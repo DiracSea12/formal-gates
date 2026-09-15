@@ -72,18 +72,25 @@ class RegistryAndSelection(unittest.TestCase):
 
 
 class NativeRequests(unittest.TestCase):
-    def zcode_request(self, read_only, previous='', probe=False, close_error=False):
+    def zcode_request(self, read_only, previous='', probe=False, close_error=False,
+                      native_mode='build', failure='', observed=None):
         with tempfile.TemporaryDirectory() as t:
             directory = Path(t)
             client = Mock(identity='', events=[], interactions=[])
             snapshot = {'session': {'sessionId': 'root'}, 'settings': {
                 'model': {'current': MODEL, 'available': [{'ref': MODEL}]},
-                'thoughtLevel': {'current': ''}}}
+                'thoughtLevel': {'current': ''}, 'mode': {'current': native_mode}}}
             def respond(method, params, **kwargs):
+                if observed is not None:
+                    observed.append((method, params))
+                if method == failure:
+                    raise RuntimeBlocked('ZCODE_TIMEOUT: simulated native response timeout')
                 if method == 'session/close' and close_error:
                     raise RuntimeBlocked('Native close failed')
                 if method in ('workspace/readState', 'session/create', 'session/resume'):
                     return snapshot
+                if method == 'session/setMode':
+                    self.fail('The adapter must not change the native permission mode')
                 if method == 'session/subscribe':
                     return {'sessionId': 'root'}
                 if method == 'session/send':
@@ -112,8 +119,39 @@ class NativeRequests(unittest.TestCase):
             with self.subTest(previous=previous):
                 params, calls, _ = self.zcode_request(False, previous)
                 self.assertFalse(forbidden & params.keys())
+                self.assertNotIn('session/setMode', [method for method, _ in calls])
+                self.assertNotIn('mcp/list', [method for method, _ in calls])
+
+    def test_zcode_read_only_and_probe_sessions_never_set_a_mode(self):
+        for read_only, probe in ((True, False), (False, True)):
+            with self.subTest(read_only=read_only, probe=probe):
+                _, calls, _ = self.zcode_request(read_only, probe=probe)
+                self.assertNotIn('session/setMode', [method for method, _ in calls])
+
+    def test_zcode_preserves_each_native_mode_on_new_and_resume(self):
+        for mode in ('build', 'edit', 'plan', 'yolo', 'auto'):
+            for previous in ('', 'root'):
+                with self.subTest(mode=mode, previous=previous):
+                    _, calls, _ = self.zcode_request(False, previous, native_mode=mode)
+                    self.assertNotIn('session/setMode', [method for method, _ in calls])
+
+    def test_removed_auto_mode_environment_cannot_override_native_settings(self):
+        for mode in ('auto', 'yolo', 'autopilot'):
+            with self.subTest(mode=mode), patch.dict(os.environ, {'FORMAL_GATES_ZCODE_AUTO_MODE': mode}):
+                for previous in ('', 'root'):
+                    _, calls, _ = self.zcode_request(False, previous)
+                    self.assertNotIn('session/setMode', [method for method, _ in calls])
+
+    def test_zcode_native_timeout_never_retries_with_another_permission_mode(self):
+        for method in ('workspace/readState', 'session/create', 'session/resume', 'session/subscribe'):
+            with self.subTest(method=method):
+                calls = []
+                previous = 'root' if method == 'session/resume' else ''
+                with self.assertRaisesRegex(RuntimeBlocked, 'ZCODE_TIMEOUT'):
+                    self.zcode_request(False, previous, failure=method, observed=calls)
+                self.assertEqual(sum(m == method for m, _ in calls), 1)
                 self.assertNotIn('session/setMode', [m for m, _ in calls])
-                self.assertNotIn('mcp/list', [m for m, _ in calls])
+                self.assertNotIn('session/send', [m for m, _ in calls])
 
     def test_zcode_only_read_only_roles_narrow_tools_on_new_and_resume(self):
         for previous in ('', 'root'):
