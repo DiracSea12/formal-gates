@@ -160,20 +160,33 @@ def status_projection(store,app,config):
 def read_checkpointer(path: Path):
     # Uses the pinned SqliteSaver serializer, not a second state implementation.
     # No schema creation or write lock for a progress query.
-    connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
-                                 check_same_thread=False, timeout=5)
+    connection = None
     try:
+        connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
+                                     check_same_thread=False, timeout=5)
         connection.execute('PRAGMA query_only=ON')
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {'checkpoints', 'writes'} <= tables:
-            raise DogfoodError('Checkpoint schema is not initialized')
+            raise DogfoodError(
+                'CHECKPOINT_NOT_INITIALIZED: checkpoint tables are not initialized. '
+                'show is read-only; use resume on this same run to continue an interrupted startup.')
         connection.execute('BEGIN')
         saver = SqliteSaver(connection)
         saver.is_setup = True  # pinned sqlite checkpointer 3.1.1; setup otherwise writes DDL
         yield saver
+    except sqlite3.Error as exc:
+        # Missing first checkpoint is a recoverable startup gap, not an excuse
+        # for a read command to initialize or recreate authoritative state.
+        raise DogfoodError(
+            f'CHECKPOINT_READ_ERROR: cannot read {path}: {exc}. '
+            'show did not advance the run. If startup stopped before its first '
+            'checkpoint, use resume on this same run; do not recreate it.') from exc
     finally:
-        connection.rollback()
-        connection.close()
+        if connection is not None:
+            try:
+                connection.rollback()
+            finally:
+                connection.close()
 
 def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
     root,store=open_run(directory);config={'configurable':{'thread_id':store.manifest['run_id']},'recursion_limit':10000}
