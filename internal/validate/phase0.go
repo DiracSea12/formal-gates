@@ -479,7 +479,8 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		if err != nil {
 			return err
 		}
-		if rel == ".git" || rel == ".gates" {
+		// Local development executors/evidence are not immutable package inputs.
+		if rel == ".git" || rel == ".gates" || rel == ".dogfood" {
 			if dirEntry.IsDir() {
 				return filepath.SkipDir
 			}

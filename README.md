@@ -1,5 +1,11 @@
 # formal-gates
 
+> **开发期自狗粮入口（本分支）**：`./scripts/dogfood setup` 后可运行
+> `./scripts/dogfood demo --native --approve-sample`，由 LangGraph 自动驱动 DSH。
+> 这是用于开发独立 Go 引擎的可替换工具，不是最终产品对 LangGraph 的运行依赖，
+> 也不等同于完整 3.5c 正式流程。见 [用法、权限与恢复边界](references/dogfood-langgraph.md)。
+
+
 **从需求澄清到封板的完整 AI 辅助开发工作流：每一步都有标准流程、门禁与记录**
 
 [English](README_EN.md) | [中文](README.md)

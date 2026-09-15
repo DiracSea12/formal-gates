@@ -29,3 +29,8 @@ bin/
 # Untracked knowledge/backlog files (session-local, not committed)
 P2-BACKLOG.md
 PROMPT-ENGINEERING-KNOWLEDGE.md
+
+# Optional development-only runtime and private evidence
+.dogfood/
+__pycache__/
+*.pyc

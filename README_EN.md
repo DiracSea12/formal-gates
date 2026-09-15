@@ -369,3 +369,7 @@ Codex metering deduplicates current request records and cumulative mirrors. The 
 retains the rollout source and native model-task start/end and wall time, including tool waits.
 The stage comparison requires real metrics; see [metering](references/formal-flow.md#成本计量)
 and the [validation record](refactor-plan/stage-3-5c-validation.md).
+
+## Optional development-only dogfood driver
+
+The experimental `scripts/dogfood` runner uses LangGraph and native DSH to help develop the future standalone Go engine. Ordinary Go product commands do not require Python. See `references/dogfood-langgraph.md` for setup, explicit approvals, durable recovery and limitations. `DOGFOOD_COMPLETE` is a small-profile development result, not a formal Seal or full 3.5c equivalence.
