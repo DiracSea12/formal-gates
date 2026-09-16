@@ -76,7 +76,10 @@ func TestVerifyProcessAcceptsAnIntactJob(t *testing.T) {
 
 func TestVerifyProcessNumbersCompareByValue(t *testing.T) {
 	directory, process, receipt, request, proofs := fixture(t, json.Number("0"))
-	process["exit_code"] = json.Number("0.0")
+	// Genuinely different spellings of the same number: the process record
+	// carries exit_code 0 while the receipt carries 0.0. The old test set both
+	// sides to 0.0 and therefore never exercised the value comparison.
+	process["exit_code"] = json.Number("0")
 	receipt["exit_code"] = json.Number("0.0")
 	if kind, refusal := VerifyProcess(directory, process, receipt, request, proofs); refusal != "" {
 		t.Fatalf("0 and 0.0 are the same number: %s / %s", kind, refusal)
@@ -140,6 +143,73 @@ func TestVerifyProcessEvidenceRefusals(t *testing.T) {
 			t.Fatalf("refusal %q want %q", refusal, want)
 		}
 	})
+}
+
+// TestVerifyProcessSizeComparesByValue checks that a proof's size is matched by
+// exact numeric value, not by spelling. The streams are real 7-byte files; the
+// recorded size is varied across representations that all denote 7 (accepted)
+// and ones that denote a different value (rejected, never truncated).
+func TestVerifyProcessSizeComparesByValue(t *testing.T) {
+	directory, process, receipt, request, _ := fixture(t, json.Number("0"))
+	stdout, _ := FileProof(filepath.Join(directory, "stdout.log"))
+	stderr, _ := FileProof(filepath.Join(directory, "stderr.log"))
+	proofsFor := func(size any) []Proof {
+		return []Proof{
+			{Name: "stderr.log", Expected: map[string]any{"sha256": stderr.SHA256, "size": size}},
+			{Name: "stdout.log", Expected: map[string]any{"sha256": stdout.SHA256, "size": size}},
+		}
+	}
+
+	accept := []any{
+		json.Number("7"),
+		json.Number("7.0"),
+		json.Number("7e0"),
+		float64(7.0),
+		int(7),
+	}
+	for _, size := range accept {
+		if kind, refusal := VerifyProcess(directory, process, receipt, request, proofsFor(size)); refusal != "" {
+			t.Fatalf("size %#v should be accepted: %s / %s", size, kind, refusal)
+		}
+	}
+
+	reject := []any{
+		json.Number("7.75"),
+		float64(7.75),
+		float64(7.5),
+		json.Number("8"),
+	}
+	for _, size := range reject {
+		kind, refusal := VerifyProcess(directory, process, receipt, request, proofsFor(size))
+		if kind != KindChanged || refusal != "EVIDENCE_CHANGED: stderr.log" {
+			t.Fatalf("size %#v should be rejected as EVIDENCE_CHANGED: got %s / %s", size, kind, refusal)
+		}
+	}
+}
+
+// TestValuesEqualNumbersCompareByValue checks the exact-value comparison across
+// numeric representations and that a number never equals a same-looking string.
+func TestValuesEqualNumbersCompareByValue(t *testing.T) {
+	equal := []struct{ a, b any }{
+		{int(0), float64(0)},
+		{json.Number("0"), json.Number("0.0")},
+		{json.Number("1e0"), int(1)},
+		{json.Number("7"), int(7)},
+	}
+	for _, tc := range equal {
+		if !valuesEqual(tc.a, tc.b) {
+			t.Fatalf("%#v should equal %#v", tc.a, tc.b)
+		}
+	}
+	unequal := []struct{ a, b any }{
+		{json.Number("7.75"), int(7)},
+		{json.Number("7"), "7"},
+	}
+	for _, tc := range unequal {
+		if valuesEqual(tc.a, tc.b) {
+			t.Fatalf("%#v should not equal %#v", tc.a, tc.b)
+		}
+	}
 }
 
 func TestVerifyFiles(t *testing.T) {

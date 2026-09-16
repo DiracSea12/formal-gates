@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"math"
 	"math/big"
 	"path/filepath"
 )
@@ -84,6 +85,14 @@ func VerifyFiles(files []Proof, label string) (string, string) {
 // proofMatches reports either a refusal to propagate (the file cannot be read)
 // or whether the recorded proof matches. A content mismatch is not a read
 // failure, and the two produce different refusals.
+//
+// The size in a proof is compared by exact numeric value, not by spelling: the
+// recorded size may arrive as a JSON integer, an integer-valued float
+// (json.Number "7.0", float64(7.0)) or a literal (json.Number "7e0"), all of
+// which denote the same byte count and must be accepted; a non-integer such as
+// "7.75" or float64(7.75) denotes a different value and must be rejected rather
+// than truncated. See exactRational for the single primitive that governs both
+// this check and valuesEqual.
 func proofMatches(path string, expected map[string]any) (string, bool) {
 	actual, refusal := FileProof(path)
 	if refusal != "" {
@@ -93,41 +102,55 @@ func proofMatches(path string, expected map[string]any) (string, bool) {
 	if !ok || sum != actual.SHA256 {
 		return "", false
 	}
-	size, ok := asInt64(expected["size"])
-	if !ok || size != int64(actual.Size) {
+	want, ok := exactRational(expected["size"])
+	if !ok {
+		return "", false
+	}
+	if want.Cmp(new(big.Rat).SetInt64(int64(actual.Size))) != 0 {
 		return "", false
 	}
 	return "", true
 }
 
-func asInt64(value any) (int64, bool) {
+// exactRational converts any numeric value this package can receive into an
+// exact rational. It reports false for a non-number, and for a non-finite
+// float, which has no rational value.
+func exactRational(value any) (*big.Rat, bool) {
 	switch typed := value.(type) {
 	case json.Number:
-		parsed, err := typed.Int64()
-		if err != nil {
-			return 0, false
+		rational := new(big.Rat)
+		if _, ok := rational.SetString(typed.String()); !ok {
+			return nil, false
 		}
-		return parsed, true
-	case float64:
-		return int64(typed), true
+		return rational, true
 	case int:
-		return int64(typed), true
+		return new(big.Rat).SetInt64(int64(typed)), true
 	case int64:
-		return typed, true
+		return new(big.Rat).SetInt64(typed), true
+	case float64:
+		if math.IsInf(typed, 0) || math.IsNaN(typed) {
+			return nil, false
+		}
+		return new(big.Rat).SetFloat64(typed), true
 	}
-	return 0, false
+	return nil, false
 }
 
 // valuesEqual compares two decoded JSON values, treating two numeric literals as
 // equal when they denote the same number.
 func valuesEqual(a, b any) bool {
-	switch left := a.(type) {
-	case json.Number:
-		right, ok := b.(json.Number)
+	// Numeric values compare by exact value across representations: a number on
+	// the left must meet a number on the right, and the two rationals must be
+	// equal. A non-number on the left keeps the structural branches below
+	// (map/slice/nil/other), so bool and string equality are unchanged.
+	if left, ok := exactRational(a); ok {
+		right, ok := exactRational(b)
 		if !ok {
 			return false
 		}
-		return numbersEqual(left, right)
+		return left.Cmp(right) == 0
+	}
+	switch left := a.(type) {
 	case map[string]any:
 		right, ok := b.(map[string]any)
 		if !ok || len(left) != len(right) {
@@ -155,16 +178,4 @@ func valuesEqual(a, b any) bool {
 		return b == nil
 	}
 	return a == b
-}
-
-func numbersEqual(a, b json.Number) bool {
-	left, ok := new(big.Rat).SetString(a.String())
-	if !ok {
-		return a.String() == b.String()
-	}
-	right, ok := new(big.Rat).SetString(b.String())
-	if !ok {
-		return a.String() == b.String()
-	}
-	return left.Cmp(right) == 0
 }

@@ -38,7 +38,7 @@ def outcome(fn, *args, **kwargs):
 class JobFixture:
     """A job directory that looks like the one the runner publishes."""
 
-    def __init__(self, root: Path, key: str = "job-1"):
+    def __init__(self, root: Path, key: str = "job-1", size_as: object = None):
         self.key = key
         self.jobs = root / "jobs"
         self.directory = self.jobs / key
@@ -49,6 +49,12 @@ class JobFixture:
         (self.directory / "stderr.log").write_bytes(b"stderr\n")
         for name in STREAMS:
             self.streams[name] = file_proof(self.directory / name)
+        # Override the recorded size representation (e.g. 7.0) without touching
+        # the real 7-byte file, so the proof spells the value differently from
+        # the byte count while denoting the same number.
+        if size_as is not None:
+            for name in STREAMS:
+                self.streams[name]["size"] = size_as
         self.receipt = {
             "exit_code": 0,
             "error": "",
@@ -111,6 +117,14 @@ class EvidenceVerificationDifferential(unittest.TestCase):
         fixture = JobFixture(self.root)
         record = fixture.process(exit_code=0.0)
         self.assertEqual(self.compare_process(fixture, record), ("ok", None))
+
+    def test_size_written_as_float_is_compared_by_value(self):
+        """A proof size spelled 7.0 (Python float) reaches Go as json.Number
+        "7.0" and must be accepted for the real 7-byte stream. The reference
+        implementation also accepts, because 7 != 7.0 is False. This is the
+        form both sides previously missed."""
+        fixture = JobFixture(self.root, size_as=7.0)
+        self.assertEqual(self.compare_process(fixture, fixture.process()), ("ok", None))
 
     # -- binding refusals ---------------------------------------------------
 

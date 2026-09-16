@@ -30,7 +30,7 @@ Python 侧 `refuse()` 把带 `kind` 的拒绝翻译回异常类：`binding` → 
 - Python 负责读 `exit.json`/`request.json` 与"job 是否属于本 run"的路径判断；Go 负责回执/请求绑定、字段比较、证明集合与逐文件证明校验。
 - 证明以**有序列表**传入而不是 map：多条不一致时，参照实现按文档顺序报第一条，Go 的 map 无序会让拒绝消息随机化。
 - 无法读取的证据文件要原样传播 `EVIDENCE_MISSING: <path>`（不是 `EVIDENCE_CHANGED`）。
-- 数字按值比较（`1` 与 `1.0` 相等），与 Python 的 `!=` 语义一致。
+- 数字按值比较（`1` 与 `1.0` 相等），与 Python 的 `!=` 语义一致。数值统一经 `exactRational` 化为精确有理数后比较，因此 `int`/`int64`/`float64`/`json.Number` 的等价小数与指数表示（如 `7`、`7.0`、`7e0`、`float64(7)`）都等于同一实际字节数；**非整数（如 `7.75`、`7.5`、`float64(7.75)`）不得截断后与字节数相等，必须拒绝**。不有限浮点（`Inf`/`NaN`）视为非数、不参与比较。
 - **拒绝措辞必须逐字不变**：
 
 | 家族 | 措辞 |
@@ -53,7 +53,7 @@ Python 侧 `refuse()` 把带 `kind` 的拒绝翻译回异常类：`binding` → 
 ## 不变量
 
 1. **与参考实现逐字一致**：同一 job 目录下，Go 路径与 `reference_evidence.py` 的参考实现在拒绝的异常类与消息上完全相同（含多条不一致时按文档顺序报第一条）。
-2. 数字按值比较：整型与浮点型表示同一数值时判为相等。
+2. 数字按值比较：整型与浮点型、小写/指数写法表示同一数值时判为相等；非整数不得截断后通过。统一经 `exactRational` 精确化，无截断、无四舍五入。
 3. 不可读证据传播 `EVIDENCE_MISSING` 而非 `EVIDENCE_CHANGED`。
 4. 桥接拒绝形状不变：业务拒绝以 `ok:false` + `kind` 承载，不触发 `Bridge` 的失败路径（退出码与失败消息语义保持"桥本身失败"）。
 5. 规范序列化/摘要（`canonical`/`digest`）的既有行为不变；`canonical.go` 仅顺带修正：`strconv.ParseFloat` 的 `ErrRange`（如 `1e400` 解析为 `inf`/`Infinity`）不再当作拒绝。
@@ -64,6 +64,9 @@ Python 侧 `refuse()` 把带 `kind` 的拒绝翻译回异常类：`binding` → 
 | --- | --- |
 | 完整回执通过（Go 与参考实现均接受） | 异常类/消息一致 |
 | 数值相等（exit_code 0 与 0.0） | 两者均接受 |
+| 数值相等（proof.size 写法 `7`/`7.0`/`7e0`/`float64(7)`/`int(7)` 对应 7 字节文件） | 两者均接受 |
+| proof.size 为非整数（`7.75`/`float64(7.75)`/`float64(7.5)`/`8`）对应 7 字节文件 | 两者均拒绝 `EVIDENCE_CHANGED`（非整数不得截断通过） |
+| 经正式桥接 proof.size 为 Python `7.0`（Go 侧落为 `json.Number("7.0")`）对应 7 字节文件 | Go 与参考实现均接受（差分对照补齐形态） |
 | request digest 不匹配 | `HarnessError: EVIDENCE_BINDING: request digest differs` |
 | 字段不一致（exit_code/error/streams/request_digest） | `HarnessError: EVIDENCE_BINDING: process {field} differs` |
 | 进程记录缺 request_digest | `HarnessError: EVIDENCE_BINDING: process request_digest differs` |
@@ -76,7 +79,7 @@ Python 侧 `refuse()` 把带 `kind` 的拒绝翻译回异常类：`binding` → 
 | 拒绝家族映射到异常类 | binding→HarnessError，missing/changed→RuntimeBlocked |
 | Go 合同：整型/数值相等/各拒绝家族/逐文件校验 | `verify_test.go` 全过 |
 
-样本量：差分对照 12 个用例 + Go 合同 6 个测试函数；覆盖上述全部判据。
+样本量：差分对照 13 个用例 + Go 合同 8 个测试函数；覆盖上述全部判据。
 
 ## 适用宿主
 
@@ -89,6 +92,10 @@ Python 侧 `refuse()` 把带 `kind` 的拒绝翻译回异常类：`binding` → 
 参考实现读输入文件时用 `file_proof(Path(name))`，因此缺失文件的消息里路径是 `Path` 规范化后的形式；Go 侧按调用方传入的原样字符串命名。当存储的 `input_files` 键**非规范化**（如含 `./` 或重复斜杠）且文件缺失时，两者措辞不同（实测：参考 `…/missing.txt`，Go `…/./missing.txt`）。
 
 该差异不可达：键由 `workers.py` 以 `str(Path(comparison['directory']) / name)` 写出，构造 `Path` 时即已规范化；且 `verify_evidence` 只接收 `Store.get(ref)` 的返回值，工件内容寻址——手工改写键会先触发完整性校验失败，根本到不了 `verify-files`。篡改分支（`EVIDENCE_CHANGED`）不涉及路径规范化，已由差分用例覆盖。
+
+## 已知差异（非阻塞，P3，仅手工改写可达）
+
+**布尔大小**：证明中的 `size` 若以布尔值写入（`true`/`false`），Go 与参考实现的判定可能不同。该值无法由任何正常写入者产生——`file_proof` 的 `size` 来自 `len(body)`（int），`Store` 仅透传该值。此差异经外部评审明确列为 P3、非阻塞，本单元**不修复、也不扩大范围**，仅在此记下备查。修复核心是数值的精确按值比较，不触及 `bool` 分支（`exactRational` 对 `bool` 返回 false，落入与改动前一致的 `a == b` 比较）。
 
 ## 已测量的开销
 
