@@ -18,36 +18,33 @@ import (
 // they surface in user-facing reports, so they are reproduced verbatim.
 func FrameResult(text string) (map[string]any, string) {
 	body := strings.TrimSpace(text)
-	if literal := firstNonFinite(body); literal != "" {
-		return nil, refusalNonFinite(literal)
-	}
+
 	value, err := decodeUnique(body)
 	if err == nil {
 		return asObject(value)
 	}
-	if typed, ok := err.(*duplicateFieldError); ok {
-		return nil, refusalDuplicate(typed.key)
+	if refusal, ok := refusalFor(err); ok {
+		return nil, refusal
 	}
 
 	// The text is not a single JSON document. Accept one fenced block, or one
 	// bare object embedded in prose, but never choose between competitors.
+	// Every check below is scoped to the fragment actually being parsed: prose
+	// that merely mentions NaN or Infinity is not itself a value.
 	var outside string
 	if fences := fenceBlocks(body); len(fences) == 0 && !strings.Contains(body, "```") {
 		start := bareObjectStart(body)
 		if start < 0 {
 			return nil, refusalPrefix + "no unambiguous result object"
 		}
-		head, length, err := rawDecode(body[start:])
+		fragment, length, err := rawDecode(body[start:])
 		if err != nil {
-			return nil, refusalPrefix + "invalid result object"
-		}
-		value, err = decodeUnique(strings.TrimSpace(string(head)))
-		if err != nil {
-			if typed, ok := err.(*duplicateFieldError); ok {
-				return nil, refusalDuplicate(typed.key)
+			if refusal, ok := refusalFor(err); ok {
+				return nil, refusal
 			}
 			return nil, refusalPrefix + "invalid result object"
 		}
+		value = fragment
 		outside = body[:start] + body[start+length:]
 	} else {
 		if len(fences) != 1 || strings.Count(body, "```") != 2 {
@@ -55,8 +52,8 @@ func FrameResult(text string) (map[string]any, string) {
 		}
 		value, err = decodeUnique(fences[0].inner)
 		if err != nil {
-			if typed, ok := err.(*duplicateFieldError); ok {
-				return nil, refusalDuplicate(typed.key)
+			if refusal, ok := refusalFor(err); ok {
+				return nil, refusal
 			}
 			return nil, refusalPrefix + "invalid JSON result fence"
 		}
@@ -73,6 +70,19 @@ const refusalPrefix = "NATIVE_RESULT: "
 func refusalDuplicate(key string) string { return refusalPrefix + "duplicate JSON field " + key }
 func refusalNonFinite(lit string) string { return refusalPrefix + "non-finite number " + lit }
 
+// refusalFor maps a typed framing error to its refusal text. Returning false
+// means "not one of the typed refusals", which sends the caller down the
+// fallback path.
+func refusalFor(err error) (string, bool) {
+	switch typed := err.(type) {
+	case *duplicateFieldError:
+		return refusalDuplicate(typed.key), true
+	case *nonFiniteError:
+		return refusalNonFinite(typed.literal), true
+	}
+	return "", false
+}
+
 func asObject(value any) (map[string]any, string) {
 	if object, ok := value.(map[string]any); ok {
 		return object, ""
@@ -84,6 +94,10 @@ type duplicateFieldError struct{ key string }
 
 func (e *duplicateFieldError) Error() string { return "duplicate JSON field " + e.key }
 
+type nonFiniteError struct{ literal string }
+
+func (e *nonFiniteError) Error() string { return "non-finite number " + e.literal }
+
 // decodeUnique parses one JSON document, refusing repeated object keys.
 //
 // A repeated key is reported only once its object closes, which is when a
@@ -92,8 +106,7 @@ func decodeUnique(text string) (any, error) {
 	if err := scanUnique(text); err != nil {
 		return nil, err
 	}
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.UseNumber()
+	decoder := newDecoder(text)
 	var value any
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
@@ -101,14 +114,42 @@ func decodeUnique(text string) (any, error) {
 	return value, nil
 }
 
-func scanUnique(text string) error {
+func newDecoder(text string) *json.Decoder {
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber()
+	return decoder
+}
+
+type framingError string
+
+func (e framingError) Error() string { return string(e) }
+
+const (
+	errExactlyOneDocument = framingError("exactly one JSON document is required")
+	errInvalidObjectKey   = framingError("invalid JSON object key")
+)
+
+// scanUnique parses one document and requires that nothing follows it.
+func scanUnique(text string) error {
+	decoder := newDecoder(text)
+	if err := walkTokens(decoder, text); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errExactlyOneDocument
+	}
+	return nil
+}
+
+// walkTokens consumes exactly one JSON value, reporting repeated object keys and
+// non-finite literals. It does not require the remainder of the text to be
+// empty; callers decide what may follow.
+func walkTokens(decoder *json.Decoder, text string) error {
 	var visit func() error
 	visit = func() error {
 		token, err := decoder.Token()
 		if err != nil {
-			return err
+			return classify(text, decoder, err)
 		}
 		delim, ok := token.(json.Delim)
 		if !ok {
@@ -117,18 +158,21 @@ func scanUnique(text string) error {
 		switch delim {
 		case '{':
 			seen := map[string]bool{}
+			// Tracked separately from the key itself: an empty key is a legal
+			// JSON key, so the empty string cannot double as "no duplicate".
 			repeated := ""
+			found := false
 			for decoder.More() {
 				key, err := decoder.Token()
 				if err != nil {
-					return err
+					return classify(text, decoder, err)
 				}
 				name, ok := key.(string)
 				if !ok {
-					return &duplicateFieldError{key: ""}
+					return errInvalidObjectKey
 				}
-				if seen[name] && repeated == "" {
-					repeated = name
+				if seen[name] && !found {
+					repeated, found = name, true
 				}
 				seen[name] = true
 				if err := visit(); err != nil {
@@ -136,9 +180,9 @@ func scanUnique(text string) error {
 				}
 			}
 			if _, err := decoder.Token(); err != nil {
-				return err
+				return classify(text, decoder, err)
 			}
-			if repeated != "" {
+			if found {
 				return &duplicateFieldError{key: repeated}
 			}
 			return nil
@@ -148,78 +192,37 @@ func scanUnique(text string) error {
 					return err
 				}
 			}
-			_, err := decoder.Token()
-			return err
+			if _, err := decoder.Token(); err != nil {
+				return classify(text, decoder, err)
+			}
+			return nil
 		}
 		return nil
 	}
-	if err := visit(); err != nil {
+	return visit()
+}
+
+// classify turns a decoder error into a typed refusal when the text at the
+// decoder's current position is a non-finite literal.
+//
+// The check is deliberately scoped to the text handed to this walk. An earlier
+// revision scanned the whole message up front, which refused legitimate results
+// whose surrounding prose merely mentioned "NaN" or "Infinity".
+func classify(text string, decoder *json.Decoder, err error) error {
+	offset := int(decoder.InputOffset())
+	if offset < 0 || offset > len(text) {
 		return err
 	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return errExactlyOneDocument
+	rest := strings.TrimLeft(text[offset:], " \t\r\n")
+	switch {
+	case strings.HasPrefix(rest, "-Infinity"):
+		return &nonFiniteError{literal: "-Infinity"}
+	case strings.HasPrefix(rest, "Infinity"):
+		return &nonFiniteError{literal: "Infinity"}
+	case strings.HasPrefix(rest, "NaN"):
+		return &nonFiniteError{literal: "NaN"}
 	}
-	return nil
-}
-
-type framingError string
-
-func (e framingError) Error() string { return string(e) }
-
-const errExactlyOneDocument = framingError("exactly one JSON document is required")
-
-// firstNonFinite reports the first NaN/Infinity/-Infinity that appears where a
-// value may begin, ignoring string contents. Go's decoder would report these as
-// generic syntax errors; the refusal has to name the literal instead.
-func firstNonFinite(text string) string {
-	inString := false
-	escaped := false
-	for i := 0; i < len(text); i++ {
-		ch := text[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case ch == '\\':
-				escaped = true
-			case ch == '"':
-				inString = false
-			}
-			continue
-		}
-		if ch == '"' {
-			inString = true
-			continue
-		}
-		if !valueMayStartAt(text, i) {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(text[i:], "-Infinity"):
-			return "-Infinity"
-		case strings.HasPrefix(text[i:], "Infinity"):
-			return "Infinity"
-		case strings.HasPrefix(text[i:], "NaN"):
-			return "NaN"
-		}
-	}
-	return ""
-}
-
-// valueMayStartAt reports whether the previous non-space byte allows a value to
-// begin here.
-func valueMayStartAt(text string, i int) bool {
-	for j := i - 1; j >= 0; j-- {
-		switch text[j] {
-		case ' ', '\t', '\r', '\n':
-			continue
-		case ':', ',', '[':
-			return true
-		default:
-			return false
-		}
-	}
-	return true
+	return err
 }
 
 var fencePattern = regexp.MustCompile("(?ims)^```(?:json)?[ \t]*\r?\n(.*?)^```[ \t]*(?:\r?\n|\\z)")
@@ -253,14 +256,20 @@ func bareObjectStart(body string) int {
 	return loc[0] + strings.Index(body[loc[0]:loc[1]], "{")
 }
 
-// rawDecode reads one JSON document from the start of text and reports how many
-// bytes it consumed.
-func rawDecode(text string) (json.RawMessage, int, error) {
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.UseNumber()
-	var value json.RawMessage
-	if err := decoder.Decode(&value); err != nil {
+// rawDecode reads one JSON value from the start of text and reports how many
+// bytes it consumed, so a caller can account for the text around it.
+func rawDecode(text string) (any, int, error) {
+	decoder := newDecoder(text)
+	if err := walkTokens(decoder, text); err != nil {
 		return nil, 0, err
 	}
-	return value, int(decoder.InputOffset()), nil
+	length := int(decoder.InputOffset())
+	if length > len(text) {
+		length = len(text)
+	}
+	value, err := decodeUnique(strings.TrimSpace(text[:length]))
+	if err != nil {
+		return nil, 0, err
+	}
+	return value, length, nil
 }

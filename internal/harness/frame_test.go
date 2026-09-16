@@ -29,6 +29,13 @@ func TestFrameResultAccepts(t *testing.T) {
 		{"negative and null", `{"a":-1,"b":null,"c":true}`, map[string]any{"a": json.Number("-1"), "b": nil, "c": true}},
 		{"nested arrays", `{"a":[{"b":[1,2]}]}`, map[string]any{"a": []any{map[string]any{"b": []any{json.Number("1"), json.Number("2")}}}}},
 		{"literal NaN inside a string is not scanned", `{"a":"NaN"}`, map[string]any{"a": "NaN"}},
+		{"single empty key", `{"":1}`, map[string]any{"": json.Number("1")}},
+		// Prose around the result may mention these words; only the parsed
+		// fragment decides. An earlier revision refused all four of these.
+		{"prose mentions NaN before the object", "Checked edge cases: NaN and Infinity.\n{\"a\":1}", map[string]any{"a": json.Number("1")}},
+		{"prose lists NaN after a colon", "Values seen: NaN, Infinity.\n{\"a\":1}", map[string]any{"a": json.Number("1")}},
+		{"prose mentions NaN after the object", "{\"a\":1}\nNote: no NaN was used.", map[string]any{"a": json.Number("1")}},
+		{"prose mentions Infinity before a fence", "Checked Infinity.\n```json\n{\"a\":1}\n```", map[string]any{"a": json.Number("1")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,6 +80,13 @@ func TestFrameResultRefuses(t *testing.T) {
 		{"bare object invalid json", "prose\n{\"a\":}", p + "invalid result object"},
 		{"trailing comma", `{"a":1,}`, p + "invalid result object"},
 		{"two documents", `{"a":1} {"b":2}`, p + "competing structured content outside result"},
+		{"duplicate empty key", `{"":1,"":2}`, p + "duplicate JSON field "},
+		{"duplicate empty key in fence", "```json\n{\"\":1,\"\":2}\n```", p + "duplicate JSON field "},
+		// The mirror image of the acceptance cases above: the non-finite
+		// literal really is inside the parsed object, so it must refuse.
+		{"non-finite inside the object after prose", "Checked NaN.\n{\"a\":NaN}", p + "non-finite number NaN"},
+		{"non-finite inside the fence after prose", "Checked Infinity.\n```json\n{\"a\":Infinity}\n```", p + "non-finite number Infinity"},
+		{"non-finite inside a bare object", "prose\n{\"a\":-Infinity}", p + "non-finite number -Infinity"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

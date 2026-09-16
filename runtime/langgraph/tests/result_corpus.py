@@ -44,12 +44,21 @@ CASES: list[tuple[str, str]] = [
     ("object with trailing prose", '{"a":1}\nThat is all.'),
     ("object followed by a blank line", '{"a":1}\n\n'),
 
+    # -- acceptance: prose that merely mentions non-finite words ------------
+    ("prose mentions NaN before the object", 'Checked edge cases: NaN and Infinity.\n{"a":1}'),
+    ("prose lists NaN after a colon", 'Values seen: NaN, Infinity.\n{"a":1}'),
+    ("prose mentions NaN after the object", '{"a":1}\nNote: no NaN was used.'),
+    ("prose mentions Infinity before a fence", 'Checked Infinity.\n```json\n{"a":1}\n```'),
+    ("single empty key", '{"":1}'),
+
     # -- refusal: duplicates ---------------------------------------------
     ("duplicate top level", '{"a":1,"a":2}'),
     ("duplicate nested", '{"o":{"b":1,"b":2}}'),
     ("duplicate in fence", '```json\n{"a":1,"a":2}\n```'),
     ("duplicate escaped key", '{"\\u0061":1,"a":2}'),
     ("duplicate inside bare object", 'prose\n{"a":1,"a":2}'),
+    ("duplicate empty key", '{"":1,"":2}'),
+    ("duplicate empty key in fence", '```json\n{"":1,"":2}\n```'),
 
     # -- refusal: non-finite ---------------------------------------------
     ("nan value", '{"a":NaN}'),
@@ -57,6 +66,9 @@ CASES: list[tuple[str, str]] = [
     ("negative infinity value", '{"a":-Infinity}'),
     ("nan in array", '{"a":[1,NaN]}'),
     ("nan top level", "NaN"),
+    ("non-finite inside the object after prose", 'Checked NaN.\n{"a":NaN}'),
+    ("non-finite inside the fence after prose", 'Checked Infinity.\n```json\n{"a":Infinity}\n```'),
+    ("non-finite inside a bare object", 'prose\n{"a":-Infinity}'),
 
     # -- refusal: competing structured content ---------------------------
     ("two fences", '```json\n{"a":1}\n```\ntext\n```json\n{"a":2}\n```'),
