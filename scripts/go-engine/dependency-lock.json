@@ -1,0 +1,87 @@
+{
+  "record": "G0 Go/SQLite dependency lock",
+  "recorded_at": "2026-09-16T08:40:00+08:00",
+  "purpose": "方案第 7 节要求：Go 路径采用 database/sql 与单一驱动，构建工具链、驱动和配套依赖在 G0 完成兼容验证后锁定。本记录是该锁定的唯一出处。",
+  "status": "LOCKED",
+  "toolchain": {
+    "go": "go1.26.4",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "module_go_directive": "1.22",
+    "GOTOOLCHAIN": "auto",
+    "note": "go.mod 的 go 指令保持 1.22 未改动；本记录固定实际参与构建的工具链版本。"
+  },
+  "driver": {
+    "module": "modernc.org/sqlite",
+    "version": "v1.36.1",
+    "go_sum_h1": "h1:bDa8BJUH4lg6EGkLbahKe/8QqoF8p9gArSc6fTqYhyQ=",
+    "go_sum_gomod": "h1:7MPwH7Z6bREicF9ZVUR78P1IKuxfZ8mRIDHD0iD+8TU=",
+    "declares_go": "1.21",
+    "bundled_sqlite_version": "3.49.1",
+    "cgo_required": false,
+    "backup_api": "sqlite.Driver.RegisterConnectionHook + (*conn).NewBackup/NewRestore with Backup.Step/Finish/Commit (sqlite3_backup_init based)"
+  },
+  "pinned_companions": {
+    "modernc.org/libc": {"version": "v1.61.13", "go_sum_h1": "h1:3LRd6ZO1ezsFiX1y+bHd1ipyEHIJKvuprv0sLTBwLW8="},
+    "modernc.org/mathutil": {"version": "v1.7.1", "go_sum_h1": "h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU="},
+    "modernc.org/memory": {"version": "v1.8.2", "go_sum_h1": "h1:cL9L4bcoAObu4NkxOlKWBWtNHIsnnACGF/TbqQ6sbcI="},
+    "modernc.org/fileutil": {"version": "v1.3.0", "go_sum_h1": "h1:gQ5SIzK3H9kdfai/5x41oQiKValumqNTDXMvKo62HvE="},
+    "golang.org/x/exp": {"version": "v0.0.0-20230315142452-642cacee5cc0"},
+    "golang.org/x/sys": {"version": "v0.30.0"},
+    "github.com/dustin/go-humanize": {"version": "v1.0.1"},
+    "github.com/google/uuid": {"version": "v1.6.0"},
+    "github.com/mattn/go-isatty": {"version": "v0.0.20"},
+    "github.com/ncruces/go-strftime": {"version": "v0.1.9"},
+    "github.com/remyoudompheng/bigfft": {"version": "v0.0.0-20230129092748-24d4a6f8daec"}
+  },
+  "companion_note": "modernc.org/sqlite 的 doc.go 明确要求调用方在 go.mod 中使用与该模块自身完全相同版本的 modernc.org/libc；此处固定为 v1.61.13，与驱动 go.mod 一致。",
+  "go_mod_digest": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+  "go_sum_digest": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+  "single_driver_rule": "Go 路径只使用 database/sql 与这一套驱动。不引入 ORM、第二个 SQLite 驱动或远程数据库。",
+  "compatibility_verification": {
+    "probe": "scripts/go-engine/sqlprobe",
+    "commands": [
+      "CGO_ENABLED=1 go build -o <attempt>/sqlite-probe/sqlprobe-cgo1 ./scripts/go-engine/sqlprobe && <attempt>/sqlite-probe/sqlprobe-cgo1 -dir <attempt>/sqlite-probe/run-cgo1",
+      "CGO_ENABLED=0 go build -o <attempt>/sqlite-probe/sqlprobe-cgo0 ./scripts/go-engine/sqlprobe && <attempt>/sqlite-probe/sqlprobe-cgo0 -dir <attempt>/sqlite-probe/run-cgo0",
+      "go test -count=1 ./scripts/go-engine/sqlprobe"
+    ],
+    "checks": [
+      {"id": "open-file-database", "verifies": "database/sql 能打开真实文件库并读取 sqlite_version"},
+      {"id": "schema-and-pragmas", "verifies": "journal_mode 实际为 wal；foreign_keys 实际生效（[R4] WAL 语义）"},
+      {"id": "foreign-key-rejected", "verifies": "外键违例被真实拒绝，而不是被静默接受"},
+      {"id": "transaction-commit-and-rollback", "verifies": "提交持久、回滚丢弃"},
+      {"id": "wal-coordination-files", "verifies": "活动 WAL 库确实产生 -wal/-shm 协调文件（[R4]）"},
+      {"id": "online-backup-consistent", "verifies": "[R5] 一致性在线备份：副本可独立打开、内容正确、integrity_check 通过"},
+      {"id": "wal-reader-not-blocked-by-open-writer", "verifies": "写者持事务时读者不被阻塞，且读不到未提交行"},
+      {"id": "busy-reported-then-resolved", "verifies": "竞争写者按真实 SQLite 语义得到 busy/locked 而不是静默成功，释放后可继续"}
+    ],
+    "results": {
+      "CGO_ENABLED=1": "PASS 8/8",
+      "CGO_ENABLED=0": "PASS 8/8",
+      "go_test": "PASS"
+    },
+    "no_cgo_evidence": {
+      "build_info": "go version -m 显示 CGO_ENABLED=0",
+      "otool": "cgo0 与 cgo1 二进制都只链接 /usr/lib/libSystem.B.dylib 与 /usr/lib/libresolv.9.dylib，没有外部 sqlite3 动态库"
+    },
+    "evidence_dirs": {
+      "g0_remediation": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/g0-remediation-20260916T0835Z/sqlite-probe"
+    }
+  },
+  "version_choice_rationale": {
+    "chosen": "v1.36.1",
+    "why": "它是 go.mod 声明的 go 1.22 能容纳的最新版本：v1.35.0/v1.36.0/v1.36.1 声明 go 1.21，v1.37.0 起声明 go 1.23.0，v1.42.1 起 go 1.24.0，v1.50.0 起 go 1.25.0。选择它使基线不被牵连。",
+    "rejected_alternative": {
+      "version": "v1.59.0（当前最新，2026-09-15 发布）",
+      "why_rejected": "它要求 go 1.25.0，会把主模块 go 指令从 1.22 抬到 1.25.0，改变整个冻结基线的构建契约。方案 12.5 要求不得把无关变更混入迁移步骤。",
+      "deferred_to": "若后续确实需要更新驱动，作为单独的版本化迁移实施并重新走完整验收，不在本单元内顺带升级。"
+    },
+    "no_soak_claim": "本记录只声明该版本通过了上述探针；不声明它比其它版本更安全或更成熟。"
+  },
+  "scope_limits": [
+    "探针不接入产品流程，不实现 K1，不建立 runs/tasks/decisions 表。",
+    "本记录不判断现有数据库或任何现有 SQLite 用法有错误。",
+    "探针不验证 Linux/Windows 的原生行为；跨平台结论需各自实测。",
+    "本记录不改变参考 [R3][R4][R5] 的语义，只验证这些语义在本机可达成。"
+  ]
+}
