@@ -23,9 +23,24 @@ class SessionUnavailable(RuntimeBlocked):
         self.identity, self.method, self.code = identity, method, code
 
 def canonical(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    """Canonical JSON bytes, produced by Go.
+
+    These bytes are the content-addressing format (artifact references,
+    operation ids, evidence digests), so the authority lives in
+    `internal/harness.CanonicalJSON`; this wrapper only carries the request and
+    converts the returned text back to bytes.
+    """
+    answered = driver_bridge().call('canonical', {'value': value})
+    text = answered.get('canonical')
+    if text is None:
+        raise HarnessError('Go bridge returned an unusable canonical answer')
+    return text.encode()
 def digest(value: Any) -> str:
-    return hashlib.sha256(canonical(value)).hexdigest()
+    answered = driver_bridge().call('digest', {'value': value})
+    result = answered.get('digest')
+    if not result:
+        raise HarnessError('Go bridge returned an unusable digest answer')
+    return result
 def atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -67,12 +82,26 @@ def git(root: Path, *args: str) -> str:
     if p.returncode: raise HarnessError(f"git {' '.join(args[:3])}: {p.stderr.strip()}")
     return p.stdout.strip()
 
+def _transport_bytes(envelope: Any) -> bytes:
+    """Serialize one bridge request.
+
+    This is a *transport* encoding only: compact and non-ASCII preserving, but
+    deliberately not the canonical format. The canonical format is a
+    content-addressing contract owned by Go, and duplicating it here would give
+    it a second implementation. It must not call `canonical` either, since that
+    would recurse through the very request being built.
+
+    ensure_ascii=False is kept so behaviour is unchanged: a lone surrogate still
+    fails loudly at this boundary instead of being silently substituted.
+    """
+    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+
 class Bridge:
     def __init__(self, binary: str):
         self.binary = str(Path(binary).resolve())
     def call(self, operation: str, payload: Any) -> Any:
         p = subprocess.run([self.binary, "harness", "bridge"],
-                           input=canonical({"operation": operation, "payload": payload}), capture_output=True)
+                           input=_transport_bytes({"operation": operation, "payload": payload}), capture_output=True)
         try: answer = json.loads(p.stdout)
         except (ValueError, UnicodeError) as exc:
             raise HarnessError(f"Go bridge did not return JSON: {p.stderr.decode(errors='replace')[-1000:]}") from exc

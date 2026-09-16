@@ -210,6 +210,19 @@ func certify(q sealInput) (any, error) {
 	}
 	return map[string]any{"contract_version": Version, "profile": Profile, "status": status, "evidence_level": level, "candidate": q.Candidate, "revision": q.Revision, "checks": q.Checks, "gates": q.Gates, "baseline": Baseline, "full_3_5c_equivalence": false}, nil
 }
+
+// decodeValue parses a payload value while preserving number literals, so the
+// canonical encoder can decide between integer and float the way Python does.
+func decodeValue(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
 func Bridge(in io.Reader, out io.Writer) int {
 	b, err := io.ReadAll(io.LimitReader(in, 8*1024*1024+1))
 	if err == nil && len(b) > 8*1024*1024 {
@@ -308,6 +321,33 @@ func dispatch(e envelope) (any, error) {
 		}
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
+	case "canonical", "digest":
+		// The canonical encoding is the content-addressing format, so it is
+		// owned here rather than in the caller. Numbers are decoded with
+		// UseNumber so integer literals keep arbitrary precision and float
+		// literals can be re-rendered with Python's rules.
+		var q struct {
+			Value json.RawMessage `json:"value"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		value, err := decodeValue(q.Value)
+		if err != nil {
+			return nil, err
+		}
+		if e.Operation == "canonical" {
+			encoded, err := CanonicalJSON(value)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"canonical": string(encoded)}, nil
+		}
+		digest, err := CanonicalDigest(value)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"digest": digest}, nil
 	case "file-proof":
 		// A missing or unreadable file is a typed refusal, not a broken bridge,
 		// for the same reason result framing refusals are: the caller has to be
