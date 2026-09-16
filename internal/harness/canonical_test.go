@@ -52,6 +52,9 @@ func TestCanonicalShape(t *testing.T) {
 		{"negative integer", `{"n":-7}`, `{"n":-7}`},
 		{"integer leading minus zero", `{"n":-0}`, `{"n":0}`},
 		{"big integer keeps precision", `{"n":123456789012345678901234567890}`, `{"n":123456789012345678901234567890}`},
+		// Beyond float64's range: the pre-scan must not narrow these.
+		{"integer beyond float64", `{"n":1000000000000000000000000000000000000000000000000000000000000000000}`, `{"n":1000000000000000000000000000000000000000000000000000000000000000000}`},
+		{"negative integer beyond float64", `{"n":-1000000000000000000000000000000000000000000000000000000000000000000}`, `{"n":-1000000000000000000000000000000000000000000000000000000000000000000}`},
 		{"float keeps a fractional digit", `{"n":1.0}`, `{"n":1.0}`},
 		{"negative zero float", `{"n":-0.0}`, `{"n":-0.0}`},
 		{"exponent form is normalised", `{"n":1e2}`, `{"n":100.0}`},

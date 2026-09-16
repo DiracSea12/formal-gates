@@ -6,6 +6,14 @@ import (
 	"os"
 )
 
+// ContentProof is the fixed shape of an evidence proof. It is a struct rather
+// than a map because the shape is part of the evidence contract: exactly two
+// fields, neither of them optional.
+type ContentProof struct {
+	SHA256 string `json:"sha256"`
+	Size   int    `json:"size"`
+}
+
 // FileProof reads a file and reports its content proof: the SHA-256 of its
 // bytes and its size.
 //
@@ -18,11 +26,11 @@ import (
 // The refusal text is observable behaviour and is reproduced verbatim: the
 // caller supplies the path exactly as it wants it reported, so path formatting
 // stays with the caller and this function only reports failures.
-func FileProof(path string) (map[string]any, string) {
+func FileProof(path string) (ContentProof, string) {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return nil, "EVIDENCE_MISSING: " + path
+		return ContentProof{}, "EVIDENCE_MISSING: " + path
 	}
 	sum := sha256.Sum256(body)
-	return map[string]any{"sha256": hex.EncodeToString(sum[:]), "size": len(body)}, ""
+	return ContentProof{SHA256: hex.EncodeToString(sum[:]), Size: len(body)}, ""
 }

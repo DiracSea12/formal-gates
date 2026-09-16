@@ -15,7 +15,7 @@ import uuid
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from .graph import Flow
-from .infra import Bridge, HarnessError, RuntimeBlocked, Store, atomic, git, read, run_lock, runtime_identity
+from .infra import Bridge, HarnessError, RuntimeBlocked, Store, atomic, driver_bridge, git, read, run_lock, runtime_identity
 from .native_hosts import adapter_for, execution_hosts, host_catalog, normalize_provider
 
 BASELINE='517de91f1b480ec969bd91385c29ce38d8bc2841'
@@ -37,7 +37,7 @@ def select_provider(bridge, explicit=None):
     return provider
 
 def doctor(root: Path, provider=None, model="", effort=""):
-    adapter = adapter_for(select_provider(Bridge(binary_path()), provider))
+    adapter = adapter_for(select_provider(driver_bridge(), provider))
     binding = adapter.capture()
     path=root/'.harness'/'probes'/uuid.uuid4().hex
     path.mkdir(parents=True)
@@ -59,7 +59,7 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
     body=requirement.read_bytes()
     if not body.strip(): raise HarnessError('The requirement file is empty')
     if len(body)>2*1024*1024: raise HarnessError('Requirement exceeds 2 MiB')
-    bridge=Bridge(binary_path())
+    bridge=driver_bridge()
     base=bridge.call('resolve-snapshot',{'root':str(project)})['candidate']
     provider=normalize_provider(bridge, provider) if fixture else select_provider(bridge, provider)
     if provider=='fixture' and not fixture: raise HarnessError('Fixture workers require the labelled test/demo path')
@@ -101,7 +101,7 @@ def open_run(path: str | Path):
         raise HarnessError('Requirement bytes changed after confirmation binding')
     if manifest.get('reviewer_policy_digest') != hashlib.sha256((directory/'reviewer-base.md').read_bytes()).hexdigest():
         raise HarnessError('Bound reviewer policy changed or is missing')
-    bridge=Bridge(binary_path());checked=bridge.call('validate-spec',manifest['spec'])
+    bridge=driver_bridge();checked=bridge.call('validate-spec',manifest['spec'])
     if checked['revision']!=manifest['revision']:raise HarnessError('Spec revision does not match manifest')
     return root,Store(directory,manifest,bridge)
 
@@ -259,7 +259,7 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
             return status_projection(store,app,config)
 
 def make_demo(root: Path,native=False,provider=None):
-    if native: provider = select_provider(Bridge(binary_path()), provider)
+    if native: provider = select_provider(driver_bridge(), provider)
     directory=root/'.harness'/'samples'/(('native-' if native else 'fixture-')+uuid.uuid4().hex[:12]);directory.mkdir(parents=True)
     project=directory/'project';project.mkdir()
     subprocess.run(['git','init','--quiet',str(project)],check=True)
@@ -310,7 +310,7 @@ def main():
     args=parser.parse_args()
     try:
         root=package_root()
-        if args.command=='hosts':result=host_catalog(Bridge(binary_path()))
+        if args.command=='hosts':result=host_catalog(driver_bridge())
         elif args.command=='doctor':result=doctor(root,args.provider,args.model,args.reasoning_effort)
         elif args.command=='archive':
             from .retention import archive_run

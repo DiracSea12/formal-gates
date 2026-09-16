@@ -33,11 +33,11 @@ func TestFileProofMatchesContentHash(t *testing.T) {
 				t.Fatalf("refused: %s", refusal)
 			}
 			sum := sha256.Sum256(tc.body)
-			if proof["sha256"] != hex.EncodeToString(sum[:]) {
-				t.Fatalf("sha256 %v", proof["sha256"])
+			if proof.SHA256 != hex.EncodeToString(sum[:]) {
+				t.Fatalf("sha256 %v", proof.SHA256)
 			}
-			if proof["size"] != len(tc.body) {
-				t.Fatalf("size %v, want %d", proof["size"], len(tc.body))
+			if proof.Size != len(tc.body) {
+				t.Fatalf("size %v, want %d", proof.Size, len(tc.body))
 			}
 		})
 	}
@@ -58,11 +58,11 @@ func TestFileProofLargeFile(t *testing.T) {
 		t.Fatalf("refused: %s", refusal)
 	}
 	sum := sha256.Sum256(body)
-	if proof["sha256"] != hex.EncodeToString(sum[:]) {
+	if proof.SHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatal("large file digest differs from the same bytes hashed directly")
 	}
-	if proof["size"] != len(body) {
-		t.Fatalf("size %v, want %d", proof["size"], len(body))
+	if proof.Size != len(body) {
+		t.Fatalf("size %v, want %d", proof.Size, len(body))
 	}
 }
 
@@ -81,7 +81,7 @@ func TestFileProofFollowsSymlinkAndUnicodeNames(t *testing.T) {
 	if refusal != "" {
 		t.Fatalf("refused: %s", refusal)
 	}
-	if viaLink["sha256"] != direct["sha256"] || viaLink["size"] != direct["size"] {
+	if viaLink.SHA256 != direct.SHA256 || viaLink.Size != direct.Size {
 		t.Fatal("a symlink must proof as its target content")
 	}
 
@@ -98,7 +98,7 @@ func TestFileProofRefusals(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "absent.txt")
 	proof, refusal := FileProof(missing)
-	if proof != nil {
+	if proof != (ContentProof{}) {
 		t.Fatal("refusal must not return a proof")
 	}
 	if refusal != "EVIDENCE_MISSING: "+missing {
@@ -127,7 +127,7 @@ func TestFileProofIsDeterministic(t *testing.T) {
 	first, _ := FileProof(path)
 	for i := 0; i < 5; i++ {
 		again, refusal := FileProof(path)
-		if refusal != "" || again["sha256"] != first["sha256"] || again["size"] != first["size"] {
+		if refusal != "" || again.SHA256 != first.SHA256 || again.Size != first.Size {
 			t.Fatalf("iteration %d differed", i)
 		}
 	}

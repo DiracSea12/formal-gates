@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 // CanonicalJSON reproduces the harness's canonical JSON encoding byte for byte:
@@ -202,10 +201,6 @@ func writeCanonicalString(text string, out *strings.Builder) {
 			switch {
 			case r < 0x20:
 				fmt.Fprintf(out, `\u%04x`, r)
-			case r == utf8.RuneError:
-				// A replacement character may be a literal U+FFFD; write it as
-				// itself so the bytes stay identical to Python's output.
-				out.WriteRune(r)
 			default:
 				out.WriteRune(r)
 			}

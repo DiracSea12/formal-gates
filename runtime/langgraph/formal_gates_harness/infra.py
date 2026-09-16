@@ -41,12 +41,18 @@ def digest(value: Any) -> str:
     if not result:
         raise HarnessError('Go bridge returned an unusable digest answer')
     return result
-def atomic(path: Path, value: Any) -> None:
+def atomic_bytes(path: Path, body: bytes) -> None:
+    """Publish already-serialised bytes atomically.
+
+    Split out so a caller that has just produced the canonical bytes (a content
+    reference, for example) can write them without asking Go to encode the same
+    value a second time.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         with temp.open("xb") as f:
-            f.write(canonical(value)); f.flush(); os.fsync(f.fileno())
+            f.write(body); f.flush(); os.fsync(f.fileno())
         os.replace(temp, path)
         if os.name != "nt":
             fd = os.open(path.parent, os.O_RDONLY)
@@ -54,6 +60,8 @@ def atomic(path: Path, value: Any) -> None:
             finally: os.close(fd)
     finally:
         temp.unlink(missing_ok=True)
+def atomic(path: Path, value: Any) -> None:
+    atomic_bytes(path, canonical(value))
 def read(path: Path) -> Any:
     def unique(pairs):
         result = {}
@@ -113,18 +121,23 @@ _DRIVER_BRIDGE = None
 def driver_bridge() -> Bridge:
     """The single driver binary this process talks to.
 
-    Production resolves it from the binding the development entry exports; a
-    direct import (a unit test, for example) falls back to the location
-    scripts/harness and the test fixtures already use, so there is still
-    exactly one binary rather than a second lookup mechanism.
+    Resolved here rather than by importing the CLI: this module is the base
+    layer, and reaching into `cli` for the path would drag in the graph, the
+    workers and LangGraph just to build a bridge object. Production exports the
+    binding; a direct import (a unit test, for example) falls back to the
+    location scripts/harness and the test fixtures already use, so there is
+    still exactly one lookup rule rather than a second mechanism.
     """
     global _DRIVER_BRIDGE
     if _DRIVER_BRIDGE is None:
-        from .cli import binary_path
-        try:
-            binary = binary_path()
-        except HarnessError:
-            binary = str(Path(__file__).resolve().parents[3] / '.harness' / 'bin' / 'formal-gates')
+        binary = os.environ.get('FORMAL_GATES_HARNESS_BINARY')
+        if not binary:
+            candidate = Path(__file__).resolve().parents[3] / '.harness' / 'bin' / 'formal-gates'
+            if not candidate.is_file():
+                raise HarnessError(
+                    'Go driver binary is not bound: set FORMAL_GATES_HARNESS_BINARY, '
+                    'or start through scripts/harness')
+            binary = str(candidate)
         _DRIVER_BRIDGE = Bridge(binary)
     return _DRIVER_BRIDGE
 
@@ -154,7 +167,9 @@ class Store:
     def put(self, value: Any) -> str:
         body = canonical(value); ref = hashlib.sha256(body).hexdigest()
         path = self.directory / "artifacts" / f"{ref}.json"
-        if not path.exists(): atomic(path, value)
+        # Write the bytes already produced: re-deriving them inside atomic()
+        # would encode the same value a second time, across a second process.
+        if not path.exists(): atomic_bytes(path, body)
         return ref
     def get(self, ref: str) -> Any:
         if len(ref) != 64 or any(c not in "0123456789abcdef" for c in ref):
