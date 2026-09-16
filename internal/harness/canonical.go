@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -114,7 +115,14 @@ func canonicalNumber(literal string) (string, error) {
 	}
 	value, err := strconv.ParseFloat(literal, 64)
 	if err != nil {
-		return "", fmt.Errorf("canonical json: invalid number literal %q: %w", literal, err)
+		// Python's json parser keeps an overflowed literal as +/-Inf and
+		// json.dumps then renders it as the bare token Infinity/-Infinity.
+		// strconv reports the same value together with ErrRange, so the range
+		// error is not a refusal here - only a genuinely malformed literal is.
+		var numberError *strconv.NumError
+		if !errors.As(err, &numberError) || !errors.Is(numberError.Err, strconv.ErrRange) {
+			return "", fmt.Errorf("canonical json: invalid number literal %q: %w", literal, err)
+		}
 	}
 	return pythonFloatRepr(value), nil
 }

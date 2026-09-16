@@ -44,7 +44,7 @@ class Boundaries(unittest.TestCase):
             command="from pathlib import Path;import time; p=Path('count');p.write_text(str(int(p.read_text())+1) if p.exists() else '1');time.sleep(1.5)"
             request={'kind':'check','argv':[sys.executable,'-c',command],'cwd':str(root),'stdin':'','environment':{}}
             (root/'request-input.json').write_text(json.dumps(request))
-            code="from pathlib import Path;import json,sys;from formal_gates_harness.infra import Store,Bridge;root=Path(sys.argv[1]);s=Store(root,{},Bridge('unused'));print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
+            code="from pathlib import Path;import json,sys;from formal_gates_harness.infra import Store,driver_bridge;root=Path(sys.argv[1]);s=Store(root,{},driver_bridge());print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
             log=(root/'observer.log').open('wb')
             first=subprocess.Popen([sys.executable,'-c',code,str(root)],stdout=log,stderr=log)
             deadline=time.monotonic()+20

@@ -104,6 +104,20 @@ def _transport_bytes(envelope: Any) -> bytes:
     """
     return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
 
+def refuse(answer: dict) -> None:
+    """Translate a Go verification refusal back into this module's exception.
+
+    The verification rules live in Go; which exception class a refusal maps to is
+    this module's contract, so the family travels with the refusal instead of
+    being guessed from the message text.
+    """
+    if answer.get('ok'):
+        return
+    refusal = answer.get('refusal') or 'verification refused without a reason'
+    if answer.get('kind') == 'binding':
+        raise HarnessError(refusal)
+    raise RuntimeBlocked(refusal)
+
 class Bridge:
     def __init__(self, binary: str):
         self.binary = str(Path(binary).resolve())
@@ -178,29 +192,41 @@ class Store:
         if hashlib.sha256(body).hexdigest() != ref: raise HarnessError("artifact integrity mismatch")
         return json.loads(body)
     def verify_process(self, process: dict) -> None:
+        """Re-check one job's receipt against its request and its stream evidence.
+
+        This method keeps the two things that belong to the store: which job
+        directory a process record must live in, and reading the two JSON
+        documents. The receipt/request binding, the field comparison and the
+        proof checks are the evidence contract and live in
+        `internal/harness.VerifyProcess`.
+        """
         key = process.get('operation', '')
         directory = self.directory / 'jobs' / key
         if not key or Path(process.get('directory', '')).resolve() != directory.resolve():
             raise HarnessError('EVIDENCE_BINDING: job is outside this run')
         receipt = read(directory / 'exit.json')
         request = read(directory / 'request.json')
-        if receipt.get('request_digest') != digest(request):
-            raise HarnessError('EVIDENCE_BINDING: request digest differs')
-        for field in ('exit_code', 'error', 'request_digest', 'streams'):
-            if receipt.get(field) != process.get(field):
-                raise HarnessError(f'EVIDENCE_BINDING: process {field} differs')
-        proofs = receipt.get('streams', {})
-        if set(proofs) != {'stdout.log', 'stderr.log'}:
-            raise RuntimeBlocked('EVIDENCE_MISSING: stdout/stderr proofs absent')
-        for name, proof in proofs.items():
-            if file_proof(directory / name) != proof:
-                raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+        streams = receipt.get('streams')
+        proofs = streams if isinstance(streams, dict) else {}
+        refuse(self.bridge.call('verify-process', {
+            'directory': str(directory),
+            'process': process,
+            'receipt': receipt,
+            'request': request,
+            # Ordered: when several proofs are wrong the refusal must name the
+            # same one the reference implementation named.
+            'proofs': [{'name': name, 'expected': proof} for name, proof in proofs.items()],
+        }))
 
     def verify_evidence(self, ref: str) -> Any:
         value = self.get(ref)
-        for name, proof in value.get('input_files', {}).items():
-            if file_proof(Path(name)) != proof:
-                raise RuntimeBlocked(f'EVIDENCE_CHANGED: comparison input {name}')
+        input_files = value.get('input_files') or {}
+        if input_files:
+            refuse(self.bridge.call('verify-files', {
+                'files': [{'name': str(name), 'expected': proof}
+                          for name, proof in input_files.items()],
+                'label': 'comparison input ',
+            }))
         if 'process' in value:
             self.verify_process(value['process'])
         source = value.get('source', {})

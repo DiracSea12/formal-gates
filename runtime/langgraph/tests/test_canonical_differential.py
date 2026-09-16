@@ -9,7 +9,9 @@ not a formatting preference.
 import random
 import unittest
 
-from formal_gates_harness.infra import _transport_bytes, canonical, digest
+from formal_gates_harness.infra import Bridge, _transport_bytes, canonical, digest
+
+PACKAGE = __import__("pathlib").Path(__file__).resolve().parents[3]
 from reference_canonical import canonical as reference_canonical
 from reference_canonical import digest as reference_digest
 
@@ -30,6 +32,7 @@ def corpus():
         {"n": 1e-4}, {"n": 1e-5}, {"n": 0.0001}, {"n": 0.00001},
         {"n": 5e-324}, {"n": 2.5e-308}, {"n": 1.7976931348623157e308},
         {"n": 3.141592653589793}, {"n": 1234567890123456789.0}, {"n": 1.2345678901234568e18},
+        {"n": 0.0},
         {"s": ""}, {"s": "plain"}, {"s": 'quote" back\\ slash'},
         {"s": "tab\tnl\ncr\rbs\bff\f"}, {"s": "\u0000\u0001\u001f"},
         {"s": "a<b>c&d"}, {"s": "line\u2028sep\u2029par"},
@@ -114,6 +117,47 @@ class CanonicalDifferential(unittest.TestCase):
         envelope = {"operation": "x", "payload": {"value": value}}
         self.assertNotEqual(_transport_bytes(envelope), canonical(envelope))
         self.assertEqual(_transport_bytes(envelope).decode(), '{"operation":"x","payload":{"value":{"b":1,"a":2}}}')
+
+    def test_non_finite_values_cannot_cross_the_transport(self):
+        """A measured boundary of moving canonicalisation behind the bridge.
+
+        The canonical format renders a non-finite float as the token Infinity,
+        which valid JSON does not allow. Python can express it; the bridge
+        envelope cannot carry it, so the request never reaches the encoder.
+        Before the migration this worked in-process. Recorded as a bounded
+        divergence: reachable only for a value that already holds a non-finite
+        float, which the result path refuses to produce.
+        """
+        with self.assertRaises(Exception):
+            canonical({"n": float("inf")})
+
+        # The encoder does render it; the boundary is the envelope, not the
+        # format. Sending the literal as raw JSON reaches the encoder directly.
+        import subprocess
+
+        raw = '{"operation":"canonical","payload":{"value":{"n":1e400}}}'
+        sent = subprocess.run(
+            [str(PACKAGE / ".harness/bin/formal-gates"), "harness", "bridge"],
+            input=raw.encode(), capture_output=True,
+        )
+        rendered = sent.stdout.decode()
+        self.assertIn("Infinity", rendered)
+        self.assertNotIn("1e400", rendered)
+
+    def test_over_range_literal_is_accepted_then_cannot_be_canonicalised(self):
+        """The end-to-end shape of the transport boundary, measured.
+
+        A result containing the literal 1e400 passes framing - both paths agree,
+        and both report +Inf - but that value can no longer be canonicalised,
+        where before the migration it produced {"n":Infinity}. Recorded as an
+        open regression: narrow reachability, but a real behaviour change.
+        """
+        bridge = Bridge(str(PACKAGE / ".harness/bin/formal-gates"))
+        accepted = bridge.call("frame-result", {"text": '{"n":1e400}'})
+        self.assertTrue(accepted["accepted"])
+        self.assertEqual(accepted["result"], {"n": float("inf")})
+        with self.assertRaises(Exception):
+            canonical(accepted["result"])
 
     def test_digest_is_the_sha256_of_the_canonical_bytes(self):
         import hashlib

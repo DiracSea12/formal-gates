@@ -121,6 +121,16 @@ class ResultFrameDifferential(unittest.TestCase):
         with self.assertRaises(UnicodeEncodeError):
             atomic(Path(tempfile.mkdtemp()) / "answer.json", {"note": chr(0xD800)})
 
+        # (3) An out-of-range float literal is NOT a framing divergence: with
+        #     UseNumber the literal survives, so both paths accept it and both
+        #     report +Inf. Where it does bite is the next step - canonicalising
+        #     that value cannot cross the bridge. That end-to-end shape is
+        #     asserted in test_canonical_differential.py.
+        overflow = '{"n":1e400}'
+        self.assertEqual(run_reference(overflow)[0], "accept")
+        self.assertEqual(run_go(self.bridge, overflow)[0], "accept")
+        self.assertEqual(run_reference(overflow)[1], run_go(self.bridge, overflow)[1])
+
 
 if __name__ == "__main__":
     unittest.main()

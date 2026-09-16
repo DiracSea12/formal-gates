@@ -211,6 +211,37 @@ func certify(q sealInput) (any, error) {
 	return map[string]any{"contract_version": Version, "profile": Profile, "status": status, "evidence_level": level, "candidate": q.Candidate, "revision": q.Revision, "checks": q.Checks, "gates": q.Gates, "baseline": Baseline, "full_3_5c_equivalence": false}, nil
 }
 
+// orderedProofDTO carries one recorded proof in document order.
+type orderedProofDTO struct {
+	Name     string          `json:"name"`
+	Expected json.RawMessage `json:"expected"`
+}
+
+func decodeProofs(entries []orderedProofDTO) ([]Proof, error) {
+	proofs := make([]Proof, 0, len(entries))
+	for _, entry := range entries {
+		expected, err := decodeObject(entry.Expected)
+		if err != nil {
+			return nil, err
+		}
+		proofs = append(proofs, Proof{Name: entry.Name, Expected: expected})
+	}
+	return proofs, nil
+}
+
+// decodeObject is decodeValue restricted to a JSON object.
+func decodeObject(raw json.RawMessage) (map[string]any, error) {
+	value, err := decodeValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected a JSON object")
+	}
+	return object, nil
+}
+
 // decodeValue parses a payload value while preserving number literals, so the
 // canonical encoder can decide between integer and float the way Python does.
 func decodeValue(raw json.RawMessage) (any, error) {
@@ -321,6 +352,58 @@ func dispatch(e envelope) (any, error) {
 		}
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
+	case "verify-process":
+		// The caller reads the two JSON documents; the verification rules live
+		// here. A refusal carries its family so the wrapper can raise the same
+		// exception class the reference implementation raised.
+		var q struct {
+			Directory string            `json:"directory"`
+			Process   json.RawMessage   `json:"process"`
+			Receipt   json.RawMessage   `json:"receipt"`
+			Request   json.RawMessage   `json:"request"`
+			Proofs    []orderedProofDTO `json:"proofs"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		process, err := decodeObject(q.Process)
+		if err != nil {
+			return nil, err
+		}
+		receipt, err := decodeObject(q.Receipt)
+		if err != nil {
+			return nil, err
+		}
+		request, err := decodeObject(q.Request)
+		if err != nil {
+			return nil, err
+		}
+		proofs, err := decodeProofs(q.Proofs)
+		if err != nil {
+			return nil, err
+		}
+		kind, refusal := VerifyProcess(q.Directory, process, receipt, request, proofs)
+		if refusal != "" {
+			return map[string]any{"ok": false, "kind": kind, "refusal": refusal}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	case "verify-files":
+		var q struct {
+			Files []orderedProofDTO `json:"files"`
+			Label string            `json:"label"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		files, err := decodeProofs(q.Files)
+		if err != nil {
+			return nil, err
+		}
+		kind, refusal := VerifyFiles(files, q.Label)
+		if refusal != "" {
+			return map[string]any{"ok": false, "kind": kind, "refusal": refusal}, nil
+		}
+		return map[string]any{"ok": true}, nil
 	case "canonical", "digest":
 		// The canonical encoding is the content-addressing format, so it is
 		// owned here rather than in the caller. Numbers are decoded with

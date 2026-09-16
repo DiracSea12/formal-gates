@@ -87,6 +87,13 @@ func TestCanonicalFloatBoundaries(t *testing.T) {
 		{`{"n":5e-324}`, `{"n":5e-324}`},
 		{`{"n":1.7976931348623157e308}`, `{"n":1.7976931348623157e+308}`},
 		{`{"n":-2.5e-3}`, `{"n":-0.0025}`},
+		// Overflowing literals: Python keeps +/-Inf and json.dumps renders the
+		// broken-JSON tokens below, so strconv's range error must not refuse.
+		{`{"n":1e400}`, `{"n":Infinity}`},
+		{`{"n":-1e400}`, `{"n":-Infinity}`},
+		{`{"n":1e309}`, `{"n":Infinity}`},
+		{`{"n":2.5e400}`, `{"n":Infinity}`},
+		{`{"n":1e-400}`, `{"n":0.0}`},
 		{`{"n":100.0}`, `{"n":100.0}`},
 		{`{"n":-100.0}`, `{"n":-100.0}`},
 	}
