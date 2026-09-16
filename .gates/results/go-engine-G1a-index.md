@@ -13,6 +13,7 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 | B0 | 基线冻结与标定（含验收工具、SQLite 锁定） | `41d3375` | `284ceff` | `PASS` |
 | C1 | 结果解码 | `20b0422` | `a756cde` | `PASS`（后被独立验收发现回归，见 C2 重签） |
 | C2 | 证据内容摘要原语 + C1 回归修复 | `87895e4` | 见 `go-engine-C2.json` | `PASS` |
+| C3 | 规范化序列化与内容摘要 | `04f343d` | 见 `go-engine-C3.json` | `PASS` |
 
 C2 记录取代了绑定 `2ed75d4` 的上一版 C2 记录：该候选存在一处 C1 回归，修复后候选前移，原结论不再适用。分支 `codex/go-engine-v1`，基线起点 `c6d49323`。
 
@@ -38,12 +39,17 @@ C2 记录取代了绑定 `2ed75d4` 的上一版 C2 记录：该候选存在一�
 
 **因此证据校验可以在 G1a 内继续补齐。**
 
+### C3 的逐字节等价证据
+
+迁移前实现保存在仅测试使用的 `reference_canonical.py`，450 个样本（其中 300 个是固定种子、跨约 40 个数量级的随机浮点，另有次正规数、`1e15/1e16/1e21` 与 `1e-4/1e-5` 阈值、Unicode、控制字符、`<>&`、U+2028/9、空键、100 个随机嵌套结构）**字节与摘要 0 差异**。另有一层独立证据：122 项 Python 测试全过，工件引用、证据摘要、作业请求摘要与增量绑定路径全部仍然吻合。
+
+关键边界：桥接信封原先用 `canonical` 序列化自己，会无限递归；现改用私有**传输编码**（紧凑、保留非 ASCII、**不排序**），并有测试断言它不等于规范字节——防止信封悄悄变成第二实现。
+
 ## G1a 剩余工作
 
 | 单元 | 内容 | 前置 |
 | --- | --- | --- |
-| C3 | `canonical` / `digest` 迁入 Go（用实测过的编码器），附逐字节等价对照 | 无 |
-| C4 | `verify_process` / `verify_evidence` 迁入 Go：请求/回执绑定、证明集合检查、结果比较 | 依赖 C3 |
+| C4 | `verify_process` / `verify_evidence` 迁入 Go：请求/回执绑定、证明集合检查、结果比较 | **已解除**——C3 之后 `digest(request)` 可在 Go 内计算 |
 
 仍是宿主编配器生命周期策略、随 G2b/G2c 迁移的：`verify_source` / `validate_binding`。
 
@@ -53,6 +59,7 @@ C2 记录取代了绑定 `2ed75d4` 的上一版 C2 记录：该候选存在一�
 | --- | --- | --- | --- |
 | C1 | `internal/harness.FrameResult` | `frame-result` | `native_result.decode_result` 变为适配器 |
 | C2 | `internal/harness.FileProof` | `file-proof` | `infra.file_proof` 变为适配器 |
+| C3 | `internal/harness.CanonicalJSON` / `CanonicalDigest` | `canonical`、`digest` | `infra.canonical` / `infra.digest` 变为转发 |
 
 两处拒绝**不走桥接失败形状**，而走 `value` 里的类型化结果（`{"accepted": false, "refusal": ...}` / `{"ok": false, "refusal": ...}`）。失败形状（`{ok:false, code}` + 退出码 2）保留原义，用于"桥接本身坏了"。
 
