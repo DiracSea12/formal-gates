@@ -308,6 +308,21 @@ func dispatch(e envelope) (any, error) {
 		}
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
+	case "frame-result":
+		// A refusal is a typed business outcome, so it travels inside the value
+		// rather than as a bridge failure: the failure shape is reserved for
+		// malformed operations and must keep meaning "the bridge itself failed".
+		var q struct {
+			Text string `json:"text"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		result, refusal := FrameResult(q.Text)
+		if refusal != "" {
+			return map[string]any{"accepted": false, "refusal": refusal}, nil
+		}
+		return map[string]any{"accepted": true, "result": result}, nil
 	default:
 		return nil, fmt.Errorf("unknown harness operation %q", e.Operation)
 	}
