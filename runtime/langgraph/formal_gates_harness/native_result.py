@@ -10,32 +10,12 @@ It deliberately contains no framing rules of its own. The refusal reasons are
 observable behaviour (existing tests assert them and they reach user-facing
 reports), so they are passed through verbatim rather than rewritten here.
 """
-from pathlib import Path
-
-from .infra import Bridge, HarnessError, RuntimeBlocked
-
-_BRIDGE = None
-
-
-def bridge() -> Bridge:
-    """Resolve the driver binary the same way the development entry does."""
-    global _BRIDGE
-    if _BRIDGE is None:
-        from .cli import binary_path
-        try:
-            binary = binary_path()
-        except HarnessError:
-            # No binding exported (a unit test importing this module directly).
-            # Fall back to the location scripts/harness and the test fixtures
-            # already use, so there is still exactly one driver binary.
-            binary = str(Path(__file__).resolve().parents[3] / '.harness' / 'bin' / 'formal-gates')
-        _BRIDGE = Bridge(binary)
-    return _BRIDGE
+from .infra import HarnessError, RuntimeBlocked, driver_bridge
 
 
 def decode_result(text: str) -> dict:
     """Accept one object, optionally fenced; never choose between competing results."""
-    answered = bridge().call('frame-result', {'text': text})
+    answered = driver_bridge().call('frame-result', {'text': text})
     if answered.get('accepted'):
         return answered['result']
     refusal = answered.get('refusal')

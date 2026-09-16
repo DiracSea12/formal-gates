@@ -308,6 +308,21 @@ func dispatch(e envelope) (any, error) {
 		}
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
+	case "file-proof":
+		// A missing or unreadable file is a typed refusal, not a broken bridge,
+		// for the same reason result framing refusals are: the caller has to be
+		// able to tell "this evidence is gone" from "the bridge failed".
+		var q struct {
+			Path string `json:"path"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		proof, refusal := FileProof(q.Path)
+		if refusal != "" {
+			return map[string]any{"ok": false, "refusal": refusal}, nil
+		}
+		return map[string]any{"ok": true, "proof": proof}, nil
 	case "frame-result":
 		// A refusal is a typed business outcome, so it travels inside the value
 		// rather than as a bridge failure: the failure shape is reserved for

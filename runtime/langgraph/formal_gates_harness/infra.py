@@ -48,11 +48,19 @@ def read(path: Path) -> Any:
         return result
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
 def file_proof(path: Path) -> dict:
-    try:
-        body = path.read_bytes()
-    except OSError as exc:
-        raise RuntimeBlocked(f'EVIDENCE_MISSING: {path}') from exc
-    return {'sha256': hashlib.sha256(body).hexdigest(), 'size': len(body)}
+    """Content proof of one evidence file, computed by Go.
+
+    The primitive lives in `internal/harness.FileProof`; this wrapper only
+    formats the path for the caller-visible refusal and translates the typed
+    refusal back into RuntimeBlocked. It holds no hashing rule of its own.
+    """
+    answered = driver_bridge().call('file-proof', {'path': str(path)})
+    if answered.get('ok'):
+        return answered['proof']
+    refusal = answered.get('refusal')
+    if not refusal:
+        raise HarnessError('Go bridge returned an unusable file-proof answer')
+    raise RuntimeBlocked(refusal)
 
 def git(root: Path, *args: str) -> str:
     p = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
@@ -71,6 +79,25 @@ class Bridge:
         if p.returncode or not answer.get("ok"):
             raise HarnessError(answer.get("message", "Go bridge rejected the operation"))
         return answer["value"]
+
+_DRIVER_BRIDGE = None
+def driver_bridge() -> Bridge:
+    """The single driver binary this process talks to.
+
+    Production resolves it from the binding the development entry exports; a
+    direct import (a unit test, for example) falls back to the location
+    scripts/harness and the test fixtures already use, so there is still
+    exactly one binary rather than a second lookup mechanism.
+    """
+    global _DRIVER_BRIDGE
+    if _DRIVER_BRIDGE is None:
+        from .cli import binary_path
+        try:
+            binary = binary_path()
+        except HarnessError:
+            binary = str(Path(__file__).resolve().parents[3] / '.harness' / 'bin' / 'formal-gates')
+        _DRIVER_BRIDGE = Bridge(binary)
+    return _DRIVER_BRIDGE
 
 @contextlib.contextmanager
 def run_lock(directory: Path):
