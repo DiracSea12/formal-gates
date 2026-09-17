@@ -1,5 +1,6 @@
 """Local artifacts and execution receipts; never a second workflow state machine."""
 from __future__ import annotations
+import base64
 import contextlib
 import hashlib
 import json
@@ -179,17 +180,30 @@ class Store:
         self._event_lock = threading.Lock()
         self.directory.mkdir(parents=True, exist_ok=True)
     def put(self, value: Any) -> str:
-        body = canonical(value); ref = hashlib.sha256(body).hexdigest()
+        # The content-addressing rule (ref = sha256(CanonicalJSON(value))) moved
+        # to Go (M3); this adapter only carries the request and writes the bytes
+        # Go already produced. Re-deriving canonical here would encode the same
+        # value a second time, across a second process, so we keep Go's bytes.
+        answered = self.bridge.call('artifact-plan', {'value': value})
+        canonical_text = answered.get('canonical')
+        if canonical_text is None:
+            raise HarnessError('Go bridge returned an unusable artifact-plan answer')
+        ref = answered.get('ref')
+        if not ref:
+            raise HarnessError('Go bridge returned an unusable artifact-plan answer')
+        body = canonical_text.encode()
         path = self.directory / "artifacts" / f"{ref}.json"
-        # Write the bytes already produced: re-deriving them inside atomic()
-        # would encode the same value a second time, across a second process.
+        # Publish once: existing file (even a corrupt one) is never overwritten.
         if not path.exists(): atomic_bytes(path, body)
         return ref
     def get(self, ref: str) -> Any:
-        if len(ref) != 64 or any(c not in "0123456789abcdef" for c in ref):
-            raise HarnessError("invalid artifact reference")
+        # Two calls make the refusal ordering structural rather than argued:
+        # the format verdict (artifact-reference) runs before any filesystem
+        # access, and the integrity verdict (artifact-binding) only compares.
+        refuse(self.bridge.call('artifact-reference', {'ref': ref}))
         body = (self.directory / "artifacts" / f"{ref}.json").read_bytes()
-        if hashlib.sha256(body).hexdigest() != ref: raise HarnessError("artifact integrity mismatch")
+        refuse(self.bridge.call('artifact-binding', {'ref': ref,
+               'body_b64': base64.b64encode(body).decode('ascii')}))
         return json.loads(body)
     def verify_process(self, process: dict) -> None:
         """Re-check one job's receipt against its request and its stream evidence.

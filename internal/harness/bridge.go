@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -430,6 +431,65 @@ func dispatch(e envelope) (any, error) {
 			return nil, err
 		}
 		return planEvidenceFeedback(q)
+	case "artifact-plan":
+		// The content-addressing rule (ref = sha256(CanonicalJSON(value)))
+		// moves here (M3); Python keeps the artifact path, the publish-once
+		// check and the atomic write. The value is decoded with number fidelity
+		// so integer literals keep arbitrary precision and the produced
+		// canonical bytes match the pre-migration hashlib.sha256(canonical(value)).
+		var q artifactPlanInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		value, err := decodeValue(q.Value)
+		if err != nil {
+			return nil, err
+		}
+		canonical, ref, err := ArtifactPlan(value)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"canonical": string(canonical), "ref": ref}, nil
+	case "artifact-reference":
+		// The reference FORMAT rule moves here (M3). It is a typed business
+		// refusal inside the value (C4 pattern) so Python's refuse() can raise
+		// the same HarnessError the reference implementation raised. This call
+		// runs BEFORE any filesystem access so the format verdict is structural.
+		var q struct {
+			Ref string `json:"ref"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		ok, refusal := VerifyArtifactReference(q.Ref)
+		if !ok {
+			return map[string]any{"ok": false, "kind": "binding", "refusal": refusal}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	case "artifact-binding":
+		// The integrity rule moves here (M3), over the RAW bytes. The bytes
+		// arrive base64-encoded so a non-UTF-8 tampered artifact yields an
+		// integrity refusal rather than a UnicodeDecodeError. A bad base64 body
+		// is a caller error, not a business refusal: it fails the bridge (shape
+		// {ok:false, code}, exit 2). This op does NOT re-check the reference
+		// format — that is owned by artifact-reference — so the refusal ordering
+		// is structural.
+		var q struct {
+			Ref     string `json:"ref"`
+			BodyB64 string `json:"body_b64"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		body, err := base64.StdEncoding.DecodeString(q.BodyB64)
+		if err != nil {
+			return nil, fmt.Errorf("artifact-binding: invalid base64 body: %w", err)
+		}
+		ok, refusal := VerifyArtifactBinding(q.Ref, body)
+		if !ok {
+			return map[string]any{"ok": false, "kind": "binding", "refusal": refusal}, nil
+		}
+		return map[string]any{"ok": true}, nil
 	case "canonical", "digest":
 		// The canonical encoding is the content-addressing format, so it is
 		// owned here rather than in the caller. Numbers are decoded with
