@@ -99,6 +99,9 @@
         "what": "native_zcode.capture_binding() names the bundled catalogue through ZCODE_BUILTIN_PROVIDER_CONFIG_FILE - the host's own documented input for it - only when the host's own two candidates are absent, so a host whose lookup works is untouched. No file is written to the application bundle or to ~/.zcode. The catalogue is deliberately not added to the binding's file proofs, because the host refreshes it on its own.",
         "verified": "baseline: exit 1, no protocol emitted; with the catalogue named: alive and five startup/storageState events emitted. Point sensitivity: 3 of 4 new tests fail with the implementation reverted, 4/4 pass with it. go vet exit 0; Python suite 199 OK (195 before + 4 new).",
         "effect_on_the_item": "moves the failure forward, it does not clear it: ./scripts/harness doctor --provider zcode now answers {\"ok\": false, \"error\": \"ZCODE_NATIVE workspace/readState: {\\\"code\\\": -32601, \\\"message\\\": \\\"Method not found: workspace/readState\\\"}\"} instead of exiting at launch.",
+        "runtime_identity_after_fix": "2b29d6d5d17520e985b0ba5b2fc9f69b5b5cb3dd57f495233b72b88bf5e80383",
+        "identity_note": "The transport is part of the runtime identity, so this source change moves it: the recorded 8/9 attempt bound 37194cd2... on 9e4a622, and HEAD (0eebcc6) now computes 2b29d6d5.... Per section 12.5 the recorded attempt therefore no longer describes the current tree; the recorded item results stand as observed for that attempt, and any re-acceptance must run on the repaired candidate and bind the identity it computes.",
+        "driver_binary_sha256_unchanged": "a4d9ac941bb8c7559f09315725545625fd4594b906768fafb138e808657eaa05",
         "evidence": ".harness/validation/zcode-launch-20260917T163706Z/DIAGNOSIS.md"
       },
       "remaining_adaptation": {

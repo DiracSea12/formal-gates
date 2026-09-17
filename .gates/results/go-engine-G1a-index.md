@@ -199,6 +199,7 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 - **跨平台**：只在本地 macOS 实测。
 - **M3 的返修候选**：已产出（定点证明、Go 全量、Python 全套 199 项、隔离回放均通过），但**尚未完成验收**，因此 `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` 的关闭**尚未被确认**。在完成验收并把记录结论改为 `PASS` 之前，G1b 不得按已收口处理。挡路的是 `doctor-zcode`，成因见 `ZCODE-APP-SERVER-CATALOGUE-LOCATION-STALE`（已修）与 `ZCODE-APP-SERVER-PROTOCOL-SURFACE-CHANGED`（未修，属 G2c）。
 - **ZCode 宿主接入（阻塞整条链）**：本机 ZCode 3.12.3 的 app-server 已换协议面，本传输未跟上。`doctor-zcode` 是**每个单元**的必需项，故这不是 M3 一项的问题。**未验证**：新协议下工作区原生模型选择从哪读、是否需先授信（`workspace/hooks/trustGrant`）。
+- **身份已因该修复前移**：传输属运行时身份的一部分，故 `6757231` 使身份由 `37194cd2…`（记录里 8/9 那次尝试在 `9e4a622` 上绑定的值）变为 **`2b29d6d5…`**（HEAD `0eebcc6` 上重算）。按 §12.5，**记录中那次尝试已不再描述当前树**；其九项结果作为"那一次尝试的观测"保留，任何重新验收都必须在返修候选上运行并绑定它自己算出的身份。驱动二进制摘要未变（`a4d9ac94…`，可重复构建）。
 - **`M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` 的触发点**：**未恢复**。类别已由确定性复现确定（check 侧错误经 `check-runtime` 中断浮出、末态无 `terminal`），但三个候选触发站点签名相同、保留物不足。该用例在第二次全套、返修后全套与 10 次隔离回放中均通过——**这些通过不解释第一次失败**，本项保持"未解释"。
 
 ## 已知有界差异与风险
