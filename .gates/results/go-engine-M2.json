@@ -1,0 +1,94 @@
+{
+  "unit": "M2",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M2/20260917T021022Z-48351",
+  "recorded_at": "2026-09-17T02:17:59.593975+00:00",
+  "overall": "PASS",
+  "previous_accepted_baseline": "M1",
+  "candidate": {
+    "commit": "dfa23e77d4518976b0b2c0909e845344bae15d58",
+    "branch": "codex/go-engine-v1",
+    "runtime_identity": "fa680731dd96e7e09994cef4721b425a30515b08d8709b4139ddb33190e7f1c5",
+    "driver_binary_sha256": "0b4c4307aa504fe83f5a77ab04da08c815ff8409fcdf2a66d124bf4491c8b782",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    }
+  },
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.973
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.474
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "status": "PASS",
+      "seconds": 393.583
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.583
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "status": "PASS",
+      "seconds": 51.054
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.637
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.128
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.743
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.065
+    }
+  ],
+  "budget": {
+    "go_test_backstop_timeout": "60m",
+    "stall_budget_seconds": 240.0,
+    "note": "The regression is judged by result and progress, not by wall-clock speed."
+  },
+  "attestation": {
+    "summary_sha256": "96ef29141ee4df22721e188960ccd0b0e27e59722871ba5089ae747a3e298b3a",
+    "identity_sha256": "5caba58b7b549b6901af509af8a7b23941d917bf5563e7e99d700c5f9f1ad266",
+    "evidence_sha256": "fe09c4a81419f544b7d090594de631dc92a620b232c769eca6dbc327b49bfeb0",
+    "evidence_file_count": 64
+  },
+  "bookkeeping": [
+    ".gates/results/go-engine-M2.json",
+    ".gates/results/go-engine-M2.md",
+    ".gates/results/go-engine-G1a-index.md"
+  ],
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit M2"
+}
