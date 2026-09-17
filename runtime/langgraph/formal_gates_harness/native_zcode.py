@@ -21,12 +21,48 @@ from .native_result import decode_result
 READ_ONLY_TOOLS=['Read','Glob','Grep','WebSearch','WebFetch']
 
 
+# The app-server reads its built-in provider catalogue from a file, or from one
+# of two paths it derives from its own script location. A launcher may name that
+# file instead; see bundled_provider_catalogue().
+BUILTIN_PROVIDER_CATALOGUE_ENV='ZCODE_BUILTIN_PROVIDER_CONFIG_FILE'
+
+
+def bundled_provider_catalogue(script):
+    """Name the app-server's bundled provider catalogue when the host cannot.
+
+    The app-server resolves that catalogue from the script's own directory:
+    `<script dir>/provider/zcode-builtin.json`, then a source-tree-relative
+    `../../../../../config/provider/zcode-builtin.json`. The 3.12.3 bundle ships
+    it at `<Resources>/config/provider/zcode-builtin.json`, which neither
+    candidate reaches, so the app-server exits 1 before emitting any protocol.
+
+    The host defines ZCODE_BUILTIN_PROVIDER_CONFIG_FILE so a launcher can name
+    that file; the host still computes the *active* catalogue it maintains and
+    refreshes itself, and takes ours as the bundled seed. It is returned only
+    when the host's own candidates are absent, so a host whose lookup already
+    works keeps its current behaviour unchanged. Nothing is written anywhere.
+    """
+    directory=script.parent
+    for candidate in (
+        directory/'provider'/'zcode-builtin.json',
+        Path(os.path.normpath(os.path.join(str(directory),'../../../../../config/provider/zcode-builtin.json'))),
+    ):
+        if candidate.is_file(): return None
+    resources=directory.parent/'config'/'provider'/'zcode-builtin.json'
+    return resources if resources.is_file() else None
+
+
 def capture_binding():
     node=shutil.which('node')
     script=Path(os.environ.get('FORMAL_GATES_ZCODE_SCRIPT','/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs')).expanduser().resolve()
     if not node or not script.is_file(): raise RuntimeBlocked('ZCODE_UNAVAILABLE: node or app-server script missing')
     launch={'executable':str(Path(node).resolve()),'script':str(script)}
-    return {'provider':'zcode','launch':launch,'files':{p:file_proof(Path(p)) for p in launch.values()}}
+    binding={'provider':'zcode','launch':launch,'files':{p:file_proof(Path(p)) for p in launch.values()}}
+    # The catalogue is host configuration the host refreshes on its own, so it is
+    # named in the launch environment but not proofed like an executed binary.
+    catalogue=bundled_provider_catalogue(script)
+    if catalogue is not None: binding['environment']={BUILTIN_PROVIDER_CATALOGUE_ENV:str(catalogue)}
+    return binding
 
 
 class Client:
@@ -240,7 +276,7 @@ def execute(request,directory,probe=False):
     if previous:
         if not request.get('model'): raise RuntimeBlocked('ZCODE_CONFIG: resume requires the bound model selection')
         environment,local=resume_model_environment(request['model'])
-    client=Client(launch,workspace,directory,environment);attached=False
+    client=Client(launch,workspace,directory,{**binding.get('environment',{}),**environment});attached=False
     try:
         # Load this workspace's native model catalog before restoring a historic
         # session. This is a read, not provider registration or credential copying.

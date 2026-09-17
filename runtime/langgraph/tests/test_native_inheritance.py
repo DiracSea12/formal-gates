@@ -184,6 +184,76 @@ class NativeRequests(unittest.TestCase):
             self.assertEqual(set(binding['launch']), {'executable', 'script'})
             self.assertEqual(len(binding['files']), 2)
 
+    def test_zcode_binding_names_the_bundled_catalogue_the_host_cannot_reach(self):
+        # ZCode 3.12.3 ships the catalogue at <Resources>/config/provider/, which
+        # neither path the app-server derives from its own script location
+        # reaches. The launcher names it instead.
+        with tempfile.TemporaryDirectory() as t:
+            resources = Path(t) / 'Resources'
+            script = resources / 'glm' / 'zcode.cjs'; script.parent.mkdir(parents=True); script.write_text('native')
+            catalogue = resources / 'config' / 'provider' / 'zcode-builtin.json'
+            catalogue.parent.mkdir(parents=True); catalogue.write_text('{"revision": 28}')
+            node = Path(t) / 'node'; node.write_text('node')
+            with patch.dict(os.environ, {'FORMAL_GATES_ZCODE_SCRIPT': str(script)}), \
+                 patch.object(zcode.shutil, 'which', return_value=str(node)):
+                binding = zcode.capture_binding()
+            self.assertEqual(binding['environment'],
+                             {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(catalogue)})
+            # Naming a host-owned catalogue is not proofing an executed binary.
+            self.assertEqual(len(binding['files']), 2)
+
+    def test_zcode_binding_leaves_a_host_that_finds_its_own_catalogue_alone(self):
+        # The pre-3.12.3 layout: the app-server resolves this itself, so the
+        # launcher must not override anything.
+        with tempfile.TemporaryDirectory() as t:
+            resources = Path(t) / 'Resources'
+            script = resources / 'glm' / 'zcode.cjs'; script.parent.mkdir(parents=True); script.write_text('native')
+            (script.parent / 'provider').mkdir()
+            (script.parent / 'provider' / 'zcode-builtin.json').write_text('{}')
+            (resources / 'config' / 'provider').mkdir(parents=True)
+            (resources / 'config' / 'provider' / 'zcode-builtin.json').write_text('{}')
+            node = Path(t) / 'node'; node.write_text('node')
+            with patch.dict(os.environ, {'FORMAL_GATES_ZCODE_SCRIPT': str(script)}), \
+                 patch.object(zcode.shutil, 'which', return_value=str(node)):
+                binding = zcode.capture_binding()
+            self.assertNotIn('environment', binding)
+
+    def test_zcode_binding_claims_no_catalogue_when_the_bundle_ships_none(self):
+        # Negative control: with no catalogue anywhere the binding stays silent
+        # and the app-server reports its own failure rather than ours.
+        with tempfile.TemporaryDirectory() as t:
+            script = Path(t) / 'app.cjs'; script.write_text('native')
+            node = Path(t) / 'node'; node.write_text('node')
+            with patch.dict(os.environ, {'FORMAL_GATES_ZCODE_SCRIPT': str(script)}), \
+                 patch.object(zcode.shutil, 'which', return_value=str(node)):
+                binding = zcode.capture_binding()
+            self.assertNotIn('environment', binding)
+            self.assertIsNone(zcode.bundled_provider_catalogue(script))
+
+    def test_zcode_launch_gives_the_child_the_named_catalogue(self):
+        # The binding's launch environment reaches the child, and a resume's own
+        # environment is merged with it rather than replacing it.
+        seed = {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': '/host/seed.json'}
+        with tempfile.TemporaryDirectory() as t:
+            directory = Path(t)
+            binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'},
+                       'files': {}, 'environment': dict(seed)}
+            for previous, resumed, expected in (
+                ('', {}, seed),
+                ('root', {'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': '/host/personal.json'},
+                 {**seed, 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': '/host/personal.json'}),
+            ):
+                with self.subTest(previous=previous), patch.object(zcode, 'Client') as client, \
+                     patch.object(zcode, 'resume_model_environment', return_value=(resumed, {})):
+                    client.return_value.request.side_effect = RuntimeBlocked('probe stopped at the first request')
+                    request = {'workspace': t, 'read_only': True, 'binding': binding,
+                               'identity': previous, 'model': json.dumps(MODEL) if previous else ''}
+                    with self.assertRaisesRegex(RuntimeBlocked, 'probe stopped'):
+                        zcode.execute(request, directory, probe=True)
+                launch, _workspace, _directory, environment = client.call_args.args
+                self.assertEqual(launch, binding['launch'])
+                self.assertEqual(environment, expected)
+
     def test_dsh_development_new_and_resume_have_no_permission_patch(self):
         for previous in ('', 'root'):
             with self.subTest(previous=previous), tempfile.TemporaryDirectory() as t:
