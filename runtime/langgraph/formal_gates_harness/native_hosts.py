@@ -8,8 +8,7 @@ from dataclasses import dataclass
 import importlib
 from pathlib import Path
 from .infra import HarnessError, RuntimeBlocked, file_proof
-
-SOURCE_FILES = ('native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json')
+from .native_transport import SOURCE_FILES
 
 @dataclass(frozen=True)
 class NativeAdapter:

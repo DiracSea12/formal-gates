@@ -1,16 +1,16 @@
 """Shared host boundary regressions. No paid/native model prompts."""
 from pathlib import Path
 import json
-import os
-import queue
 import tempfile
 import unittest
-from unittest.mock import Mock,patch
-from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,file_proof
+from unittest.mock import Mock
+from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof
 from formal_gates_harness.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
-from formal_gates_harness.native_zcode import materialize_source,exact_model,Client
+from formal_gates_harness.native_zcode import (Client,advertised_models,apply_selection,handshake,
+                                               materialize_source,reference,selection)
 
 ROOT=Path(__file__).resolve().parents[3]
+REF={'providerId':'original','modelId':'M'}
 
 class HostRegistryTests(unittest.TestCase):
     def setUp(self):self.bridge=Bridge(str(ROOT/'.harness/bin/formal-gates'))
@@ -88,35 +88,53 @@ class ZCodeEvidenceTests(unittest.TestCase):
     def test_failed_transport_not_reconciled(self):
         self.events();atomic(self.root/'native-error.json',{'error':'actual network failure'})
         with self.assertRaisesRegex(RuntimeBlocked,'not a completed'):adapter_for('zcode').reconcile(self.root,{'exit_code':1,'error':''})
-    def test_model_provider_never_silently_substituted(self):
-        ref={'providerId':'original','modelId':'M'}
-        snap={'settings':{'model':{'current':ref,'available':[{'ref':ref}]}}}
-        self.assertEqual(exact_model('M',snap),ref)
-        with self.assertRaisesRegex(RuntimeBlocked,'no fallback'):
-            exact_model(json.dumps({'providerId':'other','modelId':'M'}),snap)
+    def test_a_bound_selection_names_one_exact_provider_and_model(self):
+        # A bare model name cannot be resolved against a catalogue this version
+        # does not expose, so it is refused rather than matched to some provider.
+        self.assertEqual(reference(json.dumps(REF)),REF)
+        self.assertIsNone(reference(''))
+        for value in ('M','{}',json.dumps({**REF,'extra':1}),json.dumps([REF])):
+            with self.subTest(value=value),self.assertRaisesRegex(RuntimeBlocked,'ZCODE_CONFIG'):
+                reference(value)
 
-    def test_resume_uses_native_config_without_persisting_secret(self):
-        from formal_gates_harness.native_zcode import resume_model_environment,runtime_model
-        model={'providerId':'bound-provider','modelId':'M'}
-        with tempfile.TemporaryDirectory() as t:
-            path=Path(t)/'host.json'
-            original={'provider':{'bound-provider':{'enabled':True,'kind':'anthropic','options':{'baseURL':'https://native.example/v1','apiKey':'FAKE_TEST_ONLY'},'models':{'M':{}}}}}
-            atomic(path,original);before=path.read_bytes()
-            with patch.dict(os.environ,FORMAL_GATES_ZCODE_CONFIG=str(path)):
-                env,local=resume_model_environment(json.dumps(model))
-            catalog={'modelCatalog':{'providers':[{'providerId':'bound-provider','kind':'openai-compatible','source':'builtin','models':[{'modelId':'M'}]}]}}
-            value=runtime_model(catalog,model,'high',local)
-            self.assertEqual(env['FORMAL_GATES_ZCODE_API_KEY'],'FAKE_TEST_ONLY')
-            self.assertNotIn('FAKE_TEST_ONLY',json.dumps(value))
-            self.assertEqual(value['provider']['kind'],'anthropic')
-            self.assertNotIn('apiFormat',value['provider'])
-            self.assertEqual(value['provider']['apiKey']['source'],'env')
-            self.assertEqual(value['provider']['baseURL'],'https://native.example/v1')
-            self.assertEqual(path.read_bytes(),before)
-    def test_missing_catalog_model_cannot_materialize(self):
-        from formal_gates_harness.native_zcode import runtime_model
-        with self.assertRaisesRegex(RuntimeBlocked,'catalog entry'):
-            runtime_model({'modelCatalog':{'providers':[]}}, {'providerId':'gone','modelId':'M'},'high')
+    def test_selection_is_read_from_the_host_and_never_invented(self):
+        # 3.12.3 answers an unconfigured app-server with an empty catalogue and no
+        # current model. That is recorded as it is; nothing is guessed or filled.
+        empty={'settings':{'model':{'available':[],'current':None},'thoughtLevel':{'current':''}}}
+        self.assertEqual(selection(empty),{'model':'','reasoning_effort':''})
+        self.assertEqual(advertised_models(empty),[])
+        bound={'settings':{'model':{'current':REF,'available':[{'ref':REF}]},'thoughtLevel':{'current':'high'}}}
+        self.assertEqual(selection(bound),{'model':canonical(REF).decode(),'reasoning_effort':'high'})
+        self.assertEqual(advertised_models(bound),[canonical(REF).decode()])
+
+    def test_unadvertised_selection_is_refused_before_any_change(self):
+        client=Mock(identity='root')
+        snapshot={'settings':{'model':{'current':None,'available':[{'ref':REF}]},'thoughtLevel':{'current':''}}}
+        with tempfile.TemporaryDirectory() as t,self.assertRaisesRegex(RuntimeBlocked,'no fallback'):
+            apply_selection(client,snapshot,{'providerId':'other','modelId':'M'},'',Path(t),t)
+        client.request.assert_not_called()
+
+    def test_a_selection_the_host_does_not_apply_is_never_recorded(self):
+        client=Mock(identity='root');client.request.return_value={}
+        snapshot={'settings':{'model':{'current':None,'available':[{'ref':REF}]},'thoughtLevel':{'current':''}}}
+        with tempfile.TemporaryDirectory() as t,self.assertRaisesRegex(RuntimeBlocked,'was not applied'):
+            apply_selection(client,snapshot,REF,'',Path(t),t)
+        self.assertEqual(client.request.call_args.args[0],'session/setModel')
+        self.assertFalse((Path(t)/'identity.json').exists())
+
+    def test_a_session_with_no_native_selection_and_none_bound_is_refused(self):
+        client=Mock(identity='root')
+        empty={'settings':{'model':{'available':[],'current':None},'thoughtLevel':{'current':''}}}
+        with tempfile.TemporaryDirectory() as t,self.assertRaisesRegex(RuntimeBlocked,'selected model missing'):
+            apply_selection(client,empty,None,'',Path(t),t)
+        client.request.assert_not_called()
+
+    def test_the_app_server_protocol_handshake_is_required(self):
+        self.assertEqual(handshake({'protocol':{'name':'ZCode Protocol','version':1}}),
+                         {'name':'ZCode Protocol','version':1})
+        for protocol in ({},{'name':'ZCode Protocol','version':2},{'name':'ACP','version':1}):
+            with self.subTest(protocol=protocol),self.assertRaisesRegex(RuntimeBlocked,'ZCODE_PROTOCOL'):
+                handshake({'protocol':protocol})
 
 
 

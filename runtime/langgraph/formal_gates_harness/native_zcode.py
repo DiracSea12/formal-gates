@@ -1,30 +1,50 @@
 """ZCode app-server transport, reusing the original native event contract.
 
-No graph imports, workflow callbacks, global configuration writes or model
-substitution. Only read-only roles narrow native tools. Terminals require exact
-session/input/turn IDs.
+Only the ZCode protocol lives here; process handling, the request/reply loop,
+bindings and evidence come from native_transport. No graph imports, workflow
+callbacks, global configuration writes or model substitution. Only read-only
+roles narrow native tools. Terminals require exact session/input/turn IDs.
+
+The app-server speaks "ZCode Protocol v1". It applies no selection of its own: a
+client names an exact provider/model reference and reads the result back.
 """
 from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import queue
 import shutil
-import subprocess
-import threading
 import time
-from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof, canonical
-from .native_result import decode_result
+from .infra import RuntimeBlocked, SessionUnavailable, atomic, read, canonical
+from .native_transport import (Client as Transport, Reply, close_session,
+                               capture_binding as capture, evidence_source, launch_environment,
+                               reconcile_completed_output as reconcile, session_events,
+                               transport_files, write_answer)
+
+TRANSPORT_FILES=transport_files(Path(__file__).name)
 
 # App-server has no read-only mode. Its native allowlist also governs MCP;
 # arbitrary command/plugin executors cannot enforce this role's write boundary.
 READ_ONLY_TOOLS=['Read','Glob','Grep','WebSearch','WebFetch']
 
+# The handshake every snapshot carries. A different one means the app-server no
+# longer speaks the protocol this transport was accepted against.
+PROTOCOL_NAME='ZCode Protocol'
+PROTOCOL_VERSION=1
+
+# The host's own name for "this session is gone", used on resume and on any
+# call against a session the host no longer holds.
+SESSION_UNAVAILABLE=-32004
+
+DEFAULT_SCRIPT='/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
 
 # The app-server reads its built-in provider catalogue from a file, or from one
 # of two paths it derives from its own script location. A launcher may name that
 # file instead; see bundled_provider_catalogue().
 BUILTIN_PROVIDER_CATALOGUE_ENV='ZCODE_BUILTIN_PROVIDER_CONFIG_FILE'
+
+# Result-framing failures only. Runtime and transport failures are never
+# laundered into a successful worker result.
+RESULT_FRAME_ERROR='RuntimeBlocked: NATIVE_RESULT:'
 
 
 def bundled_provider_catalogue(script):
@@ -41,6 +61,9 @@ def bundled_provider_catalogue(script):
     refreshes itself, and takes ours as the bundled seed. It is returned only
     when the host's own candidates are absent, so a host whose lookup already
     works keeps its current behaviour unchanged. Nothing is written anywhere.
+
+    This names host configuration only. It does not seed, register or select a
+    provider: the host's own account configuration decides what is selectable.
     """
     directory=script.parent
     for candidate in (
@@ -54,261 +77,192 @@ def bundled_provider_catalogue(script):
 
 def capture_binding():
     node=shutil.which('node')
-    script=Path(os.environ.get('FORMAL_GATES_ZCODE_SCRIPT','/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs')).expanduser().resolve()
+    script=Path(os.environ.get('FORMAL_GATES_ZCODE_SCRIPT',DEFAULT_SCRIPT)).expanduser().resolve()
     if not node or not script.is_file(): raise RuntimeBlocked('ZCODE_UNAVAILABLE: node or app-server script missing')
     launch={'executable':str(Path(node).resolve()),'script':str(script)}
-    binding={'provider':'zcode','launch':launch,'files':{p:file_proof(Path(p)) for p in launch.values()}}
     # The catalogue is host configuration the host refreshes on its own, so it is
     # named in the launch environment but not proofed like an executed binary.
     catalogue=bundled_provider_catalogue(script)
-    if catalogue is not None: binding['environment']={BUILTIN_PROVIDER_CATALOGUE_ENV:str(catalogue)}
-    return binding
+    return capture('zcode',launch,
+                   {BUILTIN_PROVIDER_CATALOGUE_ENV:str(catalogue)} if catalogue else None)
 
 
-class Client:
-    def __init__(self, launch, workspace, directory, environment=None):
-        self.identity='';self.counter=0;self.events=[];self.messages=queue.Queue();self.directory=directory
-        self.interactions=[]
-        self.errors=(directory/'host.stderr').open('ab');self.trace=(directory/'protocol.jsonl').open('a')
-        self.proc=subprocess.Popen([launch['executable'],launch['script'],'--cwd',workspace,'app-server'],
-            cwd=workspace,env={**os.environ, **(environment or {})},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.errors,text=True,bufsize=1)
-        atomic(directory/'native-process.json',{'pid':self.proc.pid,'pgid':os.getpgid(self.proc.pid) if os.name!='nt' else None})
-        self.reader=threading.Thread(target=self.collect,daemon=True);self.reader.start()
-    def collect(self):
-        for line in self.proc.stdout:
-            try:
-                message=json.loads(line)
-                # Record protocol routing, not configuration/auth payloads.
-                self.trace.write(json.dumps({k:message[k] for k in ('id','method') if k in message})+'\n');self.trace.flush()
-                self.messages.put(message)
-            except ValueError:self.messages.put({'closed':'Invalid native protocol output'})
-        self.messages.put({'closed':'Native output closed'})
-    def send(self,value):
-        self.proc.stdin.write(json.dumps(value,ensure_ascii=False)+'\n');self.proc.stdin.flush()
-    def receive(self,timeout=60):
-        try:msg=self.messages.get(timeout=timeout)
-        except queue.Empty as exc: raise RuntimeBlocked('ZCODE_TIMEOUT: no native message; session is not assumed lost') from exc
-        if 'closed' in msg: raise RuntimeBlocked('ZCODE_TRANSPORT: '+msg['closed'])
-        if msg.get('method') and 'id' in msg:
-            method=msg['method']
-            if method=='session/requestRuntimePreferences':
-                # ZCode defines this response as its native compatibility fallback.
-                self.send({'id':msg['id'],'error':{'code':-32601,'message':'Use native runtime preferences fallback'}})
-                status='native-default-fallback'
-            elif method=='interaction/requestOfficialMcpAuthHeaders':
-                # No desktop authentication port is available on this connection.
-                self.send({'id':msg['id'],'result':{'ok':False,'reason':'official_auth_unavailable'}})
-                status='official_auth_unavailable'
-            elif method in ('interaction/requestPermission', 'interaction/requestUserInput',
-                            'interaction/requestProviderRuntimeHeaders'):
-                raise RuntimeBlocked('ZCODE_INTERACTION_REQUIRED: '+method+' needs a native interactive client; no user decision was sent')
-            else:
-                self.send({'id':msg['id'],'error':{'code':-32601,'message':'Client method not supported'}})
-                status='unsupported-method'
-            self.interactions.append({'method':method,'status':status})
-            atomic(self.directory/'interaction-status.json',self.interactions)
-        elif msg.get('method')=='session/event':
-            event=msg['params']
-            if self.identity and event.get('sessionId')==self.identity:
-                self.events.append(event)
-                with (self.directory/'native-events.jsonl').open('a') as f:f.write(json.dumps(event,ensure_ascii=False)+'\n');f.flush()
-        return msg
-    def request(self,method,params,timeout=60):
-        self.counter+=1;ident='native-'+str(self.counter);self.send({'id':ident,'method':method,'params':params})
-        deadline=time.monotonic()+timeout
-        while time.monotonic()<deadline:
-            msg=self.receive(max(.1,deadline-time.monotonic()))
-            if msg.get('id')==ident and not msg.get('method'):
-                if msg.get('error'):
-                    e=msg['error'];text=e.get('message','')
-                    if method=='session/resume' and e.get('code')==-32004 and text.startswith('Session not found:'):
-                        raise SessionUnavailable('ZCODE_SESSION_UNAVAILABLE: '+text,identity=params.get('sessionId',''),code=e['code'])
-                    raise RuntimeBlocked(f'ZCODE_NATIVE {method}: {json.dumps(e,ensure_ascii=False)}')
-                return msg.get('result',{})
-        raise RuntimeBlocked('ZCODE_TIMEOUT: '+method)
-    def close(self):
-        try:self.proc.stdin.close()
-        except (OSError,BrokenPipeError):pass
-        try:self.proc.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            self.proc.terminate()
-            try:self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait()
-        self.reader.join(timeout=2);self.trace.close();self.errors.close()
+class Client(Transport):
+    """ZCode's client-directed replies and error classification."""
+
+    transport_prefix='ZCODE_TRANSPORT'
+    request_prefix='ZCODE_NATIVE'
+
+    def __init__(self,launch,workspace,directory,environment=None):
+        super().__init__([launch['executable'],launch['script'],'--cwd',workspace,'app-server'],
+                         workspace,directory,environment)
+
+    def respond(self,method,params):
+        if method=='session/requestRuntimePreferences':
+            # ZCode defines this response as its native compatibility fallback:
+            # the host then keeps its own preferences instead of ours.
+            return Reply({'error':{'code':-32601,'message':'Use native runtime preferences fallback'}},
+                         'native-default-fallback')
+        if method=='interaction/requestOfficialMcpAuthHeaders':
+            # No desktop authentication port is available on this connection.
+            return Reply({'result':{'ok':False,'reason':'official_auth_unavailable'}},
+                         'official_auth_unavailable')
+        if method in ('interaction/requestPermission','interaction/requestUserInput',
+                      'interaction/requestProviderRuntimeHeaders'):
+            raise RuntimeBlocked('ZCODE_INTERACTION_REQUIRED: '+method+' needs a native interactive client; no user decision was sent')
+        return None
+
+    def classify(self,method,error,params):
+        if (method=='session/resume' and error.get('code')==SESSION_UNAVAILABLE
+                and error.get('message','').startswith('Session not found:')):
+            return SessionUnavailable('ZCODE_SESSION_UNAVAILABLE: '+error['message'],
+                                      identity=params.get('sessionId',''),code=error['code'])
+        return None
+
+    def notification(self,message):
+        if message.get('method')!='session/event': return
+        event=message.get('params')
+        # Child sessions are separate evidence; only the bound root is recorded.
+        if not self.identity or not isinstance(event,dict) or event.get('sessionId')!=self.identity: return
+        self.events.append(event)
+        with (self.directory/'native-events.jsonl').open('a') as f:f.write(json.dumps(event,ensure_ascii=False)+'\n');f.flush()
 
 
-def selection(snapshot):
-    settings=snapshot.get('settings',{});model=settings.get('model',{}).get('current')
-    if not isinstance(model,dict) or set(model)!={'providerId','modelId'}:
-        raise RuntimeBlocked('ZCODE_CONFIG: native selected model missing')
-    return {'model':canonical(model).decode(),'reasoning_effort':settings.get('thoughtLevel',{}).get('current','')}
+def reference(value):
+    """The exact provider/model reference a bound selection names.
 
-
-def exact_model(value,snapshot):
-    if not value:return snapshot['settings']['model']['current']
-    try:ref=json.loads(value)
-    except ValueError:
-        current=snapshot['settings']['model']['current']
-        ref={'providerId':current['providerId'],'modelId':value}
-    available=[a['ref'] for a in snapshot['settings']['model'].get('available',[])]
-    if ref not in available:raise RuntimeBlocked('ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback')
+    A bare model name cannot be resolved: this version exposes no catalogue to
+    resolve it against, so borrowing another provider's identity is not possible
+    and would be a substitution anyway.
+    """
+    if not value: return None
+    try: ref=json.loads(value)
+    except ValueError as exc:
+        raise RuntimeBlocked('ZCODE_CONFIG: a bound selection must name a provider and a model') from exc
+    if not isinstance(ref,dict) or set(ref)!={'providerId','modelId'}:
+        raise RuntimeBlocked('ZCODE_CONFIG: a bound selection must name exactly one provider and model')
     return ref
 
 
-def resume_model_environment(value):
-    """Use only the exact selected provider's EXISTING local runtime options.
+def selected_model(snapshot):
+    """The exact native selection the host reports, or None if it reports none."""
+    model=((snapshot.get('settings') or {}).get('model') or {}).get('current')
+    return model if isinstance(model,dict) and set(model)=={'providerId','modelId'} else None
 
-    ZCode's catalog omits built-in endpoint/auth details on cold restore. The
-    adapter reads the host's documented CLI config, does not write it, and passes
-    an env reference to the native runtime API. No secret enters a prompt,
-    request.json or evidence record. The native host owns its tool environments.
+
+def selection(snapshot):
+    """The recorded selection: the host's own reported values, never our wish."""
+    model=selected_model(snapshot)
+    thoughtLevel=(snapshot.get('settings') or {}).get('thoughtLevel') or {}
+    return {'model':canonical(model).decode() if model else '','reasoning_effort':thoughtLevel.get('current') or ''}
+
+
+def advertised_models(snapshot):
+    """Every exact reference the host currently advertises to this client."""
+    available=((snapshot.get('settings') or {}).get('model') or {}).get('available') or []
+    return [canonical(entry['ref']).decode() for entry in available
+            if isinstance(entry,dict) and isinstance(entry.get('ref'),dict)
+            and set(entry['ref'])=={'providerId','modelId'}]
+
+
+def apply_selection(client,snapshot,wanted,effort,directory,workspace):
+    """Apply the bound selection and read the host back; never substitute.
+
+    A host may silently ignore a setting it does not support (an unavailable
+    thought level is dropped with a warning), so every value is confirmed from
+    the host's own report before it is recorded. Nothing is persisted to the
+    workspace's last-used selection.
     """
-    try: model=json.loads(value)
-    except ValueError as exc: raise RuntimeBlocked('ZCODE_CONFIG: resume needs a full provider/model reference') from exc
-    path=Path(os.environ.get('FORMAL_GATES_ZCODE_CONFIG',str(Path.home()/'.zcode/cli/config.json')))
-    if not path.is_file():return {},{}
-    config=read(path);provider=config.get('provider',{}).get(model.get('providerId'),{})
-    if not provider:return {},{}
-    if provider.get('enabled') is False:raise RuntimeBlocked('ZCODE_CONFIG: selected native provider is disabled')
-    options=provider.get('options',{});data={};env={}
-    if provider.get('kind') in ('anthropic','openai','openai-compatible'): data['kind']=provider['kind']
-    if options.get('apiFormat'): data['apiFormat']=options['apiFormat']
-    if isinstance(options.get('baseURL'),str):data['baseURL']=options['baseURL']
-    key=options.get('apiKey')
-    if isinstance(key,str) and key:
-        env['FORMAL_GATES_ZCODE_API_KEY']=key
-        data['apiKeyRef']={'source':'env','name':'FORMAL_GATES_ZCODE_API_KEY'}
-    elif isinstance(key,dict) and key.get('source') in ('credential','env','server-config'):
-        data['apiKeyRef']=key
-    return env,data
+    configured=selection(snapshot)
+    if wanted:
+        advertised=advertised_models(snapshot)
+        if advertised and canonical(wanted).decode() not in advertised:
+            raise RuntimeBlocked('ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback')
+        if configured['model']!=canonical(wanted).decode():
+            changed=client.request('session/setModel',{'sessionId':client.identity,'model':wanted,
+                                                       'persistAsWorkspaceLastUsed':False})
+            if changed.get('settings'):configured=selection(changed)
+            if configured['model']!=canonical(wanted).decode():
+                raise RuntimeBlocked('ZCODE_CONFIG: requested selection was not applied')
+    elif not configured['model']:
+        raise RuntimeBlocked('ZCODE_CONFIG: native selected model missing')
+    if effort and configured['reasoning_effort']!=effort:
+        changed=client.request('session/setThoughtLevel',{'sessionId':client.identity,'thoughtLevel':effort,
+                                                          'persistAsWorkspaceLastUsed':False})
+        if changed.get('settings'):configured=selection(changed)
+        if configured['reasoning_effort']!=effort:
+            raise RuntimeBlocked('ZCODE_CONFIG: reasoning setting was not applied')
+    atomic(directory/'identity.json',{'identity':client.identity,'provider':'zcode',
+                                      'workspace':workspace,'selection':configured})
+    return configured
 
 
-def runtime_model(catalog, model, effort, local=None):
-    """Rehydrate the exact native catalog entry, using credential REFERENCES only.
-
-    ZCode cold-resume otherwise creates a deferred model adapter even though its
-    UI lists the model. Only the exact native configuration is reused; no global selection
-    is changed. Never invent a provider endpoint or substitute a model.
-    """
-    providers=catalog.get('modelCatalog',{}).get('providers',[])
-    matches=[p for p in providers if p.get('providerId')==model['providerId']]
-    if len(matches)!=1: raise RuntimeBlocked('ZCODE_CONFIG: exact native provider catalog entry is missing')
-    original=matches[0]
-    keys=('providerId','kind','apiFormat','label','source','baseURL','apiKeyRequired','headers',
-          'providerOptions','logoUrl','modelsDevProviderId')
-    provider={k:original[k] for k in keys if k in original}
-    models=[m for m in original.get('models',[]) if m.get('modelId')==model['modelId']]
-    if len(models)!=1 or original.get('disabledReason') or models[0].get('disabledReason'):
-        raise RuntimeBlocked('ZCODE_CONFIG: bound native model unavailable')
-    provider['models']=models
-    local=local or {}
-    if local.get('kind'):
-        provider['kind']=local['kind']
-        provider.pop('apiFormat',None)
-        if local.get('apiFormat'): provider['apiFormat']=local['apiFormat']
-    if not provider.get('baseURL') and local.get('baseURL'): provider['baseURL']=local['baseURL']
-    credential=original.get('apiKeyRef') or local.get('apiKeyRef')
-    if credential:
-        if credential.get('source') not in ('credential','env','server-config'):
-            raise RuntimeBlocked('ZCODE_CONFIG: native credential reference cannot be reused safely')
-        provider['apiKey']=credential
-    from .infra import digest
-    record={'revision':'formal-gates-'+digest({'provider':provider,'model':model,'effort':effort}),
-            'generatedAt':int(time.time()*1000),'model':model,'provider':provider}
-    if effort:record['thoughtLevel']=effort
-    return record
+def handshake(snapshot):
+    """The protocol both sides agreed on, or a refusal to guess."""
+    protocol=snapshot.get('protocol') or {}
+    if protocol.get('name')!=PROTOCOL_NAME or protocol.get('version')!=PROTOCOL_VERSION:
+        raise RuntimeBlocked(f'ZCODE_PROTOCOL: the app-server does not speak {PROTOCOL_NAME} '
+                             f'v{PROTOCOL_VERSION}: '+json.dumps(protocol,ensure_ascii=False))
+    return protocol
 
 
 def materialize_source(directory):
+    """Turn committed native turn evidence into the bound source receipt."""
     binding=read(directory/'native-source.json');identity=binding['sessionId'];input_id=binding['inputId']
     turn='';end=None;seq=-1
-    with (directory/'native-events.jsonl').open() as f:
-        for line in f:
-            event=json.loads(line)
-            if event.get('sessionId')!=identity: raise RuntimeBlocked('ZCODE_BINDING: mixed sessions')
-            number=event.get('seq')
-            if not isinstance(number,int) or number<0: raise RuntimeBlocked('ZCODE_BINDING: invalid sequence')
-            if number<=seq:continue
-            seq=number;p=event.get('payload',{})
-            if p.get('inputId')!=input_id:continue
-            if event['type']=='turn.started':
-                if turn or not event.get('turnId'):raise RuntimeBlocked('ZCODE_BINDING: duplicate/missing start')
-                turn=event['turnId']
-            if event['type'] in ('turn.failed','turn.completed'):
-                if not turn or turn!=event.get('turnId') or end is not None: raise RuntimeBlocked('ZCODE_BINDING: terminal mismatch')
-                if event['type']!='turn.completed' or p.get('resultType')!='success':raise RuntimeBlocked('ZCODE_EXECUTION: turn failed')
-                end=event
+    for event in session_events(directory,identity):
+        number=event.get('seq')
+        if not isinstance(number,int) or number<0: raise RuntimeBlocked('ZCODE_BINDING: invalid sequence')
+        if number<=seq:continue
+        seq=number;p=event.get('payload',{})
+        if p.get('inputId')!=input_id:continue
+        if event['type']=='turn.started':
+            if turn or not event.get('turnId'):raise RuntimeBlocked('ZCODE_BINDING: duplicate/missing start')
+            turn=event['turnId']
+        if event['type'] in ('turn.failed','turn.completed'):
+            if not turn or turn!=event.get('turnId') or end is not None: raise RuntimeBlocked('ZCODE_BINDING: terminal mismatch')
+            if event['type']!='turn.completed' or p.get('resultType')!='success':raise RuntimeBlocked('ZCODE_EXECUTION: turn failed')
+            end=event
     if end is None:raise RuntimeBlocked('ZCODE_RESULT: matching native completion is missing')
-    text=end['payload'].get('response','');raw=directory/'answer.raw.txt'
-    if raw.exists() and raw.read_text()!=text:raise RuntimeBlocked('ZCODE_RESULT: saved output differs')
-    if not raw.exists():raw.write_text(text)
-    result=decode_result(text);atomic(directory/'answer.json',result)
-    source={'provider':'zcode','identity':identity,'native_turn':turn,'input_id':input_id,
-            'selection':binding['selection'],'usage_evidence':end['payload'].get('usage'),
-            'files':{name:file_proof(directory/name) for name in ('native-source.json','native-events.jsonl','answer.raw.txt','answer.json')}}
-    atomic(directory/'source.json',source);return source
+    write_answer(directory,end['payload'].get('response',''),'ZCODE')
+    return evidence_source(directory,'zcode',identity,native_turn=turn,input_id=input_id,
+                           selection=binding['selection'],usage_evidence=end['payload'].get('usage'))
 
 
 def reconcile_completed_output(directory,process):
     # Only result-framing errors can be replayed; runtime/transport failures are
     # never laundered into a successful worker result.
-    e=read(directory/'native-error.json') if (directory/'native-error.json').exists() else {}
-    if process.get('exit_code')!=1 or process.get('error') or not e.get('error','').startswith('RuntimeBlocked: NATIVE_RESULT:'):
-        raise RuntimeBlocked('ZCODE_RECONCILE: not a completed formatting-only failure')
-    source=materialize_source(directory)
-    source['reconciliation']={'kind':'completed-output-format','original_exit_code':1,'original_error':e['error'],'new_model_calls':0}
-    atomic(directory/'source.json',source);return source
+    return reconcile(directory,process,'ZCODE',
+                     lambda original: original.startswith(RESULT_FRAME_ERROR),
+                     lambda: materialize_source(directory))
 
 
 def execute(request,directory,probe=False):
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
     workspace=str(Path(request['workspace']).resolve());binding=request.get('binding') or capture_binding()
-    launch=binding['launch']
+    previous=request.get('identity','');wanted=reference(request.get('model',''))
+    effort=request.get('reasoning_effort','')
     location={'workspacePath':workspace,'workspaceKey':workspace}
-    params={'workspace':location}
+    # A new session is persisted immediately; a resume addresses the recorded one.
+    params={'workspace':location,'sessionId':previous} if previous else {'workspace':location,'persistence':'immediate'}
     if request['read_only']:params['toolAllowlist']=READ_ONLY_TOOLS
-    previous=request.get('identity','')
-    if previous: params['sessionId']=previous
-    else:
-        params['persistence']='immediate'
-        if probe:params['titleGenerationEnabled']=False
-    environment={};local={}
-    if previous:
-        if not request.get('model'): raise RuntimeBlocked('ZCODE_CONFIG: resume requires the bound model selection')
-        environment,local=resume_model_environment(request['model'])
-    client=Client(launch,workspace,directory,{**binding.get('environment',{}),**environment});attached=False
+    if probe and not previous:params['titleGenerationEnabled']=False
+    client=Client(binding['launch'],workspace,directory,launch_environment(binding));attached=False
     try:
-        # Load this workspace's native model catalog before restoring a historic
-        # session. This is a read, not provider registration or credential copying.
-        catalog=client.request('workspace/readState', {'workspace':location})
-        if previous:
-            if not request.get('model'): raise RuntimeBlocked('ZCODE_CONFIG: resume requires the bound model selection')
-            chosen=exact_model(request['model'],catalog)
-            params['runtimeModel']=runtime_model(catalog,chosen,request.get('reasoning_effort',''),local)
-            atomic(directory/'runtime-materialization.json',{'model':chosen,'from':'native catalog and existing native configuration',
-                'credential_handling':'ephemeral child environment reference; never stored in run files','global_config_changed':False})
-        snap=client.request('session/resume' if previous else 'session/create',params)
-        identity=snap.get('session',{}).get('sessionId','')
+        snapshot=client.request('session/resume' if previous else 'session/create',params)
+        protocol=handshake(snapshot)
+        identity=(snapshot.get('session') or {}).get('sessionId','')
         if not identity or previous and identity!=previous:raise RuntimeBlocked('ZCODE_BINDING: missing or changed identity')
-        client.identity=identity;attached=True;configured=selection(snap)
-        atomic(directory/'identity.json',{'identity':identity,'provider':'zcode','workspace':workspace,'selection':configured})
-        wanted=exact_model(request.get('model',''),snap)
-        if wanted!=snap['settings']['model']['current']:
-            changed=client.request('session/setModel',{'sessionId':identity,'model':wanted,'persistAsWorkspaceLastUsed':False})
-            if changed.get('settings'): configured=selection(changed)
-            if json.loads(configured['model'])!=wanted:raise RuntimeBlocked('ZCODE_CONFIG: requested selection was not applied')
-        effort=request.get('reasoning_effort','')
-        if effort and effort!=configured['reasoning_effort']:
-            changed=client.request('session/setThoughtLevel',{'sessionId':identity,'thoughtLevel':effort,'persistAsWorkspaceLastUsed':False})
-            if changed.get('settings'):configured=selection(changed)
-            if configured['reasoning_effort']!=effort:raise RuntimeBlocked('ZCODE_CONFIG: reasoning setting was not applied')
-        atomic(directory/'identity.json',{'identity':identity,'provider':'zcode','workspace':workspace,'selection':configured})
+        client.identity=identity;attached=True
+        atomic(directory/'identity.json',{'identity':identity,'provider':'zcode','workspace':workspace,
+                                          'selection':selection(snapshot)})
+        configured=apply_selection(client,snapshot,wanted,effort,directory,workspace)
         if request['read_only']:
             atomic(directory/'tool-policy.json',{'read_only':True,'allowed':READ_ONLY_TOOLS})
         if probe:
-            client.request('session/close',{'sessionId':identity}); attached=False
-            return {'provider':'zcode','selection':configured,'binding':binding,'model_calls':0,
-                'interactions':client.interactions,'native_tools':'not_verified',
+            client.request('session/close',{'sessionId':identity});attached=False
+            return {'provider':'zcode','protocol':protocol,'selection':configured,'binding':binding,
+                'model_calls':0,'interactions':client.interactions,'native_tools':'not_verified',
                 'mcp_auth':'unavailable' if any(i['status']=='official_auth_unavailable' for i in client.interactions) else 'not_verified'}
         subscribed=client.request('session/subscribe',{'sessionId':identity,'deliveryKind':'desktop-continuous','includeSnapshot':False})
         if subscribed.get('sessionId')!=identity:raise RuntimeBlocked('ZCODE_BINDING: subscription identity differs')
@@ -329,7 +283,5 @@ def execute(request,directory,probe=False):
         # Finalize proofs only after native shutdown messages have been drained.
         return materialize_source(directory)
     finally:
-        if attached:
-            try:client.request('session/close',{'sessionId':client.identity},timeout=10)
-            except (HarnessError,OSError):pass
+        if attached:close_session(client,client.identity)
         client.close()

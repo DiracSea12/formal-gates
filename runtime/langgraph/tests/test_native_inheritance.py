@@ -11,7 +11,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from formal_gates_harness import cli, native_dsh as dsh, native_zcode as zcode, native_hosts as hosts
+from formal_gates_harness import (cli, native_dsh as dsh, native_transport as shared,
+                                  native_zcode as zcode, native_hosts as hosts)
 from formal_gates_harness.infra import Bridge, HarnessError, RuntimeBlocked, read, runtime_identity
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -77,9 +78,11 @@ class NativeRequests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             directory = Path(t)
             client = Mock(identity='', events=[], interactions=[])
-            snapshot = {'session': {'sessionId': 'root'}, 'settings': {
-                'model': {'current': MODEL, 'available': [{'ref': MODEL}]},
-                'thoughtLevel': {'current': ''}, 'mode': {'current': native_mode}}}
+            snapshot = {'session': {'sessionId': 'root'},
+                        'protocol': {'name': 'ZCode Protocol', 'version': 1},
+                        'settings': {
+                            'model': {'current': MODEL, 'available': [{'ref': MODEL}]},
+                            'thoughtLevel': {'current': ''}, 'mode': {'current': native_mode}}}
             def respond(method, params, **kwargs):
                 if observed is not None:
                     observed.append((method, params))
@@ -87,7 +90,7 @@ class NativeRequests(unittest.TestCase):
                     raise RuntimeBlocked('ZCODE_TIMEOUT: simulated native response timeout')
                 if method == 'session/close' and close_error:
                     raise RuntimeBlocked('Native close failed')
-                if method in ('workspace/readState', 'session/create', 'session/resume'):
+                if method in ('session/create', 'session/resume'):
                     return snapshot
                 if method == 'session/setMode':
                     self.fail('The adapter must not change the native permission mode')
@@ -103,8 +106,6 @@ class NativeRequests(unittest.TestCase):
                        'model': json.dumps(MODEL), 'prompt': 'Current task', 'schema': {},
                        'binding': {'provider': 'zcode', 'launch': {'executable': '/bound/node', 'script': '/bound/host'}}}
             with patch.object(zcode, 'Client', return_value=client) as constructor, \
-                 patch.object(zcode, 'resume_model_environment', return_value=({}, {})), \
-                 patch.object(zcode, 'runtime_model', return_value={}), \
                  patch.object(zcode, 'materialize_source', return_value={'provider': 'zcode'}):
                 result = zcode.execute(request, directory, probe=probe)
             constructor.assert_called_once_with(request['binding']['launch'], str(directory.resolve()), directory.resolve(), {})
@@ -119,8 +120,11 @@ class NativeRequests(unittest.TestCase):
             with self.subTest(previous=previous):
                 params, calls, _ = self.zcode_request(False, previous)
                 self.assertFalse(forbidden & params.keys())
-                self.assertNotIn('session/setMode', [method for method, _ in calls])
-                self.assertNotIn('mcp/list', [method for method, _ in calls])
+                methods = [method for method, _ in calls]
+                self.assertNotIn('session/setMode', methods)
+                self.assertNotIn('mcp/list', methods)
+                # 3.12.3 removed it; a resume or a new session must not call it.
+                self.assertNotIn('workspace/readState', methods)
 
     def test_zcode_read_only_and_probe_sessions_never_set_a_mode(self):
         for read_only, probe in ((True, False), (False, True)):
@@ -143,7 +147,7 @@ class NativeRequests(unittest.TestCase):
                     self.assertNotIn('session/setMode', [method for method, _ in calls])
 
     def test_zcode_native_timeout_never_retries_with_another_permission_mode(self):
-        for method in ('workspace/readState', 'session/create', 'session/resume', 'session/subscribe'):
+        for method in ('session/create', 'session/resume', 'session/subscribe'):
             with self.subTest(method=method):
                 calls = []
                 previous = 'root' if method == 'session/resume' else ''
@@ -197,8 +201,10 @@ class NativeRequests(unittest.TestCase):
             with patch.dict(os.environ, {'FORMAL_GATES_ZCODE_SCRIPT': str(script)}), \
                  patch.object(zcode.shutil, 'which', return_value=str(node)):
                 binding = zcode.capture_binding()
+            # The launch names the resolved file: on macOS TMPDIR itself is a
+            # symlink (/var -> /private/var), so compare canonical paths.
             self.assertEqual(binding['environment'],
-                             {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(catalogue)})
+                             {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(catalogue.resolve())})
             # Naming a host-owned catalogue is not proofing an executed binary.
             self.assertEqual(len(binding['files']), 2)
 
@@ -231,20 +237,16 @@ class NativeRequests(unittest.TestCase):
             self.assertIsNone(zcode.bundled_provider_catalogue(script))
 
     def test_zcode_launch_gives_the_child_the_named_catalogue(self):
-        # The binding's launch environment reaches the child, and a resume's own
-        # environment is merged with it rather than replacing it.
+        # The binding's launch environment reaches the child unchanged on a new
+        # session and on a resume: the host owns its account configuration, so
+        # the transport adds nothing of its own to it.
         seed = {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': '/host/seed.json'}
         with tempfile.TemporaryDirectory() as t:
             directory = Path(t)
             binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'},
                        'files': {}, 'environment': dict(seed)}
-            for previous, resumed, expected in (
-                ('', {}, seed),
-                ('root', {'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': '/host/personal.json'},
-                 {**seed, 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': '/host/personal.json'}),
-            ):
-                with self.subTest(previous=previous), patch.object(zcode, 'Client') as client, \
-                     patch.object(zcode, 'resume_model_environment', return_value=(resumed, {})):
+            for previous in ('', 'root'):
+                with self.subTest(previous=previous), patch.object(zcode, 'Client') as client:
                     client.return_value.request.side_effect = RuntimeBlocked('probe stopped at the first request')
                     request = {'workspace': t, 'read_only': True, 'binding': binding,
                                'identity': previous, 'model': json.dumps(MODEL) if previous else ''}
@@ -252,7 +254,7 @@ class NativeRequests(unittest.TestCase):
                         zcode.execute(request, directory, probe=True)
                 launch, _workspace, _directory, environment = client.call_args.args
                 self.assertEqual(launch, binding['launch'])
-                self.assertEqual(environment, expected)
+                self.assertEqual(environment, seed)
 
     def test_dsh_development_new_and_resume_have_no_permission_patch(self):
         for previous in ('', 'root'):
@@ -278,6 +280,39 @@ class NativeRequests(unittest.TestCase):
                 self.assertIs(overlays[0]['insert'][0]['config']['read_only'], False)
                 params = next(c.args[1] for c in client.request.call_args_list if c.args[0] in ('session/new', 'session/resume'))
                 self.assertEqual(params['mcpServers'], [])  # ACP's additive, required transport field.
+
+
+class SharedTransportBoundary(unittest.TestCase):
+    """One boundary serves every host; an adapter declares protocol, not mechanics."""
+
+    def test_every_adapter_declares_the_shared_module_it_depends_on(self):
+        # A change to the shared mechanics must be reviewable as a transport
+        # change for every host built on it, or adoption would reject the fix.
+        for provider in hosts.execution_hosts():
+            with self.subTest(provider=provider):
+                files = hosts.adapter_for(provider).transport_files()
+                self.assertIn('native_transport.py', files)
+                self.assertIn(f'native_{provider}.py', files)
+
+    def test_each_adapter_supplies_protocol_only(self):
+        # If an adapter defines one of these again, the logic stopped being shared.
+        for module in (zcode, dsh):
+            with self.subTest(module=module.__name__):
+                for name in ('collect', 'send', 'receive', 'answer', 'request', 'wait', 'close', 'frame'):
+                    self.assertNotIn(name, vars(module.Client))
+
+    def test_an_adapter_declares_its_envelope_not_its_loop(self):
+        dsh_client = object.__new__(dsh.Client); dsh_client.counter = 0
+        self.assertEqual(dsh_client.frame(dsh_client.ident(), 'session/new', {}),
+                         {'jsonrpc': '2.0', 'id': 1, 'method': 'session/new', 'params': {}})
+        zcode_client = object.__new__(zcode.Client); zcode_client.counter = 0
+        self.assertEqual(zcode_client.frame(zcode_client.ident(), 'session/create', {}),
+                         {'id': 'native-1', 'method': 'session/create', 'params': {}})
+
+    def test_a_long_native_turn_is_not_cut_off_by_our_own_budget(self):
+        client = object.__new__(dsh.Client)
+        self.assertEqual(client.wait(40, None), 40)           # per-message, as ACP bounds startup
+        self.assertIsNone(client.wait(shared.UNBOUNDED, None))  # the host owns the turn length
 
 
 class ProtocolInteractions(unittest.TestCase):
@@ -320,13 +355,15 @@ class ProtocolInteractions(unittest.TestCase):
             self.assertNotIn('child', (Path(t) / 'native-events.jsonl').read_text())
 
     def test_transport_metadata_does_not_log_native_auth_payloads(self):
-        for module, collect in ((zcode, 'collect'), (dsh, '_read')):
-            client = object.__new__(module.Client)
-            client.trace = io.StringIO(); client.messages = queue.Queue()
-            client.proc = Mock(stdout=io.StringIO(json.dumps({'id': 1, 'result': {'Authorization': 'TEST_SECRET'}}) + '\n'))
-            getattr(client, collect)()
-            self.assertNotIn('TEST_SECRET', client.trace.getvalue())
-            self.assertEqual(client.messages.get()['result']['Authorization'], 'TEST_SECRET')
+        # Both hosts read through the one shared reader, so neither can log more.
+        for module in (zcode, dsh):
+            with self.subTest(module=module.__name__):
+                client = object.__new__(module.Client)
+                client.trace = io.StringIO(); client.messages = queue.Queue()
+                client.proc = Mock(stdout=io.StringIO(json.dumps({'id': 1, 'result': {'Authorization': 'TEST_SECRET'}}) + '\n'))
+                client.collect()
+                self.assertNotIn('TEST_SECRET', client.trace.getvalue())
+                self.assertEqual(client.messages.get()['result']['Authorization'], 'TEST_SECRET')
 
     def test_dsh_permission_request_does_not_send_a_user_decision(self):
         client = object.__new__(dsh.Client)
