@@ -6,7 +6,9 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 
 > **G1a 已完成。** 四个替换单元（C1 结果解码、C2 证据内容摘要原语、C3 规范化与内容摘要、C4 证据校验）各自通过并被固定为下一基线。
 >
-> **G1b 已完成。** 方案要求比较材料、反馈包装、工件发布**分别验收**，三项各自通过：**M1 比较材料**（候选 `f51d1ac`）、**M2 反馈包装**（候选 `dfa23e7`）、**M3 工件发布**（候选 `d71113e`）。下一单元为 **G2a 命令作业**。
+> **G1b 已完成。** 方案要求比较材料、反馈包装、工件发布**分别验收**，三项各自通过：**M1 比较材料**（候选 `f51d1ac`）、**M2 反馈包装**（候选 `dfa23e7`）、**M3 工件发布**（候选 `d71113e`）。
+>
+> **G2a 已完成。** 命令作业（Go 监督器的直接 argv 路径）通过：**G2a 命令作业**（候选 `63b0650`）。下一单元为 **G2b 原生定向验收关口**，需显式授权费用。
 
 ## 基线与验收链
 
@@ -22,6 +24,7 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 | M1 | 比较材料（G1b 第一项） | `f51d1ac` | 见 `go-engine-M1.json` | `PASS` |
 | M2 | 反馈包装（G1b 第二项） | `dfa23e7` | `72b5aba` | `PASS` |
 | M3 | 工件发布（G1b 第三项，G1b 收口） | `d71113e` | 见 `go-engine-M3.json` | `PASS` |
+| G2a | 命令作业（Go 监督器的直接 argv 路径） | `63b0650` | 见 `go-engine-G2a.json` | `PASS` |
 
 **M2 行是本次补的**：M2 的记录提交改了本索引的两张表，却漏掉了上表的 M2 行。记录为 `INDEX-MISSING-M2-ROW`。
 
@@ -40,6 +43,22 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 **M1、M2、M3 是前三条由子代理实施、我独立复核的单元。** M1 复核中未查出该级别回归；**M2 查出 3 处**（`role` 非字符串被改写、revision 绑定把数字字符串化、残留的内联 `__import__`），其中前两处与 C4 的 `7.0`／布尔大小**属同一模式**：类型边界上的静默收窄。这说明该模式被反复触发，而"经桥接的端到端等价用例 + 负控制"是**由我**在外部评审之前发现的——但不代表外部评审会找不到别的问题，本表的其余三条仍全部来自外部。M2 的这两处已各配回归，并以负控制证明回退后用例会失败。
 
 **M3 查出 1 处（D1）**：交付的差分测试让两个实现共用同一个工件目录，使被测的写路径从未按值被差分、两棵工件树也从未被互相比较。它没有造成可观察行为偏差，但让"重入不覆盖已绑定内容"的唯一直接证据退化为顺带成立，故按缺陷处理。D1 同样是**我在外部评审之前**查出的；修复的第二次派发没有产生任何改动（子代理返回空），我因此自行实施修复，并已在 M3 记录中如实登记。
+
+**G2a 查出 3 处（D1、D2、D3），三处都被子代理的自述报告为"全绿"。**
+
+| 编号 | 缺陷 | 性质 |
+| --- | --- | --- |
+| D1 | PATH 走查在第一个"存在"的候选处停住（`os.Stat` 预筛），而 `execvp` 会继续搜索 | **实现缺陷**，自建 oracle 16 个场景中 5 个分歧 |
+| D2 | 组信号取消时收据不确定：`130` 与子进程自身的 `-15` 交替 | **实现缺陷**，参考实现 20/20 恒定 |
+| D3 | 四个取消用例等到 `process.json`（写在 handler 装载**之前**）就发信号，抢跑启动窗口 | **用例缺陷**，只在完整验收的负载下 20 轮中失败 1 轮 |
+
+D1、D2 由自建 oracle 在验收前查出，修复由第二次派发完成。**D3 特殊之处在于它只在完整验收里才现形**：单独跑该包 5 次全过，而 `go test ./...` 的负载下失败——这正是"以完整验收为准、不以单包通过为准"的经验依据。D3 的处置是**修用例、不动实现**，因为那个窗口是参考实现固有的，在窗口里补写收据会让 Go 在参考实现根本没有收据的地方给出收据（`Store.job` 对缺失收据的处置是 `RuntimeBlocked(UNKNOWN_JOB)`，可观察地不同）。
+
+**与既有模式的对应关系**：
+
+- **D1 是"类型边界上的静默收窄"的第 7 次出现**（前六次：C1 的 NaN 预扫描、C3 的 float64 收窄、C4 的整数截断与 `7.0` 误拒、M2 的 `role` 改写与 revision 字符串化）。它把**内核对候选的可执行性判定**换成了 `os.Stat` 的存在性判定——动态语义被实现成更窄的静态形状，与前六次同型。
+- **D2、D3 是新的一类**：不是类型收窄，而是**把间接证据当成直接证据**。D2 用一个并发边界上共享的标志代替"这次死亡是否由取消引起"的直接判定；D3 用一个更早写入的标记（`process.json`）代替"handler 确已装载"的就绪证据。两者都是"信号比证据先到"的同一个错误。
+- 三处都不是笔误。三处已各配回归用例（D1：`path_search_oracle.py`；D2：`cancel_oracle.py` + `TestSuperviseCancelGroup`；D3：四个取消用例的 marker 等待）。
 
 ## 独立验收三项，逐项处置结果
 
@@ -69,16 +88,18 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 
 关键边界：桥接信封原先用 `canonical` 序列化自己，会无限递归；现改用私有**传输编码**（紧凑、保留非 ASCII、**不排序**），并有测试断言它不等于规范字节——防止信封悄悄变成第二实现。
 
-## G1b 之后的剩余工作
+## G2 的剩余工作
 
-| 单元 | 内容 | 前置 |
+| 单元 | 内容 | 状态 / 前置 |
 | --- | --- | --- |
-| G2a | 命令作业：Go 监督器的直接 argv 路径，再验证它承载原生传输 | 待准入核验 M3（本记录的复核命令第一条） |
-| G2b | 原生定向验收关口 | G2a 之后；需显式授权费用 |
+| G2a | 命令作业：Go 监督器的直接 argv 路径 | **已完成**（候选 `63b0650`，本索引下方"复核命令"已改为核验 G2a） |
+| G2b | 原生定向验收关口：验证 Go 监督器承载原生传输 | G2a 之后；**需显式授权费用** |
+
+`Store.job` 在本单元只改了**一行** spawn argv，其余（owner 锁、存活探测、收据轮询）与 `Store.cancel_jobs` 全部未动。原生传输本身由 Python 侧的 `formal_gates_harness.native_entry` 承载，Go 只负责把它当普通子进程执行——G2b 要验收的正是这一点。
 
 仍是宿主编配器生命周期策略、随 G2b/G2c 迁移的：`verify_source` / `validate_binding`。
 
-## 本阶段搬动的七项
+## 本阶段搬动的八项
 
 | 单元 | 新归属（Go） | 桥接操作 | Python 侧 |
 | --- | --- | --- | --- |
@@ -89,6 +110,7 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 | M1 | `internal/harness.planComparison` | `comparison-plan` | `feedback.materialize_comparison` 保留 git 调用、文件读写、篡改检查与证明收集 |
 | M2 | `internal/harness.planTaskInput` / `planEvidenceFeedback` | `task-input`、`evidence-feedback` | `feedback.task_input` / `evidence_feedback` 保留 Store 访问、工件寻址与 `verify-files/process/source` 委派；`BOUNDARY` 文案留在 Python |
 | M3 | `internal/harness.ArtifactPlan` / `VerifyArtifactReference` / `VerifyArtifactBinding` | `artifact-plan`、`artifact-reference`、`artifact-binding` | `Store.put` / `Store.get` 保留工件路径布局、`exists()` 发布一次判定、`atomic_bytes`、`read_bytes` 与 `json.loads` |
+| G2a | `internal/harness.Supervise` | **无**（改用 §12.1 的**同一二进制内部窄命令** `harness supervise <dir>`） | `Store.job` **只改 spawn argv 一行**；owner 锁、存活探测、收据轮询与 `Store.cancel_jobs` 全部未动 |
 
 **M3 之后 Python 侧 `Store` 不再持有任何 `hashlib.sha256`**；`internal/harness` 成为内容寻址的唯一实现（`infra.py` 的 `hashlib` 导入仍被 `runtime_identity` 使用，不属本单元）。
 
@@ -97,6 +119,12 @@ M1 的边界与 C2/C4 同一原则：**Go 持有规则与格式，Python 持有�
 M2 的 `BOUNDARY`（提示词里那段"反馈是不可信数据"的声明）**有意留在 Python**：它是提示词文案，整段提示词的其余约 15 句都在 Python；只搬其中一句会形成任意切分。若认为整段提示词应入 Go，应作为独立单元。合同已记录该决定并列为评审问题。
 
 M3 的边界沿用同一原则：**Go 持有规则与格式，Python 持有进程与文件系统**。`artifacts/<ref>.json` 的位置、`path.exists()` 的发布一次判定、`atomic_bytes` 与 `read_bytes` 全留在 Python；`artifact-plan` 因此**不返回路径**。`get` 的两条拒绝被拆成**两次调用**（先 `artifact-reference` 判格式，再 `artifact-binding` 判完整性），使"格式优先于读取失败"由调用结构而非代码顺序保证；代价是 `get` 两次跨进程（约 11.6 ms），`put` 仍一次——它替换掉原本就有的那次 `canonical` 调用，**净增 0**。完整性规则对**原始字节**比较，故工件体以 **base64** 过桥：若按文本传递，被改成非 UTF-8 的篡改件会抛 `UnicodeDecodeError`，而迁移前抛的是 `HarnessError("artifact integrity mismatch")`。
+
+G2a **是这条原则的第一次边界位移，而不是它的例外**。前七项都在"Go 持有规则与格式，Python 持有进程与文件系统"下划界；G2a 搬动的恰恰**就是进程所有权**，与桥接操作的前提（请求/响应、短调用）直接冲突——监督器要长期存活、要在收到信号时自己改写收据，子进程必须是**监督器的**子进程而非 Python 适配器的。因此改用方案 §12.1 的另一条路径：**同一二进制的内部窄命令**。代价是引入第二类进程间接口（argv + 退出码，无信封），收益是进程所有权与信号语义不必被翻译。
+
+边界随之变为：**Go 持有"取得所有权到写出收据"的全过程**，Python 只保留"何时启动、如何轮询、如何取消"。
+
+这也意味着 §12.1 的两条路径在本项目里都已实际使用（桥接操作 C1–M3、内部窄命令 G2a），**"新单元该走哪条路径"本身成为需要论证的设计决定**，已列入下方评审问题。
 
 **前提变更（有意，非删除）**：`tests/test_boundary_recovery.py::test_artifact_integrity` 原先用 `Bridge('unused')` 证明"工件读写不需要桥接"；M3 之后 `put`/`get` 都走桥接，该用例改用真实 bridge（`driver_bridge()`），断言逐字保留。合同第 117 行已记录该变更。
 
@@ -107,23 +135,29 @@ M3 的边界沿用同一原则：**Go 持有规则与格式，Python 持有进�
 ```sh
 cd /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
 
-# 准入：读取 M3 记录并放行 G2a
-python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json --next-unit G2a
+# 准入：读取最新一条记录（G2a）并放行下一单元 G2b
+python3 scripts/go-engine/admission.py --record .gates/results/go-engine-G2a.json --next-unit G2b
 
 # 完整验收（新尝试目录，不覆盖历史）
-python3 scripts/go-engine/acceptance.py --unit M3 --previous-baseline M2
+python3 scripts/go-engine/acceptance.py --unit G2a --previous-baseline M3
 
 # 两个工具自身的控制项（需要干净工作树）
-sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-M3.json
+sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-G2a.json
+
+# 历史单元的复核入口仍有效，逐条读取各自记录即可
+python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json --next-unit G2a
 ```
+
+> G2a 之前的单元（B0、C1–C4、M1–M3）的准入命令只在其记录中的候选仍是 `HEAD` 祖先时通过；`admission.py` 会因"候选已移动"拒绝，这是**预期行为**，不是故障。要复核历史单元请用其记录内的"复核入口"在对应的候选提交上操作。
 
 > 手工跑 Python 套件请同时设两件事：**已解析**的临时目录 `TMPDIR=/private/tmp`，以及 `PYTHONPATH="$PWD/runtime/langgraph"`。前者避开 `test_output_recovery.py` 的一个用例报错（未解析符号链接），后者覆盖掉宿主注入的 `sitecustomize` 垫片（见 `HOST-SHIM-BREAKS-PATH-OPS`）。两者都与本迁移无关，验收器自身已按此设置。
 
 | 文件 | 内容 |
 | --- | --- |
 | `.gates/results/go-engine-B0.md` / `.json` | 基线冻结记录 |
-| `.gates/results/go-engine-C1-contract.md` … `C4-contract.md`、`M1-contract.md`、`M2-contract.md`、`M3-contract.md` | 实施前固定的单元合同 |
-| `.gates/results/go-engine-C1.md` … `C4.md`、`M1.md`、`M2.md`、`M3.md` 与同名 `.json` | 单元验收记录 |
+| `.gates/results/go-engine-C1-contract.md` … `C4-contract.md`、`M1-contract.md`、`M2-contract.md`、`M3-contract.md`、`G2a-contract.md` | 实施前固定的单元合同 |
+| `.gates/results/go-engine-C1.md` … `C4.md`、`M1.md`、`M2.md`、`M3.md`、`G2a.md` 与同名 `.json` | 单元验收记录 |
+| `.gates/results/g2a-probes/` | **G2a 的独立裁判与实测脚本**：`reference_semantics.py`（迁移前语义的重新实测）、`path_search_oracle.py`（D1）、`exec_semantics_oracle.py`（`-N` 退出码与空 PATH 分量）、`cancel_oracle.py`（D2）。四者都**不依赖**交付的差分测试与参考模块的调用方式 |
 | `scripts/go-engine/README.md` | 验收与准入工具的约定、判定条件、控制项清单 |
 | `scripts/go-engine/dependency-lock.json` | Go/SQLite 驱动与依赖锁定 |
 
@@ -131,7 +165,7 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-M3.json
 
 ## 明确未验证的事项
 
-- **真实原生模型流水线**：`NATIVE-REVERIFY-AT-BASELINE` 未执行，需显式授权费用。C1–C4 与 M1–M3 都是纯计算（M1 另有 Python 侧本地 git 调用，M3 另有 Python 侧文件系统读写），**不需要**原生定向验收；授权关口在 G2b 之前。`live-20260915-2050` 的原生证据绑定更早的提交与运行时，不可当作当前候选的原生验收。
+- **真实原生模型流水线**：`NATIVE-REVERIFY-AT-BASELINE` 未执行，需显式授权费用。C1–C4、M1–M3 与 G2a 都**不需要**原生定向验收：C1–C4 是纯计算，M1 另有 Python 侧本地 git 调用，M3 另有 Python 侧文件系统读写，G2a 搬的是**进程所有权与 argv 路径**（不含模型调用，其差分与三个 oracle 全部在本地子进程上完成，`demo-fixture` 达到 `DEMO_COMPLETE` 也只是夹具流程）。授权关口在 G2b 之前。`live-20260915-2050` 的原生证据绑定更早的提交与运行时，不可当作当前候选的原生验收。
 - **跨平台**：只在本地 macOS 实测。
 
 ## 已知有界差异与风险
@@ -148,6 +182,11 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-M3.json
 | `HOST-SHIM-BREAKS-PATH-OPS` | **M3（环境陷阱，非迁移缺陷）**：本机宿主经 `PYTHONPATH` 注入 `sitecustomize` 垫片，令 `Path.mkdir(exist_ok=True)` 在目录已存在时抛 `PermissionError`、令 `shutil.rmtree` 走回收站守卫。直接探针复现；用它跑全套报 10–15 个错误（集中在 `test_retention`、`test_comparison_inputs`、`test_checkpoint_startup`）。**以 `PYTHONPATH=<repo>/runtime/langgraph` 覆盖后 174 项全过**；验收器自建 `PYTHONPATH`，判定不受影响。任何手工跑套件的人都会撞上 |
 | `ARTIFACT-READ-COSTS-TWO-CALLS` | **M3（有界代价）**：`get` 由 0 次跨进程调用变为 2 次（约 11.6 ms），`put` 净增 0。`graph.py` 中 `get` 会被调用数十次（含列表推导内多次），单次 run 量级为百毫秒、远小于模型调用。合并为一次须接受"格式优先"只靠代码顺序成立，或让 Go 读文件并复现 `FileNotFoundError`/`IsADirectoryError` 的类型与消息。经评审定为三项方案中唯一不需要为异常语义写例外者 |
 | `ARTIFACT-LOCATION-STAYS-IN-PYTHON` | **M3（待评审）**：`artifacts/<ref>.json` 的命名未入 Go。§7 只说"正文…在工件目录中"、未规定命名，故按"存储布局属 Python"处理，`artifact-plan` 不返回路径。若认为该命名属寻址格式，应作为独立单元 |
+| `CANCEL-WINDOW-REFERENCE-INHERITED` | **G2a（有意保留的继承行为）**：`process.json` 写在 SIGTERM handler 装载**之前**（Go 与 `reference_job.py` 第 31/38 行同序），落在该窗口的组信号会让监督器**无收据**地以 `signal: terminated` 结束。两侧一致，故**不关闭**——在窗口里补写收据会让 Go 在参考实现根本没有收据处给出收据，而 `Store.job` 对缺失收据的处置是 `RuntimeBlocked(UNKNOWN_JOB)`，可观察地不同。实测 6 轮中两侧均未落进窗口（0/6），但窗口客观存在；G2a 的 D3 即由此而来 |
+| `CANCEL-POSTCHILD-WINDOW` | **G2a（已知有界差异，未构造用例）**：参考实现的取消 handler 以 `raise KeyboardInterrupt` 实现，会在**任意**执行点抛出；若信号落在外层 `try` 结束之后、写 `exit.json` 之前，参考实现带 traceback 退出且**不写收据**，而 Go 在等待循环返回后不再理会已缓冲的信号、会**正常写收据**。窗口极窄（子进程收割与收据落盘之间），Go 侧更稳定；按"实测差异 + 不可达论证"记录，未加机制 |
+| `SUPERVISE-NATIVE-FORM-DIGEST` | **G2a（测试约定，非差异）**：原生入口形态下，两侧 `argv` 里嵌的是**各自**的作业目录，故 `request_digest` **合法地不同**；差分用例只断言**形状**相同（退出 1、`error=""`、写出 `native-error.json`、两份流证明齐备）。这与 M3 的 D1 同属"两侧不能共享目录"的约束 |
+| `EMPTY-PATH-COMPONENT-ORACLE-BLIND` | **G2a（覆盖边界）**：`PATH` 空分量（表示当前目录）这一分支在 macOS 上**不被**执行语义 oracle 区分——见下条；它只由 Go 单元测试覆盖 |
+| `EQUIVALENT-MUTANT-NOT-CAUGHT` | **G2a（负控制方法论）**：一次定向变异（把空 PATH 分量分支简化为 `filepath.Join(dir, name)`）**未被** oracle 检出，因为它实际是**等价变异**：`filepath.Join("", "tool")` 得到 `"tool"`，而 `execve` 对不含分隔符的相对路径按 cwd 解析（PATH 搜索是 `execvp` 的行为，不是 `execve` 的）。记录它是为了区分"oracle 失效"与"变异等价"——两者都表现为"没被检出"，但处置完全不同 |
 | `INDEX-MISSING-M2-ROW` | **M3（文档，已修）**：M2 的记录提交改了索引的两张表，却漏掉"基线与验收链"表的 M2 行；已在 M3 索引更新中补上。它说明"索引已更新"这句自述不足以证明更新完整 |
 | `WORKTREE-LOCATION-AMBIGUOUS` | **过程项**：本项目以独立 worktree 开发，绑定 `codex/go-engine-v1` 的目录才是当前工作区；按会话默认目录侦察会误判为"工作丢失"。以 `git worktree list` 为准 |
 | `ENV-THROUGHPUT-UNIDENTIFIED` | 独立环境整体吞吐约为本机 1/4，成因未查明；回归判定已改为不依赖吞吐 |
@@ -163,12 +202,16 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-M3.json
 1. **C4 的边界划得对不对**：哪些属证据校验（已入 Go）、哪些属存储层（路径判断与文件读取留在 Python），以及"有序证明列表"是否为最小充分的表达方式。
 2. **两处不可达差异的记录方式**：`NON-FINITE-CROSSES-TRANSPORT` 与 `INPUT-PATH-NOT-NORMALISED` 都以"实测差异 + 不可达论证"记录，而非加机制。是否认可这种处置，或应改为结构性消除。
 3. **跨进程原语的取舍**：`file_proof` 从 0.036 ms 变为 6.1 ms；C4 未新增高频路径，但校验仍逐文件跨进程。是否应在此阶段就引入批量操作。
-4. **类型边界上的静默收窄为何反复出现**：C1 的 NaN 预扫描、C3 的 float64 收窄、C4 的整数截断与 `7.0` 误拒、M2 的 `role` 改写与 revision 字符串化——**六处，同一个模式**：Go 侧把"参考实现的动态类型语义"实现成了更窄的静态形状。C4 起补的"经桥接的端到端等价用例 + 负控制"在 M2 确实生效（两处由我在外部评审前查出），但模式仍在复发，说明**逐例修补不够**。是否需要一条结构性纪律（例如：凡从 JSON 取出的值，禁止在 Go 侧做类型断言式的默认值替换，只能按参考实现的取值语义原样透传），是本阶段最值得质疑的一点。
+4. **类型边界上的静默收窄为何反复出现**：C1 的 NaN 预扫描、C3 的 float64 收窄、C4 的整数截断与 `7.0` 误拒、M2 的 `role` 改写与 revision 字符串化、G2a 的 PATH 走查以 `os.Stat` 存在性替代内核可执行性判定——**七处，同一个模式**：Go 侧把"参考实现的动态类型/动态语义"实现成了更窄的静态形状。C4 起补的"经桥接的端到端等价用例 + 负控制"在 M2 确实生效（两处由我在外部评审前查出），G2a 的三处也都由独立 oracle 或完整验收查出，但模式仍在复发，说明**逐例修补不够**。是否需要一条结构性纪律（例如：凡从 JSON 取出的值，禁止在 Go 侧做类型断言式的默认值替换，只能按参考实现的取值语义原样透传；凡"某候选能否运行"这类判定，禁止用预筛替代内核的最终判定），是本阶段最值得质疑的一点。
 5. **G1b 的拆分与各项边界**：M1 把"解析+表示规则"入 Go、把"git 调用与文件系统"留在 Python；M2 把两个包装形状入 Go、把 Store 访问与 `BOUNDARY` 文案留在 Python；M3 把内容寻址与两条判定入 Go、把工件路径布局与原子写留在 Python。这三个切法是否合理；`COPY-STATUS-UNREACHABLE` 该按"已由单元测试与独立裁判覆盖"接受，还是应改为结构性消除（例如断言选项集不可能产生 `C`，或让 Go 拒绝未知状态）。
 6. **`BOUNDARY` 留在 Python 是否可接受**：它是否算"反馈包装"的一部分（§9.4 的措辞），还是纯提示词文案。若应入 Go，范围是整段提示词而非其中一句。
 7. **M3 的"两次调用"是否为正确取舍**：`get` 拆成 `artifact-reference` + `artifact-binding`，使"格式优先于读取失败"成为结构性质，代价是每次读 2 次跨进程（约 11.6 ms，`graph.py` 内单次 run 数十次调用）。被否的两案是"合成一次调用、靠代码顺序保序"与"让 Go 读文件并复现异常语义"。若评审认为该代价不可接受，需要指认一个不会为异常语义写例外的替代。
 8. **工件路径为何不入 Go**：`artifact-plan` 返回引用与规范字节、不返回 `artifacts/<ref>.json`。依据是 §7 只规定"正文在工件目录中"、未规定命名。是否应把该命名视为寻址格式的一部分而搬入 Go（即 `ARTIFACT-LOCATION-STAYS-IN-PYTHON` 是否应升级为阻塞项）。
 9. **`test_boundary_recovery::test_artifact_integrity` 的前提变更是否可接受**：该用例原先断言"工件读写不需要桥接"，M3 后改用真实 bridge 而断言逐字保留。这是有意的前提变更（合同已登记），但它是**唯一一处**为迁移而改动既有测试前提的地方，值得单独审视。
 10. **D1 的处置是否恰当**：交付的差分测试令两侧共用同一工件目录（写路径未被按值差分、两棵树未被互比）。我按缺陷处理并重写，但也可以论证它"没有造成可观察行为偏差"故应算测试质量问题。此外，修复的第二次派发返回空、由我自行实施——是否需要在流程上要求"派发失败必须显式回报"。
+11. **G2a 为什么走内部窄命令而不是桥接操作**：理由是"搬动的对象就是进程所有权，与请求/响应的桥接前提冲突"。§12.1 的两条路径因此在本项目里都被使用了，这意味着**"新单元走哪条路径"本身成为一项需要论证的设计决定**。判据是否应写成明文规则（例如：凡需要跨调用存活的状态、或需要接收信号者，走内部窄命令），还是继续逐单元论证。
+12. **D3 的处置：修用例、不关闭窗口，是否可接受**：关闭窗口（把 handler 提前到写 `process.json` 之前）会让 Go 在参考实现**没有收据**的地方产出收据，因此我选择保持忠实并改用例。但也可以论证"在该窗口多写一份收据"是对调用方更有利的行为、应作为**有意的行为改进**单独提出（那将是一次显式的语义变更，而非迁移）。若认可后者，它应作为独立单元而不是塞进 G2a。
+13. **`childSignalGrace = 250 ms` 这个有界宽限是否该存在**：它是 D2 的修复手段——子进程被信号打死时，先给信号通道 250 ms 确认组信号是否**同样**到达监督器，以区分"取消"与"子进程自己死于 SIGTERM"。它引入了一个时间参数。替代方案是让监督器在信号到达时**无条件**优先报告取消（不设宽限），代价是失去"子进程自杀 vs 被取消"的区分能力。是否应改用不依赖时间常数的结构性做法，值得评审。
+14. **"只在完整验收的负载下才复现"是否应升级为流程纪律**：D3 单独跑该包 5 次全过，只在 `go test ./...` 下失败。这提示"单包通过"不足以作为放行依据。是否需要把"竞态类缺陷必须由完整验收复现一次"写成明文要求（本次是碰巧撞上的，不是设计出来的）。
 
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
