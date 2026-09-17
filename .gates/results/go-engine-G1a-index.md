@@ -1,8 +1,12 @@
-# G1a 状态索引（供外部评审）
+# G1 状态索引（供外部评审）
+
+> 文件名沿用 `go-engine-G1a-index.md`（C4 记录的 `bookkeeping` 引用它），内容自 M1 起覆盖 G1b。
 
 G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证据校验**分别验收**。
 
-> **G1a 已完成。** 四个替换单元（C1 结果解码、C2 证据内容摘要原语、C3 规范化与内容摘要、C4 证据校验）各自通过并被固定为下一基线。按 §13.1，下一单元为 **G1b：材料生成**（比较材料、反馈包装、工件发布，分别验收）。
+> **G1a 已完成。** 四个替换单元（C1 结果解码、C2 证据内容摘要原语、C3 规范化与内容摘要、C4 证据校验）各自通过并被固定为下一基线。
+>
+> **G1b 进行中。** 方案要求比较材料、反馈包装、工件发布**分别验收**。第一项 **M1 比较材料已通过**；余下 M2 反馈包装、M3 工件发布。
 
 ## 基线与验收链
 
@@ -15,6 +19,7 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 | C2 | 证据内容摘要原语 + C1 回归修复 | `87895e4` | 见 `go-engine-C2.json` | `PASS` |
 | C3 | 规范化序列化与内容摘要 | `7492c01` | `6ae01c2` | `PASS`（重签；见下） |
 | C4 | 证据校验（G1a 收尾） | `9687945` | 见 `go-engine-C4.json` | `PASS`（重签；见下） |
+| M1 | 比较材料（G1b 第一项） | `f51d1ac` | 见 `go-engine-M1.json` | `PASS` |
 
 C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独立验收发现的 P1 合同回归（大整数在桥接路径上被拒），修复后候选前移到 `7492c01`，原结论不再适用。**C4 记录取代了绑定 `0f1cd2b` 的上版记录**：该候选存在一处由独立验收发现的 P1 数值语义缺陷（证据大小按两种不一致的整数转换规则比较，既误拒绝又误接受），修复后候选前移到 `9687945`。C2 记录同样取代了绑定 `2ed75d4` 的上版记录。分支 `codex/go-engine-v1`，基线起点 `c6d49323`。
 
@@ -27,6 +32,8 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 | C4 | 证据大小按两种整数转换规则比较（`7.0` 误拒、`7.75` 截断误接受） | 两套测试都只写整数大小；`0` vs `0.0` 的用例**两边都设成了 `0.0`** |
 
 三次都在**公开调用链上**成立、而在**直接函数测试**下看不出来。C4 起已把"经桥接的端到端等价用例"作为纪律，并对新增用例补了**负控制**（撤回实现后确认用例确实失败）。
+
+**M1 是第一条由子代理实施、我独立复核的单元**：复核中未自查出同级别回归，但本表的存在恰恰说明"我没找到"不等于"不存在"。M1 为此额外做了一层**独立裁判**（把迁移前的解析循环逐字取出当 oracle，覆盖生产路径产不出的 `C` 分支）与**5 处定向变异**的负控制；该层是否已足够，仍请外部评审判断。
 
 ## 独立验收三项，逐项处置结果
 
@@ -56,16 +63,17 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 
 关键边界：桥接信封原先用 `canonical` 序列化自己，会无限递归；现改用私有**传输编码**（紧凑、保留非 ASCII、**不排序**），并有测试断言它不等于规范字节——防止信封悄悄变成第二实现。
 
-## G1a 之后的剩余工作
+## G1b 之后的剩余工作
 
 | 单元 | 内容 | 前置 |
 | --- | --- | --- |
-| G1b | 比较材料、反馈包装、工件发布（三项分别验收） | 待准入核验 C4 |
+| M2 | 反馈包装（G1b 第二项） | 待准入核验 M1 |
+| M3 | 工件发布（G1b 第三项） | M2 之后 |
 | G2a | 命令作业：Go 监督器的直接 argv 路径，再验证它承载原生传输 | G1b 之后 |
 
 仍是宿主编配器生命周期策略、随 G2b/G2c 迁移的：`verify_source` / `validate_binding`。
 
-## 本阶段搬动的四项
+## 本阶段搬动的五项
 
 | 单元 | 新归属（Go） | 桥接操作 | Python 侧 |
 | --- | --- | --- | --- |
@@ -73,6 +81,9 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 | C2 | `internal/harness.FileProof` | `file-proof` | `infra.file_proof` 变为适配器 |
 | C3 | `internal/harness.CanonicalJSON` / `CanonicalDigest` | `canonical`、`digest` | `infra.canonical` / `infra.digest` 变为转发 |
 | C4 | `internal/harness.VerifyProcess` / `VerifyFiles` | `verify-process`、`verify-files` | `Store.verify_process` / `verify_evidence` 保留路径判断与文件读取，校验委派 |
+| M1 | `internal/harness.planComparison` | `comparison-plan` | `feedback.materialize_comparison` 保留 git 调用、文件读写、篡改检查与证明收集 |
+
+M1 的边界与 C2/C4 同一原则：**Go 持有规则与格式，Python 持有进程与文件系统**。它同时**减少**一次 `canonical` 跨进程调用（原「逐材料一次 `cat-file` + 一次 `canonical`」变为「一次 `comparison-plan`」）。
 
 三处拒绝**不走桥接失败形状**，而走 `value` 里的类型化结果（`{"accepted": false, "refusal": ...}` / `{"ok": false, "refusal": ...}`）。C4 的拒绝另带 `kind`，由 Python `refuse()` 映射回原异常类。失败形状（`{ok:false, code}` + 退出码 2）保留原义，用于"桥接本身坏了"。
 
@@ -82,20 +93,20 @@ C3 记录取代了绑定 `04f343d` 的上版记录：该候选存在一处由独
 cd /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
 
 # 准入：读取记录并核验结果、身份、已安装依赖与公开基线冒烟
-python3 scripts/go-engine/admission.py --record .gates/results/go-engine-C4.json --next-unit G1b
+python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M1.json --next-unit M2
 
 # 完整验收（新尝试目录，不覆盖历史）
-python3 scripts/go-engine/acceptance.py --unit C4 --previous-baseline C3
+python3 scripts/go-engine/acceptance.py --unit M1 --previous-baseline C4
 
 # 两个工具自身的控制项（需要干净工作树）
-sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-C4.json
+sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-M1.json
 ```
 
 | 文件 | 内容 |
 | --- | --- |
 | `.gates/results/go-engine-B0.md` / `.json` | 基线冻结记录 |
-| `.gates/results/go-engine-C1-contract.md` … `C4-contract.md` | 实施前固定的单元合同 |
-| `.gates/results/go-engine-C1.md` … `C4.md` 与同名 `.json` | 单元验收记录 |
+| `.gates/results/go-engine-C1-contract.md` … `C4-contract.md`、`M1-contract.md` | 实施前固定的单元合同 |
+| `.gates/results/go-engine-C1.md` … `C4.md`、`M1.md` 与同名 `.json` | 单元验收记录 |
 | `scripts/go-engine/README.md` | 验收与准入工具的约定、判定条件、控制项清单 |
 | `scripts/go-engine/dependency-lock.json` | Go/SQLite 驱动与依赖锁定 |
 
@@ -103,7 +114,7 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-C4.json
 
 ## 明确未验证的事项
 
-- **真实原生模型流水线**：`NATIVE-REVERIFY-AT-BASELINE` 未执行，需显式授权费用。G1a 两项都是纯计算，**不需要**原生定向验收；授权关口在 G2b 之前。`live-20260915-2050` 的原生证据绑定更早的提交与运行时，不可当作当前候选的原生验收。
+- **真实原生模型流水线**：`NATIVE-REVERIFY-AT-BASELINE` 未执行，需显式授权费用。C1–C4 与 M1 都是纯计算（M1 另有 Python 侧本地 git 调用），**不需要**原生定向验收；授权关口在 G2b 之前。`live-20260915-2050` 的原生证据绑定更早的提交与运行时，不可当作当前候选的原生验收。
 - **跨平台**：只在本地 macOS 实测。
 
 ## 已知有界差异与风险
@@ -114,6 +125,9 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-C4.json
 | `NON-FINITE-CROSSES-TRANSPORT` | 合法 JSON 不允许 `Infinity`，故含非有限浮点的值可经桥接进入编码器、但信封载不动它（C3 起）；不可达——结果路径不会产出非有限值 |
 | `INPUT-PATH-NOT-NORMALISED` | C4：参考实现按 `Path` 规范化形式命名缺失的输入文件，Go 用传入的原样字符串；不可达——键由 `str(Path(...))` 写出且工件内容寻址 |
 | `BOOL-SIZE-IS-A-NUMBER-IN-PYTHON` | C4：证据 `size` 为布尔值时两侧判定可能不同（Python 中 `True == 1`）；仅手工改写可达，无法由正常写入者产生。经评审定为 P3、非阻塞 |
+| `COPY-STATUS-UNREACHABLE` | **M1（覆盖限制）**：生产只传 `--find-renames`，`C`／拷贝记录不可达，故差分语料**不可能**覆盖该分支。该分支由 Go 单元测试与一份逐字取自迁移前解析循环的独立裁判（17 个样本、0 分歧）覆盖 |
+| `MALFORMED-RECORD-ERROR-SHAPE` | **M1（P3，不可达）**：畸形记录在迁移前触发**未捕获异常**（`ValueError`／`StopIteration`），现在返回受控的桥接错误。git 正常输出不产生该输入 |
+| `WORKTREE-LOCATION-AMBIGUOUS` | **过程项**：本项目以独立 worktree 开发，绑定 `codex/go-engine-v1` 的目录才是当前工作区；按会话默认目录侦察会误判为"工作丢失"。以 `git worktree list` 为准 |
 | `ENV-THROUGHPUT-UNIDENTIFIED` | 独立环境整体吞吐约为本机 1/4，成因未查明；回归判定已改为不依赖吞吐 |
 | `BUILD-PATH-IN-RUNTIME-IDENTITY` | `go build` 不加 `-trimpath` 时运行时身份随构建路径变化 |
 | `NODE-PATH-AMBIGUOUS` | 两份 node 摘要不同，跨 shell 恢复可能触发 `HOST_CHANGED` |
@@ -127,6 +141,6 @@ sh scripts/go-engine/negative-controls.sh "" .gates/results/go-engine-C4.json
 2. **两处不可达差异的记录方式**：`NON-FINITE-CROSSES-TRANSPORT` 与 `INPUT-PATH-NOT-NORMALISED` 都以"实测差异 + 不可达论证"记录，而非加机制。是否认可这种处置，或应改为结构性消除。
 3. **跨进程原语的取舍**：`file_proof` 从 0.036 ms 变为 6.1 ms；C4 未新增高频路径，但校验仍逐文件跨进程。是否应在此阶段就引入批量操作。
 4. **回归为何三次都由外部发现**：C1 的 NaN 预扫描、C3 的 float64 收窄、C4 的整数截断与 `7.0` 误拒，都出在公开调用链上、而在直接函数测试下看不出来。C4 已补经桥接的端到端等价用例，并对新增用例执行了**负控制**（撤回实现后确认用例确实失败）。该纪律是否已足够，是本阶段最值得质疑的一点。
-5. **G1b 的拆分**：比较材料、反馈包装、工件发布三项的边界与验收顺序。
+5. **G1b 的拆分与 M1 的边界**：比较材料、反馈包装、工件发布三项的边界与验收顺序；M1 把"解析+表示规则"入 Go、把"git 调用与文件系统"留在 Python，这个切法是否合理，以及 `COPY-STATUS-UNREACHABLE` 该按"已由单元测试与独立裁判覆盖"接受，还是应改为结构性消除（例如断言选项集不可能产生 `C`，或让 Go 拒绝未知状态）。
 
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
