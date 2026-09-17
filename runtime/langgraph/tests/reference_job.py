@@ -1,4 +1,19 @@
-"""One owned command, with an exit receipt independent of the runner."""
+"""Reference implementation of the pre-migration job supervisor (formal_gates_harness.job).
+
+Test-only. Production code must not import this module. The body below is the
+pre-migration implementation from formal_gates_harness/job.py (baseline M3),
+moved verbatim so the G2a differential can prove the Go supervisor
+(`internal/harness.Supervise`) preserves its external behaviour byte for byte.
+
+The original module was spawned as `python -m formal_gates_harness.job <dir>` and
+relied on a package-relative import (`from .infra import ...`). To run as an
+independent process from this test directory it uses the absolute import
+`formal_gates_harness.infra`; PYTHONPATH must contain
+`<repo>/runtime/langgraph` (the differential test sets this). The `main(Path)`
+signature and the `if __name__ == "__main__"` guard are preserved exactly so both
+sides of the differential run as their own process - the supervisor's whole point
+is process ownership, which an in-process call cannot demonstrate.
+"""
 from __future__ import annotations
 import os
 from pathlib import Path
@@ -6,7 +21,7 @@ import signal
 import subprocess
 import sys
 import time
-from .infra import atomic, digest, read, file_proof
+from formal_gates_harness.infra import atomic, digest, read, file_proof
 
 def main(directory: Path) -> int:
     request = read(directory / "request.json")

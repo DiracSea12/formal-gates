@@ -14,6 +14,13 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 	if len(args) > 0 && args[0] == "bridge" {
 		return Bridge(in, out)
 	}
+	if len(args) > 0 && args[0] == "supervise" {
+		if len(args) < 2 {
+			fmt.Fprintln(errout, "harness supervise requires a job directory")
+			return 2
+		}
+		return Supervise(args[1])
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		fmt.Fprintln(errout, e)

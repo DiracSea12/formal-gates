@@ -290,7 +290,7 @@ class Store:
             atomic(intent, request)
             self.event("job-start", operation=key, kind=request["kind"])
             with (directory / "wrapper.stderr").open("ab") as err:
-                owner = subprocess.Popen([sys.executable, "-m", "formal_gates_harness.job", str(directory)],
+                owner = subprocess.Popen([self.bridge.binary, "harness", "supervise", str(directory)],
                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                                          start_new_session=True, close_fds=True)
         receipt = directory / "exit.json"
