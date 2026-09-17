@@ -2,7 +2,81 @@
   "unit": "M3",
   "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260917T045618Z-80157",
   "recorded_at": "2026-09-17T05:04:27.948556+00:00",
-  "overall": "PASS",
+  "overall": "FAIL",
+  "overall_note": "The original recorded conclusion was PASS and is withdrawn. The recorded attempt's nine items all PASSED and are kept unchanged below; they simply did not cover what independent acceptance and code review then found. The unit conclusion is FAIL because (a) a P1 functional regression exists in the delivered unit, and (b) the cumulative full regression of the same candidate produced one unexplained required error.",
+  "withdrawn": {
+    "was": "PASS",
+    "withdrawn_at": "2026-09-17",
+    "by": "independent acceptance and code review, not by the recorded attempt's own runner",
+    "consequence": "G1b cannot close (M3 is the third of its three units) and G2a must not be treated as resting on an accepted baseline.",
+    "findings": [
+      {
+        "id": "M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT",
+        "severity": "P1",
+        "kind": "functional-regression",
+        "summary": "Read-back capacity was smaller than publication capacity. artifact-binding put the artifact body on the wire as base64, so a read request grew to about 4/3 of the artifact while every operation shares one fixed 8 MiB input ceiling. An artifact that put() accepted could therefore be unreadable, and an already published, already referenced artifact could not be read back at all.",
+        "user_visible_consequence": "Completed work could not be resumed: a worker that had written its receipt could not read it back on re-entry.",
+        "reproduction": "6.25 MiB artifact: put() succeeds, the pre-migration get() succeeds, M3's get() raises 'bridge input exceeds 8 MiB'; a real worker re-entry fails.",
+        "evidence": [
+          ".harness/validation/g1b-m3-closeout-20260917T151748Z/findings.json",
+          ".harness/validation/g1b-m3-closeout-20260917T151748Z/capacity-reconfirmation.stdout"
+        ]
+      },
+      {
+        "id": "M3-CUMULATIVE-WORKFLOW-NO-TERMINAL",
+        "severity": "blocking",
+        "kind": "unexplained-required-regression-failure",
+        "test": "test_driver.DriverTests.test_complete_failure_repair_and_inheritance",
+        "location": "runtime/langgraph/tests/test_driver.py:46-64",
+        "full_suite_tests": 174,
+        "first_full_suite_exit": 1,
+        "first_full_suite_errors": 1,
+        "observed": "The unchanged workflow test returned from the graph without a terminal key and raised KeyError('terminal') at line 54, with no check-complete, evaluate or seal before it.",
+        "classification": {
+          "class": "ESTABLISHED: a check-side runtime error surfaces through the check-runtime decision interrupt, so the graph returns with an interrupt and no terminal key. Reproduced deterministically by injecting a single fault (Store.job emits job-start then raises RuntimeBlocked), which yields an event signature identical to the retained log and the same KeyError.",
+          "trigger_site": "NOT RECOVERED. Three candidate sites (UNKNOWN_JOB, UNKNOWN_START, and the post-receipt Git validation in one_check) produce an identical observable signature, and the fixture deleted the job directory, so the retained evidence cannot distinguish them.",
+          "excluded_attributions": [
+            "the M3 base64 capacity defect: the failure is at round 0, where one_check never reads a stored artifact",
+            "environment or timeout without evidence: the UNKNOWN_START budget is a fixed 10s while the measured supervisor startup to process.json is 38ms median (about 250x margin), and the observed suite slowdown was about 9x"
+          ],
+          "not_to_be_read_as": "environmental noise, a proven new product defect, or the same base64 size defect"
+        },
+        "evidence": [
+          ".harness/validation/g1b-m3-review-20260917T054029Z/first-full-failed-test-context.log",
+          ".harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.json"
+        ]
+      }
+    ]
+  },
+  "repair_candidate": {
+    "status": "PRODUCED, NOT YET ACCEPTED",
+    "base_commit": "c4bac4923c0476cfbbf4379adc16efa21eb25133",
+    "commit": "f136303",
+    "worktree_dirty": false,
+    "p1_fix": "artifact-binding now takes {ref, path}. Python keeps its own read_bytes() (preserving FileNotFoundError / IsADirectoryError) and Go verifies the bytes it reads at that same path, so a read request is a fixed-size envelope independent of the artifact. The 8 MiB ceiling is retained, not removed or widened.",
+    "files_changed": [
+      "internal/harness/artifact.go",
+      "internal/harness/bridge.go",
+      "internal/harness/artifact_test.go",
+      "internal/harness/contract_test.go",
+      "runtime/langgraph/formal_gates_harness/infra.py",
+      "runtime/langgraph/tests/test_artifact_capacity_boundary.py (new)"
+    ],
+    "fix_sensitivity_proof": {
+      "method": "one worktree, one build directory, one command; the only variable is the patch",
+      "before_patch": "Ran 5 tests, FAILED (errors=5), all HarnessError: bridge input exceeds 8 MiB",
+      "after_patch": "Ran 5 tests, OK"
+    },
+    "regression": {
+      "go_vet": "exit 0",
+      "go_test_full": "exit 0, 23 packages executed, 3 with no test files, 0 FAIL, 0 cached",
+      "python_unittest": "195 tests OK in 67.6s",
+      "isolated_replay_of_the_unchanged_failing_test": "10/10 PASS",
+      "count_delta": "195 = 174 (M3 baseline) + 16 (G2a test_job_supervision_differential.py) + 5 (new capacity boundary tests); no existing test was rewritten"
+    },
+    "evidence_dir": ".harness/validation/m3-repair-capacity-20260917T2330Z",
+    "classification_document": ".harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md"
+  },
   "previous_accepted_baseline": "M2",
   "candidate": {
     "commit": "d71113e5ada1f84c9f6f5d94b022e33dfba477e3",

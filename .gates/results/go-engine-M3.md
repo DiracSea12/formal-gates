@@ -2,7 +2,18 @@
 
 ## 结论
 
-替换单元 M3 通过，被固定为下一基线。**G1b 三项（比较材料、反馈包装、工件发布）全部通过，G1b 收口**；下一单元为 G2a（命令作业）。
+> **本记录已于 2026-09-17 撤回原 `PASS`。** 替换单元 M3 **未通过**，**不是下一基线**；**G1b 不能收口**，依赖 M3 基线的 G2a 不能按已通过处理。
+>
+> 撤回原因是**外部独立验收与代码审查**（不是本记录的运行器）查出的两项事实——运行器自己的九项检查当时全绿，但它们**没有覆盖**这两项：
+>
+> | 编号 | 事项 | 严重度 | 证据 |
+> | --- | --- | --- | --- |
+> | `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` | **P1 功能回归**：读回容量小于发布容量。`artifact-binding` 把工件**体**的 base64 放在请求里，与所有操作共用固定 8 MiB 天花板，读取请求因此约等于 4/3 × 工件体量；**已发布并被引用的工件读不回来**，已完成的工作无法重入。复现：6.25 MiB 工件 `put` 成功、旧的 `get` 成功、M3 的 `get` 报 `bridge input exceeds 8 MiB`，真实 worker 重入失败 | 阻塞 | `g1b-m3-closeout-20260917T151748Z/findings.json`、`capacity-reconfirmation.stdout` |
+> | `M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` | **未解释的必需回归错误**：第一次完整回归（174 项）以 1 个 ERROR 结束——`test_driver.DriverTests.test_complete_failure_repair_and_inheritance` 从图返回时末态无 `terminal`，在 `test_driver.py:54` 抛 `KeyError('terminal')`。**原因当时未确定**，且不得据此改标为环境噪声、新的产品缺陷或同一个 base64 缺陷 | 阻塞（先行解释或明确归类） | `g1b-m3-closeout-20260917T151748Z/regression-gaps.json`、`g1b-m3-review-20260917T054029Z/first-full-failed-test-context.log` |
+>
+> 本记录的九项检查结果**保持原样登记**（它们确实通过，且撤回不改变已观测事实）；单元的总体结论按"必需检查未满足 + 存在未解释的必需回归失败"判为 `FAIL`。
+>
+> **返修候选已产出，尚未验收**（见下方"返修"一节）。原 `PASS` 由本次更正撤回，撤回过程与 G2a 的撤回同一约定（`5fa69c4`、`c4bac49`）。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -17,7 +28,7 @@
 | SQLite 探针 | 通过，CGO 开/关各 8/8 |
 | DSH / ZCode `doctor` | 通过，接入探测 |
 | 原生定向验收 | **不适用**：纯计算 |
-| **总体** | **`PASS`** |
+| **总体** | **`FAIL`（原 `PASS` 已撤回）** |
 
 上一验收基线：`M2`（候选 `dfa23e7`，记录提交 `72b5aba`）。
 
@@ -38,9 +49,13 @@
 
 候选方案与被否原因：把两条规则合成一次调用、靠"读失败后重抛"保留顺序，可以省一次调用，但那样"格式优先于读取失败"就只靠代码顺序成立；让 Go 自己读文件（C2 的 `file-proof` 先例）则要 Go 侧复现 `FileNotFoundError`/`IsADirectoryError` 的类型与消息（合成异常或跨平台 errno 映射）。**两次调用是三者中唯一不需要为异常语义写例外的方案**，也是独立裁判 87 行里 3 条"格式优先"用例（畸形引用 + 文件存在 / 短引用 + 文件存在 / 畸形引用 + 路径是目录）能逐条对齐的原因。
 
+> **返修后的更正（2026-09-17）**：上面这段对"让 Go 读文件"的否决理由**只在"由 Go 负责读取"时成立**。返修采用的是一种当时没被列出的第三条路：**读取仍由 Python 做**（`read_bytes()` 保留全部文件系统异常语义），Go 只**按同一路径复核字节**。这样既保住了异常语义不需要例外，又让读请求不随工件体量增长。见"撤回后：返修候选"一节。
+
 ### 字节为什么用 base64
 
 完整性规则是**对字节**的比较。若以文本传递，被改成非 UTF-8 的篡改件会在解码处抛 `UnicodeDecodeError`，而迁移前抛的是 `HarnessError("artifact integrity mismatch")`。base64 使该情形仍报完整性拒绝，并有用例与负控制各钉一次。
+
+> **返修后的更正（2026-09-17）**：base64 的**目的**（非 UTF-8 篡改件仍报完整性拒绝）保留且仍然成立，但**载体**改为路径：Go 从盘上读字节再比对，故非 UTF-8 的判定不经过任何文本解码，`TestVerifyArtifactBindingNonUTF8IsIntegrityRefusal` 与 `TestVerifyArtifactBindingFileOverFileBytes` 各钉一次。真正的代价不是"字节怎么传"，而是**读请求的大小随工件增长**——这正是 P1 的成因。
 
 ## 独立复核发现的 1 处缺陷
 
@@ -100,16 +115,102 @@ D1 是我在验收前复核交付物时查出的，**不是外部评审发现的
 
 M3 只跑了**一个**尝试（`20260917T045618Z-80157`），`overall=PASS`、`failed=[]`。
 
+## 撤回后：返修候选（尚未验收）
+
+返修针对上表两项阻塞事实，**候选尚未通过完整验收**，故本单元仍为 `FAIL`。
+
+返修候选：`f136303`（源码提交；上一候选 `c4bac49`）。按本仓库约定，**源码提交与验收结论分开提交**；本记录的撤回与候选登记是文档提交，结论仍待一次完整验收。
+
+### P1 的修法：把完整性判定改成按路径读
+
+`put` 与 `get` 端点各自无误，问题是两端**不共享同一个容量**。修法是让读侧不再把工件体放上线路：
+
+| 归属 | 修复后 |
+| --- | --- |
+| Go `bridge.go` | `artifact-binding` 载荷由 `{ref, body_b64}` 改为 `{ref, path}`；新增 `VerifyArtifactBindingFile(ref, path)` |
+| Python `infra.py` | `Store.get` 先 `body = path.read_bytes()`（**调用方自己的读**，保留 `FileNotFoundError` / `IsADirectoryError` 语义），再把 `path` 交 Go 复核完整性；删除 `base64` 导入 |
+
+读请求因此成为**固定大小的信封**，与工件体量无关。这与既有 `file-proof` 操作同型，不算新机制。
+**8 MiB 天花板保留、未放宽**——`TestBridgeStillRejectsInputOverTheSharedCeiling` 专门钉住这一点。
+
+### 定点证明：同一构建目录、同一命令，唯一变量是补丁
+
+```sh
+git worktree add --detach /tmp/m3-prefix-c4bac49 c4bac49
+go build -o .harness/bin/formal-gates ./cmd/formal-gates     # 修复前
+python -m unittest discover -s runtime/langgraph/tests -p 'test_artifact_capacity_boundary.py' -v
+#   → Ran 5 tests … FAILED (errors=5)   全部 HarnessError: bridge input exceeds 8 MiB
+git apply <evidence>/prefix-sensitivity/fix.patch            # 只打返修补丁
+go build -o .harness/bin/formal-gates ./cmd/formal-gates     # 同目录重建
+python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
+#   → Ran 5 tests … OK
+```
+
+### 未解释回归错误的归类
+
+该错误**已确定性复现**：只注入一处故障（`Store.job` 写出 `job-start` 后抛 `RuntimeBlocked`，即"有 intent
+而无 process identity / 无收据"），事件签名与保留日志**逐项一致**（有 `stage-start checks`、两个
+`job-start check`、两个 gate `stage-complete`；无 `check-complete`、无 `stage-complete checks`、无
+`evaluate`/`seal`），末态 `__interrupt__` 为 `check-runtime` 且不含 `terminal`，同样在 `test_driver.py:54`
+抛 `KeyError('terminal')`。机理见 `graph.py:190-203`（`checks` 捕获运行期错误后调 `ask("check-runtime")`）
+与 `graph.py:53-61`（`guard` 只在 `fn` 正常返回时写 `stage-complete`）。
+
+因此**类别已确定**：这是 check 侧运行期错误经 `check-runtime` 中断浮出，不是"图返回了无终态的结果"。
+但**具体触发点未恢复**——三个候选站点（`UNKNOWN_JOB`、`UNKNOWN_START`、收据之后的 Git 校验）产生完全
+相同的可观测签名，而测试自己的 `TemporaryDirectory` tearDown 删掉了作业目录。已知的三条**排除**：
+
+| 归因 | 依据 |
+| --- | --- |
+| 与 M3 的 base64 容量缺陷同源 | 失败发生在 `round=0`；`one_check` 只在第 1 轮重入（`old_ref` 存在）时才 `store.get`，`round=0` 的 check 路径到不了线上天花板 |
+| "环境慢撞上超时" | `UNKNOWN_START` 是固定 10 秒预算；实测该 Python 监督器从 `Popen` 到写出 `process.json` 中位 **38 毫秒**，约 250 倍余量，而本批观测到的整体变慢只有约 9 倍（全套 3958 秒 vs 445 秒 vs 返修后 68.5 秒） |
+| Base64 时限不足以外的解释 | 同上 |
+
+本项保持**未解释**（不因第二次及返修后均通过而改判），并登记流程建议：**失败时必须保留作业目录**，
+否则同样的签名永远无法归因。
+
+### 返修后的回归结果（候选证据）
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| `go vet ./...` | exit 0 | `m3-repair-capacity-20260917T2330Z/go-test-full.log` |
+| `go test -count=1 -timeout 60m ./...` | exit 0；23 包执行、3 包无测试文件、0 FAIL、0 cached | 同上 |
+| 本块 Go 合同 | `internal/harness` 18 项 PASS（含 3 项新增 + 天花板保留 1 项） | `go-artifact-contract.log` |
+| Python 全套 | **195 项 OK**（67.6 秒） | `full-attempt/steps/python-unittest/` |
+| 隔离回放（未改动用例） | **10/10 PASS** | `isolated-replay/summary.json` |
+
+`195 = 174 + 16 + 5`：174 为 M3 基线项数，16 为 G2a 新增的 `test_job_supervision_differential.py`，
+5 为本次新增的容量边界用例。**既有用例未被改写。**
+
+完整证据与分类：`.harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md`。
+
+### 对 G2a 的影响
+
+G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**：G2a 的"命令作业半"是在含本 P1 的
+候选（驱动二进制 `8bca2e2c…`）上签署的。G2a 本身仍为 `BLOCKED`（后半受阻），处置不变；但其前半不能再
+按"建立在已通过基线之上"来读。
+
 ## 未解决问题
 
 | 编号 | 状态 |
 | --- | --- |
-| `HOST-SHIM-BREAKS-PATH-OPS` | **新增（环境陷阱，非迁移缺陷）**：本机宿主通过 `PYTHONPATH` 注入一个 `sitecustomize` 垫片，它令 `Path.mkdir(exist_ok=True)` 在目录已存在时抛 `PermissionError`、令 `rmtree` 走回收站守卫。直接探针复现；用它跑全套会报 10–15 个错误（集中在 `test_retention`、`test_comparison_inputs`、`test_checkpoint_startup`）。**以 `PYTHONPATH=<repo>/runtime/langgraph` 覆盖后 174 项全过**，验收器本身就是这样设置的（`acceptance.py` 自建 `PYTHONPATH`），故不影响判定。任何手工跑套件的人都会撞上它 |
-| `ARTIFACT-READ-COSTS-TWO-CALLS` | **新增（有界代价）**：`get` 由 0 次跨进程调用变为 2 次（约 11.6 ms），`put` 净增 0。`graph.py` 中 `get` 会被调用数十次（含 `graph.py:213-214`、`236-237` 的列表推导内多次调用），单次 run 量级为百毫秒、远小于模型调用。若要合并为一次，须接受"格式优先"只靠代码顺序成立，或让 Go 读文件并复现异常语义 |
-| `ARTIFACT-LOCATION-STAYS-IN-PYTHON` | **新增（待评审）**：`artifacts/<ref>.json` 未入 Go。§7 只说"正文…在工件目录中"、未规定命名，故按"存储布局属 Python"处理；`artifact-plan` 因此不返回路径。若认为该命名属寻址格式，应作为独立单元 |
+| `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` | **新增（P1 功能回归，返修候选已产出、尚未验收）**：读回容量小于发布容量，已发布并被引用的工件读不回来。机理、修法与定点证明见"撤回后：返修候选"一节 |
+| `M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` | **新增（未解释的必需回归错误，类别已定、触发点未恢复）**：第一次完整回归末态的 `KeyError('terminal')`。已确定性复现其机制；三个候选触发点签名相同、保留物不足以区分。**不得**改标为环境噪声或同一个 base64 缺陷。见"撤回后：返修候选"一节 |
+| `M3-READ-GRANULARITY` / `M3-TESTS-OVERFIT-TRANSPORT-SPLIT` | **新增（P3，非阻塞建议）**：读的粒度与交付测试对传输拆分的依赖。与本 P1 同批记录，按建议处理 |
+| `M3-JOB-DIRECTORY-LOST-ON-FAILURE` | **新增（流程，导致上一项无法归因）**：`test_driver` 的 `TemporaryDirectory` tearDown 会删掉 `jobs/` 目录，于是失败时的 `wrapper.stderr`、`request.json`、`process.json` 全部丢失。**建议：任何 check 侧失败都必须先保留作业目录再清理**，否则同型错误永远只能停留在"类别已定、触发点未知" |
+| `HOST-SHIM-BREAKS-PATH-OPS` | **新增（环境陷阱，非迁移缺陷）**：本机宿主通过 `PYTHONPATH` 注入一个 `sitecustomize` 垫片，它令 `Path.mkdir(exist_ok=True)` 在目录已存在时抛 `PermissionError`、令 `rmtree` 走回收站守卫。直接探针复现；用它跑全套会报 10–15 个错误（集中在 `test_retention`、`test_comparison_inputs`、`test_checkpoint_startup`）。**以 `PYTHONPATH=<repo>/runtime/langgraph` 覆盖后全套通过**，验收器本身就是这样设置的（`acceptance.py` 自建 `PYTHONPATH`），故不影响判定。任何手工跑套件的人都会撞上它 |
+| `ARTIFACT-READ-COSTS-TWO-CALLS` | **新增（有界代价）**：`get` 由 0 次跨进程调用变为 2 次（约 11.6 ms），`put` 净增 0。`graph.py` 中 `get` 会被调用数十次（含 `graph.py:213-214`、`236-237` 的列表推导内多次调用），单次 run 量级为百毫秒、远小于模型调用。返修**没有**增加调用次数。若要合并为一次，须接受"格式优先"只靠代码顺序成立，或让 Go 读文件并复现异常语义 |
+| `ARTIFACT-LOCATION-STAYS-IN-PYTHON` | **新增（待评审）**：`artifacts/<ref>.json` 未入 Go。§7 只说"正文…在工件目录中"、未规定命名，故按"存储布局属 Python"处理；`artifact-plan` 因此不返回路径。若认为该命名属寻址格式，应作为独立单元。**返修后此项与 `ARTIFACT-READ-COSTS-TWO-CALLS` 的关系需重新表述**：读侧现在自己按路径取文件，故该命名已成为**调用方可见的约定**，不再只是存储布局细节 |
 | `TMPDIR-UNRESOLVED-SYMLINK`、`COPY-STATUS-UNREACHABLE`、`MALFORMED-RECORD-ERROR-SHAPE`、`BOOL-SIZE-IS-A-NUMBER-IN-PYTHON`、`NON-FINITE-CROSSES-TRANSPORT`、`INPUT-PATH-NOT-NORMALISED`、`WORKTREE-LOCATION-AMBIGUOUS` 等 | 保留，不变 |
 | `INDEX-MISSING-M2-ROW` | **新增（文档，已修）**：M2 记录提交漏掉索引"基线与验收链"表的 M2 行；本次补上。它说明"索引已更新"这句自述不足以证明更新完整 |
-| G1b | **已完成**：M1、M2、M3 全部通过。下一单元 G2a（命令作业） |
+| G1b | **未收口**：M1、M2 通过；**M3 `FAIL`**（原 `PASS` 已撤回）。G1b 三项未全部通过，下一阶段不得按已收口推进 |
+| G2a 的基线 | **已失效**：G2a 的前半签署在含本 P1 的 M3 候选上。G2a 本身仍为 `BLOCKED`，处置不变 |
+
+## 评审问题
+
+1. **返修的载荷形状是否可接受**：`artifact-binding` 由"传字节"改为"传路径"，代价是**读侧自己按路径取文件**，命名 `artifacts/<ref>.json` 因此成为调用方可见约定（原 `ARTIFACT-LOCATION-STAYS-IN-PYTHON` 的"存储布局属 Python"读法需要重新论证）。替代案是"把 8 MiB 天花板按操作分开"，但那会引入**两个容量**，而本 P1 的教训正是"两端不共享同一容量"。
+2. **是否应把 8 MiB 天花板改成与操作无关的显式上限声明**：当前天花板是所有操作共用的固定值，缺陷的成因是"某个操作的请求体随输入增长而另一侧不知道"。是否应要求任何**随输入增长**的操作显式声明自己的上限，使这类不对称在结构上不可能？
+3. **`checks` 侧运行期错误是否应中止而不是转为 `check-runtime` 决策**：当前语义下，check 出错会转成一次用户决策中断，图返回时末态**没有 `terminal`**——测试因此以 `KeyError` 表现。这是既定中断语义的产物，但它让"图正常返回"与"图被中断"在测试里只能靠 `KeyError` 区分。是否需要一个显式的终态缺失分类？
+4. **失败时保留作业目录是否应写成明文纪律**：`M3-JOB-DIRECTORY-LOST-ON-FAILURE` 是本次"触发点无法归因"的直接原因。是否把所有 check/gate 子进程目录的保留写进流程要求（例如失败时移动到证据目录）？
 
 ## 回退入口
 
@@ -125,21 +226,34 @@ git -C /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engi
 ```sh
 cd /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
 
-# 准入：核验本记录并放行 G2a
+# 准入：核验本记录。**预期被拒绝**：本记录的总体结论已撤回为 FAIL
+# 实际输出：`ADMISSION REFUSED: M3: recorded overall conclusion is 'FAIL'`，退出码 1
 python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json --next-unit G2a
 
 # 本块合同
 go test ./internal/harness -run 'Artifact' -v
+
+# 天花板仍在（超限输入必须退出码 2）
+go test ./internal/harness -run 'Ceiling' -v
+
+# 容量边界（返修后）：读回必须覆盖发布接受的最大工件
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tmp \
+  .harness/venv/bin/python -m unittest discover -s runtime/langgraph/tests \
+  -p 'test_artifact_capacity_boundary.py' -v
 
 # 差分对照（PYTHONPATH 覆盖掉宿主的 sitecustomize 垫片，见上）
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tmp \
   .harness/venv/bin/python -m unittest discover -s runtime/langgraph/tests \
   -p 'test_artifact_publication_differential.py' -v
 
-# 桥接操作直查：非 UTF-8 的工件体必须报完整性拒绝，而不是解码错误
-printf '%s' '{"operation":"artifact-binding","payload":{"ref":"'"$(printf 'x' | shasum -a 256 | cut -d' ' -f1)"'","body_b64":"//4Abm90LWpzb24="}}' \
+# 未解释回归错误的机制复现：check 侧出错必然导致末态无 terminal
+.harness/venv/bin/python .harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.py
+
+# 桥接操作直查：按路径做完整性判定（返修后的载荷形状；指向不存在的路径必须报完整性拒绝）
+printf '%s' '{"operation":"artifact-binding","payload":{"ref":"'"$(printf 'x' | shasum -a 256 | cut -d' ' -f1)"'","path":"/nonexistent"}}' \
   | .harness/bin/formal-gates harness bridge
 ```
 
 单元合同：`.gates/results/go-engine-M3-contract.md`。
 本记录只汇总已观测结果；日志保留原始失败，不以最终通过覆盖中间尝试。
+**原 `PASS` 已于 2026-09-17 撤回，撤回理由见文首；本记录不再声明该单元通过。**

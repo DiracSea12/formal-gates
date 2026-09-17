@@ -41,6 +41,16 @@
 
 `body_b64` 为标准带填充 base64（ASCII）。base64 解码失败属于调用方错误，走桥接失败形状（`{ok:false, code}` + 退出码 2），不是业务拒绝；Python 自身不会构造该情形。
 
+> **合同更正（2026-09-17，外部验收发现 P1 之后）**：本表 `artifact-binding` 的载荷已由 `{"ref", "body_b64"}` 改为 **`{"ref", "path"}`**。
+>
+> **为什么必须改**：`body_b64` 让读请求的大小**随工件体量增长**（约 4/3 × 工件体量），而桥接的输入天花板是**所有操作共用的固定 8 MiB**。于是发布侧接受、读取侧拒绝：约 6 MiB 以上的工件写进去却读不回来，一份已发布、已被引用的工件无法读回，已完成的工作无法重入。这是**合同自身的缺陷**，不是实现走样——原合同把一个**随输入增长**的字段放进了一个**固定上限**的信封，却没有规定两端必须共享同一容量。
+>
+> **改后的语义**：读取仍由 Python 做（`body = path.read_bytes()`，保留 `FileNotFoundError` / `IsADirectoryError` 与 `json.loads` 的帮助），Go 只按**同一路径**读取并比对字节（`VerifyArtifactBindingFile`）。Go 因此**不**负责返回读取结果，也就**不**需要复现 Python 的异常类型与消息——这正是本文第 48 行否决"让 Go 读文件"时未考虑到的第三条路。`artifacts/<ref>.json` 的命名**仍属 Python**（Go 只是被**告知**路径，不推导它）。`artifact-reference`（格式判定）与拒绝映射全部不变，两次调用的结构与顺序也不变。
+>
+> **未放宽天花板**：8 MiB 共用上限保留原样，并有专门用例（`TestBridgeStillRejectsInputOverTheSharedCeiling`）钉住。修的是"读请求不该随工件增长"，不是"把上限拿掉"。
+>
+> 返修候选**尚未验收**；本合同的这一处更正随返修候选一并待审。详见 `.harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md` 与 `.gates/results/go-engine-M3.md`。
+
 ### 为什么 `get` 用两次调用
 
 迁移前的 `get` 有两条**各自独立**的拒绝，顺序是：格式 → 读取 → 完整。两次调用把这个顺序变成**结构性**的而不是论证性的：`artifact-reference` 在任何文件系统访问之前给出判定，`artifact-binding` 只做比较。代价是每次 `get` 两次桥接调用（实测 5.8 ms/次，每次都会起一次进程）；`put` 仍是一次——替换掉它原本就有的那次 `canonical` 调用，净增 0。
