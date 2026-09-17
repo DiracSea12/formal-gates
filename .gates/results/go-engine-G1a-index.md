@@ -12,6 +12,8 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 >
 > **G2a 的记录基线已失效**：其 `previous_accepted_baseline` 写作 `M3`，而 M3 现已 `FAIL`。命令作业半是在含该 P1 的候选（驱动二进制 `8bca2e2c…`）上签署的，因此不能再按"建立在已通过基线之上"来读。G2a 的处置（`BLOCKED`）本身不变。
 >
+> **ZCode 宿主接入已阻塞整条链（2026-09-17 晚）。** 本机 ZCode 升到 3.12.3，app-server 的**打包与协议面都变了**。`doctor-zcode` 是验收器 9 个必需项之一、**每个单元都要过**，所以这不是 M3 一项的问题。已修的一层是**我方陈旧假设**——内置 provider 目录位置（`6757231`，已由定点灵敏度与独立探针验证）；未修的一层是**宿主协议变更**——`workspace/readState` 被移除、`session/create` 不再给出已选模型（按 §12.2/§13.1 归 **G2c**）。两条见"已知有界差异与风险"，裁定见评审问题 23/24。**上一轮把成因记成"宿主缺件、产品无关"的 `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` 已撤回。**
+>
 > **命名更正**：本索引此前把 G2b 写作"原生定向验收关口"，这是错的。方案 §13.1 的表把 **G2b 定义为"DSH 薄适配"**；原生定向验收是 **G2a 自己的后半**。G2a 的记录也同错，已一并更正。**同一错误还在单元合同里**（`go-engine-G2a-contract.md` 第 178 行"授权关口在 G2b 之前"）：合同是派发前固定、与候选同批落地的历史件，改写它会动到候选，故**不改动**，更正以本索引与 G2a 记录为准。
 
 ## 基线与验收链
@@ -195,7 +197,8 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
   - **本索引此前在这里写错了一句**：原文称"G2a 也**不需要**原生定向验收……授权关口在 G2b 之前"。那是把 G2a 的后半误记成了 G2b 的关口（见文首命名更正），并且与 §13.1 第 513/520 行冲突。更正后的读法见上。
   - `live-20260915-2050` 的原生证据绑定更早的提交与运行时，**不可**当作当前候选的原生验收；它在本索引中的用途只有两个——排除"路径范围"与"配置差异"，以及给出"同一宿主同版本下七个角色可以跑通"的对照。**它不能用来判断本次运行为什么停下来**：09-15 那次的外层上下文能 apply 只读沙箱，本次不能（见"G2 的剩余工作"的更正）。
 - **跨平台**：只在本地 macOS 实测。
-- **M3 的返修候选**：已产出（定点证明、Go 全量、Python 全套 195 项、隔离回放均通过），但**尚未完成验收**，因此 `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` 的关闭**尚未被确认**。在完成验收并把记录结论改为 `PASS` 之前，G1b 不得按已收口处理。
+- **M3 的返修候选**：已产出（定点证明、Go 全量、Python 全套 199 项、隔离回放均通过），但**尚未完成验收**，因此 `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` 的关闭**尚未被确认**。在完成验收并把记录结论改为 `PASS` 之前，G1b 不得按已收口处理。挡路的是 `doctor-zcode`，成因见 `ZCODE-APP-SERVER-CATALOGUE-LOCATION-STALE`（已修）与 `ZCODE-APP-SERVER-PROTOCOL-SURFACE-CHANGED`（未修，属 G2c）。
+- **ZCode 宿主接入（阻塞整条链）**：本机 ZCode 3.12.3 的 app-server 已换协议面，本传输未跟上。`doctor-zcode` 是**每个单元**的必需项，故这不是 M3 一项的问题。**未验证**：新协议下工作区原生模型选择从哪读、是否需先授信（`workspace/hooks/trustGrant`）。
 - **`M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` 的触发点**：**未恢复**。类别已由确定性复现确定（check 侧错误经 `check-runtime` 中断浮出、末态无 `terminal`），但三个候选触发站点签名相同、保留物不足。该用例在第二次全套、返修后全套与 10 次隔离回放中均通过——**这些通过不解释第一次失败**，本项保持"未解释"。
 
 ## 已知有界差异与风险
@@ -216,7 +219,9 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 | `M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` | **M3（未解释的必需回归错误，类别已定、触发点未恢复）**：第一次完整回归（174 项）末态无 `terminal`，在 `test_driver.py:54` 抛 `KeyError('terminal')`。**类别已确定性复现**：check 侧运行期错误经 `check-runtime` 中断浮出，`guard` 因此不写 `stage-complete checks`，`evaluate`/`seal` 从未运行。**触发点未恢复**：`UNKNOWN_JOB`、`UNKNOWN_START`、收据之后的 Git 校验三个站点签名相同，而测试自己的 tearDown 删掉了作业目录。已排除的归因：与 M3 的 base64 缺陷同源（`round=0` 的 check 路径不读已发布工件）、"环境慢撞上超时"（固定 10 秒预算 vs 实测监督器启动中位 38 毫秒，约 250 倍余量，而观测到的变慢只有约 9 倍） |
 | `M3-JOB-DIRECTORY-LOST-ON-FAILURE` | **M3（流程，导致上一项无法归因）**：`test_driver` 的 `TemporaryDirectory` tearDown 会删掉 `jobs/` 目录，失败时的 `wrapper.stderr`、`request.json`、`process.json` 一并丢失。**建议**：任何 check 侧失败必须先保留作业目录再清理 |
 | `ARTIFACT-READ-BECOMES-SIZE-INDEPENDENT` | **M3 返修（结构性收益）**：读请求不再随工件增长，因此"两端容量不一致"这一类缺陷在结构上不再可能；代价是 Go 需要**被信任地**按给定路径读取（读的语义仍由 Python 的 `read_bytes()` 负责，Go 只比对字节） |
-| `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` | **M3（宿主阻塞，非产品缺陷）**：返修候选的完整验收 **8/9 通过**，仅 `doctor-zcode` 失败——本机 ZCode 安装不再自带 app-server 所需的 provider 配置（`…/glm/provider/zcode-builtin.json` 不存在），app-server 启动即退出（`ZCODE_TRANSPORT: Native output closed`）。同一条命令在 **`d71113e`（该项原先通过的那条候选）**、`c4bac49`、`9e4a622` 上逐字相同地失败；PASS 那次绑定的 `zcode.cjs`（`e9f1868c…` / 12,615,227 B）已不在盘上，现在的是 `da61b066…` / 11,416,833 B。**保持未验收**，不改标不适用 |
+| `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` | **M3（已于 2026-09-17 晚撤回并拆分）**：原写作"宿主阻塞，非产品缺陷"。**"非本次返修引入"成立，"非产品缺陷"不成立**，见下两条 |
+| `ZCODE-APP-SERVER-CATALOGUE-LOCATION-STALE` | **ZCode（我方陈旧假设，已修 `6757231`）**：3.12.3 把 app-server 的内置 provider 目录从 `<Resources>/glm/provider/` 搬到 `<Resources>/config/provider/`，而 app-server 只按**自己的脚本目录**推两个候选（`<script dir>/provider/…` 与 `<script dir>/../../../../../config/provider/…`，本机规约成 `/config/provider/zcode-builtin.json`），两个都够不到 ⇒ **在任何协议之前**退出 1。**文件在盘上存在**，不是宿主缺件。修复：仅在宿主自己的候选都缺失时，把新位置作为 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（宿主为此定义的入口）交给子进程；不写 app 包、不写 `~/.zcode`；目录**不进** `files` 证明（宿主自行刷新它，钉住字节会把正常刷新误判成 `HOST_CHANGED`）。验证：基线退出 1 且零协议；命名后存活并发出 5 条 `startup/storageState`。点灵敏度：回退实现 → 4 个新用例中 3 个失败（2 error + 1 failure）。`go vet` 0；Python 全套 **199 OK**（195 + 4） |
+| `ZCODE-APP-SERVER-PROTOCOL-SURFACE-CHANGED` | **ZCode（宿主协议变更，未修 ⇒ 迁移阻塞）**：同一构建已**移除 `workspace/readState`**（3.12.3 的 `zcode.cjs` 中出现 0 次；实调返回 `-32601`），而它是本传输的**首次调用**；`session/create` 对新工作区返回 `settings.model={"available": []}`（无 `current`），而 `selection()` 要求 `current`。修好上一条只是**把失败点前移**：`./scripts/harness doctor --provider zcode` 现在报 `ZCODE_NATIVE workspace/readState: … Method not found`。**已排除**"我们的 fallback 答复清空了目录"（改答空 result → `model=null`，同样无 `current`）；新协议下模型目录的真实来源**未确定**（`runtime/capabilities` 只有 `{independentPlanState:true}`；`session/read`、`session/messages`、`workspace/readPresentation` 都不含 `available`/`current`；是否需先 `workspace/hooks/trustGrant` 未验证）。按 §12.2 属宿主协议改动、§13.1 归 **G2c**。**影响面：`doctor-zcode` 是每个单元都要过的必需项，故在此适配完成（或换回说旧协议面的 ZCode 构建）之前，任何单元都不能收口** |
 | `CANCEL-WINDOW-REFERENCE-INHERITED` | **G2a（有意保留的继承行为）**：`process.json` 写在 SIGTERM handler 装载**之前**（Go 与 `reference_job.py` 第 31/38 行同序），落在该窗口的组信号会让监督器**无收据**地以 `signal: terminated` 结束。两侧一致，故**不关闭**——在窗口里补写收据会让 Go 在参考实现根本没有收据处给出收据，而 `Store.job` 对缺失收据的处置是 `RuntimeBlocked(UNKNOWN_JOB)`，可观察地不同。实测 6 轮中两侧均未落进窗口（0/6），但窗口客观存在；G2a 的 D3 即由此而来 |
 | `CANCEL-POSTCHILD-WINDOW` | **G2a（已知有界差异，未构造用例）**：参考实现的取消 handler 以 `raise KeyboardInterrupt` 实现，会在**任意**执行点抛出；若信号落在外层 `try` 结束之后、写 `exit.json` 之前，参考实现带 traceback 退出且**不写收据**，而 Go 在等待循环返回后不再理会已缓冲的信号、会**正常写收据**。窗口极窄（子进程收割与收据落盘之间），Go 侧更稳定；按"实测差异 + 不可达论证"记录，未加机制 |
 | `SUPERVISE-NATIVE-FORM-DIGEST` | **G2a（测试约定，非差异）**：原生入口形态下，两侧 `argv` 里嵌的是**各自**的作业目录，故 `request_digest` **合法地不同**；差分用例只断言**形状**相同（退出 1、`error=""`、写出 `native-error.json`、两份流证明齐备）。这与 M3 的 D1 同属"两侧不能共享目录"的约束 |
@@ -229,6 +234,7 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 | `MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED` | **G2a（此条已于 2026-09-17 撤回）**：原称模型为提权给出的理由"与证据不符"。**不成立**：本次运行自己的工具结果里就有 `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` 与 `sandbox-exec: sandbox_apply: Operation not permitted`，模型是按工具自己打印的提示请求了最小放宽。替换为 `SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT` |
 | `G2B-MISLABELLED-AS-NATIVE-GATE` | **G2a（文档，已修）**：G2a 的记录与本索引都把"验证监督器承载原生传输"写成了"下一单元 G2b 的关口"，而方案 §13.1 定义 **G2b 为 DSH 薄适配**、原生传输是 **G2a 自己的后半**。该错误让一个**属于本单元**的必需关口被顺延到了下一个单元，是"记录写错会改变流程"的实例。已连同记录一并更正 |
 | `INDEX-MISSING-M2-ROW` | **M3（文档，已修）**：M2 的记录提交改了索引的两张表，却漏掉"基线与验收链"表的 M2 行；已在 M3 索引更新中补上。它说明"索引已更新"这句自述不足以证明更新完整 |
+| `M3-CONTRACT-AMENDED-AFTER-DISPATCH` | **过程项（两条合同、同一情形、两种处置）**：`go-engine-M3-contract.md` 是随候选提交 `d71113e` 一起落地的**历史件**，却在撤回提交 `9e4a622` 里被**追加了 10 行更正**；而 G2a 的同类错误处理是**刻意不改**（见文首命名更正）。两条合同的差别带来一个可观察后果：M3 的 `bookkeeping` 只声明了 `M3.json`/`M3.md`/索引，**不含该合同**，所以若 M3 记录某天结论为 `PASS`，`admission.py` 会以"候选已移动"拒绝，而理由会指向一处**为记录而做的文档更正**。今天它被更靠前的 `overall == FAIL` 拒绝掩盖了。建议：要么统一为"合同一律不改、更正只进索引与记录"，要么把此类更正显式写进 `bookkeeping` |
 | `WORKTREE-LOCATION-AMBIGUOUS` | **过程项**：本项目以独立 worktree 开发，绑定 `codex/go-engine-v1` 的目录才是当前工作区；按会话默认目录侦察会误判为"工作丢失"。以 `git worktree list` 为准 |
 | `ENV-THROUGHPUT-UNIDENTIFIED` | 独立环境整体吞吐约为本机 1/4，成因未查明；回归判定已改为不依赖吞吐 |
 | `BUILD-PATH-IN-RUNTIME-IDENTITY` | `go build` 不加 `-trimpath` 时运行时身份随构建路径变化 |
@@ -262,5 +268,8 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 20. **`checks` 侧运行期错误是否应中止而不是转为决策中断**：当前语义下，check 出错会转成一次用户决策中断，图返回时末态**没有 `terminal`**，测试因此以 `KeyError` 而非断言失败表现。这是既定中断语义的产物，但"图正常返回"与"图被中断"在测试里只能靠 `KeyError` 区分。是否需要一个显式的"终态缺失"分类。
 21. **失败时保留子进程作业目录是否应写成明文纪律**：`M3-JOB-DIRECTORY-LOST-ON-FAILURE` 是本次"触发点无法归因"的直接原因——上一项被定级为"未解释"而不是"已解释"，几乎完全由此造成。是否要求所有 check/gate 作业目录在失败时先移动到证据目录再清理。
 22. **"本机沙箱是否有可用后端"这句话的作用域**：同一个短语在本项目里至少指三个**不同**的上下文，互相不能引用——(a) **远端 DSH 会话**按 harness 的只读约束起的沙箱：09-15 可用（进程能起、写入被拒），09-17 两次运行的**外层上下文**不可用（`sandbox_apply: Operation not permitted`）；(b) **本代理自身的 shell**：它已处在宿主的代理沙箱内，在其中**再叠加** `sandbox-exec` 以 `Operation not permitted`（退出 71）失败——这是本条的观察，与 (a) 无关；(c) **工具沙箱被显式放开后**的同一会话：本会话未能真正脱离沙箱，重试结果逐字相同。三者不可互相引用，而此前的记录正是把 (a) 的另一次运行与本次运行混为一谈（见已撤回的 `MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED`）。是否应把"作用域必须写明"写成原生验收的记录要求。（本项不改变 G2a 的处置：任何情况下 harness 都不得自行授予提权。）
+
+23. **ZCode 协议适配该切成哪一个单元、以及 `doctor-zcode` 是否应当拦住纯计算单元**：3.12.3 移除了 `workspace/readState` 并改掉了 `session/create` 的模型语义，这是**宿主协议面变更**。按 §12.2 它不该和当前单元混改；按 §13.1 它落在 **G2c（ZCode 薄适配）**——但 G2c 的前置是"G2a 收口"，而 G2a 本身卡在同一条链上。那么在这个适配完成前，是（i）把它作为一个**独立的前置单元**插到 G1b/G2a 之前（宿主接入是所有单元的公共前置），还是（ii）按 §12.5"原生定向验收按影响确定"论证：C1–C4、M1–M3 属纯计算/本地子进程，**本不需要**原生 ZCode 验收，故验收器固定要求的 `doctor-zcode` 对它们是**超出方案的更强要求**？两种读法给不同结论，需要明确裁定。**注意**（ii）不能读成"改判据放行"：`doctor-zcode` 此前一直通过，改标不适用会把"宿主不可用"写成"不需要测"；若采（ii），应改的是**每个单元的必需项清单**（并要求把 ZCode 就绪单独作为一条前置验收），不是把失败改标。
+24. **启动时给子进程命名宿主自己的内置目录，是否算 §5.3 的"改变宿主行为"**：本轮把 `<Resources>/config/provider/zcode-builtin.json` 通过宿主自己定义的 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 传给子进程。论据是：它是宿主为此**专门定义**的入口，宿主随后仍自行计算并维护 active 目录（我们把值放在 bundled seed 位），只覆盖"宿主自己的查找失败"这一种情形，且不写任何文件。反方读法可主张"适配器不得用环境变量参与宿主配置解析"。是否认可，或应改为在适配层报"宿主不兼容"而不提供该路径（那会让 ZCode 完全不可用）。
 
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

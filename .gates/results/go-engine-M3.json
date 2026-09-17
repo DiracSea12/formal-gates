@@ -86,10 +86,29 @@
       ],
       "items_failed": ["doctor-zcode"],
       "blocker": "ZCODE_TRANSPORT: Native output closed (doctor exit 2). The ZCode app-server exits immediately.",
-      "blocker_cause": "The host's ZCode installation no longer ships the built-in provider config the app-server looks for: /Applications/ZCode.app/Contents/Resources/glm/provider/zcode-builtin.json does not exist, and the app-server exits 1 with 'cannot locate CLI ZCode Built-in Provider Config'.",
-      "blocker_is_not_the_repair": "The identical failure reproduces on three candidates built separately in their own worktrees: d71113e (the M3 candidate on which this same check PASSED), c4bac49 (pre-repair) and 9e4a622 (repaired). The measured artifact changed: the zcode.cjs the passing run bound was sha256 e9f1868c... at 12615227 bytes, while the installed one is sha256 da61b066... at 11416833 bytes; the node binary is unchanged.",
-      "disposition": "The repair candidate stays UNACCEPTED. The item is required and has always passed here, so it is not relabelled NOT_APPLICABLE and the missing result is not read as PASS. Unblocking condition: a ZCode installation whose app-server starts. Then re-run this unit on the same candidate.",
-      "evidence": ".harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md"
+      "blocker_cause": "SEE CORRECTION. The cause is not the host install. Two parts, both on our side: (a) FIXED - ZCode 3.12.3 ships the app-server's built-in provider catalogue at <Resources>/config/provider/zcode-builtin.json, while the app-server only derives <script dir>/provider/zcode-builtin.json and a source-tree-relative ../../../../../config/provider/zcode-builtin.json (which normalises to /config/provider/zcode-builtin.json). Both miss, so it exits 1 before emitting any protocol. The file is present; only its location moved. (b) NOT FIXED - the same build removed workspace/readState, which this transport calls first, and session/create now answers settings.model={\"available\": []} with no current selection.",
+      "attribution_withdrawn": {
+        "was": "M3-REPAIR-BLOCKED-BY-HOST-ZCODE: the host's ZCode install no longer ships the provider config, so this is not a product defect; unblock by installing a ZCode whose app-server starts.",
+        "why_wrong": "\"the artifact changed\" was established (zcode.cjs e9f1868c/12615227 vs da61b066/11416833) but \"therefore our side is fine\" does not follow: the artifact changing is exactly what makes our assumption stale. Whether a defect is ours depends on whether our closed-world assumption about the host still holds, not on whether the host changed.",
+        "same_pattern_as": "the already-retracted G2a attribution MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED - read the run's own evidence before attributing",
+        "replaced_by": "ZCODE-APP-SERVER-CATALOGUE-LOCATION-STALE (fixed) + ZCODE-APP-SERVER-PROTOCOL-SURFACE-CHANGED (open)"
+      },
+      "blocker_is_not_the_repair": "Confirmed and unchanged: the identical launch failure reproduced on three candidates built separately in their own worktrees - d71113e (the M3 candidate on which this same check PASSED), c4bac49 (pre-repair) and 9e4a622 (repaired). The Go repair (f136303) and the Go supervisor are still not involved.",
+      "fix_applied": {
+        "commit": "6757231",
+        "what": "native_zcode.capture_binding() names the bundled catalogue through ZCODE_BUILTIN_PROVIDER_CONFIG_FILE - the host's own documented input for it - only when the host's own two candidates are absent, so a host whose lookup works is untouched. No file is written to the application bundle or to ~/.zcode. The catalogue is deliberately not added to the binding's file proofs, because the host refreshes it on its own.",
+        "verified": "baseline: exit 1, no protocol emitted; with the catalogue named: alive and five startup/storageState events emitted. Point sensitivity: 3 of 4 new tests fail with the implementation reverted, 4/4 pass with it. go vet exit 0; Python suite 199 OK (195 before + 4 new).",
+        "effect_on_the_item": "moves the failure forward, it does not clear it: ./scripts/harness doctor --provider zcode now answers {\"ok\": false, \"error\": \"ZCODE_NATIVE workspace/readState: {\\\"code\\\": -32601, \\\"message\\\": \\\"Method not found: workspace/readState\\\"}\"} instead of exiting at launch.",
+        "evidence": ".harness/validation/zcode-launch-20260917T163706Z/DIAGNOSIS.md"
+      },
+      "remaining_adaptation": {
+        "what": "The ZCode app-server protocol surface changed. workspace/readState is gone (0 occurrences in the 3.12.3 bundle; a call returns -32601) and session/create returns settings.model={\"available\": []} with no current for a fresh workspace, while selection() requires current. Neither is a rename: it is not known yet which call exposes the workspace's native model selection, and whether a workspace must be trusted first (workspace/hooks/trustGrant exists in the method table) was not determined. Excluded on evidence: our documented session/requestRuntimePreferences fallback answer is not what empties the catalogue - answering with an empty result instead yields model=null, also without current.",
+        "why_not_fixed_here": "It changes the transport's call sequence and model determination, which section 12.2 keeps out of the current unit and section 13.1 assigns to G2c (ZCode thin adapter).",
+        "impact": "doctor-zcode is one of the nine required items for EVERY unit, so no unit can close until this adaptation is done or a ZCode build speaking the previous surface is installed.",
+        "evidence": ".harness/validation/zcode-launch-20260917T163706Z/report.json"
+      },
+      "disposition": "The repair candidate stays UNACCEPTED. doctor-zcode is required and had always passed here, so it is not relabelled NOT_APPLICABLE and the missing result is not read as PASS. The recorded 8/9 stands as recorded. Unblocking condition: the G2c-scope adaptation above, or a ZCode build whose app-server speaks the previous surface.",
+      "evidence": ".harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md (sections 1-2 still valid, section 3 attribution superseded), .harness/validation/zcode-launch-20260917T163706Z/"
     },
     "evidence_dir": ".harness/validation/m3-repair-capacity-20260917T2330Z",
     "classification_document": ".harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md"

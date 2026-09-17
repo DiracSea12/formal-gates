@@ -183,6 +183,30 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 
 完整证据与分类：`.harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md`。
 
+> ### 更正（2026-09-17 晚）：成因不是"宿主缺件"，而是**我方陈旧假设 + 宿主协议变更**
+>
+> 下面把失败写成"**宿主侧**的，与本次返修无关"。**"与本次返修无关"仍然成立，但"宿主侧"不成立**，
+> 已撤回（`M3-REPAIR-BLOCKED-BY-HOST-ZCODE` 随之更名拆成两条）。真实成因有两层：
+>
+> * **（a）我方陈旧假设，已修（`6757231`）**：3.12.3 把 app-server 的内置 provider 目录搬到
+>   `<Resources>/config/provider/zcode-builtin.json`，而 app-server 只按**自己的脚本目录**推两个候选
+>   （`<script dir>/provider/…` 与 `<script dir>/../../../../../config/provider/…`，后者在本机规约成
+>   `/config/provider/zcode-builtin.json`），两个都够不到，于是**在说出任何协议之前**退出 1。
+>   **该文件在盘上存在**——不是宿主缺件，只是位置变了，而 app-server 的候选列表不认识新位置。
+>   修复只在宿主自己的候选**都不存在**时才把新位置作为 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 交给子进程
+>   （这正是宿主为此定义的入口）；不写 app 包、不写 `~/.zcode`；点灵敏度：回退实现 → 4 个新用例中 3 个失败。
+> * **（b）宿主协议变更，未修**：同一版本已移除 `workspace/readState`（本传输的首次调用），且
+>   `session/create` 对新工作区返回 `settings.model={"available": []}`（无 `current`）。故修好 (a) 只是把
+>   失败点前移：`./scripts/harness doctor --provider zcode` 现在是
+>   `{"ok": false, "error": "ZCODE_NATIVE workspace/readState: {\"code\": -32601, \"message\": \"Method not found: workspace/readState\"}"}`。
+>   按方案 §12.2 这属**宿主协议**改动，§13.1 归 **G2c（ZCode 薄适配）**，不在本单元内修。
+>
+> 处置不变：**返修候选保持未验收**，`doctor-zcode` 仍是 9 个必需项之一（**每个单元**都要过）。
+> 但**解阻条件变了**：不再是"等一个能启动 app-server 的 ZCode 安装"，而是"完成上述 G2c 范围的协议适配，
+> 或换回一个说旧协议面的 ZCode 构建"。证据与完整分析：
+> `.harness/validation/zcode-launch-20260917T163706Z/`（`DIAGNOSIS.md`、`probe.py`、`report.json`）；
+> 下方第 1~2 条的观测仍然有效并保留，第 3 条的归因与解阻条件作废。
+
 ### 完整验收：8/9 通过，被 `doctor-zcode` 挡住 ⇒ 仍不放行
 
 对固定返修候选（`9e4a622`，源码 `f136303`）跑了两次完整验收，**没有签发记录**：
@@ -192,19 +216,19 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 | `.harness/validation/acceptance/M3/20260917T155933Z-31836` | 在首个失败项处停止 |
 | `.harness/validation/acceptance/M3/20260917T161012Z-57517`（`--keep-going`，9 项全跑） | **8 项 PASS**（含 `tree-clean-after`），**`doctor-zcode` FAIL** |
 
-`doctor-zcode` 的失败是**宿主侧**的，与本次返修无关，有直接证据：
+`doctor-zcode` 的失败**与本次返修无关**，有直接证据：
 
 ```
 {"ok": false, "error": "ZCODE_TRANSPORT: Native output closed"}   # 退出 2
 ```
 
-* 直接启动 app-server，它自己给出的原因：`无法定位 CLI ZCode Built-in Provider Config：…/glm/provider/zcode-builtin.json`，退出 1；该目录**不存在**。
+* 直接启动 app-server，它自己给出的原因：`无法定位 CLI ZCode Built-in Provider Config：…/glm/provider/zcode-builtin.json`，退出 1。**该位置不存在**——但同名文件在 `<Resources>/config/provider/` 下**存在**（见上方更正 (a)）。
 * 同一条命令在 **`d71113e`**（**原先这项检查通过的那条 M3 候选**）、`c4bac49`（返修前）、`9e4a622`（返修后）上**逐字相同**地失败；三者各用**自己目录里构建**的驱动二进制。
-* 测量物本身变了：PASS 那次绑定的 `zcode.cjs` 是 `e9f1868c…` / 12,615,227 字节，现在盘上是 `da61b066…` / 11,416,833 字节；node 未变。
+* 测量物本身变了：PASS 那次绑定的 `zcode.cjs` 是 `e9f1868c…` / 12,615,227 字节，现在盘上是 `da61b066…` / 11,416,833 字节；node 未变。**"脚本变了"成立的推论是"宿主的打包与协议面变了、我方假设可能已陈旧"**，不是"因此我方无缺陷"。
 
-按"必需检查受阻 ⇒ 保持未验收，不视为 PASS、不改标不适用"，**返修候选不放行**。解阻条件是一个
-app-server 能正常启动的 ZCode 安装。完整记录见
-`.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md`。
+按"必需检查受阻 ⇒ 保持未验收，不视为 PASS、不改标不适用"，**返修候选不放行**。解阻条件见上方更正。
+完整记录见 `.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md`
+（第 1~2 节仍有效，第 3 节归因已被更正）与 `.harness/validation/zcode-launch-20260917T163706Z/DIAGNOSIS.md`。
 
 ### 对 G2a 的影响
 
