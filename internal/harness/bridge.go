@@ -412,6 +412,24 @@ func dispatch(e envelope) (any, error) {
 			return nil, err
 		}
 		return planComparison(q)
+	case "task-input":
+		// The wrapper shape and the canonical digest move here (M2). file I/O
+		// and the callers stay in Python; the digest that used to be a separate
+		// digest() cross-process call is now computed in-line.
+		var q taskInputInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return planTaskInput(q)
+	case "evidence-feedback":
+		// The wrapper shape and the revision-binding judgement move here (M2).
+		// A refusal is a typed business outcome inside the value (C4 pattern):
+		// Python's refuse() maps it back to the HarnessError family.
+		var q evidenceFeedbackInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return planEvidenceFeedback(q)
 	case "canonical", "digest":
 		// The canonical encoding is the content-addressing format, so it is
 		// owned here rather than in the caller. Numbers are decoded with
