@@ -17,8 +17,21 @@
     "flow_status": "WAITING_USER",
     "roles_completed": 0,
     "blocker": "NATIVE_BLOCKED: RuntimeBlocked: DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
-    "blocker_cause": "The product-review role asked for an out-of-sandbox escalation: its bash tool call carried sandbox_permissions='danger-full-access'. DSH turned that into session/request_permission and the turn ended aborted/user. This version has no native-answer path (the permission bridge is recorded as not implemented), so no answer could be delivered.",
-    "blocker_is_not_a_regression": "Same host and version, and a byte-identical harness tool policy apart from the job-directory path, as the earlier run live-20260915-2050 which reached HARNESS_COMPLETE with 7 roles. That run made 32 bash calls - 16 of them operating inside the run's workspaces/ directories and 13 running the same class of check command - with 0 escalation fields and 0 permission requests in any of its seven jobs. So the trigger is the model's own escalation request, not the path scope, the configuration or the Go supervisor.",
+    "blocker_cause": "The read-only sandbox cannot be applied in the outer run context. The product-review role read its bound inputs normally, and its next bash call (a read-only survey) was refused by the host itself: 'sandbox mode read-only is requested but no sandbox backend is usable on this host; refusing to run the command unconfined' with 'Runner failure: sandbox-exec: sandbox_apply: Operation not permitted' and structured error SandboxUnavailableError / SANDBOX_UNAVAILABLE. The role then asked for the smallest relaxation, following the hint in that same tool result ('otherwise switch the consumer to danger-full-access'). DSH turned that into session/request_permission and the turn ended aborted/user. This version has no native-answer path (the permission bridge is recorded as not implemented), so no answer could be delivered.",
+    "blocker_is_not_a_regression": "A bare probe with no harness, no Python and no Go supervisor involved reproduces the outer-context fault: /usr/bin/sandbox-exec -p '(version 1) (allow default)' /bin/echo OK gives 'sandbox-exec: sandbox_apply: Operation not permitted', exit 71, while the binary itself exists and is executable. The same machine applied the read-only sandbox normally on 2026-09-15 (a bash call started, its write was refused with Operation not permitted, and the file was afterwards absent), so what changed is the launching context, not the product. The blocker also reproduces: a strict same-configuration rerun on 2026-09-17 19:59 stopped at the same place with the verbatim same reason.",
+    "correction": {
+      "retracted": "An earlier revision of this record (commit 5fa69c4) asserted that the model's stated reason - 'the read-only sandbox has no usable backend on this host' - was unsupported by the evidence, and named the model's own escalation request as the trigger.",
+      "why_retracted": "That conclusion used a passing run from another day to rebut this run's cause, and treated the model's own account as the claim to test instead of reading this run's own tool result. The tool result is in this run and supports the model: SandboxUnavailableError / SANDBOX_UNAVAILABLE, with sandbox_apply refused. The role escalated only after bash could not run at all, following the hint the tool result itself printed.",
+      "unchanged_conclusion": "This is still not a G2a regression, but the reason changes to the bare probe above. What remains true from the original comparison table is only that path scope and configuration are excluded.",
+      "known_difference_replaced": "MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED -> SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT"
+    },
+    "rerun": {
+      "run": "harness-20260917-195934-b993516f",
+      "at": "2026-09-17 19:59 (+0800)",
+      "same_configuration": "HEAD differs only in record files; driver_binary_sha256 8bca2e2c... and runtime_identity a50f2289... are identical to the first run; DSH 0.1.5-rc.1",
+      "outcome": "WAITING_USER, roles=[] , interrupted at product-review with the verbatim same reason",
+      "evidence_dir": ".harness/validation/g2a-native-rerun-20260917T115915Z"
+    },
     "supervisor_half_proven": {
       "request_kind": "native",
       "request_argv": "venv python -m formal_gates_harness.native_entry <job dir>",
@@ -33,6 +46,7 @@
     "known_difference_id": "NATIVE-GATE-BLOCKED-BY-MODEL-ESCALATION"
   },
   "previous_accepted_baseline": "M3",
+  "previous_accepted_baseline_note": "The recorded baseline is no longer an accepted baseline: M3's PASS was withdrawn on 2026-09-17 (P1 capacity regression plus one unexplained required regression failure). G2a's command-job half was signed on a candidate whose driver binary (8bca2e2c...) contains that P1, so it must not be read as resting on an accepted baseline. G2a's own BLOCKED disposition is unchanged.",
   "candidate": {
     "commit": "63b0650f4ecaf5a6e709b78b8f16170f6aa21d4e",
     "branch": "codex/go-engine-v1",

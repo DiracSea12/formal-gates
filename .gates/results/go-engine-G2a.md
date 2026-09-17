@@ -167,7 +167,7 @@ DSH 据此发出 `{"id": 0, "method": "session/request_permission"}`（`protocol
 
 **结论**：监督器的那一半——**执行原生 argv、取得所有权、写出收据、如实转述流与退出码**——是被证明的。**没有**被证明的是**原生完成关联**：方案 §13.1 第 513 行给"原生定向验收"规定的最小证据是"真实宿主/配置、原生请求及**完成关联**、实际文件或服务端证据"，而本次没有任何角色抵达完成的轮次。因此这一半是**受阻**，不是通过、也不是不适用。
 
-### 与先前的通过运行对照：阻塞原因已定位为模型自己的提权请求
+### 与先前的通过运行对照：**先前的归因已于 2026-09-17 更正**
 
 `live-20260915-2050`（另一 worktree，`codex/dogfood-dsh`，DSH `0.1.5-rc.1`）曾让**同一宿主**的七个角色全部通过并到达 `HARNESS_COMPLETE`。同一宿主、同一版本为何这次第一个角色就停？逐项对照如下。
 
@@ -183,9 +183,37 @@ DSH 据此发出 `{"id": 0, "method": "session/request_permission"}`（`protocol
 
 （先前那次的 `bash` 计数以解析后的工具调用为准；按文本 grep `"name":"bash"` 会得到两倍，因为流式事件里每个调用还会出现一次 `tool-call-chunks`。）
 
-三点因此可以排除：**不是路径范围**（先前那次的 bash 有 16 次同样进入 `workspaces/…` 而未被拦）、**不是配置差异**（工具策略逐项相同）、**不是 Go 监督器**（同一次运行里 seq 24 的 bash 与全部 `read`/`glob` 都正常执行，阻塞发生在模型提交提权请求之后）。
+两点因此可以排除：**不是路径范围**（先前那次的 bash 有 16 次同样进入 `workspaces/…` 而未被拦）、**不是配置差异**（工具策略逐项相同）。**"不是 Go 监督器"这一条仍然成立，但理由要换**——见下。
 
-模型给出的理由（"只读沙箱在本机没有可用后端"）**与证据不符**：先前那次在只读沙箱内执行了同一类命令、13 次运行检查脚本而**没有**任何提权；更早的 DSH 专项验收还记录过只读会话真的尝试追加文件并被 `Operation not permitted` 拒绝——即只读沙箱在本机是有后端、且确实生效的。
+> #### 更正（2026-09-17）：本记录此前对阻塞成因的归因是错的
+>
+> 本记录（提交 `5fa69c4`）此前在这里写的是：
+>
+> > 三点因此可以排除：…**不是 Go 监督器**…。模型给出的理由（"只读沙箱在本机没有可用后端"）**与证据不符**：先前那次在只读沙箱内执行了同一类命令、13 次运行检查脚本而**没有任何**提权；更早的 DSH 专项验收还记录过只读会话真的尝试追加文件并被 `Operation not permitted` 拒绝——即只读沙箱在本机是有后端、且确实生效的。
+>
+> **这一段不成立，已撤回。** 它用**另一天**的通过运行去反驳**本次**运行的成因，并把模型的自述当作待检验的主张，而没有去读本次运行**自己的工具结果**。而工具结果就在本次会话里：
+>
+> ```
+> Error: sandbox mode "read-only" is requested but no sandbox backend is usable on this host;
+> refusing to run the command unconfined. … otherwise switch the consumer to danger-full-access.
+> Runner failure: sandbox-exec: sandbox_apply: Operation not permitted
+> {"name":"SandboxUnavailableError","code":"SANDBOX_UNAVAILABLE"}
+> ```
+>
+> 即：角色第 1 轮的 `read` 正常，紧接着的 `bash`（`pwd; ls -la; git status; …`，只读勘察）**被宿主自身拒绝**；模型随后按**工具自己给出的提示**（"otherwise switch the consumer to danger-full-access"）请求了最小放宽，于是 DSH 发出 `session/request_permission`、`native_dsh.py:47-48` 抛 `RuntimeBlocked`、`turn/end` 记为 `aborted/user`，流程停在 `WAITING_USER`。**模型不是无端提权，它是在 `bash` 完全无法执行之后的反应。**
+>
+> **"这不是 G2a 的回归"这个结论不变，但依据换成裸探针**（不含 harness、不含 Python、不含 Go 监督器）：
+>
+> ```
+> $ /usr/bin/sandbox-exec -p '(version 1) (allow default)' /bin/echo SANDBOX_EXEC_OK
+> sandbox-exec: sandbox_apply: Operation not permitted          # exit=71
+> ```
+>
+> `/usr/bin/sandbox-exec` 存在且可执行，`sandbox_apply` 被拒 ⇒ **故障在外层运行上下文**。09-15 的历史 transcript（`permission/preset=read-only`、`approval/policy=never`）显示同一台机器上的只读沙箱**当时是正常工作的**：`bash` 能起、写入被拒（`Operation not permitted`），事后查该文件为 `FILE_ABSENT`。变的是**今天的启动上下文**，不是产品。
+>
+> **本次阻塞可复现**：2026-09-17 19:59 在同一配置下重跑（HEAD 仅记录文件不同、驱动二进制 `8bca2e2c…` 与 `runtime_identity a50f2289…` 与首次逐字相同、DSH `0.1.5-rc.1`），**停在同一位置**：`status=WAITING_USER`、`roles=[]`，中断角色 `product-review`、理由与上次逐字相同。故下方"本次没有再重跑"一句也不成立，一并更正。
+>
+> 证据：`.harness/validation/g2a-native-rerun-20260917T115915Z/`（`DIAGNOSIS.md`、`rerun-session.transcript.jsonl`、`historical-20260915-readonly-boundary.transcript.jsonl`、`probe-sandbox-exec.inside-agent-sandbox.txt`）。
 
 ### 处置：这是既定的无头交互边界，不是回归
 
@@ -194,7 +222,11 @@ DSH 据此发出 `{"id": 0, "method": "session/request_permission"}`（`protocol
 3. **harness 的行为正是方案要求的行为。** §6.2/§13.1："没有原生答复通路的版本明确报告能力不足，**不靠免审批模式让测试通过**"；§14.2："宿主原本关闭某能力 | harness 不开启；**测试不靠临时强制授权凑通过**"；§14.2："原生受限于平台能力而阻塞时**保留该事实，不自动修改宿主配置完成测试**"。
 4. **与既有的 ZCode 记录同类。** 先前的验收记录在 ZCode 于真实 Edit 审批处返回 `ZCODE_INTERACTION_REQUIRED` 时写的是"**这符合既定交互边界**，但也意味着目前不能在该配置下无人值守跑完整条 ZCode 开发流水线"。本次 DSH 的情形与之同型，索引中已有一条 `ZCODE-HEADLESS-BLOCK` 与之并列。
 
-**因此 G2a 保持未验收**（方案 §13.1"必要原生验证受权限、服务或费用授权阻塞时，当前单元保持未验收，不擅自消费额外权限或跳过测试继续推进"）。本次**没有**再重跑：重跑须重新取得授权，而且阻塞取决于模型是否选择提权（先前那次七个角色都没有提权），"模型这次没提权所以过了"本身并不构成对监督器的验证。
+**因此 G2a 保持未验收**（方案 §13.1"必要原生验证受权限、服务或费用授权阻塞时，当前单元保持未验收，不擅自消费额外权限或跳过测试继续推进"）。
+
+> **更正（2026-09-17）**：上面"本次没有再重跑"一句已不成立。本记录发布后又在**同一配置**下重跑了一次（2026-09-17 19:59，`harness-20260917-195934-b993516f`；HEAD 仅记录文件不同，驱动二进制 `8bca2e2c…` 与 `runtime_identity a50f2289…` 与首次逐字相同，DSH `0.1.5-rc.1`），**停在同一位置**：`status=WAITING_USER`、`roles=[]`，中断角色 `product-review`、理由与首次逐字相同。因此"阻塞取决于模型是否选择提权、故不必重跑"这个理由也不再成立——阻塞是**可复现的**，成因是外层运行上下文无法 apply 只读沙箱（见上节更正）。
+>
+> 另：该次重跑是从本 App 会话发起的；同一命令在"工具沙箱被显式放开后"重试仍逐字相同，说明本次会话**未能**取得独立上下文。真正能解阻的做法是在一个 `sandbox_apply` 可用的上下文里重跑（例如用户自己的 Terminal 窗口），见下节。
 
 ### 什么能收口 G2a 的后半
 
@@ -256,9 +288,11 @@ G2a 的**通过**尝试只有一个（`20260917T100854Z-99375`），`overall=PAS
 | `CANCEL-POSTCHILD-WINDOW` | **新增（已知有界差异，未构造用例）**：参考实现的 handler 以 `raise KeyboardInterrupt` 实现，会在**任意**执行点抛出；若信号落在外层 `try` 结束之后、写 `exit.json` 之前，参考实现会带 traceback 退出且**不写收据**。Go 在 `waitChild` 返回后不再理会已缓冲的信号，会**正常写收据**。窗口极窄（子进程收割与收据落盘之间），Go 侧更稳定；按"实测差异 + 不可达论证"记录，未加机制 |
 | `SUPERVISE-NATIVE-FORM-DIGEST` | **新增（测试约定，非差异）**：原生入口形态下 `argv` 里含**各自**的作业目录，故 `request_digest` 两侧**合法地不同**，差分用例只断言**形状**相同（退出 1、`error=""`、写出 `native-error.json`、两份流证明齐备）。若评审认为应连 `request_digest` 一并相等，需要先给出两侧共享目录的办法（与 M3 的 D1 同一类约束） |
 | `EMPTY-PATH-COMPONENT-ORACLE-BLIND` | **新增（覆盖边界）**：`PATH` 空分量（当前目录）在 macOS 上**不被**该 oracle 区分（见负控制一节的等价变异分析），只由 Go 单元测试覆盖 |
-| `NATIVE-GATE-BLOCKED-BY-MODEL-ESCALATION` | **新增（本单元真实阻塞项）**：G2a 后半的真实原生运行停在宿主权限请求上。触发者是模型自己在 `bash` 参数里写 `sandbox_permissions: "danger-full-access"`，而非配置、路径范围或 Go 监督器——同一宿主、同一版本、同一工具策略下，先前那次的 32 次 `bash`（其中 16 次进入 `workspaces/…`、13 次运行同类检查脚本）**0 次**提权、**0 次**权限请求。本版本无原生答复通路（见 `NATIVE-ANSWER-PATH-ABSENT`），故唯一合规动作是报告能力不足。**保持未验收** |
+| `NATIVE-GATE-BLOCKED-BY-MODEL-ESCALATION` | **G2a（已于 2026-09-17 撤回并改名）**：原文称"触发者是模型自己在 `bash` 参数里写 `sandbox_permissions: "danger-full-access"`"。**该归因不成立**（见上节更正）：模型是在 `bash` 被宿主以 `SANDBOX_UNAVAILABLE` 拒绝之后、按工具自己打印的提示请求最小放宽。**替换为 `SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT`** |
 | `NATIVE-ANSWER-PATH-ABSENT` | **新增（既定的能力缺口，非本单元回归）**：本版本**不能**回答宿主的原生权限请求。既有工作的记录是 `permission_bridge: BLOCKED: file_edit add permissions.py rejected by tool safety check`、`completion: PARTIAL: … live permission forwarding not implemented`、`model_calls: 0`（`permission-fix-20260915-2236/final-audit.json`）。方案 §12.4/§13.1 把该项单列为 **G2d：原生交互**。与索引中既有的 `ZCODE-HEADLESS-BLOCK` 同型；先前验收记录对 ZCode 的同类阻塞写的是"这符合既定交互边界" |
-| `MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED` | **新增（本次实测发现，写给宿主评审）**：模型为提权给出的理由——"只读沙箱在本机没有可用后端"——**与证据不符**。先前那次在同一只读沙箱里 13 次运行检查脚本均成功且未提权，更早的 DSH 专项验收还记录过只读会话写被 `Operation not permitted` 拒绝（即沙箱确有生效的后端）。这不改变处置（harness 仍不得自行授予提权），但它说明"模型自述的阻塞原因"也不可直接当作环境事实 |
+| `MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED` | **G2a（此条已于 2026-09-17 撤回并替换）**：原文称模型为提权给出的理由"与证据不符"。**该结论不成立**：本次运行自己的工具结果里就有 `{"name":"SandboxUnavailableError","code":"SANDBOX_UNAVAILABLE"}` 与 `sandbox-exec: sandbox_apply: Operation not permitted`，模型是按工具自己给出的提示请求了最小放宽。**替换为 `SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT`**（见下条） |
+| `SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT` | **G2a（本单元真实阻塞项，成因已定位）**：只读沙箱在**本次外层运行上下文**里无法 apply。裸探针（无 harness、无 Python、无 Go 监督器）复现：
+`/usr/bin/sandbox-exec -p '(version 1) (allow default)' /bin/echo OK` → `sandbox-exec: sandbox_apply: Operation not permitted`，退出 71。09-15 的同一台机器上只读沙箱是正常工作的（`bash` 能起、写入被拒），故变的是**启动上下文**，不是产品。**保持未验收**；解阻条件是在一个 `sandbox_apply` 可用的上下文里重跑 |
 | `NATIVE-TRANSPORT-CARRIED-BUT-NO-COMPLETION` | **新增（本单元后半的精确状态）**：Go 监督器**确实**承载了原生传输——原生入口 argv 被当普通子进程执行、`exit.json` 六字段齐备且流证明正确、`native-process.json` 显示监督器是进程组组长（pgid == 自身 pid）而原生子进程是它的子进程——但**没有完成关联**（无角色抵达完成的轮次）。方案 §13.1 第 513 行要求的最小证据含"完成关联"，故该半为**受阻**而非通过 |
 | `HOST-SHIM-BREAKS-PATH-OPS`、`TMPDIR-UNRESOLVED-SYMLINK`、`COPY-STATUS-UNREACHABLE`、`MALFORMED-RECORD-ERROR-SHAPE`、`BOOL-SIZE-IS-A-NUMBER-IN-PYTHON`、`NON-FINITE-CROSSES-TRANSPORT`、`INPUT-PATH-NOT-NORMALISED`、`ARTIFACT-READ-COSTS-TWO-CALLS`、`ARTIFACT-LOCATION-STAYS-IN-PYTHON`、`INDEX-MISSING-M2-ROW`、`GOFMT-WINDOWS-FILE-PREEXISTING`、`WORKTREE-LOCATION-AMBIGUOUS`、`ZCODE-HEADLESS-BLOCK` 等 | 保留，不变 |
 | G2a | **未收口**：命令作业半 `PASS`（候选 `63b0650`），承载原生传输半 `BLOCKED`。**G2b 不得开始**（方案 §13.1"必要原生验证受权限、服务或费用授权阻塞时，当前单元保持未验收"、§14.3"必需测试未结束、被跳过或原生验证受阻 | 保持未验收"）。G2b 是 **DSH 薄适配**，不是"原生定向验收关口" |

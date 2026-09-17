@@ -183,6 +183,29 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 
 完整证据与分类：`.harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md`。
 
+### 完整验收：8/9 通过，被 `doctor-zcode` 挡住 ⇒ 仍不放行
+
+对固定返修候选（`9e4a622`，源码 `f136303`）跑了两次完整验收，**没有签发记录**：
+
+| 尝试 | 结果 |
+| --- | --- |
+| `.harness/validation/acceptance/M3/20260917T155933Z-31836` | 在首个失败项处停止 |
+| `.harness/validation/acceptance/M3/20260917T161012Z-57517`（`--keep-going`，9 项全跑） | **8 项 PASS**（含 `tree-clean-after`），**`doctor-zcode` FAIL** |
+
+`doctor-zcode` 的失败是**宿主侧**的，与本次返修无关，有直接证据：
+
+```
+{"ok": false, "error": "ZCODE_TRANSPORT: Native output closed"}   # 退出 2
+```
+
+* 直接启动 app-server，它自己给出的原因：`无法定位 CLI ZCode Built-in Provider Config：…/glm/provider/zcode-builtin.json`，退出 1；该目录**不存在**。
+* 同一条命令在 **`d71113e`**（**原先这项检查通过的那条 M3 候选**）、`c4bac49`（返修前）、`9e4a622`（返修后）上**逐字相同**地失败；三者各用**自己目录里构建**的驱动二进制。
+* 测量物本身变了：PASS 那次绑定的 `zcode.cjs` 是 `e9f1868c…` / 12,615,227 字节，现在盘上是 `da61b066…` / 11,416,833 字节；node 未变。
+
+按"必需检查受阻 ⇒ 保持未验收，不视为 PASS、不改标不适用"，**返修候选不放行**。解阻条件是一个
+app-server 能正常启动的 ZCode 安装。完整记录见
+`.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md`。
+
 ### 对 G2a 的影响
 
 G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**：G2a 的"命令作业半"是在含本 P1 的
@@ -193,7 +216,8 @@ G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**�
 
 | 编号 | 状态 |
 | --- | --- |
-| `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` | **新增（P1 功能回归，返修候选已产出、尚未验收）**：读回容量小于发布容量，已发布并被引用的工件读不回来。机理、修法与定点证明见"撤回后：返修候选"一节 |
+| `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` | **新增（P1 功能回归，返修候选已产出、验收受阻）**：读回容量小于发布容量，已发布并被引用的工件读不回来。机理、修法与定点证明见"撤回后：返修候选"一节 |
+| `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` | **新增（宿主阻塞，非产品缺陷、非本次返修引入）**：完整验收 8/9 通过，仅 `doctor-zcode` 失败——本机 ZCode 安装不再自带 app-server 所需的 provider 配置，app-server 启动即退出。同一条命令在 `d71113e`（**该项原先通过的那条候选**）、`c4bac49`、`9e4a622` 上逐字相同地失败；PASS 那次绑定的 `zcode.cjs`（`e9f1868c…`）已不在盘上。**保持未验收**，解阻条件是 app-server 能启动的 ZCode 安装。见 `.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md` |
 | `M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` | **新增（未解释的必需回归错误，类别已定、触发点未恢复）**：第一次完整回归末态的 `KeyError('terminal')`。已确定性复现其机制；三个候选触发点签名相同、保留物不足以区分。**不得**改标为环境噪声或同一个 base64 缺陷。见"撤回后：返修候选"一节 |
 | `M3-READ-GRANULARITY` / `M3-TESTS-OVERFIT-TRANSPORT-SPLIT` | **新增（P3，非阻塞建议）**：读的粒度与交付测试对传输拆分的依赖。与本 P1 同批记录，按建议处理 |
 | `M3-JOB-DIRECTORY-LOST-ON-FAILURE` | **新增（流程，导致上一项无法归因）**：`test_driver` 的 `TemporaryDirectory` tearDown 会删掉 `jobs/` 目录，于是失败时的 `wrapper.stderr`、`request.json`、`process.json` 全部丢失。**建议：任何 check 侧失败都必须先保留作业目录再清理**，否则同型错误永远只能停留在"类别已定、触发点未知" |

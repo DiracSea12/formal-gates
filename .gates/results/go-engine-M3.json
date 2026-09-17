@@ -49,7 +49,7 @@
     ]
   },
   "repair_candidate": {
-    "status": "PRODUCED, NOT YET ACCEPTED",
+    "status": "PRODUCED; ACCEPTANCE BLOCKED BY A HOST-SIDE ITEM (doctor-zcode)",
     "base_commit": "c4bac4923c0476cfbbf4379adc16efa21eb25133",
     "commit": "f136303",
     "worktree_dirty": false,
@@ -73,6 +73,23 @@
       "python_unittest": "195 tests OK in 67.6s",
       "isolated_replay_of_the_unchanged_failing_test": "10/10 PASS",
       "count_delta": "195 = 174 (M3 baseline) + 16 (G2a test_job_supervision_differential.py) + 5 (new capacity boundary tests); no existing test was rewritten"
+    },
+    "acceptance_attempt": {
+      "status": "BLOCKED - 8 of 9 required items PASS; doctor-zcode cannot pass on this host. No record was issued.",
+      "attempts": [
+        ".harness/validation/acceptance/M3/20260917T155933Z-31836 (stopped at the first failed item)",
+        ".harness/validation/acceptance/M3/20260917T161012Z-57517 (--keep-going, all 9 items)"
+      ],
+      "items_passed": [
+        "identity", "go-vet", "go-test-full (426.1s)", "sqlite-probe", "python-unittest (76.6s)",
+        "demo-fixture", "doctor-dsh", "tree-clean-after"
+      ],
+      "items_failed": ["doctor-zcode"],
+      "blocker": "ZCODE_TRANSPORT: Native output closed (doctor exit 2). The ZCode app-server exits immediately.",
+      "blocker_cause": "The host's ZCode installation no longer ships the built-in provider config the app-server looks for: /Applications/ZCode.app/Contents/Resources/glm/provider/zcode-builtin.json does not exist, and the app-server exits 1 with 'cannot locate CLI ZCode Built-in Provider Config'.",
+      "blocker_is_not_the_repair": "The identical failure reproduces on three candidates built separately in their own worktrees: d71113e (the M3 candidate on which this same check PASSED), c4bac49 (pre-repair) and 9e4a622 (repaired). The measured artifact changed: the zcode.cjs the passing run bound was sha256 e9f1868c... at 12615227 bytes, while the installed one is sha256 da61b066... at 11416833 bytes; the node binary is unchanged.",
+      "disposition": "The repair candidate stays UNACCEPTED. The item is required and has always passed here, so it is not relabelled NOT_APPLICABLE and the missing result is not read as PASS. Unblocking condition: a ZCode installation whose app-server starts. Then re-run this unit on the same candidate.",
+      "evidence": ".harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md"
     },
     "evidence_dir": ".harness/validation/m3-repair-capacity-20260917T2330Z",
     "classification_document": ".harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md"
