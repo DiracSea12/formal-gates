@@ -404,6 +404,14 @@ func dispatch(e envelope) (any, error) {
 			return map[string]any{"ok": false, "kind": kind, "refusal": refusal}, nil
 		}
 		return map[string]any{"ok": true}, nil
+	case "comparison-plan":
+		// Only the parse + representation rules move here (M1). Git invocation,
+		// file I/O, tamper checks and proof collection stay in Python.
+		var q comparisonPlanInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return planComparison(q)
 	case "canonical", "digest":
 		// The canonical encoding is the content-addressing format, so it is
 		// owned here rather than in the caller. Numbers are decoded with
