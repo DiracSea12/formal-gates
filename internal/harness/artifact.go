@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 )
 
@@ -66,12 +67,38 @@ func VerifyArtifactReference(ref string) (bool, string) {
 // bytes must equal the reference. It does NOT re-check the reference format —
 // the format rule is owned by VerifyArtifactReference / the artifact-reference
 // call — so the refusal ordering (format → read → integrity) is structural
-// rather than argued. The bytes arrive base64-encoded so a non-UTF-8 tampered
-// artifact still yields an integrity refusal instead of a UnicodeDecodeError.
+// rather than argued. Bytes, never text: a non-UTF-8 tampered artifact yields
+// an integrity refusal instead of a UnicodeDecodeError.
 func VerifyArtifactBinding(ref string, body []byte) (bool, string) {
 	sum := sha256.Sum256(body)
 	if hex.EncodeToString(sum[:]) != ref {
 		return false, "artifact integrity mismatch"
 	}
 	return true, ""
+}
+
+// VerifyArtifactBindingFile applies the integrity rule to the bytes of the
+// artifact file at path, which Go reads itself.
+//
+// The rule is applied to the file's bytes rather than to bytes carried in the
+// request because the request envelope has a fixed input ceiling shared by every
+// operation (Bridge). Carrying the body across it made the READ capacity smaller
+// than the WRITE capacity by the transport's own expansion factor, so an
+// artifact this version had published and referenced could not be read back by
+// the same version. Reading the file keeps the request independent of the
+// artifact's size, so read capacity covers whatever publication accepts.
+//
+// The caller keeps its own read of the same path: that read is what produces the
+// value returned to the caller and the OS error classes (FileNotFoundError,
+// IsADirectoryError) the pre-migration store raised. This function therefore
+// reports an unreadable file as an integrity refusal — the reference is not
+// confirmed as bound to a readable body — instead of inventing an OS error class
+// of its own. The artifact directory is publish-once (Store.put never overwrites
+// an existing file), so the two reads see the same bytes.
+func VerifyArtifactBindingFile(ref, path string) (bool, string) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return false, "artifact integrity mismatch"
+	}
+	return VerifyArtifactBinding(ref, body)
 }

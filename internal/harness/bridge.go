@@ -3,7 +3,6 @@ package harness
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -467,25 +466,28 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"ok": true}, nil
 	case "artifact-binding":
-		// The integrity rule moves here (M3), over the RAW bytes. The bytes
-		// arrive base64-encoded so a non-UTF-8 tampered artifact yields an
-		// integrity refusal rather than a UnicodeDecodeError. A bad base64 body
-		// is a caller error, not a business refusal: it fails the bridge (shape
-		// {ok:false, code}, exit 2). This op does NOT re-check the reference
-		// format — that is owned by artifact-reference — so the refusal ordering
-		// is structural.
+		// The integrity rule moves here (M3), over the RAW bytes of the file at
+		// path, which Go reads itself. It does NOT re-check the reference format
+		// — that is owned by artifact-reference — so the refusal ordering is
+		// structural.
+		//
+		// The path, not the body, crosses this boundary because the request
+		// envelope has one fixed input ceiling shared by every operation
+		// (Bridge): carrying the body here made READ capacity smaller than WRITE
+		// capacity by the transport's own expansion factor, so an artifact
+		// publication accepted could not be read back. A bounded request keeps
+		// read capacity above whatever publication accepts. A path that cannot
+		// be read is an integrity refusal, not a new error class: the caller has
+		// already read the same file for the returned value and for the OS error
+		// classes that read belongs to.
 		var q struct {
-			Ref     string `json:"ref"`
-			BodyB64 string `json:"body_b64"`
+			Ref  string `json:"ref"`
+			Path string `json:"path"`
 		}
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		body, err := base64.StdEncoding.DecodeString(q.BodyB64)
-		if err != nil {
-			return nil, fmt.Errorf("artifact-binding: invalid base64 body: %w", err)
-		}
-		ok, refusal := VerifyArtifactBinding(q.Ref, body)
+		ok, refusal := VerifyArtifactBindingFile(q.Ref, q.Path)
 		if !ok {
 			return map[string]any{"ok": false, "kind": "binding", "refusal": refusal}, nil
 		}

@@ -1,15 +1,29 @@
 package harness
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // rep builds a string of n copies, since Go has no "c"*n string operator.
 func rep(s string, n int) string { return strings.Repeat(s, n) }
+
+// jsonString quotes a path for a bridge request, so a directory name that needs
+// escaping still produces a valid envelope.
+func jsonString(t *testing.T, value string) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal %q: %v", value, err)
+	}
+	return string(encoded)
+}
 
 // planArtifact decodes a JSON payload the way the bridge would and runs
 // ArtifactPlan, returning canonical text and ref.
@@ -197,27 +211,82 @@ func TestVerifyArtifactBindingNonUTF8IsIntegrityRefusal(t *testing.T) {
 	}
 }
 
-// F6: the bridge round-trips base64 bytes for binding.
-func TestArtifactBindingBase64RoundTrip(t *testing.T) {
+// F6 (repaired): the binding rule runs over the bytes of the file Go reads, so
+// the request never carries the body. The rule itself is unchanged, and an
+// unreadable path is an integrity refusal rather than a new error class.
+func TestVerifyArtifactBindingFileOverFileBytes(t *testing.T) {
+	directory := t.TempDir()
 	body := []byte(`{"result":"PASS"}`)
 	sum := sha256.Sum256(body)
 	ref := hex.EncodeToString(sum[:])
-	b64 := base64.StdEncoding.EncodeToString(body)
-	// Mirror the dispatch path: decode base64, then bind.
-	decoded, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		t.Fatalf("base64 decode: %v", err)
+
+	bound := filepath.Join(directory, "bound.json")
+	if err := os.WriteFile(bound, body, 0o644); err != nil {
+		t.Fatalf("write bound artifact: %v", err)
 	}
-	ok, refusal := VerifyArtifactBinding(ref, decoded)
-	if !ok {
-		t.Fatalf("round-trip failed: %q", refusal)
+	if ok, refusal := VerifyArtifactBindingFile(ref, bound); !ok {
+		t.Fatalf("file with matching bytes should bind: %q", refusal)
+	}
+
+	tampered := filepath.Join(directory, "tampered.json")
+	if err := os.WriteFile(tampered, []byte(`{"result":"FAIL"}`), 0o644); err != nil {
+		t.Fatalf("write tampered artifact: %v", err)
+	}
+	ok, refusal := VerifyArtifactBindingFile(ref, tampered)
+	if ok || refusal != "artifact integrity mismatch" {
+		t.Fatalf("tampered file: ok=%v refusal=%q", ok, refusal)
+	}
+
+	// Unreadable paths keep the binding verdict instead of inventing an OS
+	// error class: the caller's own read owns FileNotFoundError/IsADirectoryError.
+	for _, path := range []string{filepath.Join(directory, "missing.json"), directory} {
+		ok, refusal := VerifyArtifactBindingFile(ref, path)
+		if ok || refusal != "artifact integrity mismatch" {
+			t.Fatalf("unreadable %q: ok=%v refusal=%q", path, ok, refusal)
+		}
 	}
 }
 
-// F7: an invalid base64 body is a caller error and is rejected by the decoder,
-// which the bridge turns into a bridge failure (exit 2), not a business refusal.
-func TestArtifactBindingInvalidBase64RejectedByDecoder(t *testing.T) {
-	if _, err := base64.StdEncoding.DecodeString("!!!not base64!!!"); err == nil {
-		t.Fatalf("expected base64 decode failure")
+// F7 (repaired): the rule has no transport ceiling of its own. A file larger
+// than the shared request ceiling binds, because its body never crosses the
+// wire — this is the capacity asymmetry the acceptance finding reported.
+func TestVerifyArtifactBindingFileHasNoWireCeiling(t *testing.T) {
+	directory := t.TempDir()
+	body := bytes.Repeat([]byte("x"), 9*1024*1024)
+	sum := sha256.Sum256(body)
+	ref := hex.EncodeToString(sum[:])
+	path := filepath.Join(directory, "large.json")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatalf("write large artifact: %v", err)
+	}
+	if ok, refusal := VerifyArtifactBindingFile(ref, path); !ok {
+		t.Fatalf("artifact above the request ceiling must still bind: %q", refusal)
+	}
+}
+
+// F8: the bridge request for a binding stays far below the shared input ceiling
+// however large the artifact is, and the dispatch still reaches the rule. This
+// is the boundary itself, exercised through Bridge rather than the helper.
+func TestArtifactBindingRequestIsIndependentOfArtifactSize(t *testing.T) {
+	directory := t.TempDir()
+	body := bytes.Repeat([]byte("x"), 9*1024*1024)
+	sum := sha256.Sum256(body)
+	ref := hex.EncodeToString(sum[:])
+	path := filepath.Join(directory, "large.json")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatalf("write large artifact: %v", err)
+	}
+
+	request := `{"operation":"artifact-binding","payload":{"ref":"` + ref + `","path":` +
+		jsonString(t, path) + `}}`
+	if len(request) > 8*1024*1024 {
+		t.Fatalf("request grew with the artifact: %d bytes", len(request))
+	}
+	var out bytes.Buffer
+	if code := Bridge(strings.NewReader(request), &out); code != 0 {
+		t.Fatalf("bridge exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), `"ok":true`) {
+		t.Fatalf("artifact above the request ceiling was not bound: %s", out.String())
 	}
 }

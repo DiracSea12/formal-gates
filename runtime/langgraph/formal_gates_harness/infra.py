@@ -1,6 +1,5 @@
 """Local artifacts and execution receipts; never a second workflow state machine."""
 from __future__ import annotations
-import base64
 import contextlib
 import hashlib
 import json
@@ -197,13 +196,21 @@ class Store:
         if not path.exists(): atomic_bytes(path, body)
         return ref
     def get(self, ref: str) -> Any:
-        # Two calls make the refusal ordering structural rather than argued:
-        # the format verdict (artifact-reference) runs before any filesystem
-        # access, and the integrity verdict (artifact-binding) only compares.
+        # Two calls make the refusal ordering structural rather than argued: the
+        # format verdict (artifact-reference) runs before any filesystem access,
+        # and the integrity verdict (artifact-binding) only compares.
         refuse(self.bridge.call('artifact-reference', {'ref': ref}))
-        body = (self.directory / "artifacts" / f"{ref}.json").read_bytes()
-        refuse(self.bridge.call('artifact-binding', {'ref': ref,
-               'body_b64': base64.b64encode(body).decode('ascii')}))
+        path = self.directory / "artifacts" / f"{ref}.json"
+        # This is the caller's read: it produces the returned value and keeps the
+        # pre-migration OS error classes (FileNotFoundError, IsADirectoryError).
+        body = path.read_bytes()
+        # The integrity verdict hashes the file Go reads at that same path, so the
+        # request stays a fixed size instead of growing with the artifact. Sending
+        # the body here is what made read capacity smaller than write capacity:
+        # the transport's own expansion put a published, referenced artifact over
+        # the shared request ceiling on the way back in. The artifact directory is
+        # publish-once, so both reads see the same bytes.
+        refuse(self.bridge.call('artifact-binding', {'ref': ref, 'path': str(path)}))
         return json.loads(body)
     def verify_process(self, process: dict) -> None:
         """Re-check one job's receipt against its request and its stream evidence.
