@@ -158,6 +158,8 @@ for line in sys.stdin:
                  'settings':{'model':{'current':REF,'available':[{'ref':REF}]},'thoughtLevel':{'current':'max'}}})
     elif method=='session/subscribe':
         reply(i,{'sessionId':'s-root'})
+    elif method=='session/setMode':
+        reply(i,{'projection':{'mode':message['params']['mode']}})
     elif method=='session/send':
         reply(i,{'sessionId':'s-root','accepted':True})
         input_id=message['params']['inputId']

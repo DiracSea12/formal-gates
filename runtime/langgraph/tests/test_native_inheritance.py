@@ -94,7 +94,7 @@ class NativeRequests(unittest.TestCase):
                 if method in ('session/create', 'session/resume'):
                     return snapshot
                 if method == 'session/setMode':
-                    self.fail('The adapter must not change the native permission mode')
+                    return {'projection': {'mode': params['mode']}}
                 if method == 'session/subscribe':
                     return {'sessionId': 'root'}
                 if method == 'session/send':
@@ -115,17 +115,24 @@ class NativeRequests(unittest.TestCase):
             client.close.assert_called_once()
             return params, calls, result
 
-    def test_zcode_development_new_and_resume_inherit_native_configuration(self):
+    def test_zcode_development_new_session_declares_operator_mode_resume_keeps_its_own(self):
         forbidden = {'mode', 'toolAllowlist', 'toolDenylist', 'mcpServers', 'network', 'sandbox', 'approval', 'titleGenerationEnabled'}
         for previous in ('', 'root'):
             with self.subTest(previous=previous):
                 params, calls, _ = self.zcode_request(False, previous)
                 self.assertFalse(forbidden & params.keys())
                 methods = [method for method, _ in calls]
-                self.assertNotIn('session/setMode', methods)
                 self.assertNotIn('mcp/list', methods)
                 # 3.12.3 removed it; a resume or a new session must not call it.
                 self.assertNotIn('workspace/readState', methods)
+                # A NEW dev session declares the operator's unattended mode once,
+                # before its first turn; a resumed session keeps its own mode.
+                mode_calls = [p for m, p in calls if m == 'session/setMode']
+                if previous:
+                    self.assertEqual(mode_calls, [])
+                else:
+                    self.assertEqual(mode_calls, [{'sessionId': 'root', 'mode': zcode.DEV_PERMISSION_MODE}])
+                    self.assertLess(methods.index('session/setMode'), methods.index('session/send'))
 
     def test_zcode_read_only_and_probe_sessions_never_set_a_mode(self):
         for read_only, probe in ((True, False), (False, True)):
@@ -133,19 +140,28 @@ class NativeRequests(unittest.TestCase):
                 _, calls, _ = self.zcode_request(read_only, probe=probe)
                 self.assertNotIn('session/setMode', [method for method, _ in calls])
 
-    def test_zcode_preserves_each_native_mode_on_new_and_resume(self):
+    def test_zcode_declares_operator_mode_regardless_of_reported_native_mode(self):
+        # The app-server hard-defaults new headless sessions to 'build'; whatever
+        # mode the host reports, a NEW dev session still declares the operator's
+        # unattended mode so the default cannot gate unattended runs. A resumed
+        # session is never re-declared.
         for mode in ('build', 'edit', 'plan', 'yolo', 'auto'):
             for previous in ('', 'root'):
                 with self.subTest(mode=mode, previous=previous):
                     _, calls, _ = self.zcode_request(False, previous, native_mode=mode)
-                    self.assertNotIn('session/setMode', [method for method, _ in calls])
+                    declared = [p.get('mode') for m, p in calls if m == 'session/setMode']
+                    self.assertEqual(declared, [] if previous else [zcode.DEV_PERMISSION_MODE])
 
     def test_removed_auto_mode_environment_cannot_override_native_settings(self):
+        # The removed variable has no effect: a NEW dev session declares the
+        # fixed operator mode, never the value the variable used to carry, and
+        # a resumed session still declares nothing.
         for mode in ('auto', 'yolo', 'autopilot'):
             with self.subTest(mode=mode), patch.dict(os.environ, {'FORMAL_GATES_ZCODE_AUTO_MODE': mode}):
                 for previous in ('', 'root'):
                     _, calls, _ = self.zcode_request(False, previous)
-                    self.assertNotIn('session/setMode', [method for method, _ in calls])
+                    declared = [p.get('mode') for m, p in calls if m == 'session/setMode']
+                    self.assertEqual(declared, [] if previous else [zcode.DEV_PERMISSION_MODE])
 
     def test_zcode_native_timeout_never_retries_with_another_permission_mode(self):
         for method in ('session/create', 'session/resume', 'session/subscribe'):

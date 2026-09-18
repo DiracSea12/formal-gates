@@ -39,6 +39,15 @@ TRANSPORT_FILES=transport_files(Path(__file__).name,'zcode_credential.mjs')
 # arbitrary command/plugin executors cannot enforce this role's write boundary.
 READ_ONLY_TOOLS=['Read','Glob','Grep','WebSearch','WebFetch']
 
+# Unattended operator context for development/repair sessions. A headless
+# session cannot inherit the operator's interactive context: every new session
+# hard-defaults to 'build' (approval-gated), no host setting changes that
+# default, and an unattended client cannot answer approvals. The mode is
+# declared once per NEW session before its first turn; resumed sessions keep
+# the mode they already have and nothing is ever changed in reaction to a
+# prompt, timeout or failure.
+DEV_PERMISSION_MODE='yolo'
+
 # The handshake every snapshot carries. A different one means the app-server no
 # longer speaks the protocol this transport was accepted against.
 PROTOCOL_NAME='ZCode Protocol'
@@ -580,6 +589,8 @@ def execute(request,directory,probe=False):
         configured=apply_selection(client,snapshot,wanted,effort,directory,workspace)
         if request['read_only']:
             atomic(directory/'tool-policy.json',{'read_only':True,'allowed':READ_ONLY_TOOLS})
+        elif not probe:
+            atomic(directory/'tool-policy.json',{'read_only':False,'permission_mode':DEV_PERMISSION_MODE})
         if probe:
             client.request('session/close',{'sessionId':identity});attached=False
             return {'provider':'zcode','protocol':protocol,'selection':configured,'binding':binding,
@@ -587,8 +598,14 @@ def execute(request,directory,probe=False):
                 'mcp_auth':'unavailable' if any(i['status']=='official_auth_unavailable' for i in client.interactions) else 'not_verified'}
         subscribed=client.request('session/subscribe',{'sessionId':identity,'deliveryKind':'desktop-continuous','includeSnapshot':False})
         if subscribed.get('sessionId')!=identity:raise RuntimeBlocked('ZCODE_BINDING: subscription identity differs')
+        if not request['read_only'] and not previous:
+            changed=client.request('session/setMode',{'sessionId':identity,'mode':DEV_PERMISSION_MODE})
+            applied=(changed.get('projection') or {}).get('mode','')
+            if applied!=DEV_PERMISSION_MODE:raise RuntimeBlocked('ZCODE_CONFIG: permission mode was not applied')
         input_id='formal-gates-'+directory.name
-        atomic(directory/'native-source.json',{'sessionId':identity,'inputId':input_id,'selection':configured})
+        turn_binding={'sessionId':identity,'inputId':input_id,'selection':configured}
+        if not request['read_only']:turn_binding['permission_mode']=DEV_PERMISSION_MODE
+        atomic(directory/'native-source.json',turn_binding)
         prompt=request['prompt']+'\nReturn ONLY one JSON object matching this schema:\n'+json.dumps(request['schema'],ensure_ascii=False)
         ack=client.request('session/send',{'sessionId':identity,'inputId':input_id,'content':prompt})
         if ack.get('sessionId')!=identity or not ack.get('accepted'):raise RuntimeBlocked('ZCODE_BINDING: input not accepted')
