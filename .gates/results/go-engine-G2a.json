@@ -1,11 +1,11 @@
 {
   "unit": "G2a",
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260918T082237Z-21775",
-  "recorded_at": "2026-09-18T08:30:15.626277+00:00",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260918T101818Z-517",
+  "recorded_at": "2026-09-18T10:26:39.430312+00:00",
   "overall": "PASS",
   "previous_accepted_baseline": "M3",
   "candidate": {
-    "commit": "91255c66584a9739377277a168b11b17cbe7b83f",
+    "commit": "fa44747f83d4638a38c7c42b0f35dded9c577837",
     "branch": "codex/go-engine-v1",
     "runtime_identity": "017ea1db64a3ab0b8075c459b6430c574cf3341cc8a24681fa3093d42093dbec",
     "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
@@ -23,55 +23,55 @@
       "id": "identity",
       "required": true,
       "status": "PASS",
-      "seconds": 0.447
+      "seconds": 0.43
     },
     {
       "id": "go-vet",
       "required": true,
       "status": "PASS",
-      "seconds": 0.417
+      "seconds": 0.432
     },
     {
       "id": "go-test-full",
       "required": true,
       "status": "PASS",
-      "seconds": 378.683
+      "seconds": 418.431
     },
     {
       "id": "sqlite-probe",
       "required": true,
       "status": "PASS",
-      "seconds": 2.193
+      "seconds": 2.366
     },
     {
       "id": "python-unittest",
       "required": true,
       "status": "PASS",
-      "seconds": 68.671
+      "seconds": 71.697
     },
     {
       "id": "demo-fixture",
       "required": true,
       "status": "PASS",
-      "seconds": 2.984
+      "seconds": 3.171
     },
     {
       "id": "doctor-dsh",
       "required": true,
       "status": "PASS",
-      "seconds": 2.086
+      "seconds": 2.119
     },
     {
       "id": "doctor-zcode",
       "required": true,
       "status": "PASS",
-      "seconds": 2.182
+      "seconds": 2.295
     },
     {
       "id": "tree-clean-after",
       "required": true,
       "status": "PASS",
-      "seconds": 0.035
+      "seconds": 0.039
     }
   ],
   "budget": {
@@ -80,9 +80,9 @@
     "note": "The regression is judged by result and progress, not by wall-clock speed."
   },
   "attestation": {
-    "summary_sha256": "bda3001c130c01ad146a64fcc7371ad272e663924365a07c75111551aadae976",
-    "identity_sha256": "e0cf2e3c0bc73385907ccaa67a9042982b9896fc2b1f5bb8b730fa34ff932c6a",
-    "evidence_sha256": "264486b4a66b32ac183ca654183799d003d384769d65d19245960cbf3f91e3f4",
+    "summary_sha256": "de942e0e3031695f394a826935a3c10c560c5cce4d8f5567cefd116f5b91d760",
+    "identity_sha256": "d96cfb880698ad1c4bfe6827a14e9bc04dc14087b46df1159d1d190c93dead63",
+    "evidence_sha256": "e7dfb5180869d7cc0ff9d7def0a193130310e51d1c974ef78d321653ffff5d01",
     "evidence_file_count": 61
   },
   "bookkeeping": [
@@ -91,7 +91,7 @@
     ".gates/results/go-engine-G1a-index.md"
   ],
   "run_command": "python3 scripts/go-engine/acceptance.py --unit G2a",
-  "overall_note": "Second whole re-sign after the independent review round of 2026-09-18 (m3-g2a-independent-20260918T064153Z) rejected the first one. The review confirmed 2xP1 + 2xP2; each was independently reproduced, fixed on this candidate (91255c6) and covered by a regression or control that fails without the fix: admission now enforces the required native verification (re-reading the run report and binding the run manifest to the candidate runtime identity), the supervisor test builds from the repository root on clean trees, persisted permission evidence states the mode actually in force (host settings readback, snapshot report on resume) instead of a constant, and bounded requests end at their deadline even under continuous notifications. Both halves are evidenced by this record on this candidate.",
+  "overall_note": "Third whole re-sign after the second review round (g2a-repair-review-20260918T091325Z) confirmed the three previous fixes closed but rejected two remaining P1s: the native admission gate still granted when every raw job file and artifact behind the report was gone, and the supervisor test package did not compile for Windows. Both were independently reproduced and fixed on this candidate (fa44747): admission now walks the harness evidence chain itself (open_run binding, Store.verify_evidence per worker receipt, terminal artifact readback; control ADM-E16), and the two POSIX-only cancellation tests moved behind //go:build !windows with windows/linux vet clean. The runtime identity is unchanged (017ea1db), so the fifth authorized native run still binds this candidate; no new model calls were spent. Nine acceptance items all PASS on this attempt.",
   "native_verification": {
     "required": true,
     "status": "PASS",
@@ -109,7 +109,8 @@
     "duration_s": 556.1,
     "completion_linkage": "All seven jobs ran under the Go supervisor (store.job -> \"harness supervise\"): each job's process.json pid equals the native child's pgid, so the supervisor is the process-group leader, and every exit.json receipt records exit_code 0 with stream proofs. Per-role worker receipts verify against the store.",
     "read_only_boundary": "Read-only roles' native events contain only Read/Glob/Grep calls; side-effect tools appear exclusively in the development job. The dev session's tool-policy.json records permission_mode from the host's own settings readback, not from a constant.",
-    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The zcode adapter changes in this chain are post-unit common prerequisites explicitly authorized by the user (d7a687c source-receipt persistence; 2d36375 mode declaration; 91255c6 review fixes: honest mode evidence, deadline enforcement, clean-tree test build, admission native gate), in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
+    "raw_evidence_gate": "Since fa44747 admission re-verifies this run through the harness evidence chain itself: open_run re-checks the runtime-identity binding and the spec/requirement digests, every worker receipt goes through Store.verify_evidence (artifact integrity, comparison inputs, job receipts, stream proofs, native source files), and the terminal artifact is read back. A report without its raw jobs and artifacts can no longer carry the unit (control ADM-E16).",
+    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The zcode adapter changes in this chain are post-unit common prerequisites explicitly authorized by the user (d7a687c source-receipt persistence; 2d36375 mode declaration; 91255c6/fa44747 review fixes: honest mode evidence, deadline enforcement, clean-tree test build, admission native gate), in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
     "history": [
       {
         "date": "2026-09-18",
@@ -128,6 +129,12 @@
         "provider": "zcode",
         "outcome": "7/7 PASS, HARNESS_COMPLETE on this candidate; this record binds this run",
         "evidence": ".harness/validation/zcode-native-fifth-20260918T081304"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "binding unchanged; the second review round rejected the gate and the test compile, not the run; third re-sign re-binds this same run on fa44747 (runtime identity 017ea1db unchanged)",
+        "evidence": ".harness/validation/g2a-repair-review-20260918T091325Z"
       }
     ],
     "supervisor_half_proven": "Go unit case \"same request differing only in kind\" (the supervisor never reads kind) plus the seven supervised native jobs above with owner locks, receipts and stream proofs.",
