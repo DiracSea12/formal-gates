@@ -58,6 +58,28 @@ ZCode app-server 没有统一只读会话模式，因此只读角色使用原生
 不会伪造认证头、借用其他工具的凭据或静默关闭插件。协议诊断只保存路由元数据；
 角色完成内容、原生事件和输入绑定继续使用既有证据文件。
 
+ZCode app-server 自身不持有 provider 注册表。账号 provider 配置由**启动它的一方**在
+provider/model 就绪后经 `provider/updateAccountConfig`（client → agent 方法）交付，因此启动方必须
+①把 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` **成对**命名
+（只给前者时宿主会重算它自己的 active 目录，启动方就无从得知 revision），②令
+`basedOnZCodeBuiltinRevision` **逐字**等于
+`zcode-builtin:<catalogue revision>:sha256(realpath(activeCatalogue))`——哈希取**解析后的路径**、
+不取内容；不相等时交付被静默丢弃，回执仍是 `received`，无法从应答推断。
+
+同一模式下每次模型请求前，宿主还会反向调用 `interaction/requestProviderRuntimeHeaders`
+（端口 `createProviderRuntimeHeadersPort` 的 `shouldRefreshBeforeModelRequest()` 恒为 true），
+应答必须是以 `headersApplied` 为判别键的严格联合。该项**不属于用户决定**，故不走上一段的阻塞边界：
+传输从宿主自己的开通索引（`~/.zcode/v2/credentials.json` 的**键名**）取该 provider 的凭据值，用宿主
+自己的密码（`sha256(固定回退串)`，aes-256-gcm，**不涉钥匙串、不需用户决定**）解密后应答；没有凭据的
+provider 报 `headersApplied: false` 而不编造。凭据值不写入任何证据文件，`Client.answer` 只记方法与状态。
+
+`tui`／`--prompt`／CLI `login` 走的是**另一套互斥**的账号来源（由 `skipUserConfig` 选中）：本进程自读
+凭据库、不需要 client，且拒绝宿主投递。它的开通判定要求凭据库同时存在
+`account-provider:<id>:identity` 与 `…:api-key` 两条记录，前者只有 standalone 的 `login` 会写。
+另：`--help`／`--version` 会**跳过** provider 运行时准备，拿它们当宿主健康探针会得到假阴性；
+CLI 没有 `zcode` 命令，只能以
+`node <ZCode.app>/Contents/Resources/glm/zcode.cjs <command>` 调用。
+
 `doctor` 不发送模型任务，仅检查当前原生接入。仅在 probe 中关闭自动标题生成，
 不会将该设置带入正常开发会话。连接成功不证明 MCP 认证、网络访问、子代理执行或
 真实只读工具行为均已通过；报告中的 `not_verified` 必须保留这一含义。
