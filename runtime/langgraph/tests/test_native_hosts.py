@@ -1,12 +1,13 @@
 """Shared host boundary regressions. No paid/native model prompts."""
 from pathlib import Path
 import json
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock
-from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof
+from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof,read
 from formal_gates_harness.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
-from formal_gates_harness.native_zcode import (Client,advertised_models,apply_selection,handshake,
+from formal_gates_harness.native_zcode import (Client,advertised_models,apply_selection,execute,handshake,
                                                materialize_source,reference,selection)
 
 ROOT=Path(__file__).resolve().parents[3]
@@ -141,7 +142,50 @@ class ZCodeEvidenceTests(unittest.TestCase):
     def test_missing_session_separate_from_model_error(self):
         for code,text,cls in ((-32004,'Session not found: old',SessionUnavailable),(-32031,'Model unavailable',RuntimeBlocked)):
             c=object.__new__(Client);c.counter=0;c.send=Mock();c.receive=Mock(return_value={'id':'native-1','error':{'code':code,'message':text}})
-            with self.subTest(code=code),self.assertRaises(cls) as e:c.request('session/resume',{'sessionId':'old'})
+            with self.subTest(code=code,text=text),self.assertRaises(cls) as e:c.request('session/resume',{'sessionId':'old'})
             if cls is RuntimeBlocked:self.assertNotIsInstance(e.exception,SessionUnavailable)
+
+
+FAKE_APP_SERVER='''
+import json,sys
+REF={'providerId':'original','modelId':'M'}
+ANSWER={'status':'PASS','summary':'observed','findings':[],'check_ids':[]}
+def reply(i,result): print(json.dumps({'id':i,'result':result}),flush=True)
+for line in sys.stdin:
+    message=json.loads(line);method=message.get('method');i=message.get('id')
+    if method in ('session/create','session/resume'):
+        reply(i,{'protocol':{'name':'ZCode Protocol','version':1},'session':{'sessionId':'s-root'},
+                 'settings':{'model':{'current':REF,'available':[{'ref':REF}]},'thoughtLevel':{'current':'max'}}})
+    elif method=='session/subscribe':
+        reply(i,{'sessionId':'s-root'})
+    elif method=='session/send':
+        reply(i,{'sessionId':'s-root','accepted':True})
+        input_id=message['params']['inputId']
+        for seq,kind in ((1,'turn.started'),(2,'turn.completed')):
+            payload={'inputId':input_id} if kind=='turn.started' else {'inputId':input_id,'resultType':'success',
+                     'response':'Done.\\n```json\\n'+json.dumps(ANSWER)+'\\n```','usage':{'inputTokens':10}}
+            print(json.dumps({'method':'session/event','params':{'sessionId':'s-root','turnId':'t-1','seq':seq,'type':kind,'payload':payload}}),flush=True)
+    elif method=='session/close':
+        reply(i,{});break
+'''
+
+
+class ZCodeSuccessReceiptTests(unittest.TestCase):
+    def test_success_path_persists_the_source_receipt(self):
+        # execute() returning the receipt is not enough: the worker store reads
+        # source.json from the job directory after the supervised process exits.
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t);fake=root/'fake-app-server.py';fake.write_text(FAKE_APP_SERVER)
+            workspace=root/'ws';workspace.mkdir();directory=root/'job'
+            request={'workspace':str(workspace),
+                     'binding':{'provider':'zcode','launch':{'executable':sys.executable,'script':str(fake)},'files':{}},
+                     'read_only':False,'model':canonical(REF).decode(),'reasoning_effort':'','prompt':'review','schema':{}}
+            source=execute(request,directory)
+            persisted=read(directory/'source.json')
+            self.assertEqual(persisted['provider'],'zcode');self.assertEqual(persisted['identity'],'s-root')
+            self.assertEqual(json.loads((directory/'answer.json').read_text())['status'],'PASS')
+            adapter_for('zcode').verify_source(directory,persisted)
+            self.assertEqual({k:v for k,v in source.items() if k!='files'},
+                             {k:v for k,v in persisted.items() if k!='files'})
 
 if __name__=='__main__':unittest.main()

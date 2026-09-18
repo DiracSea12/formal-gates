@@ -602,7 +602,9 @@ def execute(request,directory,probe=False):
         if not terminal:raise RuntimeBlocked('ZCODE_TIMEOUT: turn incomplete; inspect the original invocation')
         client.request('session/close',{'sessionId':identity});attached=False
         # Finalize proofs only after native shutdown messages have been drained.
-        return materialize_source(directory)
+        source=materialize_source(directory)
+        atomic(directory/'source.json',source)
+        return source
     finally:
         if attached:close_session(client,client.identity)
         client.close()
