@@ -266,6 +266,21 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 >
 > **仍未解决**：standalone 路径（`--prompt`／TUI）在本机**不可用**——凭据库缺 `account-provider:<id>:identity` 记录（standalone 开通判定要求它），注册表未开通，turn 停在 `Select a model before continuing`；该记录只有 standalone 的 `login` 会写。DSH 方面本轮**没有任何实测结论**。
 
+> **【本地证据已回收（2026-09-18，清理所致，非产品缺陷）】** 按用户"只保留最精华信息、清掉临时产物"的指示，
+> `.harness/validation/`（5.6G）与 `.harness/probes/` 已被删除，本记录引用到的那些目录**已不在盘上**。
+> 判断失误在于把 `.gitignore` 的 "development-only … private evidence" 读成"可回收"——在本链尚未收口期间
+> 它是**记录的被引用对象**。**本记录文件逐字节未改**：`attestation.summary_sha256` 与候选身份
+> （`commit`／`branch`／`runtime_identity`／`driver_binary_sha256`）仍在，故"记录写了什么"可读可信；
+> **失去的是重算能力**——`admission.py` 现在停在"摘要存在性"这一步（`attempt summary is missing`），
+> 走不到摘要比对、逐项必需项、以及会同时检出"缺失"与"运行后被改动"的原始证据清单校验；
+> 本单元的**结论拒绝理由未变**（`overall=FAIL` 的判定先于证据校验，实测仍为
+> `recorded overall conclusion is 'FAIL'`）。受影响处：`evidence[]` 中 20 余处、
+> `repair_candidate.acceptance_attempt.*` 内引用，以及下方 `复核入口` 依赖
+> `.harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.py` 的那条命令。
+> **唯一恢复路径**：对候选提交**重跑一次完整验收**（生成新尝试目录、不覆盖历史），再按流程重新签发记录。
+> 同类影响的全量登记（含其它受影响单元与已核查为无损的工作区）见
+> `go-engine-G1a-index.md` 未决问题**第 26 条**。
+
 ### 对 G2a 的影响
 
 G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**：G2a 的"命令作业半"是在含本 P1 的
@@ -331,7 +346,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tm
   -p 'test_artifact_publication_differential.py' -v
 
 # 未解释回归错误的机制复现：check 侧出错必然导致末态无 terminal
-.harness/venv/bin/python .harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.py
+# ⚠️ 2026-09-18 起**不可运行**：该脚本随 .harness/validation/ 被回收（见上文"本地证据已回收"一节）。
+#    其机制描述仍成立，需要复跑时按该节所述重跑一次完整验收以重新取得证据。
+# .harness/venv/bin/python .harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.py
 
 # 桥接操作直查：按路径做完整性判定（返修后的载荷形状；指向不存在的路径必须报完整性拒绝）
 printf '%s' '{"operation":"artifact-binding","payload":{"ref":"'"$(printf 'x' | shasum -a 256 | cut -d' ' -f1)"'","path":"/nonexistent"}}' \
