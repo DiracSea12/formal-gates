@@ -230,6 +230,28 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 完整记录见 `.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md`
 （第 1~2 节仍有效，第 3 节归因已被更正）与 `.harness/validation/zcode-launch-20260917T163706Z/DIAGNOSIS.md`。
 
+> **更正（2026-09-18）：`doctor-zcode` 已解除，本节不再构成放行障碍。**
+> 该检查已在本记录撤回后的候选上重新实测为 **PASS**：`./scripts/harness doctor --provider zcode` 返回
+> `{"ok": true}`、`model_calls: 0`，选中 `account:bigmodel-individual-coding-plan` / `GLM-5.3`、推理档 `max`。
+> 记录见本记录 JSON 的 `repair_candidate.acceptance_attempt.blocker_cleared` 与
+> `.harness/validation/zcode-protocol-3.12.3-probe/DELIVERY-RESOLUTION.md`。
+>
+> 上方归因同时作废两条：①"该位置不存在/宿主打包变了"**不是**根因——app-server 自带的那份
+> catalogue 路径确实存在，此前是从 `glm/` 下的旧位置去找才落空；②"解阻条件是完成 G2c 协议适配、
+> 或换回说旧协议面的 ZCode 构建"也不成立——缺口在**我方**，且是**一个缺失的协议步骤**：app-server
+> 不自己解析 provider，账号 provider 配置由启动它的一方通过 `provider/updateAccountConfig` 交付，
+> 而 `basedOnZCodeBuiltinRevision` 必须**逐字**等于
+> `zcode-builtin:<catalogue revision>:sha256(realpath(activeCatalogue))`（哈希取**解析后的路径**，
+> 不取内容），否则交付被**静默丢弃**——回执仍是 `received`，这正是它无法从应答里推断的原因。
+> 同一条路上另有两处此前不可达的缺陷一并修好：`session/setModel` 必须携带
+> `options.reasoningLevel`，以及 `selected_model()` 曾把带 options 的 `current` 读成"宿主未报告选择"。
+> 修复只改开发驱动源码（`runtime/langgraph/`）与本记录；未安装任何东西、未申请权限、未读任何凭据、
+> 未改宿主配置，探针也只写 `.harness/` 内部。
+>
+> 本节处置结论相应改为：**返修候选仍不放行，但不再是因为 `doctor-zcode`**，而是因为本单元自身的两项
+> 发现——P1（`M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT`）与未解释的累计回归错误
+> （`M3-CUMULATIVE-WORKFLOW-NO-TERMINAL`）。这两项本次工作**未触及、也未主张已解决**。
+
 ### 对 G2a 的影响
 
 G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**：G2a 的"命令作业半"是在含本 P1 的
@@ -241,7 +263,7 @@ G2a 记录的 `previous_accepted_baseline` 是 `M3`。**该基线现已无效**�
 | 编号 | 状态 |
 | --- | --- |
 | `M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT` | **新增（P1 功能回归，返修候选已产出、验收受阻）**：读回容量小于发布容量，已发布并被引用的工件读不回来。机理、修法与定点证明见"撤回后：返修候选"一节 |
-| `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` | **新增（宿主阻塞，非产品缺陷、非本次返修引入）**：完整验收 8/9 通过，仅 `doctor-zcode` 失败——本机 ZCode 安装不再自带 app-server 所需的 provider 配置，app-server 启动即退出。同一条命令在 `d71113e`（**该项原先通过的那条候选**）、`c4bac49`、`9e4a622` 上逐字相同地失败；PASS 那次绑定的 `zcode.cjs`（`e9f1868c…`）已不在盘上。**保持未验收**，解阻条件是 app-server 能启动的 ZCode 安装。见 `.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md` |
+| `M3-REPAIR-BLOCKED-BY-HOST-ZCODE` | **已解除（2026-09-18）：`doctor-zcode` 重测为 PASS，返修候选不再因此受阻**；仍不放行的原因是本单元自身的两项发现（见上表 P1 与未解释回归错误两条）。解除依据与根因更正见上一节更正块。原记录（**宿主阻塞，非产品缺陷、非本次返修引入**）：完整验收 8/9 通过，仅 `doctor-zcode` 失败——本机 ZCode 安装不再自带 app-server 所需的 provider 配置，app-server 启动即退出。同一条命令在 `d71113e`（**该项原先通过的那条候选**）、`c4bac49`、`9e4a622` 上逐字相同地失败；PASS 那次绑定的 `zcode.cjs`（`e9f1868c…`）已不在盘上。**保持未验收**（该理由已于 2026-09-18 解除），原解阻条件是 app-server 能启动的 ZCode 安装。见 `.harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md` |
 | `M3-CUMULATIVE-WORKFLOW-NO-TERMINAL` | **新增（未解释的必需回归错误，类别已定、触发点未恢复）**：第一次完整回归末态的 `KeyError('terminal')`。已确定性复现其机制；三个候选触发点签名相同、保留物不足以区分。**不得**改标为环境噪声或同一个 base64 缺陷。见"撤回后：返修候选"一节 |
 | `M3-READ-GRANULARITY` / `M3-TESTS-OVERFIT-TRANSPORT-SPLIT` | **新增（P3，非阻塞建议）**：读的粒度与交付测试对传输拆分的依赖。与本 P1 同批记录，按建议处理 |
 | `M3-JOB-DIRECTORY-LOST-ON-FAILURE` | **新增（流程，导致上一项无法归因）**：`test_driver` 的 `TemporaryDirectory` tearDown 会删掉 `jobs/` 目录，于是失败时的 `wrapper.stderr`、`request.json`、`process.json` 全部丢失。**建议：任何 check 侧失败都必须先保留作业目录再清理**，否则同型错误永远只能停留在"类别已定、触发点未知" |

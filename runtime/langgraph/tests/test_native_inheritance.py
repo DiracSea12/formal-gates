@@ -13,7 +13,8 @@ from unittest.mock import Mock, patch
 
 from formal_gates_harness import (cli, native_dsh as dsh, native_transport as shared,
                                   native_zcode as zcode, native_hosts as hosts)
-from formal_gates_harness.infra import Bridge, HarnessError, RuntimeBlocked, read, runtime_identity
+from formal_gates_harness.infra import (Bridge, HarnessError, RuntimeBlocked, canonical, read,
+                                        runtime_identity)
 
 ROOT = Path(__file__).resolve().parents[3]
 MODEL = {'providerId': 'original', 'modelId': 'M'}
@@ -204,7 +205,9 @@ class NativeRequests(unittest.TestCase):
             # The launch names the resolved file: on macOS TMPDIR itself is a
             # symlink (/var -> /private/var), so compare canonical paths.
             self.assertEqual(binding['environment'],
-                             {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(catalogue.resolve())})
+                             {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(catalogue.resolve()),
+                              'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE':
+                                  str(zcode.host_data_directory() / '.zcode' / 'v2' / 'provider_config.json')})
             # Naming a host-owned catalogue is not proofing an executed binary.
             self.assertEqual(len(binding['files']), 2)
 
@@ -246,7 +249,8 @@ class NativeRequests(unittest.TestCase):
             binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'},
                        'files': {}, 'environment': dict(seed)}
             for previous in ('', 'root'):
-                with self.subTest(previous=previous), patch.object(zcode, 'Client') as client:
+                with self.subTest(previous=previous), patch.object(zcode, 'Client') as client, \
+                     patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': str(directory)}):
                     client.return_value.request.side_effect = RuntimeBlocked('probe stopped at the first request')
                     request = {'workspace': t, 'read_only': True, 'binding': binding,
                                'identity': previous, 'model': json.dumps(MODEL) if previous else ''}
@@ -420,6 +424,332 @@ for (const readOnly of [false,true]) {
                                         str(ROOT / 'runtime/langgraph/formal_gates_harness/native_dsh.mjs'), t],
                                        text=True, capture_output=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class AccountProviderConfiguration(unittest.TestCase):
+    """The account provider overlay a launcher has to hand the app-server.
+
+    A launcher-started app-server keeps no provider registry of its own, so
+    without this overlay it reports an empty provider list and no current model.
+    Every case below is derived from the host's own provisioning index, never
+    invented, and the revision has to match the agent's exactly or the agent
+    discards the delivery without saying so.
+    """
+
+    ACCOUNT = 'account:bigmodel-individual-coding-plan'
+    TEAM = 'account:bigmodel-team-coding-plan'
+    TEMPLATE = 'zai-api'
+
+    def catalogue(self, root, providers=(ACCOUNT, TEAM), revision=28, modes=None, family='bigmodel'):
+        """A built-in catalogue holding the given account providers."""
+        modes = modes or {}
+        rules = []
+        for provider in providers:
+            rules.append({'providerId': provider, 'providerName': provider,
+                          'config': {'builtinModelIds': ['GLM-5.3'],
+                                     'access': {'type': 'zhipu-account',
+                                                'mode': modes.get(provider, 'individual-coding-plan'),
+                                                'accountType': family}}})
+        rules.append({'providerId': 'template:zai-api', 'providerName': 'Z.AI API',
+                      'config': {'access': {'type': 'api-key', 'apiKey': 'k'}}})
+        path = Path(root) / 'zcode-builtin.json'
+        path.write_text(json.dumps({'schemaVersion': 1, 'revision': revision,
+                                    'config': {'providerConfigRules': {'templateRules': [],
+                                                                       'providerRules': rules},
+                                               'modelConfigRules': {}}}))
+        return str(path)
+
+    def credentials(self, root, keys):
+        """A host credential store holding the given key names."""
+        store = Path(root) / '.zcode' / 'v2' / 'credentials.json'
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(json.dumps({key: 'enc:v1:secret' for key in keys}))
+        return str(root)
+
+    def setting(self, root, family='bigmodel', kind='individual-coding-plan'):
+        """A host setting recording the plan the host itself selected."""
+        path = Path(root) / '.zcode' / 'v2' / 'setting.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'providerFamilyDomain': family,
+                                    'providerFamilyConnectionSelections': {family: {'kind': kind}}}))
+        return str(root)
+
+    def account_key(self, provider, identity='77971787107705163'):
+        return f'account-provider:coding-plan:{provider}:account:{identity}:api-key'
+
+    def test_revision_is_the_catalogue_revision_and_the_hash_of_its_path(self):
+        # The agent answers with sha256(path.resolve(catalogue)), not of the bytes:
+        # the same catalogue at a different path is a different revision.
+        import hashlib
+        with tempfile.TemporaryDirectory() as t:
+            first = self.catalogue(Path(t))
+            self.assertEqual(zcode.builtin_provider_revision(first),
+                             'zcode-builtin:28:' + hashlib.sha256(os.path.abspath(first).encode()).hexdigest())
+            moved = Path(t) / 'elsewhere' / 'zcode-builtin.json'
+            moved.parent.mkdir(); shutil.copy(first, moved)
+            self.assertNotEqual(zcode.builtin_provider_revision(first),
+                                zcode.builtin_provider_revision(str(moved)))
+
+    def test_unreadable_or_revisionless_catalogue_is_refused(self):
+        with tempfile.TemporaryDirectory() as t:
+            missing = str(Path(t) / 'absent.json')
+            with self.assertRaisesRegex(RuntimeBlocked, 'cannot read'):
+                zcode.builtin_provider_revision(missing)
+            blank = Path(t) / 'blank.json'; blank.write_text('{"config": {}}')
+            with self.assertRaisesRegex(RuntimeBlocked, 'no revision'):
+                zcode.builtin_provider_revision(str(blank))
+
+    def test_only_providers_the_host_provisioned_and_the_catalogue_declares(self):
+        with tempfile.TemporaryDirectory() as t:
+            catalogue = self.catalogue(Path(t), providers=(self.ACCOUNT, self.TEAM))
+            data = self.credentials(t, [self.account_key(self.TEAM),
+                                        self.account_key(self.ACCOUNT),
+                                        'oauth:bigmodel:access_token',
+                                        self.account_key('account:not-in-catalogue'),
+                                        'account-provider:coding-plan:' + self.ACCOUNT + ':identity'])
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                # The store's own order is kept; unrelated and unknown keys are not
+                # account provisioning entries and are left out.
+                self.assertEqual(zcode.provisioned_account_providers(catalogue),
+                                 [self.TEAM, self.ACCOUNT])
+
+    def test_a_host_without_provisioned_accounts_delivers_nothing(self):
+        with tempfile.TemporaryDirectory() as t:
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, ['oauth:bigmodel:access_token'])
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                self.assertEqual(zcode.provisioned_account_providers(catalogue), [])
+                self.assertIsNone(zcode.account_provider_configuration(catalogue))
+
+    def test_overlay_reports_the_host_state_and_grants_no_entitlement_it_lacks(self):
+        with tempfile.TemporaryDirectory() as t:
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.TEAM), self.account_key(self.ACCOUNT)])
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                delivered = zcode.account_provider_configuration(
+                    catalogue, {'providerId': self.ACCOUNT, 'modelId': 'GLM-5.3'})
+            configuration = delivered['configuration']
+            self.assertEqual(configuration['basedOnZCodeBuiltinRevision'], delivered['based_on'])
+            self.assertEqual(set(configuration['providers']), {self.ACCOUNT, self.TEAM})
+            for provider, value in configuration['providers'].items():
+                self.assertEqual(value, {'access': {'type': 'zhipu-account', 'entitled': True}})
+                # The agent requires a boolean current for every entitled account
+                # provider, and exactly one of them is the preferred selection.
+                self.assertEqual(configuration['states'][provider],
+                                 {'availability': 'available', 'entitled': True,
+                                  'current': provider == self.ACCOUNT})
+
+    def test_a_requested_provider_that_is_not_provisioned_is_not_preferred(self):
+        with tempfile.TemporaryDirectory() as t:
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.TEAM)])
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                delivered = zcode.account_provider_configuration(
+                    catalogue, {'providerId': self.ACCOUNT, 'modelId': 'GLM-5.3'})
+            self.assertEqual(delivered['current'], self.TEAM)
+            self.assertEqual(delivered['current_source'], 'provisioning-order')
+
+    def test_the_plan_the_host_itself_selected_is_preferred(self):
+        # The host records family plus plan kind; the catalogue declares each
+        # provider's own accountType and mode, so the two are matched on those
+        # fields rather than on the order the credential store happens to use.
+        modes = {self.TEAM: 'team-coding-plan', self.ACCOUNT: 'individual-coding-plan'}
+        for kind, expected in (('individual-coding-plan', self.ACCOUNT),
+                               ('team-coding-plan', self.TEAM)):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as t:
+                catalogue = self.catalogue(Path(t), modes=modes)
+                data = self.credentials(t, [self.account_key(self.TEAM), self.account_key(self.ACCOUNT)])
+                self.setting(data, 'bigmodel', kind)
+                with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                    delivered = zcode.account_provider_configuration(catalogue)
+                self.assertEqual(delivered['current'], expected)
+                self.assertEqual(delivered['current_source'], 'host-selected-plan')
+
+    def test_a_host_setting_for_another_family_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as t:
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.TEAM), self.account_key(self.ACCOUNT)])
+            self.setting(data, 'zai', 'individual-coding-plan')
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                delivered = zcode.account_provider_configuration(catalogue)
+            self.assertEqual(delivered['current'], self.TEAM)
+            self.assertEqual(delivered['current_source'], 'provisioning-order')
+
+    def test_a_setting_that_expresses_no_usable_plan_is_not_guessed_at(self):
+        for setting in ({}, {'providerFamilyDomain': 'bigmodel'},
+                        {'providerFamilyDomain': 'bigmodel', 'providerFamilyConnectionSelections': []}):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as t:
+                catalogue = self.catalogue(Path(t))
+                data = self.credentials(t, [self.account_key(self.TEAM)])
+                path = Path(data) / '.zcode' / 'v2' / 'setting.json'
+                path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(setting))
+                with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                    delivered = zcode.account_provider_configuration(catalogue)
+                self.assertEqual(delivered['current'], self.TEAM)
+
+    def execute(self, directory, binding, wanted=MODEL, reply=None, **kwargs):
+        """Run a probe against a mock host, returning the methods it was sent."""
+        calls = []
+        client = Mock(identity='', events=[], interactions=[])
+        snapshot = {'session': {'sessionId': 'root'},
+                    'protocol': {'name': 'ZCode Protocol', 'version': 1},
+                    'settings': {'model': {'current': MODEL, 'available': [{'ref': MODEL}]},
+                                 'thoughtLevel': {'current': ''}}}
+
+        def respond(method, params, **_kwargs):
+            calls.append((method, params))
+            if method == zcode.ACCOUNT_CONFIG_METHOD:
+                if reply is not None:
+                    return reply
+                return {'receivedRevision': params['revision'],
+                        'providerCount': len(params['providers']), 'status': 'received'}
+            if method in ('session/create', 'session/resume'):
+                return snapshot
+            return {}
+
+        client.request.side_effect = respond
+        request = {'workspace': str(directory), 'read_only': False, 'identity': '',
+                   'model': json.dumps(wanted) if wanted else '', 'prompt': 'Current task',
+                   'schema': {}, 'binding': binding}
+        with patch.object(zcode, 'Client', return_value=client), \
+             patch.object(zcode, 'materialize_source', return_value={'provider': 'zcode'}):
+            zcode.execute(request, directory, probe=True, **kwargs)
+        return calls
+
+    def test_the_overlay_precedes_the_first_snapshot(self):
+        with tempfile.TemporaryDirectory() as t:
+            directory = Path(t) / 'evidence'; directory.mkdir()
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.ACCOUNT)])
+            binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'},
+                       'files': {}, 'environment': {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': catalogue}}
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                calls = self.execute(directory, binding)
+            self.assertEqual([method for method, _ in calls],
+                             [zcode.ACCOUNT_CONFIG_METHOD, 'session/create', 'session/close'])
+            method, params = calls[0]
+            self.assertEqual(params['basedOnZCodeBuiltinRevision'],
+                             zcode.builtin_provider_revision(catalogue))
+            self.assertEqual(set(params['providers']), {self.ACCOUNT})
+            recorded = read(directory / 'account-provider.json')
+            self.assertEqual(recorded['providers'], [self.ACCOUNT])
+            self.assertEqual(recorded['source'], 'host credential index')
+
+    def test_a_host_that_resolves_its_own_catalogue_is_never_given_one(self):
+        # Without a pinned catalogue the launcher does not own the path whose hash
+        # is the revision, so it cannot deliver and must not guess.
+        with tempfile.TemporaryDirectory() as t:
+            directory = Path(t) / 'evidence'; directory.mkdir()
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.ACCOUNT)])
+            binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'}, 'files': {}}
+            with patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}):
+                calls = self.execute(directory, binding)
+            self.assertEqual([method for method, _ in calls], ['session/create', 'session/close'])
+            self.assertFalse((directory / 'account-provider.json').exists())
+
+    def test_a_refused_delivery_is_reported_and_not_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as t:
+            directory = Path(t) / 'evidence'; directory.mkdir()
+            catalogue = self.catalogue(Path(t))
+            data = self.credentials(t, [self.account_key(self.ACCOUNT)])
+            binding = {'provider': 'zcode', 'launch': {'executable': 'node', 'script': 'app.cjs'},
+                       'files': {}, 'environment': {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': catalogue}}
+            for reply in ({}, {'status': 'received', 'providerCount': 0},
+                          {'status': 'rejected', 'providerCount': 1}):
+                with self.subTest(reply=reply), patch.dict(os.environ, {'ZCODE_DATA_BASE_DIR': data}), \
+                     self.assertRaisesRegex(RuntimeBlocked, 'did not accept'):
+                    self.execute(directory, binding, reply=reply)
+
+
+class ReasoningLevelBinding(unittest.TestCase):
+    """A bound model has to carry a reasoning level the host itself advertised.
+
+    3.12.3 refuses an object model selection without options.reasoningLevel, and
+    the level must be one of that model's own advertised values. Neither is
+    guessed here: the level comes from the request when one was asked for and from
+    the host's own report otherwise.
+    """
+
+    REF = {'providerId': 'account:bigmodel-individual-coding-plan', 'modelId': 'GLM-5.3'}
+
+    def entry(self, **extra):
+        return {'ref': dict(self.REF), 'label': 'GLM-5.3', **extra}
+
+    def levels(self, levels=('low', 'high', 'max'), default='max'):
+        reasoning = {'levels': [{'value': v, 'label': v} for v in levels]}
+        if default is not None:
+            reasoning['defaultLevel'] = default
+        return reasoning
+
+    def apply(self, available, wanted=REF, effort=''):
+        """Apply a selection against a host that echoes back what it was given."""
+        calls = []
+        client = Mock(identity='root')
+        snapshot = {'settings': {'model': {'current': None, 'available': available},
+                                 'thoughtLevel': {'current': ''}}}
+
+        applied = {'model': None, 'thoughtLevel': ''}
+
+        def settings():
+            return {'model': {'current': applied['model'], 'available': available},
+                    'thoughtLevel': {'current': applied['thoughtLevel']}}
+
+        def respond(method, params, **_kwargs):
+            calls.append((method, params))
+            if method == 'session/setModel':
+                applied['model'] = params['model']
+            elif method == 'session/setThoughtLevel':
+                applied['thoughtLevel'] = params['thoughtLevel']
+            return {'settings': settings()}
+
+        client.request.side_effect = respond
+        with tempfile.TemporaryDirectory() as t:
+            configured = zcode.apply_selection(client, snapshot, wanted, effort, Path(t), t)
+        return calls, configured
+
+    def bound_model(self, calls):
+        return next(params['model'] for method, params in calls if method == 'session/setModel')
+
+    def test_the_hosts_own_default_is_bound_and_never_invented(self):
+        calls, configured = self.apply([self.entry(reasoning=self.levels())])
+        self.assertEqual(self.bound_model(calls)['options'], {'reasoningLevel': 'max'})
+        self.assertEqual(configured['model'], canonical(self.REF).decode())
+
+    def test_a_requested_effort_is_bound_with_the_model(self):
+        calls, _ = self.apply([self.entry(reasoning=self.levels())], effort='low')
+        self.assertEqual(self.bound_model(calls)['options'], {'reasoningLevel': 'low'})
+
+    def test_the_first_advertised_value_stands_in_for_a_missing_default(self):
+        for default in (None, 'unlisted'):
+            with self.subTest(default=default):
+                calls, _ = self.apply([self.entry(reasoning=self.levels(default=default))])
+                self.assertEqual(self.bound_model(calls)['options'], {'reasoningLevel': 'low'})
+
+    def test_levels_are_read_from_the_entry_that_names_this_exact_reference(self):
+        other = {'ref': {'providerId': 'account:other', 'modelId': 'M'},
+                 'reasoning': self.levels(default='high')}
+        calls, _ = self.apply([other, self.entry(reasoning=self.levels(default='low', levels=('low',)))])
+        self.assertEqual(self.bound_model(calls)['options'], {'reasoningLevel': 'low'})
+        self.assertEqual(zcode.advertised_reasoning({'settings': {'model': {'available': [other]}}}, self.REF),
+                         {'levels': [], 'default': ''})
+
+    def test_a_model_with_no_advertised_levels_is_bound_exactly_as_given(self):
+        calls, _ = self.apply([self.entry()])
+        self.assertEqual(self.bound_model(calls), self.REF)
+        self.assertEqual(zcode.bound_model({'settings': {'model': {'available': [self.entry()]}}},
+                                           self.REF, ''), self.REF)
+
+    def test_an_unadvertised_model_is_still_refused_before_any_change(self):
+        calls = []
+        client = Mock(identity='root')
+        snapshot = {'settings': {'model': {'current': None, 'available': [self.entry(reasoning=self.levels())]},
+                                 'thoughtLevel': {'current': ''}}}
+        client.request.side_effect = lambda method, params, **_: calls.append(method)
+        with tempfile.TemporaryDirectory() as t, self.assertRaisesRegex(RuntimeBlocked, 'no fallback'):
+            zcode.apply_selection(client, snapshot, {'providerId': 'account:other', 'modelId': 'M'},
+                                  '', Path(t), t)
+        self.assertEqual(calls, [])
 
 
 if __name__ == '__main__':

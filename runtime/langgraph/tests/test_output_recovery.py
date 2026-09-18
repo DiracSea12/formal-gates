@@ -87,7 +87,10 @@ class OutputRecovery(unittest.TestCase):
 class TransportAdoption(unittest.TestCase):
     def case(self):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
-        root=Path(tmp.name)/'current';snap=Path(tmp.name)/'original';run=Path(tmp.name)/'run';run.mkdir()
+        # adopt_transport resolves both the run and the snapshot, so compare like
+        # with like: on macOS TMPDIR itself is a symlink (/var -> /private/var).
+        base=Path(tmp.name).resolve()
+        root=base/'current';snap=base/'original';run=base/'run';run.mkdir()
         paths=['runtime/langgraph/formal_gates_harness/'+n for n in ('cli.py','workers.py','native_dsh.py','native_dsh.mjs','graph.py','infra.py')]
         paths+=['runtime/langgraph/requirements.lock','.harness/bin/formal-gates','prompts/reviewer-base.md']
         for base in (root,snap):
