@@ -245,12 +245,19 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 > 不取内容），否则交付被**静默丢弃**——回执仍是 `received`，这正是它无法从应答里推断的原因。
 > 同一条路上另有两处此前不可达的缺陷一并修好：`session/setModel` 必须携带
 > `options.reasoningLevel`，以及 `selected_model()` 曾把带 options 的 `current` 读成"宿主未报告选择"。
-> 修复只改开发驱动源码（`runtime/langgraph/`）与本记录；未安装任何东西、未申请权限、未读任何凭据、
-> 未改宿主配置，探针也只写 `.harness/` 内部。
+> 修复只改开发驱动源码（`runtime/langgraph/`）与本记录；未安装任何东西、未申请权限、未改宿主配置，
+> 探针也只写 `.harness/` 内部。凭据方面只读 `~/.zcode/v2/credentials.json` 的**键名**（值加密，从不解密）。
 >
 > 本节处置结论相应改为：**返修候选仍不放行，但不再是因为 `doctor-zcode`**，而是因为本单元自身的两项
 > 发现——P1（`M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT`）与未解释的累计回归错误
 > （`M3-CUMULATIVE-WORKFLOW-NO-TERMINAL`）。这两项本次工作**未触及、也未主张已解决**。
+>
+> **另需更正一处过度断言（同日）**：解除这件事只做到"probe 项 PASS，0 次模型调用"，**不证明一次真实对话能跑完**。
+> 早先措辞把"真实 turn 需要反向通道 `interaction/requestProviderRuntimeHeaders`"写成了已确立结论，实际是**未实测的推断**。
+> 读包后发现：agent **自己**会打开并解析共用凭据库（`<baseDir>/.zcode/v2/credentials.json`），拼账号 key 的格式正是
+> `account-provider:coding-plan:<providerId>:account:<identity>:api-key`，与本传输读的是**同一份索引**；
+> 且该反向方法在包内**只出现 1 次**（协议方法名表），**未找到客户端发送点**。
+> ⇒ 反向通道**未被证明**是真实 turn 的障碍。要坐实需**一次模型调用**，按 §12.5 本工作不擅自消费该授权。
 
 ### 对 G2a 的影响
 
