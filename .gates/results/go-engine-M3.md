@@ -252,12 +252,19 @@ python -m unittest discover … -p 'test_artifact_capacity_boundary.py' -v
 > 发现——P1（`M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT`）与未解释的累计回归错误
 > （`M3-CUMULATIVE-WORKFLOW-NO-TERMINAL`）。这两项本次工作**未触及、也未主张已解决**。
 >
-> **另需更正一处过度断言（同日）**：解除这件事只做到"probe 项 PASS，0 次模型调用"，**不证明一次真实对话能跑完**。
-> 早先措辞把"真实 turn 需要反向通道 `interaction/requestProviderRuntimeHeaders`"写成了已确立结论，实际是**未实测的推断**。
-> 读包后发现：agent **自己**会打开并解析共用凭据库（`<baseDir>/.zcode/v2/credentials.json`），拼账号 key 的格式正是
-> `account-provider:coding-plan:<providerId>:account:<identity>:api-key`，与本传输读的是**同一份索引**；
-> 且该反向方法在包内**只出现 1 次**（协议方法名表），**未找到客户端发送点**。
-> ⇒ 反向通道**未被证明**是真实 turn 的障碍。要坐实需**一次模型调用**，按 §12.5 本工作不擅自消费该授权。
+> **二次更正（2026-09-18，已在实测之后）**：上一节把反向通道从"已确立"改写成"**未实测的推断**"，这个改写本身也是错的。它既不是已确立，也不是未被证明，而是**实测为必需**，且**现已实现**。
+>
+> 两处读包错误一并更正：①`interaction/requestProviderRuntimeHeaders` 在包内**不是**只有协议方法名表那一处，**客户端发送点是 `createProviderRuntimeHeadersPort`**；②因此"agent 自己读凭据库所以不需要反向请求"的推理不成立——那是 **standalone 模式**（自带端口 `O6n`，自读凭据、不需要 client）的行为，而 `app-server` 走的是 **host 模式**，两者由 `skipUserConfig` 决定、**互斥**，且 host 模式明确拒绝 host 之外的账号来源。
+>
+> 该端口的 `shouldRefreshBeforeModelRequest()` 恒返回 true，即**每次模型请求前**都会反向索取；应答 schema 是以 `headersApplied` 为判别键的严格联合，缺 `headersApplied`/`requestAuth` 会抛错中断 turn。**双向实测**：改答 `-32601` ⇒ turn 在 `model_creation` 阶段失败、**0 次模型调用**；按契约回答 ⇒ `turn.completed`／`resultType: success`。
+>
+> **本传输已不再拒绝它**（提交 `d2f4847`）：从宿主自己的开通索引取该 provider 的凭据，经**宿主自己的密码**读取（`zcode_credential.mjs`；密钥为 `sha256(固定回退串)`、aes-256-gcm，**不涉钥匙串、不需用户决定**）。没有凭据的 provider 回 `headersApplied: false` 而不编造，故"缺凭据"表现为宿主自己的 provider 报错，而不是被我方静默否掉。凭据本身**从不进入证据**：`Client.answer` 只记录方法与状态。`ZCODE_INTERACTION_REQUIRED` 现在只覆盖真正属于用户决定的两项。
+>
+> **真实 turn 已实测跑完（走本传输，不是探针）**：`turn.completed`、`resultType: success`、1 次模型请求、`answer.raw.txt` = `{"ok": true}`、`interaction-status.json` = `provider-runtime-headers-applied`；Python 全套 **227 OK**；`go vet`／`go build` 不变，驱动二进制 sha256 `a4d9ac94…` 不变，运行时身份 `b605285f…` → `07a23099…`。
+>
+> 本节上方"**从不读取凭据值**"一类措辞与此冲突处，**以本更正为准**：现在会读本账号已开通的那一条值，但仅此一条、且不入证据。**代价**：本轮共消费 **2 次模型调用**（1 次协议探针、1 次产品路径），是机主明确要求"实测通"下的授权支出。
+>
+> **仍未解决**：standalone 路径（`--prompt`／TUI）在本机**不可用**——凭据库缺 `account-provider:<id>:identity` 记录（standalone 开通判定要求它），注册表未开通，turn 停在 `Select a model before continuing`；该记录只有 standalone 的 `login` 会写。DSH 方面本轮**没有任何实测结论**。
 
 ### 对 G2a 的影响
 
