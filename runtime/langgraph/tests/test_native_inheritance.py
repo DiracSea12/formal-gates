@@ -324,6 +324,7 @@ class ProtocolInteractions(unittest.TestCase):
         client = object.__new__(zcode.Client)
         client.counter = 0; client.identity = 'root'; client.send = Mock()
         client.messages = queue.Queue(); client.events = []; client.interactions = []
+        client.trace = io.StringIO()
         client.directory = Path(directory)
         return client
 
@@ -341,13 +342,90 @@ class ProtocolInteractions(unittest.TestCase):
             self.assertIn({'method': 'interaction/requestOfficialMcpAuthHeaders', 'status': 'official_auth_unavailable'}, read(Path(t) / 'interaction-status.json'))
 
     def test_required_user_decisions_are_neither_approved_nor_denied(self):
-        for method in ('interaction/requestPermission', 'interaction/requestUserInput', 'interaction/requestProviderRuntimeHeaders'):
+        for method in ('interaction/requestPermission', 'interaction/requestUserInput'):
             with self.subTest(method=method), tempfile.TemporaryDirectory() as t:
                 client = self.client(t)
                 client.messages.put({'id': 0, 'method': method, 'params': {}})
                 with self.assertRaisesRegex(RuntimeBlocked, 'INTERACTION_REQUIRED'):
                     client.receive()
                 client.send.assert_not_called()
+
+    def test_request_auth_comes_from_the_host_store_and_is_never_recorded(self):
+        # The one interaction with a machine answer. It is supplied from the host's
+        # own provisioning index, keyed by the provider the host is about to call.
+        secret = 'TEST-DECRYPTED-CREDENTIAL'
+        with tempfile.TemporaryDirectory() as t:
+            store = Path(t) / 'credentials.json'
+            store.write_text(json.dumps({
+                'account-provider:coding-plan:account:probe:account:identity-1:api-key': secret,
+                'account-provider:coding-plan:account:other:account:identity-1:api-key': 'OTHER',
+                'oauth:active_provider': 'enc:v1:not-a-credential',
+            }))
+            client = self.client(t)
+            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
+            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
+            try:
+                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
+                                     'params': {'providerId': 'account:probe'}})
+                client.receive()
+            finally:
+                if previous is None:
+                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
+                else:
+                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
+            reply = client.send.call_args[0][0]
+            self.assertEqual(reply['result'], {'headersApplied': True, 'requestAuth': {'apiKey': secret}})
+            # The credential is an input to the answer, never evidence.
+            recorded = (Path(t) / 'interaction-status.json').read_text()
+            self.assertNotIn(secret, recorded)
+            self.assertIn({'method': zcode.RUNTIME_HEADERS_METHOD,
+                           'status': 'provider-runtime-headers-applied'}, json.loads(recorded))
+            self.assertNotIn(secret, client.trace.getvalue())
+
+    def test_a_provider_without_a_provisioned_credential_is_reported_not_invented(self):
+        with tempfile.TemporaryDirectory() as t:
+            store = Path(t) / 'credentials.json'
+            store.write_text(json.dumps({'oauth:active_provider': 'enc:v1:not-a-credential'}))
+            client = self.client(t)
+            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
+            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
+            try:
+                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
+                                     'params': {'providerId': 'account:absent'}})
+                client.receive()
+            finally:
+                if previous is None:
+                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
+                else:
+                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
+            reply = client.send.call_args[0][0]
+            self.assertIs(reply['result']['headersApplied'], False)
+            self.assertNotIn('apiKey', reply['result'])
+            self.assertIn({'method': zcode.RUNTIME_HEADERS_METHOD,
+                           'status': 'provider-runtime-headers-unavailable'},
+                          json.loads((Path(t) / 'interaction-status.json').read_text()))
+
+    def test_an_unreadable_credential_is_never_treated_as_a_useful_answer(self):
+        # A value that cannot be decrypted must not become "headers applied".
+        with tempfile.TemporaryDirectory() as t:
+            store = Path(t) / 'credentials.json'
+            store.write_text(json.dumps({
+                'account-provider:coding-plan:account:probe:account:identity-1:api-key': 'enc:v1:broken',
+            }))
+            client = self.client(t)
+            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
+            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
+            try:
+                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
+                                     'params': {'providerId': 'account:probe'}})
+                client.receive()
+            finally:
+                if previous is None:
+                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
+                else:
+                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
+            reply = client.send.call_args[0][0]
+            self.assertIs(reply['result']['headersApplied'], False)
 
     def test_child_notifications_do_not_enter_root_evidence(self):
         with tempfile.TemporaryDirectory() as t:

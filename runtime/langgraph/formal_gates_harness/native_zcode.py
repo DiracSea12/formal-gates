@@ -13,6 +13,11 @@ over the host's account provider configuration, because the agent keeps no
 registry of its own: without it the app-server reports an empty provider list
 and no current model at all. `account_provider_configuration` rebuilds that
 overlay from the host's own provisioning index.
+
+Handing over the overlay is not enough to finish a turn. The same host asks its
+client for the request credential before every model request and abandons the
+turn when none comes back, so `respond` answers that one interaction from the
+same provisioning index -- see request_auth().
 """
 from __future__ import annotations
 import hashlib
@@ -20,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import time
 from .infra import RuntimeBlocked, SessionUnavailable, atomic, read, canonical
 from .native_transport import (Client as Transport, Reply, close_session,
@@ -27,7 +33,7 @@ from .native_transport import (Client as Transport, Reply, close_session,
                                reconcile_completed_output as reconcile, session_events,
                                transport_files, write_answer)
 
-TRANSPORT_FILES=transport_files(Path(__file__).name)
+TRANSPORT_FILES=transport_files(Path(__file__).name,'zcode_credential.mjs')
 
 # App-server has no read-only mode. Its native allowlist also governs MCP;
 # arbitrary command/plugin executors cannot enforce this role's write boundary.
@@ -57,11 +63,21 @@ PERSONAL_PROVIDER_CONFIG='provider_config.json'
 
 # The host's own credential store. Its key names are the host's provisioning
 # index for account providers and are plaintext; its values are encrypted account
-# secrets, which this transport never reads.
+# secrets, read only by zcode_credential.mjs and never recorded.
 CREDENTIALS_FILE='credentials.json'
 ACCOUNT_CREDENTIAL_PREFIX='account-provider:coding-plan:'
 ACCOUNT_CREDENTIAL_SUFFIX=':api-key'
 ACCOUNT_IDENTITY_SEPARATOR=':account:'
+
+# Reading one credential out of that store. The host's cipher is local, so this
+# needs neither keychain access nor a user decision.
+CREDENTIAL_HELPER='zcode_credential.mjs'
+CREDENTIAL_HELPER_ENV='FORMAL_GATES_ZCODE_CREDENTIALS'
+
+# The host asks its client for request auth before every model request. A
+# launcher that started the app-server is that client, and a turn cannot reach a
+# provider without an answer. See request_auth().
+RUNTIME_HEADERS_METHOD='interaction/requestProviderRuntimeHeaders'
 
 # The account provider overlay a host delivers once provider/model are ready.
 ACCOUNT_CONFIG_METHOD='provider/updateAccountConfig'
@@ -145,6 +161,42 @@ def capture_binding():
     return capture('zcode',launch,provider_environment(script))
 
 
+def credential_store():
+    """The host's own account credential store, as the host resolves it."""
+    override=os.environ.get(CREDENTIAL_HELPER_ENV,'').strip()
+    if override: return Path(override)
+    return host_data_directory()/'.zcode'/'v2'/CREDENTIALS_FILE
+
+
+def request_auth(provider):
+    """The request credential the host asks its client for, or None.
+
+    The app-server holds no account credential it can spend on its own: in host
+    mode its provider runtime headers port reports
+    ``shouldRefreshBeforeModelRequest() === true`` unconditionally, so before every
+    model request it asks the client for the request auth and abandons the turn
+    when the reply carries none. A launcher that spawned the app-server is that
+    client, so supplying the credential the host itself provisioned is part of
+    starting it, not a substitution of its choice.
+
+    Only this account's own provisioned value is read, through the host's cipher,
+    which is local (see zcode_credential.mjs): no keychain access and no user
+    decision are involved. The value is never returned into evidence -- answers go
+    through Client.answer, which records the method and the status only -- and is
+    never logged, written or reported by this transport.
+    """
+    if not provider: return None
+    node=shutil.which('node')
+    helper=Path(__file__).with_name(CREDENTIAL_HELPER)
+    if not node or not helper.is_file(): return None
+    try:
+        done=subprocess.run([node,str(helper),provider,str(credential_store())],
+                            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=60)
+    except (OSError,subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None
+
+
 class Client(Transport):
     """ZCode's client-directed replies and error classification."""
 
@@ -165,8 +217,22 @@ class Client(Transport):
             # No desktop authentication port is available on this connection.
             return Reply({'result':{'ok':False,'reason':'official_auth_unavailable'}},
                          'official_auth_unavailable')
-        if method in ('interaction/requestPermission','interaction/requestUserInput',
-                      'interaction/requestProviderRuntimeHeaders'):
+        if method==RUNTIME_HEADERS_METHOD:
+            # The one interaction with a machine answer: the credential this host
+            # provisioned for the provider it is about to call. Answered from the
+            # host's own index rather than refused, because in host mode the host
+            # cannot reach a provider without it. When the host has no such
+            # credential the reply says so and the host reports the failure itself,
+            # so a missing credential is never laundered into a denied turn.
+            provider=params.get('providerId') or ''
+            secret=request_auth(provider)
+            if not secret:
+                return Reply({'result':{'headersApplied':False,
+                                        'errorMessage':'no provisioned request credential for '+provider}},
+                             'provider-runtime-headers-unavailable')
+            return Reply({'result':{'headersApplied':True,'requestAuth':{'apiKey':secret}}},
+                         'provider-runtime-headers-applied')
+        if method in ('interaction/requestPermission','interaction/requestUserInput'):
             raise RuntimeBlocked('ZCODE_INTERACTION_REQUIRED: '+method+' needs a native interactive client; no user decision was sent')
         return None
 
