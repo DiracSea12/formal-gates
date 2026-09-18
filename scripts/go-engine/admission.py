@@ -129,41 +129,22 @@ def native_verification_problem(unit: str, record: dict, root: Path) -> str:
 def native_raw_evidence_problem(native: dict, root: Path, venv_python: Path) -> str:
     """'' when the raw execution evidence behind the report still verifies.
 
-    Reuses the harness's own chain — open_run (runtime-identity binding, spec
-    and requirement digests), Store.verify_evidence (artifact integrity,
-    comparison inputs, job receipts and stream proofs, native source files)
-    and the terminal artifact — so a report that survives while its jobs and
-    artifacts are gone cannot carry a unit through this gate.
+    Delegates to scripts/go-engine/native_evidence_probe.py, which walks the
+    harness's own chain (open_run binding, Store.verify_evidence for every
+    worker receipt AND every check/gate the terminal artifact depends on,
+    spec-identity of those dependencies, terminal readback) using the same
+    rules that refused identical missing evidence during the run.
     """
     run_rel = (native.get("run") or "").strip()
     if not run_rel:
         return "native verification names no run directory"
     run_dir = Path(run_rel)
     run_dir = run_dir if run_dir.is_absolute() else root / run_dir
-    probe = "\n".join([
-        "import json, sys",
-        "from pathlib import Path",
-        f"sys.path.insert(0, {str(root / 'runtime' / 'langgraph')!r})",
-        "from formal_gates_harness.cli import open_run",
-        "from formal_gates_harness.infra import read",
-        f"run = Path({str(run_dir)!r})",
-        "_, store = open_run(run)",
-        "items = []",
-        "for receipt in sorted((run / 'workers').glob('*.json')):",
-        "    value = store.verify_evidence(read(receipt)['ref'])",
-        "    items.append({'role': value.get('role'),",
-        "                  'status': (value.get('result') or {}).get('status'),",
-        "                  'provider': (value.get('source') or {}).get('provider')})",
-        "events = [json.loads(line) for line in (run / 'events.jsonl').read_text().splitlines() if line.strip()]",
-        "terminals = [e for e in events if e.get('event') == 'terminal']",
-        "term = terminals[-1] if terminals else {}",
-        "if term.get('evidence'): store.get(term['evidence'])",
-        "print(json.dumps({'roles': items, 'terminal': term.get('status')}))",
-    ])
+    probe = root / "scripts" / "go-engine" / "native_evidence_probe.py"
     env = {**os.environ,
            "FORMAL_GATES_HARNESS_ROOT": str(root),
            "FORMAL_GATES_HARNESS_BINARY": str(root / ".harness" / "bin" / "formal-gates")}
-    proc = subprocess.run([str(venv_python), "-c", probe], cwd=str(root), env=env,
+    proc = subprocess.run([str(venv_python), str(probe), str(run_dir)], cwd=str(root), env=env,
                           capture_output=True, text=True)
     if proc.returncode != 0:
         detail = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"exit {proc.returncode}"
@@ -183,8 +164,9 @@ def native_raw_evidence_problem(native: dict, root: Path, venv_python: Path) -> 
     if native.get("roles_completed") is not None and native["roles_completed"] != len(roles):
         return (f"native verification: verified {len(roles)} worker receipts, "
                 f"the record says {native['roles_completed']}")
+    if not result.get("checks") or not result.get("gates"):
+        return "native verification: terminal depends on no checks or no gates"
     return ""
-
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()

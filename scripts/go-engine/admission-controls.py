@@ -209,6 +209,8 @@ class Controls:
 
         self.native_case()
 
+        self.native_check_evidence_case()
+
         self.smoke_case()
 
         failed = [label for label, ok, _ in self.results if not ok]
@@ -331,6 +333,48 @@ class Controls:
         target = self.out / "native-stripped.json"
         target.write_text(json.dumps(record, indent=2) + "\n")
         self.expect_refusal("ADM-E16 raw native evidence missing", target, "raw execution evidence did not verify")
+
+    def native_check_evidence_case(self) -> None:
+        """One REQUIRED CHECK's evidence disappears while everything else stays.
+
+        Job receipts bind their absolute directories, so a relocated copy fails
+        the binding check before the check-evidence walk and would make this
+        control vacuous. Instead one artifact is renamed in place and restored
+        in a finally block; the valid-record control has just proven the
+        untouched chain passes, so this refusal can only come from walking the
+        terminal's own check/gate dependencies.
+        """
+        native = self.record.get("native_verification")
+        if not native or not native.get("run"):
+            return
+        run = Path(native["run"])
+        events = run / "events.jsonl"
+        if not run.is_dir() or not events.is_file():
+            return
+        terminals = [json.loads(line) for line in events.read_text().splitlines()
+                     if line.strip() and json.loads(line).get("event") == "terminal"]
+        if not terminals:
+            return
+        terminal_ref = terminals[-1].get("evidence")
+        terminal_path = run / "artifacts" / f"{terminal_ref}.json"
+        if not terminal_path.is_file():
+            return
+        terminal = json.loads(terminal_path.read_text())
+        checks = terminal.get("checks") or []
+        if not checks:
+            return
+        victim = run / "artifacts" / f"{checks[0]['evidence']}.json"
+        if not victim.is_file():
+            return
+        hidden = victim.with_suffix(".json.adm-e17")
+        victim.rename(hidden)
+        try:
+            self.expect_refusal("ADM-E17 required check evidence missing",
+                                self.record_path, "raw execution evidence did not verify")
+        finally:
+            hidden.rename(victim)
+            if not victim.is_file():
+                self.check("ADM-E17 restoration", False, f"{victim} was not restored")
 
     def smoke_case(self) -> None:
         """The baseline smoke must reject a flow that stops for the user."""
