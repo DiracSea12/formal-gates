@@ -209,7 +209,7 @@ class Controls:
 
         self.native_case()
 
-        self.native_check_evidence_case()
+        self.native_fixture_case()
 
         self.smoke_case()
 
@@ -309,72 +309,97 @@ class Controls:
             "run report provider",
         )
 
-        # The report and manifest survive while every raw job file and artifact
-        # is gone: the gate must walk the harness's own evidence chain instead
-        # of trusting the report's summary of it.
-        native = self.record["native_verification"]
-        stripped_run = self.out / "native-run-stripped"
-        if stripped_run.exists():
-            shutil.rmtree(stripped_run)
-        shutil.copytree(Path(native["run"]), stripped_run)
-        shutil.rmtree(stripped_run / "jobs")
-        shutil.rmtree(stripped_run / "artifacts")
-        stripped_evidence = self.out / "native-evidence-stripped"
-        if stripped_evidence.exists():
-            shutil.rmtree(stripped_evidence)
-        shutil.copytree(Path(native["evidence_dir"]), stripped_evidence)
-        report_path = stripped_evidence / native["report"]
-        report = json.loads(report_path.read_text())
-        report["run"] = str(stripped_run)
-        report_path.write_text(json.dumps(report, indent=2) + "\n")
-        record = json.loads(self.record_path.read_text())
-        record["native_verification"]["run"] = str(stripped_run)
-        record["native_verification"]["evidence_dir"] = str(stripped_evidence)
-        target = self.out / "native-stripped.json"
-        target.write_text(json.dumps(record, indent=2) + "\n")
-        self.expect_refusal("ADM-E16 raw native evidence missing", target, "raw execution evidence did not verify")
+    def native_fixture_case(self) -> None:
+        """Terminal-dependent evidence refusals on a generated, disposable fixture.
 
-    def native_check_evidence_case(self) -> None:
-        """One REQUIRED CHECK's evidence disappears while everything else stays.
-
-        Job receipts bind their absolute directories, so a relocated copy fails
-        the binding check before the check-evidence walk and would make this
-        control vacuous. Instead one artifact is renamed in place and restored
-        in a finally block; the valid-record control has just proven the
-        untouched chain passes, so this refusal can only come from walking the
-        terminal's own check/gate dependencies.
+        The official native run is never modified. A fresh fixture demo run
+        (public entry, no model calls) is generated, its record passes the
+        whole gate (the discriminating positive control), and only then is the
+        fixture selectively damaged: one required check's artifact, then the
+        raw evidence wholesale. Cleanup removes the fixture we created;
+        interruption can at worst leave an unreferenced run that the next
+        control run regenerates past. The official run's artifact inventory
+        is asserted equal before and after.
         """
         native = self.record.get("native_verification")
         if not native or not native.get("run"):
             return
-        run = Path(native["run"])
-        events = run / "events.jsonl"
-        if not run.is_dir() or not events.is_file():
+        official = Path(native["run"])
+
+        def inventory() -> dict:
+            if not official.is_dir():
+                return {}
+            return {p.name: digest(p) for p in sorted((official / "artifacts").glob("*.json"))}
+
+        before = inventory()
+
+        proc = subprocess.run(["./scripts/harness", "demo", "--approve-sample"],
+                              cwd=str(self.root), capture_output=True, text=True)
+        run = None
+        if proc.returncode == 0:
+            text = proc.stdout.strip()
+            values = []
+            while text:
+                value, end = json.JSONDecoder().raw_decode(text)
+                values.append(value)
+                text = text[end:].strip()
+            run = (values[0].get("created_run") if values else None) or (values[-1].get("directory") if values else None)
+        if not run:
+            self.check("ADM-E16 fixture run generated", False,
+                       (proc.stderr.strip().splitlines() or ["demo failed"])[-1])
             return
-        terminals = [json.loads(line) for line in events.read_text().splitlines()
-                     if line.strip() and json.loads(line).get("event") == "terminal"]
-        if not terminals:
-            return
-        terminal_ref = terminals[-1].get("evidence")
-        terminal_path = run / "artifacts" / f"{terminal_ref}.json"
-        if not terminal_path.is_file():
-            return
-        terminal = json.loads(terminal_path.read_text())
-        checks = terminal.get("checks") or []
-        if not checks:
-            return
-        victim = run / "artifacts" / f"{checks[0]['evidence']}.json"
-        if not victim.is_file():
-            return
-        hidden = victim.with_suffix(".json.adm-e17")
-        victim.rename(hidden)
+        run = Path(run)
         try:
-            self.expect_refusal("ADM-E17 required check evidence missing",
-                                self.record_path, "raw execution evidence did not verify")
+            events = [json.loads(line) for line in (run / "events.jsonl").read_text().splitlines() if line.strip()]
+            terminals = [e for e in events if e.get("event") == "terminal"]
+            terminal = json.loads((run / "artifacts" / f"{terminals[-1]['evidence']}.json").read_text())
+            roles = []
+            for receipt in sorted((run / "workers").glob("*.json")):
+                value = json.loads((run / "artifacts" / f"{json.loads(receipt.read_text())['ref']}.json").read_text())
+                roles.append({"role": value.get("role"), "status": (value.get("result") or {}).get("status")})
+            report_dir = self.out / "fixture-report"
+            if report_dir.exists():
+                shutil.rmtree(report_dir)
+            report_dir.mkdir(parents=True)
+            (report_dir / "report.json").write_text(json.dumps(
+                {"passed": True, "provider": "fixture", "run": str(run), "roles": roles,
+                 "status": terminal.get("status")}, indent=2) + "\n")
+            record = json.loads(self.record_path.read_text())
+            record["native_verification"] = {
+                "required": True, "status": "PASS",
+                "authorized": "generated admission-control fixture (public demo entry, no model calls)",
+                "evidence_dir": str(report_dir), "run": str(run), "report": "report.json",
+                "command": "./scripts/harness demo --approve-sample",
+                "provider": "fixture", "flow_status": terminal.get("status"),
+                "roles_completed": len(roles),
+            }
+            fixture_record = self.out / "native-fixture.json"
+            fixture_record.write_text(json.dumps(record, indent=2) + "\n")
+
+            code, text = self.run_admission(fixture_record)
+            (self.out / "native-fixture-positive.stdout").write_text(text)
+            self.check("ADM-E16 fixture positive control is granted",
+                       code == 0 and "ADMISSION GRANTED" in text,
+                       text.splitlines()[0] if text.strip() else "")
+
+            victim = run / "artifacts" / f"{terminal['checks'][0]['evidence']}.json"
+            if victim.is_file():
+                victim.unlink()
+            self.expect_refusal("ADM-E17 required check evidence missing", fixture_record,
+                                "raw execution evidence did not verify")
+
+            shutil.rmtree(run / "jobs")
+            shutil.rmtree(run / "artifacts")
+            self.expect_refusal("ADM-E18 raw native evidence missing", fixture_record,
+                                "raw execution evidence did not verify")
         finally:
-            hidden.rename(victim)
-            if not victim.is_file():
-                self.check("ADM-E17 restoration", False, f"{victim} was not restored")
+            runs_root = self.root / ".harness" / "runs"
+            if run.is_relative_to(runs_root):
+                shutil.rmtree(run, ignore_errors=True)
+            if run.exists():
+                self.check("ADM-E18 fixture cleanup", False, f"{run} was not removed")
+
+        self.check("ADM-E19 official run untouched by fixture controls", inventory() == before)
 
     def smoke_case(self) -> None:
         """The baseline smoke must reject a flow that stops for the user."""
