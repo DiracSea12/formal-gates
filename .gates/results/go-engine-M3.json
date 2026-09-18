@@ -1,9 +1,9 @@
 {
   "unit": "M3",
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T013841Z-71218",
-  "recorded_at": "2026-09-18T01:46:40.594882+00:00",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T020721Z-20228",
+  "recorded_at": "2026-09-18T02:15:24.552084+00:00",
   "overall": "PASS",
-  "overall_note": "The original PASS was withdrawn on 2026-09-17 by independent acceptance and code review; the unit then stood FAIL on two findings. The first, M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT (P1), is fixed by the repair candidate and was point-proven (5 capacity tests fail before the patch, pass after; the 8 MiB ceiling is retained). The second, M3-CUMULATIVE-WORKFLOW-NO-TERMINAL, is classified but not explained: its mechanism is reproduced deterministically (a check-side runtime error surfaces as a check-runtime interrupt, so the graph returns without a terminal), while the specific trigger of the original occurrence is unrecoverable because the failing test's job directory was deleted by its own tearDown. A fresh full acceptance on the later candidate e13176c passes all nine required items, including doctor-zcode, which had been the outstanding blocker and is now cleared by the host delivery and request-auth work. This conclusion therefore rests on that new attempt; the two attempts listed under repair_candidate.acceptance_attempt predate it and are no longer on disk (see G1a-index open item 26).",
+  "overall_note": "The original PASS was withdrawn on 2026-09-17 by independent acceptance and code review; the unit then stood FAIL on two findings. The first, M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT (P1), is fixed by the repair candidate and was point-proven (5 capacity tests fail before the patch, pass after; the 8 MiB ceiling is retained). The second, M3-CUMULATIVE-WORKFLOW-NO-TERMINAL, is classified but not explained: its mechanism is reproduced deterministically (a check-side runtime error surfaces as a check-runtime interrupt, so the graph returns without a terminal), while the specific trigger of the original occurrence is unrecoverable because the failing test's job directory was deleted by its own tearDown. A fresh full acceptance on the later candidate e13176c passes all nine required items, including doctor-zcode, which had been the outstanding blocker and is now cleared by the host delivery and request-auth work. This conclusion therefore rests on that new attempt; the two attempts listed under repair_candidate.acceptance_attempt predate it and are no longer on disk (see G1a-index open item 26). REPLACED 2026-09-18 by a second full acceptance on candidate aa3312e, which is the same product source re-signed on a new candidate: the only new commit is a fix to the acceptance tooling itself, which had been recording build products and duplicated streams as evidence. That second attempt (.../acceptance/M3/20260918T020721Z-20228) also passes all nine required items and is now the attempt this record points at; evidence_file_count falls from 64 to 61 because the two ~9 MB probe binaries and the byte-identical duplicate of the go-test -json stream are no longer recorded (one attempt: 22 MB -> 2.3 MB, measured). The earlier attempt 20260918T013841Z-71218 is kept on disk and stands as an observation of that candidate, not as this record's evidence. The verdict is unchanged by the re-sign: it is the same source, and the re-sign exists only because any further commit invalidates admission against the previous candidate - the tooling fix is what moved HEAD.",
   "withdrawn": {
     "was": "PASS",
     "withdrawn_at": "2026-09-17",
@@ -75,9 +75,10 @@
       "count_delta": "195 = 174 (M3 baseline) + 16 (G2a test_job_supervision_differential.py) + 5 (new capacity boundary tests); no existing test was rewritten"
     },
     "acceptance_attempt": {
-      "status": "ACCEPTED on a later candidate. Was: BLOCKED - 8 of 9 required items; doctor-zcode failed and no record was issued. The two older attempts below were reclaimed by the 2026-09-18 cleanup and are no longer on disk (G1a-index open item 26); the accepted attempt is listed first.",
+      "status": "ACCEPTED on a later candidate (re-signed 2026-09-18 on aa3312e: same product source, acceptance tooling fix only; evidence 22 MB -> 2.3 MB). Was: BLOCKED - 8 of 9 required items; doctor-zcode failed and no record was issued. The two earlier attempts below were reclaimed by the 2026-09-18 cleanup and are no longer on disk (G1a-index open item 26); the accepted attempt is listed first.",
       "attempts": [
-        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T013841Z-71218",
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T020721Z-20228",
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T013841Z-71218 (superseded 2026-09-18 by the aa3312e re-sign; kept on disk)",
         ".harness/validation/acceptance/M3/20260917T161012Z-57517 (--keep-going, all 9 items; reclaimed 2026-09-18)",
         ".harness/validation/acceptance/M3/20260917T155933Z-31836 (stopped at the first failed item; reclaimed 2026-09-18)"
       ],
@@ -167,7 +168,7 @@
   },
   "previous_accepted_baseline": "M2",
   "candidate": {
-    "commit": "e13176c1ac761257549f20da5809080679c878e4",
+    "commit": "aa3312e6f3a976d65a90393ddb6c2c1c2c91d61b",
     "branch": "codex/go-engine-v1",
     "runtime_identity": "448f3a524f9973c99bc9711d6ba38ab5e1d6402d80c244ac616a03982d234e15",
     "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
@@ -185,49 +186,49 @@
       "id": "identity",
       "required": true,
       "status": "PASS",
-      "seconds": 0.898
+      "seconds": 1.03
     },
     {
       "id": "go-vet",
       "required": true,
       "status": "PASS",
-      "seconds": 0.508
+      "seconds": 0.472
     },
     {
       "id": "go-test-full",
       "required": true,
       "status": "PASS",
-      "seconds": 382.564
+      "seconds": 380.417
     },
     {
       "id": "sqlite-probe",
       "required": true,
       "status": "PASS",
-      "seconds": 2.688
+      "seconds": 2.919
     },
     {
       "id": "python-unittest",
       "required": true,
       "status": "PASS",
-      "seconds": 81.984
+      "seconds": 87.989
     },
     {
       "id": "demo-fixture",
       "required": true,
       "status": "PASS",
-      "seconds": 3.924
+      "seconds": 4.019
     },
     {
       "id": "doctor-dsh",
       "required": true,
       "status": "PASS",
-      "seconds": 2.98
+      "seconds": 2.917
     },
     {
       "id": "doctor-zcode",
       "required": true,
       "status": "PASS",
-      "seconds": 2.701
+      "seconds": 2.871
     },
     {
       "id": "tree-clean-after",
@@ -242,10 +243,10 @@
     "note": "The regression is judged by result and progress, not by wall-clock speed."
   },
   "attestation": {
-    "summary_sha256": "57d50775cfd305ca8c858f6d762ae482862e81e1b473fb494f7c724fd1875e85",
-    "identity_sha256": "1be664486fa870aaac892c3ca75659cc6bb1e99d03cd69660a603aba11e13eb9",
-    "evidence_sha256": "5e262580e7e055e2866be89a5cb4c8d10fca5e1a178b44b77cdc69d6481f1b17",
-    "evidence_file_count": 64
+    "summary_sha256": "053e06118586068fd3bc4c180dae6613eb55eaa33bc12724d22d913513913024",
+    "identity_sha256": "c2fa09f77b216b040507e256bd3483c6f4ad14de84f73b169ffb15e385ca8c8c",
+    "evidence_sha256": "932ece09d2aaaac6b9a2c963175254d2a39afa4011b529dc9d762c522ceccf51",
+    "evidence_file_count": 61
   },
   "bookkeeping": [
     ".gates/results/go-engine-M3.json",
