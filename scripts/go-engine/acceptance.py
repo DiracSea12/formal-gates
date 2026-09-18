@@ -377,8 +377,10 @@ class Runner:
             "go-test",
             stall_budget=self.stall_budget if self.stall_budget is not None else STALL_BUDGET_SECONDS,
         )
-        jsonl = self.attempt / "steps" / "go-test-full" / "go-test.jsonl"
-        jsonl.write_text(stdout)
+        # No second copy of the stream. `go-test.stdout` already *is* the -json
+        # stream that `go-test` produced, and nothing ever read a `go-test.jsonl`:
+        # it cost 1.8 MB per attempt - the largest file in the attempt after the
+        # probe binaries - to duplicate bytes that were already recorded.
         packages: dict[str, dict] = {}
         skipped: list[dict] = []
         failed_tests: list[dict] = []
@@ -451,8 +453,15 @@ class Runner:
         started = time.monotonic()
         probe_dir = self.attempt / "steps" / "sqlite-probe" / "evidence"
         probe_dir.mkdir(parents=True, exist_ok=True)
+        # The probe binaries are build products, not evidence. Two of them are
+        # ~9 MB each, which made them ~80% of a whole attempt. They are built
+        # under .harness/tmp (outside the attempt, so the manifest never lists
+        # them) and removed when the item is done; what stays in the evidence is
+        # the probe report, the streams, and the size/digest recorded below.
+        scratch = self.root / ".harness" / "tmp" / f"sqlprobe-{self.attempt.name}"
+        scratch.mkdir(parents=True, exist_ok=True)
         for mode in ("1", "0"):
-            binary = probe_dir / f"sqlprobe-cgo{mode}"
+            binary = scratch / f"sqlprobe-cgo{mode}"
             build = step.sh(
                 ["go", "build", "-o", str(binary), "./scripts/go-engine/sqlprobe"],
                 f"build-cgo{mode}",
@@ -460,6 +469,11 @@ class Runner:
             )
             if not step.require(build.returncode == 0, f"CGO_ENABLED={mode} build failed"):
                 continue
+            step.note(
+                f"CGO_ENABLED={mode}: probe binary {binary.stat().st_size} bytes, "
+                f"sha256 {sha256_file(binary)[:16]}... (build product, not retained; "
+                "rebuild from the pinned commit with this CGO_ENABLED to reproduce)"
+            )
             run = step.sh([str(binary), "-dir", str(probe_dir / f"run-cgo{mode}")], f"run-cgo{mode}", env={"CGO_ENABLED": mode})
             report_path = probe_dir / f"run-cgo{mode}" / "probe-report.json"
             if not step.require(report_path.is_file(), f"CGO_ENABLED={mode} produced no probe report"):
@@ -478,6 +492,7 @@ class Runner:
             step.note(f"CGO_ENABLED={mode}: sqlite {report.get('sqlite_version')}, {len(report.get('checks', []))} checks all PASS")
         unit = step.sh(["go", "test", "-count=1", "./scripts/go-engine/sqlprobe"], "unit-test")
         step.require(unit.returncode == 0, "sqlprobe unit tests failed")
+        shutil.rmtree(scratch, ignore_errors=True)
         step.seconds = time.monotonic() - started
         self.results.append(step.finish())
 

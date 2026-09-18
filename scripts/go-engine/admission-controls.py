@@ -226,9 +226,13 @@ class Controls:
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(self.root), capture_output=True, text=True).stdout.strip()
         # Clone on the same branch so the branch identity still matches, then pin
         # the exact commit; a detached clone would refuse earlier and for a
-        # different reason.
+        # different reason. `--local` is kept and `--no-hardlinks` is gone: git
+        # never writes to an object file in place, so hardlinked objects are safe
+        # here and turned this clone from 110 MB into a working-tree-sized
+        # ~10 MB. The control mutates only the working tree (`git reset --hard`
+        # checks files out fresh), never the shared object store.
         subprocess.run(
-            ["git", "clone", "--quiet", "--no-hardlinks", "--local", "--branch", branch, str(self.root), str(clone)],
+            ["git", "clone", "--quiet", "--local", "--branch", branch, str(self.root), str(clone)],
             check=True, capture_output=True, text=True,
         )
         subprocess.run(["git", "reset", "--hard", "--quiet", head], cwd=str(clone), check=True, capture_output=True, text=True)

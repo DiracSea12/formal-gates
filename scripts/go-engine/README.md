@@ -26,6 +26,7 @@ python3 scripts/go-engine/admission-controls.py --record .gates/results/go-engin
 - **逐项断言业务结果**，不以退出码代替结论。例如 fixture 演示必须真正达到 `DEMO_COMPLETE` 且 `evidence_level=fixture`，每个检查 `PASS` 且退出 0，每个门审 `PASS`；停在 `WAITING_USER` 一律判失败。
 - **聚合结论**：`summary.json` 的 `overall` 只有在全部必需项 PASS 且项数与预期一致时才为 `PASS`。
 - **证据清单**：每次尝试写 `evidence.json`，为 `steps/**`、`summary.json`、`identity.json`、`run.log` 逐文件记录 sha256。
+- **证据留结果，不留构建产物**：一次尝试的原始证据是 **MB 量级**，不是几十 MB。两条具体约定：`sqlite-probe` 的两个探针二进制（各约 9 MB，合计 18.2 MB）构建在 `.harness/tmp/sqlprobe-<尝试名>/` 下——**在尝试目录之外**，故不进清单——用完即删，`summary.json` 的注释里留下字节数与 sha256 供按候选重建比对；`go-test-full` 的 `-json` 流**只存一份**（`go-test.stdout`），不再另存同字节的 `go-test.jsonl`。**判据**：证据文件只应保存"结果与它的见证"，**由候选源码可重建的东西不进证据**。
 - **不发送模型请求**。宿主部分只做 `doctor` 接入探测，并要求 `model_calls == 0`。
 
 必需项：`identity`、`go-vet`、`go-test-full`、`sqlite-probe`、`python-unittest`、`demo-fixture`、`doctor-dsh`、`doctor-zcode`、`tree-clean-after`。
@@ -108,3 +109,13 @@ Git 状态行按"状态码 + 路径"整行比较，**不去掉前导空格**：�
 ## 本地证据
 
 原始日志与尝试目录位于 `.harness/validation/` 下，不进入版本管理。受版本管理的只有记录本身（`.gates/results/`）、工具与锁定记录。
+
+`negative-controls.sh` 的产物**不是证据**，是工具自检的日志；但它**曾经是最大的磁盘消费者**，而且默认落在带时间戳、**从不清扫**的目录里，于是"跑二十来次控制项"就长成 GB 级。以下数字都是实测：
+
+| 项 | 修复前 | 修复后 | 怎么测的 |
+| --- | --- | --- | --- |
+| 两个探针二进制 | **18.2 MB**（在尝试目录内，进清单） | **0**（在 `.harness/tmp/` 构建、用完即删） | 修复后只跑 `--only sqlite-probe` 的诊断尝试共 **128 KB** |
+| `go-test.jsonl` | **1.8 MB**（与 `go-test.stdout` 同字节） | **0**（不再写第二份） | 逐文件比对两者 sha256 相同后删除写入 |
+| `git clone --no-hardlinks` 的对象库 | **96 MB** | **0**（改用 git 默认的硬链接对象） | 同一次控制项运行的**边际**占用 219.3 MB → 123.4 MB（`st_nlink>1` 排除共享文件） |
+
+`--no-hardlinks` 去掉是安全的：git **从不原地改写对象文件**，而这个控制项只改工作树（`git reset --hard` 重新检出）。剩下的量级由 4 份尝试副本决定——新版格式的尝试是 MB 级，旧的日志不受影响。
