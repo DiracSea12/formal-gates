@@ -307,6 +307,31 @@ class Controls:
             "run report provider",
         )
 
+        # The report and manifest survive while every raw job file and artifact
+        # is gone: the gate must walk the harness's own evidence chain instead
+        # of trusting the report's summary of it.
+        native = self.record["native_verification"]
+        stripped_run = self.out / "native-run-stripped"
+        if stripped_run.exists():
+            shutil.rmtree(stripped_run)
+        shutil.copytree(Path(native["run"]), stripped_run)
+        shutil.rmtree(stripped_run / "jobs")
+        shutil.rmtree(stripped_run / "artifacts")
+        stripped_evidence = self.out / "native-evidence-stripped"
+        if stripped_evidence.exists():
+            shutil.rmtree(stripped_evidence)
+        shutil.copytree(Path(native["evidence_dir"]), stripped_evidence)
+        report_path = stripped_evidence / native["report"]
+        report = json.loads(report_path.read_text())
+        report["run"] = str(stripped_run)
+        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        record = json.loads(self.record_path.read_text())
+        record["native_verification"]["run"] = str(stripped_run)
+        record["native_verification"]["evidence_dir"] = str(stripped_evidence)
+        target = self.out / "native-stripped.json"
+        target.write_text(json.dumps(record, indent=2) + "\n")
+        self.expect_refusal("ADM-E16 raw native evidence missing", target, "raw execution evidence did not verify")
+
     def smoke_case(self) -> None:
         """The baseline smoke must reject a flow that stops for the user."""
         import importlib.util

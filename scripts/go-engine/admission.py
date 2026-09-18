@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -122,6 +123,66 @@ def native_verification_problem(unit: str, record: dict, root: Path) -> str:
             f"run binds runtime identity {str(manifest.get('runtime_identity'))[:12]}…, "
             f"not the recorded candidate's {str(recorded_identity)[:12]}…"
         )
+    return ""
+
+
+def native_raw_evidence_problem(native: dict, root: Path, venv_python: Path) -> str:
+    """'' when the raw execution evidence behind the report still verifies.
+
+    Reuses the harness's own chain — open_run (runtime-identity binding, spec
+    and requirement digests), Store.verify_evidence (artifact integrity,
+    comparison inputs, job receipts and stream proofs, native source files)
+    and the terminal artifact — so a report that survives while its jobs and
+    artifacts are gone cannot carry a unit through this gate.
+    """
+    run_rel = (native.get("run") or "").strip()
+    if not run_rel:
+        return "native verification names no run directory"
+    run_dir = Path(run_rel)
+    run_dir = run_dir if run_dir.is_absolute() else root / run_dir
+    probe = "\n".join([
+        "import json, sys",
+        "from pathlib import Path",
+        f"sys.path.insert(0, {str(root / 'runtime' / 'langgraph')!r})",
+        "from formal_gates_harness.cli import open_run",
+        "from formal_gates_harness.infra import read",
+        f"run = Path({str(run_dir)!r})",
+        "_, store = open_run(run)",
+        "items = []",
+        "for receipt in sorted((run / 'workers').glob('*.json')):",
+        "    value = store.verify_evidence(read(receipt)['ref'])",
+        "    items.append({'role': value.get('role'),",
+        "                  'status': (value.get('result') or {}).get('status'),",
+        "                  'provider': (value.get('source') or {}).get('provider')})",
+        "events = [json.loads(line) for line in (run / 'events.jsonl').read_text().splitlines() if line.strip()]",
+        "terminals = [e for e in events if e.get('event') == 'terminal']",
+        "term = terminals[-1] if terminals else {}",
+        "if term.get('evidence'): store.get(term['evidence'])",
+        "print(json.dumps({'roles': items, 'terminal': term.get('status')}))",
+    ])
+    env = {**os.environ,
+           "FORMAL_GATES_HARNESS_ROOT": str(root),
+           "FORMAL_GATES_HARNESS_BINARY": str(root / ".harness" / "bin" / "formal-gates")}
+    proc = subprocess.run([str(venv_python), "-c", probe], cwd=str(root), env=env,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"exit {proc.returncode}"
+        return f"native verification: raw execution evidence did not verify: {detail}"
+    try:
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return "native verification: raw evidence probe returned no result"
+    if native.get("flow_status") and result.get("terminal") != native.get("flow_status"):
+        return (f"native verification: run terminal state is {result.get('terminal')!r}, "
+                f"the record says {native.get('flow_status')!r}")
+    roles = result.get("roles") or []
+    if not roles or any(r.get("status") != "PASS" for r in roles):
+        return "native verification: verified worker evidence has roles that are not PASS"
+    if native.get("provider") and any(r.get("provider") != native.get("provider") for r in roles):
+        return "native verification: verified worker evidence has roles from another provider"
+    if native.get("roles_completed") is not None and native["roles_completed"] != len(roles):
+        return (f"native verification: verified {len(roles)} worker receipts, "
+                f"the record says {native['roles_completed']}")
     return ""
 
 
@@ -416,9 +477,15 @@ def main() -> int:
         return fail(f"{unit}: public baseline smoke failed: {smoke['detail']}", 1)
 
     # -- a unit that requires native verification must pass it here, not in prose
-    native = native_verification_problem(unit, record, root)
-    if native:
-        return fail(f"{unit}: {native}", 1)
+    native = record.get("native_verification")
+    native_required = bool(native and native.get("required")) or unit in UNITS_REQUIRING_NATIVE_VERIFICATION
+    problem = native_verification_problem(unit, record, root)
+    if problem:
+        return fail(f"{unit}: {problem}", 1)
+    if native_required and native:
+        raw = native_raw_evidence_problem(native, root, venv_python)
+        if raw:
+            return fail(f"{unit}: {raw}", 1)
 
     target = f" for {args.next_unit}" if args.next_unit else ""
     print(f"ADMISSION GRANTED: {unit} is PASS, complete, and still matches the current candidate{target}")
