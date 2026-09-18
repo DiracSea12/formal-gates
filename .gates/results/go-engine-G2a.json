@@ -1,57 +1,14 @@
 {
   "unit": "G2a",
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260917T100854Z-99375",
-  "recorded_at": "2026-09-17T10:16:08.417869+00:00",
-  "overall": "BLOCKED",
-  "overall_note": "The recorded attempt PASSED all nine of its items; those results are unchanged below. The unit conclusion is BLOCKED because G2a has a second half - verifying that the Go supervisor carries the fixed native transport (plan section 13.1: 'first deliver the Go supervisor's direct argv check path, then verify that it carries the fixed native transport'; section 13.1 prose: 'G2a first verifies command supervision, then verifies that it carries the native transport'). That half was authorized on 2026-09-17, executed, and stopped at a host permission request. Plan section 13.1 keeps a unit unaccepted when a necessary native verification is blocked by permission, service or fee authorization, and section 14.3 forbids relabelling a blocked verification as NOT_APPLICABLE or treating a missing result as PASS.",
-  "native_verification": {
-    "required": true,
-    "status": "BLOCKED",
-    "authorized": "2026-09-17, explicit fee authorization from the user",
-    "evidence_dir": ".harness/validation/g2a-native-20260917T103650Z",
-    "run": ".harness/runs/harness-20260917-183818-280a7a16",
-    "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider dsh --out <evidence_dir>/dsh-flow",
-    "provider": "dsh",
-    "host_version": "0.1.5-rc.1",
-    "model": "deepseek-official / deepseek-v4-flash, reasoning high",
-    "flow_status": "WAITING_USER",
-    "roles_completed": 0,
-    "blocker": "NATIVE_BLOCKED: RuntimeBlocked: DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
-    "blocker_cause": "The read-only sandbox cannot be applied in the outer run context. The product-review role read its bound inputs normally, and its next bash call (a read-only survey) was refused by the host itself: 'sandbox mode read-only is requested but no sandbox backend is usable on this host; refusing to run the command unconfined' with 'Runner failure: sandbox-exec: sandbox_apply: Operation not permitted' and structured error SandboxUnavailableError / SANDBOX_UNAVAILABLE. The role then asked for the smallest relaxation, following the hint in that same tool result ('otherwise switch the consumer to danger-full-access'). DSH turned that into session/request_permission and the turn ended aborted/user. This version has no native-answer path (the permission bridge is recorded as not implemented), so no answer could be delivered.",
-    "blocker_is_not_a_regression": "A bare probe with no harness, no Python and no Go supervisor involved reproduces the outer-context fault: /usr/bin/sandbox-exec -p '(version 1) (allow default)' /bin/echo OK gives 'sandbox-exec: sandbox_apply: Operation not permitted', exit 71, while the binary itself exists and is executable. The same machine applied the read-only sandbox normally on 2026-09-15 (a bash call started, its write was refused with Operation not permitted, and the file was afterwards absent), so what changed is the launching context, not the product. The blocker also reproduces: a strict same-configuration rerun on 2026-09-17 19:59 stopped at the same place with the verbatim same reason.",
-    "correction": {
-      "retracted": "An earlier revision of this record (commit 5fa69c4) asserted that the model's stated reason - 'the read-only sandbox has no usable backend on this host' - was unsupported by the evidence, and named the model's own escalation request as the trigger.",
-      "why_retracted": "That conclusion used a passing run from another day to rebut this run's cause, and treated the model's own account as the claim to test instead of reading this run's own tool result. The tool result is in this run and supports the model: SandboxUnavailableError / SANDBOX_UNAVAILABLE, with sandbox_apply refused. The role escalated only after bash could not run at all, following the hint the tool result itself printed.",
-      "unchanged_conclusion": "This is still not a G2a regression, but the reason changes to the bare probe above. What remains true from the original comparison table is only that path scope and configuration are excluded.",
-      "known_difference_replaced": "MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED -> SANDBOX-UNAVAILABLE-IN-OUTER-CONTEXT"
-    },
-    "rerun": {
-      "run": "harness-20260917-195934-b993516f",
-      "at": "2026-09-17 19:59 (+0800)",
-      "same_configuration": "HEAD differs only in record files; driver_binary_sha256 8bca2e2c... and runtime_identity a50f2289... are identical to the first run; DSH 0.1.5-rc.1",
-      "outcome": "WAITING_USER, roles=[] , interrupted at product-review with the verbatim same reason",
-      "evidence_dir": ".harness/validation/g2a-native-rerun-20260917T115915Z"
-    },
-    "supervisor_half_proven": {
-      "request_kind": "native",
-      "request_argv": "venv python -m formal_gates_harness.native_entry <job dir>",
-      "exit_json_fields": ["error", "exit_code", "finished_at", "request_digest", "started_at", "streams"],
-      "exit_code": 1,
-      "error_field": "",
-      "stream_proofs_present": true,
-      "process_group": "supervisor pid == pgid (30044); the native child (30048) is its child in its group",
-      "note": "The supervisor executed the native argv as an ordinary child, owned it, wrote a six-field receipt and relayed the child's streams verbatim. The pre-migration supervisor can no longer run at all (the module is gone), so the receipt can only have come from the Go binary."
-    },
-    "missing_for_acceptance": "a native completion correlation: no role reached a completed turn, so the minimum evidence of plan section 13.1 ('real host/config, native request and completion correlation, actual file or server-side evidence') is not satisfied",
-    "known_difference_id": "NATIVE-GATE-BLOCKED-BY-MODEL-ESCALATION"
-  },
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260918T060912Z-34198",
+  "recorded_at": "2026-09-18T06:17:09.485089+00:00",
+  "overall": "PASS",
   "previous_accepted_baseline": "M3",
-  "previous_accepted_baseline_note": "The recorded baseline is no longer an accepted baseline: M3's PASS was withdrawn on 2026-09-17 (P1 capacity regression plus one unexplained required regression failure). G2a's command-job half was signed on a candidate whose driver binary (8bca2e2c...) contains that P1, so it must not be read as resting on an accepted baseline. G2a's own BLOCKED disposition is unchanged.",
   "candidate": {
-    "commit": "63b0650f4ecaf5a6e709b78b8f16170f6aa21d4e",
+    "commit": "2d363757a575850f0c602c2cf25ae59b2018d77b",
     "branch": "codex/go-engine-v1",
-    "runtime_identity": "a50f2289fa9ebb7857dd49ac8295397c9b2b1ac1058fd357f80e06147adac756",
-    "driver_binary_sha256": "8bca2e2ca56b5e0979dfd01fe9f3828043b5dc7ad97335acc7963e06c129da3a",
+    "runtime_identity": "8b2047217e97cf6eaa2fb0824749b830b0ebc2925af18f83305c09651e6e3bbe",
+    "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
     "files": {
       "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
       "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
@@ -66,55 +23,55 @@
       "id": "identity",
       "required": true,
       "status": "PASS",
-      "seconds": 0.926
+      "seconds": 0.474
     },
     {
       "id": "go-vet",
       "required": true,
       "status": "PASS",
-      "seconds": 0.478
+      "seconds": 0.47
     },
     {
       "id": "go-test-full",
       "required": true,
       "status": "PASS",
-      "seconds": 367.897
+      "seconds": 396.308
     },
     {
       "id": "sqlite-probe",
       "required": true,
       "status": "PASS",
-      "seconds": 2.955
+      "seconds": 2.295
     },
     {
       "id": "python-unittest",
       "required": true,
       "status": "PASS",
-      "seconds": 54.114
+      "seconds": 70.11
     },
     {
       "id": "demo-fixture",
       "required": true,
       "status": "PASS",
-      "seconds": 2.836
+      "seconds": 2.956
     },
     {
       "id": "doctor-dsh",
       "required": true,
       "status": "PASS",
-      "seconds": 1.998
+      "seconds": 2.047
     },
     {
       "id": "doctor-zcode",
       "required": true,
       "status": "PASS",
-      "seconds": 2.683
+      "seconds": 2.111
     },
     {
       "id": "tree-clean-after",
       "required": true,
       "status": "PASS",
-      "seconds": 0.042
+      "seconds": 0.036
     }
   ],
   "budget": {
@@ -123,15 +80,58 @@
     "note": "The regression is judged by result and progress, not by wall-clock speed."
   },
   "attestation": {
-    "summary_sha256": "b8441726fcca3df32fdf170b3c52a7e9a5db958f4ef33cddb65e395321418efc",
-    "identity_sha256": "702f5bd1e13fa20c00fdcb73c102c6344d045a5c1679b4aff32d082984fc9b48",
-    "evidence_sha256": "835d987cd8971c27b8c90f88396b8fb5d16b14a91462c89c1aaee59e413d4dd6",
-    "evidence_file_count": 64
+    "summary_sha256": "20419c513d9a769c58b5afa79fb11da1873aa4341f49fd0b8f45dcee3d289389",
+    "identity_sha256": "75004927c81813853ee28008f12857fc8c752b4c06f6d96b0af5f8884ccf23ee",
+    "evidence_sha256": "169bbc1c15b78fd031fadd003c4c8a419bd5963409d273e6b31253bdc75ba118",
+    "evidence_file_count": 61
   },
   "bookkeeping": [
     ".gates/results/go-engine-G2a.json",
     ".gates/results/go-engine-G2a.md",
     ".gates/results/go-engine-G1a-index.md"
   ],
-  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2a"
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2a",
+  "overall_note": "Whole re-sign on candidate 2d363757 (the old command-job half was signed on 63b0650, which predates the M3 P1 fix f136303 and carried it; per index item 27 the old record could not be reused). Both halves are evidenced by this record: the nine acceptance items cover the command-job half on the current tree, and native_verification binds a fresh authorized real run that reached HARNESS_COMPLETE.",
+  "native_verification": {
+    "required": true,
+    "status": "PASS",
+    "authorized": "2026-09-18, explicit user direction to test ZCode integration and close G2a",
+    "evidence_dir": ".harness/validation/zcode-native-third-20260918T053817",
+    "run": ".harness/runs/harness-20260918-133821-34281339",
+    "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider zcode --out <evidence_dir>/zcode-flow",
+    "provider": "zcode",
+    "host_version": "ZCode 3.12.3 desktop bundle (zcode.cjs app-server)",
+    "model": "account:bigmodel-individual-coding-plan / GLM-5.3",
+    "flow_status": "HARNESS_COMPLETE",
+    "roles_completed": 7,
+    "interrupts": 0,
+    "duration_s": 470.3,
+    "completion_linkage": "All seven jobs ran under the Go supervisor (store.job -> \"harness supervise\"): each job's process.json pid equals the native child's pgid, so the supervisor is the process-group leader, and every exit.json receipt records exit_code 0 with stream proofs. Per-role worker receipts verify against the store.",
+    "read_only_boundary": "Read-only roles' native events contain only Read/Glob/Grep calls; Bash (27) and Edit (9) appear exclusively in the development job. The declared permission mode (2d36375) is bound to new dev/repair sessions only and recorded in tool-policy.json and native-source.json.",
+    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The two zcode adapter changes in this candidate (d7a687c source-receipt persistence, 2d36375 operator mode declaration) are post-unit common prerequisites explicitly authorized by the user, in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
+    "history": [
+      {
+        "date": "2026-09-17",
+        "provider": "dsh",
+        "outcome": "BLOCKED twice, same config, first role",
+        "cause": "sandbox-exec could not apply in the inherited agent context (environmental, not a regression; bare probe exit 71)",
+        "evidence": ".harness/validation/g2a-native-20260917T103650Z (reclaimed 2026-09-18, index item 26)"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "dsh",
+        "outcome": "7/7 PASS once relocated to a non-inherited launchd context, on a byte-identical copy under /tmp (TCC)",
+        "evidence": ".harness/validation/g2a-native-launchd-20260918T114605 (reclaimed 2026-09-18, index item 26)"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "7/7 PASS, HARNESS_COMPLETE, in the ordinary agent session context; this record binds this run",
+        "evidence": ".harness/validation/zcode-native-third-20260918T053817"
+      }
+    ],
+    "supervisor_half_proven": "Go unit case \"same request differing only in kind\" (the supervisor never reads kind) plus the seven supervised native jobs above with owner locks, receipts and stream proofs.",
+    "missing_for_acceptance": [],
+    "blocker": null
+  }
 }
