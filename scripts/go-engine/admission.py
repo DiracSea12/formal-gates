@@ -10,7 +10,9 @@ import or `doctor` are explicitly not substitutes.
 
 This script is that check. It refuses on a missing record, an incomplete run, a
 non-PASS result, raw evidence that is missing or altered, an unpopulated
-runtime environment, a baseline that will not start, or an identity that moved.
+runtime environment, a baseline that will not start, an identity that moved,
+or a required native verification that is missing, failing, internally
+inconsistent, or not bound to the recorded candidate's runtime identity.
 
 Exit codes:
   0  admission granted
@@ -44,6 +46,83 @@ IDENTITY_FILES = [
 # A record may only implicitly declare itself as bookkeeping when it lives in
 # the canonical record directory.
 RECORD_DIR = ".gates/results/"
+
+# Units whose acceptance requires a real native run in addition to the common
+# items (the unit's own record says so via native_verification.required; this
+# map is the checker's independent knowledge, so a record that simply omits the
+# section cannot wave the requirement through).
+UNITS_REQUIRING_NATIVE_VERIFICATION = {"G2a"}
+
+
+def native_verification_problem(unit: str, record: dict, root: Path) -> str:
+    """'' when any required native verification is present, consistent and real.
+
+    A hand-filled PASS field proves nothing: the named report is re-read from
+    disk, its business result (passed/provider/roles) is checked, and the run's
+    own manifest must bind the recorded candidate's runtime identity.
+    """
+    native = record.get("native_verification")
+    required_by_unit = unit in UNITS_REQUIRING_NATIVE_VERIFICATION
+    if not native:
+        return "record carries no native verification section" if required_by_unit else ""
+    if not (native.get("required") or required_by_unit):
+        return ""
+
+    def problem(text: str) -> str:
+        return f"native verification: {text}"
+
+    if native.get("status") != "PASS":
+        return problem(f"status is {native.get('status')!r}")
+    evidence_rel = (native.get("evidence_dir") or "").strip()
+    run_rel = (native.get("run") or "").strip()
+    report_rel = (native.get("report") or "").strip()
+    if not (evidence_rel and run_rel and report_rel):
+        return problem("must name evidence_dir, run and report")
+
+    def resolve(rel: str) -> Path:
+        path = Path(rel)
+        return path if path.is_absolute() else root / path
+
+    evidence_dir, run_dir = resolve(evidence_rel), resolve(run_rel)
+    report_path = Path(report_rel)
+    # The report lives inside the evidence directory it belongs to.
+    report = report_path if report_path.is_absolute() else evidence_dir / report_path
+    if not evidence_dir.is_dir():
+        return problem(f"evidence directory is missing: {evidence_rel}")
+    if not run_dir.is_dir():
+        return problem(f"run directory is missing: {run_rel}")
+    if not report.is_file():
+        return problem(f"run report is missing: {report_rel}")
+    try:
+        findings = json.loads(report.read_text())
+    except ValueError as exc:
+        return problem(f"run report is not valid JSON: {exc}")
+    if findings.get("passed") is not True:
+        return problem(f"run report says passed={findings.get('passed')!r}")
+    if findings.get("provider") != native.get("provider"):
+        return problem(f"run report provider {findings.get('provider')!r} differs from the record's {native.get('provider')!r}")
+    roles = [r for r in (findings.get("roles") or []) if isinstance(r, dict)]
+    if not roles or any(r.get("status") != "PASS" for r in roles):
+        return problem("run report has roles that are not PASS")
+    recorded_roles = native.get("roles_completed")
+    if recorded_roles is not None and recorded_roles != len(roles):
+        return problem(f"run report has {len(roles)} roles, the record says {recorded_roles}")
+    if str(resolve(str(findings.get("run") or ""))) != str(run_dir):
+        return problem("run report points at a different run directory than the record")
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return problem(f"run manifest is missing: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except ValueError as exc:
+        return problem(f"run manifest is not valid JSON: {exc}")
+    recorded_identity = (record.get("candidate") or {}).get("runtime_identity")
+    if manifest.get("runtime_identity") != recorded_identity:
+        return problem(
+            f"run binds runtime identity {str(manifest.get('runtime_identity'))[:12]}…, "
+            f"not the recorded candidate's {str(recorded_identity)[:12]}…"
+        )
+    return ""
 
 
 def sha256_file(path: Path) -> str:
@@ -335,6 +414,11 @@ def main() -> int:
     smoke = public_baseline_smoke(root)
     if not smoke["ok"]:
         return fail(f"{unit}: public baseline smoke failed: {smoke['detail']}", 1)
+
+    # -- a unit that requires native verification must pass it here, not in prose
+    native = native_verification_problem(unit, record, root)
+    if native:
+        return fail(f"{unit}: {native}", 1)
 
     target = f" for {args.next_unit}" if args.next_unit else ""
     print(f"ADMISSION GRANTED: {unit} is PASS, complete, and still matches the current candidate{target}")

@@ -3,12 +3,13 @@ from pathlib import Path
 import json
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock
 from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof,read
 from formal_gates_harness.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
-from formal_gates_harness.native_zcode import (Client,advertised_models,apply_selection,execute,handshake,
-                                               materialize_source,reference,selection)
+from formal_gates_harness.native_zcode import (Client,DEV_PERMISSION_MODE,advertised_models,apply_selection,
+                                               execute,handshake,materialize_source,reference,selection)
 
 ROOT=Path(__file__).resolve().parents[3]
 REF={'providerId':'original','modelId':'M'}
@@ -159,7 +160,7 @@ for line in sys.stdin:
     elif method=='session/subscribe':
         reply(i,{'sessionId':'s-root'})
     elif method=='session/setMode':
-        reply(i,{'projection':{'mode':message['params']['mode']}})
+        reply(i,{'settings':{'mode':{'current':message['params']['mode']}}})
     elif method=='session/send':
         reply(i,{'sessionId':'s-root','accepted':True})
         input_id=message['params']['inputId']
@@ -189,5 +190,41 @@ class ZCodeSuccessReceiptTests(unittest.TestCase):
             adapter_for('zcode').verify_source(directory,persisted)
             self.assertEqual({k:v for k,v in source.items() if k!='files'},
                              {k:v for k,v in persisted.items() if k!='files'})
+            # The declared mode is confirmed by the host readback and recorded
+            # as the mode actually in force.
+            self.assertEqual(read(directory/'tool-policy.json'),
+                             {'read_only':False,'permission_mode':DEV_PERMISSION_MODE})
+            self.assertEqual(read(directory/'native-source.json')['permission_mode'],DEV_PERMISSION_MODE)
+
+FLOODING_APP_SERVER='''
+import json,sys,time
+for line in sys.stdin:
+    message=json.loads(line)
+    if 'id' in message and 'method' in message:
+        for i in range(30):
+            print(json.dumps({'method':'session/event','params':{'sessionId':'other','type':'stream','seq':i}}),flush=True)
+            time.sleep(0.03)
+        print(json.dumps({'id':message['id'],'result':{'late':True}}),flush=True)
+        break
+'''
+
+
+class BoundedRequestDeadlineTests(unittest.TestCase):
+    def test_notifications_cannot_outlive_the_total_budget(self):
+        # The shared request loop once only starved on an empty queue, so a host
+        # that kept streaming notifications could push a bounded request past
+        # its deadline and still have the late response accepted.
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t);fake=root/'flood-server.py';fake.write_text(FLOODING_APP_SERVER)
+            workspace=root/'ws';workspace.mkdir();directory=root/'job';directory.mkdir()
+            client=Client({'executable':sys.executable,'script':str(fake)},str(workspace),directory)
+            try:
+                started=time.monotonic()
+                with self.assertRaisesRegex(RuntimeBlocked,'ZCODE_NATIVE_TIMEOUT'):
+                    client.request('session/ping',{},timeout=0.05)
+                self.assertLess(time.monotonic()-started,5)
+            finally:
+                client.close()
+
 
 if __name__=='__main__':unittest.main()

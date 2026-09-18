@@ -205,6 +205,12 @@ class Client:
         self.send(self.frame(ident, method, params))
         deadline = None if timeout is UNBOUNDED or not self.bounded else time.monotonic() + timeout
         while True:
+            # A bounded request must not outlive its total budget: continuous
+            # notifications keep the queue non-empty, so per-message waits alone
+            # would never starve and a response arriving past the deadline would
+            # still be accepted.
+            if deadline is not None and time.monotonic() >= deadline:
+                raise self.timeout_error(method)
             try:
                 message = self.receive(self.wait(timeout, deadline))
             except Timeout as exc:

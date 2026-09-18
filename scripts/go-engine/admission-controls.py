@@ -207,6 +207,8 @@ class Controls:
         # checker granted on, while the public entry could not even start.
         self.runtime_case()
 
+        self.native_case()
+
         self.smoke_case()
 
         failed = [label for label, ok, _ in self.results if not ok]
@@ -256,6 +258,53 @@ class Controls:
             self.record_path,
             "installed dependencies do not match",
             root=clone,
+        )
+
+    def native_case(self) -> None:
+        """Required native verification must be part of the gate, not prose.
+
+        Skipped for records that neither carry a native section nor belong to a
+        unit the checker knows requires one, so per-unit control runs against
+        the computation units stay unchanged.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("admission_module", self.admission)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        native = self.record.get("native_verification")
+        required_by_unit = self.record.get("unit") in module.UNITS_REQUIRING_NATIVE_VERIFICATION
+        if native is None and not required_by_unit:
+            return
+
+        # A unit the checker knows needs native verification cannot drop the
+        # section and keep the common nine items as its whole story.
+        dropped = json.loads(self.record_path.read_text())
+        dropped["unit"] = "G2a"
+        dropped.pop("native_verification", None)
+        target = self.out / "native-dropped.json"
+        target.write_text(json.dumps(dropped, indent=2) + "\n")
+        self.expect_refusal("ADM-E12 required native section absent", target, "carries no native verification section")
+
+        # The section exists but reports a failing or absent run.
+        self.expect_refusal(
+            "ADM-E13 native result not PASS",
+            self.mutated("native-fail", "native_verification.status", "FAIL"),
+            "native verification: status is 'FAIL'",
+        )
+        self.expect_refusal(
+            "ADM-E14 native evidence missing",
+            self.mutated("native-evidence-missing", "native_verification.evidence_dir", ".harness/validation/native-controls-absent"),
+            "evidence directory is missing",
+        )
+
+        # The report exists but contradicts the record: the gate must read the
+        # run's own artifacts, not trust the record's summary of them.
+        self.expect_refusal(
+            "ADM-E15 native report contradicts record",
+            self.mutated("native-provider", "native_verification.provider", "dsh"),
+            "run report provider",
         )
 
     def smoke_case(self) -> None:

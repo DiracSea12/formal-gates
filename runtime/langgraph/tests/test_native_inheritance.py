@@ -94,7 +94,9 @@ class NativeRequests(unittest.TestCase):
                 if method in ('session/create', 'session/resume'):
                     return snapshot
                 if method == 'session/setMode':
-                    return {'projection': {'mode': params['mode']}}
+                    # The real host confirms through settings; its projection
+                    # block can be a stale snapshot.
+                    return {'settings': {'mode': {'current': params['mode']}}}
                 if method == 'session/subscribe':
                     return {'sessionId': 'root'}
                 if method == 'session/send':
@@ -109,6 +111,15 @@ class NativeRequests(unittest.TestCase):
             with patch.object(zcode, 'Client', return_value=client) as constructor, \
                  patch.object(zcode, 'materialize_source', return_value={'provider': 'zcode'}):
                 result = zcode.execute(request, directory, probe=probe)
+            # Persisted permission evidence must state the mode actually in
+            # force: the declared one for a new session (confirmed by the host
+            # readback), the snapshot-reported one for a resumed session —
+            # never a constant that was not applied.
+            if not read_only and not probe:
+                expected_mode = native_mode if previous else zcode.DEV_PERMISSION_MODE
+                self.assertEqual(read(directory / 'tool-policy.json'),
+                                 {'read_only': False, 'permission_mode': expected_mode})
+                self.assertEqual(read(directory / 'native-source.json')['permission_mode'], expected_mode)
             constructor.assert_called_once_with(request['binding']['launch'], str(directory.resolve()), directory.resolve(), {})
             calls = [(c.args[0], c.args[1]) for c in client.request.call_args_list]
             params = next(p for method, p in calls if method in ('session/create', 'session/resume'))

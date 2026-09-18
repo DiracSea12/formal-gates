@@ -589,8 +589,6 @@ def execute(request,directory,probe=False):
         configured=apply_selection(client,snapshot,wanted,effort,directory,workspace)
         if request['read_only']:
             atomic(directory/'tool-policy.json',{'read_only':True,'allowed':READ_ONLY_TOOLS})
-        elif not probe:
-            atomic(directory/'tool-policy.json',{'read_only':False,'permission_mode':DEV_PERMISSION_MODE})
         if probe:
             client.request('session/close',{'sessionId':identity});attached=False
             return {'provider':'zcode','protocol':protocol,'selection':configured,'binding':binding,
@@ -598,13 +596,24 @@ def execute(request,directory,probe=False):
                 'mcp_auth':'unavailable' if any(i['status']=='official_auth_unavailable' for i in client.interactions) else 'not_verified'}
         subscribed=client.request('session/subscribe',{'sessionId':identity,'deliveryKind':'desktop-continuous','includeSnapshot':False})
         if subscribed.get('sessionId')!=identity:raise RuntimeBlocked('ZCODE_BINDING: subscription identity differs')
-        if not request['read_only'] and not previous:
-            changed=client.request('session/setMode',{'sessionId':identity,'mode':DEV_PERMISSION_MODE})
-            applied=(changed.get('projection') or {}).get('mode','')
-            if applied!=DEV_PERMISSION_MODE:raise RuntimeBlocked('ZCODE_CONFIG: permission mode was not applied')
+        if not request['read_only']:
+            # Evidence states the mode actually in force, never the constant: a
+            # NEW dev/repair session declares the operator mode and records the
+            # host's readback; a resumed session records the mode the host's own
+            # snapshot says it kept, and is never switched to match a constant.
+            if previous:
+                mode_in_force=((snapshot.get('settings') or {}).get('mode') or {}).get('current','')
+            else:
+                changed=client.request('session/setMode',{'sessionId':identity,'mode':DEV_PERMISSION_MODE})
+                # settings is the host's own confirmation; the projection block
+                # in this response can be a stale snapshot (observed with
+                # sessionId "unknown" and the pre-set mode on the real host).
+                mode_in_force=((changed.get('settings') or {}).get('mode') or {}).get('current','')
+                if mode_in_force!=DEV_PERMISSION_MODE:raise RuntimeBlocked('ZCODE_CONFIG: permission mode was not applied')
+            atomic(directory/'tool-policy.json',{'read_only':False,'permission_mode':mode_in_force})
         input_id='formal-gates-'+directory.name
         turn_binding={'sessionId':identity,'inputId':input_id,'selection':configured}
-        if not request['read_only']:turn_binding['permission_mode']=DEV_PERMISSION_MODE
+        if not request['read_only']:turn_binding['permission_mode']=mode_in_force
         atomic(directory/'native-source.json',turn_binding)
         prompt=request['prompt']+'\nReturn ONLY one JSON object matching this schema:\n'+json.dumps(request['schema'],ensure_ascii=False)
         ack=client.request('session/send',{'sessionId':identity,'inputId':input_id,'content':prompt})

@@ -31,7 +31,12 @@ func supervisorBinary(t *testing.T) string {
 		t.Fatalf("temp dir: %v", err)
 	}
 	out := filepath.Join(tmp, "formal-gates")
-	if b, err := exec.Command("go", "build", "-o", out, "./cmd/formal-gates").CombinedOutput(); err != nil {
+	// The package path is relative to the repository root, not this package's
+	// directory; without Dir the build looks for internal/harness/cmd/... and
+	// fails on any tree that has no prebuilt .harness binary (clean CI checkouts).
+	build := exec.Command("go", "build", "-o", out, "./cmd/formal-gates")
+	build.Dir = root
+	if b, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build supervisor: %v\n%s", err, b)
 	}
 	return out
