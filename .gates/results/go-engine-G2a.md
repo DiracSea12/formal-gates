@@ -1,15 +1,18 @@
-# G2a 验收记录（2026-09-18 整条重签）：命令作业 + 承载原生传输
+# G2a 验收记录（2026-09-18 第二次整条重签，评审返修后）：命令作业 + 承载原生传输
 
 ## 结论
 
-替换单元 G2a **收口，`PASS`**。两半在同一候选 `2d363757` 上分别取证：
+替换单元 G2a **收口，`PASS`**。本记录是**第二次**整条重签：第一次（候选 `2d363757`，记录提交 `8a69e63`）
+被 2026-09-18 的独立验收与代码评审**驳回**（2 项 P1 + 2 项 P2，证据
+`.harness/validation/m3-g2a-independent-20260918T064153Z/`）；四项发现经独立复现全部坐实，在候选
+`91255c6` 上修复（每项配了"撤掉修复即失败"的回归或控制项），本记录在该候选上重新取证：
 
 - **命令作业半**（Go 监督器的直接 argv 检查路径）：验收尝试
-  `.harness/validation/acceptance/G2a/20260918T060912Z-34198` 九项全过
-  （`overall=PASS`、`failed=[]`）。
-- **承载原生传输半**：2026-09-18 经用户明确指示执行的一次真实原生运行（provider `zcode`）
-  **到达 `HARNESS_COMPLETE`，7/7 角色全部 `PASS`、零中断、470.3 秒**，且全部七个作业在
-  **Go 监督器**下执行并产出收据——§13.1 第 513 行要求的"原生请求及**完成关联**"最小证据就此补齐。
+  `.harness/validation/acceptance/G2a/20260918T082237Z-21775` 九项全过（`overall=PASS`、`failed=[]`）。
+- **承载原生传输半**：经授权的真实原生运行（provider `zcode`）**`HARNESS_COMPLETE`、7/7 角色、
+  0 中断、556.1 秒**，七个作业全部在 Go 监督器下执行（每作业 `process.json.pid == native pgid`、
+  `exit.json` 全 0），运行清单绑定本候选的运行时身份（`017ea1db…`）——§13.1 第 513 行的
+  "完成关联"证据就此落账。
 
 **为什么是整条重签**：旧的命令作业半签在候选 `63b0650` 上，该候选早于 M3 的 P1 修复
 `f136303`、自带该缺陷，且与 M3 现在的 `PASS` 不共享候选树——按索引第 27 条，旧半不得复用，
@@ -21,41 +24,64 @@
 上下文、逐字节副本）；zcode 路径在**普通代理会话上下文**直接 7/7 通过。两条宿主路径互相
 印证"监督器承载原生传输"这一事实本身。
 
-**候选中两处 zcode 适配器变更的披露**（`d7a687c` source 收据落盘、`2d36375` 运营方权限
-模式声明）：均为本单元派发之后、按用户明确授权落地的**公共前置修复**，沿
-`6757231`/`8a06fc1`/`4e3fa0e`/`d2f4847` 的既有先例；监督器本体、`native-request.json` 形状、
-交互投递与 `verify_source` 未动。`2d36375` 的契约：**新建** dev/返修会话在首个 turn 前经
-`session/setMode` 一次性声明运营方无人值守上下文的完全自动模式并回读确认（app-server 把
-新会话硬默认为 `build` 且无宿主设置可改、无头客户端无法应答审批）；恢复会话保持既有模式；
-绝不在权限询问/超时/失败后改模式；只读会话与探针从不设模式。
+**候选中 zcode 适配器变更的披露**（`d7a687c` source 收据落盘、`2d36375` 运营方权限模式声明、
+`91255c6` 评审返修：模式证据事实化、有界请求截止、干净树测试构建、准入原生关口）：均为本单元
+派发之后、按用户明确授权落地的**公共前置修复**，沿 `6757231`/`8a06fc1`/`4e3fa0e`/`d2f4847` 的
+既有先例；监督器本体、`native-request.json` 形状、交互投递与 `verify_source` 未动。权限契约
+（授权依据的逐字引用见 `native_verification.authorized`）：**新建** dev/返修会话在首个 turn 前经
+`session/setMode` 一次性声明运营方无人值守上下文的完全自动模式并回读确认（app-server 把新会话
+硬默认为 `build` 且无宿主设置可改、无头客户端无法应答审批）；恢复会话保持既有模式并**如实记录
+宿主报告的模式**（绝不为对齐常量而切换）；绝不在权限询问/超时/失败后改模式；只读会话与探针
+从不设模式。
 
 | 检查 | 结果 |
 | --- | --- |
-| identity / go-vet / go-test-full（无缓存全量 396.3s） | PASS |
+| identity / go-vet / go-test-full（无缓存全量） | PASS |
 | sqlite-probe（CGO 开/关各 8/8） | PASS |
-| python-unittest（全套 228 项，70.0s） | PASS |
+| python-unittest（全套 229 项） | PASS |
 | demo-fixture（`DEMO_COMPLETE`） | PASS |
 | doctor-dsh / doctor-zcode（0 次模型调用） | PASS |
 | tree-clean-after | PASS |
 | 原生定向验收（已授权、已执行） | **`PASS`**：`HARNESS_COMPLETE`、7/7 角色、0 中断 |
 | **总体** | **`PASS`** |
 
-上一验收基线：`M3`（记录候选 `aa3312e`）。本候选 `2d363757` 含 `f136303`，血缘已按索引第 27 条核对。
+上一验收基线：`M3`（记录候选 `aa3312e`）。本候选 `91255c6` 含 `f136303`，血缘已按索引第 27 条核对。
 
-## 原生运行证据（zcode，2026-09-18）
+## 独立评审轮（2026-09-18）与处置
 
-- 运行：`.harness/runs/harness-20260918-133821-34281339`（revision `23e15db2…`，
-  模型 `account:bigmodel-individual-coding-plan / GLM-5.3`）。
-- 探针与报告：`.harness/validation/zcode-native-third-20260918T053817/zcode-flow/report.json`
-  （`passed: true`、`status: HARNESS_COMPLETE`、`interrupts: []`）。
+评审证据：`.harness/validation/m3-g2a-independent-20260918T064153Z/`（`review.json`、
+`code-review.json`、`findings.json`）。四项发现的独立复现与处置（每项的回归/控制项在
+"撤掉修复即失败"意义上验证过）：
+
+| 发现 | 级别 | 独立复现 | 修复与防线 |
+| --- | --- | --- | --- |
+| 准入不检查记录声明为必需的原生验收：篡改成绩为 FAIL 或证据路径缺失仍 `ADMISSION GRANTED`（exit 0） | P1 | 两种篡改副本实测均放行 | `admission.py` 新增原生校验：重读 `native_verification.report` 的业务结果（passed/provider/roles）、要求 run 清单绑定候选运行时身份；新控制项 `ADM-E12..E15`（缺失/FAIL/证据丢失/报告与记录矛盾） |
+| 干净源码上监督器测试被构建目录阻断：`supervise_test.go` 的临时构建未设工作目录，`.harness/bin` 缺失（CI 环境）时找 `internal/harness/cmd/...` 必败 | P1 | 干净 worktree + CI 式二进制准备实测退出 1 | 构建命令设 `Dir = root`；CI 式干净树复检通过 |
+| 恢复会话未切模式但证据写 `yolo`：`tool-policy.json`/`native-source.json` 记录常量而非实际模式 | P2 | 代码路径确认（resume 不调 setMode 而落盘常量） | 落盘"实际生效模式"：新会话记宿主 `settings` 回读、恢复会话记快照报告值；继承测试内嵌"落盘模式＝宿主回读"断言（负控制：撤修复 8 项失败） |
+| 共享传输抽取后有界请求不再因总预算耗尽而终止：通知持续到达时晚到响应仍被接受 | P2 | 受控投递复现（0.05s 预算下旧实现拒绝、新实现处理 30 条通知后接受迟到响应） | `request()` 循环顶部显式截止检查；洪水服务器回归用例（负控制：撤修复该用例失败、跑满 1s）；DSH 的 `UNBOUNDED`/逐消息语义不变 |
+
+评审轮的附带收获：严格回读在真实宿主上暴露 `session/setMode` 应答中 `projection` 块可以是
+**陈旧快照**（实测 `mode: "build"`、`sessionId: "unknown"`），权威确认在 `settings`——第一次返修
+候选的原生运行因此如实停在 `ZCODE_CONFIG: permission mode was not applied`，修正回读字段后
+7/7 通过（运行史见 `native_verification.history`）。假服务器夹具同步改为镜像真实形状。
+
+## 原生运行证据（zcode，2026-09-18，本记录绑定的运行）
+
+- 运行：`.harness/runs/harness-20260918-161308-6e657186`，其清单绑定本候选运行时身份 `017ea1db…`，
+  模型 `account:bigmodel-individual-coding-plan / GLM-5.3`，556.1 秒、0 中断。
+- 探针与报告：`.harness/validation/zcode-native-fifth-20260918T081304/zcode-flow/report.json`
+  （`passed: true`、`status: HARNESS_COMPLETE`、7/7 角色 `PASS`）——准入的 `ADM-E12..E15` 之后的
+  正式关口会**重读这份报告并核对清单身份**，手填字段不再自证。
 - **完成关联**：七个作业全部经 `store.job → harness supervise` 执行；每个作业 `process.json`
   的 pid **等于**原生子进程的 pgid（监督器是进程组组长，`Store.cancel_jobs` 组取消的前提，
   旧评审问题 3 所要求的显式取证在此落成），每份 `exit.json` 收据 `exit_code=0` 且流证明齐备。
-- **只读边界**：只读角色的原生事件中只有 Read/Glob/Grep 调用；Bash（27 次）与 Edit（9 次）
-  只出现在 development 作业中。
-- 同日两轮先行运行：第一轮暴露 zcode 成功路径不落盘 `source.json`（`d7a687c` 修复，此前任何
-  zcode 运行都未完整跑完过角色、故从未踩到完成路径）；第二轮 4 角色 PASS、dev 停在
-  `interaction/requestPermission`（设计边界），促成 `2d36375` 的模式声明修订。
+- **只读边界**：只读角色的原生事件中只有 Read/Glob/Grep 调用；带副作用的工具只出现在
+  development 作业中，其 `tool-policy.json` 记录的 `permission_mode: yolo` 来自宿主 `settings`
+  回读而非常量。
+- 同日先行运行史（完整列表见 `native_verification.history`）：第一轮暴露 source 收据不落盘
+  （`d7a687c`）；第二轮停在 Edit 审批边界，促成模式声明修订（`2d36375`）；第三轮 7/7 但记录被
+  评审驳回（缺陷在原生运行之外）；第四轮如实停在严格回读（发现 `projection` 陈旧快照问题）；
+  第五轮即本记录绑定 的运行。
 
 ## 本单元搬了什么
 
@@ -170,21 +196,19 @@ D1、D2 的 oracle 在修复前**确实失败过**（5/16 分歧、取消不稳�
 4. **受阻运行的费用记账**（旧问题 4）：本次三轮运行的授权与用途已在 `native_verification`
    的 `history` 中逐条登记；`usage_evidence` 落盘仍缺（见下）。
 
-## 候选身份（2026-09-18 重签）
+## 候选身份（2026-09-18 第二次重签）
 
 ```text
 工作树   /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
 分支     codex/go-engine-v1
-提交     2d363757a575850f0c602c2cf25ae59b2018d77b
+提交     91255c6658（评审返修候选；第一次重签候选 2d363757 的记录已随评审轮作废）
 上一基线 M3（记录候选 aa3312e）
-运行时身份 8b2047217e97cf6eaa2fb0824749b830b0ebc2925af18f83305c09651e6e3bbe
-驱动二进制 5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51
+运行时身份 017ea1db64a3ab0b（见 identity.json 与原生 run 清单一致）
 证据清单 61 个文件
-通过尝试 20260918T060912Z-34198
+通过尝试 20260918T082237Z-21775
 ```
 
-驱动二进制由验收器自行从候选源码构建并计入 identity 项。运行时身份较旧记录
-（`a50f2289…`）改变属预期：源码变了（M3 修复与两处 zcode 前置修复）。
+驱动二进制由验收器自行从候选源码构建并计入 identity 项。运行时身份较第一次重签（`8b204721…`）改变属预期：评审返修改动了传输与适配器文件。
 
 ## 明确未验证 / 已知边界
 
@@ -208,12 +232,16 @@ git -C /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engi
 ```sh
 cd /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
 
-# 准入：**预期放行**——本记录 overall=PASS 且两半证据齐备
+# 准入：**预期放行**——本记录 overall=PASS 且两半证据齐备；
+# 原生关口会重读 zcode-flow/report.json 并核对 run 清单绑定的运行时身份
 python3 scripts/go-engine/admission.py --record .gates/results/go-engine-G2a.json --next-unit G2b
 
+# 新增的原生准入控制项（ADM-E12..E15）
+python3 scripts/go-engine/admission-controls.py --record .gates/results/go-engine-G2a.json --out .harness/tmp/adm-controls-g2a
+
 # 原生半证据（只读）
-cat .harness/validation/zcode-native-third-20260918T053817/zcode-flow/report.json | python3 -m json.tool | head -30
-R=.harness/runs/harness-20260918-133821-34281339
+cat .harness/validation/zcode-native-fifth-20260918T081304/zcode-flow/report.json | python3 -m json.tool | head -30
+R=.harness/runs/harness-20260918-161308-6e657186
 for j in "$R"/jobs/*/; do
   python3 -c "import json;p=json.load(open('$j/process.json'));n=json.load(open('$j/native-process.json'));e=json.load(open('$j/exit.json'));print(p['pid'],n['pgid'],e['exit_code'])"
 done  # 期望：七行，每行 supervisor_pid == native_pgid，exit 0

@@ -1,13 +1,13 @@
 {
   "unit": "G2a",
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260918T060912Z-34198",
-  "recorded_at": "2026-09-18T06:17:09.485089+00:00",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260918T082237Z-21775",
+  "recorded_at": "2026-09-18T08:30:15.626277+00:00",
   "overall": "PASS",
   "previous_accepted_baseline": "M3",
   "candidate": {
-    "commit": "2d363757a575850f0c602c2cf25ae59b2018d77b",
+    "commit": "91255c66584a9739377277a168b11b17cbe7b83f",
     "branch": "codex/go-engine-v1",
-    "runtime_identity": "8b2047217e97cf6eaa2fb0824749b830b0ebc2925af18f83305c09651e6e3bbe",
+    "runtime_identity": "017ea1db64a3ab0b8075c459b6430c574cf3341cc8a24681fa3093d42093dbec",
     "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
     "files": {
       "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
@@ -23,55 +23,55 @@
       "id": "identity",
       "required": true,
       "status": "PASS",
-      "seconds": 0.474
+      "seconds": 0.447
     },
     {
       "id": "go-vet",
       "required": true,
       "status": "PASS",
-      "seconds": 0.47
+      "seconds": 0.417
     },
     {
       "id": "go-test-full",
       "required": true,
       "status": "PASS",
-      "seconds": 396.308
+      "seconds": 378.683
     },
     {
       "id": "sqlite-probe",
       "required": true,
       "status": "PASS",
-      "seconds": 2.295
+      "seconds": 2.193
     },
     {
       "id": "python-unittest",
       "required": true,
       "status": "PASS",
-      "seconds": 70.11
+      "seconds": 68.671
     },
     {
       "id": "demo-fixture",
       "required": true,
       "status": "PASS",
-      "seconds": 2.956
+      "seconds": 2.984
     },
     {
       "id": "doctor-dsh",
       "required": true,
       "status": "PASS",
-      "seconds": 2.047
+      "seconds": 2.086
     },
     {
       "id": "doctor-zcode",
       "required": true,
       "status": "PASS",
-      "seconds": 2.111
+      "seconds": 2.182
     },
     {
       "id": "tree-clean-after",
       "required": true,
       "status": "PASS",
-      "seconds": 0.036
+      "seconds": 0.035
     }
   ],
   "budget": {
@@ -80,9 +80,9 @@
     "note": "The regression is judged by result and progress, not by wall-clock speed."
   },
   "attestation": {
-    "summary_sha256": "20419c513d9a769c58b5afa79fb11da1873aa4341f49fd0b8f45dcee3d289389",
-    "identity_sha256": "75004927c81813853ee28008f12857fc8c752b4c06f6d96b0af5f8884ccf23ee",
-    "evidence_sha256": "169bbc1c15b78fd031fadd003c4c8a419bd5963409d273e6b31253bdc75ba118",
+    "summary_sha256": "bda3001c130c01ad146a64fcc7371ad272e663924365a07c75111551aadae976",
+    "identity_sha256": "e0cf2e3c0bc73385907ccaa67a9042982b9896fc2b1f5bb8b730fa34ff932c6a",
+    "evidence_sha256": "264486b4a66b32ac183ca654183799d003d384769d65d19245960cbf3f91e3f4",
     "evidence_file_count": 61
   },
   "bookkeeping": [
@@ -91,13 +91,14 @@
     ".gates/results/go-engine-G1a-index.md"
   ],
   "run_command": "python3 scripts/go-engine/acceptance.py --unit G2a",
-  "overall_note": "Whole re-sign on candidate 2d363757 (the old command-job half was signed on 63b0650, which predates the M3 P1 fix f136303 and carried it; per index item 27 the old record could not be reused). Both halves are evidenced by this record: the nine acceptance items cover the command-job half on the current tree, and native_verification binds a fresh authorized real run that reached HARNESS_COMPLETE.",
+  "overall_note": "Second whole re-sign after the independent review round of 2026-09-18 (m3-g2a-independent-20260918T064153Z) rejected the first one. The review confirmed 2xP1 + 2xP2; each was independently reproduced, fixed on this candidate (91255c6) and covered by a regression or control that fails without the fix: admission now enforces the required native verification (re-reading the run report and binding the run manifest to the candidate runtime identity), the supervisor test builds from the repository root on clean trees, persisted permission evidence states the mode actually in force (host settings readback, snapshot report on resume) instead of a constant, and bounded requests end at their deadline even under continuous notifications. Both halves are evidenced by this record on this candidate.",
   "native_verification": {
     "required": true,
     "status": "PASS",
-    "authorized": "2026-09-18, explicit user direction to test ZCode integration and close G2a",
-    "evidence_dir": ".harness/validation/zcode-native-third-20260918T053817",
-    "run": ".harness/runs/harness-20260918-133821-34281339",
+    "authorized": "2026-09-18, explicit user direction. Verbatim basis: \"这样吧，现在你是 Zcode 平台，那就做 Zcode 接入吧，Workbody 先不做了。你自己就是 Zcode 平台，那进入 Zcode 测试应该是零成本吧？\" and, after the Edit approval boundary was reported together with the finding that no host-side configuration lever exists: \"我们现在这个对话本身就已经是完全访问权限了，你还要我怎么做呢？\". The resulting contract: NEW dev/repair sessions declare the operator unattended mode once before the first turn; resumed sessions are never switched and record the mode the host reports; nothing is changed in reaction to prompts, timeouts or failures; read-only sessions and probes never set a mode.",
+    "evidence_dir": ".harness/validation/zcode-native-fifth-20260918T081304",
+    "run": ".harness/runs/harness-20260918-161308-6e657186",
+    "report": "zcode-flow/report.json",
     "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider zcode --out <evidence_dir>/zcode-flow",
     "provider": "zcode",
     "host_version": "ZCode 3.12.3 desktop bundle (zcode.cjs app-server)",
@@ -105,29 +106,28 @@
     "flow_status": "HARNESS_COMPLETE",
     "roles_completed": 7,
     "interrupts": 0,
-    "duration_s": 470.3,
+    "duration_s": 556.1,
     "completion_linkage": "All seven jobs ran under the Go supervisor (store.job -> \"harness supervise\"): each job's process.json pid equals the native child's pgid, so the supervisor is the process-group leader, and every exit.json receipt records exit_code 0 with stream proofs. Per-role worker receipts verify against the store.",
-    "read_only_boundary": "Read-only roles' native events contain only Read/Glob/Grep calls; Bash (27) and Edit (9) appear exclusively in the development job. The declared permission mode (2d36375) is bound to new dev/repair sessions only and recorded in tool-policy.json and native-source.json.",
-    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The two zcode adapter changes in this candidate (d7a687c source-receipt persistence, 2d36375 operator mode declaration) are post-unit common prerequisites explicitly authorized by the user, in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
+    "read_only_boundary": "Read-only roles' native events contain only Read/Glob/Grep calls; side-effect tools appear exclusively in the development job. The dev session's tool-policy.json records permission_mode from the host's own settings readback, not from a constant.",
+    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The zcode adapter changes in this chain are post-unit common prerequisites explicitly authorized by the user (d7a687c source-receipt persistence; 2d36375 mode declaration; 91255c6 review fixes: honest mode evidence, deadline enforcement, clean-tree test build, admission native gate), in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
     "history": [
       {
-        "date": "2026-09-17",
-        "provider": "dsh",
-        "outcome": "BLOCKED twice, same config, first role",
-        "cause": "sandbox-exec could not apply in the inherited agent context (environmental, not a regression; bare probe exit 71)",
-        "evidence": ".harness/validation/g2a-native-20260917T103650Z (reclaimed 2026-09-18, index item 26)"
-      },
-      {
         "date": "2026-09-18",
-        "provider": "dsh",
-        "outcome": "7/7 PASS once relocated to a non-inherited launchd context, on a byte-identical copy under /tmp (TCC)",
-        "evidence": ".harness/validation/g2a-native-launchd-20260918T114605 (reclaimed 2026-09-18, index item 26)"
+        "provider": "zcode",
+        "outcome": "7/7 PASS, HARNESS_COMPLETE (candidate 2d363757); record later rejected by the independent review round for defects outside the native run itself",
+        "evidence": ".harness/validation/zcode-native-third-20260918T053817"
       },
       {
         "date": "2026-09-18",
         "provider": "zcode",
-        "outcome": "7/7 PASS, HARNESS_COMPLETE, in the ordinary agent session context; this record binds this run",
-        "evidence": ".harness/validation/zcode-native-third-20260918T053817"
+        "outcome": "BLOCKED at session start by the new strict readback: the real host confirms setMode through settings, its projection block was a stale snapshot; the fake-server fixtures mirrored the wrong shape",
+        "evidence": ".harness/validation/zcode-native-fourth-20260918T080409"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "7/7 PASS, HARNESS_COMPLETE on this candidate; this record binds this run",
+        "evidence": ".harness/validation/zcode-native-fifth-20260918T081304"
       }
     ],
     "supervisor_half_proven": "Go unit case \"same request differing only in kind\" (the supervisor never reads kind) plus the seven supervised native jobs above with owner locks, receipts and stream proofs.",
