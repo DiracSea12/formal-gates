@@ -336,4 +336,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【更正 2026-09-19（第六轮，G2b 原生关口关闭）】**紧接上轮：机主对点名请求（7 角色流程重绑身份＋`--tools` 能力探针，launchd 非继承上下文＋候选逐字节副本）逐字回复**「授权」**。执行结果：流程 run `harness-20260919-210130-0164b260` **7/7 PASS、HARNESS_COMPLETE、0 中断**（7 个原生作业 argv 全为 Go 窄命令、exit 0、pgid 齐备、manifest 绑定 `cc213960…` 与记录相等）；`--tools` 探针五项 effects 全真——**read_only_tools VERIFIED**（真实 bash 写入尝试两次被拒 `Operation not permitted`，guard/child-guard 逐字节未变）、**subagents VERIFIED**（原生委派 child 文件＋只读子代理继承策略尝试）、**resume VERIFIED**（同会话续用成功，补齐"只证失效重建"缺口）、network 仅回环、mcp 如实不适用。`native_verification.status=PASS` 落盘，评审缺口①②③全部闭合。证据：`/private/tmp/g2b-v2-copy/.harness/validation/g2b-native-v2-{flow,tools}-20260919T210124`。**现行结论以 `go-engine-G2b.md`（v2）为准。**
 
+> **【2026-09-19（第七轮，G2c 实施与验收，原生关口待授权）】**G2c（ZCode 薄适配）按合同实施完毕：候选 `8289bb2`——`internal/harness/native_zcode.go` 单文件挂公共传输预留 hooks（两处最小缺口补齐：子进程环境覆盖、非请求消息进 notification 钩子；DSH 零变化）、分派表加 zcode、Python 执行路径全退役（native_zcode/native_transport 移 tests 参照逐字、native_entry 删除、双 GoAdapter）、22 例值级差分、admission 原生必需集合加 G2c。九项验收全过（`20260919T150503Z-49995`，身份 `3ce9dd2c…`）；G2b 冻结版回退冒烟 DEMO_COMPLETE/0 模型调用；Python 全套 281 亲跑 OK；`native_verification.status=NOT_RUN` 如实落盘（G2a zcode 证据绑定已退役 Python 路径），待机主授权一次 zcode 真跑后终签。现行结论以 `go-engine-G2c.md` 为准。
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
