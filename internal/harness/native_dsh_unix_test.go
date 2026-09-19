@@ -26,16 +26,14 @@ const dshTestAnswerJSON = `{"status": "PASS", "summary": "observed", "findings":
 // executable, a workspace and an evidence directory (resolved the way RunNative
 // resolves it), and the canonical native-request.json bytes on disk.
 type dshScenario struct {
-	request   ordObj
+	request   map[string]any
 	directory string
 	workspace string
 	echoPath  string
 }
 
-// The customize hook takes a pointer: ordObj carries its key order in a slice,
-// so a by-value copy would share the map but never grow the caller's key list
-// (exactly the bug a new key like "probe" would expose).
-func newDSHScenario(t *testing.T, steps []peerStep, customize func(request *ordObj)) *dshScenario {
+// The customize hook mutates the request map before it is serialised.
+func newDSHScenario(t *testing.T, steps []peerStep, customize func(request map[string]any)) *dshScenario {
 	t.Helper()
 	t.Setenv("FORMAL_GATES_HARNESS_ROOT", t.TempDir())
 	workspace := resolveNativePath(t.TempDir())
@@ -52,22 +50,23 @@ func newDSHScenario(t *testing.T, steps []peerStep, customize func(request *ordO
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := dict(
-		"provider", "dsh",
-		"binding", dict("provider", "dsh", "launch", dict("executable", executable),
-			"files", dict(executable, proof)),
-		"workspace", workspace,
-		"read_only", true,
-		"identity", "",
-		"model", "",
-		"reasoning_effort", "",
-		"prompt", dshTestPrompt,
-		"schema", decodeOrFatal(t, dshTestSchema),
-	)
-	if customize != nil {
-		customize(&request)
+	request := map[string]any{
+		"provider": "dsh",
+		"binding": map[string]any{"provider": "dsh",
+			"launch": map[string]any{"executable": executable},
+			"files":  map[string]any{executable: proof}},
+		"workspace":        workspace,
+		"read_only":        true,
+		"identity":         "",
+		"model":            "",
+		"reasoning_effort": "",
+		"prompt":           dshTestPrompt,
+		"schema":           decodeTestJSON(t, dshTestSchema),
 	}
-	if err := writeNativeJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
+	if customize != nil {
+		customize(request)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
 		t.Fatal(err)
 	}
 	return &dshScenario{request: request, directory: directory, workspace: workspace, echoPath: echoPath}
@@ -77,15 +76,15 @@ func newDSHScenario(t *testing.T, steps []peerStep, customize func(request *ordO
 // with one unconfigured option, a set_config_option readback, a completed
 // turn's evidence and the close.
 func successSteps() []peerStep {
-	events := peerEvent("s-1", "assistant/message", dict("turn", 1, "step", 0,
-		"usage", dict("inputTokens", 12, "outputTokens", 3),
-		"message", dict("content", []any{
-			dict("type", "text", "text", "```json\n"),
-			dict("type", "tool_use", "id", "t-1"),
-			dict("type", "text", "text", dshTestAnswerJSON),
-			dict("type", "text", "text", "\n```"),
-		}))) + "\n" +
-		peerEvent("s-1", "turn/end", dict("turn", 1, "reason", dict("kind", "completed"))) + "\n"
+	events := peerEvent("s-1", "assistant/message", map[string]any{"turn": 1, "step": 0,
+		"usage": map[string]any{"inputTokens": 12, "outputTokens": 3},
+		"message": map[string]any{"content": []any{
+			map[string]any{"type": "text", "text": "```json\n"},
+			map[string]any{"type": "tool_use", "id": "t-1"},
+			map[string]any{"type": "text", "text": dshTestAnswerJSON},
+			map[string]any{"type": "text", "text": "\n```"},
+		}}}) + "\n" +
+		peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
 	return []peerStep{
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
 		{On: `"method":"session/new"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "configOptions": [{"id": "model"}, {"id": "reasoning_effort", "currentValue": "high"}]}}`},
@@ -100,13 +99,14 @@ func successSteps() []peerStep {
 
 // TestRunNativeNewSessionSuccessTurn runs the whole narrow command: canonical
 // stdout line, identity.json/source.json/answer files landed canonically, the
-// prompt text byte-identical to the reference concatenation, and the config
-// inheritance applied through set_config_option (合同 ACP 时序全表＋必需用例
-// "新建成功回合" 的 Go 侧).
+// prompt text with the schema embedded in its canonical JSON form (registered
+// bounded difference: value-equal to the reference's default-separator
+// rendering), and the config inheritance applied through set_config_option
+// (合同 ACP 时序全表＋必需用例 "新建成功回合" 的 Go 侧).
 func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
-	scenario := newDSHScenario(t, successSteps(), func(request *ordObj) {
-		request.Set("model", "test-model")
-		request.Set("reasoning_effort", "high")
+	scenario := newDSHScenario(t, successSteps(), func(request map[string]any) {
+		request["model"] = "test-model"
+		request["reasoning_effort"] = "high"
 	})
 	var errout bytes.Buffer
 	code := 0
@@ -118,36 +118,32 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 		t.Fatalf("stderr = %q", errout.String())
 	}
 
-	// stdout: one canonical line plus newline (registered bounded difference).
+	// stdout: one canonical line plus newline.
 	if !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	value, err := decodeOrdered([]byte(stdout))
-	if err != nil {
-		t.Fatalf("stdout is not one JSON line: %v", err)
-	}
-	if provider := pyStr(getOf(value, "provider")); provider != "dsh" {
+	value := decodeTestJSON(t, stdout)
+	if provider := textOf(objectOrEmpty(value)["provider"]); provider != "dsh" {
 		t.Fatalf("provider = %v", provider)
 	}
-	if identity := pyStr(getOf(value, "identity")); identity != "s-1" {
+	if identity := textOf(objectOrEmpty(value)["identity"]); identity != "s-1" {
 		t.Fatalf("identity = %v", identity)
 	}
-	if turn := pyStr(getOf(value, "native_turn")); turn != "1" {
+	if turn := textOf(objectOrEmpty(value)["native_turn"]); turn != "1" {
 		t.Fatalf("native_turn = %v", turn)
 	}
-	selection := dshObject(getOf(value, "selection"))
-	if !pyDictEqual(selection, dict("model", "test-model", "reasoning_effort", "high")) {
+	selection := objectOrEmpty(value)["selection"]
+	if !valuesEqual(selection, map[string]any{"model": "test-model", "reasoning_effort": "high"}) {
 		t.Fatalf("selection = %v", selection)
 	}
-	files := dshObject(getOf(value, "files"))
-	if !pyDictEqual(files, dictOfNames(scenario.directory, nativeSourceFiles)) {
-		t.Fatalf("files = %v", files)
+	if !valuesEqual(objectOrEmpty(value)["files"], proofsOf(t, scenario.directory, nativeSourceFiles)) {
+		t.Fatalf("files = %v", objectOrEmpty(value)["files"])
 	}
-	usage := dshObject2List(getOf(value, "usage_evidence"))
+	usage := listOf(objectOrEmpty(value)["usage_evidence"])
 	if len(usage) != 1 {
 		t.Fatalf("usage_evidence = %v", usage)
 	}
-	if event := pyStr(getOf(usage[0], "event")); event != "assistant/message" {
+	if event := textOf(objectOrEmpty(usage[0])["event"]); event != "assistant/message" {
 		t.Fatalf("usage_evidence[0].event = %v", event)
 	}
 
@@ -157,11 +153,11 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pyDictEqual(dshObject(identityRecord), dict(
-		"identity", "s-1",
-		"workspace", scenario.workspace,
-		"selection", dict("model", nil, "reasoning_effort", "high"),
-	)) {
+	if !valuesEqual(identityRecord, map[string]any{
+		"identity":  "s-1",
+		"workspace": scenario.workspace,
+		"selection": map[string]any{"model": nil, "reasoning_effort": "high"},
+	}) {
 		t.Fatalf("identity.json = %v", identityRecord)
 	}
 	// source.json: the receipt plus the applied selection, canonical bytes.
@@ -169,7 +165,7 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pyEquals(sourceRecord, value) {
+	if !valuesEqual(sourceRecord, value) {
 		t.Fatalf("source.json = %v, stdout = %v", sourceRecord, value)
 	}
 	// answer.raw.txt keeps the original text; answer.json is the framed result.
@@ -202,52 +198,35 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 		t.Fatalf("session/new must carry the empty additional-server list:\n%s", echo)
 	}
 
-	// The prompt text, byte for byte: the request prompt, the fixed middle
-	// line, and the schema re-encoded with Python's default separators in the
-	// document order of the canonical request file.
-	schema, _ := scenario.request.Get("schema")
-	wantPrompt := dshTestPrompt + "\nReturn ONLY one JSON object matching this result schema:\n" + mustPyDumps(t, schema)
+	// The prompt text: the request prompt, the fixed middle line, and the
+	// schema re-encoded canonically (value-equal to the reference's
+	// default-separator form).
+	wantPrompt := dshTestPrompt + "\nReturn ONLY one JSON object matching this result schema:\n" +
+		mustCanonical(t, scenario.request["schema"])
 	promptFrame := frameByMethod(t, echo, "session/prompt")
-	params := dshObject(getOf(promptFrame, "params"))
-	promptParts := asList(getOf(params, "prompt"))
+	promptParts := listOf(objectOrEmpty(promptFrame["params"])["prompt"])
 	if len(promptParts) != 1 {
 		t.Fatalf("prompt parts = %v", promptParts)
 	}
-	if got := pyStr(getOf(promptParts[0], "text")); got != wantPrompt {
+	if got := textOf(objectOrEmpty(promptParts[0])["text"]); got != wantPrompt {
 		t.Fatalf("prompt text:\n got %q\nwant %q", got, wantPrompt)
 	}
 }
 
-func dshObject2List(v any) []any {
-	if list, ok := v.([]any); ok {
-		return list
-	}
-	return nil
-}
-
-func frameByMethod(t *testing.T, echo, method string) ordObj {
+func frameByMethod(t *testing.T, echo, method string) map[string]any {
 	t.Helper()
 	for _, line := range strings.Split(strings.TrimSpace(echo), "\n") {
 		if !strings.Contains(line, `"method":"`+method+`"`) {
 			continue
 		}
-		frame, err := decodeOrdered([]byte(line))
+		frame, err := decodeNativeJSON([]byte(line))
 		if err != nil {
 			t.Fatalf("echo line not JSON: %v (%s)", err, line)
 		}
-		return dshObject(frame)
+		return objectOrEmpty(frame)
 	}
 	t.Fatalf("no %s frame in echo:\n%s", method, echo)
-	return ordObj{}
-}
-
-func mustPyDumps(t *testing.T, value any) string {
-	t.Helper()
-	text, err := pyDumps(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return text
+	return nil
 }
 
 // TestRunNativeProbePath pins the probe: no prompt frame, session/close before
@@ -258,8 +237,8 @@ func TestRunNativeProbePath(t *testing.T) {
 		{On: `"method":"session/new"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "configOptions": [{"id": "model", "currentValue": "probe-model"}]}}`},
 		{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 	}
-	scenario := newDSHScenario(t, steps, func(request *ordObj) {
-		request.Set("probe", true)
+	scenario := newDSHScenario(t, steps, func(request map[string]any) {
+		request["probe"] = true
 	})
 	var errout bytes.Buffer
 	code := 0
@@ -267,18 +246,16 @@ func TestRunNativeProbePath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errout.String())
 	}
-	value, err := decodeOrdered([]byte(stdout))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls := pyStr(getOf(value, "model_calls")); calls != "0" {
+	value := decodeTestJSON(t, stdout)
+	if calls := textOf(objectOrEmpty(value)["model_calls"]); calls != "0" {
 		t.Fatalf("model_calls = %v", calls)
 	}
-	if selection := dshObject(getOf(value, "selection")); !pyDictEqual(selection, dict("model", "probe-model")) {
+	selection := objectOrEmpty(value)["selection"]
+	if !valuesEqual(selection, map[string]any{"model": "probe-model"}) {
 		t.Fatalf("selection = %v", selection)
 	}
-	executable := pyStr(getOf(getOf(dshObject(getOf(scenario.request, "binding")), "launch"), "executable"))
-	if got := pyStr(getOf(value, "executable")); got != resolveNativePath(executable) {
+	executable := textOf(objectOrEmpty(objectOrEmpty(scenario.request["binding"])["launch"])["executable"])
+	if got := textOf(objectOrEmpty(value)["executable"]); got != resolveNativePath(executable) {
 		t.Fatalf("executable = %v, want %v", got, resolveNativePath(executable))
 	}
 	echo := readTestFile(t, scenario.echoPath)
@@ -324,12 +301,12 @@ func TestDSHExecuteRefusals(t *testing.T) {
 	cases := []struct {
 		name      string
 		steps     []peerStep
-		customize func(request *ordObj)
+		customize func(request map[string]any)
 		want      string
 	}{
 		{"capability", capabilitySteps, nil, "RuntimeBlocked: DSH_CAPABILITY: ACP v1 resume/close required"},
 		{"identity missing", identitySteps, nil, "RuntimeBlocked: DSH_BINDING: missing or changed identity"},
-		{"config readback", configSteps, func(request *ordObj) { request.Set("model", "test-model") },
+		{"config readback", configSteps, func(request map[string]any) { request["model"] = "test-model" },
 			"RuntimeBlocked: DSH_CONFIG: model selection was not applied"},
 		{"stop reason", stopSteps, nil, "RuntimeBlocked: DSH_STOP: max_tokens"},
 	}
@@ -360,18 +337,18 @@ func TestDSHExecuteResumeUnavailable(t *testing.T) {
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
 		{On: `"method":"session/resume"`, Send: `{"id": "@ID@", "error": {"code": -32004, "message": "Session not found: s-1"}}`},
 	}
-	scenario := newDSHScenario(t, steps, func(request *ordObj) {
-		request.Set("identity", "s-1")
+	scenario := newDSHScenario(t, steps, func(request map[string]any) {
+		request["identity"] = "s-1"
 	})
-	request := decodeOrFatal(t, string(readTestFileBytes(t, filepath.Join(scenario.directory, "native-request.json"))))
+	request := decodeTestJSON(t, string(readTestFileBytes(t, filepath.Join(scenario.directory, "native-request.json"))))
 	_, err := dshExecute(request, scenario.directory, false)
-	unavailable, ok := err.(*pySessionUnavailable)
+	unavailable, ok := err.(*sessionUnavailableError)
 	if !ok {
-		t.Fatalf("expected pySessionUnavailable, got %T: %v", err, err)
+		t.Fatalf("expected sessionUnavailableError, got %T: %v", err, err)
 	}
 	if unavailable.message != "DSH_SESSION_UNAVAILABLE: Session not found: s-1" ||
-		pyStr(unavailable.identity) != "s-1" || unavailable.method != "session/resume" ||
-		pyStr(unavailable.code) != "-32004" {
+		textOf(unavailable.identity) != "s-1" || unavailable.method != "session/resume" ||
+		textOf(unavailable.code) != "-32004" {
 		t.Fatalf("unavailable = %+v", unavailable)
 	}
 
@@ -385,7 +362,7 @@ func TestDSHExecuteResumeUnavailable(t *testing.T) {
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
-	if got := pydumps(t, record); got != `{"error": "SessionUnavailable: DSH_SESSION_UNAVAILABLE: Session not found: s-1", "error_kind": "SESSION_UNAVAILABLE", "identity": "s-1", "method": "session/resume", "native_code": -32004}` {
+	if got := mustCanonical(t, record); got != `{"error":"SessionUnavailable: DSH_SESSION_UNAVAILABLE: Session not found: s-1","error_kind":"SESSION_UNAVAILABLE","identity":"s-1","method":"session/resume","native_code":-32004}` {
 		t.Fatalf("record = %s", got)
 	}
 	if _, statErr := os.Stat(filepath.Join(scenario.directory, "identity.json")); !os.IsNotExist(statErr) {
@@ -414,19 +391,15 @@ func TestDSHExecutePermissionNeverAnswered(t *testing.T) {
 	}
 	echo := readTestFile(t, scenario.echoPath)
 	for _, line := range strings.Split(strings.TrimSpace(echo), "\n") {
-		frame, err := decodeOrdered([]byte(line))
-		if err != nil {
-			t.Fatalf("echo line not JSON: %v (%s)", err, line)
-		}
-		if _, has := entryOf(frame, "error"); has {
+		frame := decodeTestJSON(t, line)
+		if _, has := objectOrEmpty(frame)["error"]; has {
 			t.Fatalf("a user decision was answered:\n%s", echo)
 		}
 	}
 }
 
-// TestDSHExecuteMissingPromptKey pins the unreachable KeyError text for a
-// non-probe request without a prompt (workers always write one; the reference
-// implementation raises KeyError('prompt') here).
+// TestDSHExecuteMissingPromptKey pins the unreachable missing-field error for
+// a non-probe request without a prompt (workers always writes one).
 func TestDSHExecuteMissingPromptKey(t *testing.T) {
 	steps := []peerStep{
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
@@ -435,15 +408,14 @@ func TestDSHExecuteMissingPromptKey(t *testing.T) {
 	}
 	scenario := newDSHScenario(t, steps, nil)
 	// Rebuild the request file without prompt/schema at all.
-	request := dict()
-	for _, key := range scenario.request.Keys() {
+	request := map[string]any{}
+	for key, value := range scenario.request {
 		if key == "prompt" || key == "schema" {
 			continue
 		}
-		value, _ := scenario.request.Get(key)
-		request.Set(key, value)
+		request[key] = value
 	}
-	if err := writeNativeJSON(filepath.Join(scenario.directory, "native-request.json"), request); err != nil {
+	if err := writeAtomicJSON(filepath.Join(scenario.directory, "native-request.json"), request); err != nil {
 		t.Fatal(err)
 	}
 	var errout bytes.Buffer
@@ -452,7 +424,7 @@ func TestDSHExecuteMissingPromptKey(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if got := nativeRecordError(t, scenario.directory); got != "KeyError: 'prompt'" {
+	if got := nativeRecordError(t, scenario.directory); got != `missing JSON field "prompt"` {
 		t.Fatalf("error = %q", got)
 	}
 }

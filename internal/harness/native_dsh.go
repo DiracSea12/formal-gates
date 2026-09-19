@@ -5,8 +5,8 @@ package harness
 // the provider dispatch behind `formal-gates harness native <dir>` and the
 // four native bridge operations. One native job is one process: read
 // native-request.json, run the ACP sequence, land every evidence file, print
-// the result JSON to stdout, and on any execution error write
-// native-error.json with the Python exception text and exit 1.
+// the result JSON to stdout as one canonical line, and on any execution error
+// write native-error.json and exit 1.
 
 import (
 	"encoding/json"
@@ -36,7 +36,7 @@ func dshDispatch(provider string) error {
 			return nil
 		}
 	}
-	return &pyRuntimeBlocked{message: fmt.Sprintf(
+	return &blockedError{message: fmt.Sprintf(
 		"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(executionAdapters, ", "))}
 }
 
@@ -54,11 +54,10 @@ func dshHooks() nativeHooks {
 		closedMessage:   "native ACP process closed its output",
 		invalidMessage:  "non-JSON ACP output",
 		identify:        func(c *nativeClient) any { return c.nextCounter() },
-		envelope: func(value ordObj) ordObj {
-			framed := dict("jsonrpc", "2.0")
-			for _, key := range value.Keys() {
-				item, _ := value.Get(key)
-				framed.Set(key, item)
+		envelope: func(value map[string]any) map[string]any {
+			framed := map[string]any{"jsonrpc": "2.0"}
+			for key, item := range value {
+				framed[key] = item
 			}
 			return framed
 		},
@@ -66,7 +65,7 @@ func dshHooks() nativeHooks {
 			if method == "session/request_permission" {
 				// A user decision belongs to the user; never approve or deny it
 				// here, and never answer or retry.
-				return nil, &pyRuntimeBlocked{
+				return nil, &blockedError{
 					message: "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
 				}
 			}
@@ -83,21 +82,23 @@ func newDSHClient(argv []string, workspace, directory string) (*nativeClient, er
 
 // dshClassifySessionUnavailable is the narrow DSH error classification: never
 // treat a timeout or a model error as proof that a session was destroyed.
-func dshClassifySessionUnavailable(method string, errValue any, params ordObj) error {
+func dshClassifySessionUnavailable(method string, errValue any, params map[string]any) error {
 	message := "unknown error"
 	if value, present := entryOf(errValue, "message"); present {
-		message = pyStr(value)
+		if text, isString := value.(string); isString {
+			message = text
+		}
 	}
 	missing := strings.HasPrefix(message, "Invalid params: session is not resumable:") ||
 		strings.HasPrefix(message, "Session not found:")
 	code := getOf(errValue, "code")
 	if method == "session/resume" &&
-		(pyEquals(code, -32602) || pyEquals(code, -32004)) && missing {
-		return &pySessionUnavailable{
-			pyRuntimeBlocked: pyRuntimeBlocked{message: "DSH_SESSION_UNAVAILABLE: " + message},
-			identity:         getOrOf(params, "sessionId", ""),
-			method:           "session/resume",
-			code:             code,
+		(valuesEqual(code, -32602) || valuesEqual(code, -32004)) && missing {
+		return &sessionUnavailableError{
+			blockedError: blockedError{message: "DSH_SESSION_UNAVAILABLE: " + message},
+			identity:     getOrOf(params, "sessionId", ""),
+			method:       "session/resume",
+			code:         code,
 		}
 	}
 	return nil
@@ -105,23 +106,16 @@ func dshClassifySessionUnavailable(method string, errValue any, params ordObj) e
 
 // dshSelection maps configOptions to {id: currentValue}, a missing
 // currentValue becoming null.
-func dshSelection(raw any) (ordObj, error) {
-	out := dict()
-	for _, option := range asList(getOf(raw, "configOptions")) {
+func dshSelection(raw any) (map[string]any, error) {
+	out := map[string]any{}
+	for _, option := range listOf(getOf(raw, "configOptions")) {
 		id, err := mustEntry(option, "id")
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		out.Set(pyStr(id), getOf(option, "currentValue"))
+		out[textOf(id)] = getOf(option, "currentValue")
 	}
 	return out, nil
-}
-
-func asList(v any) []any {
-	if list, ok := v.([]any); ok {
-		return list
-	}
-	return nil
 }
 
 // dshHarnessRoot mirrors command.go's root discovery exactly:
@@ -141,7 +135,7 @@ func dshHarnessRoot() (string, error) {
 			return dir, nil
 		}
 	}
-	return "", &pyHarnessError{message: "harness runtime not found; use scripts/harness setup"}
+	return "", &bindingError{message: "harness runtime not found; use scripts/harness setup"}
 }
 
 // dshPluginPath is the host-side plugin path: native_dsh.py's sibling .mjs,
@@ -159,408 +153,402 @@ func dshPluginPath() (string, error) {
 // disables session-title-llm. The read-only tool surface itself is enforced by
 // the unchanged native_dsh.mjs inside the host - there is no second permission
 // engine here.
-func makeDSHPatch(directory string, readOnly any, probe bool) (string, error) {
+func makeDSHPatch(directory string, readOnly bool, probe bool) (string, error) {
 	plugin, err := dshPluginPath()
 	if err != nil {
 		return "", err
 	}
 	inject := []any{"tools"}
-	if pyTruthy(readOnly) {
+	if readOnly {
 		inject = append(inject, "sandboxPolicy")
 	}
 	patch := []any{
-		dict("insert", []any{dict(
-			"id", "harness-native",
-			"name", plugin,
-			"inject", inject,
-			"config", dict("directory", directory, "read_only", readOnly),
-		)}),
-		dict("id", "acp", "inject", []any{"acpAppStartup", "harnessNativeReady"}),
+		map[string]any{"insert": []any{map[string]any{
+			"id":     "harness-native",
+			"name":   plugin,
+			"inject": inject,
+			"config": map[string]any{"directory": directory, "read_only": readOnly},
+		}}},
+		map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}},
 	}
 	if probe {
-		patch = append(patch, dict("id", "session-title-llm", "disabled", true))
+		patch = append(patch, map[string]any{"id": "session-title-llm", "disabled": true})
 	}
 	path := filepath.Join(directory, "profile.json")
-	if err := writeNativeJSON(path, patch); err != nil {
+	if err := writeAtomicJSON(path, patch); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
 // observeNative turns committed native turn evidence into the bound source
-// receipt (native_dsh.observe).
-func observeNative(directory string, identity any) (ordObj, error) {
+// receipt (native_dsh.observe). The events file is streamed line by line: only
+// one decoded event is alive at a time.
+func observeNative(directory string, identity any) (map[string]any, error) {
 	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
 	if err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
 	turn := getOf(source, "turn")
-	if !pyEquals(getOf(source, "sessionId"), identity) || !pyIsInt(turn) {
-		return ordObj{}, &pyRuntimeBlocked{message: "DSH_BINDING: native source does not match the session"}
+	// The source must belong to this session, and the turn must be the host's
+	// integer turn counter.
+	if !valuesEqual(getOf(source, "sessionId"), identity) || !isIntegerLiteral(turn) {
+		return nil, &blockedError{message: "DSH_BINDING: native source does not match the session"}
 	}
 	answer := ""
 	ended := false
 	var usage []any
-	events, err := sessionEvents(directory, identity)
-	if err != nil {
-		return ordObj{}, err
-	}
-	for _, record := range events {
+	err = forEachSessionEvent(directory, identity, func(record map[string]any) error {
 		event, err := mustEntry(record, "event")
 		if err != nil {
-			return ordObj{}, err
+			return err
 		}
 		eventType, err := mustEntry(event, "type")
 		if err != nil {
-			return ordObj{}, err
+			return err
 		}
-		data := getOrOf(event, "data", dict())
-		if pyEquals(eventType, "compaction/summary") {
-			continue
+		data := objectOrEmpty(getOrOf(event, "data", map[string]any{}))
+		if valuesEqual(eventType, "compaction/summary") {
+			return nil
 		}
-		if !pyEquals(getOf(data, "turn"), turn) {
-			continue
+		if !valuesEqual(data["turn"], turn) {
+			return nil
 		}
-		switch pyStr(eventType) {
-		case "assistant/message":
+		switch {
+		case valuesEqual(eventType, "assistant/message"):
 			if ended {
-				return ordObj{}, &pyRuntimeBlocked{message: "DSH_RESULT: message after turn ended"}
+				return &blockedError{message: "DSH_RESULT: message after turn ended"}
 			}
-			if _, isDict := getOf(data, "usage").(ordObj); isDict {
-				usage = append(usage, dict(
-					"turn", turn,
-					"step", getOf(data, "step"),
-					"event", "assistant/message",
-					"usage", getOf(data, "usage"),
-				))
+			// A message's usage counts by presence: an object, empty or not.
+			if eventUsage, isObject := getOf(data, "usage").(map[string]any); isObject {
+				usage = append(usage, map[string]any{
+					"turn":  turn,
+					"step":  getOf(data, "step"),
+					"event": "assistant/message",
+					"usage": eventUsage,
+				})
 			}
 			var text strings.Builder
-			for _, part := range asList(getOf(getOrOf(data, "message", dict()), "content")) {
-				if pyEquals(getOf(part, "type"), "text") {
-					text.WriteString(pyStr(getOrOf(part, "text", "")))
+			for _, part := range listOf(getOf(objectOrEmpty(getOrOf(data, "message", map[string]any{})), "content")) {
+				if valuesEqual(getOf(part, "type"), "text") {
+					if segment, isString := getOf(part, "text").(string); isString {
+						text.WriteString(segment)
+					}
 				}
 			}
 			answer = text.String()
-		case "assistant/attempt":
+		case valuesEqual(eventType, "assistant/attempt"):
 			// Preserve native usage, never infer or fill a missing counter with
-			// zero (truthiness, not presence, gates an attempt's usage).
-			if attemptUsage := getOf(data, "usage"); pyTruthy(attemptUsage) {
-				usage = append(usage, dict(
-					"turn", turn,
-					"step", getOf(data, "step"),
-					"event", "assistant/attempt",
-					"usage", attemptUsage,
-				))
+			// zero: an attempt counts only when its usage object has entries.
+			if attemptUsage, isObject := getOf(data, "usage").(map[string]any); isObject && len(attemptUsage) > 0 {
+				usage = append(usage, map[string]any{
+					"turn":  turn,
+					"step":  getOf(data, "step"),
+					"event": "assistant/attempt",
+					"usage": attemptUsage,
+				})
 			}
-		case "turn/end":
+		case valuesEqual(eventType, "turn/end"):
 			reason := getOf(data, "reason")
-			kind := getOf(getOrOf(data, "reason", dict()), "kind")
-			if ended || !pyEquals(kind, "completed") {
-				return ordObj{}, &pyRuntimeBlocked{
-					message: "DSH_RESULT: turn was not completed: " + pyStr(reason),
-				}
+			kind := getOf(objectOrEmpty(getOrOf(data, "reason", map[string]any{})), "kind")
+			if ended || !valuesEqual(kind, "completed") {
+				return &blockedError{message: "DSH_RESULT: turn was not completed: " + textOf(reason)}
 			}
 			ended = true
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if !ended {
-		return ordObj{}, &pyRuntimeBlocked{message: "DSH_RESULT: committed turn/end evidence is missing"}
+		return nil, &blockedError{message: "DSH_RESULT: committed turn/end evidence is missing"}
 	}
 	// Keep original bytes; reconciliation never rewrites the native evidence.
 	if err := writeNativeAnswer(directory, answer, "DSH"); err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
 	var usageEvidence any
 	if len(usage) > 0 {
 		usageEvidence = usage
 	}
-	return evidenceSource(directory, "dsh", identity, dict(
-		"native_turn", turn,
-		"transcript", getOrOf(source, "transcriptPath", ""),
-		"usage_evidence", usageEvidence,
-	))
+	return evidenceSource(directory, "dsh", identity, map[string]any{
+		"native_turn":    turn,
+		"transcript":     getOrOf(source, "transcriptPath", ""),
+		"usage_evidence": usageEvidence,
+	})
 }
 
 // dshReconcile recovers only a completed native turn rejected by the old
 // formatting parser (native_dsh.reconcile_completed_output). Original process
 // exit/error records remain unchanged; no host is started and no model is
 // called; the caller must still accept the recovered business result.
-func dshReconcile(directory string, process any) (ordObj, error) {
+func dshReconcile(directory string, process any) (map[string]any, error) {
 	legacyError := "RuntimeBlocked: DSH_RESULT: final message is not a JSON result object"
 	eligible := func(original string) bool {
 		return original == legacyError || strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:")
 	}
-	recover := func() (ordObj, error) {
+	recover := func() (map[string]any, error) {
 		identity, err := readJSONFile(filepath.Join(directory, "identity.json"))
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
 		request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
 		workspace, err := mustEntry(identity, "workspace")
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
 		requestWorkspace, err := mustEntry(request, "workspace")
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		if !pyEquals(workspace, requestWorkspace) {
-			return ordObj{}, &pyRuntimeBlocked{message: "DSH_RECONCILE: workspace changed"}
+		if !valuesEqual(workspace, requestWorkspace) {
+			return nil, &blockedError{message: "DSH_RECONCILE: workspace changed"}
 		}
+		selection := objectOrEmpty(getOrOf(identity, "selection", map[string]any{}))
 		for _, option := range []string{"model", "reasoning_effort"} {
-			requested := getOf(request, option)
-			if pyTruthy(requested) &&
-				!pyEquals(getOf(getOrOf(identity, "selection", dict()), option), requested) {
-				return ordObj{}, &pyRuntimeBlocked{message: "DSH_RECONCILE: original model selection differs"}
+			requested, _ := getOrOf(request, option, "").(string)
+			if requested == "" {
+				continue
+			}
+			selected, _ := selection[option].(string)
+			if selected != requested {
+				return nil, &blockedError{message: "DSH_RECONCILE: original model selection differs"}
 			}
 		}
 		source, err := observeNative(directory, getOf(identity, "identity"))
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		source.Set("selection", getOrOf(identity, "selection", dict()))
+		source["selection"] = getOrOf(identity, "selection", map[string]any{})
 		return source, nil
 	}
 	return reconcileCompletedOutput(directory, process, "DSH", eligible, recover)
 }
 
+// configuredIs reports whether the selection currently holds the requested
+// value for one option; selection values are strings or null.
+func configuredIs(configured map[string]any, option, requested string) bool {
+	current, _ := configured[option].(string)
+	return current == requested
+}
+
 // dshExecute runs DSH's ACP sequence for one request (native_dsh.execute).
-func dshExecute(request any, directory string, probe bool) (result ordObj, err error) {
+func dshExecute(request any, directory string, probe bool) (result map[string]any, err error) {
 	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
-		return ordObj{}, mkdirErr
+		return nil, mkdirErr
 	}
-	binding := getOf(request, "binding")
+	// A binding with entries is used as captured; an absent or empty one means
+	// nothing was captured yet and the provider is bound now.
+	binding := objectOrEmpty(getOf(request, "binding"))
 	var executable string
-	if pyTruthy(binding) {
+	if len(binding) > 0 {
 		launch, entryErr := mustEntry(binding, "launch")
 		if entryErr != nil {
-			return ordObj{}, entryErr
+			return nil, entryErr
 		}
 		executableValue, entryErr := mustEntry(launch, "executable")
 		if entryErr != nil {
-			return ordObj{}, entryErr
+			return nil, entryErr
 		}
-		executable = pyStr(executableValue)
+		executable = textOf(executableValue)
 	} else {
 		captured, captureErr := dshCaptureBinding()
 		if captureErr != nil {
-			return ordObj{}, captureErr
+			return nil, captureErr
 		}
-		launch := getOf(captured, "launch")
-		executableValue := getOf(launch, "executable")
-		executable = pyStr(executableValue)
+		executable = textOf(getOf(getOf(captured, "launch"), "executable"))
 	}
 	workspaceValue, entryErr := mustEntry(request, "workspace")
 	if entryErr != nil {
-		return ordObj{}, entryErr
+		return nil, entryErr
 	}
-	workspace := resolveNativePath(pyStr(workspaceValue))
-	// request['read_only'] is a plain lookup in the reference implementation:
-	// a request without it is the same KeyError class as a missing workspace.
-	readOnly, entryErr := mustEntry(request, "read_only")
+	workspace := resolveNativePath(textOf(workspaceValue))
+	readOnlyValue, entryErr := mustEntry(request, "read_only")
 	if entryErr != nil {
-		return ordObj{}, entryErr
+		return nil, entryErr
+	}
+	readOnly, isBool := readOnlyValue.(bool)
+	if !isBool {
+		return nil, fmt.Errorf("read_only must be a boolean")
 	}
 	patch, err := makeDSHPatch(directory, readOnly, probe)
 	if err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
 	client, err := newDSHClient([]string{executable, "--profile", "acp", "--patch", patch}, workspace, directory)
 	if err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
-	identity := pyStr(getOrOf(request, "identity", ""))
+	identity := textOf(getOrOf(request, "identity", ""))
 	attached := false
-	var configured ordObj
+	var configured map[string]any
 	defer func() {
 		if attached {
 			closeNativeSession(client, identity)
 		}
 		client.close()
 	}()
-	run := func() (ordObj, error) {
+	run := func() (map[string]any, error) {
 		initialize, err := client.request("initialize",
-			dict("protocolVersion", 1, "clientCapabilities", dict()))
+			map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}})
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		agentCapabilities := dshObject(getOf(initialize, "agentCapabilities"))
-		capabilities := dshObject(getOf(agentCapabilities, "sessionCapabilities"))
-		if !pyEquals(getOf(initialize, "protocolVersion"), 1) ||
-			!capabilities.Has("resume") || !capabilities.Has("close") {
-			return ordObj{}, &pyRuntimeBlocked{message: "DSH_CAPABILITY: ACP v1 resume/close required"}
+		capabilities := objectOrEmpty(getOf(
+			objectOrEmpty(getOf(initialize, "agentCapabilities")), "sessionCapabilities"))
+		_, hasResume := capabilities["resume"]
+		_, hasClose := capabilities["close"]
+		if !valuesEqual(getOf(initialize, "protocolVersion"), 1) || !hasResume || !hasClose {
+			return nil, &blockedError{message: "DSH_CAPABILITY: ACP v1 resume/close required"}
 		}
 		// ACP requires the additional server list. DSH mounts it in the agent
 		// scope; an empty list does not remove servers from the native profile.
-		params := dict("cwd", workspace, "mcpServers", []any{})
-		if identity != "" {
-			params.Set("sessionId", identity) // appended last, like the dict insert
-		}
+		params := map[string]any{"cwd": workspace, "mcpServers": []any{}}
 		method := "session/new"
 		if identity != "" {
+			params["sessionId"] = identity
 			method = "session/resume"
 		}
 		created, err := client.request(method, params)
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		observed := getOrOf(created, "sessionId", identity)
-		if !pyTruthy(observed) || (identity != "" && !pyEquals(observed, identity)) {
-			return ordObj{}, &pyRuntimeBlocked{message: "DSH_BINDING: missing or changed identity"}
+		observed, _ := getOrOf(created, "sessionId", any(identity)).(string)
+		if observed == "" || (identity != "" && observed != identity) {
+			return nil, &blockedError{message: "DSH_BINDING: missing or changed identity"}
 		}
-		identity = pyStr(observed)
+		identity = observed
 		attached = true
 		configured, err = dshSelection(created)
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		if err := writeNativeJSON(filepath.Join(directory, "identity.json"), dict(
-			"identity", identity, "workspace", workspace, "selection", configured)); err != nil {
-			return ordObj{}, err
+		if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
+			"identity": identity, "workspace": workspace, "selection": configured}); err != nil {
+			return nil, err
 		}
 		for _, name := range []string{"model", "reasoning_effort"} {
-			requested := getOrOf(request, name, "")
-			if pyTruthy(requested) && !pyEquals(getOf(configured, name), requested) {
-				changed, err := client.request("session/set_config_option",
-					dict("sessionId", identity, "configId", name, "value", requested))
-				if err != nil {
-					return ordObj{}, err
-				}
-				updated, err := dshSelection(changed)
-				if err != nil {
-					return ordObj{}, err
-				}
-				for _, key := range updated.Keys() {
-					value, _ := updated.Get(key)
-					configured.Set(key, value)
-				}
-				if !pyEquals(getOf(configured, name), requested) {
-					return ordObj{}, &pyRuntimeBlocked{
-						message: "DSH_CONFIG: " + name + " selection was not applied",
-					}
+			requested, _ := getOrOf(request, name, "").(string)
+			if requested == "" || configuredIs(configured, name, requested) {
+				continue
+			}
+			changed, err := client.request("session/set_config_option",
+				map[string]any{"sessionId": identity, "configId": name, "value": requested})
+			if err != nil {
+				return nil, err
+			}
+			updated, err := dshSelection(changed)
+			if err != nil {
+				return nil, err
+			}
+			for key, value := range updated {
+				configured[key] = value
+			}
+			if !configuredIs(configured, name, requested) {
+				return nil, &blockedError{
+					message: "DSH_CONFIG: " + name + " selection was not applied",
 				}
 			}
 		}
 		if probe {
-			if _, err := client.request("session/close", dict("sessionId", identity)); err != nil {
-				return ordObj{}, err
+			if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
+				return nil, err
 			}
 			attached = false
-			return dict(
-				"provider", "dsh",
-				"executable", resolveNativePath(executable),
-				"capabilities", capabilities,
-				"selection", configured,
-				"model_calls", 0,
-			), nil
+			return map[string]any{
+				"provider":     "dsh",
+				"executable":   resolveNativePath(executable),
+				"capabilities": capabilities,
+				"selection":    configured,
+				"model_calls":  0,
+			}, nil
 		}
 		promptValue, entryErr := mustEntry(request, "prompt")
 		if entryErr != nil {
-			return ordObj{}, entryErr
+			return nil, entryErr
+		}
+		promptText, isString := promptValue.(string)
+		if !isString {
+			return nil, fmt.Errorf("prompt must be a string")
 		}
 		// The reference concatenation evaluates request['prompt'] then
-		// request['schema'] left to right, so a missing key is its own KeyError,
-		// never a silently null schema dump. json.dumps of the decoded schema
-		// (document order, Python separators, float repr) is byte-identical to
-		// PyDumpsRaw of the file's raw subtree, because native-request.json is
-		// written canonical by the one writer both sides share.
+		// request['schema'] left to right, so a missing key is its own error,
+		// never a silently null schema dump. The schema is embedded in its
+		// canonical JSON form (registered bounded difference: value-equal to
+		// the reference's default-separator rendering).
 		schemaValue, entryErr := mustEntry(request, "schema")
 		if entryErr != nil {
-			return ordObj{}, entryErr
+			return nil, entryErr
 		}
-		promptText, strErr := pyStrConcat(promptValue)
-		if strErr != nil {
-			return ordObj{}, strErr
-		}
-		schema, dumpErr := pyDumps(schemaValue)
+		schema, dumpErr := CanonicalJSON(schemaValue)
 		if dumpErr != nil {
-			return ordObj{}, dumpErr
+			return nil, dumpErr
 		}
-		prompt := promptText + "\nReturn ONLY one JSON object matching this result schema:\n" + schema
+		prompt := promptText + "\nReturn ONLY one JSON object matching this result schema:\n" + string(schema)
 		response, err := client.request("session/prompt",
-			dict("sessionId", identity, "prompt", []any{dict("type", "text", "text", prompt)}),
+			map[string]any{"sessionId": identity,
+				"prompt": []any{map[string]any{"type": "text", "text": prompt}}},
 			nativeUnbounded)
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		if !pyEquals(getOf(response, "stopReason"), "end_turn") {
-			return ordObj{}, &pyRuntimeBlocked{message: "DSH_STOP: " + pyStr(getOf(response, "stopReason"))}
+		if !valuesEqual(getOf(response, "stopReason"), "end_turn") {
+			return nil, &blockedError{message: "DSH_STOP: " + textOf(getOf(response, "stopReason"))}
 		}
 		// close flushes the native source. It does not delete persisted session
 		// history.
-		if _, err := client.request("session/close", dict("sessionId", identity)); err != nil {
-			return ordObj{}, err
+		if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
+			return nil, err
 		}
 		attached = false
 		source, err := observeNative(directory, identity)
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		source.Set("selection", configured)
-		if err := writeNativeJSON(filepath.Join(directory, "source.json"), source); err != nil {
-			return ordObj{}, err
+		source["selection"] = configured
+		if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+			return nil, err
 		}
 		return source, nil
 	}
 	return run()
 }
 
-// pyStrConcat is the str operand of Python's `+`: a non-string prompt is the
-// TypeError the reference concatenation raises (unreachable through workers,
-// which always write a string).
-func pyStrConcat(v any) (string, error) {
-	if text, ok := v.(string); ok {
-		return text, nil
-	}
-	return "", &pyError{name: "TypeError", message: fmt.Sprintf(
-		"can only concatenate str (not %s) to str", pyReprTypeName(v))}
-}
-
-// dshObject coerces a decoded value to an ordered object: absent or null
-// becomes empty (the reference implementation's .get chains on live hosts
-// always see objects here).
-func dshObject(v any) ordObj {
-	if object, ok := v.(ordObj); ok {
-		return object
-	}
-	return dict()
-}
-
 // dshCaptureBinding binds dsh to the resolved binary it will execute
 // (native_dsh.capture_binding): PATH lookup, symlink resolution, then the
 // shared launch/files proof shape.
-func dshCaptureBinding() (ordObj, error) {
+func dshCaptureBinding() (map[string]any, error) {
 	executable, err := exec.LookPath("dsh")
 	if err != nil {
-		return ordObj{}, &pyRuntimeBlocked{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
+		return nil, &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
 	}
 	resolved := resolveNativePath(executable)
-	return buildCaptureBinding("dsh", dict("executable", resolved))
+	return buildCaptureBinding("dsh", map[string]any{"executable": resolved})
 }
 
 // dshValidateBinding is the registry's validate_binding: the provider must
 // match and every bound file proof must still hold.
 func dshValidateBinding(binding any) error {
-	object, ok := binding.(ordObj)
+	object, ok := binding.(map[string]any)
 	if !ok {
-		return pyAttrError(binding, "get")
+		return fmt.Errorf("binding must be a JSON object")
 	}
-	if !pyEquals(getOf(object, "provider"), "dsh") {
-		return &pyHarnessError{message: "HOST_BINDING: provider differs"}
+	if !valuesEqual(getOf(object, "provider"), "dsh") {
+		return &bindingError{message: "HOST_BINDING: provider differs"}
 	}
-	files := dshObject(getOrOf(object, "files", nil))
-	for _, name := range files.Keys() {
-		proof, err := fileProofOf(pyStr(name))
+	files := objectOrEmpty(getOrOf(object, "files", nil))
+	for name, bound := range files {
+		proof, err := fileProofOf(textOf(name))
 		if err != nil {
 			return err
 		}
-		bound, _ := files.Get(name)
-		if !pyDictEqual(proof, bound) {
-			return &pyRuntimeBlocked{
-				message: "HOST_CHANGED: bound native executable/script changed: " + pyStr(name),
+		if !valuesEqual(proof, bound) {
+			return &blockedError{
+				message: "HOST_CHANGED: bound native executable/script changed: " + textOf(name),
 			}
 		}
 	}
@@ -571,36 +559,36 @@ func dshValidateBinding(binding any) error {
 // match, the proof set must be exactly the four evidence files, and each proof
 // must still hold against the directory.
 func dshVerifySource(directory string, source any) error {
-	object, ok := source.(ordObj)
+	object, ok := source.(map[string]any)
 	if !ok {
-		return pyAttrError(source, "get")
+		return fmt.Errorf("source must be a JSON object")
 	}
-	if !pyEquals(getOf(object, "provider"), "dsh") || !pyTruthy(getOf(object, "identity")) {
-		return &pyRuntimeBlocked{message: "NATIVE_BINDING: missing or different provider/identity"}
+	identity, _ := getOf(object, "identity").(string)
+	if !valuesEqual(getOf(object, "provider"), "dsh") || identity == "" {
+		return &blockedError{message: "NATIVE_BINDING: missing or different provider/identity"}
 	}
-	proofs := dshObject(getOrOf(object, "files", nil))
+	proofs := objectOrEmpty(getOrOf(object, "files", nil))
 	if !sameKeySet(proofs, nativeSourceFiles) {
-		return &pyRuntimeBlocked{message: "EVIDENCE_MISSING: native source proofs absent"}
+		return &blockedError{message: "EVIDENCE_MISSING: native source proofs absent"}
 	}
-	for _, name := range proofs.Keys() {
-		proof, err := fileProofOf(filepath.Join(directory, pyStr(name)))
+	for name, bound := range proofs {
+		proof, err := fileProofOf(filepath.Join(directory, textOf(name)))
 		if err != nil {
 			return err
 		}
-		bound, _ := proofs.Get(name)
-		if !pyDictEqual(proof, bound) {
-			return &pyRuntimeBlocked{message: "EVIDENCE_CHANGED: " + pyStr(name)}
+		if !valuesEqual(proof, bound) {
+			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
 		}
 	}
 	return nil
 }
 
-func sameKeySet(object ordObj, names []string) bool {
-	if object.Len() != len(names) {
+func sameKeySet(object map[string]any, names []string) bool {
+	if len(object) != len(names) {
 		return false
 	}
 	for _, name := range names {
-		if !object.Has(name) {
+		if _, ok := object[name]; !ok {
 			return false
 		}
 	}
@@ -612,10 +600,8 @@ func sameKeySet(object ordObj, names []string) bool {
 // RunNative is `formal-gates harness native <job-directory>` (the port of
 // native_entry.main): one native job, one process. It reads
 // native-request.json, dispatches by provider, prints the result JSON to
-// stdout as one canonical line (registered bounded difference: consumers parse
-// by value), and on ANY execution error writes native-error.json (canonical)
-// with the Python exception text, echoes the same text to stderr and returns
-// 1.
+// stdout as one canonical line, and on ANY execution error writes
+// native-error.json (canonical), echoes the same text to stderr and returns 1.
 func RunNative(directory string, errout io.Writer) int {
 	resolved := resolveNativePath(directory)
 	result, err := runNativeJob(resolved)
@@ -623,7 +609,7 @@ func RunNative(directory string, errout io.Writer) int {
 		writeNativeError(resolved, err, errout)
 		return 1
 	}
-	encoded, err := CanonicalJSON(canonicalValue(result))
+	encoded, err := CanonicalJSON(result)
 	if err != nil {
 		writeNativeError(resolved, err, errout)
 		return 1
@@ -632,54 +618,59 @@ func RunNative(directory string, errout io.Writer) int {
 	return 0
 }
 
-func runNativeJob(directory string) (ordObj, error) {
+func runNativeJob(directory string) (map[string]any, error) {
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
-	if _, isObject := request.(ordObj); !isObject {
-		return ordObj{}, pySubscriptError(request)
+	if _, isObject := request.(map[string]any); !isObject {
+		return nil, fmt.Errorf("native-request.json must contain a JSON object")
 	}
 	providerValue, present := entryOf(request, "provider")
 	if !present {
-		return ordObj{}, &pyError{name: "KeyError", message: "'provider'"}
+		return nil, fmt.Errorf("missing JSON field %q", "provider")
 	}
 	provider, isString := providerValue.(string)
 	if !isString {
-		// A non-string provider raises KeyError(<value>) in Python; its str()
-		// is the repr.
-		return ordObj{}, &pyError{name: "KeyError", message: pyReprOf(providerValue)}
+		return nil, fmt.Errorf("provider must be a string")
 	}
 	if err := dshDispatch(provider); err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
-	// The registry's execute wrapper: a truthy binding is validated before the
-	// implementation runs (NativeAdapter.execute).
-	if binding := getOf(request, "binding"); pyTruthy(binding) {
-		if err := dshValidateBinding(binding); err != nil {
-			return ordObj{}, err
+	// The registry's execute wrapper: a captured binding is validated before
+	// the implementation runs (NativeAdapter.execute). An empty binding
+	// object is nothing captured, so there is nothing to validate.
+	if binding := getOf(request, "binding"); binding != nil {
+		object, isObject := binding.(map[string]any)
+		if !isObject {
+			return nil, fmt.Errorf("binding must be a JSON object")
+		}
+		if len(object) > 0 {
+			if err := dshValidateBinding(object); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return dshExecute(request, directory, pyTruthy(getOf(request, "probe")))
+	return dshExecute(request, directory, getOf(request, "probe") == true)
 }
 
-// writeNativeError lands the Python-shaped failure record and echoes it to
-// stderr. SessionUnavailable carries its four extra keys with the host's
-// original code value (null included).
+// writeNativeError lands the failure record and echoes it to stderr.
+// SessionUnavailable carries its four extra keys with the host's original
+// code value (null included).
 func writeNativeError(directory string, err error, errout io.Writer) {
 	text := nativeErrorText(err)
-	detail := dict("error", text)
-	if unavailable, ok := err.(*pySessionUnavailable); ok {
+	detail := map[string]any{"error": text}
+	if unavailable, ok := err.(*sessionUnavailableError); ok {
 		method := unavailable.method
 		if method == "" {
 			method = "session/resume"
 		}
-		detail.Set("error_kind", "SESSION_UNAVAILABLE")
-		detail.Set("identity", unavailable.identity)
-		detail.Set("method", method)
-		detail.Set("native_code", unavailable.code)
+		detail["error_kind"] = "SESSION_UNAVAILABLE"
+		detail["identity"] = unavailable.identity
+		detail["method"] = method
+		detail["native_code"] = unavailable.code
 	}
-	if writeErr := writeNativeJSON(filepath.Join(directory, "native-error.json"), detail); writeErr != nil {
+	if writeErr := writeAtomicJSON(filepath.Join(directory, "native-error.json"), detail); writeErr != nil {
 		fmt.Fprintf(errout, "%s\n", text)
 		fmt.Fprintf(errout, "cannot write native-error.json: %v\n", writeErr)
 		return
@@ -703,21 +694,20 @@ func (e *nativeRefusal) Error() string { return e.refusal }
 
 // asNativeRefusal converts a native typed error into a bridge refusal carrying
 // the exception family, mirroring Python's refuse(): the refusal text is the
-// bare message (str(exc), without the class-name prefix that only the
-// native-error.json record adds), the RuntimeBlocked family (SessionUnavailable
-// included) keeps kind "", the HarnessError family reports kind "binding".
-// Anything else (a Python TypeError/KeyError leaking through a malformed
-// payload) stays a bridge failure.
+// bare message (without the family prefix that only the native-error.json
+// record adds), the RuntimeBlocked family (SessionUnavailable included) keeps
+// kind "", the HarnessError family reports kind "binding". Anything else (a
+// malformed payload leaking through) stays a bridge failure.
 func asNativeRefusal(err error) error {
 	if err == nil {
 		return nil
 	}
 	switch typed := err.(type) {
-	case *pySessionUnavailable:
+	case *sessionUnavailableError:
 		return &nativeRefusal{kind: "", refusal: typed.message}
-	case *pyRuntimeBlocked:
+	case *blockedError:
 		return &nativeRefusal{kind: "", refusal: typed.message}
-	case *pyHarnessError:
+	case *bindingError:
 		return &nativeRefusal{kind: "binding", refusal: typed.message}
 	}
 	return err
@@ -741,7 +731,7 @@ func nativeVerifyBinding(provider string, binding json.RawMessage) error {
 	if err := dshDispatch(provider); err != nil {
 		return asNativeRefusal(err)
 	}
-	value, err := decodeOrdered(binding)
+	value, err := decodeNativeJSON(binding)
 	if err != nil {
 		return err
 	}
@@ -756,7 +746,7 @@ func nativeVerifySource(provider string, directory string, source json.RawMessag
 	if err := dshDispatch(provider); err != nil {
 		return asNativeRefusal(err)
 	}
-	value, err := decodeOrdered(source)
+	value, err := decodeNativeJSON(source)
 	if err != nil {
 		return err
 	}
@@ -772,7 +762,7 @@ func nativeReconcile(provider string, directory string, process json.RawMessage)
 	if err := dshDispatch(provider); err != nil {
 		return nil, asNativeRefusal(err)
 	}
-	value, err := decodeOrdered(process)
+	value, err := decodeNativeJSON(process)
 	if err != nil {
 		return nil, err
 	}

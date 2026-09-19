@@ -1,31 +1,34 @@
 package harness
 
 // The shared mechanics every native host transport uses, the port of
-// formal_gates_harness/native_transport.py plus its decoded-value contract. A
-// native transport is always the same machine: spawn one host process, speak
-// line-delimited JSON over its stdio, keep a routing-only trace, answer the
-// host's own client-directed requests and write the same four evidence files.
-// Only the launch arguments and the protocol sequence belong to an adapter
-// (native_dsh.go today, zcode in G2c), supplied as plain hook functions on
-// nativeHooks - the Go spelling of the Python base class's overridable methods.
-// No interface, no registry, no assembly injection: the adapter and the
-// transport live in this one package.
+// formal_gates_harness/native_transport.py. A native transport is always the
+// same machine: spawn one host process, speak line-delimited JSON over its
+// stdio, keep a routing-only trace, answer the host's own client-directed
+// requests and write the same four evidence files. Only the launch arguments
+// and the protocol sequence belong to an adapter (native_dsh.go today, zcode
+// in G2c), supplied as plain hook functions on nativeHooks - the Go spelling
+// of the Python base class's overridable methods. No interface, no registry,
+// no assembly injection: the adapter and the transport live in this one
+// package.
 //
-// Byte contracts. Everything that lands on disk atomically is canonical
-// (sorted keys, compact) through writeNativeJSON; answer.raw.txt keeps the
-// original bytes; the JSON embedded in error texts and the schema embedded in
-// the prompt keep Python's json.dumps(ensure_ascii=False) default shape through
-// pyDumps/PyDumpsRaw. The outbound protocol lines, protocol.jsonl and stdout
-// use the canonical compact form (registered bounded differences: JSON
-// equivalence, consumers parse by value).
+// Every JSON surface this file touches is canonical (sorted keys, compact):
+// everything that lands on disk goes through the single atomic writer, and
+// the outbound protocol lines and stdout use CanonicalJSON directly. Consumers
+// on both sides parse by value.
+//
+// Decoded values are plain Go values (map[string]any, []any, string, bool,
+// nil) with number literals kept as json.Number so the canonical encoder can
+// re-render them exactly. Decision points state their business meaning
+// explicitly (an integer turn counter, a non-empty session id, a binding with
+// entries) rather than emulating a Python runtime.
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,136 +52,248 @@ const nativeUnsupportedMethod = -32601
 // order the receipt proofs them (native_transport.SOURCE_FILES).
 var nativeSourceFiles = []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"}
 
-// --- typed errors (the Python exception families) -----------------------------
+// --- typed errors (the reference exception families) ---------------------------
 
-// pyHarnessError is the refusal family the reference implementation raises for
-// binding-class failures (Python formal_gates_harness.infra.HarnessError).
-type pyHarnessError struct{ message string }
+// bindingError is the refusal family for binding-class failures (the reference
+// implementation's HarnessError): the harness cannot even start the work.
+type bindingError struct{ message string }
 
-func (e *pyHarnessError) Error() string { return e.message }
+func (e *bindingError) Error() string { return e.message }
 
-// pyRuntimeBlocked is the blocked-run refusal family (Python RuntimeBlocked).
-type pyRuntimeBlocked struct{ message string }
+// blockedError is the blocked-run refusal family (the reference RuntimeBlocked).
+type blockedError struct{ message string }
 
-func (e *pyRuntimeBlocked) Error() string { return e.message }
+func (e *blockedError) Error() string { return e.message }
 
-// pySessionUnavailable is the subclass of pyRuntimeBlocked for "the host
+// sessionUnavailableError is the subclass of blockedError for "the host
 // explicitly rejected the persistent session identity". Identity and code keep
 // the host's original JSON values (number, string or null) verbatim.
-type pySessionUnavailable struct {
-	pyRuntimeBlocked
+type sessionUnavailableError struct {
+	blockedError
 	identity any
 	method   string
 	code     any
 }
 
-// pyError carries a Python exception the reference implementation would have
-// raised verbatim (KeyError, FileNotFoundError, JSONDecodeError, ...); name is
-// type(exc).__name__ and message is str(exc) without the class prefix.
-type pyError struct {
-	name    string
-	message string
-}
+// duplicateKeyError is a repeated object key in a document decoded with
+// infra.read semantics.
+type duplicateKeyError struct{ key string }
 
-func (e *pyError) Error() string { return e.name + ": " + e.message }
+func (e *duplicateKeyError) Error() string { return "duplicate JSON field: " + e.key }
 
-// nativeErrorTypeName maps an error to the Python class name the native error
-// file records. Unexpected Go failures land on OSError, which is what the
-// reference implementation's OSError paths would have produced.
-func nativeErrorTypeName(err error) string {
-	switch typed := err.(type) {
-	case *pyError:
-		return typed.name
-	case *pySessionUnavailable:
-		return "SessionUnavailable"
-	case *pyRuntimeBlocked:
-		return "RuntimeBlocked"
-	case *pyHarnessError:
-		return "HarnessError"
-	default:
-		return "OSError"
-	}
-}
-
-// nativeErrorText is f'{type(exc).__name__}: {exc}': the class name once, then
-// the message. A pyError's own Error() already carries its class name, so it is
-// not prefixed a second time.
+// nativeErrorText is the text the native error file and stderr carry: the
+// reference exception family name once, then the message, so the Python driver
+// can strip the prefix (its _message_without_type_prefix). A plain Go error -
+// a malformed request, an unreadable file, a failed spawn - has no family and
+// is recorded as its own text.
 func nativeErrorText(err error) string {
-	if typed, ok := err.(*pyError); ok {
-		return typed.name + ": " + typed.message
+	switch typed := err.(type) {
+	case *sessionUnavailableError:
+		return "SessionUnavailable: " + typed.message
+	case *blockedError:
+		return "RuntimeBlocked: " + typed.message
+	case *bindingError:
+		return "HarnessError: " + typed.message
+	default:
+		return err.Error()
 	}
-	return nativeErrorTypeName(err) + ": " + err.Error()
 }
 
-// pyFileErrorParts renders a file access failure the way CPython raises it,
-// from the same errno tables the supervisor uses (no second mapping). The
-// reachable classes for reads are ENOENT (FileNotFoundError), EACCES
-// (PermissionError), EISDIR (IsADirectoryError) and ENOTDIR
-// (NotADirectoryError).
-func pyFileErrorParts(err error, path string) (string, string) {
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		name := exceptionName[int(errno)]
-		if name == "" {
-			name = "OSError"
-		}
-		message := strerrorText[int(errno)]
-		if message == "" {
-			message = errno.Error()
-		}
-		return name, fmt.Sprintf("[Errno %d] %s: '%s'", int(errno), message, path)
-	}
-	return "OSError", err.Error()
-}
+// --- JSON decoding and decoded-value access -----------------------------------
 
-// pyFileError is pyFileErrorParts as a pyError.
-func pyFileError(err error, path string) error {
-	name, message := pyFileErrorParts(err, path)
-	return &pyError{name: name, message: message}
-}
-
-// pyExecErrorParts renders Go's process start failure using CPython's exception
-// name and message, separately, mirroring mapExecError's tables (the reachable
-// errnos are ENOENT, EACCES and ENOEXEC; anything else stays a generic OSError
-// with the same {Name}: [{Errno}] ... shape).
-func pyExecErrorParts(err error, argv0 string) (string, string) {
-	var notFound *exec.Error
-	if errors.As(err, &notFound) {
-		// CPython's Popen reports an unresolvable command (bare name missing
-		// from PATH, or a missing absolute path) as FileNotFoundError.
-		return "FileNotFoundError", fmt.Sprintf("[Errno 2] No such file or directory: '%s'", argv0)
-	}
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		if name, ok := exceptionName[int(errno)]; ok {
-			return name, fmt.Sprintf("[Errno %d] %s: '%s'", int(errno), strerrorText[int(errno)], argv0)
-		}
-		return "OSError", fmt.Sprintf("[Errno %d] %s: '%s'", int(errno), errno.Error(), argv0)
-	}
-	return "OSError", err.Error()
-}
-
-// --- reading files and paths the way the reference does -----------------------
-
-// readJSONFile mirrors infra.read: read the file as UTF-8 text, decode one JSON
-// document in document order, refuse duplicate keys. Failure texts are the
-// Python ones (FileNotFoundError / IsADirectoryError / JSONDecodeError /
-// duplicate field HarnessError) because they surface in native-error.json.
+// readJSONFile reads and decodes one evidence/request file (infra.read): a
+// repeated object key is refused, never silently collapsed.
 func readJSONFile(path string) (any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, pyFileError(err, path)
+		return nil, err
 	}
-	value, err := decodeOrderedUnique(data)
+	value, err := decodeUniqueKeys(data)
 	if err != nil {
-		var syntax *jsonSyntaxError
-		if errors.As(err, &syntax) {
-			return nil, &pyError{name: "JSONDecodeError", message: syntax.Error()}
+		var duplicate *duplicateKeyError
+		if errors.As(err, &duplicate) {
+			return nil, &bindingError{message: err.Error()}
 		}
-		return nil, &pyHarnessError{message: err.Error()}
+		return nil, fmt.Errorf("invalid JSON in %s: %w", path, err)
 	}
 	return value, nil
 }
+
+// decodeNativeJSON decodes one JSON document: number literals keep their text
+// (json.Number) so the canonical encoder re-renders them exactly, and
+// anything after the document is an error.
+func decodeNativeJSON(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := expectDocumentEnd(decoder); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// decodeUniqueKeys is decodeNativeJSON with infra.read semantics: a repeated
+// object key is refused instead of collapsed.
+func decodeUniqueKeys(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, err := decodeUniqueValue(decoder)
+	if err != nil {
+		return nil, err
+	}
+	if err := expectDocumentEnd(decoder); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func expectDocumentEnd(decoder *json.Decoder) error {
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("extra data after the JSON document")
+	}
+	return nil
+}
+
+// decodeUniqueValue walks one decoder token stream building plain values and
+// refusing repeated object keys.
+func decodeUniqueValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, isDelim := token.(json.Delim)
+	if !isDelim {
+		return token, nil // string, json.Number, bool or nil
+	}
+	switch delim {
+	case '{':
+		object := map[string]any{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid object key %v", keyToken)
+			}
+			if _, exists := object[key]; exists {
+				return nil, &duplicateKeyError{key: key}
+			}
+			value, err := decodeUniqueValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = value
+		}
+		if _, err := decoder.Token(); err != nil { // consume '}'
+			return nil, err
+		}
+		return object, nil
+	case '[':
+		array := []any{}
+		for decoder.More() {
+			item, err := decodeUniqueValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, item)
+		}
+		if _, err := decoder.Token(); err != nil { // consume ']'
+			return nil, err
+		}
+		return array, nil
+	}
+	return nil, fmt.Errorf("unexpected delimiter %v", delim)
+}
+
+// entryOf is v[key] over a decoded object; the second result reports presence
+// (null counts).
+func entryOf(v any, key string) (any, bool) {
+	if object, ok := v.(map[string]any); ok {
+		value, present := object[key]
+		return value, present
+	}
+	return nil, false
+}
+
+// getOf is v.get(key): nil when absent.
+func getOf(v any, key string) any {
+	value, _ := entryOf(v, key)
+	return value
+}
+
+// getOrOf is v.get(key, default): the default only when the key is absent.
+func getOrOf(v any, key string, fallback any) any {
+	if value, ok := entryOf(v, key); ok {
+		return value
+	}
+	return fallback
+}
+
+// mustEntry is a required field of a decoded object; a missing key is a
+// malformed document, not a business refusal.
+func mustEntry(v any, key string) (any, error) {
+	if value, ok := entryOf(v, key); ok {
+		return value, nil
+	}
+	return nil, fmt.Errorf("missing JSON field %q", key)
+}
+
+// listOf is v as an array; anything else (absent included) is empty.
+func listOf(v any) []any {
+	if list, ok := v.([]any); ok {
+		return list
+	}
+	return nil
+}
+
+// objectOrEmpty coerces a decoded value to an object: anything but an object
+// (absent and null included) is empty. The live host always answers objects
+// where this is used.
+func objectOrEmpty(v any) map[string]any {
+	if object, ok := v.(map[string]any); ok {
+		return object
+	}
+	return map[string]any{}
+}
+
+// textOf renders a decoded JSON value as text: a string verbatim, every other
+// value as its canonical JSON. Error texts embed host-controlled values
+// (a stop reason, a turn-end reason), and canonical JSON is this
+// implementation's value rendering.
+func textOf(v any) string {
+	switch typed := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return typed
+	default:
+		encoded, err := CanonicalJSON(typed)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(encoded)
+	}
+}
+
+// Equality at decision points is verify.go's valuesEqual: two decoded JSON
+// values are equal when they denote the same value, numbers compared exactly
+// across representations (this package's int counters and proof sizes meet the
+// host's decoded literals). A bool is never equal to a number.
+
+// isIntegerLiteral reports a decoded integer literal of any magnitude. The
+// native turn number is an integer counter; a float literal, a string or a
+// bool is not a turn.
+func isIntegerLiteral(v any) bool {
+	number, ok := v.(json.Number)
+	return ok && !strings.ContainsAny(number.String(), ".eE")
+}
+
+// --- paths ---------------------------------------------------------------------
 
 // resolveNativePath mirrors Path.resolve(): an absolute, symlink-resolved,
 // lexically cleaned path. Non-existent trailing components keep the longest
@@ -198,457 +313,119 @@ func resolveNativePath(path string) string {
 	return absolute
 }
 
-// --- decoded-value access with Python semantics -------------------------------
-
-// entryOf is v[key]; the second result reports presence (null counts).
-func entryOf(v any, key string) (any, bool) {
-	if object, ok := v.(ordObj); ok {
-		return object.Get(key)
-	}
-	return nil, false
-}
-
-// getOf is v.get(key): nil when absent.
-func getOf(v any, key string) any {
-	value, _ := entryOf(v, key)
-	return value
-}
-
-// getOrOf is v.get(key, default): the default only when the key is absent.
-func getOrOf(v any, key string, fallback any) any {
-	if value, ok := entryOf(v, key); ok {
-		return value
-	}
-	return fallback
-}
-
-// mustEntry is v[key]: a Python KeyError (whose str is the repr of the key).
-func mustEntry(v any, key string) (any, error) {
-	if value, ok := entryOf(v, key); ok {
-		return value, nil
-	}
-	return nil, &pyError{name: "KeyError", message: pyReprOf(key)}
-}
-
-// pySubscriptError renders CPython's message for subscripting a non-object with
-// a string key, which is what read()ing a scalar native-request.json produces.
-func pySubscriptError(v any) error {
-	switch v.(type) {
-	case []any:
-		return &pyError{name: "TypeError", message: "list indices must be integers or slices, not str"}
-	case string:
-		return &pyError{name: "TypeError", message: "string indices must be integers"}
-	case json.Number:
-		return &pyError{name: "TypeError", message: "'float' object is not subscriptable"}
-	case bool:
-		return &pyError{name: "TypeError", message: "'bool' object is not subscriptable"}
-	case nil:
-		return &pyError{name: "TypeError", message: "'NoneType' object is not subscriptable"}
-	default:
-		return &pyError{name: "TypeError", message: fmt.Sprintf("'%T' object is not subscriptable", v)}
-	}
-}
-
-// pyAttrError renders the AttributeError Python raises for .get on a non-dict.
-func pyAttrError(v any, attribute string) error {
-	return &pyError{name: "AttributeError", message: pyReprTypeName(v) + " object has no attribute '" + attribute + "'"}
-}
-
-func pyReprTypeName(v any) string {
-	switch typed := v.(type) {
-	case []any:
-		return "'list'"
-	case string:
-		return "'str'"
-	case json.Number:
-		// Python's own literal split: an integer literal is an int, anything
-		// with a fraction or exponent is a float.
-		if !strings.ContainsAny(typed.String(), ".eE") {
-			return "'int'"
-		}
-		return "'float'"
-	case bool:
-		return "'bool'"
-	case nil:
-		return "'NoneType'"
-	default:
-		return fmt.Sprintf("'%T'", v)
-	}
-}
-
-// --- Python truthiness, equality and str() ------------------------------------
-
-// pyTruthy is Python bool(v) over decoded JSON values: null, false, zero
-// numbers, empty strings, empty arrays and empty objects are falsy.
-func pyTruthy(v any) bool {
-	switch typed := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case []any:
-		return len(typed) > 0
-	case ordObj:
-		return typed.Len() > 0
-	case json.Number:
-		return !numberIsZero(typed.String())
-	case int:
-		return typed != 0
-	case int64:
-		return typed != 0
-	case float64:
-		return typed != 0 // NaN is truthy, and NaN != 0 is true
-	default:
-		return true
-	}
-}
-
-func numberIsZero(literal string) bool {
-	rational, ok := new(big.Rat).SetString(literal)
-	if ok {
-		return rational.Sign() == 0
-	}
-	// NaN (or anything unparseable) is never zero; bool(float('nan')) is true.
-	return false
-}
-
-func isJSONNumber(v any) bool {
-	switch v.(type) {
-	case json.Number, int, int64, float64:
-		return true
-	}
-	return false
-}
-
-func boolNumber(v bool) json.Number {
-	if v {
-		return json.Number("1")
-	}
-	return json.Number("0")
-}
-
-// pyEquals is Python == over decoded JSON values. bool is an int subclass
-// (true == 1), and integers compare numerically with floats (1 == 1.0), both
-// exactly rather than after a float64 round-trip; other type pairs are unequal
-// unless deeply equal.
-func pyEquals(a, b any) bool {
-	if boolean, ok := a.(bool); ok {
-		if other, isBool := b.(bool); isBool {
-			return boolean == other
-		}
-		return isJSONNumber(b) && literalsEqual(boolNumber(boolean), b)
-	}
-	if boolean, ok := b.(bool); ok {
-		return isJSONNumber(a) && literalsEqual(boolNumber(boolean), a)
-	}
-	if isJSONNumber(a) || isJSONNumber(b) {
-		return isJSONNumber(a) && isJSONNumber(b) && literalsEqual(a, b)
-	}
-	switch typed := a.(type) {
-	case nil:
-		return b == nil
-	case string:
-		other, ok := b.(string)
-		return ok && typed == other
-	case ordObj:
-		return pyDictEqual(typed, b)
-	case []any:
-		other, ok := b.([]any)
-		if !ok || len(typed) != len(other) {
-			return false
-		}
-		for i := range typed {
-			if !pyEquals(typed[i], other[i]) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// pyDictEqual is Python dict ==: same key set, order-insensitive.
-func pyDictEqual(a ordObj, b any) bool {
-	other, ok := b.(ordObj)
-	if !ok || a.Len() != other.Len() {
-		return false
-	}
-	for _, key := range a.Keys() {
-		right, present := other.Get(key)
-		if !present {
-			return false
-		}
-		left, _ := a.Get(key)
-		if !pyEquals(left, right) {
-			return false
-		}
-	}
-	return true
-}
-
-func literalsEqual(a, b any) bool {
-	left, leftOK := rationalOf(a)
-	right, rightOK := rationalOf(b)
-	if leftOK && rightOK {
-		return left.Cmp(right) == 0
-	}
-	// NaN (or an unparseable literal) never equals anything, itself included.
-	return false
-}
-
-func rationalOf(v any) (*big.Rat, bool) {
-	switch typed := v.(type) {
-	case json.Number:
-		rational, ok := new(big.Rat).SetString(typed.String())
-		return rational, ok
-	case int:
-		return new(big.Rat).SetInt64(int64(typed)), true
-	case int64:
-		return new(big.Rat).SetInt64(typed), true
-	case float64:
-		rational := new(big.Rat).SetFloat64(typed)
-		return rational, rational != nil
-	}
-	return nil, false
-}
-
-// pyIsInt is isinstance(v, int): bool passes (bool subclasses int), a float
-// literal does not, an integer literal of any magnitude does.
-func pyIsInt(v any) bool {
-	switch typed := v.(type) {
-	case bool:
-		return true
-	case json.Number:
-		return !strings.ContainsAny(typed.String(), ".eE")
-	case int, int64:
-		return true
-	}
-	return false
-}
-
-// pyStr is str(v) as an f-string embeds it: strings raw, None/True/False
-// spelled out, numbers rendered by the shared encoders, containers via repr.
-func pyStr(v any) string {
-	switch typed := v.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if typed {
-			return "True"
-		}
-		return "False"
-	case string:
-		return typed
-	case json.Number, int, int64, float64:
-		text, err := pyDumps(v)
-		if err == nil {
-			return text
-		}
-		return fmt.Sprintf("%v", v)
-	case ordObj:
-		var out strings.Builder
-		writePyRepr(&out, typed)
-		return out.String()
-	case []any:
-		var out strings.Builder
-		writePyRepr(&out, typed)
-		return out.String()
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
-// pyReprOf is repr(v) for a decoded JSON value.
-func pyReprOf(v any) string {
-	var builder strings.Builder
-	writePyRepr(&builder, v)
-	return builder.String()
-}
-
-// writePyRepr renders a decoded JSON value like Python's repr(): single-quoted
-// strings, dict/list display in insertion order.
-func writePyRepr(out *strings.Builder, v any) {
-	switch typed := v.(type) {
-	case nil:
-		out.WriteString("None")
-	case bool:
-		if typed {
-			out.WriteString("True")
-		} else {
-			out.WriteString("False")
-		}
-	case string:
-		out.WriteByte('\'')
-		for _, r := range typed {
-			switch r {
-			case '\\':
-				out.WriteString(`\\`)
-			case '\'':
-				out.WriteString(`\'`)
-			case '\n':
-				out.WriteString(`\n`)
-			case '\r':
-				out.WriteString(`\r`)
-			case '\t':
-				out.WriteString(`\t`)
-			default:
-				if r < 0x20 || r == 0x7f {
-					fmt.Fprintf(out, `\x%02x`, r)
-					continue
-				}
-				out.WriteRune(r)
-			}
-		}
-		out.WriteByte('\'')
-	case json.Number, int, int64, float64:
-		out.WriteString(pyStr(typed))
-	case ordObj:
-		out.WriteByte('{')
-		for i, key := range typed.Keys() {
-			if i > 0 {
-				out.WriteString(", ")
-			}
-			writePyRepr(out, key)
-			out.WriteString(": ")
-			value, _ := typed.Get(key)
-			writePyRepr(out, value)
-		}
-		out.WriteByte('}')
-	case []any:
-		out.WriteByte('[')
-		for i, item := range typed {
-			if i > 0 {
-				out.WriteString(", ")
-			}
-			writePyRepr(out, item)
-		}
-		out.WriteByte(']')
-	default:
-		fmt.Fprintf(out, "%v", typed)
-	}
-}
-
 // --- shared evidence helpers (native_transport) --------------------------------
 
 // proofObj shapes one content proof like Python's file_proof:
-// {"sha256": ..., "size": ...} in that insertion order.
-func proofObj(proof ContentProof) ordObj {
-	return dict("sha256", proof.SHA256, "size", proof.Size)
+// {"sha256": ..., "size": ...}.
+func proofObj(proof ContentProof) map[string]any {
+	return map[string]any{"sha256": proof.SHA256, "size": proof.Size}
 }
 
-// fileProofOf is file_proof: the content proof, or a RuntimeBlocked carrying
-// the refusal text for a missing/unreadable file.
-func fileProofOf(path string) (ordObj, error) {
+// fileProofOf is file_proof: the content proof, or a blockedError carrying the
+// refusal text for a missing/unreadable file.
+func fileProofOf(path string) (map[string]any, error) {
 	proof, refusal := FileProof(path)
 	if refusal != "" {
-		return ordObj{}, &pyRuntimeBlocked{message: refusal}
+		return nil, &blockedError{message: refusal}
 	}
 	return proofObj(proof), nil
 }
 
 // buildCaptureBinding is capture_binding: {'provider', 'launch', 'files':
 // {path: proof}} for every executed file the launch names.
-func buildCaptureBinding(provider string, launch ordObj) (ordObj, error) {
-	files := dict()
-	for _, key := range launch.Keys() {
-		value, _ := launch.Get(key)
-		target := pyStr(value)
-		proof, err := fileProofOf(target)
+func buildCaptureBinding(provider string, launch map[string]any) (map[string]any, error) {
+	files := map[string]any{}
+	for _, target := range launch {
+		path := textOf(target)
+		proof, err := fileProofOf(path)
 		if err != nil {
-			return ordObj{}, err
-		}
-		files.Set(target, proof)
-	}
-	return dict("provider", provider, "launch", launch, "files", files), nil
-}
-
-// splitLines splits text like Python's universal-newline line iteration: \n,
-// \r\n and lone \r all end lines, and a final unterminated line is still a
-// line. Terminators are not part of the returned lines.
-func splitLines(text string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(text); i++ {
-		switch text[i] {
-		case '\n':
-			lines = append(lines, text[start:i])
-			start = i + 1
-		case '\r':
-			lines = append(lines, text[start:i])
-			if i+1 < len(text) && text[i+1] == '\n' {
-				i++
-			}
-			start = i + 1
-		}
-	}
-	if start < len(text) {
-		lines = append(lines, text[start:])
-	}
-	return lines
-}
-
-// sessionEvents yields this session's evidence events, rejecting mixed-session
-// evidence (native_transport.session_events). Lines are decoded with plain
-// json.loads semantics: document order, duplicate keys collapse.
-func sessionEvents(directory string, identity any) ([]any, error) {
-	path := filepath.Join(directory, "native-events.jsonl")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, pyFileError(err, path)
-	}
-	var events []any
-	for _, line := range splitLines(string(body)) {
-		value, err := decodeOrdered([]byte(line))
-		if err != nil {
-			var syntax *jsonSyntaxError
-			if errors.As(err, &syntax) {
-				return nil, &pyError{name: "JSONDecodeError", message: syntax.Error()}
-			}
 			return nil, err
 		}
-		if !pyEquals(getOf(value, "sessionId"), identity) {
-			return nil, &pyRuntimeBlocked{message: "BINDING: mixed session evidence"}
-		}
-		events = append(events, value)
+		files[path] = proof
 	}
-	return events, nil
+	return map[string]any{"provider": provider, "launch": launch, "files": files}, nil
+}
+
+// forEachSessionEvent streams this session's evidence events one line at a
+// time, rejecting mixed-session evidence (native_transport.session_events).
+// Only one decoded line is alive at a time: native-events.jsonl reaches tens
+// of megabytes on a long turn, and the whole turn is never held in memory.
+func forEachSessionEvent(directory string, identity any, handle func(record map[string]any) error) error {
+	path := filepath.Join(directory, "native-events.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(file, 64*1024)
+	for {
+		line, readErr := readNativeLine(reader)
+		// A yielded line is handled even when it is empty after terminator
+		// stripping (an empty line is a non-JSON failure); the empty read at
+		// clean EOF is not a line at all.
+		if line != "" || readErr == nil {
+			if err := handleSessionLine(path, line, identity, handle); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
+	}
+}
+
+// handleSessionLine decodes one event line and checks its session binding
+// before the caller sees it.
+func handleSessionLine(path, line string, identity any, handle func(map[string]any) error) error {
+	value, err := decodeNativeJSON([]byte(line))
+	if err != nil {
+		return fmt.Errorf("invalid JSON in %s: %w", path, err)
+	}
+	record, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid event record in %s: not a JSON object", path)
+	}
+	if !valuesEqual(record["sessionId"], identity) {
+		return &blockedError{message: "BINDING: mixed session evidence"}
+	}
+	return handle(record)
 }
 
 // writeNativeAnswer is write_answer: keep the native bytes, then decode them
-// into the business result. The saved file is compared the way Python's
-// text-mode read does it: universal newlines first (\r\n and a lone \r both
-// become \n), so a byte difference that text mode cannot observe is not a
-// refusal. A framing refusal is a RuntimeBlocked whose text already carries
-// the NATIVE_RESULT prefix.
+// into the business result. A saved file is compared after line-ending
+// normalisation (CRLF and a lone CR both read as LF), so a byte difference a
+// text read cannot observe is not a refusal. A framing refusal is a
+// blockedError whose text already carries the NATIVE_RESULT prefix.
 func writeNativeAnswer(directory, text, prefix string) error {
 	raw := filepath.Join(directory, "answer.raw.txt")
 	if _, statErr := os.Stat(raw); statErr == nil {
 		body, err := os.ReadFile(raw)
 		if err != nil {
-			return pyFileError(err, raw)
+			return err
 		}
-		if universalNewlines(string(body)) != text {
-			return &pyRuntimeBlocked{message: prefix + "_RESULT: saved output differs"}
+		if normalizeNewlines(string(body)) != text {
+			return &blockedError{message: prefix + "_RESULT: saved output differs"}
 		}
 	} else if os.IsNotExist(statErr) {
 		if err := os.WriteFile(raw, []byte(text), 0o644); err != nil {
-			return pyFileError(err, raw)
+			return err
 		}
 	} else {
-		return pyFileError(statErr, raw)
+		return statErr
 	}
 	result, refusal := FrameResult(text)
 	if refusal != "" {
-		return &pyRuntimeBlocked{message: refusal}
+		return &blockedError{message: refusal}
 	}
-	return writeNativeJSON(filepath.Join(directory, "answer.json"), result)
+	return writeAtomicJSON(filepath.Join(directory, "answer.json"), result)
 }
 
-// universalNewlines is text-mode reading in Python: every line ending (\n,
-// \r\n or a lone \r) becomes \n.
-func universalNewlines(text string) string {
+// normalizeNewlines maps every line ending (LF, CRLF or a lone CR) to LF: the
+// saved answer is compared as text, not as bytes.
+func normalizeNewlines(text string) string {
 	if !strings.ContainsRune(text, '\r') {
 		return text
 	}
@@ -668,22 +445,21 @@ func universalNewlines(text string) string {
 }
 
 // evidenceSource is the receipt every host returns: provider, identity, the
-// caller's extra keys in order, then proofs for the four evidence files.
-func evidenceSource(directory, provider string, identity any, extra ordObj) (ordObj, error) {
-	receipt := dict("provider", provider, "identity", identity)
-	for _, key := range extra.Keys() {
-		value, _ := extra.Get(key)
-		receipt.Set(key, value)
+// caller's extra keys, then proofs for the four evidence files.
+func evidenceSource(directory, provider string, identity any, extra map[string]any) (map[string]any, error) {
+	receipt := map[string]any{"provider": provider, "identity": identity}
+	for key, value := range extra {
+		receipt[key] = value
 	}
-	files := dict()
+	files := map[string]any{}
 	for _, name := range nativeSourceFiles {
 		proof, err := fileProofOf(filepath.Join(directory, name))
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		files.Set(name, proof)
+		files[name] = proof
 	}
-	receipt.Set("files", files)
+	receipt["files"] = files
 	return receipt, nil
 }
 
@@ -692,38 +468,41 @@ func evidenceSource(directory, provider string, identity any, extra ordObj) (ord
 // original process record is never rewritten; the caller-supplied recover
 // re-observes the evidence.
 func reconcileCompletedOutput(directory string, process any, prefix string,
-	eligible func(original string) bool, recover func() (ordObj, error)) (ordObj, error) {
+	eligible func(original string) bool, recover func() (map[string]any, error)) (map[string]any, error) {
 	errorPath := filepath.Join(directory, "native-error.json")
 	exists := true
 	original := ""
 	if _, statErr := os.Stat(errorPath); statErr == nil {
 		record, err := readJSONFile(errorPath)
 		if err != nil {
-			return ordObj{}, err
+			return nil, err
 		}
-		original = pyStr(getOrOf(record, "error", ""))
+		original, _ = getOrOf(record, "error", "").(string)
 	} else if os.IsNotExist(statErr) {
 		exists = false
 	} else {
-		return ordObj{}, pyFileError(statErr, errorPath)
+		return nil, statErr
 	}
 	// Only a result-framing failure of an otherwise completed process can be
 	// replayed. A runtime or transport failure is never laundered into a result.
-	if !pyEquals(getOf(process, "exit_code"), 1) || pyTruthy(getOf(process, "error")) || !exists || !eligible(original) {
-		return ordObj{}, &pyRuntimeBlocked{message: prefix + "_RECONCILE: not a completed formatting-only failure"}
+	// The process record's error is a text that is empty when the supervisor
+	// recorded no message.
+	processError, _ := getOf(process, "error").(string)
+	if !valuesEqual(getOf(process, "exit_code"), 1) || processError != "" || !exists || !eligible(original) {
+		return nil, &blockedError{message: prefix + "_RECONCILE: not a completed formatting-only failure"}
 	}
 	source, err := recover()
 	if err != nil {
-		return ordObj{}, err
+		return nil, err
 	}
-	source.Set("reconciliation", dict(
-		"kind", "completed-output-format",
-		"original_exit_code", 1,
-		"original_error", original,
-		"new_model_calls", 0,
-	))
-	if err := writeNativeJSON(filepath.Join(directory, "source.json"), source); err != nil {
-		return ordObj{}, err
+	source["reconciliation"] = map[string]any{
+		"kind":               "completed-output-format",
+		"original_exit_code": 1,
+		"original_error":     original,
+		"new_model_calls":    0,
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+		return nil, err
 	}
 	return source, nil
 }
@@ -733,7 +512,7 @@ func reconcileCompletedOutput(directory string, process any, prefix string,
 // nativeReply is a client-directed request's answer: the payload plus its
 // recorded status.
 type nativeReply struct {
-	payload ordObj
+	payload map[string]any
 	status  string
 }
 
@@ -756,9 +535,9 @@ type nativeHooks struct {
 	invalidMessage string
 
 	identify     func(c *nativeClient) any
-	envelope     func(value ordObj) ordObj
+	envelope     func(value map[string]any) map[string]any
 	respond      func(method string, params any) (*nativeReply, error)
-	classify     func(method string, errValue any, params ordObj) error
+	classify     func(method string, errValue any, params map[string]any) error
 	notification func(message any)
 }
 
@@ -803,7 +582,7 @@ type nativeClient struct {
 	hooks        nativeHooks
 	directory    string
 	counter      int
-	interactions []ordObj
+	interactions []any
 	messages     *nativeQueue
 	errorsFile   *os.File
 	traceFile    *os.File
@@ -829,40 +608,35 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 	c.errorsFile, err = os.OpenFile(filepath.Join(directory, "host.stderr"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, pyFileError(err, filepath.Join(directory, "host.stderr"))
+		return nil, fmt.Errorf("cannot open %s: %w", filepath.Join(directory, "host.stderr"), err)
 	}
 	c.traceFile, err = os.OpenFile(filepath.Join(directory, "protocol.jsonl"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		c.errorsFile.Close()
-		return nil, pyFileError(err, filepath.Join(directory, "protocol.jsonl"))
+		return nil, fmt.Errorf("cannot open %s: %w", filepath.Join(directory, "protocol.jsonl"), err)
 	}
-	// CPython's Popen reports a bad cwd with the cwd itself in the error.
 	if workspace != "" {
 		info, statErr := os.Stat(workspace)
 		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				c.errorsFile.Close()
-				c.traceFile.Close()
-				return nil, &pyError{name: "FileNotFoundError",
-					message: fmt.Sprintf("[Errno 2] No such file or directory: '%s'", workspace)}
-			}
 			c.errorsFile.Close()
 			c.traceFile.Close()
-			return nil, pyFileError(statErr, workspace)
+			if os.IsNotExist(statErr) {
+				return nil, fmt.Errorf("workspace does not exist: %s", workspace)
+			}
+			return nil, fmt.Errorf("cannot stat workspace %s: %w", workspace, statErr)
 		}
 		if !info.IsDir() {
 			c.errorsFile.Close()
 			c.traceFile.Close()
-			return nil, &pyError{name: "NotADirectoryError",
-				message: fmt.Sprintf("[Errno 20] Not a directory: '%s'", workspace)}
+			return nil, fmt.Errorf("workspace is not a directory: %s", workspace)
 		}
 	}
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
 		c.errorsFile.Close()
 		c.traceFile.Close()
-		return nil, pyFileError(err, "stdio")
+		return nil, fmt.Errorf("cannot create the stdio pipes: %w", err)
 	}
 	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
@@ -870,7 +644,7 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 		stdinWrite.Close()
 		c.errorsFile.Close()
 		c.traceFile.Close()
-		return nil, pyFileError(err, "stdio")
+		return nil, fmt.Errorf("cannot create the stdio pipes: %w", err)
 	}
 	c.stdin = stdinWrite
 	c.cmd = exec.Command(argv[0], argv[1:]...)
@@ -886,8 +660,7 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 		stdoutWrite.Close()
 		c.errorsFile.Close()
 		c.traceFile.Close()
-		name, message := pyExecErrorParts(startErr, argv[0])
-		return nil, &pyError{name: name, message: message}
+		return nil, fmt.Errorf("cannot start %s: %w", argv[0], startErr)
 	}
 	// The child owns the other ends now.
 	stdinRead.Close()
@@ -899,7 +672,7 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 		if groupErr != nil {
 			// The reference implementation's constructor raises here and leaks
 			// the just-spawned child; reaping it is observably identical and
-			// avoids a zombie. The error text is the observable part.
+			// avoids a zombie.
 			c.stdin.Close()
 			stdoutRead.Close()
 			_ = c.cmd.Process.Kill()
@@ -910,8 +683,8 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 		}
 		pgid = group
 	}
-	if err := writeNativeJSON(filepath.Join(directory, "native-process.json"),
-		dict("pid", c.cmd.Process.Pid, "pgid", pgid)); err != nil {
+	if err := writeAtomicJSON(filepath.Join(directory, "native-process.json"),
+		map[string]any{"pid": c.cmd.Process.Pid, "pgid": pgid}); err != nil {
 		return nil, err
 	}
 	go func() {
@@ -938,8 +711,8 @@ func (c *nativeClient) collect(stdout io.Reader) {
 	for {
 		line, readErr := readNativeLine(reader)
 		// A yielded line is handled even when it is empty after terminator
-		// stripping (Python's json.loads('\n') is a non-JSON failure); the
-		// empty read at clean EOF is not a line at all.
+		// stripping (an empty line is a non-JSON failure); the empty read at
+		// clean EOF is not a line at all.
 		if line != "" || readErr == nil {
 			if !c.handleLine(line) {
 				return
@@ -953,10 +726,10 @@ func (c *nativeClient) collect(stdout io.Reader) {
 
 // handleLine traces and queues one inbound line; false means stop reading.
 func (c *nativeClient) handleLine(line string) bool {
-	value, err := decodeOrdered([]byte(line))
+	value, err := decodeNativeJSON([]byte(line))
 	if err != nil {
 		// A non-JSON line is a transport failure; reading stops here (the
-		// deferred EOF closure still lands behind this one, as in Python).
+		// deferred EOF closure still lands behind this one).
 		c.messages.put(c.closureMessage(c.hooks.invalidMessageOr()))
 		return false
 	}
@@ -970,11 +743,11 @@ func (c *nativeClient) handleLine(line string) bool {
 // configuration and authentication material never appear.
 func (c *nativeClient) traceLine(value any) {
 	record := map[string]any{}
-	if object, ok := value.(ordObj); ok {
-		if id, present := object.Get("id"); present {
+	if object, ok := value.(map[string]any); ok {
+		if id, present := object["id"]; present {
 			record["id"] = id
 		}
-		if method, present := object.Get("method"); present {
+		if method, present := object["method"]; present {
 			record["method"] = method
 		}
 	}
@@ -986,45 +759,39 @@ func (c *nativeClient) traceLine(value any) {
 }
 
 // closureMessage is the synthetic queue entry that ends the transport.
-func (c *nativeClient) closureMessage(reason string) ordObj {
-	return dict(c.hooks.closedKeyOr(), reason)
+func (c *nativeClient) closureMessage(reason string) map[string]any {
+	return map[string]any{c.hooks.closedKeyOr(): reason}
 }
 
 // closureOf is the reason this transport cannot continue, or nil. Keys are
 // checked in order: the shared 'closed' key first, then this host's own
-// closed_key; either one present with a truthy value in ANY inbound message
-// counts (Python's `if closed:` truthiness test).
-func (c *nativeClient) closureOf(message ordObj) any {
+// closed_key; either one present with a non-empty reason string in ANY inbound
+// message counts.
+func (c *nativeClient) closureOf(message map[string]any) string {
 	for _, key := range []string{"closed", c.hooks.closedKeyOr()} {
-		if value, present := message.Get(key); present && pyTruthy(value) {
-			return value
+		if reason, ok := message[key].(string); ok && reason != "" {
+			return reason
 		}
 	}
-	return nil
+	return ""
 }
 
-// send writes one outbound frame as a canonical compact JSON line (registered
-// bounded difference: JSON-equivalent to the reference's default-separator
-// shape, parsed by value on the host side).
-func (c *nativeClient) send(value ordObj) error {
-	encoded, err := CanonicalJSON(canonicalValue(value))
+// send writes one outbound frame as a canonical compact JSON line; the host
+// parses by value.
+func (c *nativeClient) send(value map[string]any) error {
+	encoded, err := CanonicalJSON(value)
 	if err != nil {
 		return err
 	}
 	if _, err := c.stdin.Write(append(encoded, '\n')); err != nil {
-		// CPython surfaces a dead reader as BrokenPipeError without a filename.
-		var errno syscall.Errno
-		if errors.As(err, &errno) && errno == syscall.EPIPE {
-			return &pyError{name: "BrokenPipeError", message: "[Errno 32] Broken pipe"}
-		}
-		return pyFileError(err, "stdin")
+		return fmt.Errorf("cannot write to the host process stdin: %w", err)
 	}
 	return nil
 }
 
 // frame builds {id, method, params} and applies the host envelope.
-func (c *nativeClient) frame(ident any, method string, params ordObj) ordObj {
-	value := dict("id", ident, "method", method, "params", params)
+func (c *nativeClient) frame(ident any, method string, params map[string]any) map[string]any {
+	value := map[string]any{"id": ident, "method": method, "params": params}
 	if c.hooks.envelope != nil {
 		value = c.hooks.envelope(value)
 	}
@@ -1043,15 +810,15 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 	if !ok {
 		return nil, errNativeTimedOut
 	}
-	if object, isObject := message.(ordObj); isObject {
-		if reason := c.closureOf(object); reason != nil {
-			return nil, c.blocked(pyStr(reason))
+	if object, isObject := message.(map[string]any); isObject {
+		if reason := c.closureOf(object); reason != "" {
+			return nil, c.blocked(reason)
 		}
-		methodValue, hasMethod := object.Get("method")
-		_, hasID := object.Get("id")
-		if hasMethod && pyTruthy(methodValue) && hasID {
-			if err := c.answerReverse(object); err != nil {
-				return nil, err
+		if method, hasMethod := object["method"]; hasMethod && isLiveMethod(method) {
+			if _, hasID := object["id"]; hasID {
+				if err := c.answerReverse(object); err != nil {
+					return nil, err
+				}
 			}
 		} else if c.hooks.notification != nil {
 			c.hooks.notification(message)
@@ -1060,15 +827,20 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 	return message, nil
 }
 
+// isLiveMethod reports a method value that names a client-directed request: a
+// non-empty string. An absent, null, empty or otherwise inert method makes the
+// line a plain response.
+func isLiveMethod(v any) bool {
+	text, ok := v.(string)
+	return ok && text != ""
+}
+
 // answerReverse replies to a host request and records what was answered. A
 // respond hook error (a required user decision) propagates without any reply;
 // a nil reply is the base class's default refusal.
-func (c *nativeClient) answerReverse(message ordObj) error {
-	method := pyStr(getOf(message, "method"))
-	params := getOf(message, "params")
-	if !pyTruthy(params) {
-		params = dict()
-	}
+func (c *nativeClient) answerReverse(message map[string]any) error {
+	method := textOf(message["method"])
+	params := objectOrEmpty(message["params"])
 	var reply *nativeReply
 	if c.hooks.respond != nil {
 		var err error
@@ -1079,16 +851,15 @@ func (c *nativeClient) answerReverse(message ordObj) error {
 	}
 	if reply == nil {
 		reply = &nativeReply{
-			payload: dict("error", dict(
-				"code", nativeUnsupportedMethod,
-				"message", "Client method not supported")),
+			payload: map[string]any{"error": map[string]any{
+				"code":    nativeUnsupportedMethod,
+				"message": "Client method not supported"}},
 			status: "unsupported-method",
 		}
 	}
-	frame := dict("id", getOf(message, "id"))
-	for _, key := range reply.payload.Keys() {
-		value, _ := reply.payload.Get(key)
-		frame.Set(key, value)
+	frame := map[string]any{"id": message["id"]}
+	for key, value := range reply.payload {
+		frame[key] = value
 	}
 	if c.hooks.envelope != nil {
 		frame = c.hooks.envelope(frame)
@@ -1096,8 +867,9 @@ func (c *nativeClient) answerReverse(message ordObj) error {
 	if err := c.send(frame); err != nil {
 		return err
 	}
-	c.interactions = append(c.interactions, dict("method", method, "status", reply.status))
-	return writeNativeJSON(filepath.Join(c.directory, "interaction-status.json"), c.interactions)
+	c.interactions = append(c.interactions,
+		map[string]any{"method": method, "status": reply.status})
+	return writeAtomicJSON(filepath.Join(c.directory, "interaction-status.json"), c.interactions)
 }
 
 // nativeWaitDuration is the next receive's blocking budget: none for UNBOUNDED,
@@ -1118,11 +890,11 @@ func nativeWaitDuration(timeout time.Duration, deadline time.Time, hasDeadline b
 	return &remaining
 }
 
-// request sends one frame and waits for the matching response: same id (Python
-// equality: 1 == 1.0, true == 1) and no truthy method. An error body is
-// classified by the host hook or embedded verbatim with Python's default
-// separators and the inbound key order.
-func (c *nativeClient) request(method string, params ordObj, timeout ...time.Duration) (any, error) {
+// request sends one frame and waits for the matching response: the same id
+// (numbers compare numerically: this package's int counter meets the host's
+// echoed literal) and no live method. An error body is classified by the host
+// hook or embedded verbatim as canonical JSON.
+func (c *nativeClient) request(method string, params map[string]any, timeout ...time.Duration) (any, error) {
 	budget := c.hooks.defaultTimeoutOr()
 	if len(timeout) > 0 {
 		budget = timeout[0]
@@ -1157,11 +929,13 @@ func (c *nativeClient) request(method string, params ordObj, timeout ...time.Dur
 			}
 			return nil, err
 		}
-		object, isObject := message.(ordObj)
-		if !isObject || !pyEquals(getOf(object, "id"), ident) || pyTruthy(getOf(object, "method")) {
+		object, isObject := message.(map[string]any)
+		if !isObject || !valuesEqual(object["id"], ident) || isLiveMethod(object["method"]) {
 			continue
 		}
-		if errorValue := getOf(object, "error"); pyTruthy(errorValue) {
+		// JSON-RPC: an error member that is present and non-null is an error
+		// response, whatever its (degenerate) body.
+		if errorValue, present := object["error"]; present && errorValue != nil {
 			var specific error
 			if c.hooks.classify != nil {
 				specific = c.hooks.classify(method, errorValue, params)
@@ -1169,16 +943,17 @@ func (c *nativeClient) request(method string, params ordObj, timeout ...time.Dur
 			if specific != nil {
 				return nil, specific
 			}
-			embedded, err := pyDumps(errorValue)
+			embedded, err := CanonicalJSON(errorValue)
 			if err != nil {
 				return nil, err
 			}
-			return nil, &pyRuntimeBlocked{message: fmt.Sprintf("%s %s: %s", c.hooks.requestPrefix, method, embedded)}
+			return nil, &blockedError{message: fmt.Sprintf(
+				"%s %s: %s", c.hooks.requestPrefix, method, string(embedded))}
 		}
-		if result, present := object.Get("result"); present {
+		if result, present := object["result"]; present {
 			return result, nil
 		}
-		return dict(), nil
+		return map[string]any{}, nil
 	}
 }
 
@@ -1188,12 +963,12 @@ func (c *nativeClient) blocked(text string) error {
 	if c.hooks.transportPrefix != "" {
 		message = c.hooks.transportPrefix + ": " + text
 	}
-	return &pyRuntimeBlocked{message: message}
+	return &blockedError{message: message}
 }
 
 // timeoutError is the observable per-message/total timeout text.
 func (c *nativeClient) timeoutError(method string) error {
-	return &pyRuntimeBlocked{message: fmt.Sprintf("%s_TIMEOUT: %s", c.hooks.requestPrefix, method)}
+	return &blockedError{message: fmt.Sprintf("%s_TIMEOUT: %s", c.hooks.requestPrefix, method)}
 }
 
 // close ends the transport: close stdin, give the host 8s to exit on EOF,
@@ -1234,12 +1009,12 @@ func closeNativeSession(client *nativeClient, identity string) {
 	if identity == "" {
 		return
 	}
-	_, _ = client.request(client.hooks.closeMethodOr(), dict("sessionId", identity), 10*time.Second)
+	_, _ = client.request(client.hooks.closeMethodOr(), map[string]any{"sessionId": identity}, 10*time.Second)
 }
 
-// readNativeLine reads one universal-newline line the way Python's text-mode
-// iteration does: \n, \r\n and a lone \r all end lines. A final unterminated
-// line is still returned, with io.EOF as the error.
+// readNativeLine reads one universal-newline line the way a text-mode reader
+// does: \n, \r\n and a lone \r all end lines. A final unterminated line is
+// still returned, with io.EOF as the error.
 func readNativeLine(reader *bufio.Reader) (string, error) {
 	var line []byte
 	for {

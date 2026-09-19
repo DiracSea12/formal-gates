@@ -7,22 +7,28 @@ internal/harness/native_dsh.go) and the reference implementation over the same
 canonical native-request.json bytes, each in its OWN evidence directory, and
 asserts the two are observably equal.
 
-Comparison faces (the contract's bounded-difference registration):
+Comparison faces (the contract v2 value-level equivalence):
 
-- byte for byte, after normalising each side's own root path (and the plugin
-  path inside profile.json): every atomically written evidence file
-  (identity.json, source.json, answer.json, interaction-status.json,
-  profile.json, native-request.json), the native answer text (answer.raw.txt),
-  the prompt the host received (host-prompt.txt - string equality is byte
-  equality), and native-error.json's `error` text, which embeds Python-shaped
-  JSON (float repr, raw Unicode, inbound key order).
+- by value, parsed and compared as JSON after normalising each side's own root
+  path (and the plugin path inside profile.json): every atomically written
+  evidence file (identity.json, source.json, answer.json,
+  interaction-status.json, profile.json, native-request.json) and the schema
+  JSON embedded in the prompt the host received (host-prompt.txt). The Go side
+  renders canonical compact bytes where the reference renders default-separator
+  bytes; the JSON values are equal and consumers parse by value, which is
+  exactly the registered difference.
+- byte for byte: the native answer text (answer.raw.txt), which is the model's
+  own text on both sides.
+- the error records: the same exception-family prefix and the same message,
+  with one registered difference - a JSON body embedded in an error text (the
+  DSH_NATIVE request refusal, a turn-end reason) is Python-shaped on the
+  reference side and canonical on the Go side, so those two cases compare the
+  embedded body by value and expect each side's own rendering.
 - by value, parsed and compared as JSON: the outbound protocol lines the host
   echoed (host-frames.jsonl - including the session/new and session/prompt
   parameter values), the routing-only trace (protocol.jsonl), the host's record
   of frames it answered (host-replies.jsonl), and the Go command's stdout
-  result line. The Go side sends canonical compact bytes where the reference
-  sends default-separator bytes; the JSON values are equal and consumers parse
-  by value, which is exactly the registered difference.
+  result line.
 
 The two sides are deliberately asymmetric: the reference is called in-process
 (reference_native_dsh.execute), while the Go side is its own process, because one
@@ -70,20 +76,21 @@ SCHEMA = {'properties': {'findings': {'type': 'array'}, 'status': {'type': 'stri
           'required': ['status', 'summary'], 'type': 'object'}
 PROMPT = 'Review the requirement.'
 
-# The byte-for-byte faces: canonical atomic evidence, the raw answer text, the
-# prompt text the host received, and the error record (its text included).
-BYTE_FILES = ('native-request.json', 'profile.json', 'identity.json', 'source.json',
-              'answer.raw.txt', 'answer.json', 'interaction-status.json', 'host-prompt.txt')
-# The by-value faces (registered bounded differences): outbound protocol lines
-# echoed by the host, the routing-only trace, and the host's answered-frames
-# record. Go writes canonical compact bytes, the reference default-separator
-# bytes; the JSON values must be equal, so both sides are parsed before
-# comparing. Parsing is per line, which also makes the comparison line-ending
-# agnostic for the host's echo on Windows.
+# The by-value faces: every atomically written JSON document (Go renders them
+# canonically, the reference too, and the values must be equal), the outbound
+# protocol lines echoed by the host, the routing-only trace, and the host's
+# answered-frames record. Parsing is per line for the JSONL faces, which also
+# makes the comparison line-ending agnostic for the host's echo on Windows.
+JSON_FILES = ('native-request.json', 'profile.json', 'identity.json', 'source.json',
+              'answer.json', 'interaction-status.json')
 VALUE_FILES = ('protocol.jsonl', 'host-frames.jsonl', 'host-replies.jsonl')
-# A failure lands fewer files; the same split applies to what does land.
-ERROR_BYTE_FILES = ('native-request.json', 'profile.json', 'native-error.json', 'host-prompt.txt')
+# The byte-for-byte faces: the raw answer text is the model's own text on both
+# sides. A failure lands fewer files; the same split applies to what does land.
+RAW_FILES = ('answer.raw.txt',)
+ERROR_JSON_FILES = ('native-request.json', 'profile.json')
 ERROR_VALUE_FILES = VALUE_FILES
+# The prompt's fixed head; the schema JSON after it is compared by value.
+PROMPT_HEAD = PROMPT + '\nReturn ONLY one JSON object matching this result schema:\n'
 
 
 def event_record(session_id, event_type, data):
@@ -342,8 +349,26 @@ class DSHDifferential(unittest.TestCase):
         values = []
         for line in (directory / name).read_text(encoding='utf-8').splitlines():
             if line.strip():
-                values.append(json.loads(line))
+                values.append(self.normalize_prompt_strings(json.loads(line)))
         return values
+
+    def normalize_prompt_strings(self, value):
+        """Rewrite the schema JSON embedded in a prompt string to one canonical
+        form: the outbound session/prompt frame carries the prompt text, whose
+        embedded schema the reference renders with Python separators and Go
+        canonically (the registered difference; the values are equal)."""
+        if isinstance(value, str) and value.startswith(PROMPT_HEAD):
+            try:
+                schema = json.loads(value[len(PROMPT_HEAD):])
+            except ValueError:
+                return value
+            return PROMPT_HEAD + json.dumps(schema, ensure_ascii=False,
+                                            sort_keys=True, separators=(',', ':'))
+        if isinstance(value, list):
+            return [self.normalize_prompt_strings(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self.normalize_prompt_strings(item) for key, item in value.items()}
+        return value
 
     def compare_bytes(self, ref_dir, go_dir, names):
         for name in names:
@@ -353,6 +378,32 @@ class DSHDifferential(unittest.TestCase):
             if ref_exists:
                 self.assertEqual(self.normalized(ref_dir, name), self.normalized(go_dir, name),
                                  f'{name}: bytes differ after normalisation')
+
+    def compare_json_values(self, ref_dir, go_dir, names):
+        """Value-level evidence comparison: parse each side's normalised bytes."""
+        for name in names:
+            ref_exists = (ref_dir / name).exists()
+            go_exists = (go_dir / name).exists()
+            self.assertEqual(ref_exists, go_exists, f'{name}: existence differs')
+            if ref_exists:
+                ref_value = json.loads(self.normalized(ref_dir, name))
+                go_value = json.loads(self.normalized(go_dir, name))
+                self.assertEqual(ref_value, go_value, f'{name}: values differ')
+
+    def assert_prompt_equivalent(self, ref_dir, go_dir):
+        """host-prompt.txt: the fixed head byte for byte, the schema by value
+        (the reference renders it with Python separators, Go canonically)."""
+        exists = (ref_dir / 'host-prompt.txt').exists()
+        self.assertEqual(exists, (go_dir / 'host-prompt.txt').exists(),
+                         'host-prompt.txt: existence differs')
+        for directory in (ref_dir, go_dir):
+            if not exists:
+                return
+            prompt = (directory / 'host-prompt.txt').read_text(encoding='utf-8')
+            self.assertTrue(prompt.startswith(PROMPT_HEAD),
+                            f'{directory}: prompt head differs: {prompt[:80]!r}')
+            self.assertEqual(json.loads(prompt[len(PROMPT_HEAD):]), SCHEMA,
+                             f'{directory}: embedded schema differs')
 
     def compare_values(self, ref_dir, go_dir, names):
         for name in names:
@@ -376,7 +427,9 @@ class DSHDifferential(unittest.TestCase):
         self.assertIsNone(error, msg=repr(error))
         completed = self.run_go(go_dir)
         self.assertEqual(completed.returncode, 0, completed.stderr.decode('utf-8', 'replace'))
-        self.compare_bytes(ref_dir, go_dir, BYTE_FILES)
+        self.compare_json_values(ref_dir, go_dir, JSON_FILES)
+        self.compare_bytes(ref_dir, go_dir, RAW_FILES)
+        self.assert_prompt_equivalent(ref_dir, go_dir)
         self.compare_values(ref_dir, go_dir, VALUE_FILES)
         # stdout carries the result as one canonical JSON line on the Go side
         # and native_entry's default-separator shape before - a registered
@@ -384,18 +437,26 @@ class DSHDifferential(unittest.TestCase):
         self.assertEqual(json.loads(completed.stdout), result)
         return result
 
-    def assert_failure(self, ref_dir, go_dir, expected_error, expected_type=RuntimeBlocked):
+    def assert_failure(self, ref_dir, go_dir, expected_ref, expected_type=RuntimeBlocked,
+                       expected_go=None):
+        """expected_go defaults to expected_ref; the registered Go text
+        differences (a JSON body embedded in the message rendered canonically
+        instead of Python-shaped) pass it explicitly."""
+        if expected_go is None:
+            expected_go = expected_ref
         result, error = self.run_reference(ref_dir)
         self.assertIsNone(result)
         self.assertIsInstance(error, expected_type)
-        self.assertEqual(str(error), expected_error)
+        self.assertEqual(str(error), expected_ref)
         completed = self.run_go(go_dir)
         self.assertEqual(completed.returncode, 1)
-        self.compare_bytes(ref_dir, go_dir, ERROR_BYTE_FILES)
+        self.compare_json_values(ref_dir, go_dir, ERROR_JSON_FILES)
+        self.assert_prompt_equivalent(ref_dir, go_dir)
         self.compare_values(ref_dir, go_dir, ERROR_VALUE_FILES)
+        self.assertEqual(read(ref_dir / 'native-error.json')['error'],
+                         f'{type(error).__name__}: {expected_ref}')
         record = read(go_dir / 'native-error.json')
-        # The error text is byte-exact, embedded JSON included.
-        self.assertEqual(record['error'], f'{type(error).__name__}: {error}')
+        self.assertEqual(record['error'], f'{type(error).__name__}: {expected_go}')
         self.assertEqual(completed.stderr.decode('utf-8').strip(), record['error'])
         return error
 
@@ -420,7 +481,7 @@ class DSHDifferential(unittest.TestCase):
         self.assert_process_record_types(ref_dir, go_dir)
         # The echoed session/new frame carries the same parameter values on
         # both sides (the prompt text is compared byte for byte via
-        # host-prompt.txt in BYTE_FILES).
+        # host-prompt.txt in assert_prompt_equivalent).
         for directory in (ref_dir, go_dir):
             created = self.frame_with_method(directory, 'session/new')
             self.assertEqual(created['params']['mcpServers'], [])
@@ -510,8 +571,12 @@ class DSHDifferential(unittest.TestCase):
     def test_turn_end_kind_not_completed(self):
         events = [message_event('sess-root'), end_event('sess-root', kind='errored')]
         root, _workspace, _request, ref_dir, go_dir = self.scenario(knobs={'events': events})
+        # The reason value is the same; the Go side renders it as canonical
+        # JSON where the reference embeds Python's dict repr (registered
+        # difference).
         self.assert_failure(ref_dir, go_dir,
-                            "DSH_RESULT: turn was not completed: {'kind': 'errored'}")
+                            "DSH_RESULT: turn was not completed: {'kind': 'errored'}",
+                            expected_go='DSH_RESULT: turn was not completed: {"kind":"errored"}')
 
     def test_message_after_turn_end(self):
         events = default_events() + [message_event('sess-root', step=2)]
@@ -601,7 +666,9 @@ class DSHDifferential(unittest.TestCase):
         self.assertIsNone(error, msg=repr(error))
         completed = self.run_go(go_dir)
         self.assertEqual(completed.returncode, 0)
-        self.compare_bytes(ref_dir, go_dir, BYTE_FILES)
+        self.compare_json_values(ref_dir, go_dir, JSON_FILES)
+        self.compare_bytes(ref_dir, go_dir, RAW_FILES)
+        self.assert_prompt_equivalent(ref_dir, go_dir)
         self.compare_values(ref_dir, go_dir, VALUE_FILES)
         self.assertEqual(json.loads(completed.stdout), result)
         self.assertEqual(result['model_calls'], 0)
@@ -615,20 +682,27 @@ class DSHDifferential(unittest.TestCase):
             self.assertEqual(overlays[2], {'disabled': True, 'id': 'session-title-llm'})
 
     # --- 错误文本内嵌 JSON ---------------------------------------------------
-    def test_embedded_error_json_bytes(self):
-        # Float, Unicode, nesting and key-order sensitive: 'zz' deliberately
-        # precedes 'aa' so a sorted re-encode would be caught.
+    def test_embedded_error_json_value(self):
+        # Float, Unicode and nesting sensitive. The two sides embed the body
+        # with their own rendering (the reference Python's default separators
+        # and inbound key order, Go canonical compact): the VALUES must be
+        # equal, which is the registered difference.
         error_body = {'code': -32031, 'message': 'Model unavailable 测试',
                       'zz': 1e2, 'aa': {'unicode': 'ü会话', 'nested': {'b': 2, 'a': [1, None, True]}}}
         knobs = {'events': default_events(), 'errors': {'session/prompt': error_body}}
         root, _workspace, _request, ref_dir, go_dir = self.scenario(knobs=knobs)
-        expected = ('DSH_NATIVE session/prompt: '
-                    + json.dumps(error_body, ensure_ascii=False))
-        error = self.assert_failure(ref_dir, go_dir, expected)
-        # The embedded body keeps Python's float repr, raw Unicode and the
-        # inbound key order ('zz' before 'aa') byte for byte.
-        self.assertIn('"zz": 100.0, "aa": {"unicode": "ü会话", "nested": {"b": 2, "a": [1, null, true]}}',
-                      str(error))
+        expected_ref = 'DSH_NATIVE session/prompt: ' + json.dumps(error_body, ensure_ascii=False)
+        expected_go = ('DSH_NATIVE session/prompt: '
+                       + json.dumps(error_body, ensure_ascii=False, sort_keys=True,
+                                    separators=(',', ':')))
+        error = self.assert_failure(ref_dir, go_dir, expected_ref, expected_go=expected_go)
+        # The embedded body keeps the full value on both sides: float repr,
+        # raw Unicode, nesting.
+        prefix = 'DSH_NATIVE session/prompt: '
+        self.assertEqual(json.loads(str(error)[len(prefix):]), error_body)
+        go_text = read(go_dir / 'native-error.json')['error']
+        go_prefix = 'RuntimeBlocked: ' + prefix
+        self.assertEqual(json.loads(go_text[len(go_prefix):]), error_body)
 
 
 class DSHReconcileDifferential(unittest.TestCase):

@@ -127,9 +127,9 @@ func applyPeerStep(step peerStep, line string) {
 	}
 	send := step.Send
 	if strings.Contains(send, "@ID@") && line != "" {
-		if message, err := decodeOrdered([]byte(line)); err == nil {
-			if idJSON, err := pyDumps(getOf(message, "id")); err == nil {
-				send = strings.ReplaceAll(send, `"@ID@"`, idJSON)
+		if message, err := decodeNativeJSON([]byte(line)); err == nil {
+			if idJSON, err := CanonicalJSON(getOf(message, "id")); err == nil {
+				send = strings.ReplaceAll(send, `"@ID@"`, string(idJSON))
 			}
 		}
 	}
@@ -192,11 +192,10 @@ func spawnClient(t *testing.T, script peerScript, customize func(*nativeHooks)) 
 		closedMessage:   "native ACP process closed its output",
 		invalidMessage:  "non-JSON ACP output",
 		identify:        func(c *nativeClient) any { return c.nextCounter() },
-		envelope: func(value ordObj) ordObj {
-			framed := dict("jsonrpc", "2.0")
-			for _, key := range value.Keys() {
-				item, _ := value.Get(key)
-				framed.Set(key, item)
+		envelope: func(value map[string]any) map[string]any {
+			framed := map[string]any{"jsonrpc": "2.0"}
+			for key, item := range value {
+				framed[key] = item
 			}
 			return framed
 		},
@@ -204,7 +203,7 @@ func spawnClient(t *testing.T, script peerScript, customize func(*nativeHooks)) 
 			// The DSH rule: a required user decision is never approved or
 			// denied here, and never answered.
 			if method == "session/request_permission" {
-				return nil, &pyRuntimeBlocked{
+				return nil, &blockedError{
 					message: "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
 				}
 			}
@@ -232,26 +231,27 @@ func readTestFile(t *testing.T, path string) string {
 
 func blockedText(t *testing.T, err error) string {
 	t.Helper()
-	blocked, ok := err.(*pyRuntimeBlocked)
+	blocked, ok := err.(*blockedError)
 	if !ok {
-		if unavailable, isUnavailable := err.(*pySessionUnavailable); isUnavailable {
+		if unavailable, isUnavailable := err.(*sessionUnavailableError); isUnavailable {
 			return unavailable.message
 		}
-		t.Fatalf("expected pyRuntimeBlocked, got %T: %v", err, err)
+		t.Fatalf("expected blockedError, got %T: %v", err, err)
 	}
 	return blocked.message
 }
 
-// TestTransportOutgoingFrameBytes pins the outgoing byte contract: the
-// jsonrpc envelope, the id counter starting at 1, the session params key set,
-// and the canonical compact form (registered bounded difference; the value is
-// the Python frame's equal).
+// TestTransportOutgoingFrameBytes pins the outgoing byte contract: the jsonrpc
+// envelope, the id counter starting at 1, the session params key set, and the
+// canonical compact form (registered bounded difference; the value is the
+// Python frame's equal).
 func TestTransportOutgoingFrameBytes(t *testing.T) {
 	client, _, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: `"method":"session/new"`, Send: `{"id": 1, "result": {"sessionId": "s-1"}}`},
 	}}, nil)
 	defer client.close()
-	if _, err := client.request("session/new", dict("cwd", "/w", "mcpServers", []any{}, "sessionId", "s")); err != nil {
+	if _, err := client.request("session/new", map[string]any{
+		"cwd": "/w", "mcpServers": []any{}, "sessionId": "s"}); err != nil {
 		t.Fatal(err)
 	}
 	want := `{"id":1,"jsonrpc":"2.0","method":"session/new","params":{"cwd":"/w","mcpServers":[],"sessionId":"s"}}` + "\n"
@@ -273,7 +273,7 @@ func TestTransportTraceIsRoutingOnly(t *testing.T) {
 	defer client.close()
 	// The first inbound line is a notification; the two reverse requests are
 	// answered with the default refusal (recorded), none of them a response.
-	_, err := client.request("initialize", dict("protocolVersion", 1))
+	_, err := client.request("initialize", map[string]any{"protocolVersion": 1})
 	if err == nil || !strings.Contains(err.Error(), "DSH_NATIVE_TIMEOUT: initialize") {
 		t.Fatalf("expected the request to still be pending (timeout), got %v", err)
 	}
@@ -305,7 +305,7 @@ func TestTransportNonJSONLineClosesTransport(t *testing.T) {
 		{On: "initialize", Garbage: "not json at all"},
 	}}, nil)
 	defer client.close()
-	_, err := client.request("initialize", dict())
+	_, err := client.request("initialize", map[string]any{})
 	if blockedText(t, err) != "DSH_TRANSPORT: non-JSON ACP output" {
 		t.Fatalf("err = %v", err)
 	}
@@ -317,7 +317,7 @@ func TestTransportEOFClosesOutput(t *testing.T) {
 		{On: "initialize", Close: true},
 	}}, nil)
 	defer client.close()
-	_, err := client.request("initialize", dict())
+	_, err := client.request("initialize", map[string]any{})
 	if blockedText(t, err) != "DSH_TRANSPORT: native ACP process closed its output" {
 		t.Fatalf("err = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestTransportTimeoutText(t *testing.T) {
 	})
 	defer client.close()
 	start := time.Now()
-	_, err := client.request("initialize", dict())
+	_, err := client.request("initialize", map[string]any{})
 	if blockedText(t, err) != "DSH_NATIVE_TIMEOUT: initialize" {
 		t.Fatalf("err = %v", err)
 	}
@@ -364,12 +364,12 @@ func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
 	client, _, _ := spawnClient(t, peerScript{Steps: notifications()}, func(h *nativeHooks) {
 		h.defaultTimeout = 800 * time.Millisecond
 	})
-	result, err := client.request("initialize", dict())
+	result, err := client.request("initialize", map[string]any{})
 	client.close()
 	if err != nil {
 		t.Fatalf("unbounded transport must accept the late response: %v", err)
 	}
-	if ok := pyTruthy(getOf(result, "ok")); !ok {
+	if objectOrEmpty(result)["ok"] != true {
 		t.Fatalf("result = %v", result)
 	}
 
@@ -378,7 +378,7 @@ func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
 		h.bounded = true
 	})
 	defer client2.close()
-	_, err = client2.request("initialize", dict())
+	_, err = client2.request("initialize", map[string]any{})
 	if blockedText(t, err) != "DSH_NATIVE_TIMEOUT: initialize" {
 		t.Fatalf("bounded transport must hit the total deadline, got %v", err)
 	}
@@ -393,7 +393,7 @@ func TestTransportUnboundedWaitsForTheHostsOwnTurn(t *testing.T) {
 		h.defaultTimeout = 100 * time.Millisecond
 	})
 	defer client.close()
-	_, err := client.request("session/prompt", dict(), nativeUnbounded)
+	_, err := client.request("session/prompt", map[string]any{}, nativeUnbounded)
 	if err != nil {
 		t.Fatalf("UNBOUNDED request failed: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestTransportReverseRequestDefaultReply(t *testing.T) {
 		{On: "initialize", Send: `{"id": 1, "result": {}}`},
 	}}, nil)
 	defer client.close()
-	if _, err := client.request("initialize", dict()); err != nil {
+	if _, err := client.request("initialize", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
 	echo := readTestFile(t, echoPath)
@@ -435,7 +435,7 @@ func TestTransportRequestPermissionIsNeverAnswered(t *testing.T) {
 		{Send: `{"id": 1, "method": "session/request_permission", "params": {}}`},
 	}}, nil)
 	defer client.close()
-	_, err := client.request("session/prompt", dict("sessionId", "s"))
+	_, err := client.request("session/prompt", map[string]any{"sessionId": "s"})
 	if blockedText(t, err) != "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent" {
 		t.Fatalf("err = %v", err)
 	}
@@ -449,7 +449,8 @@ func TestTransportRequestPermissionIsNeverAnswered(t *testing.T) {
 
 // TestTransportClosureKeysInAnyMessage pins the inherited closure rule: the
 // shared 'closed' key is checked first, then the host's closed_key
-// (transport_error), in ANY inbound message, whatever the value's type.
+// (transport_error), in ANY inbound message; the value must be a non-empty
+// reason string.
 func TestTransportClosureKeysInAnyMessage(t *testing.T) {
 	cases := []struct {
 		line string
@@ -458,42 +459,50 @@ func TestTransportClosureKeysInAnyMessage(t *testing.T) {
 		{`{"id": 1, "result": {}, "closed": "weird close"}`, "DSH_TRANSPORT: weird close"},
 		{`{"id": 1, "result": {}, "transport_error": "boom"}`, "DSH_TRANSPORT: boom"},
 		{`{"id": 1, "result": {}, "closed": "first", "transport_error": "second"}`, "DSH_TRANSPORT: first"},
-		{`{"id": 1, "result": {}, "closed": {"reason": 3}}`, `DSH_TRANSPORT: {'reason': 3}`},
+		{`{"id": 1, "result": {}, "closed": ""}`, ""},
 	}
 	for _, tc := range cases {
 		client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 			{On: "initialize", Send: tc.line},
 		}}, nil)
-		_, err := client.request("initialize", dict())
+		_, err := client.request("initialize", map[string]any{})
 		client.close()
+		if tc.want == "" {
+			// An empty closure value does not close the transport: the line is
+			// the response itself and the request completes.
+			if err != nil {
+				t.Fatalf("line %s must be a plain response, got %v", tc.line, err)
+			}
+			continue
+		}
 		if blockedText(t, err) != tc.want {
 			t.Fatalf("line %s:\n got %v\nwant %s", tc.line, err, tc.want)
 		}
 	}
 }
 
-// TestTransportResponseMatchingPythonSemantics pins the response match rules.
-// A truthy method makes the line a reverse request or notification (consumed,
-// never matched); a FALSY method (absent/null/""/false/0) makes it a response,
-// exactly like native_transport.request's `message.get('method')` truthiness
-// test. Id equality is Python's: 1 == 1.0, so a float literal response id
-// matches the int ident, and a wrong id is skipped.
-func TestTransportResponseMatchingPythonSemantics(t *testing.T) {
+// TestTransportResponseMatching pins the response match rules. A live method
+// (a non-empty string) makes the line a reverse request or notification
+// (consumed, never matched); an inert method (absent/null/""/false/0) makes it
+// a response, exactly like native_transport.request's method test. Id equality
+// is value equality, so the literal 1.0 matches our int ident 1, and a wrong
+// id is skipped.
+func TestTransportResponseMatching(t *testing.T) {
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "initialize", Send: `{"id": 1, "method": "notify", "params": {}}`},
 		{On: "initialize", Send: `{"id": 2, "result": {"wrong": true}}`},
 		{On: "initialize", Send: `{"id": 1.0, "result": {"right": true}}`},
 	}}, nil)
 	defer client.close()
-	result, err := client.request("initialize", dict())
+	result, err := client.request("initialize", map[string]any{})
 	if err != nil {
-		t.Fatalf("truthy-method lines must be consumed and wrong ids skipped, 1.0 must match 1: %v", err)
+		t.Fatalf("live-method lines must be consumed and wrong ids skipped, 1.0 must match 1: %v", err)
 	}
-	if !pyTruthy(getOf(result, "right")) {
+	if objectOrEmpty(result)["right"] != true {
 		t.Fatalf("result = %v", result)
 	}
 
-	// A falsy method value is a response in its own right: the request
+	// An inert method value is a response in its own right: the request
 	// completes with that line, and a missing result defaults to {}.
 	for _, line := range []string{
 		`{"id": 1, "method": null}`,
@@ -502,47 +511,42 @@ func TestTransportResponseMatchingPythonSemantics(t *testing.T) {
 		`{"id": 1, "method": 0}`,
 	} {
 		client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{{On: "initialize", Send: line}}}, nil)
-		result, err := client.request("initialize", dict())
+		result, err := client.request("initialize", map[string]any{})
 		client.close()
 		if err != nil {
 			t.Fatalf("%s must complete the request: %v", line, err)
 		}
-		if obj, ok := result.(ordObj); !ok || obj.Len() != 0 {
+		if obj, ok := result.(map[string]any); !ok || len(obj) != 0 {
 			t.Fatalf("%s must default the result to {}, got %v", line, result)
 		}
 	}
 }
 
-// TestTransportErrorTruthinessAndEmbedding pins the error branches: a falsy
-// error body is success (result defaults to {}), and a real error body is
-// embedded verbatim with Python default separators, inbound key order and
-// float repr (byte-fidelity surface: PyDumps semantics).
-func TestTransportErrorTruthinessAndEmbedding(t *testing.T) {
-	falsy := []string{
-		`{"id": 1, "error": {}}`,
-		`{"id": 1, "error": []}`,
-		`{"id": 1, "error": 0}`,
-		`{"id": 1, "error": ""}`,
-		`{"id": 1, "error": false}`,
-		`{"id": 1, "error": null}`,
-	}
-	for _, line := range falsy {
+// TestTransportErrorEmbedding pins the error branch: an absent or null error
+// member is success (the result defaults to {}), any other error body is a
+// refusal whose text embeds the body as canonical JSON (registered bounded
+// difference: the reference embeds it with Python's default separators).
+func TestTransportErrorEmbedding(t *testing.T) {
+	for _, line := range []string{
+		`{"id": 1, "result": {"ok": true}}`,
+		`{"id": 1, "error": null, "result": {"ok": true}}`,
+	} {
 		client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{{On: "initialize", Send: line}}}, nil)
-		result, err := client.request("initialize", dict("protocolVersion", 1))
+		result, err := client.request("initialize", map[string]any{"protocolVersion": 1})
 		client.close()
 		if err != nil {
-			t.Fatalf("falsy error %s must be success, got %v", line, err)
+			t.Fatalf("%s must be success, got %v", line, err)
 		}
-		if obj, ok := result.(ordObj); !ok || obj.Len() != 0 {
-			t.Fatalf("result must default to {}, got %v", result)
+		if objectOrEmpty(result)["ok"] != true {
+			t.Fatalf("result = %v", result)
 		}
 	}
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "session/prompt", Send: `{"id": 1, "error": {"code": -32000, "message": "café ☕ failed", "nested": {"b": 1e2, "a": true}}}`},
 	}}, nil)
 	defer client.close()
-	_, err := client.request("session/prompt", dict("sessionId", "s"))
-	want := `DSH_NATIVE session/prompt: {"code": -32000, "message": "café ☕ failed", "nested": {"b": 100.0, "a": true}}`
+	_, err := client.request("session/prompt", map[string]any{"sessionId": "s"})
+	want := `DSH_NATIVE session/prompt: {"code":-32000,"message":"café ☕ failed","nested":{"a":true,"b":100.0}}`
 	if blockedText(t, err) != want {
 		t.Fatalf("err:\n got %v\nwant %s", err, want)
 	}
@@ -557,28 +561,28 @@ func TestTransportProcessRecordAndStderr(t *testing.T) {
 		{On: "initialize", Send: `{"id": 1, "result": {}}`},
 	}}, nil)
 	defer client.close()
-	if _, err := client.request("initialize", dict()); err != nil {
+	if _, err := client.request("initialize", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
 	record, err := readJSONFile(filepath.Join(directory, "native-process.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pid := getOf(record, "pid")
-	if !pyIsInt(pid) || pyStr(pid) == "0" {
+	pid := objectOrEmpty(record)["pid"]
+	if !isIntegerLiteral(pid) || textOf(pid) == "0" {
 		t.Fatalf("pid = %v", pid)
 	}
-	pgid := getOf(record, "pgid")
+	pgid := objectOrEmpty(record)["pgid"]
 	if runtime.GOOS == "windows" {
 		if pgid != nil {
 			t.Fatalf("pgid = %v, want null on Windows", pgid)
 		}
 	} else {
-		if !pyIsInt(pgid) || pyStr(pgid) == "0" {
+		if !isIntegerLiteral(pgid) || textOf(pgid) == "0" {
 			t.Fatalf("pgid = %v", pgid)
 		}
 		group, groupErr := nativeProcessGroupID(client.cmd.Process.Pid)
-		if groupErr != nil || fmt.Sprintf("%d", group) != pyStr(pgid) {
+		if groupErr != nil || fmt.Sprintf("%d", group) != textOf(pgid) {
 			t.Fatalf("pgid %v is not the spawn group (%d, %v)", pgid, group, groupErr)
 		}
 	}
@@ -616,17 +620,19 @@ func TestTransportCloseTerminatesPeerSurvivingEOF(t *testing.T) {
 	t.Fatal("peer still alive after close")
 }
 
-// TestTransportSpawnFailures pins the Python exception texts of a host that
-// cannot be spawned at all (missing executable / missing cwd).
+// TestTransportSpawnFailures pins the failure texts of a host that cannot be
+// spawned at all (missing executable / missing workspace), in Go style.
 func TestTransportSpawnFailures(t *testing.T) {
 	directory := t.TempDir()
 	workspace := t.TempDir()
-	_, err := newNativeClient(dshHooks(), []string{filepath.Join(directory, "absent-dsh"), "--profile", "acp"}, workspace, directory)
-	if err == nil || err.Error() != "FileNotFoundError: [Errno 2] No such file or directory: '"+filepath.Join(directory, "absent-dsh")+"'" {
+	absent := filepath.Join(directory, "absent-dsh")
+	_, err := newNativeClient(dshHooks(), []string{absent, "--profile", "acp"}, workspace, directory)
+	if err == nil || err.Error() != "cannot start "+absent+": fork/exec "+absent+": no such file or directory" {
 		t.Fatalf("missing executable: %v", err)
 	}
-	_, err = newNativeClient(dshHooks(), []string{"/bin/echo", "hi"}, filepath.Join(directory, "absent-workspace"), directory)
-	if err == nil || err.Error() != "FileNotFoundError: [Errno 2] No such file or directory: '"+filepath.Join(directory, "absent-workspace")+"'" {
+	absentWorkspace := filepath.Join(directory, "absent-workspace")
+	_, err = newNativeClient(dshHooks(), []string{"/bin/echo", "hi"}, absentWorkspace, directory)
+	if err == nil || err.Error() != "workspace does not exist: "+absentWorkspace {
 		t.Fatalf("missing cwd: %v", err)
 	}
 }

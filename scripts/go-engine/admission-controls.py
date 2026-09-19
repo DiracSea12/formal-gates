@@ -302,10 +302,14 @@ class Controls:
         )
 
         # The report exists but contradicts the record: the gate must read the
-        # run's own artifacts, not trust the record's summary of them.
+        # run's own artifacts, not trust the record's summary of them. The
+        # tampered value must differ from whatever the record originally
+        # carries (the recorded provider here is "dsh"), so the contradiction
+        # is guaranteed for every record, not only ones recorded with another
+        # provider.
         self.expect_refusal(
             "ADM-E15 native report contradicts record",
-            self.mutated("native-provider", "native_verification.provider", "dsh"),
+            self.mutated("native-provider", "native_verification.provider", "control-contradiction"),
             "run report provider",
         )
 

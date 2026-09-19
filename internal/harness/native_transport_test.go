@@ -1,11 +1,12 @@
 package harness
 
-// Pure-mechanics tests for the shared native transport: the unbounded queue,
-// the wait() budget rules, the universal-newline readers, the Python
-// decoded-value semantics and the file-backed evidence helpers. The tests that
-// spawn a host process live in native_transport_unix_test.go (and the execute
-// sequence in native_dsh_unix_test.go), after the supervise_unix_test.go
-// precedent of keeping POSIX-only machinery behind a build tag.
+// Pure-mechanics tests for the shared native transport: the decoded-value
+// semantics the adapter relies on, the unbounded queue, the wait() budget
+// rules, the universal-newline reader and the file-backed evidence helpers.
+// The tests that spawn a host process live in native_transport_unix_test.go
+// (and the execute sequence in native_dsh_unix_test.go), after the
+// supervise_unix_test.go precedent of keeping POSIX-only machinery behind a
+// build tag.
 
 import (
 	"bufio"
@@ -18,102 +19,90 @@ import (
 	"time"
 )
 
-// TestPythonValueSemantics pins the decoded-value semantics the adapter relies
-// on: truthiness, == (bool is an int subclass, int==float exactly, containers
-// deeply), isinstance(v, int) and str(v) for the f-string interpolations the
-// reference implementation's error texts embed (合同保真要点 3).
-func TestPythonValueSemantics(t *testing.T) {
-	falsy := []any{nil, false, json.Number("0"), json.Number("0.0"), json.Number("-0"),
-		json.Number("0e0"), "", dict(), []any{}}
-	for _, v := range falsy {
-		if pyTruthy(v) {
-			t.Fatalf("pyTruthy(%v) = true", v)
-		}
+// mustCanonical is the canonical JSON text of value, for byte-shape asserts.
+func mustCanonical(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := CanonicalJSON(value)
+	if err != nil {
+		t.Fatal(err)
 	}
-	truthy := []any{json.Number("NaN"), "x", json.Number("0.1"), []any{0}, dict("a", nil), true}
-	for _, v := range truthy {
-		if !pyTruthy(v) {
-			t.Fatalf("pyTruthy(%v) = false", v)
-		}
-	}
+	return string(encoded)
+}
 
+// decodeTestJSON decodes one JSON document or fails the test.
+func decodeTestJSON(t *testing.T, raw string) any {
+	t.Helper()
+	value, err := decodeNativeJSON([]byte(raw))
+	if err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return value
+}
+
+// TestNativeValueSemantics pins the decoded-value rules the adapter relies on:
+// equality is value equality (numbers exactly, across this package's own ints
+// and decoded literals; a bool never equals a number), and a turn is an
+// integer literal.
+func TestNativeValueSemantics(t *testing.T) {
 	equals := []struct {
 		a, b any
 		want bool
 	}{
 		{json.Number("1"), json.Number("1.0"), true},
-		{true, json.Number("1"), true},
-		{false, json.Number("0"), true},
+		{1, json.Number("1"), true}, // our counter meets the host's echoed literal
+		{int64(3), json.Number("3"), true},
+		{true, true, true},
+		{true, json.Number("1"), false}, // a bool is never a number
+		{false, json.Number("0"), false},
 		{json.Number("1"), "1", false},
 		{json.Number("2"), json.Number("2.0000000000000001"), false},
-		{json.Number("NaN"), json.Number("NaN"), false},
 		{[]any{json.Number("1")}, []any{json.Number("1.0")}, true},
-		{dict("a", json.Number("1"), "b", nil), dict("b", nil, "a", json.Number("1.0")), true},
-		{dict("a", 1), dict("a", 1, "b", nil), false},
+		{map[string]any{"a": json.Number("1"), "b": nil},
+			map[string]any{"b": nil, "a": json.Number("1.0")}, true},
+		{map[string]any{"a": 1}, map[string]any{"a": 1, "b": nil}, false},
 		{nil, nil, true},
 		{"s", "s", true},
 	}
 	for _, tc := range equals {
-		if got := pyEquals(tc.a, tc.b); got != tc.want {
-			t.Fatalf("pyEquals(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+		if got := valuesEqual(tc.a, tc.b); got != tc.want {
+			t.Fatalf("valuesEqual(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
-		if got := pyEquals(tc.b, tc.a); got != tc.want {
-			t.Fatalf("pyEquals(%v, %v) = %v, want %v (symmetry)", tc.b, tc.a, got, tc.want)
+		if got := valuesEqual(tc.b, tc.a); got != tc.want {
+			t.Fatalf("valuesEqual(%v, %v) = %v, want %v (symmetry)", tc.b, tc.a, got, tc.want)
 		}
 	}
 
-	ints := map[any]bool{
+	integers := map[any]bool{
 		json.Number("1"): true, json.Number("-5"): true,
 		json.Number("123456789012345678901234567890"): true,
-		true: true, json.Number("1.0"): false, json.Number("1e2"): false,
+		json.Number("1.0"):                            false, json.Number("1e2"): false,
+		true: false, "1": false, nil: false,
 	}
-	for v, want := range ints {
-		if got := pyIsInt(v); got != want {
-			t.Fatalf("pyIsInt(%v) = %v, want %v", v, got, want)
-		}
-	}
-
-	strs := []struct {
-		v    any
-		want string
-	}{
-		{nil, "None"}, {true, "True"}, {false, "False"}, {"raw", "raw"},
-		{json.Number("5"), "5"}, {json.Number("1e2"), "100.0"},
-		{dict("b", json.Number("1e2"), "a", "x"), "{'b': 100.0, 'a': 'x'}"},
-		{[]any{nil, "s"}, "[None, 's']"},
-	}
-	for _, tc := range strs {
-		if got := pyStr(tc.v); got != tc.want {
-			t.Fatalf("pyStr(%v) = %q, want %q", tc.v, got, tc.want)
+	for v, want := range integers {
+		if got := isIntegerLiteral(v); got != want {
+			t.Fatalf("isIntegerLiteral(%v) = %v, want %v", v, got, want)
 		}
 	}
 }
 
-// TestSplitLinesUniversalNewlines pins the events-file line iteration: \n,
-// \r\n and a lone \r all end lines, a final unterminated line still counts and
-// an empty file has none.
-func TestSplitLinesUniversalNewlines(t *testing.T) {
+// TestTextOf pins how a host-controlled value is rendered inside an error
+// text: strings verbatim, every other value as canonical JSON.
+func TestTextOf(t *testing.T) {
 	cases := []struct {
-		in   string
-		want []string
+		v    any
+		want string
 	}{
-		{"", nil},
-		{"a\nb", []string{"a", "b"}},
-		{"a\nb\n", []string{"a", "b"}},
-		{"a\r\nb", []string{"a", "b"}},
-		{"a\rb", []string{"a", "b"}},
-		{"a\n\nb", []string{"a", "", "b"}},
-		{"a", []string{"a"}},
+		{nil, "null"},
+		{true, "true"},
+		{"raw", "raw"},
+		{json.Number("5"), "5"},
+		{json.Number("1e2"), "100.0"},
+		{map[string]any{"kind": "errored"}, `{"kind":"errored"}`},
+		{[]any{nil, "s"}, `[null,"s"]`},
 	}
 	for _, tc := range cases {
-		got := splitLines(tc.in)
-		if len(got) != len(tc.want) {
-			t.Fatalf("splitLines(%q) = %v, want %v", tc.in, got, tc.want)
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("splitLines(%q) = %v, want %v", tc.in, got, tc.want)
-			}
+		if got := textOf(tc.v); got != tc.want {
+			t.Fatalf("textOf(%v) = %q, want %q", tc.v, got, tc.want)
 		}
 	}
 }
@@ -194,9 +183,10 @@ func TestNativeWaitDuration(t *testing.T) {
 	}
 }
 
-// TestReadJSONFileSemantics pins infra.read: duplicate keys are refused, a
-// missing file is the Python FileNotFoundError text, and document key order
-// survives (native-error.json/identity.json/native-request.json readers).
+// TestReadJSONFileSemantics pins infra.read: duplicate keys are refused with
+// the HarnessError family, a missing file keeps the OS error text, a malformed
+// document is an invalid-JSON error, and trailing data after the document is
+// refused.
 func TestReadJSONFileSemantics(t *testing.T) {
 	directory := t.TempDir()
 
@@ -205,13 +195,13 @@ func TestReadJSONFileSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := readJSONFile(path)
-	if _, ok := err.(*pyHarnessError); !ok || err.Error() != "duplicate JSON field: a" {
+	if _, ok := err.(*bindingError); !ok || err.Error() != "duplicate JSON field: a" {
 		t.Fatalf("duplicate keys: %v (%T)", err, err)
 	}
 
-	_, err = readJSONFile(filepath.Join(directory, "absent.json"))
-	want := "FileNotFoundError: [Errno 2] No such file or directory: '" + filepath.Join(directory, "absent.json") + "'"
-	if err == nil || err.Error() != want {
+	absent := filepath.Join(directory, "absent.json")
+	_, err = readJSONFile(absent)
+	if err == nil || err.Error() != "open "+absent+": no such file or directory" {
 		t.Fatalf("missing file: %v", err)
 	}
 
@@ -220,11 +210,11 @@ func TestReadJSONFileSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = readJSONFile(path)
-	if err == nil || err.Error() != "JSONDecodeError: Expecting value: line 1 column 1 (char 0)" {
+	if err == nil || !strings.HasPrefix(err.Error(), "invalid JSON in "+path+": ") {
 		t.Fatalf("malformed file: %v", err)
 	}
 
-	path = filepath.Join(directory, "ordered.json")
+	path = filepath.Join(directory, "trailing.json")
 	if err := os.WriteFile(path, []byte(`{"z": 1, "a": 2}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -232,25 +222,42 @@ func TestReadJSONFileSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	object, _ := value.(ordObj)
-	if keys := object.Keys(); len(keys) != 2 || keys[0] != "z" || keys[1] != "a" {
-		t.Fatalf("document order lost: %v", keys)
+	if !valuesEqual(value, map[string]any{"z": json.Number("1"), "a": json.Number("2")}) {
+		t.Fatalf("value = %v", value)
+	}
+	if id, ok := value.(map[string]any); !ok {
+		t.Fatalf("decoded object = %T", value)
+	} else if _, present := id["z"]; !present {
+		t.Fatal("decoded object lost a key")
+	}
+
+	for name, raw := range map[string]string{
+		"extra data": `{"a": 1} {"b": 2}`,
+		"junk tail":  `{"a": 1} xx`,
+	} {
+		path := filepath.Join(directory, name+".json")
+		if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readJSONFile(path); err == nil {
+			t.Fatalf("%s must be refused", name)
+		}
 	}
 }
 
-// TestNativeErrorTexts pins the "<TypeName>: <msg>" rendering the error file
-// records, including SessionUnavailable's family name.
+// TestNativeErrorTexts pins the family-prefixed rendering the error file
+// records (the Python driver strips this prefix), and that a plain Go error
+// is recorded as its own text.
 func TestNativeErrorTexts(t *testing.T) {
 	cases := []struct {
 		err  error
 		want string
 	}{
-		{&pyError{name: "KeyError", message: "'prompt'"}, "KeyError: 'prompt'"},
-		{&pyRuntimeBlocked{message: "DSH_STOP: aborted"}, "RuntimeBlocked: DSH_STOP: aborted"},
-		{&pyHarnessError{message: "HOST_BINDING: provider differs"}, "HarnessError: HOST_BINDING: provider differs"},
-		{&pySessionUnavailable{pyRuntimeBlocked: pyRuntimeBlocked{message: "DSH_SESSION_UNAVAILABLE: gone"}},
+		{&blockedError{message: "DSH_STOP: aborted"}, "RuntimeBlocked: DSH_STOP: aborted"},
+		{&bindingError{message: "HOST_BINDING: provider differs"}, "HarnessError: HOST_BINDING: provider differs"},
+		{&sessionUnavailableError{blockedError: blockedError{message: "DSH_SESSION_UNAVAILABLE: gone"}},
 			"SessionUnavailable: DSH_SESSION_UNAVAILABLE: gone"},
-		{io.EOF, "OSError: EOF"},
+		{io.EOF, "EOF"},
 	}
 	for _, tc := range cases {
 		if got := nativeErrorText(tc.err); got != tc.want {
@@ -259,15 +266,16 @@ func TestNativeErrorTexts(t *testing.T) {
 	}
 }
 
-// TestSessionEventsRejects pins the shared evidence scan: mixed-session
-// evidence is refused and a malformed line is the Python JSONDecodeError.
-func TestSessionEventsRejects(t *testing.T) {
+// TestForEachSessionEvent pins the shared evidence scan: mixed-session
+// evidence is refused, a malformed line is an invalid-JSON error, and every
+// record of the session is streamed to the handler in file order.
+func TestForEachSessionEvent(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "native-events.jsonl")
 	if err := os.WriteFile(path, []byte("{\"sessionId\": \"s-1\"}\n{\"sessionId\": \"s-2\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := sessionEvents(directory, "s-1")
+	err := forEachSessionEvent(directory, "s-1", func(map[string]any) error { return nil })
 	if err == nil || err.Error() != "BINDING: mixed session evidence" {
 		t.Fatalf("mixed sessions: %v", err)
 	}
@@ -275,15 +283,43 @@ func TestSessionEventsRejects(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = sessionEvents(directory, "s-1")
-	if err == nil || err.Error() != "JSONDecodeError: Expecting value: line 1 column 1 (char 0)" {
+	err = forEachSessionEvent(directory, "s-1", func(map[string]any) error { return nil })
+	if err == nil || !strings.HasPrefix(err.Error(), "invalid JSON in "+path+": ") {
 		t.Fatalf("malformed line: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("{\"sessionId\": \"s-1\", \"n\": 1}\n{\"sessionId\": \"s-1\", \"n\": 2}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var seen []any
+	if err := forEachSessionEvent(directory, "s-1", func(record map[string]any) error {
+		seen = append(seen, record["n"])
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != json.Number("1") || seen[1] != json.Number("2") {
+		t.Fatalf("records = %v", seen)
+	}
+
+	if err := os.WriteFile(path, []byte("{\"sessionId\": \"s-1\"}\r\n{\"sessionId\": \"s-1\"}\r"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	if err := forEachSessionEvent(directory, "s-1", func(map[string]any) error {
+		count++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("CRLF and lone-CR terminators must both split lines: %d", count)
 	}
 }
 
 // TestWriteAnswerSemantics pins write_answer: the bytes are kept, a re-run is
-// idempotent, a real difference is refused while text-mode-equal line endings
-// are not, and a framing refusal passes through with its NATIVE_RESULT prefix.
+// idempotent, a real difference is refused while line-ending-equal bytes are
+// not, and a framing refusal passes through with its NATIVE_RESULT prefix.
 func TestWriteAnswerSemantics(t *testing.T) {
 	directory := t.TempDir()
 	if err := writeNativeAnswer(directory, `{"ok": true}`, "DSH"); err != nil {
@@ -304,8 +340,8 @@ func TestWriteAnswerSemantics(t *testing.T) {
 		t.Fatalf("saved output differs: %v", err)
 	}
 
-	// Text-mode equal line endings are not a difference (read_text translates
-	// \r\n and \r to \n before comparing).
+	// Line-ending-equal bytes are not a difference (CRLF and a lone CR both
+	// normalise to LF before comparing).
 	crlf := t.TempDir()
 	if err := os.WriteFile(filepath.Join(crlf, "answer.raw.txt"), []byte("{\r\n\"ok\": true\r\n}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -324,7 +360,8 @@ func TestWriteAnswerSemantics(t *testing.T) {
 }
 
 // TestEvidenceSourceShape pins the receipt: provider, identity, the caller's
-// extra keys in order, then the four proofs; usage_evidence is null when empty.
+// extra keys, then proofs for the four files; usage_evidence is null when
+// empty.
 func TestEvidenceSourceShape(t *testing.T) {
 	directory := t.TempDir()
 	for _, name := range nativeSourceFiles {
@@ -332,34 +369,47 @@ func TestEvidenceSourceShape(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	receipt, err := evidenceSource(directory, "dsh", "s-1", dict(
-		"native_turn", json.Number("1"),
-		"transcript", "/t/transcript.jsonl",
-		"usage_evidence", nil,
-	))
+	receipt, err := evidenceSource(directory, "dsh", "s-1", map[string]any{
+		"native_turn":    json.Number("1"),
+		"transcript":     "/t/transcript.jsonl",
+		"usage_evidence": nil,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keys := receipt.Keys(); keys[len(keys)-1] != "files" {
-		t.Fatalf("files must be the last key: %v", keys)
+	want := map[string]any{
+		"provider": "dsh", "identity": "s-1",
+		"native_turn": json.Number("1"), "transcript": "/t/transcript.jsonl",
+		"usage_evidence": nil,
+		"files":          proofsOf(t, directory, nativeSourceFiles),
 	}
-	text, err := pyDumps(receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPrefix := `{"provider": "dsh", "identity": "s-1", "native_turn": 1, "transcript": "/t/transcript.jsonl", "usage_evidence": null, "files": {`
-	if len(text) < len(wantPrefix) || text[:len(wantPrefix)] != wantPrefix {
-		t.Fatalf("receipt = %s", text)
+	if !valuesEqual(receipt, want) {
+		t.Fatalf("receipt = %s", mustCanonical(t, receipt))
 	}
 }
 
-// TestReconcileCompletedOutputGate pins the shared gate: exit_code==1 (Python
-// equality: 1.0 and true both count), a falsy error, the error file existing
-// and the caller's eligibility predicate, checked before any recovery runs.
+// proofsOf builds {name: proof} for the given evidence files.
+func proofsOf(t *testing.T, directory string, names []string) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	for _, name := range names {
+		proof, err := fileProofOf(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[name] = proof
+	}
+	return out
+}
+
+// TestReconcileCompletedOutputGate pins the shared gate: exit_code==1 (numbers
+// compare by value: this package's 1 meets the record's literal), an empty
+// process error text, the error file existing and the caller's eligibility
+// predicate, checked before any recovery runs.
 func TestReconcileCompletedOutputGate(t *testing.T) {
 	eligible := func(original string) bool { return original == "LEGACY" }
-	recover := func() (ordObj, error) {
-		return dict("provider", "dsh"), nil
+	recover := func() (map[string]any, error) {
+		return map[string]any{"provider": "dsh"}, nil
 	}
 	base := func(t *testing.T) string {
 		t.Helper()
@@ -371,36 +421,39 @@ func TestReconcileCompletedOutputGate(t *testing.T) {
 	}
 
 	directory := base(t)
-	if err := writeNativeJSON(filepath.Join(directory, "native-error.json"), dict("error", "LEGACY")); err != nil {
+	if err := writeAtomicJSON(filepath.Join(directory, "native-error.json"),
+		map[string]any{"error": "LEGACY"}); err != nil {
 		t.Fatal(err)
 	}
-	source, err := reconcileCompletedOutput(directory, dict("exit_code", 1, "error", ""), "X", eligible, recover)
+	source, err := reconcileCompletedOutput(directory,
+		map[string]any{"exit_code": 1, "error": ""}, "X", eligible, recover)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconciliation, _ := source.Get("reconciliation")
-	if !pyEquals(reconciliation, dict(
-		"kind", "completed-output-format",
-		"original_exit_code", 1,
-		"original_error", "LEGACY",
-		"new_model_calls", 0,
-	)) {
-		t.Fatalf("reconciliation = %v", reconciliation)
+	if !valuesEqual(source["reconciliation"], map[string]any{
+		"kind":               "completed-output-format",
+		"original_exit_code": 1,
+		"original_error":     "LEGACY",
+		"new_model_calls":    0,
+	}) {
+		t.Fatalf("reconciliation = %v", source["reconciliation"])
 	}
 
-	// Passers: Python equality (1 == 1.0) and falsy error values.
+	// Passers: numeric equality (the record's 1.0 literal) and non-string
+	// error values (recorded without a message).
 	for name, process := range map[string]any{
-		"exit_code 1.0": dict("exit_code", json.Number("1.0"), "error", ""),
-		"error falsy 0": dict("exit_code", 1, "error", 0),
+		"exit_code 1.0":  map[string]any{"exit_code": json.Number("1.0"), "error": ""},
+		"error non-text": map[string]any{"exit_code": 1, "error": 0},
 	} {
 		if _, err := reconcileCompletedOutput(directory, process, "X", eligible, recover); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
 	for name, process := range map[string]any{
-		"exit code 0":    dict("exit_code", 0, "error", ""),
-		"exit code 2":    dict("exit_code", 2, "error", ""),
-		"error nonempty": dict("exit_code", 1, "error", "killed"),
+		"exit code 0":    map[string]any{"exit_code": 0, "error": ""},
+		"exit code 2":    map[string]any{"exit_code": 2, "error": ""},
+		"exit code true": map[string]any{"exit_code": true, "error": ""},
+		"error nonempty": map[string]any{"exit_code": 1, "error": "killed"},
 	} {
 		if _, err := reconcileCompletedOutput(directory, process, "X", eligible, recover); err == nil ||
 			err.Error() != "X_RECONCILE: not a completed formatting-only failure" {
@@ -409,7 +462,7 @@ func TestReconcileCompletedOutputGate(t *testing.T) {
 	}
 
 	empty := t.TempDir()
-	_, err = reconcileCompletedOutput(empty, dict("exit_code", 1, "error", ""), "X", eligible, recover)
+	_, err = reconcileCompletedOutput(empty, map[string]any{"exit_code": 1, "error": ""}, "X", eligible, recover)
 	if err == nil || err.Error() != "X_RECONCILE: not a completed formatting-only failure" {
 		t.Fatalf("no error file: %v", err)
 	}

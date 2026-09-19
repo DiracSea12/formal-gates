@@ -8,6 +8,7 @@ package harness
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,11 +109,9 @@ func TestBridgeNativePayloadShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sha256, _ := proof.Get("sha256")
-	size, _ := proof.Get("size")
 	bindingJSON := `{"provider": "dsh", "launch": {"executable": ` + jsonString(t, bound) +
-		`}, "files": {` + jsonString(t, bound) + `: {"sha256": ` + jsonString(t, sha256.(string)) +
-		`, "size": ` + pydumps(t, size) + `}}}`
+		`}, "files": {` + jsonString(t, bound) + `: {"sha256": ` + jsonString(t, proof["sha256"].(string)) +
+		`, "size": ` + fmt.Sprint(proof["size"]) + `}}}`
 
 	answer, code := bridgeCall(t, "native-verify-binding", `{"provider": "dsh", "binding": `+bindingJSON+`}`)
 	if code != 0 || answer["ok"] != true || len(answer) != 2 {
@@ -129,8 +128,8 @@ func TestBridgeNativePayloadShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	proofs := dictOfNames(directory, nativeSourceFiles)
-	sourceJSON := pydumps(t, dict("provider", "dsh", "identity", "s-1", "files", proofs))
+	sourceJSON := mustCanonical(t, map[string]any{
+		"provider": "dsh", "identity": "s-1", "files": proofsOf(t, directory, nativeSourceFiles)})
 	answer, code = bridgeCall(t, "native-verify-source",
 		`{"provider": "dsh", "directory": `+jsonString(t, directory)+`, "source": `+sourceJSON+`}`)
 	if code != 0 || answer["ok"] != true {
