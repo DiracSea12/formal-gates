@@ -43,7 +43,22 @@ G2b 冻结版 `3d769a0` 隔离 worktree 重建＋公开入口冒烟 **DEMO_COMPL
   镜像实测契约，24 例含两个新场景）。Python 全套 283、harness 测试、双平台 vet、doctor（0 模型调用）
   亲跑全绿。
 
-## 原生关口（唯一阻塞项）
+## 原生关口（已闭合，2026-09-20，轻装收尾）
+
+机主三次逐字授权「授权」。前两次运行如实保留为证据（run `harness-20260920-051650-834b2890`：宿主 9-19
+自动更新引发 setModel 协议漂移＋模型回显；run `harness-20260920-065125-9a6760a1`：模型连续回显
+schema 首键）。对应修复：`dfd3b75`（零调用探针实测宿主协议；空注册表可归因拒绝）、`e3e3556`（prompt
+内嵌 schema 将 additionalProperties 渲染至末位，值级等价，校验严格性不动）。
+
+**第三次运行一次通过**（候选 `e3e3556`）：run `harness-20260920-070903-cc867616`，**7/7 角色 PASS、
+HARNESS_COMPLETE、0 中断、exit 0**；7 个原生作业 argv 全为 Go 窄命令、exit 0。证据
+`.harness/validation/g2c-native-zcode-v3-flow-20260920T070900/`。
+
+按机主 2026-09-20 裁定，G2c 自本修复起**不再走迁移方案的自造单元仪式**（acceptance 电池重跑/记录
+重签循环/admission 关口），本记录如实标注：`dfd3b75` 与 `e3e3556` 两个修复候选的九项验收电池与全套
+控制项未按旧仪式重跑（两侧测试套件、差分、双平台 vet、doctor 均绿，主代理亲跑）。
+
+## 原生关口（历史：重开过程）
 
 `native_verification.status=NOT_RUN` 如实落盘：G2c 已入原生必需集合，G2a 的 zcode 证据绑定的是已退役
 Python 路径。重取＝一次授权 `native_multihost --provider zcode`（7 角色完整流程，绑定身份
