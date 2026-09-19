@@ -21,7 +21,12 @@ as test_native_dsh_differential.py):
   own text on both sides.
 - the prompt: the fixed head byte for byte, the schema JSON embedded after it
   by value (the reference renders it with Python separators, Go canonically -
-  the registered bounded difference, same as G2b).
+  the registered bounded difference, same as G2b). One more registered side
+  asymmetry in the same face: the Go side presents each object's
+  additionalProperties key last instead of first (2026-09 GLM serving echoed
+  the leading directive keyword back into answers; the value is unchanged,
+  pinned by internal/harness/native_zcode_test.go and
+  native_zcode_unix_test.go).
 - by value, parsed and compared as JSON per line: the outbound protocol lines
   the host echoed (host-frames.jsonl - including the session/create and
   session/send parameter values; the reference sends default-separator bytes,
@@ -97,7 +102,14 @@ REPO = Path(__file__).resolve().parents[3]
 BINARY = REPO / '.harness' / 'bin' / 'formal-gates'
 
 ANSWER = {'status': 'PASS', 'summary': 'observed', 'findings': [], 'check_ids': []}
-SCHEMA = {'properties': {'findings': {'type': 'array'}, 'status': {'type': 'string'}},
+# additionalProperties rides at the top level and inside an array item: the Go
+# side presents it last in each object (the registered asymmetry in the module
+# docstring), the reference keeps its dict order; every comparison face below
+# stays by value.
+SCHEMA = {'additionalProperties': False,
+          'properties': {'findings': {'items': {'additionalProperties': True, 'type': 'object'},
+                                      'type': 'array'},
+                         'status': {'type': 'string'}},
           'required': ['status', 'summary'], 'type': 'object'}
 PROMPT = 'Review the requirement.'
 PROMPT_HEAD = PROMPT + '\nReturn ONLY one JSON object matching this schema:\n'

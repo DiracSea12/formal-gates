@@ -54,6 +54,47 @@ func TestZcodeReference(t *testing.T) {
 	}
 }
 
+// TestZcodeSchemaForPrompt pins the prompt rendering's one presentation-order
+// rule: canonical encoding with each object's additionalProperties key moved
+// last (recursively; array order untouched), and the value unchanged. A value
+// without the directive key is byte-identical to the canonical encoding.
+func TestZcodeSchemaForPrompt(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{`{"type": "string"}`, `{"type":"string"}`},
+		{`{"additionalProperties": false, "type": "object"}`,
+			`{"type":"object","additionalProperties":false}`},
+		{`{"additionalProperties": false, "items": {"additionalProperties": true, "type": "object"}, "type": "array"}`,
+			`{"items":{"type":"object","additionalProperties":true},"type":"array","additionalProperties":false}`},
+		// A directive inside an array element is reordered without touching
+		// the array's own order.
+		{`[{"additionalProperties": false, "type": "object"}, 3]`,
+			`[{"type":"object","additionalProperties":false},3]`},
+		// The directive's own value is rendered as-is, whatever it is.
+		{`{"additionalProperties": {"type": "string"}, "type": "object"}`,
+			`{"type":"object","additionalProperties":{"type":"string"}}`},
+	}
+	for _, tc := range cases {
+		encoded, err := schemaForPrompt(decodeTestJSON(t, tc.value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(encoded) != tc.want {
+			t.Fatalf("%s:\n got %s\nwant %s", tc.value, encoded, tc.want)
+		}
+		if decoded := decodeTestJSON(t, string(encoded)); !valuesEqual(decoded, decodeTestJSON(t, tc.value)) {
+			t.Fatalf("%s: the value changed", tc.value)
+		}
+	}
+	plain := decodeTestJSON(t, `{"properties": {"status": {"type": "string"}}, "type": "object"}`)
+	encoded, err := schemaForPrompt(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := mustCanonical(t, plain); string(encoded) != want {
+		t.Fatalf("directive-free schema:\n got %s\nwant %s", encoded, want)
+	}
+}
+
 // zcodeTestSnapshot is one host snapshot with a current selection, an
 // advertised list carrying reasoning levels, a thought level and a mode.
 const zcodeTestSnapshot = `{

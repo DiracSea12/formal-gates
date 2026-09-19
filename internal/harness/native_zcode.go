@@ -24,8 +24,9 @@ package harness
 //
 // Serialization is value-level (the G2b v2 ruling, no CPython emulation):
 // prompt schemas and embedded error bodies are rendered with the canonical
-// encoder, and the ZCODE_*/RuntimeBlocked:/SessionUnavailable: protocol and
-// family prefix texts are kept verbatim.
+// encoder (prompt objects present additionalProperties last; see
+// schemaForPrompt), and the ZCODE_*/RuntimeBlocked:/SessionUnavailable:
+// protocol and family prefix texts are kept verbatim.
 
 import (
 	"bytes"
@@ -38,6 +39,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -1190,6 +1192,86 @@ func zcodeReconcile(directory string, process any) (map[string]any, error) {
 
 // --- the execute sequence (contract item 12) -----------------------------------
 
+// zcodeSchemaDirectiveKey is the one schema key whose prompt position is
+// presentation, not value: the canonical sort keeps it at the head of every
+// object that carries it.
+const zcodeSchemaDirectiveKey = "additionalProperties"
+
+// schemaForPrompt renders one decoded JSON value for embedding in a prompt:
+// the canonical encoding, except that an object's additionalProperties key,
+// when present, is written last instead of first. Arrays and nested objects
+// are handled recursively; no value is changed, only the order an object's
+// keys are presented in.
+//
+// Behavioural rationale (2026-09): GLM serving repeatedly echoed the schema's
+// leading directive keyword -- additionalProperties, which the canonical sort
+// keeps at the head of every object -- back into the answer as if it were a
+// field, and the strict answer validator rejects such answers. The validator's
+// strictness is independent of the prompt and stays exactly as it is;
+// presenting the directive key last instead of first removes the trigger
+// without touching the value.
+//
+// Registered bounded difference: the frozen reference embeds the schema with
+// Python's default separators in dict order, so the two sides' prompt bytes
+// already differ in separators and now also in this key's position; the
+// values are equal. This rendering is for the prompt only -- identity,
+// tool-policy, source and every other evidence serialization keep
+// CanonicalJSON.
+func schemaForPrompt(value any) ([]byte, error) {
+	var out strings.Builder
+	if err := encodeSchemaForPrompt(value, &out); err != nil {
+		return nil, err
+	}
+	return []byte(out.String()), nil
+}
+
+// encodeSchemaForPrompt is schemaForPrompt's recursive worker: canonical
+// leaves, canonical key order inside objects except that
+// zcodeSchemaDirectiveKey is emitted after every other key of its object.
+func encodeSchemaForPrompt(value any, out *strings.Builder) error {
+	switch typed := value.(type) {
+	case []any:
+		out.WriteByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			if err := encodeSchemaForPrompt(item, out); err != nil {
+				return err
+			}
+		}
+		out.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			if key != zcodeSchemaDirectiveKey {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		if _, present := typed[zcodeSchemaDirectiveKey]; present {
+			keys = append(keys, zcodeSchemaDirectiveKey)
+		}
+		out.WriteByte('{')
+		for index, key := range keys {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			writeCanonicalString(key, out)
+			out.WriteByte(':')
+			if err := encodeSchemaForPrompt(typed[key], out); err != nil {
+				return err
+			}
+		}
+		out.WriteByte('}')
+	default:
+		// Leaves keep the canonical encoding: the reorder touches key order
+		// inside objects only, never a scalar's or a value's rendering.
+		return encodeCanonical(value, out)
+	}
+	return nil
+}
+
 // zcodeExecute runs ZCode's app-server sequence for one request
 // (native_zcode.execute).
 func zcodeExecute(request any, directory string, probe bool) (result map[string]any, err error) {
@@ -1392,9 +1474,10 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	if err != nil {
 		return nil, err
 	}
-	// The schema is embedded in its canonical JSON form (registered bounded
-	// difference: value-equal to the reference's default-separator rendering).
-	schema, err := CanonicalJSON(schemaValue)
+	// The schema is embedded through schemaForPrompt: the canonical form with
+	// the one presentation-order change (registered bounded difference:
+	// value-equal to the reference's default-separator rendering).
+	schema, err := schemaForPrompt(schemaValue)
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,15 @@ import (
 
 const zcodeTestPrompt = "Review the requirement."
 
-var zcodeTestSchema = `{"properties": {"findings": {"type": "array"}, "status": {"type": "string"}}, "required": ["status", "summary"], "type": "object"}`
+// The scenario schema carries additionalProperties at the top level and
+// nested inside an array item, so the prompt rendering's reorder is exercised
+// recursively (the fixture's own key order is irrelevant; the renderer sorts).
+var zcodeTestSchema = `{"additionalProperties": false, "properties": {"findings": {"items": {"additionalProperties": true, "type": "object"}, "type": "array"}, "status": {"type": "string"}}, "required": ["status", "summary"], "type": "object"}`
+
+// zcodeTestSchemaPrompt is the scenario schema as the prompt embeds it:
+// canonical, with each object's additionalProperties presented last.
+const zcodeTestSchemaPrompt = `{"properties":{"findings":{"items":{"type":"object","additionalProperties":true},"type":"array"},` +
+	`"status":{"type":"string"}},"required":["status","summary"],"type":"object","additionalProperties":false}`
 
 // zcodeScenario wires one execute run: a scripted peer bound as the
 // app-server launch (executable plus a proofed dummy script), a workspace and
@@ -147,7 +155,8 @@ func zcodeWithStep(factory func(string) []peerStep, index int, step peerStep) fu
 // TestZcodeExecuteNewSessionSuccessTurn runs the whole narrow command: the
 // canonical stdout receipt, the identity/tool-policy/native-source evidence,
 // the mode declared once before the first turn, the prompt with the schema
-// embedded in its canonical form, and the turn's committed answer.
+// embedded canonically (additionalProperties last, value equal), and the
+// turn's committed answer.
 func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	scenario := newZcodeScenario(t, zcodeSuccessSteps, func(request map[string]any) {
 		request["read_only"] = false
@@ -247,12 +256,20 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 		t.Fatalf("setMode must be declared exactly once:\n%s", echo)
 	}
 	// The prompt text: the request prompt, the fixed middle line, and the
-	// schema re-encoded canonically.
+	// schema embedded canonically with each object's additionalProperties
+	// presented last.
 	wantPrompt := zcodeTestPrompt + "\nReturn ONLY one JSON object matching this schema:\n" +
-		mustCanonical(t, scenario.request["schema"])
+		zcodeTestSchemaPrompt
 	send := frameByMethod(t, echo, "session/send")
-	if got := textOf(objectOrEmpty(send["params"])["content"]); got != wantPrompt {
+	got := textOf(objectOrEmpty(send["params"])["content"])
+	if got != wantPrompt {
 		t.Fatalf("prompt:\n got %q\nwant %q", got, wantPrompt)
+	}
+	// The embedded schema is value-equal to the request's: only the key order
+	// the directive is presented in differs.
+	embedded := decodeTestJSON(t, got[strings.LastIndex(got, "\n")+1:])
+	if !valuesEqual(embedded, scenario.request["schema"]) {
+		t.Fatalf("embedded schema value = %v", embedded)
 	}
 	// The notification evidence: canonical lines, only the bound session.
 	events := readTestFile(t, filepath.Join(scenario.directory, "native-events.jsonl"))
