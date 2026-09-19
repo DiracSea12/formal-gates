@@ -1,14 +1,14 @@
 {
   "unit": "M2",
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M2/20260917T021022Z-48351",
-  "recorded_at": "2026-09-17T02:17:59.593975+00:00",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M2/20260919T025611Z-60452",
+  "recorded_at": "2026-09-19T03:04:16.936947+00:00",
   "overall": "PASS",
   "previous_accepted_baseline": "M1",
   "candidate": {
-    "commit": "dfa23e77d4518976b0b2c0909e845344bae15d58",
+    "commit": "106343db4fed4fbfbbc7ae53edd9e2e0460fa35e",
     "branch": "codex/go-engine-v1",
-    "runtime_identity": "fa680731dd96e7e09994cef4721b425a30515b08d8709b4139ddb33190e7f1c5",
-    "driver_binary_sha256": "0b4c4307aa504fe83f5a77ab04da08c815ff8409fcdf2a66d124bf4491c8b782",
+    "runtime_identity": "017ea1db64a3ab0b8075c459b6430c574cf3341cc8a24681fa3093d42093dbec",
+    "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
     "files": {
       "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
       "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
@@ -23,55 +23,55 @@
       "id": "identity",
       "required": true,
       "status": "PASS",
-      "seconds": 0.973
+      "seconds": 0.465
     },
     {
       "id": "go-vet",
       "required": true,
       "status": "PASS",
-      "seconds": 0.474
+      "seconds": 0.405
     },
     {
       "id": "go-test-full",
       "required": true,
       "status": "PASS",
-      "seconds": 393.583
+      "seconds": 393.282
     },
     {
       "id": "sqlite-probe",
       "required": true,
       "status": "PASS",
-      "seconds": 2.583
+      "seconds": 2.492
     },
     {
       "id": "python-unittest",
       "required": true,
       "status": "PASS",
-      "seconds": 51.054
+      "seconds": 81.629
     },
     {
       "id": "demo-fixture",
       "required": true,
       "status": "PASS",
-      "seconds": 2.637
+      "seconds": 3.15
     },
     {
       "id": "doctor-dsh",
       "required": true,
       "status": "PASS",
-      "seconds": 2.128
+      "seconds": 2.146
     },
     {
       "id": "doctor-zcode",
       "required": true,
       "status": "PASS",
-      "seconds": 2.743
+      "seconds": 2.243
     },
     {
       "id": "tree-clean-after",
       "required": true,
       "status": "PASS",
-      "seconds": 0.065
+      "seconds": 0.04
     }
   ],
   "budget": {
@@ -80,15 +80,16 @@
     "note": "The regression is judged by result and progress, not by wall-clock speed."
   },
   "attestation": {
-    "summary_sha256": "96ef29141ee4df22721e188960ccd0b0e27e59722871ba5089ae747a3e298b3a",
-    "identity_sha256": "5caba58b7b549b6901af509af8a7b23941d917bf5563e7e99d700c5f9f1ad266",
-    "evidence_sha256": "fe09c4a81419f544b7d090594de631dc92a620b232c769eca6dbc327b49bfeb0",
-    "evidence_file_count": 64
+    "summary_sha256": "2adb679bb55d2bb355721a7c0b3a396d1653f4fc393697657aa1b2483ef4cec7",
+    "identity_sha256": "aedf54db1eaf41fda542e48d1cca2aeca79f025a16a5c54bd7a6d864ac4a5028",
+    "evidence_sha256": "c2e2b88f419b280f7e48aa019e635c25427aa3863b50037c5090c6b9b456d99f",
+    "evidence_file_count": 61
   },
   "bookkeeping": [
     ".gates/results/go-engine-M2.json",
     ".gates/results/go-engine-M2.md",
     ".gates/results/go-engine-G1a-index.md"
   ],
-  "run_command": "python3 scripts/go-engine/acceptance.py --unit M2"
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit M2",
+  "overall_note": "Baseline re-verification on 2026-09-19: the final Windows review round (g2a-final-windows-review-20260918T232706Z) ran the whole repository on a real Windows machine and found a pre-existing baseline defect this unit already carried -- TestGuardPreviewBinary built its on-the-fly CLI without the .exe suffix Windows requires to exec a PE file. The defect was invisible to every earlier non-Windows validation (the file is byte-identical back to this unit's original candidate dfa23e7). Fixed on 106343d by using the package's existing installTestBinaryName() helper like every sibling test; this record re-verifies the M2 baseline on that candidate and the G2a cumulative exit gate is re-run afterwards, per the gate rule that a found baseline defect must be fixed and the baseline re-verified before the current combination may stand."
 }

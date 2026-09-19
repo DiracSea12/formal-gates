@@ -1,3 +1,11 @@
+# M2 验收记录（2026-09-19 基线重验）：反馈包装
+
+> **基线重验缘起**：最终轮 Windows 整仓真机审查（`g2a-final-windows-review-20260918T232706Z/`）发现
+> 本单元自始携带的基线缺陷——`TestGuardPreviewBinary` 的临时 CLI 构建没有 `.exe` 后缀，Windows 无法
+> exec PE 文件；该文件自本单元原候选 `dfa23e7` 起逐字节未变，此前的非 Windows 验证一律看不见它。
+> 已在 `106343d` 修复（改用本包既有的 `installTestBinaryName()`，与全部同侪测试一致），本记录在
+> 该候选上重验 M2 基线；随后 G2a 累计组合重走退出门。原记录内容见 git 历史。
+
 # M2 验收记录：反馈包装（G1b 第二项）
 
 ## 结论
