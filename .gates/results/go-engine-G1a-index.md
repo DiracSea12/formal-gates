@@ -49,7 +49,7 @@ G1a 是分块替换的第一阶段：**只读计算**。方案要求解码与证
 | M2 | 反馈包装（G1b 第二项） | `106343d`（2026-09-19 基线重验：原候选 `dfa23e7` 携带的 Windows 后缀缺陷修复后重签） | `72b5aba`（原记录提交；重签见 `git log`） | `PASS`（重验保持） |
 | M3 | 工件发布（G1b 第三项，G1b 收口） | `aa3312e`（2026-09-18 二次重签；曾为 `e13176c`，原候选 `d71113e`） | 见 `go-engine-M3.json`（记录提交见 `git log`） | `PASS`（2026-09-18 收尾。原 `PASS` 曾于 2026-09-17 撤回，见下） |
 | G2a | 命令作业（Go 监督器的直接 argv 路径）+ 验证它承载原生传输 | `df33e9c`（2026-09-19 终审 PASS 后基线修复：M2 Windows 缺陷 `106343d` 修复、M2 重验、G2a 第六次重签；旧命令作业半 `63b0650` 更早作废） | 见 `go-engine-G2a.json`（重签提交见 `git log`） | `PASS`（终审 G2a 返修与代码审查均 PASS；累计退出门在修复后候选重走全过） |
-| G2b | DSH 薄适配（请求/身份/结果/错误映射移植入 Go；ZCode 保持原实现） | `9d12645` | 见 `go-engine-G2b.json` | 九项公共门槛 `PASS`（2026-09-19，尝试 `20260919T075930Z-19871`）；**原生定向验收未运行（待机主授权），单元保持未验收**，准入按预期拒绝放行 G2c |
+| G2b | DSH 薄适配（请求/身份/结果/错误映射移植入 Go；ZCode 保持原实现） | `9d12645` | 见 `go-engine-G2b.json` | `PASS`（2026-09-19 收口：九项门槛＋授权 DSH 原生运行 `HARNESS_COMPLETE` 7/7、0 中断、134.9s＋续用/身份失效证明通过；完成关联经监督器收据与证据探针落账） |
 
 **M2 行是本次补的**：M2 的记录提交改了本索引的两张表，却漏掉了上表的 M2 行。记录为 `INDEX-MISSING-M2-ROW`。
 
@@ -122,8 +122,8 @@ D1、D2 由自建 oracle 在验收前查出，修复由第二次派发完成。*
 | 单元 | 内容（方案 §13.1 的定义） | 状态 / 前置 |
 | --- | --- | --- |
 | G2a | 命令作业：**先**交付 Go 监督器的直接 argv 检查路径，**再**验证它承载固定的原生传输；不同时更换宿主协议 | **已收口（终审 PASS；基线修复后第六次重签，候选 `df33e9c`，`PASS`）**：九项验收全过 + zcode 原生运行 `HARNESS_COMPLETE` 7/7（见文首【终审】块） |
-| G2b | **DSH 薄适配**：在已验收监督器下移植 DSH 的请求、身份、结果和错误映射；ZCode 保持原实现 | **实施与离线验证完成（候选 `9d12645`，2026-09-19）**：`harness native <dir>` 窄命令＋`internal/harness` 单包（反过度设计收紧后无新包/无新接口）；DSH Python 执行路径退役为 `tests/reference_native_dsh.py`；主代理独立 oracle 双模式全过＋负控制×2 真失败。**原生关口开放**：真实 DSH 完整小流程待机主授权（含非继承上下文程序），未验收 |
-| G2c | ZCode 薄适配：使用同一公共边界移植 ZCode；DSH 实现不同时重构 | G2b 之后 |
+| G2b | **DSH 薄适配**：在已验收监督器下移植 DSH 的请求、身份、结果和错误映射；ZCode 保持原实现 | **已收口（2026-09-19）**：候选 `9d12645`；`harness native <dir>` 窄命令＋`internal/harness` 单包；DSH Python 执行路径退役为 `tests/reference_native_dsh.py`；独立 oracle＋负控制＋授权 DSH 原生运行（`HARNESS_COMPLETE` 7/7、launchd 非继承上下文、逐字节副本 `/tmp/g2b-copy`，身份 `a1edad6a…` 与候选相等）＋续用证明全过 |
+| G2c | ZCode 薄适配：使用同一公共边界移植 ZCode；DSH 实现不同时重构 | G2b 已收口，可派发（原生关口届时需 zcode 真实运行授权） |
 | G2d | 原生交互：单独交付原生请求的持有、展示、投递和原调用继续；按宿主逐个验收 | 按宿主逐个验收 |
 
 **更正（2026-09-17）：G2a 后半的真实受阻成因已定位，此前的归因是错的。** 2026-09-17 经授权执行的一次真实 DSH 运行在第一个角色（产品审）处停住。此前的叙述把触发者写成"模型自己请求越出只读沙箱"——**不成立**。该角色先正常 `read` 了绑定输入，紧接着的 `bash`（只读勘察）**被宿主自身拒绝**：工具结果原文为 `sandbox mode "read-only" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined` + `Runner failure: sandbox-exec: sandbox_apply: Operation not permitted`，并附 `{"name":"SandboxUnavailableError","code":"SANDBOX_UNAVAILABLE"}`。模型是**在 `bash` 完全无法执行之后**、按该结果自己打印的提示（"otherwise switch the consumer to danger-full-access"）请求最小放宽的；DSH 据此发出 `session/request_permission`，而本版本**没有**原生答复通路，故如实报告 `DSH_INTERACTION_REQUIRED`。**独立探针**（不含 harness/Python/Go 监督器）确证故障在外层上下文：`/usr/bin/sandbox-exec -p '(version 1) (allow default)' /bin/echo OK` → `sandbox_apply: Operation not permitted`，退出 71。**"这不是回归"的结论不变，依据换成该裸探针**；路径范围与配置差异的排除仍然有效。

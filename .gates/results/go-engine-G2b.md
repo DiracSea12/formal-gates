@@ -1,9 +1,33 @@
-# G2b 验收记录（2026-09-19）：DSH 薄适配（在已验收监督器下移植 DSH 请求、身份、结果和错误映射）
+# G2b 验收记录（2026-09-19，原生关口已关闭重签）：DSH 薄适配（在已验收监督器下移植 DSH 请求、身份、结果和错误映射）
 
-候选 `9d12645`（分支 `codex/go-engine-v1`）。上一验收基线：`G2a`（候选 `df33e9c`，链头准入已
-GRANTED for G2b）。九项验收全过（尝试 `.harness/validation/acceptance/G2b/20260919T075930Z-19871`，
-`overall=PASS`、`failed=[]`）。**原生定向验收未运行**（需机主授权，见文末），按方案 §14.3 本单元
-**保持未验收**，`overall=PASS` 只覆盖九项公共门槛；准入对本记录的预期行为是拒绝放行 G2c。
+候选 `9d12645`（分支 `codex/go-engine-v1`）。上一验收基线：`G2a`（候选 `df33e9c`）。九项验收全过
+（尝试 `.harness/validation/acceptance/G2b/20260919T075930Z-19871`，`overall=PASS`、`failed=[]`）。
+**原生定向验收已执行并 PASS**（机主 2026-09-19 逐字授权「可以执行」；见下节与
+`native_verification.authorized`）——G2b 按此收口。
+
+## 原生定向验收（DSH，2026-09-19，授权运行）
+
+- **完整原生小流程**：`native_multihost.py --provider dsh`，运行
+  `/tmp/g2b-copy/.harness/runs/harness-20260919-161642-52992e09`，报告
+  `/tmp/g2b-copy/.harness/validation/g2b-native-first-20260919T081635/dsh-flow/report.json`
+  （`passed:true`、`HARNESS_COMPLETE`、**7/7 角色全 PASS**、`interrupts: []`、134.9 秒、模型
+  `deepseek-official / deepseek-v4-flash`＋`high`，选型经宿主 `configOptions` 回读）。
+- **完成关联**：七个 native 作业的 argv 全部是 Go 窄命令 `[<driver>,"harness","native",<dir>]`，
+  `exit.json` 全 0、owner 锁齐备、每作业 `native-process.json` 的 **pgid ＝监督器 pid**（监督器是
+  进程组组长）；证据探针从候选工作树重走 `open_run` 身份绑定＋7 份 worker 回执（含经
+  `native-verify-source` 的原生四件证明）＋2 检查＋2 门审＋终态回读，exit 0。
+- **只读约束**：只读角色的原生事件只有 `assistant/message`＋`turn/end`；mjs 工具策略拒绝 12 项
+  写能力工具（`tool-policy.json read_only:true`）；唯一的 development 作业独立承载 `read_only:false`。
+  全程 **0 次权限请求**。
+- **续用/身份失效**：`native_missing_session.py`（`test_passed:true`，证据
+  `/tmp/g2b-copy/.harness/validation/g2b-native-missing-20260919T082029`）——失效身份被显式拒绝
+  （仅 `restart-session`/`abort`）、替换会话拿到**新**原生身份、旧证据经 handover 保留、对抗性反馈
+  注入被忽略、替换 worker 以真实用量证据 PASS。
+- **运行上下文与重定位披露**：`sandbox-exec` 在代理继承上下文无法 apply（G2a 期已定性的环境事实），
+  故按已验证程序在 launchd 拉起的 runner 下、于候选工作树的**逐字节副本** `/tmp/g2b-copy` 执行：
+  副本 HEAD `c5164bd`（仅记账领先候选）、驱动二进制 sha256 `c1dda95f…` 与记录**逐字节相等**、
+  内容寻址运行时身份 `a1edad6a…` 与记录**相等**（启动前核验），探针事后又从真实工作树重验身份绑定。
+- **模型调用消耗**：小流程 7 角色＋missing-session 证明 1 次＝授权范围内的全部支出。
 
 ## 本单元搬了什么
 
@@ -58,7 +82,7 @@ GRANTED for G2b）。九项验收全过（尝试 `.harness/validation/acceptance
 | demo-fixture（`DEMO_COMPLETE`） | PASS |
 | doctor-dsh / doctor-zcode（0 次模型调用） | PASS |
 | tree-clean-after | PASS |
-| **原生定向验收（§12.5 第 520 行：宿主适配器首次接入累计组合须由该宿主跑通完整原生小流程）** | **未运行** |
+| **原生定向验收（已授权、已执行）** | **`PASS`**：`HARNESS_COMPLETE`、7/7 角色、0 中断、134.9s；续用/身份失效证明 `test_passed:true` |
 
 ## 准入控制项的本次形态
 
@@ -67,17 +91,11 @@ GRANTED for G2b）。九项验收全过（尝试 `.harness/validation/acceptance
 "candidate moved" 滞后形态**（G2a 记录对已前移的 HEAD 深查被拒，逐例输出均为该拒绝理由）——与
 M2 等更早单元在链头前进后的形态一致，非 checker 回归。**定性绿跑**待 G2b 原生段补齐后对本记录执行。
 
-## 原生关口（唯一阻塞项）
+## 原生关口（已关闭）
 
-- **需求**：`native_multihost.py --provider dsh` 完整原生小流程（§13.1 G2b 出口：新建、续用、只读
-  约束、原生配置继承、根/子会话关联），预期 `HARNESS_COMPLETE`、全部角色 PASS、每作业在
-  Go native 命令＋监督器下执行（完成关联）。离线出口证据已逐项就位（记录 JSON
-  `native_verification.exit_criteria_offline`）。
-- **阻塞**：真实模型调用需机主明确授权（§12.5：不擅自消费权限/费用，不改标不适用）。DSH 在本机
-  另需**非继承上下文**运行程序（`SANDBOX-APPLY-REQUIRES-A-NON-INHERITED-CONTEXT` 已验证做法：
-  launchd 拉起的 runner、候选副本上执行，约 90 秒量级/次）。
-- **处置**：授权前本单元保持未验收；`admission.py` 对本记录的预期行为是
-  `ADMISSION REFUSED`（native verification 缺失），G2c 不开始。
+授权（机主 2026-09-19 逐字「可以执行」，对应点名 DSH 完整小流程＋非继承上下文程序的请求）已执行：
+完整小流程 7/7 `HARNESS_COMPLETE`＋续用/身份失效证明通过，记录原生段为 `PASS`。DSH 在本机的
+非继承上下文程序（launchd 拉起＋逐字节副本）已由本次运行再次验证可用。
 
 ## 已知有界差异与遗留
 
@@ -102,5 +120,5 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tm
   .harness/venv/bin/python -m unittest runtime.langgraph.tests.test_native_dsh_differential -v
 ./scripts/harness doctor --provider dsh   # 0 模型调用
 python3 scripts/go-engine/admission.py --record .gates/results/go-engine-G2b.json --next-unit G2c
-# 预期：ADMISSION REFUSED（原生验证未运行）——授权运行补齐后重签为 PASS 再放行
+# 原生段已补齐为 PASS，预期 ADMISSION GRANTED for G2c
 ```
