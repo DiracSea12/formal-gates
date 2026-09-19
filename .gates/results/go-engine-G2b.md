@@ -86,10 +86,14 @@
 
 ## 准入控制项的本次形态
 
-`admission.py` 将 G2b 入列 `UNITS_REQUIRING_NATIVE_VERIFICATION`（一行）。控制项在候选提交后对
-**G2a 旧记录**跑过两轮：核心拒绝项（E1–E10 等）全过；原生簇（ADM-PC、E11–E18）呈**标准
-"candidate moved" 滞后形态**（G2a 记录对已前移的 HEAD 深查被拒，逐例输出均为该拒绝理由）——与
-M2 等更早单元在链头前进后的形态一致，非 checker 回归。**定性绿跑**待 G2b 原生段补齐后对本记录执行。
+`admission.py` 将 G2b 入列 `UNITS_REQUIRING_NATIVE_VERIFICATION`（一行）。收口后的定性控制项跑
+（G2b 记录、干净树）：**运行器控制 16/16 全过；准入控制 21/22 过**——`ADM-PC`（有效记录被
+GRANTED）、`ADM-E16`（fixture 正控整体过准入）、`ADM-E19`（官方 run 前后零变化）全绿。唯一失败
+`ADM-E15`：其篡改把 `native_verification.provider` 硬编码改为 `"dsh"`——G2a 时代（记录 provider
+=zcode）这构成矛盾，G2b 的记录 provider **本来就是 dsh**，篡改成恒等操作故被 GRANTED。属**控制项
+规格缺陷**（与已登记的 `CONTROL-E5-NEEDS-AN-EXISTING-DELTA` 同类），checker 本身无回归（E12–E14、
+E16–E18 的原生拒绝全部按预期工作）；修复（改为自导出矛盾值）已验证可行但按链规登记为 **G2c 候选
+携带**——本候选已 GRANTED，工具修复提交会使记录呈 candidate-moved 滞后并连带一次重新验收。
 
 ## 原生关口（已关闭）
 
@@ -106,6 +110,7 @@ M2 等更早单元在链头前进后的形态一致，非 checker 回归。**定
 | Windows 出站行尾 | Go 统一 `\n`（Python 文本模式在 Windows 发 `\r\n`）；仅影响值比对面 |
 | 不可达路径宽恕 | 宿主应答 null `agentCapabilities`/非对象 `reason`/`message` 等，Python 抛 `AttributeError`、Go 按缺省处理（错误文本可观察面仍逐字）；pgid ESRCH 补杀子进程 |
 | 差分超时用例 | Go 命令无短超时入口，Go 侧超时文本由 `TestTransportTimeoutText` 钉住，差分只跑 reference 侧 |
+| `ADM-E15-DSH-NO-OP` | 控制项规格缺陷（已登记，G2c 候选携带修复）：E15 篡改值硬编码 `"dsh"`，对本记录恒等；登记依据＝`CONTROL-E5` 先例 |
 | GOFMT-WINDOWS-FILE-PREEXISTING | 保持独立修复项未动（派发 A 的一行修复已回退） |
 
 ## 复核入口
