@@ -1,9 +1,9 @@
 # G2c 验收记录（2026-09-19 深夜，ZCode 薄适配；原生关口待授权）
 
-候选 `8289bb2`（分支 `codex/go-engine-v1`，合同 `go-engine-G2c-contract.md`）。上一验收基线：
-`G2b` v2（候选 `3d769a0`）。九项验收全过（尝试
-`.harness/validation/acceptance/G2c/20260919T150503Z-49995`，`overall=PASS`；运行时身份 `3ce9dd2c…`、
-驱动 sha256 `67ace474…`）。
+候选 `dfd3b75`（分支 `codex/go-engine-v1`，合同 `go-engine-G2c-contract.md`；首候选 `8289bb2` 因宿主漂移
+事件前移，见下）。上一验收基线：`G2b` v2（候选 `3d769a0`）。九项验收全过（尝试
+`.harness/validation/acceptance/G2c/20260919T220257Z-77445`，`overall=PASS`；运行时身份 `bc914748…`、驱动
+sha256 按该次 identity.json）。
 
 ## 本单元搬了什么（薄层形态，机主预期"适配新平台＝只加一个薄文件"达成）
 
@@ -28,6 +28,20 @@ Go 探针（真宿主握手、`model_calls:0`、selection 只读宿主自报）�
 G2b 冻结版 `3d769a0` 隔离 worktree 重建＋公开入口冒烟 **DEMO_COMPLETE**、exit 0、零模型调用
 （run `harness-20260919-230430-b8d3df21`）。证据 `.harness/validation/g2c-rollback-g2b-20260919/`；
 重建二进制与签押件之差＝go build 内嵌路径（承 G2a/G2b 同一登记解释）。
+
+## 宿主漂移事件与修复（2026-09-20，如实记录）
+
+- 首次授权运行（run `harness-20260920-051650-834b2890`，授权原文「授权」）未完成：product/technical 两角色
+  PASS；technical 首跑因 **GLM 回显 schema 关键字 `additionalProperties` 进答案**被 `validate-worker`
+  严格字段检查拒绝（G1a 已验收的既有行为），retry 重跑通过；development 角色撞上**宿主 zcode.cjs 于
+  9-19 09:51 的自动更新**——该作业的账号 overlay 未投递（读宿主 credentials.json 的瞬时竞态；六个作业
+  绑定一致、三有三无），空注册表下 setModel 只回报黑盒错 `Provider Registry 中不存在 Model: [object Object]`。
+  中断机制全程按设计停在 WAITING_USER，无洗白；该 run 保留为证据（共消费 4 个角色执行）。
+- **零模型调用探针**（/tmp/zcode_setmodel_probe.py）实测新宿主：对象＋advertised `options.reasoningLevel`
+  是 setModel 唯一被接受的形状（字符串被 params schema 拒），我们的帧本来就对；修复＝空 available 快照
+  在发射 setModel 前以本方 `ZCODE_CONFIG: ... not advertised; no fallback` 拒绝（`dfd3b75`，差分假宿主
+  镜像实测契约，24 例含两个新场景）。Python 全套 283、harness 测试、双平台 vet、doctor（0 模型调用）
+  亲跑全绿。
 
 ## 原生关口（唯一阻塞项）
 
