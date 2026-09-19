@@ -19,7 +19,9 @@ func TestGuardPreviewBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(t.TempDir(), "formal-gates")
+	// Windows cannot exec a PE file without the .exe suffix; the package's
+	// shared helper already names the platform-correct binary.
+	binary := filepath.Join(t.TempDir(), installTestBinaryName())
 	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
 	build.Dir = repo
 	if out, err := build.CombinedOutput(); err != nil {
