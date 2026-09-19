@@ -473,6 +473,18 @@ func TestZcodeExecuteSelection(t *testing.T) {
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
 	}
+	// An empty advertised list is an empty provider registry on the 2026-09-19
+	// host: setModel cannot apply anything there, so the change is refused
+	// before the frame is fired (probed; the failing G2c run jobs hit this
+	// state after their account overlay had not been delivered).
+	nothingAdvertisedSettings := `{"model": {"current": {"providerId": "p1", "modelId": "m0"}, "available": []}, ` +
+		`"thoughtLevel": {"current": "low"}, "mode": {"current": "default"}}`
+	nothingAdvertisedSteps := func(string) []peerStep {
+		return []peerStep{
+			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", nothingAdvertisedSettings)},
+			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
+		}
+	}
 
 	t.Run("applied with the advertised level", func(t *testing.T) {
 		scenario := newZcodeScenario(t, appliedSteps(setModelApplied, setThoughtApplied),
@@ -498,6 +510,10 @@ func TestZcodeExecuteSelection(t *testing.T) {
 		model := objectOrEmpty(setModel["params"])["model"]
 		// The requested effort rides with the exact reference; the advertised
 		// default applies only when none was asked for (unit-pinned above).
+		// This object with an advertised options.reasoningLevel is the only
+		// model shape the 2026-09-19 host accepts (probed: a string model is
+		// rejected by the method's params schema and an object without
+		// options by the registry itself).
 		if !valuesEqual(model, decodeTestJSON(t, `{"modelId": "m1", "options": {"reasoningLevel": "high"}, "providerId": "p1"}`)) {
 			t.Fatalf("setModel model = %v", model)
 		}
@@ -515,29 +531,38 @@ func TestZcodeExecuteSelection(t *testing.T) {
 		steps     func(string) []peerStep
 		customize func(request map[string]any)
 		want      string
+		noFrame   string
 	}{
 		{"not advertised", appliedSteps(setModelApplied, setThoughtApplied),
 			func(request map[string]any) {
 				request["read_only"] = false
 				request["model"] = `{"providerId": "p9", "modelId": "m9"}`
 			},
-			"RuntimeBlocked: ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback"},
+			"RuntimeBlocked: ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback",
+			"session/setModel"},
+		{"nothing advertised is the same refusal", nothingAdvertisedSteps,
+			func(request map[string]any) {
+				request["read_only"] = false
+				request["model"] = `{"providerId": "p1", "modelId": "m1"}`
+			},
+			"RuntimeBlocked: ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback",
+			"session/setModel"},
 		{"model not applied", appliedSteps(setModelIgnored, setThoughtApplied),
 			func(request map[string]any) {
 				request["read_only"] = false
 				request["model"] = `{"providerId": "p1", "modelId": "m1"}`
 			},
-			"RuntimeBlocked: ZCODE_CONFIG: requested selection was not applied"},
+			"RuntimeBlocked: ZCODE_CONFIG: requested selection was not applied", ""},
 		{"thought level not applied", appliedSteps(setModelApplied, setThoughtIgnored),
 			func(request map[string]any) {
 				request["read_only"] = false
 				request["model"] = `{"providerId": "p1", "modelId": "m1"}`
 				request["reasoning_effort"] = "high"
 			},
-			"RuntimeBlocked: ZCODE_CONFIG: reasoning setting was not applied"},
+			"RuntimeBlocked: ZCODE_CONFIG: reasoning setting was not applied", ""},
 		{"native selected model missing", noCurrentSteps,
 			func(request map[string]any) { request["read_only"] = false },
-			"RuntimeBlocked: ZCODE_CONFIG: native selected model missing"},
+			"RuntimeBlocked: ZCODE_CONFIG: native selected model missing", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -550,6 +575,12 @@ func TestZcodeExecuteSelection(t *testing.T) {
 			}
 			if got := nativeRecordError(t, scenario.directory); got != tc.want {
 				t.Fatalf("error = %q, want %q", got, tc.want)
+			}
+			if tc.noFrame != "" {
+				if echo := readTestFile(t, scenario.echoPath); strings.Contains(
+					echo, `"method":"`+tc.noFrame+`"`) {
+					t.Fatalf("a refused selection must not fire %s:\n%s", tc.noFrame, echo)
+				}
 			}
 		})
 	}

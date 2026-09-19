@@ -34,6 +34,19 @@ as test_native_dsh_differential.py):
   ZCODE_PROTOCOL refusal, the account-config refusal) is Python-shaped on the
   reference side and canonical on the Go side, so those cases compare the
   embedded body by value and expect each side's own rendering.
+- the setModel host contract (probed 2026-09-19 against the host updated that
+  morning): the method's params schema rejects a string model as invalid
+  params, an object without options.reasoningLevel is refused by the registry,
+  and an accepted object is confirmed with the options in the readback and
+  moves thoughtLevel with it. The fake mirrors that contract for both sides;
+  both sides already send the one accepted shape (the object with an
+  advertised options.reasoningLevel), so no comparison-layer difference is
+  needed. One registered side asymmetry: when the snapshot advertises no
+  models at all (an empty provider registry, where the real host's setModel
+  cannot apply anything), the Go adapter refuses before firing the frame with
+  the transport's own "not advertised; no fallback" text, while the frozen
+  reference still sends it - pinned by the Go-side-only scenario below, same
+  discipline as the applied-credential half.
 
 The two sides are deliberately asymmetric processes: the reference is called
 in-process (reference_native_zcode.execute), while the Go side is its own
@@ -119,6 +132,17 @@ SETTINGS_WITH_M9 = {'model': {'current': {'providerId': 'p1', 'modelId': 'm1'},
                                                            'defaultLevel': 'high'}}]},
                     'thoughtLevel': {'current': 'low'},
                     'mode': {'current': 'default'}}
+# A host whose current model differs from the wanted one, both advertised with
+# levels: the normal setModel path (frame shape plus the readback contract).
+SETTINGS_APPLY = {'model': {'current': {'providerId': 'p1', 'modelId': 'm0'},
+                            'available': [{'ref': {'providerId': 'p1', 'modelId': 'm0'},
+                                           'reasoning': {'levels': [{'value': 'high'}, {'value': 'low'}],
+                                                         'defaultLevel': 'low'}},
+                                          {'ref': {'providerId': 'p1', 'modelId': 'm1'},
+                                           'reasoning': {'levels': [{'value': 'high'}, {'value': 'low'}],
+                                                         'defaultLevel': 'low'}}]},
+                  'thoughtLevel': {'current': 'low'},
+                  'mode': {'current': 'default'}}
 
 RUNTIME_HEADERS = 'interaction/requestProviderRuntimeHeaders'
 
@@ -207,17 +231,30 @@ def main():
             settings['mode'] = {'current': applied if applied is not None else params.get('mode')}
             answer(ident, {'result': settings_reply()})
         elif method == 'session/setModel':
+            # The 2026-09-19 host contract, probed: the params schema rejects a
+            # model that is not an object, an object without
+            # options.reasoningLevel is refused by the registry, and an
+            # accepted object is confirmed with the options in the readback
+            # and moves the thought level with it.
+            model = params.get('model')
             override = knobs.get('setModel_settings')
-            if override is None:
-                model = params.get('model') or {}
-                settings['model'] = dict(settings.get('model') or {},
-                                         current={'providerId': model.get('providerId'),
-                                                  'modelId': model.get('modelId')})
-                answer(ident, {'result': settings_reply()})
-            else:
+            if not isinstance(model, dict):
+                answer(ident, {'error': {'code': -32602,
+                                         'message': 'Invalid params — model: Invalid input: '
+                                                    'expected object, received '
+                                                    + ('string' if isinstance(model, str) else type(model).__name__)}})
+            elif not isinstance(model.get('options'), dict) or not model['options'].get('reasoningLevel'):
+                answer(ident, {'error': {'code': -32603,
+                                         'message': 'Reasoning level is required for '
+                                                    + f"{model.get('providerId')}/{model.get('modelId')}"}})
+            elif override is not None:
                 # The host answers a settings block that does not reflect the
                 # request: the readback is what the client must trust.
                 answer(ident, {'result': settings_reply(override)})
+            else:
+                settings['model'] = dict(settings.get('model') or {}, current=dict(model))
+                settings['thoughtLevel'] = {'current': model['options']['reasoningLevel']}
+                answer(ident, {'result': settings_reply()})
         elif method == 'session/setThoughtLevel':
             override = knobs.get('setThoughtLevel_settings')
             if override is None:
@@ -683,6 +720,46 @@ class ZCodeDifferential(unittest.TestCase):
         for directory in (ref_dir, go_dir):
             self.frame_with_method(directory, 'session/setModel')
 
+    def test_set_model_applies_the_requested_reference(self):
+        # The normal setModel path under the probed 2026-09-19 contract: the
+        # frame carries the exact reference with the advertised default level,
+        # and the host's readback confirms the options and moves the thought
+        # level with them, so setThoughtLevel is not asked again.
+        root, workspace, ref_dir, go_dir = self.scenario(
+            knobs={'settings': SETTINGS_APPLY},
+            model=json.dumps({'providerId': 'p1', 'modelId': 'm1'}))
+        result = self.assert_success(ref_dir, go_dir)
+        self.assertEqual(result['selection'],
+                         {'model': CANONICAL_REF, 'reasoning_effort': 'low'})
+        for directory in (ref_dir, go_dir):
+            frame = self.frame_with_method(directory, 'session/setModel')
+            self.assertEqual(frame['params']['model'],
+                             {'providerId': 'p1', 'modelId': 'm1',
+                              'options': {'reasoningLevel': 'low'}})
+            self.assertIs(frame['params']['persistAsWorkspaceLastUsed'], False)
+            methods = [item.get('method') for item in self.frames(directory)]
+            self.assertNotIn('session/setThoughtLevel', methods)
+
+    def test_go_side_nothing_advertised_is_refused_before_set_model(self):
+        # Go side only, registered in the module docstring: a snapshot that
+        # advertises no models at all is an empty provider registry on the
+        # 2026-09-19 host, where setModel cannot apply anything (the state the
+        # failing G2c run jobs were in). The Go adapter refuses with its own
+        # text before firing the frame; the frozen reference still sends it.
+        empty = {'model': {'current': {'providerId': 'p1', 'modelId': 'm0'}, 'available': []},
+                 'thoughtLevel': {'current': 'low'}, 'mode': {'current': 'default'}}
+        _root, _workspace, _ref_dir, go_dir = self.scenario(
+            knobs={'settings': empty}, model=json.dumps({'providerId': 'p1', 'modelId': 'm1'}))
+        completed = self.run_go(go_dir)
+        self.assertEqual(completed.returncode, 1)
+        record = read(go_dir / 'native-error.json')
+        self.assertEqual(record['error'],
+                         'RuntimeBlocked: ZCODE_CONFIG: requested exact provider/model '
+                         'is not advertised; no fallback')
+        methods = [item.get('method') for item in self.frames(go_dir)]
+        self.assertNotIn('session/setModel', methods)
+        self.assertFalse((go_dir / 'source.json').exists())
+
     def test_missing_native_selection_with_none_bound_is_refused(self):
         empty = {'model': {'current': None, 'available': []}, 'thoughtLevel': {'current': ''}}
         root, workspace, ref_dir, go_dir = self.scenario(knobs={'settings': empty})
@@ -700,7 +777,14 @@ class ZCodeDifferential(unittest.TestCase):
             self.assertFalse((directory / 'host-frames.jsonl').exists())
 
     def test_reasoning_setting_not_applied_is_refused(self):
-        knobs = {'setThoughtLevel_settings': {'model': SETTINGS['model'],
+        # On the 2026-09-19 host setModel moves the thought level with the
+        # options it accepts, so this scenario defeats both readbacks: the
+        # setModel readback reports the level unapplied (the override), which
+        # is what sends the client to setThoughtLevel, whose own readback
+        # refuses it in turn.
+        knobs = {'setModel_settings': {'model': SETTINGS['model'],
+                                       'thoughtLevel': {'current': 'low'}},
+                 'setThoughtLevel_settings': {'model': SETTINGS['model'],
                                               'thoughtLevel': {'current': 'low'}}}
         root, workspace, ref_dir, go_dir = self.scenario(
             knobs=knobs, model=json.dumps({'providerId': 'p1', 'modelId': 'm1'}),

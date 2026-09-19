@@ -591,11 +591,17 @@ func zcodeAdvertisedModels(snapshot any) []string {
 // zcodeAdvertisedReasoning is the reasoning levels the host itself advertises
 // for one exact reference (advertised_reasoning). session/setModel takes an
 // object and refuses one without options.reasoningLevel, and the level has to
-// be one of this model's own values. The host already reports both, so they
-// are read from it: a level this transport picked itself would either be
-// refused or silently describe a capability the model does not have. The
-// fallback to the first advertised value mirrors the host's own default when
-// it reports no default at all.
+// be one of this model's own values (probed 2026-09-19 against the host that
+// updated that morning: an object without options is refused with "Reasoning
+// level is required for <provider>/<model>", a level the model does not
+// advertise with `Reasoning effort "<level>" is not supported by ...`, and a
+// string "providerId/modelId" never reaches that far -- the method's params
+// schema rejects it as "expected object, received string", so the object with
+// an advertised options.reasoningLevel is the only accepted shape). The host
+// already reports the levels, so they are read from it: a level this transport
+// picked itself would either be refused or silently describe a capability the
+// model does not have. The fallback to the first advertised value mirrors the
+// host's own default when it reports no default at all.
 func zcodeAdvertisedReasoning(snapshot any, ref map[string]any) map[string]any {
 	settings := objectOrEmpty(getOf(snapshot, "settings"))
 	available := listOf(getOrOf(objectOrEmpty(getOf(settings, "model")), "available", []any{}))
@@ -1001,6 +1007,15 @@ func zcodeDeliverAccountProviders(client *zcodeClient, catalogue string, wanted 
 // not support (an unavailable thought level is dropped with a warning), so
 // every value is confirmed from the host's own report before it is recorded.
 // Nothing is persisted to the workspace's last-used selection.
+//
+// A change is only asked of a host that advertises models at all: on the
+// 2026-09-19 host a snapshot whose available list is empty means an empty
+// provider registry, where session/setModel cannot apply any reference and
+// answers with its own opaque "Provider Registry 中不存在 Model" error
+// (probed; the failing G2c run jobs hit exactly that state after their
+// account overlay had not been delivered). The refusal is this transport's
+// own instead, and the frame is never fired. Registered bounded difference:
+// the frozen reference still sends the frame and reports the host's error.
 func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort, directory, workspace string) (map[string]any, error) {
 	configured := zcodeSelection(snapshot)
 	if wanted != nil {
@@ -1014,6 +1029,9 @@ func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort
 			return nil, &blockedError{message: "ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback"}
 		}
 		if textOf(configured["model"]) != wantedText {
+			if len(advertised) == 0 {
+				return nil, &blockedError{message: "ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback"}
+			}
 			changed, err := z.request("session/setModel", map[string]any{
 				"sessionId":                  z.identity,
 				"model":                      zcodeBoundModel(snapshot, wanted, effort),
