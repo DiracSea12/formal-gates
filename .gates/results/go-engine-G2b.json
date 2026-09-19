@@ -1,0 +1,126 @@
+{
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T075930Z-19871",
+  "attestation": {
+    "evidence_file_count": 61,
+    "evidence_sha256": "212e623f03d6946c981eb2abff7a91ee6905ddd735e2105490ac6621a1f69a71",
+    "identity_sha256": "0ed6f9f0a51dd38b6ceddce5c4bfadf28b728572c90dd75735538e71df5051f7",
+    "summary_sha256": "93382c726ff80343289a20a1c296403a96ab8989b1e05a3225521d922a6f05c0"
+  },
+  "bookkeeping": [
+    ".gates/results/go-engine-G2b.json",
+    ".gates/results/go-engine-G2b.md",
+    ".gates/results/go-engine-G1a-index.md"
+  ],
+  "budget": {
+    "go_test_backstop_timeout": "60m",
+    "note": "The regression is judged by result and progress, not by wall-clock speed.",
+    "stall_budget_seconds": 240.0
+  },
+  "candidate": {
+    "branch": "codex/go-engine-v1",
+    "commit": "9d126456acb75ce9ac10e5411da29599ce1a2d3b",
+    "driver_binary_sha256": "c1dda95f52ae7184130396c8b0337d17d9ad8b08f8234799c844d38006ac1fc9",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    },
+    "runtime_identity": "a1edad6a6dd882aa3df464d4e7d28326535b20adad4599511f730687dd6395b8"
+  },
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "seconds": 0.459,
+      "status": "PASS"
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "seconds": 0.43,
+      "status": "PASS"
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "seconds": 390.647,
+      "status": "PASS"
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "seconds": 2.411,
+      "status": "PASS"
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "seconds": 86.186,
+      "status": "PASS"
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "seconds": 2.841,
+      "status": "PASS"
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "seconds": 1.78,
+      "status": "PASS"
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "seconds": 2.082,
+      "status": "PASS"
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "seconds": 0.035,
+      "status": "PASS"
+    }
+  ],
+  "native_verification": {
+    "authorized": null,
+    "blocker": "Awaiting explicit machine-owner authorization for real model calls (plan 12.5: no unauthorized consumption of permissions/fees; no reclassification as not-applicable). Per SANDBOX-APPLY-REQUIRES-A-NON-INHERITED-CONTEXT the DSH run additionally needs the proven non-inherited context procedure (launchd-launched runner on a relocated copy or equivalent) because sandbox-exec cannot apply in the agent-inherited context.",
+    "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider dsh --out <evidence_dir>/dsh-flow",
+    "completion_linkage": null,
+    "duration_s": null,
+    "evidence_dir": null,
+    "exit_criteria_offline": {
+      "native_config_inheritance": "Differential config three-way (already-configured not reset / set_config_option readback / mismatch refused); probe selection report.",
+      "new_session": "Differential test_new_session_success_turn + Go TestRunNativeNewSessionSuccessTurn; doctor-dsh probes the real host create path with 0 model calls.",
+      "read_only_constraint": "makeDSHPatch shape (sandboxPolicy injection, no permission overlays) + native_dsh.mjs byte-identical + RootSessionHook unchanged; native events confinement awaits the real run.",
+      "resume": "Differential resume success + SessionUnavailable two-way; native_missing_session.py still passes through the registry.",
+      "root_subsession_binding": "observe identity/turn binding + mixed-session refusal + child events excluded from root evidence (mjs root gate unchanged)."
+    },
+    "flow_status": null,
+    "interrupts": null,
+    "missing_for_acceptance": [
+      "Real DSH full native mini-flow (plan 12.5 line 520: a host adapter first integrated into the cumulative combo must run the complete native mini-flow on that host): provider dsh, expected HARNESS_COMPLETE with all roles PASS and every job executed under the Go native command via the supervisor (completion linkage)."
+    ],
+    "offline_review": {
+      "delivered_differential": "runtime/langgraph/tests/test_native_dsh_differential.py: byte surfaces = evidence files + error text + prompt text; value surfaces = protocol.jsonl/host-frames/stdout per the tightened contract.",
+      "independent_oracle": "/tmp/g2b-oracle (reviewer-owned fake ACP host + runner, independent of the delivered differential fixture): both modes PASS — evidence files byte-identical (identity/source/answer.raw/answer.json/interaction-status/native-source/native-events), profile byte-identical modulo the by-design mjs location (Go names the production native_dsh.mjs), host-prompt byte-exact, host frames value-equal, stdout equals the reference return, permission error text byte-exact.",
+      "negative_controls": "Two reviewer-applied source mutations each made the oracle genuinely fail (prompt suffix mutation -> host-prompt bytes differ; DSH_INTERACTION_REQUIRED text mutation -> native-error text differs), source restored and rebuilt after each. The delivered differential carries its own two mutations (prompt tail, DSH_TRANSPORT prefix) per dispatch B."
+    },
+    "provider": "dsh",
+    "read_only_boundary": null,
+    "report": null,
+    "required": true,
+    "roles_completed": null,
+    "run": null,
+    "status": "NOT_RUN"
+  },
+  "overall": "PASS",
+  "previous_accepted_baseline": "G2a",
+  "recorded_at": "2026-09-19T08:07:37.557408+00:00",
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2b",
+  "unit": "G2b"
+}
