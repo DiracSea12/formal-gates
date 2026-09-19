@@ -62,7 +62,8 @@ from unittest.mock import patch
 
 import reference_native_dsh
 from formal_gates_harness.infra import HarnessError, RuntimeBlocked, SessionUnavailable, atomic, file_proof, read
-from formal_gates_harness.native_hosts import GoAdapter, NativeAdapter
+from formal_gates_harness.native_hosts import GoAdapter
+from reference_native_transport import SOURCE_FILES
 
 REPO = Path(__file__).resolve().parents[3]
 BINARY = REPO / '.harness' / 'bin' / 'formal-gates'
@@ -812,6 +813,34 @@ class DSHReconcileDifferential(unittest.TestCase):
                 expected_error='DSH_RECONCILE: original model selection differs')
 
 
+class _NativeDshReference:
+    """The retired NativeAdapter's dsh lifecycle semantics, verbatim.
+
+    NativeAdapter (formal_gates_harness/native_hosts.py) was deleted when the
+    last in-process execution path was retired (G2c); these two methods are
+    what the GoAdapter's bridge operations are still compared against.
+    """
+
+    name = 'dsh'
+
+    def validate_binding(self, binding):
+        if binding.get('provider') != self.name:
+            raise HarnessError('HOST_BINDING: provider differs')
+        for name, proof in binding.get('files', {}).items():
+            if file_proof(Path(name)) != proof:
+                raise RuntimeBlocked(f'HOST_CHANGED: bound native executable/script changed: {name}')
+
+    def verify_source(self, directory, source):
+        if source.get('provider') != self.name or not source.get('identity'):
+            raise RuntimeBlocked('NATIVE_BINDING: missing or different provider/identity')
+        proofs = source.get('files', {})
+        if set(proofs) != set(SOURCE_FILES):
+            raise RuntimeBlocked('EVIDENCE_MISSING: native source proofs absent')
+        for name, proof in proofs.items():
+            if file_proof(directory / name) != proof:
+                raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+
+
 class DSHRegistryDifferential(unittest.TestCase):
     """The four bridge lifecycle operations against the retired Python semantics."""
 
@@ -820,9 +849,7 @@ class DSHRegistryDifferential(unittest.TestCase):
         ensure_driver_binary()
 
     def setUp(self):
-        # The pre-migration dsh lifecycle semantics are NativeAdapter's methods
-        # (validate_binding/verify_source never import the retired module).
-        self.reference = NativeAdapter('dsh', '.native_dsh')
+        self.reference = _NativeDshReference()
         self.adapter = GoAdapter('dsh')
 
     def temporary_root(self):
@@ -958,11 +985,11 @@ class GoAdapterProbePath(unittest.TestCase):
         return request
 
     def test_entry_argv_routes_each_host_to_its_implementation(self):
-        # dsh is one native job in one Go process; zcode's entry is unchanged.
-        self.assertEqual(GoAdapter('dsh').entry_argv('/bind/formal-gates', Path('/jobs/k')),
-                         ['/bind/formal-gates', 'harness', 'native', '/jobs/k'])
-        self.assertEqual(NativeAdapter('zcode', '.native_zcode').entry_argv('/bind/formal-gates', Path('/jobs/k')),
-                         [sys.executable, '-m', 'formal_gates_harness.native_entry', '/jobs/k'])
+        # Every native host is one job in one Go process now: dsh since G2b,
+        # zcode since G2c (the Python entry module was deleted with it).
+        for provider in ('dsh', 'zcode'):
+            self.assertEqual(GoAdapter(provider).entry_argv('/bind/formal-gates', Path('/jobs/k')),
+                             ['/bind/formal-gates', 'harness', 'native', '/jobs/k'])
 
     def test_execute_probe_returns_the_report_and_writes_the_request(self):
         root, workspace, host = self.scenario_root()

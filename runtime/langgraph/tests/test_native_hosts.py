@@ -2,15 +2,21 @@
 from pathlib import Path
 import importlib
 import json
+import os
+import shutil
 import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof,read
-from formal_gates_harness.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
-from formal_gates_harness.native_zcode import (Client,DEV_PERMISSION_MODE,advertised_models,apply_selection,
-                                               execute,handshake,materialize_source,reference,selection)
+from formal_gates_harness.native_hosts import GoAdapter,adapter_for,execution_hosts,normalize_provider,host_catalog
+# G2c: the pre-migration zcode transport is test-only reference code now; the
+# production zcode execution path is the Go driver binary. The structural
+# assertions below pin the reference implementation the differential
+# (test_native_zcode_differential.py) compares the Go adapter against.
+from reference_native_zcode import (Client,DEV_PERMISSION_MODE,advertised_models,apply_selection,
+                                    handshake,materialize_source,reference,selection)
 
 ROOT=Path(__file__).resolve().parents[3]
 REF={'providerId':'original','modelId':'M'}
@@ -35,6 +41,29 @@ class HostRegistryTests(unittest.TestCase):
             p.write_text('changed')
             with self.assertRaisesRegex(RuntimeBlocked,'HOST_CHANGED'):adapter_for('zcode').validate_binding(binding)
             with self.assertRaisesRegex(HarnessError,'HOST_BINDING'):adapter_for('dsh').validate_binding(binding)
+    def test_zcode_segment_routes_to_the_go_driver(self):
+        # G2c: both execution adapters are Go driver commands now; the package
+        # keeps only each host's own side file as transport inventory.
+        adapter=adapter_for('zcode')
+        self.assertIs(type(adapter),GoAdapter)
+        self.assertEqual(adapter.entry_argv('/bind/formal-gates',Path('/jobs/k')),
+                         ['/bind/formal-gates','harness','native','/jobs/k'])
+        self.assertEqual(adapter.transport_files(),('zcode_credential.mjs',))
+        self.assertEqual(adapter_for('dsh').transport_files(),('native_dsh.mjs',))
+    def test_zcode_capture_binds_node_and_script_through_the_bridge(self):
+        node=shutil.which('node')
+        if not node:self.skipTest('node is not available')
+        with tempfile.TemporaryDirectory() as t:
+            script=Path(t)/'zcode.cjs';script.write_text('native')
+            with patch.dict(os.environ,{'FORMAL_GATES_ZCODE_SCRIPT':str(script)}):
+                go_binding=adapter_for('zcode').capture()
+            self.assertEqual(go_binding['provider'],'zcode')
+            self.assertEqual(set(go_binding['launch']),{'executable','script'})
+            self.assertEqual(go_binding['files'],
+                             {go_binding['launch']['executable']:file_proof(Path(go_binding['launch']['executable'])),
+                              go_binding['launch']['script']:file_proof(Path(go_binding['launch']['script']))})
+            # A script with no catalogue anywhere pins no environment.
+            self.assertNotIn('environment',go_binding)
     def test_same_evidence_verification_for_both_hosts(self):
         for provider in execution_hosts():
             with self.subTest(provider=provider),tempfile.TemporaryDirectory() as t:
@@ -50,10 +79,14 @@ class HostRegistryTests(unittest.TestCase):
         for name in ('workers.py','infra.py','cli.py'):
             text=(base/name).read_text()
             self.assertNotIn('from .native_dsh import',text,name)
-        # The retired Python execution path must not come back through a stale
-        # module: production dsh execution is the Go driver binary (G2b).
-        with self.assertRaises(ImportError):
-            importlib.import_module('formal_gates_harness.native_dsh')
+        # The retired Python execution paths must not come back through stale
+        # modules: production dsh execution went to the Go driver binary in G2b
+        # and production zcode execution (with the shared transport and the
+        # entry) in G2c; the pre-migration implementations survive only as
+        # tests/reference_* copies, which production code must not import.
+        for module in ('native_dsh','native_zcode','native_transport','native_entry'):
+            with self.subTest(module=module),self.assertRaises(ImportError):
+                importlib.import_module('formal_gates_harness.'+module)
         # The workflow is still the same LangGraph graph, not one graph per host.
         text=(base/'graph.py').read_text()
         self.assertNotIn('native_zcode',text)
@@ -152,54 +185,14 @@ class ZCodeEvidenceTests(unittest.TestCase):
             if cls is RuntimeBlocked:self.assertNotIsInstance(e.exception,SessionUnavailable)
 
 
-FAKE_APP_SERVER='''
-import json,sys
-REF={'providerId':'original','modelId':'M'}
-ANSWER={'status':'PASS','summary':'observed','findings':[],'check_ids':[]}
-def reply(i,result): print(json.dumps({'id':i,'result':result}),flush=True)
-for line in sys.stdin:
-    message=json.loads(line);method=message.get('method');i=message.get('id')
-    if method in ('session/create','session/resume'):
-        reply(i,{'protocol':{'name':'ZCode Protocol','version':1},'session':{'sessionId':'s-root'},
-                 'settings':{'model':{'current':REF,'available':[{'ref':REF}]},'thoughtLevel':{'current':'max'}}})
-    elif method=='session/subscribe':
-        reply(i,{'sessionId':'s-root'})
-    elif method=='session/setMode':
-        reply(i,{'settings':{'mode':{'current':message['params']['mode']}}})
-    elif method=='session/send':
-        reply(i,{'sessionId':'s-root','accepted':True})
-        input_id=message['params']['inputId']
-        for seq,kind in ((1,'turn.started'),(2,'turn.completed')):
-            payload={'inputId':input_id} if kind=='turn.started' else {'inputId':input_id,'resultType':'success',
-                     'response':'Done.\\n```json\\n'+json.dumps(ANSWER)+'\\n```','usage':{'inputTokens':10}}
-            print(json.dumps({'method':'session/event','params':{'sessionId':'s-root','turnId':'t-1','seq':seq,'type':kind,'payload':payload}}),flush=True)
-    elif method=='session/close':
-        reply(i,{});break
-'''
+# FAKE_APP_SERVER and ZCodeSuccessReceiptTests were removed with the production
+# zcode execution path: the whole in-process success receipt (source.json
+# persisted and equal to the returned receipt, tool-policy permission evidence,
+# verify_source through the registry) is now pinned end to end - against the Go
+# command, not just the reference - by test_native_zcode_differential.py
+# (test_new_session_success_turn) and, for the reference alone, by the same
+# file's value comparisons.
 
-
-class ZCodeSuccessReceiptTests(unittest.TestCase):
-    def test_success_path_persists_the_source_receipt(self):
-        # execute() returning the receipt is not enough: the worker store reads
-        # source.json from the job directory after the supervised process exits.
-        with tempfile.TemporaryDirectory() as t:
-            root=Path(t);fake=root/'fake-app-server.py';fake.write_text(FAKE_APP_SERVER)
-            workspace=root/'ws';workspace.mkdir();directory=root/'job'
-            request={'workspace':str(workspace),
-                     'binding':{'provider':'zcode','launch':{'executable':sys.executable,'script':str(fake)},'files':{}},
-                     'read_only':False,'model':canonical(REF).decode(),'reasoning_effort':'','prompt':'review','schema':{}}
-            source=execute(request,directory)
-            persisted=read(directory/'source.json')
-            self.assertEqual(persisted['provider'],'zcode');self.assertEqual(persisted['identity'],'s-root')
-            self.assertEqual(json.loads((directory/'answer.json').read_text())['status'],'PASS')
-            adapter_for('zcode').verify_source(directory,persisted)
-            self.assertEqual({k:v for k,v in source.items() if k!='files'},
-                             {k:v for k,v in persisted.items() if k!='files'})
-            # The declared mode is confirmed by the host readback and recorded
-            # as the mode actually in force.
-            self.assertEqual(read(directory/'tool-policy.json'),
-                             {'read_only':False,'permission_mode':DEV_PERMISSION_MODE})
-            self.assertEqual(read(directory/'native-source.json')['permission_mode'],DEV_PERMISSION_MODE)
 
 FLOODING_APP_SERVER='''
 import json,sys,time

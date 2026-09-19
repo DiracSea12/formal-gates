@@ -5,58 +5,11 @@ No adapter receives a Flow, SQLite connection, approval capability or run state.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-import importlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 from .infra import (HarnessError, RuntimeBlocked, SessionUnavailable, atomic, driver_bridge,
-                    file_proof, read, refuse)
-from .native_transport import SOURCE_FILES
-
-@dataclass(frozen=True)
-class NativeAdapter:
-    name: str
-    module: str
-
-    def entry_argv(self, binary, directory):
-        return [sys.executable, '-m', 'formal_gates_harness.native_entry', str(directory)]
-
-    def implementation(self):
-        return importlib.import_module(self.module, __package__)
-
-    def capture(self):
-        return self.implementation().capture_binding()
-
-    def validate_binding(self, binding):
-        if binding.get('provider') != self.name:
-            raise HarnessError('HOST_BINDING: provider differs')
-        for name, proof in binding.get('files', {}).items():
-            if file_proof(Path(name)) != proof:
-                raise RuntimeBlocked(f'HOST_CHANGED: bound native executable/script changed: {name}')
-
-    def execute(self, request, directory, probe=False):
-        if request.get('binding'): self.validate_binding(request['binding'])
-        return self.implementation().execute(request, directory, probe=probe)
-
-    def reconcile(self, directory, process):
-        return self.implementation().reconcile_completed_output(directory, process)
-
-    def transport_files(self):
-        module = self.implementation()
-        if hasattr(module, 'TRANSPORT_FILES'):
-            return module.TRANSPORT_FILES
-        return (Path(module.__file__).relative_to(Path(__file__).parent).as_posix(),)
-
-    def verify_source(self, directory, source):
-        if source.get('provider') != self.name or not source.get('identity'):
-            raise RuntimeBlocked('NATIVE_BINDING: missing or different provider/identity')
-        proofs = source.get('files', {})
-        if set(proofs) != set(SOURCE_FILES):
-            raise RuntimeBlocked('EVIDENCE_MISSING: native source proofs absent')
-        for name, proof in proofs.items():
-            if file_proof(directory / name) != proof:
-                raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+                    read, refuse)
 
 
 def _message_without_type_prefix(text):
@@ -138,13 +91,18 @@ class GoAdapter:
 
     def transport_files(self):
         # The transport mechanics live inside the Go driver binary, so only the
-        # host-side plugin belongs to this package's transport inventory.
-        return ('native_dsh.mjs',)
+        # host-side plugin belongs to this package's transport inventory: each
+        # provider names its own (dsh's sandbox/tool plugin, zcode's credential
+        # reader).
+        return ({'dsh': 'native_dsh.mjs', 'zcode': 'zcode_credential.mjs'}[self.name],)
 
 
 # This lists *execution* implementations, not another installation/alias list.
+# G2b retired the Python dsh execution path; G2c retired zcode the same way,
+# so every execution implementation now lives in the Go driver binary and the
+# pre-migration Python transports survive only as tests/reference_* copies.
 _ADAPTERS = {a.name: a for a in (
-    GoAdapter('dsh'), NativeAdapter('zcode', '.native_zcode'),
+    GoAdapter('dsh'), GoAdapter('zcode'),
 )}
 
 def adapter_for(provider):

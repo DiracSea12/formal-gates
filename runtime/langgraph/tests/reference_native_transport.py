@@ -1,4 +1,24 @@
-"""Mechanics every native host transport shares.
+"""Reference copy of the retired shared native transport mechanics.
+
+Test-only. Production code must not import this module. The body below is the
+pre-migration implementation from formal_gates_harness/native_transport.py,
+moved verbatim (G2c: with the zcode execution path, the last in-process
+consumer, retired to the Go driver binary, the shared Python transport itself
+left the production package). The G2c differential
+(test_native_zcode_differential.py) proves the Go adapters
+(internal/harness/native_transport.go behind `formal-gates harness native`)
+preserve its observable behaviour; reference_native_dsh.py and
+reference_native_zcode.py are built on this copy, exactly as their production
+originals were built on the production module.
+
+The original module lived inside formal_gates_harness and used package-relative
+imports (`from .infra import ...`). To run from this test directory it uses the
+absolute imports `formal_gates_harness.infra` and
+`formal_gates_harness.native_result`; PYTHONPATH must contain
+`<repo>/runtime/langgraph` (the tests set this). Everything else is kept
+exactly as it was:
+
+Mechanics every native host transport shares.
 
 A native transport is always the same machine: spawn one host process, speak
 line-delimited JSON over its stdio, keep a routing-only trace, answer the host's
@@ -26,8 +46,8 @@ import queue
 import subprocess
 import threading
 import time
-from .infra import HarnessError, RuntimeBlocked, atomic, read, file_proof
-from .native_result import decode_result
+from formal_gates_harness.infra import HarnessError, RuntimeBlocked, atomic, read, file_proof
+from formal_gates_harness.native_result import decode_result
 
 # The evidence a native run must leave behind, in the order it is finalized.
 SOURCE_FILES = ('native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json')

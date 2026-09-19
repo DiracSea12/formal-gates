@@ -491,14 +491,15 @@ class JobSupervisionDifferential(unittest.TestCase):
         # job directory. Because that directory differs per side, request_digest
         # legitimately differs, so this case asserts SHAPE equality (exit 1, empty
         # error, native-error.json written, streams present) rather than an identical
-        # digest - matching the contract's "same shape" requirement.
+        # digest - matching the contract's "same shape" requirement. G2c: the
+        # entrypoint is the Go narrow command itself (the Python
+        # formal_gates_harness.native_entry module was deleted with the last
+        # in-process adapter); an unknown provider still lands the typed refusal.
         native_req = {"provider": "bogus-provider-xyz"}
         request = {"kind": "native",
-                   "argv": [VENV_PYTHON, "-m", "formal_gates_harness.native_entry", "<JOB>"],
+                   "argv": [BINARY, "harness", "native", "<JOB>"],
                    "cwd": self.work, "stdin": "",
-                   "environment": {"PYTHONPATH": RUNTIME,
-                                   "PYTHONDONTWRITEBYTECODE": "1",
-                                   "FORMAL_GATES_HARNESS_BINARY": BINARY,
+                   "environment": {"FORMAL_GATES_HARNESS_BINARY": BINARY,
                                    "TMPDIR": "/private/tmp"}}
         # Run Go and reference, substituting each job dir into the argv.
         for label, binary, args in (
@@ -507,7 +508,7 @@ class JobSupervisionDifferential(unittest.TestCase):
         ):
             job = tempfile.mkdtemp(prefix="g2a-native-")
             req = dict(request)
-            req["argv"] = [VENV_PYTHON, "-m", "formal_gates_harness.native_entry", job]
+            req["argv"] = [BINARY, "harness", "native", job]
             with open(os.path.join(job, "request.json"), "w") as f:
                 json.dump(req, f)
             with open(os.path.join(job, "native-request.json"), "w") as f:

@@ -13,7 +13,10 @@ package.
 The original module lived inside formal_gates_harness and used package-relative
 imports (`from .infra import ...`). To run from this test directory it uses the
 absolute imports `formal_gates_harness.infra` etc.; PYTHONPATH must contain
-`<repo>/runtime/langgraph` (the differential test sets this). Everything else,
+`<repo>/runtime/langgraph` (the differential test sets this). The shared
+transport it was built on left the production package with the G2c zcode
+retirement, so it now builds on the tests-local reference copy
+(reference_native_transport) instead. Everything else,
 including TRANSPORT_FILES and the `Path(__file__).with_suffix('.mjs')` plugin
 lookup in make_patch, is kept exactly as it was - the differential normalises
 the plugin path it embeds into profile.json, because the reference resolves it
@@ -33,7 +36,7 @@ from pathlib import Path
 import shutil
 from formal_gates_harness.infra import RuntimeBlocked, SessionUnavailable, atomic, read
 from formal_gates_harness.native_result import decode_result
-from formal_gates_harness.native_transport import (Client as Transport, UNBOUNDED, close_session,
+from reference_native_transport import (Client as Transport, UNBOUNDED, close_session,
                                                    capture_binding as capture, evidence_source,
                                                    reconcile_completed_output as reconcile,
                                                    session_events, transport_files, write_answer)

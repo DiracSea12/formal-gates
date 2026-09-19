@@ -7,17 +7,21 @@ import queue
 import shutil
 import subprocess
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from formal_gates_harness import (cli, native_transport as shared,
-                                  native_zcode as zcode, native_hosts as hosts)
+from formal_gates_harness import (cli, native_hosts as hosts)
 # G2b: the pre-migration DSH transport is test-only reference code now; the
 # production dsh execution path is the Go driver binary. The dsh structural
 # assertions below pin the reference implementation the differential
 # (test_native_dsh_differential.py) compares the Go adapter against.
+# G2c: the zcode transport (and with it the shared transport module and the
+# native entry) left the production package the same way; the zcode structural
+# assertions below pin reference_native_zcode, which the G2c differential
+# (test_native_zcode_differential.py) compares the Go adapter against.
 import reference_native_dsh as dsh
+import reference_native_transport as shared
+import reference_native_zcode as zcode
 from formal_gates_harness.infra import (Bridge, HarnessError, RuntimeBlocked, canonical, read,
                                         runtime_identity)
 
@@ -36,13 +40,10 @@ class RegistryAndSelection(unittest.TestCase):
             (root / 'runtime/langgraph/formal_gates_harness/adapters/new.py').write_text('changed')
             self.assertNotEqual(runtime_identity(root, str(root / 'binary')), before)
 
-    def test_nested_adapter_declares_transport_without_cli_changes(self):
-        module = SimpleNamespace(__file__=str(Path(hosts.__file__).parent / 'adapters/new.py'))
-        with patch.object(hosts.importlib, 'import_module', return_value=module):
-            self.assertEqual(hosts.NativeAdapter('new', '.adapters.new').transport_files(), ('adapters/new.py',))
-
     def test_execution_only_host_does_not_need_installation_registration(self):
-        adapter = hosts.NativeAdapter('runtime-only', dsh.__name__)
+        # G2c: NativeAdapter is gone (every execution adapter is a Go driver
+        # command), so a runtime-only registration is a GoAdapter row too.
+        adapter = hosts.GoAdapter('runtime-only')
         with patch.dict(hosts._ADAPTERS, {'runtime-only': adapter}):
             bridge = Mock()
             self.assertEqual(hosts.normalize_provider(bridge, 'runtime-only'), 'runtime-only')
@@ -307,12 +308,15 @@ class SharedTransportBoundary(unittest.TestCase):
     def test_every_adapter_declares_the_shared_module_it_depends_on(self):
         # A change to the shared mechanics must be reviewable as a transport
         # change for every host built on it, or adoption would reject the fix.
-        # G2b: dsh's mechanics moved into the Go driver binary, so its Python
-        # transport inventory is only the host-side plugin (native_dsh.mjs).
-        files = hosts.adapter_for('zcode').transport_files()
-        self.assertIn('native_transport.py', files)
-        self.assertIn('native_zcode.py', files)
+        # G2b/G2c: dsh's and zcode's mechanics moved into the Go driver binary,
+        # so each host's Python transport inventory is only its own host-side
+        # plugin file.
+        self.assertEqual(hosts.adapter_for('zcode').transport_files(), ('zcode_credential.mjs',))
         self.assertEqual(hosts.adapter_for('dsh').transport_files(), ('native_dsh.mjs',))
+        # The reference copies still declare the shared module they depend on.
+        self.assertIn('reference_native_transport.py', zcode.TRANSPORT_FILES)
+        self.assertIn('reference_native_zcode.py', zcode.TRANSPORT_FILES)
+        self.assertIn('reference_native_transport.py', dsh.TRANSPORT_FILES)
 
     def test_each_adapter_supplies_protocol_only(self):
         # If an adapter defines one of these again, the logic stopped being shared.
@@ -370,82 +374,31 @@ class ProtocolInteractions(unittest.TestCase):
                     client.receive()
                 client.send.assert_not_called()
 
-    def test_request_auth_comes_from_the_host_store_and_is_never_recorded(self):
-        # The one interaction with a machine answer. It is supplied from the host's
-        # own provisioning index, keyed by the provider the host is about to call.
-        secret = 'TEST-DECRYPTED-CREDENTIAL'
-        with tempfile.TemporaryDirectory() as t:
-            store = Path(t) / 'credentials.json'
-            store.write_text(json.dumps({
-                'account-provider:coding-plan:account:probe:account:identity-1:api-key': secret,
-                'account-provider:coding-plan:account:other:account:identity-1:api-key': 'OTHER',
-                'oauth:active_provider': 'enc:v1:not-a-credential',
-            }))
-            client = self.client(t)
-            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
-            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
-            try:
-                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
-                                     'params': {'providerId': 'account:probe'}})
-                client.receive()
-            finally:
-                if previous is None:
-                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
-                else:
-                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
-            reply = client.send.call_args[0][0]
-            self.assertEqual(reply['result'], {'headersApplied': True, 'requestAuth': {'apiKey': secret}})
-            # The credential is an input to the answer, never evidence.
-            recorded = (Path(t) / 'interaction-status.json').read_text()
-            self.assertNotIn(secret, recorded)
-            self.assertIn({'method': zcode.RUNTIME_HEADERS_METHOD,
-                           'status': 'provider-runtime-headers-applied'}, json.loads(recorded))
-            self.assertNotIn(secret, client.trace.getvalue())
-
     def test_a_provider_without_a_provisioned_credential_is_reported_not_invented(self):
+        # G2c relocation consequence: request_auth looks for zcode_credential.mjs
+        # next to the module, and the reference lives in tests/ where no helper
+        # exists, so from the reference's side every runtime-headers request is
+        # the "no provisioned credential" refusal - which is exactly this
+        # case's expected honest answer. The credential-delivery half (the
+        # helper reading the host store, the secret reaching the protocol reply
+        # and no evidence) is pinned where the helper is reachable: the Go
+        # implementation's own tests (internal/harness/native_zcode_test.go
+        # TestZcodeRespondRuntimeHeadersWithCredential,
+        # native_zcode_unix_test.go TestZcodeExecuteRuntimeHeadersCredential)
+        # and the Go-side-only scenario of test_native_zcode_differential.py.
         with tempfile.TemporaryDirectory() as t:
-            store = Path(t) / 'credentials.json'
-            store.write_text(json.dumps({'oauth:active_provider': 'enc:v1:not-a-credential'}))
             client = self.client(t)
-            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
-            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
-            try:
-                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
-                                     'params': {'providerId': 'account:absent'}})
-                client.receive()
-            finally:
-                if previous is None:
-                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
-                else:
-                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
+            client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
+                                 'params': {'providerId': 'account:absent'}})
+            client.receive()
             reply = client.send.call_args[0][0]
             self.assertIs(reply['result']['headersApplied'], False)
             self.assertNotIn('apiKey', reply['result'])
+            self.assertEqual(reply['result']['errorMessage'],
+                             'no provisioned request credential for account:absent')
             self.assertIn({'method': zcode.RUNTIME_HEADERS_METHOD,
                            'status': 'provider-runtime-headers-unavailable'},
                           json.loads((Path(t) / 'interaction-status.json').read_text()))
-
-    def test_an_unreadable_credential_is_never_treated_as_a_useful_answer(self):
-        # A value that cannot be decrypted must not become "headers applied".
-        with tempfile.TemporaryDirectory() as t:
-            store = Path(t) / 'credentials.json'
-            store.write_text(json.dumps({
-                'account-provider:coding-plan:account:probe:account:identity-1:api-key': 'enc:v1:broken',
-            }))
-            client = self.client(t)
-            previous = os.environ.get(zcode.CREDENTIAL_HELPER_ENV)
-            os.environ[zcode.CREDENTIAL_HELPER_ENV] = str(store)
-            try:
-                client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
-                                     'params': {'providerId': 'account:probe'}})
-                client.receive()
-            finally:
-                if previous is None:
-                    os.environ.pop(zcode.CREDENTIAL_HELPER_ENV, None)
-                else:
-                    os.environ[zcode.CREDENTIAL_HELPER_ENV] = previous
-            reply = client.send.call_args[0][0]
-            self.assertIs(reply['result']['headersApplied'], False)
 
     def test_child_notifications_do_not_enter_root_evidence(self):
         with tempfile.TemporaryDirectory() as t:

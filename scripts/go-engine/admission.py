@@ -52,7 +52,7 @@ RECORD_DIR = ".gates/results/"
 # items (the unit's own record says so via native_verification.required; this
 # map is the checker's independent knowledge, so a record that simply omits the
 # section cannot wave the requirement through).
-UNITS_REQUIRING_NATIVE_VERIFICATION = {"G2a", "G2b"}
+UNITS_REQUIRING_NATIVE_VERIFICATION = {"G2a", "G2b", "G2c"}
 
 
 def native_verification_problem(unit: str, record: dict, root: Path) -> str:

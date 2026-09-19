@@ -18,14 +18,16 @@ import (
 
 func jsonNumber(literal string) any { return json.Number(literal) }
 
-// TestDSHDispatch pins the provider dispatch: only dsh, and the exact
+// TestDSHDispatch pins the provider dispatch: dsh and zcode, and the exact
 // unsupported-host refusal text.
 func TestDSHDispatch(t *testing.T) {
-	if err := dshDispatch("dsh"); err != nil {
-		t.Fatalf("dsh must dispatch: %v", err)
+	for _, provider := range []string{"dsh", "zcode"} {
+		if err := dshDispatch(provider); err != nil {
+			t.Fatalf("%s must dispatch: %v", provider, err)
+		}
 	}
-	err := dshDispatch("zcode")
-	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: zcode; execution adapters: dsh" {
+	err := dshDispatch("ghost")
+	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode" {
 		t.Fatalf("unsupported text = %v", err)
 	}
 }
@@ -504,7 +506,7 @@ func TestRunNativeEntryFailureShapes(t *testing.T) {
 		{"numeric provider", `{"provider": 5}`,
 			"provider must be a string"},
 		{"unsupported provider", `{"provider": "ghost"}`,
-			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh"},
+			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

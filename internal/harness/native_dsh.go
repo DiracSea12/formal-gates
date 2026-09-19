@@ -24,10 +24,9 @@ import (
 const dshStartupTimeout = 40 * time.Second
 
 // executionAdapters lists the providers this Go binary implements, in the
-// order the unsupported-host refusal names them (the Python-side registry
-// still lists zcode because its entry stays Python; the Go command never sees
-// zcode jobs).
-var executionAdapters = []string{"dsh"}
+// order the unsupported-host refusal names them. The routing table that pairs
+// with it lives in native_zcode.go (nativeImplementations).
+var executionAdapters = []string{"dsh", "zcode"}
 
 // dshDispatch refuses every provider this binary does not implement.
 func dshDispatch(provider string) error {
@@ -634,7 +633,8 @@ func runNativeJob(directory string) (map[string]any, error) {
 	if !isString {
 		return nil, fmt.Errorf("provider must be a string")
 	}
-	if err := dshDispatch(provider); err != nil {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
 		return nil, err
 	}
 	// The registry's execute wrapper: a captured binding is validated before
@@ -646,12 +646,12 @@ func runNativeJob(directory string) (map[string]any, error) {
 			return nil, fmt.Errorf("binding must be a JSON object")
 		}
 		if len(object) > 0 {
-			if err := dshValidateBinding(object); err != nil {
+			if err := impl.validateBinding(object); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return dshExecute(request, directory, getOf(request, "probe") == true)
+	return impl.execute(request, directory, getOf(request, "probe") == true)
 }
 
 // writeNativeError lands the failure record and echoes it to stderr.
@@ -716,10 +716,11 @@ func asNativeRefusal(err error) error {
 // nativeCapture is the native-capture operation: bind the provider to the
 // exact binaries it will execute.
 func nativeCapture(provider string) (any, error) {
-	if err := dshDispatch(provider); err != nil {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
 		return nil, asNativeRefusal(err)
 	}
-	binding, err := dshCaptureBinding()
+	binding, err := impl.capture()
 	if err != nil {
 		return nil, asNativeRefusal(err)
 	}
@@ -728,14 +729,15 @@ func nativeCapture(provider string) (any, error) {
 
 // nativeVerifyBinding is the native-verify-binding operation.
 func nativeVerifyBinding(provider string, binding json.RawMessage) error {
-	if err := dshDispatch(provider); err != nil {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
 		return asNativeRefusal(err)
 	}
 	value, err := decodeNativeJSON(binding)
 	if err != nil {
 		return err
 	}
-	if err := dshValidateBinding(value); err != nil {
+	if err := impl.validateBinding(value); err != nil {
 		return asNativeRefusal(err)
 	}
 	return nil
@@ -743,14 +745,15 @@ func nativeVerifyBinding(provider string, binding json.RawMessage) error {
 
 // nativeVerifySource is the native-verify-source operation.
 func nativeVerifySource(provider string, directory string, source json.RawMessage) error {
-	if err := dshDispatch(provider); err != nil {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
 		return asNativeRefusal(err)
 	}
 	value, err := decodeNativeJSON(source)
 	if err != nil {
 		return err
 	}
-	if err := dshVerifySource(directory, value); err != nil {
+	if err := impl.verifySource(directory, value); err != nil {
 		return asNativeRefusal(err)
 	}
 	return nil
@@ -759,14 +762,15 @@ func nativeVerifySource(provider string, directory string, source json.RawMessag
 // nativeReconcile is the native-reconcile operation: recover an eligible
 // completed-output failure.
 func nativeReconcile(provider string, directory string, process json.RawMessage) (any, error) {
-	if err := dshDispatch(provider); err != nil {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
 		return nil, asNativeRefusal(err)
 	}
 	value, err := decodeNativeJSON(process)
 	if err != nil {
 		return nil, err
 	}
-	source, err := dshReconcile(directory, value)
+	source, err := impl.reconcile(directory, value)
 	if err != nil {
 		return nil, asNativeRefusal(err)
 	}

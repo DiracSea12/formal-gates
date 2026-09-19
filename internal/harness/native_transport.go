@@ -598,6 +598,16 @@ type nativeClient struct {
 // pid/pgid (pgid is null on Windows; the spawn never creates a new group so
 // the pgid is the caller's), and the read loop starts immediately.
 func newNativeClient(hooks nativeHooks, argv []string, workspace, directory string) (*nativeClient, error) {
+	return newNativeClientWithEnv(hooks, argv, workspace, directory, nil)
+}
+
+// newNativeClientWithEnv is newNativeClient with additional launch environment
+// variables layered over the caller's own (the Python constructor's environment
+// parameter, {**os.environ, **environment}). Only zcode uses it today: a
+// launcher that pins the host's provider catalogue has to name it in the
+// child's environment, which DSH never needs. Duplicate keys resolve in the
+// adapter's favour, like the dict merge.
+func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directory string, environment map[string]string) (*nativeClient, error) {
 	c := &nativeClient{
 		hooks:      hooks,
 		directory:  directory,
@@ -649,7 +659,17 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 	c.stdin = stdinWrite
 	c.cmd = exec.Command(argv[0], argv[1:]...)
 	c.cmd.Dir = workspace
-	c.cmd.Env = os.Environ()
+	childEnv := os.Environ()
+	for key, value := range environment {
+		filtered := childEnv[:0]
+		for _, entry := range childEnv {
+			if !strings.HasPrefix(entry, key+"=") {
+				filtered = append(filtered, entry)
+			}
+		}
+		childEnv = append(filtered, key+"="+value)
+	}
+	c.cmd.Env = childEnv
 	c.cmd.Stdin = stdinRead
 	c.cmd.Stdout = stdoutWrite
 	c.cmd.Stderr = c.errorsFile
@@ -814,13 +834,19 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 		if reason := c.closureOf(object); reason != "" {
 			return nil, c.blocked(reason)
 		}
+		answered := false
 		if method, hasMethod := object["method"]; hasMethod && isLiveMethod(method) {
 			if _, hasID := object["id"]; hasID {
 				if err := c.answerReverse(object); err != nil {
 					return nil, err
 				}
+				answered = true
 			}
-		} else if c.hooks.notification != nil {
+		}
+		// Everything that is not a reverse request goes to the notification
+		// hook: notifications (a live method without an id) and plain
+		// responses alike, exactly like the reference receive()'s else branch.
+		if !answered && c.hooks.notification != nil {
 			c.hooks.notification(message)
 		}
 	}
