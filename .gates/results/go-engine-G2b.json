@@ -294,8 +294,10 @@
     "stall_budget_seconds": 240.0
   },
   "attestation": {
-    "independence": "Main agent re-verified the dispatched rewrite without trusting its self-report: change scope (13 files, all exclusions untouched), zero emulation-symbol remnants, gofmt clean, go vet on darwin/windows/linux, full go test ./... exit 0, Python suite 261 tests exit 0, value-level differential spot-read, ADM-E15 decision logic directly verified (tamper \"dsh\" -> no refusal for a dsh record, reproducing the defect; tamper \"control-contradiction\" -> refusal carrying the run-report-provider marker).",
-    "dispatch": "All product, tool and test code was written by dispatched subagents per the machine-owner rule; the main agent authored contract v2, these records, and ran the independent verification."
+    "summary_sha256": "ddfb005b11513883f74c141c01b301d4344261b46d8b7ad3ed3c688d153e6ba6",
+    "identity_sha256": "5af738d041cd41a71b37b5402eba81fecbb22f0030b549a4da45cb6bd0095b76",
+    "evidence_sha256": "13f3260750401c58a6ec3e192635bb8fa1dda3a9d2f277e480fd686671258625",
+    "evidence_file_count": 61
   },
   "bookkeeping": [
     ".gates/results/go-engine-G2b.json",
