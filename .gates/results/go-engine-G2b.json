@@ -1,129 +1,341 @@
 {
-  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T075930Z-19871",
-  "attestation": {
-    "evidence_file_count": 61,
-    "evidence_sha256": "212e623f03d6946c981eb2abff7a91ee6905ddd735e2105490ac6621a1f69a71",
-    "identity_sha256": "0ed6f9f0a51dd38b6ceddce5c4bfadf28b728572c90dd75735538e71df5051f7",
-    "summary_sha256": "93382c726ff80343289a20a1c296403a96ab8989b1e05a3225521d922a6f05c0"
+  "unit": "G2b",
+  "overall": "PASS",
+  "previous_accepted_baseline": "G2a",
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2b --previous-baseline G2a",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T123352Z-12066",
+  "recorded_at": "2026-09-19T12:43:20.417146+00:00",
+  "candidate": {
+    "commit": "3d769a09be87607d7a57479945b68c75bb95170d",
+    "branch": "codex/go-engine-v1",
+    "runtime_identity": "cc213960e1c792974a7a2e036000eb59e4e0ac2963a686d2906e08b8ee5f836d",
+    "driver_binary_sha256": "29889205bbdb25e0ff9e304a3c5cf1c162a3f79bf472ee1da08ce0b3cee9573f",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    }
   },
-  "bookkeeping": [
-    ".gates/results/go-engine-G2b.json",
-    ".gates/results/go-engine-G2b.md",
-    ".gates/results/go-engine-G1a-index.md"
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.414,
+      "commands": [],
+      "notes": [
+        "interpreter 3.13.15 at /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/venv/bin/python",
+        "41 pinned distributions all installed"
+      ],
+      "problems": []
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.403,
+      "commands": [
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "exit_code": 0,
+          "seconds": 0.402,
+          "stdout": "steps/go-vet/vet.stdout",
+          "stderr": "steps/go-vet/vet.stderr",
+          "exit": "steps/go-vet/vet.exit"
+        }
+      ],
+      "notes": [],
+      "problems": []
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "status": "PASS",
+      "seconds": 395.667,
+      "commands": [
+        {
+          "name": "go-test",
+          "argv": [
+            "go",
+            "test",
+            "-count=1",
+            "-timeout",
+            "60m",
+            "-json",
+            "./..."
+          ],
+          "exit_code": 0,
+          "seconds": 395.649,
+          "stdout": "steps/go-test-full/go-test.stdout",
+          "stderr": "steps/go-test-full/go-test.stderr",
+          "exit": "steps/go-test-full/go-test.exit",
+          "stall_budget_seconds": 240.0
+        }
+      ],
+      "notes": [
+        "allowed skip formal-gates/internal/validate:TestNormalizeHostPath - Windows-only path normalisation; skipped on darwin with an explicit reason",
+        "26 packages, 2135 test pass events, 396s wall"
+      ],
+      "problems": []
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.705,
+      "commands": [
+        {
+          "name": "build-cgo1",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T123352Z-12066/sqlprobe-cgo1",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.788,
+          "stdout": "steps/sqlite-probe/build-cgo1.stdout",
+          "stderr": "steps/sqlite-probe/build-cgo1.stderr",
+          "exit": "steps/sqlite-probe/build-cgo1.exit"
+        },
+        {
+          "name": "run-cgo1",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T123352Z-12066/sqlprobe-cgo1",
+            "-dir",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T123352Z-12066/steps/sqlite-probe/evidence/run-cgo1"
+          ],
+          "exit_code": 0,
+          "seconds": 0.565,
+          "stdout": "steps/sqlite-probe/run-cgo1.stdout",
+          "stderr": "steps/sqlite-probe/run-cgo1.stderr",
+          "exit": "steps/sqlite-probe/run-cgo1.exit"
+        },
+        {
+          "name": "build-cgo0",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T123352Z-12066/sqlprobe-cgo0",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.296,
+          "stdout": "steps/sqlite-probe/build-cgo0.stdout",
+          "stderr": "steps/sqlite-probe/build-cgo0.stderr",
+          "exit": "steps/sqlite-probe/build-cgo0.exit"
+        },
+        {
+          "name": "run-cgo0",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T123352Z-12066/sqlprobe-cgo0",
+            "-dir",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T123352Z-12066/steps/sqlite-probe/evidence/run-cgo0"
+          ],
+          "exit_code": 0,
+          "seconds": 0.353,
+          "stdout": "steps/sqlite-probe/run-cgo0.stdout",
+          "stderr": "steps/sqlite-probe/run-cgo0.stderr",
+          "exit": "steps/sqlite-probe/run-cgo0.exit"
+        },
+        {
+          "name": "unit-test",
+          "argv": [
+            "go",
+            "test",
+            "-count=1",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.686,
+          "stdout": "steps/sqlite-probe/unit-test.stdout",
+          "stderr": "steps/sqlite-probe/unit-test.stderr",
+          "exit": "steps/sqlite-probe/unit-test.exit"
+        }
+      ],
+      "notes": [
+        "CGO_ENABLED=1: probe binary 9573234 bytes, sha256 863e8f6be9051232... (build product, not retained; rebuild from the pinned commit with this CGO_ENABLED to reproduce)",
+        "CGO_ENABLED=1: sqlite 3.49.1, 8 checks all PASS",
+        "CGO_ENABLED=0: probe binary 9573234 bytes, sha256 d6a066cba1f6d066... (build product, not retained; rebuild from the pinned commit with this CGO_ENABLED to reproduce)",
+        "CGO_ENABLED=0: sqlite 3.49.1, 8 checks all PASS"
+      ],
+      "problems": []
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "status": "PASS",
+      "seconds": 81.151,
+      "commands": [
+        {
+          "name": "unittest",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/venv/bin/python",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "runtime/langgraph/tests",
+            "-v"
+          ],
+          "exit_code": 0,
+          "seconds": 81.07,
+          "stdout": "steps/python-unittest/unittest.stdout",
+          "stderr": "steps/python-unittest/unittest.stderr",
+          "exit": "steps/python-unittest/unittest.exit"
+        }
+      ],
+      "notes": [
+        "Ran 261 tests"
+      ],
+      "problems": []
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.727,
+      "commands": [
+        {
+          "name": "demo",
+          "argv": [
+            "./scripts/harness",
+            "demo",
+            "--approve-sample"
+          ],
+          "exit_code": 0,
+          "seconds": 2.726,
+          "stdout": "steps/demo-fixture/demo.stdout",
+          "stderr": "steps/demo-fixture/demo.stderr",
+          "exit": "steps/demo-fixture/demo.exit"
+        }
+      ],
+      "notes": [
+        "run harness-20260919-204153-854d9b1b",
+        "status=DEMO_COMPLETE evidence_level=fixture"
+      ],
+      "problems": []
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "status": "PASS",
+      "seconds": 1.943,
+      "commands": [
+        {
+          "name": "doctor",
+          "argv": [
+            "./scripts/harness",
+            "doctor",
+            "--provider",
+            "dsh"
+          ],
+          "exit_code": 0,
+          "seconds": 1.942,
+          "stdout": "steps/doctor-dsh/doctor.stdout",
+          "stderr": "steps/doctor-dsh/doctor.stderr",
+          "exit": "steps/doctor-dsh/doctor.exit"
+        }
+      ],
+      "notes": [
+        "binding recorded for dsh; model_calls=0"
+      ],
+      "problems": []
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "status": "PASS",
+      "seconds": 1.891,
+      "commands": [
+        {
+          "name": "doctor",
+          "argv": [
+            "./scripts/harness",
+            "doctor",
+            "--provider",
+            "zcode"
+          ],
+          "exit_code": 0,
+          "seconds": 1.89,
+          "stdout": "steps/doctor-zcode/doctor.stdout",
+          "stderr": "steps/doctor-zcode/doctor.stderr",
+          "exit": "steps/doctor-zcode/doctor.exit"
+        }
+      ],
+      "notes": [
+        "binding recorded for zcode; model_calls=0"
+      ],
+      "problems": []
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.062,
+      "commands": [],
+      "notes": [],
+      "problems": []
+    }
   ],
   "budget": {
     "go_test_backstop_timeout": "60m",
     "note": "The regression is judged by result and progress, not by wall-clock speed.",
     "stall_budget_seconds": 240.0
   },
-  "candidate": {
-    "branch": "codex/go-engine-v1",
-    "commit": "9d126456acb75ce9ac10e5411da29599ce1a2d3b",
-    "driver_binary_sha256": "c1dda95f52ae7184130396c8b0337d17d9ad8b08f8234799c844d38006ac1fc9",
-    "files": {
-      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
-      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
-      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
-      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
-      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
-      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
-    },
-    "runtime_identity": "a1edad6a6dd882aa3df464d4e7d28326535b20adad4599511f730687dd6395b8"
+  "attestation": {
+    "independence": "Main agent re-verified the dispatched rewrite without trusting its self-report: change scope (13 files, all exclusions untouched), zero emulation-symbol remnants, gofmt clean, go vet on darwin/windows/linux, full go test ./... exit 0, Python suite 261 tests exit 0, value-level differential spot-read, ADM-E15 decision logic directly verified (tamper \"dsh\" -> no refusal for a dsh record, reproducing the defect; tamper \"control-contradiction\" -> refusal carrying the run-report-provider marker).",
+    "dispatch": "All product, tool and test code was written by dispatched subagents per the machine-owner rule; the main agent authored contract v2, these records, and ran the independent verification."
   },
-  "items": [
-    {
-      "id": "identity",
-      "required": true,
-      "seconds": 0.459,
-      "status": "PASS"
-    },
-    {
-      "id": "go-vet",
-      "required": true,
-      "seconds": 0.43,
-      "status": "PASS"
-    },
-    {
-      "id": "go-test-full",
-      "required": true,
-      "seconds": 390.647,
-      "status": "PASS"
-    },
-    {
-      "id": "sqlite-probe",
-      "required": true,
-      "seconds": 2.411,
-      "status": "PASS"
-    },
-    {
-      "id": "python-unittest",
-      "required": true,
-      "seconds": 86.186,
-      "status": "PASS"
-    },
-    {
-      "id": "demo-fixture",
-      "required": true,
-      "seconds": 2.841,
-      "status": "PASS"
-    },
-    {
-      "id": "doctor-dsh",
-      "required": true,
-      "seconds": 1.78,
-      "status": "PASS"
-    },
-    {
-      "id": "doctor-zcode",
-      "required": true,
-      "seconds": 2.082,
-      "status": "PASS"
-    },
-    {
-      "id": "tree-clean-after",
-      "required": true,
-      "seconds": 0.035,
-      "status": "PASS"
-    }
+  "bookkeeping": [
+    ".gates/results/go-engine-G2b.json",
+    ".gates/results/go-engine-G2b.md",
+    ".gates/results/go-engine-G1a-index.md"
   ],
-  "native_verification": {
-    "authorized": "2026-09-19. The machine owner replied 「可以执行」 to a request that named exactly: the DSH full native mini-flow (runtime/langgraph/tests/native_multihost.py --provider dsh) with real model calls, run via the proven non-inherited-context procedure (launchd-launched runner). The missing-session resume proof (native_missing_session.py, one further real prompt, same opt-in DSH verification family) ran under the same authorization to close the plan's 续用 exit criterion.",
-    "blocker": null,
-    "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider dsh --out <evidence_dir>/dsh-flow",
-    "completion_linkage": "All seven native jobs ran with argv = [<driver>, 'harness', 'native', <dir>] under store.job -> 'harness supervise': every exit.json records exit_code 0 with stream proofs, every owner lock present, and each job's native-process.json pgid equals its supervisor pid (the supervisor is the process-group leader). The evidence probe (scripts/go-engine/native_evidence_probe.py) re-walked open_run identity binding, all 7 worker receipts via Store.verify_evidence (including the native four-file source proofs through the Go native-verify-source op), 2 checks, 2 gates and the HARNESS_COMPLETE terminal readback, from the candidate worktree against this run.",
-    "duration_s": 134.9,
-    "evidence_dir": "/private/tmp/g2b-copy/.harness/validation/g2b-native-first-20260919T081635",
-    "exit_criteria_offline": {
-      "native_config_inheritance": "Differential config three-way (already-configured not reset / set_config_option readback / mismatch refused); probe selection report.",
-      "new_session": "Differential test_new_session_success_turn + Go TestRunNativeNewSessionSuccessTurn; doctor-dsh probes the real host create path with 0 model calls.",
-      "read_only_constraint": "makeDSHPatch shape (sandboxPolicy injection, no permission overlays) + native_dsh.mjs byte-identical + RootSessionHook unchanged; native events confinement awaits the real run.",
-      "resume": "Differential resume success + SessionUnavailable two-way; native_missing_session.py still passes through the registry.",
-      "root_subsession_binding": "observe identity/turn binding + mixed-session refusal + child events excluded from root evidence (mjs root gate unchanged)."
+  "contract": "v2 (de-emulation), .gates/results/go-engine-G2b-contract.md; machine-owner ruling 2026-09-19 verbatim in the contract header",
+  "bounded_differences": [
+    "prompt-embedded schema JSON now canonical compact (value-equal; host-prompt.txt and the session/prompt frame)",
+    "error-text embedded JSON (DSH_NATIVE <method>: {...}; DSH_RESULT: turn was not completed: {...}) now canonical; turn-end reason rendered as canonical JSON instead of a Python dict repr",
+    "native-error.json error text and stderr are Go-style; family prefixes (RuntimeBlocked/SessionUnavailable/HarnessError) and structured fields (error_kind/identity/method/native_code) unchanged",
+    "JSON parse errors no longer carry CPython line/column text; stdlib decoding rejects non-standard literals besides Infinity/NaN/exponent forms (unreachable for real hosts)",
+    "response adjudication explicit at unreachable degenerate values: JSON-RPC error member present-and-non-null is an error; closure key and reverse-request method must be non-empty strings",
+    "true==1 numeric equivalence deleted (bool never equals a number); 1==1.0 kept where decoding can genuinely meet Go ints",
+    "harness native stdout stays canonical compact JSON with one trailing newline (registered earlier, unchanged by v2)",
+    "prior runtime-identity bindings are invalidated by the rewrite; native evidence re-take planned under one new authorization"
+  ],
+  "rollback_preservation": {
+    "status": "PASS",
+    "frozen_baseline": "G2a",
+    "frozen_candidate_commit": "df33e9c73acdbcdf584f449bfdb299f39c2b087f",
+    "recorded_runtime_identity": "017ea1db64a3ab0b8075c459b6430c574cf3341cc8a24681fa3093d42093dbec",
+    "entry": "git worktree add <tmp> df33e9c && ./scripts/harness setup && ./scripts/harness demo --approve-sample",
+    "evidence": ".harness/validation/g2b-rollback-g2a-20260919/summary.json",
+    "smoke": {
+      "status": "DEMO_COMPLETE",
+      "exit_code": 0,
+      "model_calls": 0,
+      "run": "harness-20260919-203543-3e3c0a43",
+      "note": "full public flow through approval and plan decision boundaries, one repair round, seal"
     },
-    "flow_status": "HARNESS_COMPLETE",
-    "host_version": "DSH 0.1.5-rc.1 (@deepseek-ai/dsh, bound launch binary proofed)",
-    "interrupts": 0,
-    "missing_for_acceptance": [],
-    "model": "deepseek-official / deepseek-v4-flash, reasoning effort high (configOptions readback)",
-    "offline_review": {
-      "delivered_differential": "runtime/langgraph/tests/test_native_dsh_differential.py: byte surfaces = evidence files + error text + prompt text; value surfaces = protocol.jsonl/host-frames/stdout per the tightened contract.",
-      "independent_oracle": "/tmp/g2b-oracle (reviewer-owned fake ACP host + runner, independent of the delivered differential fixture): both modes PASS — evidence files byte-identical (identity/source/answer.raw/answer.json/interaction-status/native-source/native-events), profile byte-identical modulo the by-design mjs location (Go names the production native_dsh.mjs), host-prompt byte-exact, host frames value-equal, stdout equals the reference return, permission error text byte-exact.",
-      "negative_controls": "Two reviewer-applied source mutations each made the oracle genuinely fail (prompt suffix mutation -> host-prompt bytes differ; DSH_INTERACTION_REQUIRED text mutation -> native-error text differs), source restored and rebuilt after each. The delivered differential carries its own two mutations (prompt tail, DSH_TRANSPORT prefix) per dispatch B."
-    },
-    "provider": "dsh",
-    "raw_evidence_gate": "Probe pre-verified by the reviewer (exit 0) and re-run by admission itself; roles/checks/gates/terminal as recorded.",
-    "read_only_boundary": "Read-only roles' native events contain only assistant/message and turn/end events; the injected native_dsh.mjs tool policy denies 12 write-capable tools (tool-policy.json read_only=true); the single development job carried read_only=false. Zero permission requests, zero interrupts.",
-    "relocation_disclosure": "The run and evidence live on a byte-identical relocated copy /tmp/g2b-copy because sandbox-exec cannot apply in the agent-inherited context and executing from ~/Documents hangs without TCC (SANDBOX-APPLY-REQUIRES-A-NON-INHERITED-CONTEXT, the procedure proven during G2a). The copy carries the same HEAD (c5164bd, bookkeeping-only ahead of candidate 9d12645), the byte-identical driver binary (sha256 c1dda95f… equals the record) and an equal content-based runtime_identity (a1edad6a…), verified before launch; the probe re-verified the identity binding from the candidate worktree afterwards.",
-    "report": "dsh-flow/report.json",
-    "required": true,
-    "resume_evidence": "native_missing_session.py (test_passed=true, evidence /private/tmp/g2b-copy/.harness/validation/g2b-native-missing-20260919T082029): a resume with a destroyed identity was explicitly refused (choices restart-session/abort only), the restart created a NEW native identity (0b1d3f39… replacing 92e97014…), prior evidence was preserved via handover, hostile feedback injection was ignored, and the replacement worker completed PASS with real usage evidence.",
-    "roles_completed": 7,
-    "run": "/private/tmp/g2b-copy/.harness/runs/harness-20260919-161642-52992e09",
-    "status": "PASS"
+    "identity_files": "all six runtime-identity source files digest-match the frozen commit",
+    "binary_note": "rebuilt driver sha256 d7a23dc9... differs from the signed 5bd9e243... because go build embeds build-directory paths (no -trimpath); the frozen source state is verified exactly"
   },
-  "overall": "PASS",
-  "previous_accepted_baseline": "G2a",
-  "recorded_at": "2026-09-19T08:07:37.557408+00:00",
-  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2b",
-  "unit": "G2b"
+  "native_verification": {
+    "required": true,
+    "status": "NOT_RUN",
+    "provider": "dsh",
+    "note": "The v2 rewrite changed the runtime identity, so the previously authorized run is unbound by design. Re-taking evidence needs one new authorized real DSH run covering: the 7-role flow (identity re-bind) plus native_multihost --tools probes for read-only write-denial, subagent inheritance and same-session resume, closing the external-review capability-coverage gaps.",
+    "prior_run": "superseded: harness-20260919-161642-52992e09 on /tmp/g2b-copy (identity a1edad6a..., authorized 2026-09-19)",
+    "blocker": "awaiting machine-owner authorization for real model calls"
+  }
 }

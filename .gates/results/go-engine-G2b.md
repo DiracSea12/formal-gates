@@ -1,129 +1,64 @@
-# G2b 验收记录（2026-09-19，原生关口已关闭重签）：DSH 薄适配（在已验收监督器下移植 DSH 请求、身份、结果和错误映射）
+# G2b 验收记录 v2（2026-09-19 晚，去仿真化重写后重签；原生关口重开待授权）
 
-候选 `9d12645`（分支 `codex/go-engine-v1`）。上一验收基线：`G2a`（候选 `df33e9c`）。九项验收全过
-（尝试 `.harness/validation/acceptance/G2b/20260919T075930Z-19871`，`overall=PASS`、`failed=[]`）。
-**原生定向验收已执行并 PASS**（机主 2026-09-19 逐字授权「可以执行」；见下节与
-`native_verification.authorized`）——G2b 按此收口。
+候选 `3d769a0`（分支 `codex/go-engine-v1`，合同 v2）。上一验收基线：`G2a`（候选 `df33e9c`）。
+九项验收全过（尝试 `.harness/validation/acceptance/G2b/20260919T123352Z-12066`，`overall=PASS`、
+`failed=[]`；运行时身份 `cc213960…`、驱动 sha256 `29889205…`）。
 
-## 原生定向验收（DSH，2026-09-19，授权运行）
+**为什么重签**：首次收口（候选 `9d12645`，记录 `b22e5c3`）被外部 AI 评审驳回——三项验收缺口
+（原生能力覆盖 not_verified、ADM-E15 负控制失效、回退保全证据未闭合）＋两条 P3；随后机主裁定
+（原话见合同 v2 头部）：**不做机械 Python 仿真，用 Go 实现功能，简洁优雅可维护优先**。合同由
+字节等同改为**值级功能等价**，本候选按 v2 重写后整链重验。
 
-- **完整原生小流程**：`native_multihost.py --provider dsh`，运行
-  `/tmp/g2b-copy/.harness/runs/harness-20260919-161642-52992e09`，报告
-  `/tmp/g2b-copy/.harness/validation/g2b-native-first-20260919T081635/dsh-flow/report.json`
-  （`passed:true`、`HARNESS_COMPLETE`、**7/7 角色全 PASS**、`interrupts: []`、134.9 秒、模型
-  `deepseek-official / deepseek-v4-flash`＋`high`，选型经宿主 `configOptions` 回读）。
-- **完成关联**：七个 native 作业的 argv 全部是 Go 窄命令 `[<driver>,"harness","native",<dir>]`，
-  `exit.json` 全 0、owner 锁齐备、每作业 `native-process.json` 的 **pgid ＝监督器 pid**（监督器是
-  进程组组长）；证据探针从候选工作树重走 `open_run` 身份绑定＋7 份 worker 回执（含经
-  `native-verify-source` 的原生四件证明）＋2 检查＋2 门审＋终态回读，exit 0。
-- **只读约束**：只读角色的原生事件只有 `assistant/message`＋`turn/end`；mjs 工具策略拒绝 12 项
-  写能力工具（`tool-policy.json read_only:true`）；唯一的 development 作业独立承载 `read_only:false`。
-  全程 **0 次权限请求**。
-- **续用/身份失效**：`native_missing_session.py`（`test_passed:true`，证据
-  `/tmp/g2b-copy/.harness/validation/g2b-native-missing-20260919T082029`）——失效身份被显式拒绝
-  （仅 `restart-session`/`abort`）、替换会话拿到**新**原生身份、旧证据经 handover 保留、对抗性反馈
-  注入被忽略、替换 worker 以真实用量证据 PASS。
-- **运行上下文与重定位披露**：`sandbox-exec` 在代理继承上下文无法 apply（G2a 期已定性的环境事实），
-  故按已验证程序在 launchd 拉起的 runner 下、于候选工作树的**逐字节副本** `/tmp/g2b-copy` 执行：
-  副本 HEAD `c5164bd`（仅记账领先候选）、驱动二进制 sha256 `c1dda95f…` 与记录**逐字节相等**、
-  内容寻址运行时身份 `a1edad6a…` 与记录**相等**（启动前核验），探针事后又从真实工作树重验身份绑定。
-- **模型调用消耗**：小流程 7 角色＋missing-session 证明 1 次＝授权范围内的全部支出。
-
-## 本单元搬了什么
+## v2 重写搬了什么（候选 `3d769a0`，净 −1105 行）
 
 | 归属 | 内容 |
 | --- | --- |
-| **Go（新，全部在 `internal/harness` 单包）** | `harness native <dir>` 窄内部命令（`native_dsh.go::RunNative`）：读 `native-request.json`→provider 分派→ACP 时序（initialize/session new|resume/set_config_option/prompt/close）→证据落盘→stdout 结果→`native-error.json`；共享传输机械（`native_transport.go`：进程派生、逐行读循环、无界队列、逐消息/UNBOUNDED 等待、trace、交互回执、关闭语义、Python 真值/相等语义）；`pydump.go::PyDumpsRaw`（保序再编码器，**唯一新导出**）；四个桥接操作 `native-capture`／`native-verify-binding`／`native-verify-source`／`native-reconcile`；`command.go` 的 native 分支 |
-| **Python（改）** | `native_hosts.py`：`GoAdapter`（dsh；`entry_argv`→`[binary,'harness','native',dir]`、探针路径写同一 `native-request.json` 合同后派生同一 Go 命令、四个生命周期方法走桥接、`transport_files()==('native_dsh.mjs',)`）；`workers.py` 仅 argv 一行 |
-| **Python（退役）** | `native_dsh.py` 删除，逐字移入 `tests/reference_native_dsh.py`（git 识别为 rename，相似度 79%＝docstring＋相对导入改绝对导入两处，其余逐字节） |
-| **不动** | `native_zcode.py`／`native_transport.py`／`native_entry.py`／`zcode_credential.mjs`／`native_dsh.mjs`（对 HEAD diff 为空）；`supervise.go`、`cmd/formal-gates`、`go.mod` 零改动 |
+| **删除** | `pydump.go`＋`pydump_test.go` 整体（CPython 词法解析器、`JSONDecodeError` 行列号文本、默认分隔符渲染、`repr`/`KeyError` 文本、`OrdObj` 键序结构、big.Rat 真值/相等仿真） |
+| **显式化（行为不变）** | 空绑定→`len(binding)==0`；换行归一→`normalizeNewlines`（CRLF/孤 CR）；`1==1.0` 仅在解码字面量与 Go int 真实相遇处经既有 `valuesEqual` 比较；`true==1` 删除；响应判定（error 成员、closure 键、method）显式规则 |
+| **改规范形** | `harness native` stdout、prompt 内嵌 schema、错误文本内嵌 JSON 全部 canonical 紧凑形（值相等；消费者按值解析） |
+| **流式恢复（评审 P3）** | `sessionEvents`→`forEachSessionEvent` 逐行消费（64KB bufio、单行生命周期），长回合不再整读整存 |
+| **测试跟随** | 差分改值级（双侧 `json.loads` 比值、prompt 头/schema 解析比对）；Go 测试断言结构化结果或 Go 文本 |
+| **ADM-E15（评审 P2，本单元内修）** | `admission-controls.py:308` 篡改值 `"dsh"`→`"control-contradiction"`（恒与记录原值矛盾） |
+| **不动** | `canonical.go`、`admission.py`/`acceptance.py`、zcode 生产路径、`native_dsh.mjs`、`replace_file_windows.go`（独立登记项） |
 
-## 形态与反过度设计（合同"反过度设计约束"节的执行结果）
+## 主代理独立复核（不采信子代理自述，全部亲跑）
 
-- 原生回合是长驻进程＋UNBOUNDED 等待＋宿主反向调用，与桥接操作的请求/应答前提冲突——沿 G2a 先例走
-  §12.1 内部窄命令。监督器零改动（`kind` 仍不被读取），"在已验收监督器下"由 argv 一行成立。
-- 派发前自查砍掉两处过度设计：`internal/native` 新包＋单实现 `NativeOperations` 接口＋装配注入
-  （违反方案 §15"至少两个实际调用点/不为假设调用方预建体系"）；`PyDumps`/`OrdObj` 值编码器
-  （为不可观察的出站行空格保序）。最终 Go 侧新增 3 个产品文件＋6 个测试文件，触点 7 处；
-  G2c 的 `zcode.go` 将落同包，维持"每平台一个薄文件"。
-- 字节保真只保留**可观察面**：证据文件（canonical）、错误文本（含内嵌 JSON 的文档键序＋Python 数字
-  语义，经 `PyDumpsRaw`）、prompt 文本（发模型）。出站协议行、`protocol.jsonl`、stdout 改 canonical
-  紧凑形（JSON 等价，消费者按值解析），登记为有界差异，差分按值比对。
-
-## 实施与独立复核（子代理实施，主代理独立复核；自述一律当未验证）
-
-- **派发 A（Go）**：合同收紧后按单包规格实施。主代理独立重验：`go build`、`go vet`（darwin＋
-  GOOS=windows/linux）、`gofmt -l internal/harness cmd` 空、`go test ./internal/harness -count=1` 全过
-  （42.6s）。其一处越界修复（`internal/engine/definition/replace_file_windows.go` 的一行注释空白，
-  索引 `GOFMT-WINDOWS-FILE-PREEXISTING` 登记的独立修复项）**已回退**，不混入本单元。
-- **派发 B（Python）**：按收紧合同收拾首个被取消代理留下的旧规格草稿（差分从逐字节改为按合同分面）。
-  主代理独立重验：全套 **261 项 OK**（90.3s）、`demo --approve-sample`→`DEMO_COMPLETE`、
-  `doctor --provider zcode`→`ok:true, model_calls:0`。
-- **主代理独立 oracle**（`/tmp/g2b-oracle/`，不复用交付夹具）：自建假 ACP 宿主（镜像 dsh＋mjs 可观察
-  行为）驱动两侧——Go 窄命令子进程 vs `reference_native_dsh.execute`。两模式（成功回合／权限交互）
-  **全 PASS**：七类证据文件归一后逐字节相同、profile 除按设计不同的 mjs 定位外逐字节相同（Go 侧
-  断言指向生产 `native_dsh.mjs`）、**host-prompt 逐字节**（含 Unicode 与 schema 的浮点/嵌套/排序键）、
-  帧值等价、stdout 等于 reference 返回、permission 错误文本逐字节、反向请求送达且零答复。
-- **负控制（"撤掉修复必须真失败"）**：主代理两处源码定向变异——prompt 后缀（→`host-prompt.txt`
-  bytes differ 真失败）、`DSH_INTERACTION_REQUIRED` 文本（→native-error 文本精确差异真失败）——每处
-  变异后即恢复并重建验证；交付差分自带另两处（prompt 尾注、`DSH_TRANSPORT` 前缀）。
-- **真实宿主零模型调用探针**：`doctor --provider dsh` 经 Go 路径 `ok:true`（真 dsh 二进制完成
-  initialize/session/close 往返）。
-- **过程披露**：首个派发被机主中断，其未提交草稿（含超范围的 Python 改动）由派发 B 按现行合同逐块
-  审查收拾；两代理与主代理的分工与该过程在合同"反过度设计约束"节与本记录如实登记。
-
-## 验收结果（九项公共门槛）
-
-| 检查 | 结果 |
+| 项 | 结果 |
 | --- | --- |
-| identity / go-vet / go-test-full（无缓存全量） | PASS（go-test 391s） |
-| sqlite-probe（CGO 开/关） | PASS |
-| python-unittest（全套 261 项） | PASS（86.1s） |
-| demo-fixture（`DEMO_COMPLETE`） | PASS |
-| doctor-dsh / doctor-zcode（0 次模型调用） | PASS |
-| tree-clean-after | PASS |
-| **原生定向验收（已授权、已执行）** | **`PASS`**：`HARNESS_COMPLETE`、7/7 角色、0 中断、134.9s；续用/身份失效证明 `test_passed:true` |
+| 改动范围 | 13 文件全在授权清单；排除文件零触碰；仿真符号全仓零残留 |
+| gofmt / vet | 触及文件干净；darwin/windows/linux 三平台 vet 过 |
+| `go test ./...` | exit 0（validate 342.7s 全新跑过） |
+| Python 全套 | 261 tests OK（exit 0，含差分 34 项值级） |
+| ADM-E15 决策逻辑 | 直调 `native_verification_problem` 亲验：篡改 `"dsh"`→空（复现缺陷）；`"control-contradiction"`→拒绝文本含 `"run report provider"` 标记 |
+| 关键点亲读 | `forEachSessionEvent` 真流式；`len(binding)>0`、`CanonicalJSON` schema、`normalizeNewlines` 落地；错误族前缀与 DSH 协议文本（功能数据）保留未误删 |
 
-## 准入控制项的本次形态
+## 有界差异登记（八条，全量见 `go-engine-G2b.json`）
 
-`admission.py` 将 G2b 入列 `UNITS_REQUIRING_NATIVE_VERIFICATION`（一行）。收口后的定性控制项跑
-（G2b 记录、干净树）：**运行器控制 16/16 全过；准入控制 21/22 过**——`ADM-PC`（有效记录被
-GRANTED）、`ADM-E16`（fixture 正控整体过准入）、`ADM-E19`（官方 run 前后零变化）全绿。唯一失败
-`ADM-E15`：其篡改把 `native_verification.provider` 硬编码改为 `"dsh"`——G2a 时代（记录 provider
-=zcode）这构成矛盾，G2b 的记录 provider **本来就是 dsh**，篡改成恒等操作故被 GRANTED。属**控制项
-规格缺陷**（与已登记的 `CONTROL-E5-NEEDS-AN-EXISTING-DELTA` 同类），checker 本身无回归（E12–E14、
-E16–E18 的原生拒绝全部按预期工作）；修复（改为自导出矛盾值）已验证可行但按链规登记为 **G2c 候选
-携带**——本候选已 GRANTED，工具修复提交会使记录呈 candidate-moved 滞后并连带一次重新验收。
+prompt 内嵌 schema canonical 化；错误文本内嵌 JSON canonical 化；native-error 文本 Go 风格
+（族前缀与结构化字段不变）；解析错误不再有 CPython 行列号；退化输入判定显式化；`true==1`
+删除；stdout canonical（承前登记）；**旧运行时身份绑定全部失效→原生证据需重取**。
 
-## 原生关口（已关闭）
+## 回退保全（评审缺口③，已闭合）
 
-授权（机主 2026-09-19 逐字「可以执行」，对应点名 DSH 完整小流程＋非继承上下文程序的请求）已执行：
-完整小流程 7/7 `HARNESS_COMPLETE`＋续用/身份失效证明通过，记录原生段为 `PASS`。DSH 在本机的
-非继承上下文程序（launchd 拉起＋逐字节副本）已由本次运行再次验证可用。
+G2a 冻结候选 `df33e9c` 于隔离 worktree 重建（六项身份文件摘要逐一相符；重建二进制
+`d7a23dc9…` 与签押件 `5bd9e243…` 之差＝go build 内嵌构建目录路径，源状态精确核验），公开入口
+`scripts/harness demo --approve-sample` 全流程冒烟 **DEMO_COMPLETE**、exit 0、零模型调用
+（含确认边界、一次返修回合、seal）。证据：`.harness/validation/g2b-rollback-g2a-20260919/`
+（summary.json＋完整 demo run）；回退入口已落机器记录 `rollback_preservation`。
 
-## 已知有界差异与遗留
+## 原生关口（重开，唯一阻塞项）
 
-| 项 | 内容 |
-| --- | --- |
-| 出站行/trace/stdout 序列化 | canonical 紧凑形（Python 侧为默认分隔符＋插入序）；JSON 等价、消费者按值解析；差分按值比对 |
-| mjs 定位 | reference 侧按自身位置推导（`tests/`），Go 侧按根发现规则指向生产 `native_dsh.mjs`；差分归一化该字段 |
-| Windows 出站行尾 | Go 统一 `\n`（Python 文本模式在 Windows 发 `\r\n`）；仅影响值比对面 |
-| 不可达路径宽恕 | 宿主应答 null `agentCapabilities`/非对象 `reason`/`message` 等，Python 抛 `AttributeError`、Go 按缺省处理（错误文本可观察面仍逐字）；pgid ESRCH 补杀子进程 |
-| 差分超时用例 | Go 命令无短超时入口，Go 侧超时文本由 `TestTransportTimeoutText` 钉住，差分只跑 reference 侧 |
-| `ADM-E15-DSH-NO-OP` | 控制项规格缺陷（已登记，G2c 候选携带修复）：E15 篡改值硬编码 `"dsh"`，对本记录恒等；登记依据＝`CONTROL-E5` 先例 |
-| GOFMT-WINDOWS-FILE-PREEXISTING | 保持独立修复项未动（派发 A 的一行修复已回退） |
+- 前一次授权运行（`harness-20260919-161642-52992e09`，身份 `a1edad6a…`）随 v2 重写**按设计解绑**，
+  其授权与结论归属 v1 候选，不再作为本候选证据。
+- **重取方案（一次授权全覆盖）**：① `native_multihost --provider dsh` 7 角色完整流程（重绑
+  `cc213960…` 身份）；② `native_multihost --tools` 能力探针——read-only 阶段**真实尝试写入被策略
+  拒绝**（含子代理在继承策略下的尝试）、development 阶段**原生委派子代理**完成 child 文件、
+  resume 阶段**同会话成功续用**——以效果与工具事件为证（§14.2"真正尝试过并被约束"），正好
+  关掉评审缺口①的三项 not_verified 与"只证失效重建不证成功续用"的缺口。
+- 运行仍需非继承上下文（launchd runner＋候选逐字节副本，沿已验证程序）。**未获机主授权前不消费
+  任何真实模型调用**；`native_verification.status=NOT_RUN` 如实落盘，admission 按设计拒绝。
 
-## 复核入口
+## 提交链
 
-```sh
-cd /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine
-go build -o .harness/bin/formal-gates ./cmd/formal-gates
-go test ./internal/harness -count=1
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tmp \
-  .harness/venv/bin/python -m unittest discover -s runtime/langgraph/tests
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph" TMPDIR=/private/tmp \
-  .harness/venv/bin/python -m unittest runtime.langgraph.tests.test_native_dsh_differential -v
-./scripts/harness doctor --provider dsh   # 0 模型调用
-python3 scripts/go-engine/admission.py --record .gates/results/go-engine-G2b.json --next-unit G2c
-# 原生段已补齐为 PASS，预期 ADMISSION GRANTED for G2c
-```
+`9d12645`（v1 候选，被驳回形态）→ `b22e5c3`（v1 记录）→ `3d769a0`（v2 候选：去仿真重写＋
+ADM-E15 修复＋合同 v2）→ 本次记录提交（G2b.{json,md}＋索引更正块）。
