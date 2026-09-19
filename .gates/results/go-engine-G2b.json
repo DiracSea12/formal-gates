@@ -4,7 +4,7 @@
   "previous_accepted_baseline": "G2a",
   "run_command": "python3 scripts/go-engine/acceptance.py --unit G2b --previous-baseline G2a",
   "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2b/20260919T123352Z-12066",
-  "recorded_at": "2026-09-19T12:43:20.417146+00:00",
+  "recorded_at": "2026-09-19T13:08:47.736342+00:00",
   "candidate": {
     "commit": "3d769a09be87607d7a57479945b68c75bb95170d",
     "branch": "codex/go-engine-v1",
@@ -334,10 +334,36 @@
   },
   "native_verification": {
     "required": true,
-    "status": "NOT_RUN",
+    "status": "PASS",
     "provider": "dsh",
-    "note": "The v2 rewrite changed the runtime identity, so the previously authorized run is unbound by design. Re-taking evidence needs one new authorized real DSH run covering: the 7-role flow (identity re-bind) plus native_multihost --tools probes for read-only write-denial, subagent inheritance and same-session resume, closing the external-review capability-coverage gaps.",
-    "prior_run": "superseded: harness-20260919-161642-52992e09 on /tmp/g2b-copy (identity a1edad6a..., authorized 2026-09-19)",
-    "blocker": "awaiting machine-owner authorization for real model calls"
+    "roles_completed": 7,
+    "authorized": "2026-09-19. The machine owner replied 「授权」 to a request that named exactly: (1) native_multihost --provider dsh 7-role complete flow to re-bind the rewritten runtime identity cc213960...; (2) native_multihost --provider dsh --tools capability probes (read-only real write attempt denied incl. subagent under inherited policy, native subagent delegation, same-session resume); both on a launchd non-inherited runner over a byte-identical candidate copy, model deepseek-v4-flash, combined magnitude ~1.5x the prior authorized run.",
+    "run": "/private/tmp/g2b-v2-copy/.harness/runs/harness-20260919-210130-0164b260",
+    "evidence_dir": "/private/tmp/g2b-v2-copy/.harness/validation/g2b-native-v2-flow-20260919T210124",
+    "report": "report.json",
+    "flow_status": "HARNESS_COMPLETE",
+    "interrupts": 0,
+    "completion_linkage": "All 7 native jobs carry argv [<copy driver>, \"harness\", \"native\", <dir>] in request.json, exit_code 0, pgid recorded; the run manifest binds runtime identity cc213960... which equals the recorded candidate identity.",
+    "capability_validation": {
+      "read_only_tools": "VERIFIED with tool events and file effects: the read-only phase made real bash attempts (printf DENIAL_TEST >> guard.txt, twice, second capturing stderr), got Operation not permitted with exit=1, then read guard.txt to confirm; guard.txt and child-guard.txt byte-unchanged (effect check).",
+      "subagents": "VERIFIED: development phase used the native subagent tool to delegate child-seed.txt -> child.txt with the root forbidden from doing it, effect delegated_file=true; the read-only phase also delegated a child attempt on child-guard.txt under inherited policy, file unchanged.",
+      "resume": "VERIFIED same-session continuation: the resume phase reused the development identity via session/resume and wrote resume.txt identical to seed.txt (resumed_write=true); complements native_missing_session.py (invalid-identity rejection -> new session).",
+      "network": "loopback only (2 requests to the probe server, token matched); external reach not claimed",
+      "mcp": "not applicable on this host configuration (no MCP server advertised); honestly not verified"
+    },
+    "tools_probe": {
+      "evidence_dir": "/private/tmp/g2b-v2-copy/.harness/validation/g2b-native-v2-tools-20260919T210124",
+      "effects": {
+        "direct_write": true,
+        "delegated_file": true,
+        "network_response": true,
+        "read_only_files_unchanged": true,
+        "resumed_write": true
+      },
+      "exit_code": 0
+    },
+    "relocation_disclosure": "Run on the byte-identical candidate copy /tmp/g2b-v2-copy (HEAD 590039a, bookkeeping-only ahead of candidate 3d769a0): driver binary sha256 29889205... equals the record, all six runtime-identity source files digest-match, so the content-addressed identity cc213960... is equal and manifest-bound; the launchd non-inherited runner is the previously verified procedure.",
+    "model_calls": "7-role flow + 3 tool-probe phases = the full authorized spend; deepseek-v4-flash, selection via host configOptions readback.",
+    "blocker": null
   }
 }

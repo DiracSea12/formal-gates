@@ -1,4 +1,4 @@
-# G2b 验收记录 v2（2026-09-19 晚，去仿真化重写后重签；原生关口重开待授权）
+# G2b 验收记录 v2（2026-09-19 深夜，去仿真化重写；原生关口已按授权重取关闭）
 
 候选 `3d769a0`（分支 `codex/go-engine-v1`，合同 v2）。上一验收基线：`G2a`（候选 `df33e9c`）。
 九项验收全过（尝试 `.harness/validation/acceptance/G2b/20260919T123352Z-12066`，`overall=PASS`、
@@ -46,17 +46,29 @@ G2a 冻结候选 `df33e9c` 于隔离 worktree 重建（六项身份文件摘要�
 （含确认边界、一次返修回合、seal）。证据：`.harness/validation/g2b-rollback-g2a-20260919/`
 （summary.json＋完整 demo run）；回退入口已落机器记录 `rollback_preservation`。
 
-## 原生关口（重开，唯一阻塞项）
+## 原生关口（已按机主授权重取，PASS）
 
 - 前一次授权运行（`harness-20260919-161642-52992e09`，身份 `a1edad6a…`）随 v2 重写**按设计解绑**，
   其授权与结论归属 v1 候选，不再作为本候选证据。
-- **重取方案（一次授权全覆盖）**：① `native_multihost --provider dsh` 7 角色完整流程（重绑
-  `cc213960…` 身份）；② `native_multihost --tools` 能力探针——read-only 阶段**真实尝试写入被策略
-  拒绝**（含子代理在继承策略下的尝试）、development 阶段**原生委派子代理**完成 child 文件、
-  resume 阶段**同会话成功续用**——以效果与工具事件为证（§14.2"真正尝试过并被约束"），正好
-  关掉评审缺口①的三项 not_verified 与"只证失效重建不证成功续用"的缺口。
-- 运行仍需非继承上下文（launchd runner＋候选逐字节副本，沿已验证程序）。**未获机主授权前不消费
-  任何真实模型调用**；`native_verification.status=NOT_RUN` 如实落盘，admission 按设计拒绝。
+- **机主 2026-09-19 逐字授权「授权」**（对应点名上述两项运行的请求，全文存
+  `native_verification.authorized`）。已在 launchd 非继承 runner＋候选逐字节副本 `/tmp/g2b-v2-copy`
+  执行（副本 HEAD `590039a` 仅记账领先候选；驱动 `29889205…` 与记录相等；六项身份文件相符 ⇒
+  内容寻址身份 `cc213960…` 相等且被 run manifest 绑定）。
+- **① 7 角色完整流程**：run `harness-20260919-210130-0164b260`，`HARNESS_COMPLETE`、**7/7 PASS**、
+  0 中断、exit 0；7 个原生作业 argv 全为 Go 窄命令、exit 0、pgid 齐备（完成关联亲验）。
+  证据 `/private/tmp/g2b-v2-copy/.harness/validation/g2b-native-v2-flow-20260919T210124`。
+- **② `--tools` 能力探针**（评审缺口①三项全闭，效果＋工具事件双证）：
+  - `read_only_tools` **VERIFIED**——只读阶段真实 bash 尝试 `printf DENIAL_TEST >> guard.txt`（两次，
+    第二次抓 stderr），得 `Operation not permitted`/exit=1，回读确认；guard.txt 与 child-guard.txt
+    逐字节未变。
+  - `subagents` **VERIFIED**——development 用原生 subagent 工具委派 child-seed→child.txt（根会话被
+    禁代劳），`delegated_file:true`；只读阶段另委派子代理在继承策略下尝试写 child-guard.txt，未变。
+  - `resume` **VERIFIED（同会话成功续用）**——resume 阶段以 development 身份 `session/resume` 续写
+    resume.txt 与种子逐字节同（`resumed_write:true`），补齐 native_missing_session 只证"失效重建"的
+    缺口。
+  - network 仅回环（2 次命中令牌）；mcp 本机未配置＝如实不适用不虚报。
+  证据 `/private/tmp/g2b-v2-copy/.harness/validation/g2b-native-v2-tools-20260919T210124`。
+- 模型调用支出＝7 角色流程＋3 个探针阶段（授权范围内全部支出）。
 
 ## 提交链
 
