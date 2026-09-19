@@ -1,5 +1,6 @@
 """Shared host boundary regressions. No paid/native model prompts."""
 from pathlib import Path
+import importlib
 import json
 import sys
 import tempfile
@@ -49,6 +50,10 @@ class HostRegistryTests(unittest.TestCase):
         for name in ('workers.py','infra.py','cli.py'):
             text=(base/name).read_text()
             self.assertNotIn('from .native_dsh import',text,name)
+        # The retired Python execution path must not come back through a stale
+        # module: production dsh execution is the Go driver binary (G2b).
+        with self.assertRaises(ImportError):
+            importlib.import_module('formal_gates_harness.native_dsh')
         # The workflow is still the same LangGraph graph, not one graph per host.
         text=(base/'graph.py').read_text()
         self.assertNotIn('native_zcode',text)

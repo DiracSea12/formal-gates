@@ -254,6 +254,16 @@ func decodeValue(raw json.RawMessage) (any, error) {
 	return value, nil
 }
 
+// nativeOutcome maps a native operation error to its bridge answer. A typed
+// nativeRefusal becomes the in-value refusal object (handled=true); any other
+// error is a bridge failure and is returned untouched.
+func nativeOutcome(err error) (any, bool) {
+	if refusal, ok := err.(*nativeRefusal); ok {
+		return map[string]any{"ok": false, "kind": refusal.kind, "refusal": refusal.refusal}, true
+	}
+	return nil, false
+}
+
 func Bridge(in io.Reader, out io.Writer) int {
 	b, err := io.ReadAll(io.LimitReader(in, 8*1024*1024+1))
 	if err == nil && len(b) > 8*1024*1024 {
@@ -492,6 +502,78 @@ func dispatch(e envelope) (any, error) {
 			return map[string]any{"ok": false, "kind": "binding", "refusal": refusal}, nil
 		}
 		return map[string]any{"ok": true}, nil
+	case "native-capture", "native-verify-binding", "native-verify-source", "native-reconcile":
+		// The native lifecycle operations (G2b). Business refusals are typed
+		// outcomes inside the value (same convention as verify-files); a
+		// malformed payload or an unexpected error is a bridge failure. The
+		// binding, source and process arguments are raw JSON: their shape is
+		// judged by the adapter under Python semantics, not by a typed struct
+		// here.
+		switch e.Operation {
+		case "native-capture":
+			var q struct {
+				Provider string `json:"provider"`
+			}
+			if err := StrictDecode(e.Payload, &q); err != nil {
+				return nil, err
+			}
+			binding, err := nativeCapture(q.Provider)
+			if value, handled := nativeOutcome(err); handled {
+				return value, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"binding": binding}, nil
+		case "native-verify-binding":
+			var q struct {
+				Provider string          `json:"provider"`
+				Binding  json.RawMessage `json:"binding"`
+			}
+			if err := StrictDecode(e.Payload, &q); err != nil {
+				return nil, err
+			}
+			if err := nativeVerifyBinding(q.Provider, q.Binding); err != nil {
+				if value, handled := nativeOutcome(err); handled {
+					return value, nil
+				}
+				return nil, err
+			}
+			return map[string]any{"ok": true}, nil
+		case "native-verify-source":
+			var q struct {
+				Provider  string          `json:"provider"`
+				Directory string          `json:"directory"`
+				Source    json.RawMessage `json:"source"`
+			}
+			if err := StrictDecode(e.Payload, &q); err != nil {
+				return nil, err
+			}
+			if err := nativeVerifySource(q.Provider, q.Directory, q.Source); err != nil {
+				if value, handled := nativeOutcome(err); handled {
+					return value, nil
+				}
+				return nil, err
+			}
+			return map[string]any{"ok": true}, nil
+		default: // native-reconcile
+			var q struct {
+				Provider  string          `json:"provider"`
+				Directory string          `json:"directory"`
+				Process   json.RawMessage `json:"process"`
+			}
+			if err := StrictDecode(e.Payload, &q); err != nil {
+				return nil, err
+			}
+			source, err := nativeReconcile(q.Provider, q.Directory, q.Process)
+			if value, handled := nativeOutcome(err); handled {
+				return value, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"source": source}, nil
+		}
 	case "canonical", "digest":
 		// The canonical encoding is the content-addressing format, so it is
 		// owned here rather than in the caller. Numbers are decoded with

@@ -8,7 +8,8 @@ from unittest.mock import patch, Mock
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
-from formal_gates_harness.native_dsh import decode_result, reconcile_completed_output
+from formal_gates_harness.native_result import decode_result
+from reference_native_dsh import reconcile_completed_output
 from formal_gates_harness.infra import atomic, read, RuntimeBlocked, HarnessError, Bridge, Store
 from formal_gates_harness.graph import Flow, State
 from formal_gates_harness.cli import adopt_transport
@@ -48,7 +49,7 @@ class OutputRecovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.make_evidence(root)
             originals={p:p.read_bytes() for p in root.iterdir()}
-            with patch('formal_gates_harness.native_dsh.Client',side_effect=AssertionError('must not launch')):
+            with patch('reference_native_dsh.Client',side_effect=AssertionError('must not launch')):
                 source=reconcile_completed_output(root,{'exit_code':1,'error':''})
             self.assertEqual(source['identity'],'native');self.assertEqual(source['reconciliation']['new_model_calls'],0)
             self.assertEqual(read(root/'answer.json'),ANSWER)

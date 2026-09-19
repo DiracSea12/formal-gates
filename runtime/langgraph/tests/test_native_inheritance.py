@@ -11,8 +11,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from formal_gates_harness import (cli, native_dsh as dsh, native_transport as shared,
+from formal_gates_harness import (cli, native_transport as shared,
                                   native_zcode as zcode, native_hosts as hosts)
+# G2b: the pre-migration DSH transport is test-only reference code now; the
+# production dsh execution path is the Go driver binary. The dsh structural
+# assertions below pin the reference implementation the differential
+# (test_native_dsh_differential.py) compares the Go adapter against.
+import reference_native_dsh as dsh
 from formal_gates_harness.infra import (Bridge, HarnessError, RuntimeBlocked, canonical, read,
                                         runtime_identity)
 
@@ -287,30 +292,13 @@ class NativeRequests(unittest.TestCase):
                 self.assertEqual(launch, binding['launch'])
                 self.assertEqual(environment, seed)
 
-    def test_dsh_development_new_and_resume_have_no_permission_patch(self):
-        for previous in ('', 'root'):
-            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as t:
-                directory = Path(t)
-                client = Mock()
-                def respond(method, params, **kwargs):
-                    if method == 'initialize':
-                        return {'protocolVersion': 1, 'agentCapabilities': {'sessionCapabilities': {'resume': {}, 'close': {}}}}
-                    if method in ('session/new', 'session/resume'):
-                        return {'sessionId': 'root', 'configOptions': []}
-                    return {'stopReason': 'end_turn'}
-                client.request.side_effect = respond
-                request = {'workspace': t, 'read_only': False, 'identity': previous,
-                           'prompt': 'Current task', 'schema': {},
-                           'binding': {'provider': 'dsh', 'launch': {'executable': '/bound/dsh'}}}
-                with patch.object(dsh, 'Client', return_value=client) as constructor, \
-                     patch.object(dsh, 'observe', return_value={'provider': 'dsh'}):
-                    dsh.execute(request, directory)
-                self.assertEqual(constructor.call_args.args[0][0], '/bound/dsh')
-                overlays = read(directory / 'profile.json')
-                self.assertFalse({'agent-loop', 'sandbox-policy', 'permission', 'approval', 'session-title-llm'} & {p.get('id') for p in overlays})
-                self.assertIs(overlays[0]['insert'][0]['config']['read_only'], False)
-                params = next(c.args[1] for c in client.request.call_args_list if c.args[0] in ('session/new', 'session/resume'))
-                self.assertEqual(params['mcpServers'], [])  # ACP's additive, required transport field.
+    # test_dsh_development_new_and_resume_have_no_permission_patch was removed
+    # with the dsh execution path it mocked: the overlay shape (no permission/
+    # approval/agent-loop overlays, read_only flag, mcpServers: []) is now pinned
+    # by test_native_dsh_differential.py's new/resume scenarios (profile.json
+    # byte for byte, the echoed session/new|resume params by value against the
+    # reference) and by the Go unit test of makeDSHPatch in
+    # internal/harness/native_dsh_test.go.
 
 
 class SharedTransportBoundary(unittest.TestCase):
@@ -319,11 +307,12 @@ class SharedTransportBoundary(unittest.TestCase):
     def test_every_adapter_declares_the_shared_module_it_depends_on(self):
         # A change to the shared mechanics must be reviewable as a transport
         # change for every host built on it, or adoption would reject the fix.
-        for provider in hosts.execution_hosts():
-            with self.subTest(provider=provider):
-                files = hosts.adapter_for(provider).transport_files()
-                self.assertIn('native_transport.py', files)
-                self.assertIn(f'native_{provider}.py', files)
+        # G2b: dsh's mechanics moved into the Go driver binary, so its Python
+        # transport inventory is only the host-side plugin (native_dsh.mjs).
+        files = hosts.adapter_for('zcode').transport_files()
+        self.assertIn('native_transport.py', files)
+        self.assertIn('native_zcode.py', files)
+        self.assertEqual(hosts.adapter_for('dsh').transport_files(), ('native_dsh.mjs',))
 
     def test_each_adapter_supplies_protocol_only(self):
         # If an adapter defines one of these again, the logic stopped being shared.
@@ -341,7 +330,11 @@ class SharedTransportBoundary(unittest.TestCase):
                          {'id': 'native-1', 'method': 'session/create', 'params': {}})
 
     def test_a_long_native_turn_is_not_cut_off_by_our_own_budget(self):
-        client = object.__new__(dsh.Client)
+        # G2b: the dsh half of this assertion (bounded=False, UNBOUNDED prompt)
+        # moved with the execution path - the per-message-wait scenarios of
+        # test_native_dsh_differential.py and the wait tests of
+        # internal/harness/native_transport_unix_test.go pin it for the Go driver.
+        client = object.__new__(zcode.Client)
         self.assertEqual(client.wait(40, None), 40)           # per-message, as ACP bounds startup
         self.assertIsNone(client.wait(shared.UNBOUNDED, None))  # the host owns the turn length
 
@@ -464,8 +457,12 @@ class ProtocolInteractions(unittest.TestCase):
             self.assertNotIn('child', (Path(t) / 'native-events.jsonl').read_text())
 
     def test_transport_metadata_does_not_log_native_auth_payloads(self):
-        # Both hosts read through the one shared reader, so neither can log more.
-        for module in (zcode, dsh):
+        # The Python reader serves the remaining host (zcode); neither it nor
+        # anything else can log more. G2b: the dsh half moved with the
+        # execution path - the Go reader's routing-only trace is pinned by the
+        # protocol.jsonl value comparison in test_native_dsh_differential.py and
+        # by the trace tests of internal/harness/native_transport_unix_test.go.
+        for module in (zcode,):
             with self.subTest(module=module.__name__):
                 client = object.__new__(module.Client)
                 client.trace = io.StringIO(); client.messages = queue.Queue()
@@ -474,13 +471,14 @@ class ProtocolInteractions(unittest.TestCase):
                 self.assertNotIn('TEST_SECRET', client.trace.getvalue())
                 self.assertEqual(client.messages.get()['result']['Authorization'], 'TEST_SECRET')
 
-    def test_dsh_permission_request_does_not_send_a_user_decision(self):
-        client = object.__new__(dsh.Client)
-        client.counter = 0; client.messages = queue.Queue(); client.send = Mock()
-        client.messages.put({'id': 'permission', 'method': 'session/request_permission', 'params': {}})
-        with self.assertRaisesRegex(RuntimeBlocked, 'INTERACTION_REQUIRED'):
-            client.request('session/prompt', {})
-        self.assertEqual(client.send.call_count, 1)  # Only our outgoing request.
+    # test_dsh_permission_request_does_not_send_a_user_decision was removed with
+    # the dsh execution path it exercised: the no-reply permission refusal is now
+    # pinned end to end by the interaction-boundary scenario of
+    # test_native_dsh_differential.py (identical DSH_INTERACTION_REQUIRED text
+    # on both sides, and the fake host records zero answered frames) and by the
+    # respond-hook tests of internal/harness/native_transport_unix_test.go
+    # (TestTransportRequestPermissionIsNeverAnswered) and
+    # internal/harness/native_dsh_unix_test.go (TestDSHExecutePermissionNeverAnswered).
 
 
 @unittest.skipUnless(shutil.which('node'), 'Node is needed to test the native JS hook')

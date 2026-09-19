@@ -1,21 +1,42 @@
-"""DSH ACP transport. No graph imports and no workflow state authority.
+"""Reference implementation of the pre-migration DSH ACP transport.
 
-Uses existing native sandbox/tool restrictions. A normal ACP stopReason is not
-proof of a successful turn: committed native turn/end evidence is required.
+Test-only. Production code must not import this module. The body below is the
+pre-migration implementation from formal_gates_harness/native_dsh.py, moved
+verbatim so the G2b differential can prove the Go adapter
+(internal/harness/native_dsh.go behind `formal-gates harness native`) preserves
+its observable behaviour - every atomic evidence file, the error texts and the
+prompt text byte for byte, the outbound protocol lines, protocol.jsonl and
+stdout by value (the registered bounded differences). The production execution
+path for dsh is now the Go driver binary; only native_dsh.mjs stays in the
+package.
 
-Only the ACP protocol lives here; process handling, the request/reply loop,
-bindings and evidence come from native_transport.
+The original module lived inside formal_gates_harness and used package-relative
+imports (`from .infra import ...`). To run from this test directory it uses the
+absolute imports `formal_gates_harness.infra` etc.; PYTHONPATH must contain
+`<repo>/runtime/langgraph` (the differential test sets this). Everything else,
+including TRANSPORT_FILES and the `Path(__file__).with_suffix('.mjs')` plugin
+lookup in make_patch, is kept exactly as it was - the differential normalises
+the plugin path it embeds into profile.json, because the reference resolves it
+next to this file while Go resolves it next to the production package.
+
+The two sides of the differential are deliberately asymmetrical processes: the
+reference side is called in-process (reference_native_dsh.execute), while the
+Go side is spawned as its own process (`formal-gates harness native <dir>`),
+because running one native job in one process is the Go implementation's whole
+shape. Error records for the reference side are written by the test using
+exactly the five lines native_entry.py used, since the entry's registry now
+dispatches dsh to Go.
 """
 from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-from .infra import RuntimeBlocked, SessionUnavailable, atomic, read
-from .native_result import decode_result
-from .native_transport import (Client as Transport, UNBOUNDED, close_session,
-                               capture_binding as capture, evidence_source,
-                               reconcile_completed_output as reconcile,
-                               session_events, transport_files, write_answer)
+from formal_gates_harness.infra import RuntimeBlocked, SessionUnavailable, atomic, read
+from formal_gates_harness.native_result import decode_result
+from formal_gates_harness.native_transport import (Client as Transport, UNBOUNDED, close_session,
+                                                   capture_binding as capture, evidence_source,
+                                                   reconcile_completed_output as reconcile,
+                                                   session_events, transport_files, write_answer)
 
 TRANSPORT_FILES = transport_files(Path(__file__).name, 'native_dsh.mjs')
 

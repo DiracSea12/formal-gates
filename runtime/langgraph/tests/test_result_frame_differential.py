@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from formal_gates_harness.infra import Bridge, RuntimeBlocked, atomic
-from formal_gates_harness.native_dsh import decode_result
+from formal_gates_harness.native_result import decode_result
 from reference_result import decode_result as reference_decode_result
 from result_corpus import CASES
 

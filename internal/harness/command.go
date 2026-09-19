@@ -21,6 +21,16 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 		}
 		return Supervise(args[1])
 	}
+	if len(args) > 0 && args[0] == "native" {
+		// One native job, one process (the port of native_entry.py's shape).
+		// The entry's own argument check mirrors supervise's: exit 2 with a
+		// note on stderr and no native-error.json.
+		if len(args) < 2 {
+			fmt.Fprintln(errout, "harness native requires a job directory")
+			return 2
+		}
+		return RunNative(args[1], errout)
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		fmt.Fprintln(errout, e)

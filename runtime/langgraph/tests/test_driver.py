@@ -15,7 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from formal_gates_harness.graph import Flow
 from formal_gates_harness.infra import Bridge, HarnessError, RuntimeBlocked, Store, atomic, digest, git, read, run_lock
-from formal_gates_harness.native_dsh import observe
+from reference_native_dsh import observe
 from formal_gates_harness.workers import Workers
 
 PACKAGE=Path(__file__).resolve().parents[3]

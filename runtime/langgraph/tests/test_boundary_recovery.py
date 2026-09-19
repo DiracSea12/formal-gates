@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from formal_gates_harness.cli import make_demo, package_root, run_graph
 from formal_gates_harness.infra import Bridge, HarnessError, Store, driver_bridge, read, run_lock
-from formal_gates_harness.native_dsh import observe
+from reference_native_dsh import observe
 
 class Boundaries(unittest.TestCase):
     def setUp(self):

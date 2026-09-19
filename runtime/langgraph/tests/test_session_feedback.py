@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
 import test_driver as fixtures
 from formal_gates_harness.infra import SessionUnavailable, RuntimeBlocked, HarnessError, atomic, digest
-from formal_gates_harness.native_dsh import Client
+from reference_native_dsh import Client
 from formal_gates_harness.feedback import task_input, evidence_feedback
 from formal_gates_harness.handover import prepare_session_restart
 from formal_gates_harness.graph import Flow, State
@@ -147,13 +147,17 @@ class SessionFeedbackTests(unittest.TestCase):
     def test_retry_after_failed_replacement_uses_latest_series_identity(self):
         from formal_gates_harness.workers import Workers
         self.manifest['spec'].update(provider='dsh', model='test-model', reasoning_effort='high')
+        # G2b: dsh capture lives in the Go driver, so the hermetic binding comes
+        # from the manifest (exactly what make_run stores after a real probe)
+        # instead of patching the retired module's shutil.which.
+        self.manifest['host_binding'] = {'provider': 'dsh',
+                                         'launch': {'executable': os.sys.executable}, 'files': {}}
         worker = Workers(self.store, fixtures.PACKAGE)
         data = {'run_id': 'test', 'round': 0, 'candidate': self.base, 'continuation': 0}
         series = digest({'role': 'development', 'input': data, 'feedback': None, 'revision': self.manifest['revision']})
         receipt = self.directory / 'native-identities' / (series + '.json')
         atomic(receipt, {'identity': 'newer-replacement', 'workspace': str(self.project)})
-        with patch('formal_gates_harness.native_dsh.shutil.which', return_value=os.sys.executable), \
-             patch.object(self.store, 'job', side_effect=RuntimeBlocked('stop before native launch')):
+        with patch.object(self.store, 'job', side_effect=RuntimeBlocked('stop before native launch')):
             with self.assertRaises(RuntimeBlocked):
                 worker.run('development', self.project, data, session='older-lost-session', attempt=2)
         key = digest({'series': series, 'attempt': 2})
