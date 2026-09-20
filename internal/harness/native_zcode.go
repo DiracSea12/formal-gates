@@ -349,9 +349,9 @@ func zcodeRequestAuth(provider string) string {
 // zcodeClient is ZCode's adapter state around the shared transport: the bound
 // session identity and the events its notification hook committed (the Python
 // Client's identity and events attributes). The events slice is a receive
-// buffer, not a transcript: consumed events are released as the execution
-// loop reads them (see dropConsumedEvents), and native-events.jsonl is the
-// only durable record of the whole turn.
+// buffer, not a transcript: the execution loop clears each slot as it reads
+// the event and resets the drained buffer before waiting for more, and
+// native-events.jsonl is the only durable record of the whole turn.
 type zcodeClient struct {
 	client    *nativeClient
 	directory string
@@ -485,36 +485,6 @@ func (z *zcodeClient) notification(message any) {
 	}
 	defer file.Close()
 	file.WriteString(string(line) + "\n")
-}
-
-// dropConsumedEvents drops the events the execution loop has already
-// consumed. The loop clears each slot as it reads the event (the durable copy
-// is the native-events.jsonl line the notification hook wrote on arrival), and
-// once that cleared prefix is at least as long as the not-yet-consumed tail
-// this moves the tail to the front of the retained slice and returns the
-// adjusted cursor. Compacting only then keeps the work amortized O(1) per
-// event -- every element is cleared once and moved at most once before it is
-// consumed -- so a turn that streams thousands of events retains only the
-// events that have arrived and not yet been read, never the whole transcript.
-// Nothing observable depends on the retained slice: the terminal decision
-// reads the event values and the receipt is materialized from
-// native-events.jsonl.
-func (z *zcodeClient) dropConsumedEvents(position int) int {
-	if position <= 0 || position < len(z.events)-position {
-		return position
-	}
-	if position >= len(z.events) {
-		z.events = z.events[:0]
-		return 0
-	}
-	live := copy(z.events, z.events[position:])
-	// The slots behind the shortened slice still point into the old contents;
-	// a slice's whole backing array stays reachable, so they are cleared too.
-	for index := live; index < len(z.events); index++ {
-		z.events[index] = nil
-	}
-	z.events = z.events[:live]
-	return 0
 }
 
 // --- the selection mechanism (contract item 6) ---------------------------------
@@ -1545,10 +1515,15 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 			}
 		}
 		if !terminal {
-			// The consumed prefix is dropped before waiting, so a long
-			// streaming turn keeps only the events that have arrived and not
-			// yet been read.
-			position = client.dropConsumedEvents(position)
+			// The buffer is fully drained here: the loop above only leaves
+			// position == len(events), and new events arrive only inside
+			// receive -- the notification hook appends them in this same
+			// goroutine -- so nothing can land between the drain and this
+			// reset. Releasing the drained buffer before waiting keeps a long
+			// streaming turn retaining only the events that have arrived and
+			// not yet been read.
+			client.events = client.events[:0]
+			position = 0
 			wait := time.Until(deadline)
 			if wait > 120*time.Second {
 				wait = 120 * time.Second

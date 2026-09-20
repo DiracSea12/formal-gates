@@ -886,53 +886,17 @@ func zcodeStreamEvent(seq int) map[string]any {
 	}}
 }
 
-// zcodeDrainEvents is the execution loop's consume pattern: read the event,
-// clear its retained slot, advance the cursor, then drop the consumed prefix.
+// zcodeDrainEvents is the execution loop's consume pattern: each event's
+// retained slot is cleared as the cursor advances, and the fully drained
+// buffer is reset together with the cursor -- the same inline reset execute
+// performs before waiting for more events.
 func zcodeDrainEvents(z *zcodeClient, position int) int {
 	for position < len(z.events) {
-		event := z.events[position]
 		z.events[position] = nil
 		position++
-		if textOf(getOf(event, "sessionId")) != "s-1" {
-			break
-		}
 	}
-	return z.dropConsumedEvents(position)
-}
-
-// TestZcodeDropConsumedEventsKeepsLiveTail pins the compaction itself: a
-// consumed prefix shorter than the live tail is kept as it is, one at least
-// as long moves the tail to the front in order, the cursor restarts at zero,
-// and no slot behind the shortened slice still references an event.
-func TestZcodeDropConsumedEventsKeepsLiveTail(t *testing.T) {
-	z := &zcodeClient{directory: t.TempDir(), identity: "s-1"}
-	for seq := 1; seq <= 5; seq++ {
-		z.notification(map[string]any{"method": "session/event", "params": map[string]any{
-			"sessionId": "s-1", "seq": jsonNumber(strconv.Itoa(seq)),
-			"type": "assistant/message", "payload": map[string]any{"inputId": "other"}}})
-	}
-	if len(z.events) != 5 {
-		t.Fatalf("events = %d", len(z.events))
-	}
-	// Two of five consumed: the prefix is the shorter side, nothing moves.
-	z.events[0] = nil
-	z.events[1] = nil
-	if position := z.dropConsumedEvents(2); position != 2 || len(z.events) != 5 {
-		t.Fatalf("early drop: position %d, len %d", position, len(z.events))
-	}
-	// Three of five consumed: the tail moves to the front, in its order.
-	z.events[2] = nil
-	if position := z.dropConsumedEvents(3); position != 0 || len(z.events) != 2 {
-		t.Fatalf("drop: position %d, len %d", position, len(z.events))
-	}
-	if textOf(z.events[0]["seq"]) != "4" || textOf(z.events[1]["seq"]) != "5" {
-		t.Fatalf("live tail order broken: %v", z.events)
-	}
-	for index, slot := range z.events[:cap(z.events)] {
-		if index >= len(z.events) && slot != nil {
-			t.Fatalf("slot %d behind the slice still holds an event", index)
-		}
-	}
+	z.events = z.events[:0]
+	return 0
 }
 
 // TestZcodeEventsReleasedUnderLongStream pins the receive buffer's retention
