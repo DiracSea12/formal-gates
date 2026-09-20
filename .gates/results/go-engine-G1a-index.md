@@ -356,4 +356,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-21（第十六轮，G3b 正式通过＋K1 评审返修，轻装）】**机主裁定 G3b 返修通过（原话"g3b过"），G3b 收口。K1（`6697cb2`）被外部评审驳回 1 P1＋2 P2（`/private/tmp/k1-review/review.md`，三项均主代理以评审探针亲复现）：F1＝恢复混用新旧输入仍报成功（缺任务定义绑定）；F2＝同 Store 双 Runner 重复推进把在途调用当遗留（执行两次）；F3＝SQLite URI 未编码 `#` 致不同目录连同一库。返修：`tasks.input_digest` 定义绑定＋schema v2（v1 拒开）；`Store.advance` 推进锁＋TryLock 失败返回导出 `ErrAdvancing`（主代理裁定：评审选项为"串行化或拒绝"，静默 nil 不在其中且掩盖调用失误；亲核探针只断言执行计数，显式拒绝相容；阻塞会死锁）；dsn 经 `url.URL` 百分号编码。亲验：探针三用例 copy 进树全 PASS 后删除、runner 包＋race ok、交叉编译 OK、全仓与 Python 全套绿、模型调用 0。记录 `go-engine-K1.md` 返修节。**K1 返修待外部评审复核；K2 仍为下一单元。**
 
+> **【2026-09-21（第十七轮，K1 二轮复审 PASS＋三个 P2 修复）】**完整复审（对象 `8226fa5`）：上轮 F1/F2/F3 确认关闭；**结论 PASS（无 P0/P1）**，保留三个独立复现的 P2——N1 相对路径回归（URI 编码前未转绝对路径，`Open("child")` 报 out of memory）、N2 空 run ID 毒化目录（哨兵冲突后重试写双 run）、N3 在途 Close 提前释放所有权（第二 Store 接手重跑）。三项均主代理亲复现后派发修复：Open 入口 `filepath.Abs` 单点归一；CreateRun 写事务前拒绝空 ID；Close 加入 advance 守卫（忙碌返回 ErrAdvancing、成功路径 db→lock→mutex 顺序释放、不阻塞防 executor 自调死锁）。亲验：亲读 diff（恰两文件）、两轮评审探针七项 copy 进树全 PASS 后删除、runner 包＋race ok、交叉编译 OK、全仓 go test 全 ok、模型调用 0。记录 `go-engine-K1.md` 二轮节。**K1 随复审 PASS 收口（P2 修复落在收口后提交）；下一单元 K2（精确流程确认与持久等待）。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

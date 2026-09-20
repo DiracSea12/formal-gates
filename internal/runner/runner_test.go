@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -645,6 +646,133 @@ func TestConcurrentRunsOnOneStoreDoNotDoubleAdvance(t *testing.T) {
 				t.Fatalf("executed %d times after completion, want 1", n)
 			}
 		})
+	}
+}
+
+func TestRelativeDirectoryResolvesToAbsolutePaths(t *testing.T) {
+	// Run from an isolated working directory: a relative dir must
+	// resolve to one absolute location for both the lock and the
+	// database URI, and Open/CreateRun/Run must work normally there.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	specs := []TaskSpec{{TaskID: "a", Name: "A"}}
+	st, err := Open("child")
+	if err != nil {
+		t.Fatalf("relative Open: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "child", "run.db")); err != nil {
+		t.Fatalf("run.db not at the resolved absolute location: %v", err)
+	}
+	if err := st.CreateRun(context.Background(), "rel", specs); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(st, recordingExecutor(nil, nil)).Run(context.Background(), specs); err != nil {
+		t.Fatal(err)
+	}
+	// The absolute spelling names the same run: while "child" is open,
+	// the absolute path is the same lock target and must be busy.
+	abs := filepath.Join(root, "child")
+	if _, err := Open(abs); !errors.Is(err, ErrRunBusy) {
+		t.Fatalf("absolute spelling of the same directory: err = %v, want ErrRunBusy", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if st2.runID != "rel" {
+		t.Fatalf("reopened via absolute path: run id = %q, want rel", st2.runID)
+	}
+}
+
+func TestEmptyRunIDIsRefusedWithoutPoisoning(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateRun(context.Background(), "", []TaskSpec{{TaskID: "a"}}); err == nil || !strings.Contains(err.Error(), "run id must not be empty") {
+		t.Fatalf("empty run id err = %v, want refusal before any write", err)
+	}
+	// The refused attempt left nothing behind: a corrected id creates
+	// the run normally and the directory reopens cleanly.
+	if err := st.CreateRun(context.Background(), "corrected", []TaskSpec{{TaskID: "a"}}); err != nil {
+		t.Fatalf("corrected id after refusal: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if st2.runID != "corrected" {
+		t.Fatalf("reopened run id = %q, want corrected", st2.runID)
+	}
+}
+
+func TestCloseDuringInFlightRunKeepsOwnership(t *testing.T) {
+	dir := t.TempDir()
+	specs := []TaskSpec{{TaskID: "a", Name: "A"}}
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateRun(context.Background(), "one", specs); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	exec := func(_ context.Context, inv Invocation) (Result, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return Result{Payload: json.RawMessage(`"only"`)}, nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- NewRunner(st, exec).Run(ctx, specs) }()
+	<-started
+	// While the executor is in flight, Close refuses and leaves the
+	// database and the directory lock untouched — the second owner is
+	// still excluded by ErrRunBusy, and the run finishes normally.
+	if err := st.Close(); !errors.Is(err, ErrAdvancing) {
+		t.Fatalf("in-flight Close err = %v, want ErrAdvancing", err)
+	}
+	if _, err := Open(dir); !errors.Is(err, ErrRunBusy) {
+		t.Fatalf("second Open while in flight: err = %v, want ErrRunBusy", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("first Run err = %v, want nil", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("executed %d times, want exactly 1", n)
+	}
+	// After the advance completed, Close succeeds and the next owner
+	// can take the directory over.
+	if err := st.Close(); err != nil {
+		t.Fatalf("post-run Close err = %v, want nil", err)
+	}
+	st2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if st2.runID != "one" {
+		t.Fatalf("reopened run id = %q, want one", st2.runID)
 	}
 }
 

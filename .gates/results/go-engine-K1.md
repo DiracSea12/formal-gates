@@ -93,3 +93,37 @@ URI 字符目录隔离。
   原生副作用恰好一次属后续 K 单元的宿主恢复验收——评审亦如此认定）。
 - v1 拒开是有意决定（未发布开发 schema，无迁移路径）。
 - Windows 锁仍仅交叉编译验证。
+
+---
+
+# 【二轮复审 2026-09-21：PASS＋三个 P2 修复（本节为准）】
+
+完整复审（对象 `8226fa5`，同时重查相对 `464aad1` 的完整实现）：上轮三项确认关闭；
+**结论 PASS（无 P0/P1，按 reviewer-base 规则）**，保留三个独立复现的 P2 修复项
+（`/private/tmp/k1-review-v2/review.md`，三项均主代理以探针亲复现）。评审同时认可：
+职责划分/事务边界/可读性尚好、无新过度设计、v1 拒开处置正确、进程内 Executor 重执行边界沿用上轮认定。
+
+- **N1/P2 相对路径回归**：URI 编码前未转绝对路径，`Open("child")` 报
+  `SQL logic error: out of memory`（child 落进 URI authority 位；旧版成功）。
+  修复：Open 入口 `filepath.Abs` 一次，锁与数据库共用同一条绝对路径再编码；错误文案随改引绝对路径。
+- **N2/P2 空 run ID**：`CreateRun(ctx,"",…)` 成功但与内存哨兵冲突，纠正重试写第二个 run，
+  重开报 `database holds more than one run`。修复：写事务前一个 if 拒绝
+  （`runner: run id must not be empty`）；拒绝后有效 ID 重试正常。
+- **N3/P2 在途 Close**：Close 不参与推进守卫——executor 在途时 Close 释放目录锁，第二个 Store
+  可接手重跑（执行 2 次，原 Run 最后报 database is closed）。修复：Close 以 `advance.TryLock()`
+  加入同一守卫——忙碌返回 `ErrAdvancing`（db 与目录锁原样不动）；成功路径 db.Close() →
+  lock.unlock() → advance.Unlock()（期间互斥自持，防半关 Store 上启动新 Run）；不阻塞
+  （executor 自调 Close 会死锁，评审点名）。
+
+新增正式测试：相对路径解析（隔离 cwd＋绝对写法同目标）、空 ID 无毒化重试、在途 Close 保持
+所有权（ErrAdvancing＋二次 Open 得 ErrRunBusy＋释放后 Run 完成）。
+
+## 二轮修复后亲验（主代理，最终树上）
+
+- 亲读 diff（恰 store.go 三个修复点＋runner_test.go 三个用例；runner.go 零改动）。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`、Windows/Linux 交叉编译 OK。
+- `go test ./internal/runner/ -count=1` ok（1.196s）；`-race` ok（2.227s）。
+- **两轮评审探针共七项**（v1 三项＋v2 三项断言＋DSN shapes 日志；v2 的 review_test.go 与 v1
+  逐字节相同故只取一份）copy 进树 `-run TestReview` **全部 PASS**，验后删除（ls 确认六正式文件）。
+- 全仓 `go test ./...` 全 ok（见索引当轮）；Python 侧零改动（评审自跑 335 项通过）。
+- 模型调用 0。

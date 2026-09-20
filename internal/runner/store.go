@@ -80,14 +80,24 @@ type Store struct {
 // directory — from any process, including this one — fails with an error
 // wrapping ErrRunBusy.
 func Open(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Resolve once at the entry so the lock file and the database URI
+	// agree on one absolute location: a relative dir would otherwise
+	// encode its first segment into the URI's authority slot
+	// ("file://child/run.db") and break the database open.  Abs also
+	// makes every spelling of the same directory ("child", "./child")
+	// map to one lock target.
+	abs, err := filepath.Abs(dir)
+	if err != nil {
 		return nil, err
 	}
-	lock, err := lockDir(filepath.Join(dir, lockFileName))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrRunBusy, dir, err)
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return nil, err
 	}
-	db, err := sql.Open("sqlite", dsn(filepath.Join(dir, dbFileName)))
+	lock, err := lockDir(filepath.Join(abs, lockFileName))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrRunBusy, abs, err)
+	}
+	db, err := sql.Open("sqlite", dsn(filepath.Join(abs, dbFileName)))
 	if err != nil {
 		lock.unlock()
 		return nil, err
@@ -95,7 +105,7 @@ func Open(dir string) (*Store, error) {
 	if err := migrate(db); err != nil {
 		db.Close()
 		lock.unlock()
-		return nil, fmt.Errorf("runner: migrate %s: %w", dir, err)
+		return nil, fmt.Errorf("runner: migrate %s: %w", abs, err)
 	}
 	runID, err := readRunID(db)
 	if err != nil {
@@ -106,9 +116,19 @@ func Open(dir string) (*Store, error) {
 	return &Store{db: db, lock: lock, runID: runID}, nil
 }
 
-// Close releases the database and, with it, directory ownership.  The lock
-// file itself stays behind (see lockFileName).
+// Close releases the database and, with it, directory ownership — but only
+// when no Run is mid-advance on this Store.  It joins the same advance
+// guard Run uses: a successful TryLock means no executor is in flight, so
+// the database is closed first, the directory lock released second, and
+// the mutex released last (held in between so no Run can start on a
+// half-closed Store).  When an advance is in flight Close refuses with
+// ErrAdvancing and leaves the database and the directory lock untouched —
+// blocking instead would deadlock an executor that calls Close itself.
 func (s *Store) Close() error {
+	if !s.advance.TryLock() {
+		return ErrAdvancing
+	}
+	defer s.advance.Unlock()
 	err := s.db.Close()
 	s.lock.unlock()
 	return err
@@ -122,6 +142,12 @@ func (s *Store) Close() error {
 func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) error {
 	if s.runID != "" {
 		return fmt.Errorf("runner: directory already holds run %q", s.runID)
+	}
+	// Refuse before the write transaction: an empty id would insert a
+	// runs row the in-memory sentinel cannot represent, silently
+	// poisoning the directory for every later corrected attempt.
+	if runID == "" {
+		return errors.New("runner: run id must not be empty")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
