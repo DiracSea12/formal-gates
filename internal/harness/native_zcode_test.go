@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -129,6 +131,13 @@ func TestZcodeSelectionMechanism(t *testing.T) {
 	empty := decodeTestJSON(t, `{"settings": {"model": {"current": null}, "thoughtLevel": {}}}`)
 	if got := mustCanonical(t, zcodeSelection(empty)); got != `{"model":"","reasoning_effort":""}` {
 		t.Fatalf("empty selection = %s", got)
+	}
+	// The reasoning effort is a level name or nothing: a current value that is
+	// not a level name (here a number) expresses no preference, exactly like
+	// an absent one.
+	numeric := decodeTestJSON(t, `{"settings": {"thoughtLevel": {"current": 5}}}`)
+	if got := mustCanonical(t, zcodeSelection(numeric)); got != `{"model":"","reasoning_effort":""}` {
+		t.Fatalf("non-string level = %s", got)
 	}
 	// An incomplete current selection (no modelId) is no selection either.
 	incomplete := decodeTestJSON(t, `{"settings": {"model": {"current": {"providerId": "p1"}}}}`)
@@ -861,6 +870,152 @@ func TestZcodeNotificationFilter(t *testing.T) {
 	if got := readTestFileBytes(t, filepath.Join(directory, "native-events.jsonl")); string(got) != want {
 		t.Fatalf("native-events.jsonl:\n got %s\nwant %s", got, want)
 	}
+}
+
+// zcodeStreamEvent renders one streamed assistant/message notification whose
+// payload is unique per sequence (the retention measurements count payloads).
+func zcodeStreamEvent(seq int) map[string]any {
+	return map[string]any{"method": "session/event", "params": map[string]any{
+		"sessionId": "s-1",
+		"seq":       jsonNumber(strconv.Itoa(seq)),
+		"type":      "assistant/message",
+		"payload": map[string]any{
+			"inputId": "other-input",
+			"text":    strconv.Itoa(seq) + "-" + strings.Repeat("x", 16<<10),
+		},
+	}}
+}
+
+// zcodeDrainEvents is the execution loop's consume pattern: read the event,
+// clear its retained slot, advance the cursor, then drop the consumed prefix.
+func zcodeDrainEvents(z *zcodeClient, position int) int {
+	for position < len(z.events) {
+		event := z.events[position]
+		z.events[position] = nil
+		position++
+		if textOf(getOf(event, "sessionId")) != "s-1" {
+			break
+		}
+	}
+	return z.dropConsumedEvents(position)
+}
+
+// TestZcodeDropConsumedEventsKeepsLiveTail pins the compaction itself: a
+// consumed prefix shorter than the live tail is kept as it is, one at least
+// as long moves the tail to the front in order, the cursor restarts at zero,
+// and no slot behind the shortened slice still references an event.
+func TestZcodeDropConsumedEventsKeepsLiveTail(t *testing.T) {
+	z := &zcodeClient{directory: t.TempDir(), identity: "s-1"}
+	for seq := 1; seq <= 5; seq++ {
+		z.notification(map[string]any{"method": "session/event", "params": map[string]any{
+			"sessionId": "s-1", "seq": jsonNumber(strconv.Itoa(seq)),
+			"type": "assistant/message", "payload": map[string]any{"inputId": "other"}}})
+	}
+	if len(z.events) != 5 {
+		t.Fatalf("events = %d", len(z.events))
+	}
+	// Two of five consumed: the prefix is the shorter side, nothing moves.
+	z.events[0] = nil
+	z.events[1] = nil
+	if position := z.dropConsumedEvents(2); position != 2 || len(z.events) != 5 {
+		t.Fatalf("early drop: position %d, len %d", position, len(z.events))
+	}
+	// Three of five consumed: the tail moves to the front, in its order.
+	z.events[2] = nil
+	if position := z.dropConsumedEvents(3); position != 0 || len(z.events) != 2 {
+		t.Fatalf("drop: position %d, len %d", position, len(z.events))
+	}
+	if textOf(z.events[0]["seq"]) != "4" || textOf(z.events[1]["seq"]) != "5" {
+		t.Fatalf("live tail order broken: %v", z.events)
+	}
+	for index, slot := range z.events[:cap(z.events)] {
+		if index >= len(z.events) && slot != nil {
+			t.Fatalf("slot %d behind the slice still holds an event", index)
+		}
+	}
+}
+
+// TestZcodeEventsReleasedUnderLongStream pins the receive buffer's retention
+// bound: a stream of 1536 synthetic events (16KB payloads, ~24MB in total,
+// the shape the review's synthetic probe measured), delivered in batches the
+// way the reader goroutine lands them, never lets the retained slice grow
+// past one batch; every event still reaches native-events.jsonl; and the
+// coarse heap contrast against the pre-fix pattern (append-only, cursor
+// advanced, nothing released) shows the consumed events are collectable, not
+// merely hidden behind the cursor.
+func TestZcodeEventsReleasedUnderLongStream(t *testing.T) {
+	const batches = 48
+	const batch = 32
+	const events = batches * batch // 1536
+	directory := t.TempDir()
+	z := &zcodeClient{directory: directory, identity: "s-1"}
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	position := 0
+	peak := 0
+	for seq := 1; seq <= events; seq++ {
+		z.notification(zcodeStreamEvent(seq))
+		if len(z.events) > peak {
+			peak = len(z.events)
+		}
+		if len(z.events) == batch {
+			position = zcodeDrainEvents(z, position)
+			if len(z.events) != 0 {
+				t.Fatalf("a drained buffer must compact to empty, got %d", len(z.events))
+			}
+		}
+	}
+	position = zcodeDrainEvents(z, position)
+	if position != 0 || len(z.events) != 0 {
+		t.Fatalf("final drain: position %d, len %d", position, len(z.events))
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	released := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	// z stays live through the measurement above (its emptiness is asserted
+	// here), so the small growth measures the released stream, not a dead
+	// client.
+	if live := len(z.events); live != 0 {
+		t.Fatalf("the released buffer must end empty, got %d", live)
+	}
+	if peak > batch {
+		t.Fatalf("retained events peaked at %d, want <= %d", peak, batch)
+	}
+	if body := readTestFileBytes(t, filepath.Join(directory, "native-events.jsonl")); strings.Count(string(body), "\n") != events {
+		t.Fatalf("native-events.jsonl lines = %d, want %d", strings.Count(string(body), "\n"), events)
+	}
+
+	// The pre-fix retention pattern over the same stream: append-only, the
+	// cursor advanced, nothing released. The whole transcript stays reachable.
+	retained := &zcodeClient{directory: t.TempDir(), identity: "s-1"}
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	cursor := 0
+	for seq := 1; seq <= events; seq++ {
+		retained.notification(zcodeStreamEvent(events + seq))
+		if cursor < len(retained.events) {
+			_ = textOf(getOf(retained.events[cursor], "sessionId"))
+			cursor++
+		}
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	kept := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	// The liveness twin of the released side: retained is read after the
+	// measurement, so the growth really is the retained transcript.
+	if got := len(retained.events); got != events {
+		t.Fatalf("the retained pattern must keep every event, got %d", got)
+	}
+	if kept < 16<<20 {
+		t.Fatalf("the retained pattern must hold the ~24MB transcript, heap grew %d bytes", kept)
+	}
+	if released > kept/2 {
+		t.Fatalf("released growth %d bytes is not clearly below the retained %d bytes", released, kept)
+	}
+	t.Logf("1536 events x 16KB payloads: released pattern net heap change %d bytes, retained pattern %d",
+		released, kept)
 }
 
 // TestZcodeValidateBindingAndVerifySource pins zcode's registry operations:

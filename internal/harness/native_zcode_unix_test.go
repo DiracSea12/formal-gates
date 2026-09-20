@@ -483,6 +483,9 @@ func TestZcodeExecuteSelection(t *testing.T) {
 	setThoughtApplied := `{"id": "@ID@", "result": {"settings": {"model": {"current": {"providerId": "p1", "modelId": "m1"}}, "thoughtLevel": {"current": "high"}}}}`
 	setModelIgnored := `{"id": "@ID@", "result": {"settings": {"model": {"current": {"providerId": "p1", "modelId": "m0"}}, "thoughtLevel": {"current": "low"}}}}`
 	setThoughtIgnored := `{"id": "@ID@", "result": {"settings": {"model": {"current": {"providerId": "p1", "modelId": "m1"}}, "thoughtLevel": {"current": "low"}}}}`
+	// A settings block with no entries is not a readback: the snapshot's
+	// selection stays the recorded one.
+	setModelEmptySettings := `{"id": "@ID@", "result": {"settings": {}}}`
 	noCurrentSettings := `{"model": {"available": [{"ref": {"providerId": "p1", "modelId": "m1"}}]}, "mode": {"current": "default"}}`
 	noCurrentSteps := func(string) []peerStep {
 		return []peerStep{
@@ -565,6 +568,12 @@ func TestZcodeExecuteSelection(t *testing.T) {
 			"RuntimeBlocked: ZCODE_CONFIG: requested exact provider/model is not advertised; no fallback",
 			"session/setModel"},
 		{"model not applied", appliedSteps(setModelIgnored, setThoughtApplied),
+			func(request map[string]any) {
+				request["read_only"] = false
+				request["model"] = `{"providerId": "p1", "modelId": "m1"}`
+			},
+			"RuntimeBlocked: ZCODE_CONFIG: requested selection was not applied", ""},
+		{"empty settings readback is no readback", appliedSteps(setModelEmptySettings, setThoughtApplied),
 			func(request map[string]any) {
 				request["read_only"] = false
 				request["model"] = `{"providerId": "p1", "modelId": "m1"}`
@@ -923,5 +932,61 @@ func TestZcodeExecuteRefusals(t *testing.T) {
 				t.Fatalf("error = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestZcodeExecuteLongStreamTurn pins the event-release fix end to end: a
+// turn that streams 1500 events before its terminal pair still completes
+// normally, and the committed evidence carries every streamed event plus the
+// terminal pair -- the receipt is materialized from native-events.jsonl, never
+// from the receive buffer the loop releases as it consumes.
+func TestZcodeExecuteLongStreamTurn(t *testing.T) {
+	const streamEvents = 1500
+	steps := func(inputID string) []peerStep {
+		script := []peerStep{
+			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
+			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
+			{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
+			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
+		}
+		for seq := 1; seq <= streamEvents; seq++ {
+			script = append(script, peerStep{On: `"method":"session/send"`,
+				Send: zcodeEventLine("s-1", seq, "assistant/message", "", `{"inputId": "other-input"}`)})
+		}
+		script = append(script,
+			peerStep{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", streamEvents+1,
+				"turn.started", "t-1", zcodeTurnPayload(inputID, ""))},
+			peerStep{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", streamEvents+2,
+				"turn.completed", "t-1", zcodeTurnPayload(inputID,
+					`, "resultType": "success", "response": `+zcodeTestResponseJSON))},
+			peerStep{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
+		)
+		return script
+	}
+	scenario := newZcodeScenario(t, steps, func(request map[string]any) {
+		request["read_only"] = false
+	})
+	var errout strings.Builder
+	code := 0
+	stdout := captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errout.String())
+	}
+	value := objectOrEmpty(decodeTestJSON(t, stdout))
+	if textOf(value["provider"]) != "zcode" || textOf(value["identity"]) != "s-1" ||
+		textOf(value["native_turn"]) != "t-1" || textOf(value["input_id"]) != scenario.inputID {
+		t.Fatalf("receipt = %v", value)
+	}
+	if body := readTestFileBytes(t, filepath.Join(scenario.directory, "answer.json")); string(body) != `{"status":"PASS","summary":"observed"}` {
+		t.Fatalf("answer.json = %s", body)
+	}
+	events := readTestFile(t, filepath.Join(scenario.directory, "native-events.jsonl"))
+	if lines := strings.Count(events, "\n"); lines != streamEvents+2 {
+		t.Fatalf("native-events.jsonl lines = %d, want %d", lines, streamEvents+2)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(events), "\n") {
+		if decoded := decodeTestJSON(t, line); !valuesEqual(objectOrEmpty(decoded)["sessionId"], "s-1") {
+			t.Fatalf("foreign event recorded: %s", line)
+		}
 	}
 }

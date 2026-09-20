@@ -346,6 +346,63 @@ func buildCaptureBinding(provider string, launch map[string]any) (map[string]any
 	return map[string]any{"provider": provider, "launch": launch, "files": files}, nil
 }
 
+// validateNativeBinding is the proof-checking body behind every adapter's
+// validate_binding (dshValidateBinding, zcodeValidateBinding): the provider
+// must match the adapter's own name and every bound file proof must still
+// hold. Only the provider name differs between the adapters.
+func validateNativeBinding(binding any, provider string) error {
+	object, ok := binding.(map[string]any)
+	if !ok {
+		return fmt.Errorf("binding must be a JSON object")
+	}
+	if !valuesEqual(getOf(object, "provider"), provider) {
+		return &bindingError{message: "HOST_BINDING: provider differs"}
+	}
+	files := objectOrEmpty(getOrOf(object, "files", nil))
+	for name, bound := range files {
+		proof, err := fileProofOf(textOf(name))
+		if err != nil {
+			return err
+		}
+		if !valuesEqual(proof, bound) {
+			return &blockedError{
+				message: "HOST_CHANGED: bound native executable/script changed: " + textOf(name),
+			}
+		}
+	}
+	return nil
+}
+
+// verifyNativeSource is the proof-checking body behind every adapter's
+// verify_source (dshVerifySource, zcodeVerifySource): provider/identity must
+// match, the proof set must be exactly the four evidence files, and each proof
+// must still hold against the directory. Only the provider name differs
+// between the adapters.
+func verifyNativeSource(directory string, source any, provider string) error {
+	object, ok := source.(map[string]any)
+	if !ok {
+		return fmt.Errorf("source must be a JSON object")
+	}
+	identity, _ := getOf(object, "identity").(string)
+	if !valuesEqual(getOf(object, "provider"), provider) || identity == "" {
+		return &blockedError{message: "NATIVE_BINDING: missing or different provider/identity"}
+	}
+	proofs := objectOrEmpty(getOrOf(object, "files", nil))
+	if !sameKeySet(proofs, nativeSourceFiles) {
+		return &blockedError{message: "EVIDENCE_MISSING: native source proofs absent"}
+	}
+	for name, bound := range proofs {
+		proof, err := fileProofOf(filepath.Join(directory, textOf(name)))
+		if err != nil {
+			return err
+		}
+		if !valuesEqual(proof, bound) {
+			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
+		}
+	}
+	return nil
+}
+
 // forEachSessionEvent streams this session's evidence events one line at a
 // time, rejecting mixed-session evidence (native_transport.session_events).
 // Only one decoded line is alive at a time: native-events.jsonl reaches tens

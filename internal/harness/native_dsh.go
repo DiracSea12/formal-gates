@@ -532,54 +532,14 @@ func dshCaptureBinding() (map[string]any, error) {
 // dshValidateBinding is the registry's validate_binding: the provider must
 // match and every bound file proof must still hold.
 func dshValidateBinding(binding any) error {
-	object, ok := binding.(map[string]any)
-	if !ok {
-		return fmt.Errorf("binding must be a JSON object")
-	}
-	if !valuesEqual(getOf(object, "provider"), "dsh") {
-		return &bindingError{message: "HOST_BINDING: provider differs"}
-	}
-	files := objectOrEmpty(getOrOf(object, "files", nil))
-	for name, bound := range files {
-		proof, err := fileProofOf(textOf(name))
-		if err != nil {
-			return err
-		}
-		if !valuesEqual(proof, bound) {
-			return &blockedError{
-				message: "HOST_CHANGED: bound native executable/script changed: " + textOf(name),
-			}
-		}
-	}
-	return nil
+	return validateNativeBinding(binding, "dsh")
 }
 
 // dshVerifySource is the registry's verify_source: provider/identity must
 // match, the proof set must be exactly the four evidence files, and each proof
 // must still hold against the directory.
 func dshVerifySource(directory string, source any) error {
-	object, ok := source.(map[string]any)
-	if !ok {
-		return fmt.Errorf("source must be a JSON object")
-	}
-	identity, _ := getOf(object, "identity").(string)
-	if !valuesEqual(getOf(object, "provider"), "dsh") || identity == "" {
-		return &blockedError{message: "NATIVE_BINDING: missing or different provider/identity"}
-	}
-	proofs := objectOrEmpty(getOrOf(object, "files", nil))
-	if !sameKeySet(proofs, nativeSourceFiles) {
-		return &blockedError{message: "EVIDENCE_MISSING: native source proofs absent"}
-	}
-	for name, bound := range proofs {
-		proof, err := fileProofOf(filepath.Join(directory, textOf(name)))
-		if err != nil {
-			return err
-		}
-		if !valuesEqual(proof, bound) {
-			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
-		}
-	}
-	return nil
+	return verifyNativeSource(directory, source, "dsh")
 }
 
 func sameKeySet(object map[string]any, names []string) bool {

@@ -138,27 +138,6 @@ const zcodeResultFrameError = "RuntimeBlocked: NATIVE_RESULT:"
 // variable only so the bounded-wait tests can shorten it.
 var zcodeTurnBudget = 900 * time.Second
 
-// zcodeTruthy is Python truthiness over one decoded JSON value, used where the
-// reference's `or`/`if` decisions are part of the observable contract.
-func zcodeTruthy(v any) bool {
-	switch typed := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case json.Number:
-		rational, ok := new(big.Rat).SetString(typed.String())
-		return ok && rational.Sign() != 0
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	}
-	return true
-}
-
 // zcodeIsRegularFile mirrors Path.is_file(): follows symlinks, refuses
 // directories and anything unreadable.
 func zcodeIsRegularFile(path string) bool {
@@ -369,7 +348,10 @@ func zcodeRequestAuth(provider string) string {
 
 // zcodeClient is ZCode's adapter state around the shared transport: the bound
 // session identity and the events its notification hook committed (the Python
-// Client's identity and events attributes).
+// Client's identity and events attributes). The events slice is a receive
+// buffer, not a transcript: consumed events are released as the execution
+// loop reads them (see dropConsumedEvents), and native-events.jsonl is the
+// only durable record of the whole turn.
 type zcodeClient struct {
 	client    *nativeClient
 	directory string
@@ -505,6 +487,36 @@ func (z *zcodeClient) notification(message any) {
 	file.WriteString(string(line) + "\n")
 }
 
+// dropConsumedEvents drops the events the execution loop has already
+// consumed. The loop clears each slot as it reads the event (the durable copy
+// is the native-events.jsonl line the notification hook wrote on arrival), and
+// once that cleared prefix is at least as long as the not-yet-consumed tail
+// this moves the tail to the front of the retained slice and returns the
+// adjusted cursor. Compacting only then keeps the work amortized O(1) per
+// event -- every element is cleared once and moved at most once before it is
+// consumed -- so a turn that streams thousands of events retains only the
+// events that have arrived and not yet been read, never the whole transcript.
+// Nothing observable depends on the retained slice: the terminal decision
+// reads the event values and the receipt is materialized from
+// native-events.jsonl.
+func (z *zcodeClient) dropConsumedEvents(position int) int {
+	if position <= 0 || position < len(z.events)-position {
+		return position
+	}
+	if position >= len(z.events) {
+		z.events = z.events[:0]
+		return 0
+	}
+	live := copy(z.events, z.events[position:])
+	// The slots behind the shortened slice still point into the old contents;
+	// a slice's whole backing array stays reachable, so they are cleared too.
+	for index := live; index < len(z.events); index++ {
+		z.events[index] = nil
+	}
+	z.events = z.events[:live]
+	return 0
+}
+
 // --- the selection mechanism (contract item 6) ---------------------------------
 
 // zcodeReference is the exact provider/model reference a bound selection names
@@ -559,8 +571,11 @@ func zcodeSelection(snapshot any) map[string]any {
 	}
 	settings := objectOrEmpty(getOf(snapshot, "settings"))
 	thought := objectOrEmpty(getOrOf(settings, "thoughtLevel", nil))
+	// The effort is the host's own level name (a string the likes of "low"),
+	// or nothing: a host that reports no level -- or a value that is not a
+	// level name -- expresses no preference here.
 	effort := any("")
-	if current := getOrOf(thought, "current", ""); zcodeTruthy(current) {
+	if current, isString := getOrOf(thought, "current", "").(string); isString && current != "" {
 		effort = current
 	}
 	return map[string]any{"model": modelText, "reasoning_effort": effort}
@@ -658,15 +673,17 @@ func zcodeBoundModel(snapshot any, wanted map[string]any, effort string) map[str
 		return nil
 	}
 	reported := zcodeAdvertisedReasoning(snapshot, wanted)
-	level := any(effort)
-	if !zcodeTruthy(level) {
-		level = reported["default"]
+	// The level is the requested effort, else the host's own advertised
+	// default; either way it is a level name, and "" names none.
+	level := effort
+	if level == "" {
+		level, _ = reported["default"].(string)
 	}
 	out := map[string]any{}
 	for key, value := range wanted {
 		out[key] = value
 	}
-	if zcodeTruthy(level) {
+	if level != "" {
 		out["options"] = map[string]any{"reasoningLevel": level}
 	}
 	return out
@@ -1042,14 +1059,16 @@ func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort
 			if err != nil {
 				return nil, err
 			}
-			if zcodeTruthy(getOf(changed, "settings")) {
+			// The readback the host confirms with: a settings block with
+			// entries. An absent or empty one keeps the snapshot's selection.
+			if settings, isObject := getOf(changed, "settings").(map[string]any); isObject && len(settings) > 0 {
 				configured = zcodeSelection(changed)
 			}
 			if textOf(configured["model"]) != wantedText {
 				return nil, &blockedError{message: "ZCODE_CONFIG: requested selection was not applied"}
 			}
 		}
-	} else if !zcodeTruthy(configured["model"]) {
+	} else if configured["model"] == "" {
 		return nil, &blockedError{message: "ZCODE_CONFIG: native selected model missing"}
 	}
 	if effort != "" && !valuesEqual(configured["reasoning_effort"], effort) {
@@ -1061,7 +1080,8 @@ func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort
 		if err != nil {
 			return nil, err
 		}
-		if zcodeTruthy(getOf(changed, "settings")) {
+		// The readback the host confirms with: a settings block with entries.
+		if settings, isObject := getOf(changed, "settings").(map[string]any); isObject && len(settings) > 0 {
 			configured = zcodeSelection(changed)
 		}
 		if !valuesEqual(configured["reasoning_effort"], effort) {
@@ -1145,13 +1165,15 @@ func zcodeMaterializeSource(directory string) (map[string]any, error) {
 			return err
 		}
 		if valuesEqual(eventType, "turn.started") {
-			if zcodeTruthy(turn) || getOf(event, "turnId") == nil {
+			// turn is this input's turn id -- a host string; "" means no start
+			// was recorded yet.
+			if turn != "" || getOf(event, "turnId") == nil {
 				return &blockedError{message: "ZCODE_BINDING: duplicate/missing start"}
 			}
 			turn = getOf(event, "turnId")
 		}
 		if valuesEqual(eventType, "turn.failed") || valuesEqual(eventType, "turn.completed") {
-			if !zcodeTruthy(turn) || !valuesEqual(turn, getOf(event, "turnId")) || end != nil {
+			if turn == "" || !valuesEqual(turn, getOf(event, "turnId")) || end != nil {
 				return &blockedError{message: "ZCODE_BINDING: terminal mismatch"}
 			}
 			if !valuesEqual(eventType, "turn.completed") || !valuesEqual(getOf(payload, "resultType"), "success") {
@@ -1490,7 +1512,9 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	if err != nil {
 		return nil, err
 	}
-	if !valuesEqual(getOf(ack, "sessionId"), identity) || !zcodeTruthy(getOf(ack, "accepted")) {
+	// The host's acknowledgement of the input: its own boolean, and true.
+	accepted, _ := getOf(ack, "accepted").(bool)
+	if !valuesEqual(getOf(ack, "sessionId"), identity) || !accepted {
 		return nil, &blockedError{message: "ZCODE_BINDING: input not accepted"}
 	}
 	// The bounded turn wait: events are consumed as they arrive, one receive at
@@ -1503,6 +1527,9 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	for !terminal && time.Now().Before(deadline) {
 		for position < len(client.events) {
 			event := client.events[position]
+			// The evidence copy in native-events.jsonl is the durable record;
+			// this retained slot is released the moment the event is consumed.
+			client.events[position] = nil
 			position++
 			if !valuesEqual(getOf(event, "sessionId"), identity) {
 				return nil, &blockedError{message: "ZCODE_BINDING: event from another session"}
@@ -1518,6 +1545,10 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 			}
 		}
 		if !terminal {
+			// The consumed prefix is dropped before waiting, so a long
+			// streaming turn keeps only the events that have arrived and not
+			// yet been read.
+			position = client.dropConsumedEvents(position)
 			wait := time.Until(deadline)
 			if wait > 120*time.Second {
 				wait = 120 * time.Second
@@ -1557,52 +1588,12 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 // zcodeValidateBinding is the registry's validate_binding for zcode: the
 // provider must match and every bound file proof must still hold.
 func zcodeValidateBinding(binding any) error {
-	object, ok := binding.(map[string]any)
-	if !ok {
-		return fmt.Errorf("binding must be a JSON object")
-	}
-	if !valuesEqual(getOf(object, "provider"), "zcode") {
-		return &bindingError{message: "HOST_BINDING: provider differs"}
-	}
-	files := objectOrEmpty(getOrOf(object, "files", nil))
-	for name, bound := range files {
-		proof, err := fileProofOf(textOf(name))
-		if err != nil {
-			return err
-		}
-		if !valuesEqual(proof, bound) {
-			return &blockedError{
-				message: "HOST_CHANGED: bound native executable/script changed: " + textOf(name),
-			}
-		}
-	}
-	return nil
+	return validateNativeBinding(binding, "zcode")
 }
 
 // zcodeVerifySource is the registry's verify_source for zcode.
 func zcodeVerifySource(directory string, source any) error {
-	object, ok := source.(map[string]any)
-	if !ok {
-		return fmt.Errorf("source must be a JSON object")
-	}
-	identity, _ := getOf(object, "identity").(string)
-	if !valuesEqual(getOf(object, "provider"), "zcode") || identity == "" {
-		return &blockedError{message: "NATIVE_BINDING: missing or different provider/identity"}
-	}
-	proofs := objectOrEmpty(getOrOf(object, "files", nil))
-	if !sameKeySet(proofs, nativeSourceFiles) {
-		return &blockedError{message: "EVIDENCE_MISSING: native source proofs absent"}
-	}
-	for name, bound := range proofs {
-		proof, err := fileProofOf(filepath.Join(directory, textOf(name)))
-		if err != nil {
-			return err
-		}
-		if !valuesEqual(proof, bound) {
-			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
-		}
-	}
-	return nil
+	return verifyNativeSource(directory, source, "zcode")
 }
 
 // nativeImplementation is one execution adapter's Go entry points: the Go
