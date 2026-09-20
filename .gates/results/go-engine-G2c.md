@@ -64,6 +64,13 @@ HARNESS_COMPLETE、0 中断、exit 0**；7 个原生作业 argv 全为 Go 窄命
 Python 路径。重取＝一次授权 `native_multihost --provider zcode`（7 角色完整流程，绑定身份
 `3ce9dd2c…`；zcode 普通会话上下文直接可跑，无需 launchd）。**未获机主授权前不消费任何真实模型调用**。
 
+## 评审三项 P3 修复（2026-09-20，轻装随修）
+
+外部复审 PASS 后的三条非阻塞建议已修（一次提交）：①回合循环按消费进度释放事件
+（1536 事件流实测：保留模式 ~28.1MB vs 释放后 ≈0；落盘证据与终态语义不变）；②
+`zcodeTruthy` 九个调用点全部显式化后删除（含 big.Rat 分支）；③binding/source 证明校验
+提取为同包共享函数、双适配器一行委托（纯机械）。harness/race/Python 283 全绿（主代理亲跑）。
+
 ## 有界差异
 
 八条全量见 `go-engine-G2c.json`（prompt schema canonical、错误内嵌 JSON canonical、native-events 行
