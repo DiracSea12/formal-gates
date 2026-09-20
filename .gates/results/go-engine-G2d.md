@@ -66,3 +66,18 @@
 ## 第三轮复审（2026-09-20，PASS 附一项 P2，已修 `692dab3`→amend 收录记录）
 
 第三轮（对象 `6fa5a63`）结论 PASS，附非阻塞 P2：DSH 工具进度判据读 `update.content.toolCallId`，真实宿主（dsh-acp toolCallUpdate/toolResultUpdate）把 `toolCallId` 放 update 顶层——真实进度永不匹配、observed 滞后到 prompt 响应。主代理 10 秒 grep 亲核真实源码坐实后最小范围派发，3 分钟交付：判据改读顶层 `toolCallId` 并限定 `sessionUpdate∈{tool_call, tool_call_update}`（逐一核对真实宿主，未放宽），两处测试夹具与注释同步改真实形状。窄验证：r3 夹具 5/5 全绿（含 TestReviewDSHRealToolProgress）、harness 包全绿、差分 59 全绿、gofmt 干净。零模型调用。DSH 实机/实机分支覆盖缺口不变。
+
+## 双宿主实机关死（2026-09-20，机主授权"先跑"）
+
+**zcode 补验**（`g2d-zcode-probe-20260920T5-deny` / `T6-userinput`，各 2 次模型请求）：
+- **T5 deny**：build 模式下真 `interaction/requestPermission` 持有 ≥40s（发现 25s＋刻意 15s）→ `--option deny` 投递 → bash 被拒（标记缺失）、模型如实报 `{"done":false}`、同回合完成、pending→observed。
+- **T6 requestUserInput**：真 `interaction/requestUserInput`（AskUserQuestion 工具触发）——R3 修复在实机直接可见：实际问题正文 "Which color should the probe use?" 进 summary、完整 `questions` 数组（header/逐问选项 value+label+description）原样持久化；`--option red` 单问题 value 匹配投递 → 模型回报 `{"chosen":"red","done":true}`、pending→observed。
+
+**DSH 实机**（`g2d-dsh-probe-20260920/{allow,allow-r2,deny-r2}`，各 2 次模型请求、usage `turn:1` 佐证同回合；宿主已漂至 `dsh@0.1.5-alpha.2`，绑定按新 bin.js 路径重建）：
+- 首跑 `allow` 未触发询问——模型判断 /private/tmp 在 workspace-write 沙箱内可写、未请求升级（其 reasoning 留在 native-events 里），命令直跑成功；属提示词设计问题非缺陷。改靶至 HOME 根＋明确升级指令后：
+- **allow-r2**：真 `session/request_permission` 持有 ≥35s（发现 5s＋刻意 30s）→ `allow-once` 投递 → 升级后写入 HOME 标记、`{"done":true}`、pending→observed。
+- **deny-r2**：`reject-once` 投递 → 工具被拒（标记缺失）、`{"done":false}`、pending→observed。
+
+**环境事实（有界）**：本日 `sandbox-exec` 在本会话进程树内可用（G2a 时代被拒），故无需 launchd runner/工作树副本、直接真树运行；此为环境行为，下次实机若再被拒则回到 launchd 做法。触发询问的确定条件＝模型请求沙箱升级（默认策略 ask；`/private/tmp` 属 workspace-write 可写区不会触发）。
+
+**离线已证＋实机补验对照**：允许（两宿主实机）、拒绝（两宿主实机）、userInput（zcode 实机）、取消/断连/竞态/预算暂停（假宿主离线）。**G2d 双宿主实机验收就此关闭。** 本批共 5 作业、约 10 次模型请求。

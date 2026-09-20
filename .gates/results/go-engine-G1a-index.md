@@ -344,4 +344,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-20（第十轮，G2d 第二轮评审返修）】**第二轮评审（对象 `c754dc6`）确认 R1/R3/R5 关闭，剩 F1/P1（双宿主同会话元数据——zcode titleUpdated、DSH available_commands_update——仍伪造 observed）与 F2/P2（run 级投影裁掉 Go 侧新保存的正文键），两项主代理均先亲复现再派发，`c438713` 收口：判据收紧到回执/进度语义（zcode＝permission.resolved 按 T4 真迹字段／tool.updated／turn 终态，DSH＝在途 prompt 响应或命名 toolCallId 的工具卡进度；其余停 delivered）；投影改排除法透传（正文键单一出处在 Go 适配器）。亲验：r2 夹具 4/4 全绿（含 150ms 时序新用例）、r1 夹具 3/4（唯一红＝其 R2 旧用例结构上任何正确实现都不可能通过，评审自己在 r2 已重写该检查，详见 G2d 记录）、差分 59、Python 288、race、全仓零失败。现行结论以 `go-engine-G2d.md` 为准。
 
+> **【2026-09-20（第十一轮，G2d 双宿主实机关死）】**机主授权后补齐全部实机分支：zcode deny（T5）与 requestUserInput（T6，问题正文/questions 原样持久化在实机可见）；DSH allow/deny（allow-r2/deny-r2，宿主已漂至 alpha.2、绑定重建；首跑未触发系提示词靶点在沙箱可写区，改 HOME＋升级指令后全通）。全部同回合完成、pending→observed、拒答后标记缺失/模型如实报 false。本日 sandbox-exec 在会话内可用故免 launchd。累计 G2d 实机 5 作业约 10 次模型请求。**G2d 至此实机+离线全证据链关闭，下一单元 G3a（领域路线）解锁。**现行结论以 `go-engine-G2d.md` 为准。
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
