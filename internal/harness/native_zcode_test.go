@@ -873,6 +873,45 @@ func TestZcodeNotificationFilter(t *testing.T) {
 	}
 }
 
+// TestZcodeInteractionObserved pins the attribution rule's truth table: only
+// the host's permission.resolved receipt naming the held requestId, a
+// tool.updated progress event naming the held toolCallId, or a turn terminal
+// event naming the held turnId confirm a delivered hold; same-session
+// metadata (titleUpdated, session.updated) and telemetry never do.
+func TestZcodeInteractionObserved(t *testing.T) {
+	hold := &nativePendingHold{params: map[string]any{
+		"requestId": "req-1", "sessionId": "s-1", "turnId": "t-1", "toolCallId": "tc-1"}}
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{"receipt names the held request", `{"method": "session/event", "params": {"sessionId": "s-1", "seq": 57, "type": "permission.resolved", "turnId": "t-1", "payload": {"decision": "allow", "reason": "Approved once", "requestId": "req-1", "toolCallId": "tc-1"}}}`, true},
+		{"receipt names another request", `{"method": "session/event", "params": {"sessionId": "s-1", "type": "permission.resolved", "payload": {"requestId": "req-2", "toolCallId": "tc-1"}}}`, false},
+		{"tool progress names the held call", `{"method": "session/event", "params": {"sessionId": "s-1", "seq": 58, "type": "tool.updated", "turnId": "t-1", "payload": {"kind": "started", "toolCallId": "tc-1", "toolName": "Bash"}}}`, true},
+		{"tool progress names another call", `{"method": "session/event", "params": {"sessionId": "s-1", "turnId": "t-1", "type": "tool.updated", "payload": {"toolCallId": "tc-2"}}}`, false},
+		{"turn terminal names the held turn", `{"method": "session/event", "params": {"sessionId": "s-1", "seq": 71, "type": "turn.completed", "turnId": "t-1", "payload": {"inputId": "in-1", "resultType": "success"}}}`, true},
+		{"turn terminal names another turn", `{"method": "session/event", "params": {"sessionId": "s-1", "type": "turn.completed", "turnId": "t-2", "payload": {"inputId": "in-1"}}}`, false},
+		{"turn start is not terminal", `{"method": "session/event", "params": {"sessionId": "s-1", "type": "turn.started", "turnId": "t-1", "payload": {"inputId": "in-1"}}}`, false},
+		{"title update names session and turn", `{"method": "session/event", "params": {"sessionId": "s-1", "seq": 4, "type": "session.titleUpdated", "turnId": "t-1", "payload": {"title": "t", "source": "first_input"}}}`, false},
+		{"settings update of the same session", `{"method": "session/event", "params": {"sessionId": "s-1", "type": "session.updated", "payload": {"mode": "build"}}}`, false},
+		{"telemetry is not a session event", `{"method": "process/mcpTelemetry", "params": {"event": "heartbeat"}}`, false},
+	}
+	for _, test := range cases {
+		if got := zcodeInteractionObserved(hold, decodeTestJSON(t, test.message).(map[string]any)); got != test.want {
+			t.Errorf("%s: got %v", test.name, got)
+		}
+	}
+	// A user-input hold carries no toolCallId, so tool progress cannot be
+	// attributed to it even when it names some call.
+	userInput := &nativePendingHold{params: map[string]any{
+		"requestId": "ui-1", "sessionId": "s-1", "turnId": "t-1"}}
+	message := decodeTestJSON(t, `{"method": "session/event", "params": {"sessionId": "s-1", "type": "tool.updated", "payload": {"toolCallId": "tc-1"}}}`).(map[string]any)
+	if zcodeInteractionObserved(userInput, message) {
+		t.Error("tool progress must not confirm a hold without a toolCallId")
+	}
+}
+
 // zcodeStreamEvent renders one streamed assistant/message notification whose
 // payload is unique per sequence (the retention measurements count payloads).
 func zcodeStreamEvent(seq int) map[string]any {

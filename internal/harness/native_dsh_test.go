@@ -614,3 +614,31 @@ func TestRunNativeSessionUnavailableRecord(t *testing.T) {
 		t.Fatalf("stderr = %q", errout.String())
 	}
 }
+
+// TestDSHObservesDelivered pins the attribution rule's truth table: a
+// session/update confirms a delivered hold only when its tool-card update
+// names the held request's toolCallId; metadata updates (available commands,
+// message chunks) of the same session never do; a plain response is the
+// in-flight prompt answering and always does.
+func TestDSHObservesDelivered(t *testing.T) {
+	hold := &nativePendingHold{params: map[string]any{
+		"sessionId": "s-1", "toolCall": map[string]any{"toolCallId": "call-9"}}}
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{"tool card names the held call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9", "title": "Write marker", "kind": "execute", "status": "in_progress"}}}}`, true},
+		{"tool card names another call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-10", "status": "completed"}}}}`, false},
+		{"available commands update", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": []}}}`, false},
+		{"message chunk of the same session", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "agent_message_chunk", "content": "text chunk"}}}`, false},
+		{"tool card of another session", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-2", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9"}}}}`, false},
+		{"other notification", `{"jsonrpc": "2.0", "method": "session/status", "params": {"sessionId": "s-1"}}`, false},
+		{"plain response answers the prompt", `{"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}}`, true},
+	}
+	for _, test := range cases {
+		if got := dshObservesDelivered(hold, decodeTestJSON(t, test.message).(map[string]any)); got != test.want {
+			t.Errorf("%s: got %v", test.name, got)
+		}
+	}
+}

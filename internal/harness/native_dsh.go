@@ -95,17 +95,30 @@ var dshPermissionInteraction = nativeInteractionSpec{
 }
 
 // dshObservesDelivered is DSH's attribution rule for a delivered hold's
-// continuation (hooks.observes): a session/update of the held session, or a
-// plain response - while a hold is delivered this adapter has exactly one
-// request in flight, that session's prompt, so a response arriving then
-// answers it. Notifications that name no session are not attributable.
+// continuation (hooks.observes). Two kinds of fact may confirm it:
+//
+//   - A session/update of the held session whose tool-card update names the
+//     held request's toolCallId (ACP's tool_call update: params.update.content
+//     carries the toolCallId). Metadata updates - available_commands_update,
+//     mode or title traffic - name no tool call and never confirm.
+//   - A plain response frame. While a hold is delivered this adapter's request
+//     loop has exactly one request in flight - that session's prompt, because
+//     request sends one frame and blocks on its matching reply - so a response
+//     arriving then is the original operation answering.
 func dshObservesDelivered(hold *nativePendingHold, message map[string]any) bool {
-	if isLiveMethod(getOf(message, "method")) {
-		return valuesEqual(message["method"], "session/update") &&
-			valuesEqual(getOf(objectOrEmpty(message["params"]), "sessionId"),
-				getOf(hold.params, "sessionId"))
+	if !isLiveMethod(getOf(message, "method")) {
+		return true
 	}
-	return true
+	if !valuesEqual(message["method"], "session/update") {
+		return false
+	}
+	params := objectOrEmpty(getOf(message, "params"))
+	if !valuesEqual(getOf(params, "sessionId"), getOf(hold.params, "sessionId")) {
+		return false
+	}
+	toolCallID, _ := getOf(objectOrEmpty(getOf(hold.params, "toolCall")), "toolCallId").(string)
+	content := objectOrEmpty(getOf(objectOrEmpty(getOf(params, "update")), "content"))
+	return toolCallID != "" && valuesEqual(getOf(content, "toolCallId"), toolCallID)
 }
 
 // dshHooks is DSH's transport configuration: the host decides when a turn

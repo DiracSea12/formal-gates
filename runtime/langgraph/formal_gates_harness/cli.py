@@ -172,9 +172,13 @@ def native_pending_interactions(store):
         if not isinstance(records,list):continue
         for record in records:
             if isinstance(record,dict) and record.get('status')=='pending':
-                collected.append({'job':path.parent.name,'request_id':record.get('request_id'),
-                                  'method':record.get('method'),'summary':record.get('summary'),
-                                  'options':record.get('options') or []})
+                # Body keys (toolName/input/toolCall/prompt/questions) are the Go-side
+                # adapter's choice; the saved record is passed through verbatim, minus
+                # the lifecycle bookkeeping, instead of being re-listed here.
+                projected={key:value for key,value in record.items()
+                           if key not in ('status','connection','updated_at')}
+                projected['job']=path.parent.name
+                collected.append(projected)
     return collected
 
 def status_projection(store,app,config):

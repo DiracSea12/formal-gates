@@ -283,6 +283,51 @@ func TestInteractionDSHJobRefusesBadAnswers(t *testing.T) {
 	}
 }
 
+// TestInteractionDSHMetadataMustNotConfirm pins the metadata side of the
+// attribution rule end to end: after the answer, an available_commands_update
+// of the held session keeps the decision at delivered, and the tool card's own
+// progress (the update naming the held tool call) confirms it before the
+// prompt response returns.
+func TestInteractionDSHMetadataMustNotConfirm(t *testing.T) {
+	steps := dshPermissionSteps(`"outcome":"selected"`)
+	extra := []peerStep{
+		{On: `"outcome":"selected"`, Send: `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": []}}}`},
+		{On: `"outcome":"selected"`, SleepSecs: 1},
+		{On: `"outcome":"selected"`, Send: `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9", "title": "Write marker", "kind": "execute", "status": "in_progress"}}}}`},
+	}
+	steps = append(steps[:3:3], append(extra, steps[3:]...)...)
+	code, _, directory := runDSHWithAnswerer(t, steps, "41",
+		func(directory string, errout *bytes.Buffer) int {
+			code := NativeRespond([]string{"--job", directory, "--request", "41", "--option", "allow-once"}, errout)
+			// The trace records routing only, so the first session/update line
+			// is the metadata one by the script's order.
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				if body, err := os.ReadFile(filepath.Join(directory, "protocol.jsonl")); err == nil &&
+					strings.Contains(string(body), `"method":"session/update"`) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("metadata update never reached the transport")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(150 * time.Millisecond)
+			if record := pendingStatus(t, directory, "41"); record == nil || textOf(record["status"]) != "delivered" {
+				t.Fatalf("available_commands_update must not confirm the decision: %v", record)
+			}
+			// The tool card's own progress completes the fact, before the
+			// prompt response returns.
+			waitStatusContent(t, directory, `"status":"observed"`)
+			return code
+		})
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if record := pendingStatus(t, directory, "41"); record == nil || textOf(record["status"]) != "observed" {
+		t.Fatalf("pending record = %v", record)
+	}
+}
+
 // zcodePermissionFrame is the reverse permission request the fake app-server
 // sends; the option responses are the decision objects the host itself
 // declared for them (reverse-read shape: each option carries its response).
@@ -296,9 +341,11 @@ func zcodePermissionFrame(frameID, requestID, toolName string) string {
 
 // zcodeUserInputFrame is the reverse structured user-input request with one
 // single question whose options carry a value (the reverse-read FBi shape).
+// The turnId is the FBi schema's own optional member: the host names the turn
+// the question belongs to, which is what attributes the hold's continuation.
 func zcodeUserInputFrame(frameID, requestID, question string) string {
 	return `{"id": "` + frameID + `", "method": "interaction/requestUserInput", "params": {"requestId": "` + requestID +
-		`", "sessionId": "s-1", "prompt": "Pick one", "questions": [{"question": "` + question +
+		`", "sessionId": "s-1", "turnId": "t-1", "prompt": "Pick one", "questions": [{"question": "` + question +
 		`", "header": "Choice", "options": [{"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}]}]}}`
 }
 
@@ -589,17 +636,21 @@ func TestInteractionZcodeBudgetSurvivesLateAnswer(t *testing.T) {
 }
 
 // TestInteractionZcodeUnrelatedTrafficMustNotConfirm pins the attribution
-// rule: after the answer, host telemetry that names no session is consumed
-// but never advances the decision past delivered; only the held request's own
-// turn traffic does, once it arrives.
+// rule: after the answer, host telemetry that names no session and same-session
+// metadata (a title update) are consumed but never advance the decision past
+// delivered; only the held request's own confirmation events do, once they
+// arrive.
 func TestInteractionZcodeUnrelatedTrafficMustNotConfirm(t *testing.T) {
 	steps := func(inputID string) []peerStep {
 		script := zcodeInteractionSteps(zcodePermissionFrame("server-1", "req-1", "Bash"),
 			`"decision":"allow"`)(inputID)
-		// After the reply the host first emits an MCP telemetry heartbeat and
-		// holds the real turn events back for two more seconds.
+		// After the reply the host first emits an MCP telemetry heartbeat and a
+		// same-session title update, then holds the real turn events back for
+		// two more seconds.
 		unrelated := []peerStep{
 			{On: `"decision":"allow"`, Send: `{"method": "process/mcpTelemetry", "params": {"event": "heartbeat"}}`},
+			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 0, "session.titleUpdated", "",
+				`{"title": "Background title update"}`)},
 			{On: `"decision":"allow"`, SleepSecs: 2},
 		}
 		return append(script[:4:4], append(unrelated, script[4:]...)...)
@@ -607,22 +658,25 @@ func TestInteractionZcodeUnrelatedTrafficMustNotConfirm(t *testing.T) {
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
 			code := NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
-			// Wait until the transport has consumed the telemetry line, then
-			// stay inside the two-second window it bought: the decision must
+			// Wait until the transport has consumed both unrelated lines, then
+			// stay inside the two-second window they bought: the decision must
 			// still be delivered, not observed.
+			events := filepath.Join(directory, "native-events.jsonl")
 			for deadline := time.Now().Add(30 * time.Second); ; {
-				trace := readTestFile(t, filepath.Join(directory, "protocol.jsonl"))
-				if strings.Contains(trace, "process/mcpTelemetry") {
+				trace, traceErr := os.ReadFile(filepath.Join(directory, "protocol.jsonl"))
+				body, eventsErr := os.ReadFile(events)
+				if traceErr == nil && strings.Contains(string(trace), "process/mcpTelemetry") &&
+					eventsErr == nil && strings.Contains(string(body), "session.titleUpdated") {
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatalf("telemetry never reached the transport: %s", trace)
+					t.Fatalf("unrelated traffic never reached the transport: %s %s", traceErr, eventsErr)
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
 			time.Sleep(500 * time.Millisecond)
 			if record := pendingStatus(t, directory, "req-1"); record == nil || textOf(record["status"]) != "delivered" {
-				t.Fatalf("unrelated telemetry must not confirm the decision: %v", record)
+				t.Fatalf("unrelated traffic must not confirm the decision: %v", record)
 			}
 			// The held request's own turn events land after the window, and
 			// only they complete the fact.
@@ -634,6 +688,58 @@ func TestInteractionZcodeUnrelatedTrafficMustNotConfirm(t *testing.T) {
 	}
 	if record := pendingStatus(t, scenario.directory, "req-1"); record == nil || textOf(record["status"]) != "observed" {
 		t.Fatalf("pending record = %v", record)
+	}
+}
+
+// TestInteractionZcodeReceiptConfirms pins the receipt path of the attribution
+// rule with the real host vocabulary: after the answer, a same-session title
+// update keeps the decision at delivered, and the host's own
+// permission.resolved receipt (the T4 trace's shape) confirms it before any
+// turn event has arrived.
+func TestInteractionZcodeReceiptConfirms(t *testing.T) {
+	steps := func(inputID string) []peerStep {
+		return []peerStep{
+			{Send: zcodePermissionFrame("server-1", "req-1", "Bash")},
+			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
+			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
+			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
+			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 0, "session.titleUpdated", "",
+				`{"title": "Background title update"}`)},
+			{On: `"decision":"allow"`, SleepSecs: 1},
+			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 1, "permission.resolved", "t-1",
+				`{"decision": "allow", "reason": "Approved once", "requestId": "req-1", "toolCallId": "tc-1"}`)},
+			{On: `"decision":"allow"`, SleepSecs: 2},
+			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 2, "turn.started", "t-1",
+				zcodeTurnPayload(inputID, ""))},
+			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 3, "turn.completed", "t-1",
+				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
+			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
+		}
+	}
+	code, errout, _ := runZcodeWithAnswerer(t, steps, "req-1",
+		func(directory string, errout *bytes.Buffer) int {
+			code := NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			events := filepath.Join(directory, "native-events.jsonl")
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				if body, err := os.ReadFile(events); err == nil &&
+					strings.Contains(string(body), "session.titleUpdated") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("title update never reached the transport: %s", readTestFile(t, events))
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(150 * time.Millisecond)
+			if record := pendingStatus(t, directory, "req-1"); record == nil || textOf(record["status"]) != "delivered" {
+				t.Fatalf("a title update must not confirm the decision: %v", record)
+			}
+			// The receipt alone - before any turn event - completes the fact.
+			waitStatusContent(t, directory, `"status":"observed"`)
+			return code
+		})
+	if code != 0 || errout != "" {
+		t.Fatalf("code = %d stderr = %q", code, errout)
 	}
 }
 

@@ -518,20 +518,43 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 }
 
 // zcodeInteractionObserved is zcode's attribution rule for a delivered hold's
-// continuation (hooks.observes): a session/event notification that names the
-// held request's session, turn or tool call - the session's turn lifecycle
-// traffic. Process telemetry and anything without such a binding is not
-// attributable and leaves the decision honestly at delivered.
+// continuation (hooks.observes): only a session/event that is itself a fact
+// about the held request may confirm it. Three kinds are, with the field
+// spellings of the real T4 trace,
+// .harness/validation/g2d-zcode-probe-20260920T4/native-events.jsonl:
+//
+//   - permission.resolved, the host's own receipt for the answered request:
+//     payload {decision, reason, requestId, toolCallId} (T4 seq 57), confirmed
+//     when payload.requestId is the held request's requestId.
+//   - tool.updated, the tool call's progress: payload names the executing
+//     toolCallId (T4 seq 58-60), confirmed when it is the held request's
+//     toolCallId.
+//   - turn.completed / turn.failed, the turn's terminal events (T4 seq 71),
+//     confirmed when the event's turnId is the held request's turnId.
+//
+// Everything else - session.titleUpdated and session.updated metadata,
+// available-command changes, model streaming, telemetry - is same-session
+// traffic that names no held request, tool call or turn outcome, and leaves
+// the decision honestly at delivered.
 func zcodeInteractionObserved(hold *nativePendingHold, message map[string]any) bool {
 	if !valuesEqual(message["method"], "session/event") {
 		return false
 	}
 	event := objectOrEmpty(message["params"])
-	for _, key := range []string{"sessionId", "turnId", "toolCallId"} {
-		value, isString := getOf(hold.params, key).(string)
-		if isString && value != "" && valuesEqual(getOf(event, key), value) {
-			return true
-		}
+	payload := objectOrEmpty(getOrOf(event, "payload", map[string]any{}))
+	// owns matches one of the held request's own identity values (a non-empty
+	// string in the request params) against the event's value for it.
+	owns := func(held, event any) bool {
+		id, isString := held.(string)
+		return isString && id != "" && valuesEqual(event, id)
+	}
+	switch textOf(getOf(event, "type")) {
+	case "permission.resolved":
+		return owns(getOf(hold.params, "requestId"), getOf(payload, "requestId"))
+	case "tool.updated":
+		return owns(getOf(hold.params, "toolCallId"), getOf(payload, "toolCallId"))
+	case "turn.completed", "turn.failed":
+		return owns(getOf(hold.params, "turnId"), getOf(event, "turnId"))
 	}
 	return false
 }

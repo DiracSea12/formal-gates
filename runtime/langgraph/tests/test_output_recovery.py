@@ -95,6 +95,16 @@ class NativeInteractionProjection(unittest.TestCase):
                'options': [{'optionId': 'allow_once', 'kind': 'allow_once'}],
                'status': 'pending', 'updated_at': '2026-09-20T03:04:05Z'}
     RESOLVED = {**PENDING, 'request_id': 'req-0', 'status': 'invalidated'}
+    # Body-bearing records in pendingRecord's exact shape: the host payload
+    # members the Go spec picked, under their own field names.
+    PERMISSION = {**PENDING, 'request_id': 'req-perm', 'toolName': 'Bash',
+                  'input': {'command': 'printf hello > result.txt'}}
+    QUESTIONS = {**PENDING, 'request_id': 'req-q', 'method': 'interaction/userInput',
+                 'options': [], 'prompt': 'Pick the next step',
+                 'questions': [{'question': 'Which keeper?',
+                                'options': [{'label': 'ship'}, {'label': 'hold'}]},
+                               {'question': 'Add a note?',
+                                'options': [{'label': 'none'}]}]}
     # WAL-mode readers may touch the sqlite coordination files; the projection
     # itself must change nothing (the test_checkpoint_startup discipline).
     IGNORED = {'checkpoints.sqlite-wal', 'checkpoints.sqlite-shm'}
@@ -128,7 +138,9 @@ class NativeInteractionProjection(unittest.TestCase):
             root = Path(tmp).resolve()
             job = root / 'jobs' / 'active-job'; job.mkdir(parents=True)
             # One open hold next to one invalidated hold: only the still-open
-            # question belongs in the projection.
+            # question belongs in the projection. PENDING carries no body keys,
+            # so the exact-equality below is also the older-record contract:
+            # absent body keys simply do not appear.
             atomic(job / 'interaction-pending.json', [self.RESOLVED, self.PENDING])
             projection = self.projected(root)
         self.assertEqual(projection['status'], 'WAITING_USER')
@@ -138,6 +150,25 @@ class NativeInteractionProjection(unittest.TestCase):
                            'method': 'interaction/requestPermission',
                            'summary': 'Bash: run a tool',
                            'options': [{'optionId': 'allow_once', 'kind': 'allow_once'}]}])
+
+    def test_pending_body_is_carried_through_verbatim(self):
+        # The projection passes the saved record through instead of clipping
+        # it to the fixed fields: the permission's toolName/input and the
+        # userInput's prompt/questions stay visible, per-question options
+        # included, in the order the file holds them.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            job = root / 'jobs' / 'active-job'; job.mkdir(parents=True)
+            atomic(job / 'interaction-pending.json', [self.PERMISSION, self.QUESTIONS])
+            projection = self.projected(root)
+        permission, questions = projection['native_interactions']
+        self.assertEqual(permission['toolName'], 'Bash')
+        self.assertEqual(permission['input'], {'command': 'printf hello > result.txt'})
+        self.assertEqual(questions['prompt'], 'Pick the next step')
+        self.assertEqual([q['question'] for q in questions['questions']],
+                         ['Which keeper?', 'Add a note?'])
+        self.assertEqual(questions['questions'][0]['options'],
+                         [{'label': 'ship'}, {'label': 'hold'}])
 
     def test_without_pending_records_the_projection_is_unchanged(self):
         # No open hold: a job directory whose holds are all resolved projects
