@@ -42,6 +42,11 @@ func TestMain(m *testing.M) {
 	if point := os.Getenv(envCrashPoint); point != "" {
 		crashChild(point) // never returns
 	}
+	// K2's decision scenarios use their own env and child (decisions_test.go);
+	// the K1 crash path above is untouched.
+	if scenario := os.Getenv(envK2Scenario); scenario != "" {
+		k2Child(scenario) // never returns
+	}
 	os.Exit(m.Run())
 }
 

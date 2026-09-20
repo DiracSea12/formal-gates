@@ -5,9 +5,10 @@
 // another short transaction that also appends the run event.  This file owns
 // directory ownership and durable state; runner.go owns the loop.
 //
-// K1 scope: single owner + task transactions + sequential execution + result
-// admission.  Decisions, native interactions, parallelism and generation
-// bumps arrive in later K units and are deliberately absent here.
+// K1 added the single owner, task transactions, sequential execution and
+// result admission; K2 adds process confirmations (decisions.go).  Native
+// interactions, parallelism and generation bumps arrive in later K units
+// and are deliberately absent.
 package runner
 
 import (
@@ -52,8 +53,9 @@ const (
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
-// (tasks.input_digest); version 1 databases are refused outright below.
-const schemaVersion = 2
+// (tasks.input_digest); version 3 adds the decisions gate table; version 1
+// databases are refused outright below.
+const schemaVersion = 3
 
 // Store is the durable state of one run plus exclusive ownership of its
 // directory.  Open acquires ownership, Close releases it; between the two,
@@ -202,10 +204,11 @@ func dsn(path string) string {
 		"&_txlock=immediate"
 }
 
-// schemaV2 is the final-shaped table set K1 actually reads and writes
-// (plan §7); decisions and native_interactions belong to later K units and
-// are not created here.  Columns follow this unit's real read paths —
-// nothing speculative.
+// schemaV2 is the accepted K1 baseline table set (plan §7), kept verbatim
+// because both the fresh-file and the v2→v3 migration paths build on it.
+// The v3 delta (decisions) is decisionsTable below; native_interactions
+// belongs to a later K unit.  Columns follow real read paths — nothing
+// speculative.
 var schemaV2 = []string{
 	// One row per run.  schema_version records the version the run was
 	// created under; user_version is the file-level migration marker.
@@ -280,8 +283,33 @@ var schemaV2 = []string{
 	)`,
 }
 
+// decisionsTable is the entire v3 delta: the process-confirmation gate of
+// plan §6.1/§7 — one row per (run, task, generation), created pending by
+// the run loop the first time it selects the gated task and consumed once
+// by Store.Answer.  revision/body_digest/options_json freeze the question
+// at creation: the row, not a later Run's Confirm fields, defines the
+// gate.  answer and answered_at stay NULL until the single
+// pending→answered transition, in the style of invocations.result_json.
+const decisionsTable = `CREATE TABLE decisions (
+	decision_id  TEXT PRIMARY KEY,
+	run_id       TEXT NOT NULL REFERENCES runs (run_id),
+	task_id      TEXT NOT NULL,
+	generation   INTEGER NOT NULL,
+	revision     TEXT NOT NULL,
+	body         TEXT NOT NULL,
+	body_digest  TEXT NOT NULL,
+	options_json TEXT NOT NULL,
+	created_at   TEXT NOT NULL,
+	state        TEXT NOT NULL CHECK (state IN ('pending','answered')),
+	answer       TEXT,
+	answered_at  TEXT,
+	UNIQUE (run_id, task_id, generation)
+)`
+
 // migrate applies forward-only schema versioning via PRAGMA user_version:
-// 0 means a fresh file (create v2 and stamp it), the current version means
+// 0 means a fresh file (create the baseline plus the delta and stamp it),
+// 2 is the accepted K1 baseline (take the additive decisions-only step to
+// v3 — a real migration, never a refusal), the current version means
 // nothing to do, version 1 is refused outright, and anything larger means
 // a newer runner wrote this database and must not be touched by this
 // build.
@@ -290,22 +318,29 @@ func migrate(db *sql.DB) error {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	switch version {
-	case schemaVersion:
+	if version == schemaVersion {
 		return nil
-	case 0:
+	}
+	switch version {
+	case 0, 2:
 		tx, err := db.Begin()
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback() // no-op after Commit
-		for _, stmt := range schemaV2 {
-			if _, err := tx.Exec(stmt); err != nil {
-				return err
+		if version == 0 {
+			// A fresh file needs the whole baseline, not just the delta.
+			for _, stmt := range schemaV2 {
+				if _, err := tx.Exec(stmt); err != nil {
+					return err
+				}
 			}
 		}
+		if _, err := tx.Exec(decisionsTable); err != nil {
+			return err
+		}
 		// user_version is a transactional header write: a crash
-		// mid-migration leaves the file at version 0 again.
+		// mid-migration leaves the file at its previous version again.
 		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 			return err
 		}

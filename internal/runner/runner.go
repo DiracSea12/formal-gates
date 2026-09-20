@@ -31,6 +31,12 @@ type TaskSpec struct {
 	Name      string
 	DependsOn []string
 	Input     []byte
+	// Confirm, when non-nil, gates this task behind a persisted user
+	// decision (§6.1): Run materializes the decision row the first time
+	// the task is selected and returns ErrWaitingDecision while it is
+	// pending — the task's successors never run without a user decision.
+	// See decisions.go.
+	Confirm *Confirmation
 }
 
 // Invocation is a registered execution intent.  The tuple
@@ -131,7 +137,9 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // runs at a time — parallelism is a later unit.  specs must cover the
 // run's tasks with the inputs the run was created under; a changed input
 // or a missing spec for ready work fails the run instead of executing
-// blind.
+// blind.  A task gated by a still-pending decision stops Run with
+// ErrWaitingDecision — its work waits for Store.Answer, and no successor
+// runs without that user decision.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -172,6 +180,22 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 		sp, ok := byTask[t.taskID]
 		if !ok {
 			return fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
+		}
+		// A gated task consults its decision before any intent is
+		// registered: pending means Run reports the wait and returns
+		// immediately (this sits ahead of the no-ready-task exit, so a
+		// waiting gate can never be misreported as a cycle), answered
+		// means the gate is already consumed and execution proceeds
+		// exactly as ungated work — an executor failure and retry after
+		// the answer never re-asks.
+		if sp.Confirm != nil {
+			pending, err := r.store.gateDecision(ctx, t, sp.Confirm)
+			if err != nil {
+				return err
+			}
+			if pending {
+				return ErrWaitingDecision
+			}
 		}
 		inv, err := r.registerIntent(ctx, t, sp.Input)
 		if err != nil {
@@ -296,7 +320,7 @@ func (r *Runner) checkAllFinished(ctx context.Context) error {
 // running.  If the process dies here, recovery finds the pending row with
 // no receipt and supersedes it.
 func (r *Runner) registerIntent(ctx context.Context, t *taskRow, input []byte) (Invocation, error) {
-	id, err := newInvocationID()
+	id, err := newID128()
 	if err != nil {
 		return Invocation{}, err
 	}
@@ -412,20 +436,21 @@ func (r *Runner) admit(ctx context.Context, inv Invocation, res Result) error {
 	}
 }
 
-// inputDigest is the sha256 of a task input, hex encoded.  One function
-// serves both bindings that store a digest: tasks.input_digest pins the
-// run's definition (what CreateRun declared), invocations.input_digest
+// inputDigest is the sha256 of a byte input, hex encoded.  One function
+// serves every digest binding in the schema: tasks.input_digest pins the
+// task DEFINITION to what CreateRun declared, invocations.input_digest
 // records what one call actually ran with (part of the admission
-// identity).
+// identity), and decisions.body_digest pins the confirmation body the
+// question was asked with.
 func inputDigest(input []byte) string {
 	sum := sha256.Sum256(input)
 	return hex.EncodeToString(sum[:])
 }
 
-// newInvocationID mints a random 128-bit id.  Random ids keep invocation
-// identity meaningful across owner processes without any counter state to
-// maintain or recover.
-func newInvocationID() (string, error) {
+// newID128 mints a random 128-bit hex id.  Random ids keep identity
+// meaningful across owner processes without any counter state to maintain
+// or recover; both invocations and decisions use them.
+func newID128() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
