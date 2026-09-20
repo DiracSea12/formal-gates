@@ -45,3 +45,51 @@ harness/产品包导入。**依赖**：仅标准库＋已锁 modernc.org/sqlite 
 ## 后续
 
 K2（精确流程确认与持久等待）在本候选上加能力；G3b 返修正待外部评审复核。
+
+---
+
+# 【返修 2026-09-21】外部评审驳回 → 修复（本节为准）
+
+## 评审驳回（对象 6697cb2）
+
+- **F1/P1**：恢复未核对任务原输入——A 完成、B 中断后以变更输入恢复，保留旧 A、执行新 B 仍报成功
+  （缺任务定义的持久绑定与恢复核对）。**主代理以评审探针亲复现**（三条 FAIL 之一）。
+- **F2/P2**：同 Store 双 Runner 并发 Run——后者无条件 recoverPending，把前者在途调用标 superseded
+  并重跑同任务（两次 Run 均 nil、执行 2 次）。**亲复现成立**。
+- **F3/P2**：SQLite URI 未编码路径——`run#one`/`run#two` 的 `#` 被当 fragment，两目录锁独立却连
+  同一数据库。**亲复现成立**。
+- 评审全文与探针：`/private/tmp/k1-review/review.md` 及同目录 `snapshot/internal/runner/review_test.go`。
+
+## 修复（子代理实施，主代理定合同并逐处复核）
+
+- **F1**：`tasks.input_digest TEXT NOT NULL`（任务**定义**绑定；与 invocations 的调用级摘要角色
+  分开，DDL 注释互指）；**schema v2**——v1 拒开（"predates task input binding; K1 development
+  schema — recreate the run"：未发布、摘要无法回填，重建即诚实）；`Run` 在 **TryLock 之后、
+  recoverPending 之前** `verifySpecs`：逐 spec 核对任务存在与摘要，不一致指名拒绝；被拒的 Run
+  连恢复写入都不做。
+- **F2**：`Store.advance sync.Mutex`（必须挂 Store——挡不同 Runner 实例共享 Store；目录 flock 挡
+  跨进程，两层注释写明）。`Run` 以 TryLock 取锁全程持有，取不到返回**导出哨兵 `ErrAdvancing`**
+  ——主代理复核裁定：评审给的选项是"串行化**或拒绝**"，静默 nil 退让不在其中且掩盖调用失误；
+  亲核探针只断言执行计数，显式拒绝同样通过；阻塞串行会死锁"先返回再释放"的调用方结构，故取拒绝。
+- **F3**：`dsn` 用 `url.URL{Scheme:"file", Path: filepath.ToSlash(path)}` 标准百分号编码（`#`→`%23`）；
+  查询串为固定常量原样拼接（不过 Values.Encode，避免括号转义改变 modernc 解析）。
+
+新增正式测试：输入变更全生命周期拒绝（首跑/部分完成后/未变更恢复/v1 拒开）、同 Store 并发推进
+拒绝（双 Runner 与同 Runner 重入，第二个 Run 得 ErrAdvancing、执行恰 1、首完成后可正常取锁）、
+URI 字符目录隔离。
+
+## 返修后亲验（主代理，最终树上）
+
+- 亲读全部改动 diff 与最终落位（ErrAdvancing/verifySpecs/schema v2/dsn 编码）。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`、`GOOS=windows`/`GOOS=linux` 交叉编译 OK。
+- `go test ./internal/runner/ -count=1` ok；`go test -race` ok。
+- 评审探针（copy 进树跑 `-run TestReview` 后删除，不入仓库）：**三用例全部 PASS**
+  （F2 探针日志如实显示第二个 Run 得 `ErrAdvancing`、执行恰 1——探针只断言计数，与"拒绝"选项相容）。
+- 全仓 `go test ./...` 与 Python 全套见索引当轮。模型调用 0。
+
+## 残余边界（如实）
+
+- 四注入点中"取得结果未提交"仍会重跑（进程内 Executor 的已披露边界；恰好一次接纳由事务保证，
+  原生副作用恰好一次属后续 K 单元的宿主恢复验收——评审亦如此认定）。
+- v1 拒开是有意决定（未发布开发 schema，无迁移路径）。
+- Windows 锁仍仅交叉编译验证。

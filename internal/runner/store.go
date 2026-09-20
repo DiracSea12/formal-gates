@@ -15,8 +15,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver (pure Go, no CGo)
@@ -27,6 +29,16 @@ import (
 // so unlike the pid/token heartbeat lock in internal/coordination there is
 // no staleness to interpret and no heartbeat to miss.
 var ErrRunBusy = errors.New("runner: run directory already owned by another owner")
+
+// ErrAdvancing is returned by Run when another Run on the same Store is
+// mid-advance.  Ownership has two layers: the directory flock stops other
+// processes, Store.advance stops this one — so a duplicate advance is a
+// caller mistake, refused here rather than silently absorbed (a nil
+// return would read as "the run advanced").  Blocking instead would
+// deadlock callers that release the in-flight work only after this call
+// returns; the holder keeps the lock for its whole Run, and execution
+// inside the lock is the advance boundary.
+var ErrAdvancing = errors.New("runner: another Run is advancing this store")
 
 // A run directory holds exactly these two files.  The lock file is created
 // but never removed: deleting it would let a second opener flock a fresh
@@ -39,8 +51,9 @@ const (
 // schemaVersion is the schema this build writes.  PRAGMA user_version
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
-// how to read it.
-const schemaVersion = 1
+// how to read it.  Version 2 added the task-definition input binding
+// (tasks.input_digest); version 1 databases are refused outright below.
+const schemaVersion = 2
 
 // Store is the durable state of one run plus exclusive ownership of its
 // directory.  Open acquires ownership, Close releases it; between the two,
@@ -49,6 +62,17 @@ type Store struct {
 	db    *sql.DB
 	lock  *dirLock
 	runID string // empty until CreateRun ran in this directory
+
+	// advance serializes run advances within this process for every
+	// Runner sharing this Store.  The directory flock only stops other
+	// processes; without this mutex a second Runner (or a re-entrant
+	// Run) on the same Store would supersede the first's in-flight
+	// invocation mid-loop and re-execute its task.  It must live on the
+	// Store, not the Runner, precisely because different Runner
+	// instances can share one Store.  The holder keeps it for the whole
+	// Run — execution happens inside the lock, so the lock is the
+	// advance boundary.
+	advance sync.Mutex
 }
 
 // Open takes exclusive ownership of dir (created if missing), opens run.db
@@ -111,8 +135,8 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 	}
 	for _, sp := range specs {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO tasks (run_id, task_id, name, state, generation) VALUES (?,?,?,?,1)",
-			runID, sp.TaskID, sp.Name, taskWaitingDeps); err != nil {
+			"INSERT INTO tasks (run_id, task_id, name, input_digest, state, generation) VALUES (?,?,?,?,?,1)",
+			runID, sp.TaskID, sp.Name, inputDigest(sp.Input), taskWaitingDeps); err != nil {
 			return err
 		}
 	}
@@ -136,20 +160,27 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 // sqlprobe): WAL for crash-safe commits, foreign keys enforced per
 // connection, a busy timeout so WAL checkpoints never fail fast, and
 // immediate write transactions so a short writer never upgrades
-// mid-transaction into SQLITE_BUSY.
+// mid-transaction into SQLITE_BUSY.  The path travels through url.URL so
+// URI-significant characters in the directory name are percent-encoded
+// ('#' would otherwise start a URI fragment and make two distinct run
+// directories silently share one database).  The query string is a fixed
+// constant with no user input and is appended verbatim: url.Values.Encode
+// would escape the parentheses of the _pragma=... options and change how
+// modernc parses them.
 func dsn(path string) string {
-	return "file:" + path +
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	return u.String() +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=foreign_keys(1)" +
 		"&_pragma=journal_mode(WAL)" +
 		"&_txlock=immediate"
 }
 
-// schemaV1 is the final-shaped table set K1 actually reads and writes
+// schemaV2 is the final-shaped table set K1 actually reads and writes
 // (plan §7); decisions and native_interactions belong to later K units and
 // are not created here.  Columns follow this unit's real read paths —
 // nothing speculative.
-var schemaV1 = []string{
+var schemaV2 = []string{
 	// One row per run.  schema_version records the version the run was
 	// created under; user_version is the file-level migration marker.
 	`CREATE TABLE runs (
@@ -157,15 +188,22 @@ var schemaV1 = []string{
 		schema_version INTEGER NOT NULL,
 		created_at     TEXT NOT NULL
 	)`,
-	// One row per task.  state is execution state (§4.2); "ready" is
-	// computed from dependencies and never stored.  generation is
-	// reserved for later units.  result_invocation_id points at the one
-	// admitted invocation whose result is effective — a late result
-	// never moves it.
+	// One row per task.  input_digest binds the task DEFINITION to the
+	// input declared at CreateRun — Run refuses any spec whose digest
+	// differs, so a restarted owner cannot settle old work with new
+	// inputs (K1 has no re-evaluation rule; generation bumps arrive in
+	// a later unit).  invocations.input_digest plays a different,
+	// per-call role below: it records what one specific call ran with
+	// and is part of the admission identity.  state is execution state
+	// (§4.2); "ready" is computed from dependencies and never stored.
+	// generation is reserved for later units.  result_invocation_id
+	// points at the one admitted invocation whose result is effective —
+	// a late result never moves it.
 	`CREATE TABLE tasks (
 		run_id               TEXT NOT NULL REFERENCES runs (run_id),
 		task_id              TEXT NOT NULL,
 		name                 TEXT NOT NULL,
+		input_digest         TEXT NOT NULL,
 		state                TEXT NOT NULL,
 		generation           INTEGER NOT NULL DEFAULT 1,
 		result_invocation_id TEXT REFERENCES invocations (invocation_id),
@@ -183,9 +221,13 @@ var schemaV1 = []string{
 		FOREIGN KEY (run_id, depends_on) REFERENCES tasks (run_id, task_id)
 	)`,
 	// The call record (§4.2: original invocation records are never
-	// overwritten).  Only state and result_json ever change, each in one
-	// forward transition: pending→admitted, pending→superseded, and
-	// result_json filled once when the result arrives — even late.
+	// overwritten).  input_digest here is the CALL-level digest — what
+	// this specific invocation ran with, re-verified at admission as
+	// part of the identity tuple — as opposed to the task-definition
+	// binding in tasks.input_digest above.  Only state and result_json
+	// ever change, each in one forward transition: pending→admitted,
+	// pending→superseded, and result_json filled once when the result
+	// arrives — even late.
 	`CREATE TABLE invocations (
 		invocation_id TEXT PRIMARY KEY,
 		run_id        TEXT NOT NULL,
@@ -213,9 +255,10 @@ var schemaV1 = []string{
 }
 
 // migrate applies forward-only schema versioning via PRAGMA user_version:
-// 0 means a fresh file (create v1 and stamp it), the current version means
-// nothing to do, anything larger means a newer runner wrote this database
-// and must not be touched by this build.
+// 0 means a fresh file (create v2 and stamp it), the current version means
+// nothing to do, version 1 is refused outright, and anything larger means
+// a newer runner wrote this database and must not be touched by this
+// build.
 func migrate(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -230,7 +273,7 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 		defer tx.Rollback() // no-op after Commit
-		for _, stmt := range schemaV1 {
+		for _, stmt := range schemaV2 {
 			if _, err := tx.Exec(stmt); err != nil {
 				return err
 			}
@@ -241,6 +284,12 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 		return tx.Commit()
+	case 1:
+		// Version 1 predates the task input binding.  K1 never
+		// shipped, so v1 files exist only in development, and the
+		// missing digests cannot be backfilled from anything the
+		// file knows — the honest move is to refuse and recreate.
+		return errors.New("schema version 1 predates task input binding; K1 development schema — recreate the run")
 	default:
 		return fmt.Errorf("schema version %d is newer than supported version %d", version, schemaVersion)
 	}

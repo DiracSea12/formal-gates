@@ -2,10 +2,14 @@ package runner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // mustCreate opens dir and creates a run with the given specs.
@@ -451,5 +455,239 @@ func TestSchemaConstraintsHold(t *testing.T) {
 	}
 	if st2.runID != "r" {
 		t.Fatalf("reopened run id = %q, want %q", st2.runID, "r")
+	}
+}
+
+func TestSpecInputChangesAreRefusedThroughoutLifecycle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("before any execution", func(t *testing.T) {
+		dir := t.TempDir()
+		original := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("revision-1")}}
+		st := mustCreate(t, dir, "r-fresh", original)
+		changed := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("revision-2")}}
+		executed := 0
+		r := NewRunner(st, func(_ context.Context, inv Invocation) (Result, error) {
+			executed++
+			return Result{}, nil
+		})
+		err := r.Run(ctx, changed)
+		if err == nil || !strings.Contains(err.Error(), `task "a"`) {
+			t.Fatalf("changed input err = %v, want refusal naming task a", err)
+		}
+		if executed != 0 {
+			t.Fatalf("executed %d tasks on refused specs, want 0", executed)
+		}
+		if n := countInvocations(t, st, "a", invPending); n != 0 {
+			t.Fatalf("refused run left %d intents, want 0", n)
+		}
+		// A spec naming a task the run never had is refused too.
+		stray := append([]TaskSpec{}, original...)
+		stray = append(stray, TaskSpec{TaskID: "zz", Input: []byte("x")})
+		if err := r.Run(ctx, stray); err == nil || !strings.Contains(err.Error(), "not part of run") {
+			t.Fatalf("unknown task err = %v, want refusal", err)
+		}
+	})
+
+	t.Run("after partial completion and on recovery", func(t *testing.T) {
+		dir := t.TempDir()
+		original := []TaskSpec{
+			{TaskID: "a", Name: "A", Input: []byte("in-a")},
+			{TaskID: "b", Name: "B", DependsOn: []string{"a"}, Input: []byte("in-b")},
+		}
+		st := mustCreate(t, dir, "r-resume", original)
+		var gotInputs []string
+		interruptB := true
+		r := NewRunner(st, func(_ context.Context, inv Invocation) (Result, error) {
+			gotInputs = append(gotInputs, inv.TaskID+":"+string(inv.Input))
+			if inv.TaskID == "b" && interruptB {
+				return Result{}, errors.New("interrupted")
+			}
+			return Result{Payload: json.RawMessage(`"ok-` + inv.TaskID + `"`)}, nil
+		})
+		// First advance settles a, loses the receipt for b.
+		if err := r.Run(ctx, original); err == nil || !strings.Contains(err.Error(), "interrupted") {
+			t.Fatalf("first run err = %v, want interruption", err)
+		}
+		_, effA := taskState(t, st, "a")
+
+		// Reopening with a changed input for b must refuse before any
+		// recovery write: b's unsettled intent stays pending, nothing
+		// runs with the wrong input, a's effective result is untouched.
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		st2, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st2.Close()
+		r2 := NewRunner(st2, r.exec)
+		changedB := []TaskSpec{
+			{TaskID: "a", Name: "A", Input: []byte("in-a")},
+			{TaskID: "b", Name: "B", DependsOn: []string{"a"}, Input: []byte("tampered")},
+		}
+		if err := r2.Run(ctx, changedB); err == nil || !strings.Contains(err.Error(), `task "b"`) {
+			t.Fatalf("changed recovery input err = %v, want refusal naming task b", err)
+		}
+		if n := countInvocations(t, st2, "b", invPending); n != 1 {
+			t.Fatalf("b pending intents after refusal = %d, want 1 (no recovery write)", n)
+		}
+		for _, got := range gotInputs {
+			if strings.HasSuffix(got, ":tampered") {
+				t.Fatalf("task executed with tampered input: %q", got)
+			}
+		}
+		if s, eff := taskState(t, st2, "a"); s != taskFinished || eff != effA {
+			t.Fatalf("a effective result changed by refused run: (%q,%q), want (%q,%q)", s, eff, taskFinished, effA)
+		}
+
+		// Unchanged specs resume cleanly: b is superseded by a fresh
+		// call and admitted exactly once.
+		interruptB = false
+		if err := r2.Run(ctx, original); err != nil {
+			t.Fatal(err)
+		}
+		if n := countInvocations(t, st2, "b", invSuperseded); n != 1 {
+			t.Fatalf("b superseded rows = %d, want the interrupted attempt preserved", n)
+		}
+		if n := countInvocations(t, st2, "b", invAdmitted); n != 1 {
+			t.Fatalf("b admitted rows = %d, want exactly 1", n)
+		}
+		if n := len(loadEvents(t, st2)); n != 2 {
+			t.Fatalf("events = %d, want one per admitted task (2)", n)
+		}
+	})
+
+	t.Run("schema v1 database is refused", func(t *testing.T) {
+		dir := t.TempDir()
+		// Seed a file that claims version 1 — the shape K1's first
+		// draft wrote, before task input binding existed.
+		db, err := sql.Open("sqlite", filepath.Join(dir, "run.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "predates task input binding") {
+			t.Fatalf("v1 open err = %v, want explicit refusal", err)
+		}
+	})
+}
+
+func TestConcurrentRunsOnOneStoreDoNotDoubleAdvance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sameRunner bool
+	}{
+		{"two runners sharing one store", false},
+		{"same runner re-entered", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			specs := []TaskSpec{{TaskID: "a", Name: "A"}}
+			st := mustCreate(t, dir, "r-serial", specs)
+			ctx := context.Background()
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var calls atomic.Int32
+			exec := func(_ context.Context, inv Invocation) (Result, error) {
+				calls.Add(1)
+				close(started)
+				<-release
+				return Result{Payload: json.RawMessage(`"only"`)}, nil
+			}
+			first := NewRunner(st, exec)
+			second := first
+			if !tc.sameRunner {
+				second = NewRunner(st, exec) // separate instance over the same store
+			}
+			firstDone := make(chan error, 1)
+			go func() { firstDone <- first.Run(ctx, specs) }()
+			<-started // the first advance is executing task a
+
+			// The second advance must neither execute anything nor
+			// wait for the in-flight one: it is refused with
+			// ErrAdvancing because the holder already owns the loop.
+			secondDone := make(chan error, 1)
+			go func() { secondDone <- second.Run(ctx, specs) }()
+			select {
+			case err := <-secondDone:
+				if !errors.Is(err, ErrAdvancing) {
+					t.Fatalf("in-flight second Run err = %v, want ErrAdvancing", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("second Run blocked on the in-flight advance")
+			}
+			if n := calls.Load(); n != 1 {
+				t.Fatalf("executed %d times while in flight, want 1", n)
+			}
+			close(release)
+			if err := <-firstDone; err != nil {
+				t.Fatalf("first Run err = %v, want nil", err)
+			}
+			if n := calls.Load(); n != 1 {
+				t.Fatalf("executed %d times total, want exactly 1", n)
+			}
+			if n := countInvocations(t, st, "a", invAdmitted); n != 1 {
+				t.Fatalf("admitted rows = %d, want exactly 1", n)
+			}
+			// After completion a further advance takes the lock
+			// normally — here a no-op that reports nil.
+			if err := second.Run(ctx, specs); err != nil {
+				t.Fatalf("post-completion Run err = %v, want nil", err)
+			}
+			if n := calls.Load(); n != 1 {
+				t.Fatalf("executed %d times after completion, want 1", n)
+			}
+		})
+	}
+}
+
+func TestDirectoriesWithURICharactersAreIsolated(t *testing.T) {
+	root := t.TempDir()
+	// Concurrent opens of two directories whose names contain a URI
+	// fragment character — without path encoding both silently resolve
+	// to the same database file.
+	openAndCreate := func(name, runID, taskID string) error {
+		st, err := Open(filepath.Join(root, name))
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return st.CreateRun(context.Background(), runID, []TaskSpec{{TaskID: taskID}})
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- openAndCreate("run#one", "one", "a") }()
+	go func() { errs <- openAndCreate("run#two", "two", "b") }()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent open/create: %v", err)
+		}
+	}
+	// Each directory sees exactly its own run and nothing of the other.
+	for _, tc := range []struct{ dir, runID, taskID string }{
+		{"run#one", "one", "a"},
+		{"run#two", "two", "b"},
+	} {
+		st, err := Open(filepath.Join(root, tc.dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		if st.runID != tc.runID {
+			t.Errorf("%s run id = %q, want %q", tc.dir, st.runID, tc.runID)
+		}
+		var n int
+		if err := st.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE run_id=?", tc.runID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("%s holds %d tasks for run %q, want its own single task", tc.dir, n, tc.runID)
+		}
 	}
 }

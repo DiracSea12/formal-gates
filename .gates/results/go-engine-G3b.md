@@ -137,3 +137,7 @@ db 行比逻辑哈希）；`archive-projection` 载荷改小事实（status/sour
 - 容量包络（如实声明）：与基线一致——最大单次桥接载荷为 `canonical(index)` 一份
   （30k 文件实测 ≈3.5MB；上限约 7 万文件级，基线同样受此约束）；prune-plan 的 names+size
   单份约 80B/行（30k≈2.4MB）。`CHUNK` 上限由 Go 侧 `chunkLimit` 熔断保护，防止未来回归。
+
+---
+
+**【2026-09-21 机主裁定：G3b 返修通过验收。】** 原话"g3b过"。G3b 至此正式收口。

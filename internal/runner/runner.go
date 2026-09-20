@@ -22,9 +22,10 @@ type Executor func(ctx context.Context, inv Invocation) (Result, error)
 
 // TaskSpec declares one task at run creation: identity, display name,
 // dependency edges and the input bytes the executor will receive.  Inputs
-// are not persisted (§7: no payloads in the database); Run receives the
-// specs again on every call, and the digest computed at registration is
-// what ties an admitted result back to the exact input that produced it.
+// are not persisted (§7: no payloads in the database); their sha256 is —
+// CreateRun binds it on the task row and every Run verifies its specs
+// against that binding before touching anything, so a restarted owner
+// cannot drift from the created run.
 type TaskSpec struct {
 	TaskID    string
 	Name      string
@@ -128,11 +129,30 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // transaction, execute outside any transaction, then admit the result in a
 // short transaction that also appends the event.  Exactly one ready task
 // runs at a time — parallelism is a later unit.  specs must cover the
-// run's tasks (they carry the non-persisted inputs); a missing spec for
-// ready work fails the run instead of executing blind.
+// run's tasks with the inputs the run was created under; a changed input
+// or a missing spec for ready work fails the run instead of executing
+// blind.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
+	}
+	// Take the Store's advance boundary.  The directory flock stops
+	// other processes; this stops another Run sharing this Store from
+	// superseding an in-flight invocation mid-loop.  A duplicate
+	// advance is a caller mistake — refuse it (see ErrAdvancing)
+	// rather than silently absorb a nil "success", and never block:
+	// waiting would deadlock callers that release the in-flight work
+	// only after this call returns.
+	if !r.store.advance.TryLock() {
+		return ErrAdvancing
+	}
+	defer r.store.advance.Unlock()
+	// Spec verification precedes every recovery write and all
+	// execution: a restarted owner must not settle old work with new
+	// inputs, and a refused run must not disturb unsettled intents
+	// either.
+	if err := r.verifySpecs(ctx, specs); err != nil {
+		return err
 	}
 	byTask := make(map[string]TaskSpec, len(specs))
 	for _, sp := range specs {
@@ -174,6 +194,29 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 			return err
 		}
 	}
+}
+
+// verifySpecs checks the caller's specs against the persisted task
+// definitions: every spec must name an existing task, and its input digest
+// must equal the one bound at CreateRun.  K1 refuses changed inputs
+// outright — re-evaluation with a new generation is a later unit's rule.
+func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
+	for _, sp := range specs {
+		var bound string
+		err := r.store.db.QueryRowContext(ctx,
+			"SELECT input_digest FROM tasks WHERE run_id=? AND task_id=?",
+			r.store.runID, sp.TaskID).Scan(&bound)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("runner: spec names task %q which is not part of run %q", sp.TaskID, r.store.runID)
+		}
+		if err != nil {
+			return err
+		}
+		if got := inputDigest(sp.Input); got != bound {
+			return fmt.Errorf("runner: input for task %q differs from the run's definition; K1 refuses input changes (re-evaluation arrives in a later unit)", sp.TaskID)
+		}
+	}
+	return nil
 }
 
 // recoverPending closes out unsettled intents from a previous owner
@@ -257,12 +300,11 @@ func (r *Runner) registerIntent(ctx context.Context, t *taskRow, input []byte) (
 	if err != nil {
 		return Invocation{}, err
 	}
-	sum := sha256.Sum256(input)
 	inv := Invocation{
 		InvocationID: id,
 		TaskID:       t.taskID,
 		Generation:   t.generation,
-		InputDigest:  hex.EncodeToString(sum[:]),
+		InputDigest:  inputDigest(input),
 		Input:        input,
 	}
 	tx, err := r.store.db.BeginTx(ctx, nil)
@@ -368,6 +410,16 @@ func (r *Runner) admit(ctx context.Context, inv Invocation, res Result) error {
 		}
 		return nil
 	}
+}
+
+// inputDigest is the sha256 of a task input, hex encoded.  One function
+// serves both bindings that store a digest: tasks.input_digest pins the
+// run's definition (what CreateRun declared), invocations.input_digest
+// records what one call actually ran with (part of the admission
+// identity).
+func inputDigest(input []byte) string {
+	sum := sha256.Sum256(input)
+	return hex.EncodeToString(sum[:])
 }
 
 // newInvocationID mints a random 128-bit id.  Random ids keep invocation
