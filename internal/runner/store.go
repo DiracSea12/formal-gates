@@ -1,0 +1,275 @@
+// Package runner is the Go engine's single-owner kernel (plan §2.1, §4.1):
+// exactly one process owns one run directory and its SQLite state, computes
+// ready work from persisted facts, registers execution intents in short
+// transactions, executes outside any transaction, and admits results in
+// another short transaction that also appends the run event.  This file owns
+// directory ownership and durable state; runner.go owns the loop.
+//
+// K1 scope: single owner + task transactions + sequential execution + result
+// admission.  Decisions, native interactions, parallelism and generation
+// bumps arrive in later K units and are deliberately absent here.
+package runner
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" driver (pure Go, no CGo)
+)
+
+// ErrRunBusy is returned by Open when the directory is already owned.  The
+// underlying flock is released by the kernel when the owning process dies,
+// so unlike the pid/token heartbeat lock in internal/coordination there is
+// no staleness to interpret and no heartbeat to miss.
+var ErrRunBusy = errors.New("runner: run directory already owned by another owner")
+
+// A run directory holds exactly these two files.  The lock file is created
+// but never removed: deleting it would let a second opener flock a fresh
+// inode while the first owner still holds the old one.
+const (
+	dbFileName   = "run.db"
+	lockFileName = "run.lock"
+)
+
+// schemaVersion is the schema this build writes.  PRAGMA user_version
+// carries it inside the database file; migration is forward-only, so a
+// build that finds a newer version refuses the file instead of guessing
+// how to read it.
+const schemaVersion = 1
+
+// Store is the durable state of one run plus exclusive ownership of its
+// directory.  Open acquires ownership, Close releases it; between the two,
+// this process is the run's single owner.
+type Store struct {
+	db    *sql.DB
+	lock  *dirLock
+	runID string // empty until CreateRun ran in this directory
+}
+
+// Open takes exclusive ownership of dir (created if missing), opens run.db
+// and brings its schema to this build's version.  A second Open on the same
+// directory — from any process, including this one — fails with an error
+// wrapping ErrRunBusy.
+func Open(dir string) (*Store, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	lock, err := lockDir(filepath.Join(dir, lockFileName))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrRunBusy, dir, err)
+	}
+	db, err := sql.Open("sqlite", dsn(filepath.Join(dir, dbFileName)))
+	if err != nil {
+		lock.unlock()
+		return nil, err
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		lock.unlock()
+		return nil, fmt.Errorf("runner: migrate %s: %w", dir, err)
+	}
+	runID, err := readRunID(db)
+	if err != nil {
+		db.Close()
+		lock.unlock()
+		return nil, err
+	}
+	return &Store{db: db, lock: lock, runID: runID}, nil
+}
+
+// Close releases the database and, with it, directory ownership.  The lock
+// file itself stays behind (see lockFileName).
+func (s *Store) Close() error {
+	err := s.db.Close()
+	s.lock.unlock()
+	return err
+}
+
+// CreateRun persists the run definition in one transaction: the runs row,
+// one tasks row per spec (all starting waiting_deps at generation 1 — the
+// generation column is reserved for later units' re-evaluation rules, K1
+// never bumps it) and the dependency edges.  A directory holds exactly one
+// run; a second CreateRun is refused.
+func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) error {
+	if s.runID != "" {
+		return fmt.Errorf("runner: directory already holds run %q", s.runID)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO runs (run_id, schema_version, created_at) VALUES (?,?,?)",
+		runID, schemaVersion, nowUTC()); err != nil {
+		return err
+	}
+	for _, sp := range specs {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO tasks (run_id, task_id, name, state, generation) VALUES (?,?,?,?,1)",
+			runID, sp.TaskID, sp.Name, taskWaitingDeps); err != nil {
+			return err
+		}
+	}
+	for _, sp := range specs {
+		for _, dep := range sp.DependsOn {
+			if _, err := tx.ExecContext(ctx,
+				"INSERT INTO task_deps (run_id, task_id, depends_on) VALUES (?,?,?)",
+				runID, sp.TaskID, dep); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.runID = runID
+	return nil
+}
+
+// dsn mirrors the repository's established SQLite DSN (the go-engine
+// sqlprobe): WAL for crash-safe commits, foreign keys enforced per
+// connection, a busy timeout so WAL checkpoints never fail fast, and
+// immediate write transactions so a short writer never upgrades
+// mid-transaction into SQLITE_BUSY.
+func dsn(path string) string {
+	return "file:" + path +
+		"?_pragma=busy_timeout(5000)" +
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_txlock=immediate"
+}
+
+// schemaV1 is the final-shaped table set K1 actually reads and writes
+// (plan §7); decisions and native_interactions belong to later K units and
+// are not created here.  Columns follow this unit's real read paths —
+// nothing speculative.
+var schemaV1 = []string{
+	// One row per run.  schema_version records the version the run was
+	// created under; user_version is the file-level migration marker.
+	`CREATE TABLE runs (
+		run_id         TEXT PRIMARY KEY,
+		schema_version INTEGER NOT NULL,
+		created_at     TEXT NOT NULL
+	)`,
+	// One row per task.  state is execution state (§4.2); "ready" is
+	// computed from dependencies and never stored.  generation is
+	// reserved for later units.  result_invocation_id points at the one
+	// admitted invocation whose result is effective — a late result
+	// never moves it.
+	`CREATE TABLE tasks (
+		run_id               TEXT NOT NULL REFERENCES runs (run_id),
+		task_id              TEXT NOT NULL,
+		name                 TEXT NOT NULL,
+		state                TEXT NOT NULL,
+		generation           INTEGER NOT NULL DEFAULT 1,
+		result_invocation_id TEXT REFERENCES invocations (invocation_id),
+		PRIMARY KEY (run_id, task_id)
+	)`,
+	// Dependency edges, unique per (task, dependency) by the primary
+	// key.  Both ends reference tasks, so a dangling edge cannot be
+	// persisted.
+	`CREATE TABLE task_deps (
+		run_id     TEXT NOT NULL,
+		task_id    TEXT NOT NULL,
+		depends_on TEXT NOT NULL,
+		PRIMARY KEY (run_id, task_id, depends_on),
+		FOREIGN KEY (run_id, task_id)    REFERENCES tasks (run_id, task_id),
+		FOREIGN KEY (run_id, depends_on) REFERENCES tasks (run_id, task_id)
+	)`,
+	// The call record (§4.2: original invocation records are never
+	// overwritten).  Only state and result_json ever change, each in one
+	// forward transition: pending→admitted, pending→superseded, and
+	// result_json filled once when the result arrives — even late.
+	`CREATE TABLE invocations (
+		invocation_id TEXT PRIMARY KEY,
+		run_id        TEXT NOT NULL,
+		task_id       TEXT NOT NULL,
+		generation    INTEGER NOT NULL,
+		input_digest  TEXT NOT NULL,
+		registered_at TEXT NOT NULL,
+		state         TEXT NOT NULL,
+		result_json   TEXT,
+		FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
+	)`,
+	// Recovery scans a run's unsettled (pending) invocations; identity
+	// checks go through the primary key.
+	`CREATE INDEX idx_invocations_run_state ON invocations (run_id, state)`,
+	// The append-only run journal.  Admission events land here in the
+	// same transaction as the admission itself (§4.1).  seq is the
+	// autoassigned primary key — never reused, because events are never
+	// deleted or rewritten.
+	`CREATE TABLE events (
+		seq          INTEGER PRIMARY KEY,
+		run_id       TEXT NOT NULL REFERENCES runs (run_id),
+		kind         TEXT NOT NULL,
+		payload_json TEXT NOT NULL
+	)`,
+}
+
+// migrate applies forward-only schema versioning via PRAGMA user_version:
+// 0 means a fresh file (create v1 and stamp it), the current version means
+// nothing to do, anything larger means a newer runner wrote this database
+// and must not be touched by this build.
+func migrate(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	switch version {
+	case schemaVersion:
+		return nil
+	case 0:
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback() // no-op after Commit
+		for _, stmt := range schemaV1 {
+			if _, err := tx.Exec(stmt); err != nil {
+				return err
+			}
+		}
+		// user_version is a transactional header write: a crash
+		// mid-migration leaves the file at version 0 again.
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
+			return err
+		}
+		return tx.Commit()
+	default:
+		return fmt.Errorf("schema version %d is newer than supported version %d", version, schemaVersion)
+	}
+}
+
+// readRunID returns the single run this directory holds, or "" for a fresh
+// database.  A directory holds exactly one run by construction (CreateRun
+// refuses a second), so more than one row is corruption we refuse to guess
+// about.
+func readRunID(db *sql.DB) (string, error) {
+	rows, err := db.Query("SELECT run_id FROM runs")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var runID string
+	if !rows.Next() {
+		return "", nil
+	}
+	if err := rows.Scan(&runID); err != nil {
+		return "", err
+	}
+	if rows.Next() {
+		return "", errors.New("runner: database holds more than one run")
+	}
+	return runID, rows.Err()
+}
+
+// nowUTC is the timestamp format used for every persisted instant.
+func nowUTC() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
