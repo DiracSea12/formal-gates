@@ -346,4 +346,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-20（第十一轮，G2d 双宿主实机关死）】**机主授权后补齐全部实机分支：zcode deny（T5）与 requestUserInput（T6，问题正文/questions 原样持久化在实机可见）；DSH allow/deny（allow-r2/deny-r2，宿主已漂至 alpha.2、绑定重建；首跑未触发系提示词靶点在沙箱可写区，改 HOME＋升级指令后全通）。全部同回合完成、pending→observed、拒答后标记缺失/模型如实报 false。本日 sandbox-exec 在会话内可用故免 launchd。累计 G2d 实机 5 作业约 10 次模型请求。**G2d 至此实机+离线全证据链关闭，下一单元 G3a（领域路线）解锁。**现行结论以 `go-engine-G2d.md` 为准。
 
+> **【2026-09-20（第十二轮，G3a 领域路线，轻装）】**五项领域判断迁入 Go：`evaluate-route`（返修路线）、`worker-outcome`（角色结果分支）、`check-retention`（增量资格，两阶段）、`repair-allowance`（轮次边界）、`candidate-admission`（候选准入）；graph.py 五处改薄包装，图边与流程确认仍归 LangGraph，repair-no-change 观测事件有意留 Python。参照实现＋差分 13 用例（顺序/优先级/边界可判别）＋Go 单测 18＋全图正常/异常路径：亲验 Go 全仓 ok、Python 全套 301 OK、差分子集 154 OK、负控（未知字段拒收）通过，模型调用 0。实机构成证与既有 bounded differences 见 `go-engine-G3a.md`。**G3a 轻装收口，G3b 解锁。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

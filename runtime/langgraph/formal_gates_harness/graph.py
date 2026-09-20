@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
-from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, git
+from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, git, refuse
 from .workers import Workers
 from .feedback import evidence_feedback
 
@@ -84,16 +84,18 @@ class Flow:
                 attempt += 1; continue
             session = result["source"].get("identity", session)
             restart_session = False
-            if result["result"]["status"] == "CONTINUE":
+            action = self.store.bridge.call("worker-outcome", {"role": role, "status": result["result"]["status"],
+                                                               "needs_repair": result["needs_repair"]})["action"]
+            if action == "continue":
                 continuation += 1
                 feedback = {'continuation': evidence_feedback(self.store, self.store.put(result), 'unfinished-work'),
                             'initial_feedback': initial_feedback}
                 continue
-            if result["result"]["status"] == "BLOCKED":
+            if action == "blocked":
                 self.ask("worker-blocked", ["retry", "abort"], role=role,
                          reason=result["result"]["summary"], evidence=self.store.put(result))
                 attempt += 1; continue
-            if role in ('development', 'repair') and result['needs_repair']:
+            if action == "unresolved-findings":
                 self.ask('development-findings', ['retry', 'abort'], role=role,
                          evidence=self.store.put(result), reason='Unresolved development findings cannot be discarded')
                 feedback = {'prior_result': evidence_feedback(self.store, self.store.put(result), 'unresolved-findings'),
@@ -139,9 +141,9 @@ class Flow:
             design_ref, _ = self.invoke_worker("qa-design", {**state, "round": revision}, self.baseline(),
                                                {"review": evidence_feedback(self.store, ref, "qa-review-findings"), "prior_design": evidence_feedback(self.store, design_ref, "prior-qa-design")})
     def candidate(self, state: State):
-        if self.store.get(state['development'])['needs_repair']:
-            raise HarnessError('Unresolved development result cannot create a verification candidate')
-        if self.store.get(state["qa_review"])["needs_repair"]: raise HarnessError("QA not approved")
+        refuse(self.store.bridge.call("candidate-admission", {
+            "development_needs_repair": self.store.get(state['development'])['needs_repair'],
+            "qa_review_needs_repair": self.store.get(state["qa_review"])["needs_repair"]}))
         op = digest({"revision": self.revision, "round": state.get("round", 0), "development": state["development"]})
         result = self.store.bridge.call("snapshot", {"root": str(self.development_workspace()), "operation_id": op})
         if state.get("round", 0) and result["candidate"] == state.get("candidate"):
@@ -152,22 +154,33 @@ class Flow:
         binding = self.store.bridge.call("binding", {"root": str(root), "candidate": state["candidate"],
                                                      "revision": self.revision, "check": check})["binding"]
         old_ref = state.get("checks", {}).get(check["id"])
-        if old_ref:
-            old = self.store.get(old_ref)
-            if old["binding"] == binding and old["status"] in ("PASS", "FAIL"):
-                try:
-                    self.store.verify_evidence(old["evidence"])
-                except (HarnessError, OSError) as exc:
-                    if attempt == 0:
-                        raise
-                    # Only an explicit check-runtime retry reaches a new attempt.
-                    self.store.event('check-evidence-invalid', check=check['id'],
-                                     previous=old_ref, reason=str(exc), retry_attempt=attempt)
-                else:
-                    retained = {**old, "candidate": state["candidate"]}
-                    if old["candidate"] != state["candidate"]: retained["inherited_from"] = old["candidate"]
-                    self.store.event("check-retained", check=check["id"], status=old["status"], binding=binding)
-                    return retained
+        old = self.store.get(old_ref) if old_ref else None
+        # Two bridge phases over one operation: eligibility first, then the
+        # verdict once verify_evidence has decided, so the branch condition
+        # lives only in Go. The original exception is re-raised on attempt 0.
+        snapshot = None if old is None else {"binding": old["binding"], "status": old["status"],
+                                             "candidate": old["candidate"]}
+        retention = self.store.bridge.call("check-retention", {"binding": binding, "old": snapshot})
+        if retention["action"] == "verify":
+            exc = None
+            try:
+                self.store.verify_evidence(old["evidence"])
+            except (HarnessError, OSError) as caught:
+                exc = caught
+            retention = self.store.bridge.call("check-retention", {"binding": binding, "old": snapshot,
+                                                                   "candidate": state["candidate"], "attempt": attempt,
+                                                                   "evidence_valid": exc is None})
+            if retention["action"] == "fail":
+                raise exc
+            if retention["action"] == "run":
+                # Only an explicit check-runtime retry reaches a new attempt.
+                self.store.event('check-evidence-invalid', check=check['id'],
+                                 previous=old_ref, reason=str(exc), retry_attempt=attempt)
+        if retention["action"] == "retain":
+            retained = {**old, "candidate": state["candidate"]}
+            if retention["inherited_from"]: retained["inherited_from"] = retention["inherited_from"]
+            self.store.event("check-retained", check=check["id"], status=old["status"], binding=binding)
+            return retained
         operation = digest({"kind": "check", "candidate": state["candidate"], "check": check, "binding": binding, "attempt": attempt})
         workspace = self.store.clone(root, "check-" + operation[:24], state["candidate"])
         cache = workspace / ".formal-gates-cache"; cache.mkdir(exist_ok=True)
@@ -210,21 +223,24 @@ class Flow:
                   "evidence": ref, "result": result["result"]}
         return {"gates": {gate: self.store.put(record)}}
     def evaluate(self, state: State):
-        failed = [self.store.get(state["checks"][c["id"]]) for c in self.spec["checks"]
-                  if self.store.get(state["checks"][c["id"]])["status"] != "PASS"]
-        findings = []
-        for g in self.spec["gates"]:
-            r = self.store.get(state["gates"][g])["result"]
-            if r["status"] != "PASS" or any(f["severity"] != "P3" for f in r["findings"]):
-                findings.append({"gate": g, "result": r})
-        if failed or findings:
-            ref = self.store.put({"failed_checks": failed, "gate_findings": findings,
+        checks = [self.store.get(state["checks"][c["id"]]) for c in self.spec["checks"]]
+        gate_results = {g: self.store.get(state["gates"][g])["result"] for g in self.spec["gates"]}
+        verdict = self.store.bridge.call("evaluate-route", {
+            "checks": [{"id": c["id"], "status": r["status"]} for c, r in zip(self.spec["checks"], checks)],
+            "gates": [{"gate": g, "result": gate_results[g]} for g in self.spec["gates"]]})
+        if verdict["route"] == "repair":
+            by_id = {r["id"]: r for r in checks}
+            ref = self.store.put({"failed_checks": [by_id[i] for i in verdict["failed_checks"]],
+                                  "gate_findings": [{"gate": g, "result": gate_results[g]} for g in verdict["blocking_gates"]],
                                   "candidate": state["candidate"], "revision": self.revision})
             return {"feedback": ref, "route": "repair"}
         return {"route": "seal"}
     def repair(self, state: State):
-        allowance = state.get("round_allowance", self.spec["repair_limit"])
-        if state.get("round", 0) >= allowance:
+        verdict = self.store.bridge.call("repair-allowance", {"round": state.get("round", 0),
+                                                              "allowance": state.get("round_allowance"),
+                                                              "repair_limit": self.spec["repair_limit"]})
+        allowance = verdict["allowance"]
+        if verdict["ask_user"]:
             self.ask("repair-limit", ["continue", "abort"], reason="Configured repair rounds reached; continue authorizes one more round", feedback=state["feedback"])
             allowance += 1
         feedback = evidence_feedback(self.store, state["feedback"], "failed-verification")

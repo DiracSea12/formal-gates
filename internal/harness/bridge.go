@@ -631,6 +631,50 @@ func dispatch(e envelope) (any, error) {
 			return map[string]any{"accepted": false, "refusal": refusal}, nil
 		}
 		return map[string]any{"accepted": true, "result": result}, nil
+	case "evaluate-route":
+		// The repair-or-seal judgement moves here (G3a). Python selects the full
+		// records by the returned ids/gate names and assembles the feedback
+		// artifact, so the blocking condition exists once, in NeedsRepair.
+		var q evaluateRouteInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return evaluateRoute(q), nil
+	case "worker-outcome":
+		// The invoke_worker branch selection moves here (G3a); the loop
+		// mechanics (continuation, asks, attempt counters) stay in Python.
+		var q workerOutcomeInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return workerOutcome(q), nil
+	case "check-retention":
+		// The incremental-check eligibility moves here (G3a) as two phases over
+		// one operation: without evidence_valid it judges eligibility, with it
+		// the retain/fail/rerun verdict. Python still owns verify_evidence so
+		// the original exception can be re-raised on the first attempt.
+		var q checkRetentionInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return checkRetention(q), nil
+	case "repair-allowance":
+		// The repair-limit boundary moves here (G3a). The increment after the
+		// user continues is a flow decision and stays in Python.
+		var q repairAllowanceInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return repairAllowance(q), nil
+	case "candidate-admission":
+		// The candidate admission refusals move here (G3a). A refusal is a
+		// typed business outcome inside the value (C4 pattern) so Python's
+		// refuse() raises the same HarnessError the node raised.
+		var q candidateAdmissionInput
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return candidateAdmission(q), nil
 	default:
 		return nil, fmt.Errorf("unknown harness operation %q", e.Operation)
 	}
