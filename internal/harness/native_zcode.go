@@ -57,15 +57,6 @@ func zcodeReadOnlyToolsValue() []any {
 	return value
 }
 
-// Unattended operator context for development/repair sessions. A headless
-// session cannot inherit the operator's interactive context: every new session
-// hard-defaults to 'build' (approval-gated), no host setting changes that
-// default, and an unattended client cannot answer approvals. The mode is
-// declared once per NEW session before its first turn; resumed sessions keep
-// the mode they already have and nothing is ever changed in reaction to a
-// prompt, timeout or failure.
-const zcodeDevPermissionMode = "yolo"
-
 // The handshake every snapshot carries. A different one means the app-server
 // no longer speaks the protocol this transport was accepted against.
 const zcodeProtocolName = "ZCode Protocol"
@@ -1433,6 +1424,14 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 		return nil, err
 	}
 	effort, _ := getOrOf(request, "reasoning_effort", "").(string)
+	// An optional permission_mode names the mode a NEW non-read-only session
+	// is switched to before its first turn. Absent, the driver switches
+	// nothing: the session runs in the host's own default mode, and the
+	// approvals that mode can raise are answered through the G2d interaction
+	// hold, not by forcing a permissive mode (the pre-G2d workaround). The
+	// name is not validated here: the host's own setMode rejects modes it does
+	// not know. Resumed and read-only sessions never apply it.
+	wantedMode, _ := getOrOf(request, "permission_mode", "").(string)
 	readOnlyValue, err := mustEntry(request, "read_only")
 	if err != nil {
 		return nil, err
@@ -1556,17 +1555,19 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	}
 	permissionMode := any("")
 	if !readOnly {
-		// Evidence states the mode actually in force, never the constant: a
-		// NEW dev/repair session declares the operator mode and records the
-		// host's readback; a resumed session records the mode the host's own
-		// snapshot says it kept, and is never switched to match a constant.
-		if previous != "" {
+		// Evidence states the mode the host itself reports, never a value this
+		// driver asked for: a session nothing switches records the mode its own
+		// snapshot carried (a resumed session, or a new one with no requested
+		// permission_mode); a session the request did switch records the host's
+		// setMode readback. A host that reports no mode is recorded as empty,
+		// never invented.
+		if previous != "" || wantedMode == "" {
 			permissionMode = getOrOf(objectOrEmpty(getOf(objectOrEmpty(
 				getOf(snapshot, "settings")), "mode")), "current", "")
 		} else {
 			changed, err := client.request("session/setMode", map[string]any{
 				"sessionId": identity,
-				"mode":      zcodeDevPermissionMode,
+				"mode":      wantedMode,
 			})
 			if err != nil {
 				return nil, err
@@ -1576,7 +1577,7 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 			// "unknown" and the pre-set mode on the real host).
 			permissionMode = getOrOf(objectOrEmpty(getOf(objectOrEmpty(
 				getOf(changed, "settings")), "mode")), "current", "")
-			if !valuesEqual(permissionMode, zcodeDevPermissionMode) {
+			if !valuesEqual(permissionMode, wantedMode) {
 				return nil, &blockedError{message: "ZCODE_CONFIG: permission mode was not applied"}
 			}
 		}

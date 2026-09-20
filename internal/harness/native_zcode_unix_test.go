@@ -124,13 +124,12 @@ func zcodeTurnPayload(inputID, extra string) string {
 }
 
 // zcodeSuccessSteps is the happy new-session sequence after the snapshot: the
-// subscribe acknowledgement, the yolo mode readback, the accepted input and
-// this input's turn events.
+// subscribe acknowledgement, the accepted input and this input's turn events.
+// It models a request naming no permission_mode, so no mode is declared.
 func zcodeSuccessSteps(inputID string) []peerStep {
 	return []peerStep{
 		{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 		{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-		{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
 		{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 		{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 			zcodeTurnPayload(inputID, ""))},
@@ -154,9 +153,9 @@ func zcodeWithStep(factory func(string) []peerStep, index int, step peerStep) fu
 
 // TestZcodeExecuteNewSessionSuccessTurn runs the whole narrow command: the
 // canonical stdout receipt, the identity/tool-policy/native-source evidence,
-// the mode declared once before the first turn, the prompt with the schema
-// embedded canonically (additionalProperties last, value equal), and the
-// turn's committed answer.
+// no mode declaration at all (the request names none), the prompt with the
+// schema embedded canonically (additionalProperties last, value equal), and
+// the turn's committed answer.
 func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	scenario := newZcodeScenario(t, zcodeSuccessSteps, func(request map[string]any) {
 		request["read_only"] = false
@@ -206,9 +205,10 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 		t.Fatalf("identity.json = %v", identityRecord)
 	}
 	// tool-policy.json states the mode in force; native-source.json binds the
-	// turn and carries the same mode.
+	// turn and carries the same mode. The request names no permission_mode, so
+	// the recorded mode is the snapshot's own readback, not a declared value.
 	if policy := readTestFileBytes(t, filepath.Join(scenario.directory, "tool-policy.json")); string(policy) !=
-		`{"permission_mode":"yolo","read_only":false}` {
+		`{"permission_mode":"default","read_only":false}` {
 		t.Fatalf("tool-policy.json = %s", policy)
 	}
 	sourceValue, err := readJSONFile(filepath.Join(scenario.directory, "native-source.json"))
@@ -221,7 +221,7 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 		"selection": map[string]any{
 			"model":            `{"modelId":"m1","providerId":"p1"}`,
 			"reasoning_effort": "low"},
-		"permission_mode": "yolo",
+		"permission_mode": "default",
 	}) {
 		t.Fatalf("native-source.json = %v", source)
 	}
@@ -246,14 +246,10 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	if !strings.Contains(echo, `"deliveryKind":"desktop-continuous"`) {
 		t.Fatalf("subscribe frame:\n%s", echo)
 	}
-	// The mode is declared once, before the first turn.
-	setModeAt := strings.Index(echo, `"method":"session/setMode"`)
-	sendAt := strings.Index(echo, `"method":"session/send"`)
-	if setModeAt < 0 || sendAt < 0 || setModeAt > sendAt {
-		t.Fatalf("setMode must precede send:\n%s", echo)
-	}
-	if strings.Count(echo, `"method":"session/setMode"`) != 1 {
-		t.Fatalf("setMode must be declared exactly once:\n%s", echo)
+	// A request naming no permission_mode declares none: the session keeps the
+	// host's own default mode.
+	if strings.Contains(echo, `"method":"session/setMode"`) {
+		t.Fatalf("an unrequested mode must not be declared:\n%s", echo)
 	}
 	// The prompt text: the request prompt, the fixed middle line, and the
 	// schema embedded canonically with each object's additionalProperties
@@ -374,10 +370,34 @@ func TestZcodeExecuteProbe(t *testing.T) {
 	}
 }
 
-// TestZcodeExecuteSetModeBoundary pins the mode discipline: the NEW session
-// declares yolo once and a mismatching readback is refused, with no tool
-// policy landed; a resumed session is never switched.
+// TestZcodeExecuteSetModeBoundary pins the mode discipline: a NEW session
+// declares no mode at all unless the request's permission_mode names one; a
+// named mode is declared once with a readback that must confirm it (a
+// mismatch is refused, with no tool policy landed); a resumed session is
+// never switched.
 func TestZcodeExecuteSetModeBoundary(t *testing.T) {
+	t.Run("no requested mode", func(t *testing.T) {
+		scenario := newZcodeScenario(t, zcodeSuccessSteps, func(request map[string]any) {
+			request["read_only"] = false
+		})
+		var errout strings.Builder
+		code := 0
+		captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+		if code != 0 {
+			t.Fatalf("code = %d, stderr = %q", code, errout.String())
+		}
+		echo := readTestFile(t, scenario.echoPath)
+		if strings.Contains(echo, `"method":"session/setMode"`) {
+			t.Fatalf("an unrequested mode must not be declared:\n%s", echo)
+		}
+		// The evidence mode is the snapshot's own readback, not a declared
+		// value.
+		if policy := readTestFileBytes(t, filepath.Join(scenario.directory, "tool-policy.json")); string(policy) !=
+			`{"permission_mode":"default","read_only":false}` {
+			t.Fatalf("tool-policy.json = %s", policy)
+		}
+	})
+
 	t.Run("readback refused", func(t *testing.T) {
 		steps := func(string) []peerStep {
 			return []peerStep{
@@ -389,6 +409,7 @@ func TestZcodeExecuteSetModeBoundary(t *testing.T) {
 		}
 		scenario := newZcodeScenario(t, steps, func(request map[string]any) {
 			request["read_only"] = false
+			request["permission_mode"] = "yolo"
 		})
 		var errout strings.Builder
 		code := 0
@@ -402,6 +423,52 @@ func TestZcodeExecuteSetModeBoundary(t *testing.T) {
 		}
 		if _, statErr := os.Stat(filepath.Join(scenario.directory, "tool-policy.json")); !os.IsNotExist(statErr) {
 			t.Fatal("a refused mode must not land tool-policy.json")
+		}
+	})
+
+	t.Run("requested mode is declared", func(t *testing.T) {
+		// The request names a mode; the peer's setMode readback answers the
+		// same value.
+		steps := func(inputID string) []peerStep {
+			return []peerStep{
+				{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
+				{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
+				{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
+				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
+				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
+					zcodeTurnPayload(inputID, ""))},
+				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+					zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
+				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
+			}
+		}
+		scenario := newZcodeScenario(t, steps, func(request map[string]any) {
+			request["read_only"] = false
+			request["permission_mode"] = "yolo"
+		})
+		var errout strings.Builder
+		code := 0
+		captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+		if code != 0 {
+			t.Fatalf("code = %d, stderr = %q", code, errout.String())
+		}
+		echo := readTestFile(t, scenario.echoPath)
+		setMode := frameByMethod(t, echo, "session/setMode")
+		if mode := textOf(objectOrEmpty(setMode["params"])["mode"]); mode != "yolo" {
+			t.Fatalf("setMode mode = %q:\n%s", mode, echo)
+		}
+		// Evidence keeps recording the host's readback, which here equals the
+		// requested value.
+		if policy := readTestFileBytes(t, filepath.Join(scenario.directory, "tool-policy.json")); string(policy) !=
+			`{"permission_mode":"yolo","read_only":false}` {
+			t.Fatalf("tool-policy.json = %s", policy)
+		}
+		sourceValue, err := readJSONFile(filepath.Join(scenario.directory, "native-source.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := objectOrEmpty(sourceValue)["permission_mode"]; !valuesEqual(mode, "yolo") {
+			t.Fatalf("native-source mode = %v", mode)
 		}
 	})
 
@@ -468,7 +535,6 @@ func TestZcodeExecuteSelection(t *testing.T) {
 				{On: `"method":"session/setThoughtLevel"`, Send: setThoughtReply},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 				{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-				{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 					zcodeTurnPayload(inputID, ""))},
@@ -638,7 +704,6 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 				{On: `"method":"provider/updateAccountConfig"`, Send: reply},
 				{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 				{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-				{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
@@ -840,7 +905,6 @@ func TestZcodeExecuteBoundedWait(t *testing.T) {
 		return []peerStep{
 			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-			{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -912,7 +976,7 @@ func TestZcodeExecuteRefusals(t *testing.T) {
 	}
 	subscribeDiffers := zcodeWithStep(zcodeSuccessSteps, 1,
 		peerStep{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-9"}}`})
-	inputRefused := zcodeWithStep(zcodeSuccessSteps, 3,
+	inputRefused := zcodeWithStep(zcodeSuccessSteps, 2,
 		peerStep{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": false}}`})
 
 	cases := []struct {
@@ -962,7 +1026,6 @@ func TestZcodeExecuteLongStreamTurn(t *testing.T) {
 		script := []peerStep{
 			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-			{On: `"method":"session/setMode"`, Send: `{"id": "@ID@", "result": {"settings": {"mode": {"current": "yolo"}}}}`},
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 		}
 		for seq := 1; seq <= streamEvents; seq++ {
