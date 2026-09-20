@@ -293,7 +293,7 @@ func TestInteractionDSHMetadataMustNotConfirm(t *testing.T) {
 	extra := []peerStep{
 		{On: `"outcome":"selected"`, Send: `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": []}}}`},
 		{On: `"outcome":"selected"`, SleepSecs: 1},
-		{On: `"outcome":"selected"`, Send: `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9", "title": "Write marker", "kind": "execute", "status": "in_progress"}}}}`},
+		{On: `"outcome":"selected"`, Send: `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "toolCallId": "call-9", "title": "Write marker", "kind": "other", "status": "in_progress", "rawInput": {"path": "marker.txt"}}}}`},
 	}
 	steps = append(steps[:3:3], append(extra, steps[3:]...)...)
 	code, _, directory := runDSHWithAnswerer(t, steps, "41",

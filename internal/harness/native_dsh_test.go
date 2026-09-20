@@ -617,9 +617,11 @@ func TestRunNativeSessionUnavailableRecord(t *testing.T) {
 
 // TestDSHObservesDelivered pins the attribution rule's truth table: a
 // session/update confirms a delivered hold only when its tool-card update
-// names the held request's toolCallId; metadata updates (available commands,
-// message chunks) of the same session never do; a plain response is the
-// in-flight prompt answering and always does.
+// (sessionUpdate tool_call or tool_call_update, toolCallId at the update's
+// top level, content an array - the host's real shapes) names the held
+// request's toolCallId; metadata updates (available commands, message chunks)
+// of the same session never do; a plain response is the in-flight prompt
+// answering and always does.
 func TestDSHObservesDelivered(t *testing.T) {
 	hold := &nativePendingHold{params: map[string]any{
 		"sessionId": "s-1", "toolCall": map[string]any{"toolCallId": "call-9"}}}
@@ -628,11 +630,11 @@ func TestDSHObservesDelivered(t *testing.T) {
 		message string
 		want    bool
 	}{
-		{"tool card names the held call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9", "title": "Write marker", "kind": "execute", "status": "in_progress"}}}}`, true},
-		{"tool card names another call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-10", "status": "completed"}}}}`, false},
+		{"tool card names the held call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call", "toolCallId": "call-9", "title": "Write marker", "kind": "other", "status": "in_progress", "rawInput": {"path": "marker.txt"}}}}`, true},
+		{"tool card names another call", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "call-10", "status": "completed", "content": []}}}`, false},
 		{"available commands update", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": []}}}`, false},
 		{"message chunk of the same session", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-1", "update": {"sessionUpdate": "agent_message_chunk", "content": "text chunk"}}}`, false},
-		{"tool card of another session", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-2", "update": {"sessionUpdate": "tool_call", "content": {"toolCallId": "call-9"}}}}`, false},
+		{"tool card of another session", `{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s-2", "update": {"sessionUpdate": "tool_call", "toolCallId": "call-9"}}}`, false},
 		{"other notification", `{"jsonrpc": "2.0", "method": "session/status", "params": {"sessionId": "s-1"}}`, false},
 		{"plain response answers the prompt", `{"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}}`, true},
 	}

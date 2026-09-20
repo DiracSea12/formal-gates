@@ -98,9 +98,11 @@ var dshPermissionInteraction = nativeInteractionSpec{
 // continuation (hooks.observes). Two kinds of fact may confirm it:
 //
 //   - A session/update of the held session whose tool-card update names the
-//     held request's toolCallId (ACP's tool_call update: params.update.content
-//     carries the toolCallId). Metadata updates - available_commands_update,
-//     mode or title traffic - name no tool call and never confirm.
+//     held request's toolCallId. The host's own protocol stack (dsh-acp
+//     lib/index.js toolCallUpdate/toolResultUpdate) puts toolCallId at the
+//     update's top level with sessionUpdate "tool_call" or "tool_call_update"
+//     and content an array; metadata updates - available_commands_update, mode
+//     or title traffic - name no tool call and never confirm.
 //   - A plain response frame. While a hold is delivered this adapter's request
 //     loop has exactly one request in flight - that session's prompt, because
 //     request sends one frame and blocks on its matching reply - so a response
@@ -117,8 +119,12 @@ func dshObservesDelivered(hold *nativePendingHold, message map[string]any) bool 
 		return false
 	}
 	toolCallID, _ := getOf(objectOrEmpty(getOf(hold.params, "toolCall")), "toolCallId").(string)
-	content := objectOrEmpty(getOf(objectOrEmpty(getOf(params, "update")), "content"))
-	return toolCallID != "" && valuesEqual(getOf(content, "toolCallId"), toolCallID)
+	update := objectOrEmpty(getOf(params, "update"))
+	kind := getOf(update, "sessionUpdate")
+	if !valuesEqual(kind, "tool_call") && !valuesEqual(kind, "tool_call_update") {
+		return false
+	}
+	return toolCallID != "" && valuesEqual(getOf(update, "toolCallId"), toolCallID)
 }
 
 // dshHooks is DSH's transport configuration: the host decides when a turn

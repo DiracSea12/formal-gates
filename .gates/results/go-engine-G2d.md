@@ -62,3 +62,7 @@
 - zcode bundle 双模式枚举（UI 注册表 vs setMode 参数 schema），以参数 schema 为权威。
 - 本机宿主默认模式＝yolo：缺省路径作业在本机不触发权限请求（宿主模式说了算，属设计内行为）。
 - 差分登记（test_native_zcode_differential.py 模块清单）：参考实现冻结"强制 yolo"历史行为 vs Go 缺省不设模式只记宿主自报；显式 permission_mode 且回读不符双侧同拒；resumed/read-only 双侧都不切模式。
+
+## 第三轮复审（2026-09-20，PASS 附一项 P2，已修 `692dab3`→amend 收录记录）
+
+第三轮（对象 `6fa5a63`）结论 PASS，附非阻塞 P2：DSH 工具进度判据读 `update.content.toolCallId`，真实宿主（dsh-acp toolCallUpdate/toolResultUpdate）把 `toolCallId` 放 update 顶层——真实进度永不匹配、observed 滞后到 prompt 响应。主代理 10 秒 grep 亲核真实源码坐实后最小范围派发，3 分钟交付：判据改读顶层 `toolCallId` 并限定 `sessionUpdate∈{tool_call, tool_call_update}`（逐一核对真实宿主，未放宽），两处测试夹具与注释同步改真实形状。窄验证：r3 夹具 5/5 全绿（含 TestReviewDSHRealToolProgress）、harness 包全绿、差分 59 全绿、gofmt 干净。零模型调用。DSH 实机/实机分支覆盖缺口不变。
