@@ -350,4 +350,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-20（第十三轮，G3b 终态资源管理，轻装）】**十项终态判断迁入 Go（`internal/harness/retention.go`）：archive-inventory/destination/settled/index-plan、archive-verify（两阶段独立核验）、archive-stale、archive-projection（两阶段终态可查）、prune-admission/bind/plan。锁、SQLite backup、zip 读写、unlink、进程探测与 `_terminal` 的 LangGraph 只读终态读取留 Python；活动检查点未被改写（G3b 约束）。既有 `test_retention.py` 12 用例**逐字未改原样全绿**（错归档/中断/源数据变化不误删、崩溃恢复标记）；差分 26 用例＋Go 单测 27；亲验 Go 全仓 ok、Python 全套 327 OK、差分子集 180 OK、负控与分量路径探针通过，模型调用 0。子代理披露 7 项＋主代理复核补 2 项有界差异（含 ARCHIVE_EXISTS 时机后移、腐坏 marker 缺键角点、bool↔int 相等性沿 C4 先例）见 `go-engine-G3b.md`。**G3b 轻装收口，G1–G3 迁移链全部完成；下一单元 G4（Go 内核 K1–K5，新形态）派发前需与机主对齐。**
 
+> **【2026-09-20（第十四轮，G3b 评审返修收口，轻装）】**第十三轮收口被外部评审驳回（`/private/tmp/g3b-review/review.md`）：F1/P1＝清单整包过桥撞 8 MiB 桥接上限（30,006 文件真实 run 归档/读取/预览全挂，基线全过）；F2/P3＝Python 语义模拟辅助过度设计；F3/P3＝目的地已存在时先做全量 I/O 才拒绝（多读 16.8MB）。三项均主代理先亲复现再派发返修：v2＝分块（CHUNK=2000，Go 侧熔断）＋小事实载荷＋全类型化（语言兼容辅助全删）＋ARCHIVE_EXISTS 回基线位置＋新增 prune-marker，唯一大载荷回到 `canonical(index)` 一份＝基线容量包络。新增 30k 文件全链 scale 回归（22.5s）；评审脚本亲验回归：g3b verify PASS、三 CLI exit 0、重复输出零 I/O；test_retention.py 10 项原样全绿（初版记录误写 12，已更正）；retention 子集 44 项、全套与差分见提交时统计，模型调用 0。有界差异与容量包络声明见 `go-engine-G3b.md` 返修节。**G3b 返修收口，待外部评审复核；G4 仍待机主对齐。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

@@ -1,24 +1,36 @@
 package harness
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// The ten terminal-retention judgements below moved from retention.py (G3b).
+// The eleven terminal-retention judgements below moved from retention.py (G3b).
 // Each one is a plain function over its payload: the caller (retention.py)
 // keeps every filesystem fact — locking, hashing, the SQLite backup, zip
 // reading and writing, process probing and the deletions — and ships ordered
-// projections, so Python never re-derives a condition after the call. Value
-// payloads (the manifest contents, the marker, proofs) are decoded with
-// number fidelity and Python comparison semantics; a refusal is a typed
-// business outcome inside the value ({ok:false, refusal:...}) and retention.py
-// raises the HarnessError family directly from its text.
+// projections, so Python never re-derives a condition after the call.
+//
+// Inventories, member proofs and staleness comparisons never cross the bridge
+// whole: they travel in batches of at most retentionChunk entries, or as small
+// facts (bools, counts, strings), and every ordering is carried by arrays —
+// batch order follows the walk, entry order follows the manifest's sorted
+// files. Values are strictly typed; a refusal is a typed business outcome
+// inside the value ({ok:false, refusal:...}) and retention.py raises the
+// HarnessError family directly from its text. The one large payload that
+// remains is canonical(index) when the manifest is written, a single copy of
+// the index inside the capacity envelope the format has always had.
+
+// retentionChunk bounds the entry count of one batched call
+// (archive-inventory, archive-verify, archive-stale). It keeps every request
+// far below the bridge's fixed input ceiling; retention.py chunks with the
+// same number (its CHUNK constant). prune-plan is deliberately exempt: its
+// rows are name+size only (~80 bytes each), so one full call stays within the
+// ceiling for runs with tens of thousands of files.
+const retentionChunk = 2000
 
 var terminalStatuses = map[string]bool{
 	"HARNESS_COMPLETE": true,
@@ -46,11 +58,28 @@ var keepNames = map[string]bool{
 	"archive.json":            true,
 }
 
+// proofValue is the typed {sha256, size} fact Python's hashing produces.
+type proofValue struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
 func retentionRefusal(refusal string) map[string]any {
 	return map[string]any{"ok": false, "refusal": refusal}
 }
 func retentionOK() map[string]any {
 	return map[string]any{"ok": true}
+}
+
+// chunkLimit rejects an oversized batch: a caller that ships a whole
+// inventory in one request is the capacity regression the chunk rule exists
+// to prevent, so it fails loudly instead of silently approaching the bridge
+// input ceiling.
+func chunkLimit(operation string, count int) error {
+	if count > retentionChunk {
+		return fmt.Errorf("%s: %d entries exceed the %d-entry chunk limit", operation, count, retentionChunk)
+	}
+	return nil
 }
 
 // retentionDispatch routes one terminal-retention operation to its judgement.
@@ -61,7 +90,7 @@ func retentionDispatch(operation string, payload []byte) (any, error) {
 		if err := StrictDecode(payload, &q); err != nil {
 			return nil, err
 		}
-		return archiveInventoryOp(q), nil
+		return archiveInventoryOp(q)
 	case "archive-destination":
 		var q archiveDestinationInput
 		if err := StrictDecode(payload, &q); err != nil {
@@ -109,13 +138,19 @@ func retentionDispatch(operation string, payload []byte) (any, error) {
 		if err := StrictDecode(payload, &q); err != nil {
 			return nil, err
 		}
-		return pruneBind(q)
+		return pruneBind(q), nil
+	case "prune-marker":
+		var q pruneMarkerInput
+		if err := StrictDecode(payload, &q); err != nil {
+			return nil, err
+		}
+		return pruneMarkerOp(q), nil
 	case "prune-plan":
 		var q prunePlanInput
 		if err := StrictDecode(payload, &q); err != nil {
 			return nil, err
 		}
-		return prunePlan(q)
+		return prunePlanOp(q)
 	}
 	return nil, fmt.Errorf("unknown retention operation %q", operation)
 }
@@ -130,27 +165,32 @@ type archiveInventoryEntry struct {
 	Kind string `json:"kind"`
 }
 
-// archiveInventoryOp applies the member admission rule over the walked entries
-// (already in sorted-rglob order). Order is preserved verbatim: SKIP wins over
-// the symlink refusal, directories are skipped, and only plain files pass.
-func archiveInventoryOp(q archiveInventoryInput) map[string]any {
+// archiveInventoryOp applies the member admission rule over one batch of the
+// walked entries (at most retentionChunk, already in sorted-rglob order).
+// Order is preserved verbatim: SKIP wins over the symlink refusal, directories
+// are skipped, and only plain files pass. The caller concatenates batches, so
+// the global order is the batch order and the first refusing batch decides.
+func archiveInventoryOp(q archiveInventoryInput) (map[string]any, error) {
+	if err := chunkLimit("archive-inventory", len(q.Entries)); err != nil {
+		return nil, err
+	}
 	files := []string{}
 	for _, entry := range q.Entries {
 		if skipNames[entry.Name] {
 			continue
 		}
 		if entry.Kind == "symlink" {
-			return retentionRefusal("ARCHIVE_UNSUPPORTED: symlink " + entry.Name + "; no files deleted")
+			return retentionRefusal("ARCHIVE_UNSUPPORTED: symlink " + entry.Name + "; no files deleted"), nil
 		}
 		if entry.Kind == "dir" {
 			continue
 		}
 		if entry.Kind != "file" {
-			return retentionRefusal("ARCHIVE_UNSUPPORTED: non-regular entry " + entry.Name)
+			return retentionRefusal("ARCHIVE_UNSUPPORTED: non-regular entry " + entry.Name), nil
 		}
 		files = append(files, entry.Name)
 	}
-	return map[string]any{"ok": true, "files": files}
+	return map[string]any{"ok": true, "files": files}, nil
 }
 
 // ---- 2. archive-destination ---------------------------------------------------
@@ -183,8 +223,14 @@ type settledJob struct {
 	Processes  []settledProcess `json:"processes"`
 }
 type settledProcess struct {
-	PID   json.RawMessage `json:"pid"`
-	Probe string          `json:"probe"`
+	// PID is the recorded identity as a plain int (null when the record held
+	// no integer at all); PIDValid is the Python-side fact
+	// isinstance(pid, int) and not isinstance(pid, bool) and pid > 0. The
+	// bool exclusion is the owner's ruling: CPython's isinstance(True, int)
+	// quirk is deliberately not emulated on either side of the bridge.
+	PID      *int64 `json:"pid"`
+	PIDValid bool   `json:"pid_valid"`
+	Probe    string `json:"probe"`
 }
 
 // archiveSettled merges the terminal-set check with job settlement, keeping
@@ -201,15 +247,14 @@ func archiveSettled(q archiveSettledInput) map[string]any {
 			return retentionRefusal("RUN_UNSETTLED: " + job.Name + " has no exit receipt; no cleanup")
 		}
 		for _, process := range job.Processes {
-			pid, ok := pythonInteger(process.PID)
-			if !ok || pid.Sign() <= 0 {
+			if !process.PIDValid || process.PID == nil {
 				return retentionRefusal("RUN_UNSETTLED: invalid process identity")
 			}
 			switch process.Probe {
 			case "permission":
 				return retentionRefusal("RUN_UNSETTLED: process cannot be checked")
 			case "alive":
-				return retentionRefusal("RUN_UNSETTLED: PID " + pid.String() + " still exists; no cleanup")
+				return retentionRefusal("RUN_UNSETTLED: PID " + strconv.FormatInt(*process.PID, 10) + " still exists; no cleanup")
 			}
 		}
 	}
@@ -219,267 +264,187 @@ func archiveSettled(q archiveSettledInput) map[string]any {
 // ---- 4. archive-index-plan ---------------------------------------------------
 
 type archiveIndexPlanInput struct {
-	DestinationExists     bool                       `json:"destination_exists"`
-	SourceDirectory       string                     `json:"source_directory"`
-	RunID                 string                     `json:"run_id"`
-	Revision              string                     `json:"revision"`
-	RuntimeIdentity       string                     `json:"runtime_identity"`
-	Status                json.RawMessage            `json:"status"`
-	Files                 map[string]json.RawMessage `json:"files"`
-	DatabaseLogicalSHA256 string                     `json:"database_logical_sha256"`
-	CheckpointsProof      json.RawMessage            `json:"checkpoints_proof"`
+	SourceDirectory       string          `json:"source_directory"`
+	RunID                 string          `json:"run_id"`
+	Revision              string          `json:"revision"`
+	RuntimeIdentity       string          `json:"runtime_identity"`
+	Status                json.RawMessage `json:"status"`
+	DatabaseLogicalSHA256 string          `json:"database_logical_sha256"`
 }
 
-// archiveIndexPlan refuses an existing destination and assembles the archive
-// index. The Python caller writes canonical(index), and canonical JSON sorts
-// keys, so the response's map encoding loses nothing. The document order of
-// the pre-migration literal was format, source_directory, run_id, revision,
-// runtime_identity, status, files, database_logical_sha256.
+// archiveIndexPlan assembles the archive index skeleton — every field except
+// the files proofs, which the caller joins locally. The destination-exists
+// refusal is NOT judged here: archive_run checks it in Python right after the
+// terminal verdict, before any inventory or backup work, exactly where the
+// pre-migration guard sat.
 func archiveIndexPlan(q archiveIndexPlanInput) (map[string]any, error) {
-	status, err := decodeValue(q.Status)
-	if err != nil {
+	if _, err := decodeValue(q.Status); err != nil {
 		return nil, fmt.Errorf("archive-index-plan: malformed status: %w", err)
 	}
-	files := make(map[string]any, len(q.Files)+1)
-	for name, raw := range q.Files {
-		value, err := decodeValue(raw)
-		if err != nil {
-			return nil, fmt.Errorf("archive-index-plan: malformed proof for %s: %w", name, err)
-		}
-		files[name] = value
-	}
-	proof, err := decodeValue(q.CheckpointsProof)
-	if err != nil {
-		return nil, fmt.Errorf("archive-index-plan: malformed checkpoints proof: %w", err)
-	}
-	if q.DestinationExists {
-		return retentionRefusal("ARCHIVE_EXISTS: use a new destination; not overwritten"), nil
-	}
-	files["checkpoints.sqlite"] = proof
-	index := map[string]any{
+	return map[string]any{"ok": true, "skeleton": map[string]any{
 		"format":                  "formal-gates-archive-v1",
 		"source_directory":        q.SourceDirectory,
 		"run_id":                  q.RunID,
 		"revision":                q.Revision,
 		"runtime_identity":        q.RuntimeIdentity,
-		"status":                  status,
-		"files":                   files,
+		"status":                  q.Status,
 		"database_logical_sha256": q.DatabaseLogicalSHA256,
-	}
-	return map[string]any{"ok": true, "index": index}, nil
+	}}, nil
 }
 
 // ---- 5. archive-verify ---------------------------------------------------
 
 type archiveVerifyInput struct {
-	Names        []string        `json:"names"`
-	Index        json.RawMessage `json:"index"`
-	MemberProofs json.RawMessage `json:"member_proofs"`
+	// The small facts the Python reader derived from the zip before any
+	// member was hashed. Every batch carries them, so the verdict order is
+	// idempotent: duplicates, format/terminal status, the exact member set,
+	// then this batch's entries.
+	Duplicates bool          `json:"duplicates"`
+	Format     *string       `json:"format"`
+	StatusName *string       `json:"status_name"`
+	NamesMatch bool          `json:"names_match"`
+	Entries    []verifyEntry `json:"entries"`
+}
+type verifyEntry struct {
+	Name     string     `json:"name"`
+	Actual   proofValue `json:"actual"`
+	Expected proofValue `json:"expected"`
 }
 
-// archiveVerify is the standalone verification in two phases over one
-// operation. Without `index` it only rejects duplicate zip members; with it,
-// the manifest rules run in the pre-migration order: format and terminal
-// status, the exact member set, then per-name safety and content in the
-// manifest's files order. Python has already produced the wrapped KeyError
-// for a missing status/files key before this second phase is called.
+// archiveVerify is the standalone verification over facts plus one batch of
+// member entries (manifest files order, which for a canonical manifest is
+// sorted order). Per entry, safety runs before the typed content comparison,
+// and the first offending entry in the batch decides.
 func archiveVerify(q archiveVerifyInput) (map[string]any, error) {
-	names := uniqueNames(q.Names)
-	if len(q.Index) == 0 {
-		if len(names) != len(q.Names) {
-			return retentionRefusal("ARCHIVE_INVALID: duplicate members"), nil
-		}
-		return retentionOK(), nil
+	if err := chunkLimit("archive-verify", len(q.Entries)); err != nil {
+		return nil, err
 	}
-	decoded, err := decodeOrdered(q.Index)
-	if err != nil {
-		return nil, fmt.Errorf("archive-verify: malformed index: %w", err)
+	if q.Duplicates {
+		return retentionRefusal("ARCHIVE_INVALID: duplicate members"), nil
 	}
-	index, _ := decoded.(*orderedObject)
-	if index == nil {
-		index = &orderedObject{values: map[string]any{}}
-	}
-	// Python's index.get('format') and index['status']['status']: the format
-	// default only covers the absent key; a non-string status name is simply
-	// not a member of the terminal set.
-	if !pythonEqual(index.values["format"], "formal-gates-archive-v1") {
+	if q.Format == nil || *q.Format != "formal-gates-archive-v1" ||
+		q.StatusName == nil || !terminalStatuses[*q.StatusName] {
 		return retentionRefusal("ARCHIVE_INVALID: wrong format or nonterminal run"), nil
 	}
-	status, _ := index.values["status"].(*orderedObject)
-	var statusName any
-	if status != nil {
-		statusName = status.values["status"]
-	}
-	if !terminalStatusValue(statusName) {
-		return retentionRefusal("ARCHIVE_INVALID: wrong format or nonterminal run"), nil
-	}
-	files, _ := index.values["files"].(*orderedObject)
-	expected := map[string]bool{"archive-manifest.json": true}
-	fileNames := []string{}
-	if files != nil {
-		for _, name := range files.keys {
-			expected["run/"+name] = true
-			fileNames = append(fileNames, name)
-		}
-	}
-	if len(names) != len(expected) {
+	if !q.NamesMatch {
 		return retentionRefusal("ARCHIVE_INVALID: missing or extra members"), nil
 	}
-	for _, name := range names {
-		if !expected[name] {
-			return retentionRefusal("ARCHIVE_INVALID: missing or extra members"), nil
+	for _, entry := range q.Entries {
+		if unsafeMemberPath(entry.Name) {
+			return retentionRefusal("ARCHIVE_INVALID: unsafe member path"), nil
+		}
+		if entry.Actual != entry.Expected {
+			return retentionRefusal("ARCHIVE_INVALID: content differs: " + entry.Name), nil
 		}
 	}
-	var proofs map[string]any
-	if len(q.MemberProofs) > 0 {
-		value, err := decodeValue(q.MemberProofs)
-		if err != nil {
-			return nil, fmt.Errorf("archive-verify: malformed member proofs: %w", err)
-		}
-		proofs, _ = value.(map[string]any)
-	}
-	if files != nil {
-		for _, name := range files.keys {
-			if unsafeMemberPath(name) {
-				return retentionRefusal("ARCHIVE_INVALID: unsafe member path"), nil
-			}
-			if !pythonEqual(proofs[name], files.values[name]) {
-				return retentionRefusal("ARCHIVE_INVALID: content differs: " + name), nil
-			}
-		}
-	}
-	return map[string]any{"ok": true, "index": index.toPlain()}, nil
+	return retentionOK(), nil
 }
 
 // ---- 6. archive-stale ---------------------------------------------------
 
 type archiveStaleInput struct {
-	Current                   json.RawMessage `json:"current"`
-	Files                     json.RawMessage `json:"files"`
-	AllowMissing              bool            `json:"allow_missing"`
-	DatabaseLogicalSHA256     json.RawMessage `json:"database_logical_sha256"`
-	LiveDatabaseLogicalSHA256 string          `json:"live_database_logical_sha256"`
+	// Facts phase: has_new/has_missing present, entries absent. A nil HasNew
+	// marks the entries phase instead.
+	HasNew       *bool               `json:"has_new"`
+	HasMissing   *bool               `json:"has_missing"`
+	AllowMissing bool                `json:"allow_missing"`
+	Entries      []archiveStaleEntry `json:"entries"`
+}
+type archiveStaleEntry struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// File rows compare the byte proofs; the database row compares the two
+	// logical-hash strings (iterdump hash, not the byte proof). Only the pair
+	// the kind names is present in a well-formed row.
+	ActualProof   *proofValue `json:"actual_proof"`
+	ExpectedProof *proofValue `json:"expected_proof"`
+	ActualDB      *string     `json:"actual_db"`
+	ExpectedDB    *string     `json:"expected_db"`
 }
 
-// archiveStale judges source drift. `current` is the live inventory (hashed by
-// Python); `files` and `database_logical_sha256` are the index expectations.
-// The checkpoints.sqlite comparison is logical (iterdump hash), not the byte
-// proof, so Python ships the live logical hash alongside; both sides stay
-// facts the sqlite reader in Python produced.
+// archiveStale judges source drift in two segments. The facts segment keeps
+// the pre-migration rule order: new files first, then (unless missing entries
+// are allowed) set equality. The entries segment walks the live inventory in
+// the caller's current-iteration order and refuses on the first row whose
+// proof (or logical database hash) differs from the index expectation.
 func archiveStale(q archiveStaleInput) (map[string]any, error) {
-	current, files, err := decodeStaleSides(q.Current, q.Files)
-	if err != nil {
+	if q.HasNew != nil {
+		if *q.HasNew {
+			return retentionRefusal("ARCHIVE_STALE: new files appeared; no deletion"), nil
+		}
+		if !q.AllowMissing && *q.HasMissing {
+			return retentionRefusal("ARCHIVE_STALE: source files missing"), nil
+		}
+		return retentionOK(), nil
+	}
+	if err := chunkLimit("archive-stale", len(q.Entries)); err != nil {
 		return nil, err
 	}
-	indexDB, err := decodeValue(q.DatabaseLogicalSHA256)
-	if err != nil {
-		return nil, fmt.Errorf("archive-stale: malformed logical hash: %w", err)
-	}
-	if refusal := judgeStaleness(current, files, q.AllowMissing, indexDB, q.LiveDatabaseLogicalSHA256); refusal != "" {
-		return retentionRefusal(refusal), nil
-	}
-	return retentionOK(), nil
-}
-
-// decodeStaleSides decodes the live inventory (document order kept, the
-// "source differs" naming follows it) and the index expectation map.
-func decodeStaleSides(currentRaw, filesRaw []byte) (*orderedObject, map[string]any, error) {
-	current, err := decodeOrderedObject(currentRaw)
-	if err != nil {
-		return nil, nil, fmt.Errorf("archive-stale: malformed current inventory: %w", err)
-	}
-	files, err := decodePlainObject(filesRaw)
-	if err != nil {
-		return nil, nil, fmt.Errorf("archive-stale: malformed expected files: %w", err)
-	}
-	return current, files, nil
-}
-
-// judgeStaleness keeps the pre-migration rule order: new files first, then
-// (unless missing entries are allowed) set equality, then per-name comparison
-// in current's iteration order with the checkpoints.sqlite logical special
-// case. An empty refusal means the source still matches the index.
-func judgeStaleness(current *orderedObject, files map[string]any, allowMissing bool, indexDB any, liveDB string) string {
-	for _, name := range current.keys {
-		if _, ok := files[name]; !ok {
-			return "ARCHIVE_STALE: new files appeared; no deletion"
-		}
-	}
-	if !allowMissing && len(current.keys) != len(files) {
-		return "ARCHIVE_STALE: source files missing"
-	}
-	for _, name := range current.keys {
+	for _, entry := range q.Entries {
 		var equal bool
-		if name == "checkpoints.sqlite" {
-			equal = pythonEqual(liveDB, indexDB)
-		} else {
-			equal = pythonEqual(current.values[name], files[name])
+		switch entry.Kind {
+		case "database":
+			equal = entry.ActualDB != nil && entry.ExpectedDB != nil && *entry.ActualDB == *entry.ExpectedDB
+		case "file":
+			equal = entry.ActualProof != nil && entry.ExpectedProof != nil && *entry.ActualProof == *entry.ExpectedProof
+		default:
+			return nil, fmt.Errorf("archive-stale: unknown entry kind %q", entry.Kind)
 		}
 		if !equal {
-			return "ARCHIVE_STALE: source differs: " + name
+			return retentionRefusal("ARCHIVE_STALE: source differs: " + entry.Name), nil
 		}
 	}
-	return ""
+	return retentionOK(), nil
 }
 
 // ---- 7. archive-projection ---------------------------------------------------
 
 type archiveProjectionInput struct {
-	Index        json.RawMessage `json:"index"`
-	Archive      string          `json:"archive"`
-	ArchiveProof json.RawMessage `json:"archive_proof"`
-	Marker       json.RawMessage `json:"marker"`
-	Directory    string          `json:"directory"`
+	// Pre-check phase (no status yet): the marker proof comparison
+	// archived_status runs BEFORE opening the zip. Full phase: status present.
+	Status          json.RawMessage        `json:"status"`
+	SourceDirectory string                 `json:"source_directory"`
+	FileCount       int                    `json:"file_count"`
+	Archive         string                 `json:"archive"`
+	ArchiveProof    *proofValue            `json:"archive_proof"`
+	Marker          *projectionMarkerInput `json:"marker"`
+	Directory       string                 `json:"directory"`
 }
 
-// archiveProjection serves both status readers in two phases over one
-// operation (the archive-verify pattern). Without `index` it is the pre-check
-// archived_status runs BEFORE opening the zip: a present marker whose
-// archive_proof no longer matches the retained bytes refuses ARCHIVE_CHANGED
-// before any zip work, exactly as the pre-migration comparison did. With the
-// verified index, the plain projection (no marker) or the full tombstone
-// path runs: ARCHIVE_CHANGED, then the run_id/revision/source_directory
-// binding (ARCHIVE_BINDING), then cleanup_complete joining the projection
-// with Python's marker.get default. Python has already touched the marker
-// keys, so a missing key keeps today's raw KeyError there.
+// projectionMarkerInput carries the marker fields each phase needs; the
+// caller builds it with natural key accesses so a corrupt marker keeps the
+// pre-migration raw KeyError on the Python side.
+type projectionMarkerInput struct {
+	ArchiveProof    *proofValue     `json:"archive_proof"`
+	RunID           *string         `json:"run_id"`
+	Revision        *string         `json:"revision"`
+	CleanupComplete json.RawMessage `json:"cleanup_complete"`
+}
+
+// archiveProjection serves both status readers. Without `status` it is the
+// pre-check archived_status runs BEFORE opening the zip: a present marker
+// whose archive_proof no longer matches the retained bytes refuses
+// ARCHIVE_CHANGED before any zip work. With the verified status it builds the
+// plain projection (no marker) or the full tombstone path: the
+// run_id/revision/source_directory binding (ARCHIVE_BINDING), then
+// cleanup_complete joining the projection with Python's marker.get default.
 func archiveProjection(q archiveProjectionInput) (map[string]any, error) {
-	markerPresent := len(q.Marker) > 0 && string(q.Marker) != "null"
-	var marker map[string]any
-	var proof any
-	if markerPresent {
-		markerValue, err := decodeOrdered(q.Marker)
-		if err != nil {
-			return nil, fmt.Errorf("archive-projection: malformed marker: %w", err)
+	if len(q.Status) == 0 {
+		if q.Marker != nil && q.Marker.ArchiveProof != nil {
+			if q.ArchiveProof == nil || *q.ArchiveProof != *q.Marker.ArchiveProof {
+				return retentionRefusal("ARCHIVE_CHANGED: retained archive missing or altered"), nil
+			}
 		}
-		marker, _ = plainValue(markerValue).(map[string]any)
-		if marker == nil {
-			marker = map[string]any{}
-		}
-		proof, err = decodeValue(q.ArchiveProof)
-		if err != nil {
-			return nil, fmt.Errorf("archive-projection: malformed archive proof: %w", err)
-		}
-		if !pythonEqual(proof, marker["archive_proof"]) {
-			return retentionRefusal("ARCHIVE_CHANGED: retained archive missing or altered"), nil
-		}
-	}
-	if len(q.Index) == 0 {
-		// Pre-check phase: no index yet, nothing else to judge.
 		return retentionOK(), nil
 	}
-	indexValue, err := decodeValue(q.Index)
+	statusValue, err := decodeValue(q.Status)
 	if err != nil {
-		return nil, fmt.Errorf("archive-projection: malformed index: %w", err)
+		return nil, fmt.Errorf("archive-projection: malformed status: %w", err)
 	}
-	index, _ := indexValue.(map[string]any)
-	if index == nil {
-		index = map[string]any{}
+	status, ok := statusValue.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("archive-projection: status is not an object")
 	}
-	status, _ := index["status"].(map[string]any)
-	if status == nil {
-		status = map[string]any{}
-	}
-	files, _ := index["files"].(map[string]any)
 	projection := make(map[string]any, len(status)+6)
 	for key, value := range status {
 		projection[key] = value
@@ -487,20 +452,23 @@ func archiveProjection(q archiveProjectionInput) (map[string]any, error) {
 	projection["archived"] = true
 	projection["archive"] = q.Archive
 	projection["archive_verified"] = true
-	projection["source_directory"] = index["source_directory"]
-	projection["file_count"] = len(files)
+	projection["source_directory"] = q.SourceDirectory
+	projection["file_count"] = q.FileCount
 	projection["model_calls"] = 0
-	if !markerPresent {
+	if q.Marker == nil {
 		return map[string]any{"ok": true, "status": projection}, nil
 	}
-	if !pythonEqual(projection["run_id"], marker["run_id"]) ||
-		!pythonEqual(projection["revision"], marker["revision"]) ||
-		!pythonEqual(projection["source_directory"], q.Directory) {
+	if q.Marker.RunID == nil || q.Marker.Revision == nil ||
+		status["run_id"] != *q.Marker.RunID || status["revision"] != *q.Marker.Revision ||
+		q.SourceDirectory != q.Directory {
 		return retentionRefusal("ARCHIVE_BINDING: tombstone does not match archive"), nil
 	}
-	cleanup, ok := marker["cleanup_complete"] // marker.get(..., False)
-	if !ok {
-		cleanup = false
+	cleanup := any(false) // marker.get('cleanup_complete', False)
+	if len(q.Marker.CleanupComplete) > 0 {
+		cleanup, err = decodeValue(q.Marker.CleanupComplete)
+		if err != nil {
+			return nil, fmt.Errorf("archive-projection: malformed cleanup_complete: %w", err)
+		}
 	}
 	projection["cleanup_complete"] = cleanup
 	return map[string]any{"ok": true, "status": projection}, nil
@@ -533,97 +501,73 @@ func pruneAdmission(q pruneAdmissionInput) map[string]any {
 // ---- 9. prune-bind ---------------------------------------------------
 
 type pruneBindInput struct {
-	Directory       string          `json:"directory"`
-	RunID           string          `json:"run_id"`
-	Revision        string          `json:"revision"`
-	SourceDirectory json.RawMessage `json:"source_directory"`
-	IndexRunID      json.RawMessage `json:"index_run_id"`
-	IndexRevision   json.RawMessage `json:"index_revision"`
+	Directory       string `json:"directory"`
+	RunID           string `json:"run_id"`
+	Revision        string `json:"revision"`
+	SourceDirectory string `json:"source_directory"`
+	IndexRunID      string `json:"index_run_id"`
+	IndexRevision   string `json:"index_revision"`
 }
 
 // pruneBind requires the archive index to name exactly this run, revision and
-// directory. The index fields are values from a possibly foreign manifest, so
-// they compare under Python equality (a non-string can never match).
-func pruneBind(q pruneBindInput) (map[string]any, error) {
-	source, err := decodeValue(q.SourceDirectory)
-	if err != nil {
-		return nil, fmt.Errorf("prune-bind: malformed source directory: %w", err)
+// directory. The index fields come from a possibly foreign manifest; the
+// caller normalizes a non-string value to null (which decodes as the empty
+// string), so a heterogeneous value can never match a real identity.
+func pruneBind(q pruneBindInput) map[string]any {
+	if q.SourceDirectory != q.Directory || q.IndexRunID != q.RunID || q.IndexRevision != q.Revision {
+		return retentionRefusal("ARCHIVE_BINDING: wrong run/revision")
 	}
-	runID, err := decodeValue(q.IndexRunID)
-	if err != nil {
-		return nil, fmt.Errorf("prune-bind: malformed index run id: %w", err)
-	}
-	revision, err := decodeValue(q.IndexRevision)
-	if err != nil {
-		return nil, fmt.Errorf("prune-bind: malformed index revision: %w", err)
-	}
-	if !pythonEqual(source, q.Directory) || !pythonEqual(runID, q.RunID) || !pythonEqual(revision, q.Revision) {
-		return retentionRefusal("ARCHIVE_BINDING: wrong run/revision"), nil
-	}
-	return retentionOK(), nil
+	return retentionOK()
 }
 
-// ---- 10. prune-plan ---------------------------------------------------
+// ---- 10. prune-marker ---------------------------------------------------
+
+type pruneMarkerInput struct {
+	Archive            string     `json:"archive"`
+	ArchiveProof       proofValue `json:"archive_proof"`
+	MarkerArchive      string     `json:"marker_archive"`
+	MarkerArchiveProof proofValue `json:"marker_archive_proof"`
+}
+
+// pruneMarker binds a re-entered prune to the archive the tombstone recorded.
+// It runs after the terminal verdict and before any staleness work, exactly
+// where the pre-migration `if marker and (...)` comparison sat; the caller
+// invokes it only for a truthy marker.
+func pruneMarkerOp(q pruneMarkerInput) map[string]any {
+	if q.Archive != q.MarkerArchive || q.ArchiveProof != q.MarkerArchiveProof {
+		return retentionRefusal("ARCHIVE_BINDING: use the original cleanup archive")
+	}
+	return retentionOK()
+}
+
+// ---- 11. prune-plan ---------------------------------------------------
 
 type prunePlanInput struct {
-	Marker                    json.RawMessage `json:"marker"`
-	Archive                   string          `json:"archive"`
-	ArchiveProof              json.RawMessage `json:"archive_proof"`
-	Current                   json.RawMessage `json:"current"`
-	Files                     json.RawMessage `json:"files"`
-	DatabaseLogicalSHA256     json.RawMessage `json:"database_logical_sha256"`
-	LiveDatabaseLogicalSHA256 string          `json:"live_database_logical_sha256"`
-	AllowMissing              bool            `json:"allow_missing"`
-	RunID                     string          `json:"run_id"`
-	Revision                  string          `json:"revision"`
-	TerminalStatus            string          `json:"terminal_status"`
-	Directory                 string          `json:"directory"`
+	// One full call in current-inventory order: name+size rows only, never a
+	// proof, so the payload stays around 80 bytes per file.
+	Entries        []prunePlanEntry `json:"entries"`
+	RunID          string           `json:"run_id"`
+	Revision       string           `json:"revision"`
+	TerminalStatus string           `json:"terminal_status"`
+	Archive        string           `json:"archive"`
+	MarkerExists   bool             `json:"marker_exists"`
+}
+type prunePlanEntry struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
-// prunePlan keeps the pre-migration order: the marker binding first (only
-// when the marker is truthy, matching `if marker and ...`), then the same
-// staleness rules as archive-stale, then the removal plan — everything not in
-// KEEP, deepest path first, ties by name. The report and the tombstone plan
-// are facts assembled here; the deletions and the atomic marker write stay in
-// Python.
-func prunePlan(q prunePlanInput) (map[string]any, error) {
-	markerPresent := len(q.Marker) > 0 && string(q.Marker) != "null"
-	var marker any
-	if markerPresent {
-		decoded, err := decodeOrdered(q.Marker)
-		if err != nil {
-			return nil, fmt.Errorf("prune-plan: malformed marker: %w", err)
-		}
-		marker = decoded
-		if pythonTruthy(marker) {
-			markerMap, _ := plainValue(marker).(map[string]any)
-			if markerMap == nil {
-				markerMap = map[string]any{}
-			}
-			proof, err := decodeValue(q.ArchiveProof)
-			if err != nil {
-				return nil, fmt.Errorf("prune-plan: malformed archive proof: %w", err)
-			}
-			if !pythonEqual(markerMap["archive"], q.Archive) || !pythonEqual(markerMap["archive_proof"], proof) {
-				return retentionRefusal("ARCHIVE_BINDING: use the original cleanup archive"), nil
-			}
-		}
-	}
-	current, files, err := decodeStaleSides(q.Current, q.Files)
-	if err != nil {
-		return nil, err
-	}
-	indexDB, err := decodeValue(q.DatabaseLogicalSHA256)
-	if err != nil {
-		return nil, fmt.Errorf("prune-plan: malformed logical hash: %w", err)
-	}
-	if refusal := judgeStaleness(current, files, q.AllowMissing, indexDB, q.LiveDatabaseLogicalSHA256); refusal != "" {
-		return retentionRefusal(refusal), nil
-	}
+// prunePlan builds the removal plan: everything not in KEEP, deepest path
+// first, ties by name. The report keys match the pre-migration preview; the
+// tombstone plan is attached only when no marker exists yet. The plan's
+// archive_proof is merged by the caller, which owns the hashing.
+func prunePlanOp(q prunePlanInput) (map[string]any, error) {
+	sizes := make(map[string]int64, len(q.Entries))
 	remove := []string{}
-	for _, name := range current.keys {
-		if !keepNames[name] {
-			remove = append(remove, name)
+	for _, entry := range q.Entries {
+		sizes[entry.Name] = entry.Size
+		if !keepNames[entry.Name] {
+			remove = append(remove, entry.Name)
 		}
 	}
 	sort.Slice(remove, func(i, j int) bool {
@@ -633,277 +577,33 @@ func prunePlan(q prunePlanInput) (map[string]any, error) {
 		}
 		return remove[i] < remove[j]
 	})
+	var bytesToRemove int64
+	for _, name := range remove {
+		bytesToRemove += sizes[name]
+	}
 	report := map[string]any{
 		"status":          "PRUNE_PREVIEW",
 		"run_id":          q.RunID,
 		"terminal_status": q.TerminalStatus,
 		"archive":         q.Archive,
 		"files_to_remove": len(remove),
-		"bytes_to_remove": sumSizes(current, remove),
+		"bytes_to_remove": bytesToRemove,
 		"model_calls":     0,
 	}
 	var plan any
-	if !markerPresent {
-		proof, err := decodeValue(q.ArchiveProof)
-		if err != nil {
-			return nil, fmt.Errorf("prune-plan: malformed archive proof: %w", err)
-		}
+	if !q.MarkerExists {
 		plan = map[string]any{
 			"format":           "formal-gates-prune-v1",
 			"run_id":           q.RunID,
 			"revision":         q.Revision,
 			"archive":          q.Archive,
-			"archive_proof":    proof,
 			"cleanup_complete": false,
 		}
 	}
 	return map[string]any{"ok": true, "report": report, "remove": remove, "marker": plan}, nil
 }
 
-// ---- shared value and path helpers -----------------------------------------
-
-// orderedObject is a JSON object decoded with number fidelity whose key order
-// survives, so iterations name the same entry Python's ordered dicts named.
-type orderedObject struct {
-	keys   []string
-	values map[string]any
-}
-
-// decodeOrdered parses a JSON value keeping object key order. Duplicate keys
-// keep their first position with their last value, matching Python's dict.
-func decodeOrdered(raw []byte) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	return orderedValue(decoder)
-}
-
-func orderedValue(decoder *json.Decoder) (any, error) {
-	token, err := decoder.Token()
-	if err != nil {
-		return nil, err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return token, nil // string, json.Number, bool or nil
-	}
-	switch delim {
-	case '{':
-		object := &orderedObject{values: map[string]any{}}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return nil, err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return nil, fmt.Errorf("object key is not a string")
-			}
-			value, err := orderedValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			if _, exists := object.values[key]; !exists {
-				object.keys = append(object.keys, key)
-			}
-			object.values[key] = value
-		}
-		if _, err := decoder.Token(); err != nil { // consume '}'
-			return nil, err
-		}
-		return object, nil
-	case '[':
-		list := []any{}
-		for decoder.More() {
-			value, err := orderedValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			list = append(list, value)
-		}
-		if _, err := decoder.Token(); err != nil { // consume ']'
-			return nil, err
-		}
-		return list, nil
-	}
-	return nil, fmt.Errorf("unexpected delimiter %v", delim)
-}
-
-// toPlain converts ordered objects into plain maps for the answer value; the
-// transport encodes maps with sorted keys and canonical JSON sorts anyway.
-func (o *orderedObject) toPlain() map[string]any {
-	plain := make(map[string]any, len(o.keys))
-	for _, key := range o.keys {
-		plain[key] = plainValue(o.values[key])
-	}
-	return plain
-}
-
-// plainValue recursively replaces ordered objects with plain maps.
-func plainValue(value any) any {
-	switch typed := value.(type) {
-	case *orderedObject:
-		return typed.toPlain()
-	case []any:
-		list := make([]any, len(typed))
-		for i, item := range typed {
-			list[i] = plainValue(item)
-		}
-		return list
-	}
-	return value
-}
-
-func decodeOrderedObject(raw []byte) (*orderedObject, error) {
-	decoded, err := decodeOrdered(raw)
-	if err != nil {
-		return nil, err
-	}
-	object, _ := decoded.(*orderedObject)
-	if object == nil {
-		object = &orderedObject{values: map[string]any{}}
-	}
-	return object, nil
-}
-
-func decodePlainObject(raw []byte) (map[string]any, error) {
-	value, err := decodeValue(raw)
-	if err != nil {
-		return nil, err
-	}
-	object, _ := value.(map[string]any)
-	if object == nil {
-		object = map[string]any{}
-	}
-	return object, nil
-}
-
-// pythonEqual reproduces Python's == over decoded JSON values: type-strict
-// for null/bool/string, numerically exact across int and float literals, and
-// order-independent and recursive for containers.
-func pythonEqual(a, b any) bool {
-	a, b = plainValue(a), plainValue(b)
-	switch x := a.(type) {
-	case nil:
-		return b == nil
-	case bool:
-		y, ok := b.(bool)
-		return ok && x == y
-	case string:
-		y, ok := b.(string)
-		return ok && x == y
-	case json.Number:
-		y, ok := b.(json.Number)
-		if !ok {
-			return false
-		}
-		ra, oka := numberRat(x)
-		rb, okb := numberRat(y)
-		return oka && okb && ra.Cmp(rb) == 0
-	case []any:
-		y, ok := b.([]any)
-		if !ok || len(x) != len(y) {
-			return false
-		}
-		for i := range x {
-			if !pythonEqual(x[i], y[i]) {
-				return false
-			}
-		}
-		return true
-	case map[string]any:
-		y, ok := b.(map[string]any)
-		if !ok || len(x) != len(y) {
-			return false
-		}
-		for key, value := range x {
-			other, ok := y[key]
-			if !ok || !pythonEqual(value, other) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// pythonTruthy reproduces Python truthiness; prune's marker binding gate was
-// `if marker and ...`, so an empty marker object skips the check exactly as
-// before.
-func pythonTruthy(value any) bool {
-	switch typed := plainValue(value).(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case json.Number:
-		r, ok := numberRat(typed)
-		return ok && r.Sign() != 0
-	case string:
-		return typed != ""
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	}
-	return true
-}
-
-// numberRat maps a JSON number literal onto the exact rational Python would
-// compare: integer literals stay arbitrary precision, float literals go
-// through the float64 the parser produced.
-func numberRat(n json.Number) (*big.Rat, bool) {
-	literal := n.String()
-	if !strings.ContainsAny(literal, ".eE") {
-		integer, ok := new(big.Int).SetString(literal, 10)
-		if !ok {
-			return nil, false
-		}
-		return new(big.Rat).SetInt(integer), true
-	}
-	value, err := strconv.ParseFloat(literal, 64)
-	if err != nil {
-		return nil, false
-	}
-	return new(big.Rat).SetFloat64(value), true
-}
-
-// pythonInteger reports the int a pid literal must be: a JSON integer
-// literal, positive. Note: CPython's isinstance(True, int) let a JSON true
-// through the pre-migration check; Go refuses it — an intentional divergence
-// from mechanical CPython emulation, ruled by the owner.
-func pythonInteger(raw []byte) (*big.Int, bool) {
-	literal := string(raw)
-	if literal == "" {
-		return nil, false
-	}
-	if strings.ContainsAny(literal, ".eE") {
-		return nil, false
-	}
-	value, ok := new(big.Int).SetString(literal, 10)
-	if !ok {
-		return nil, false
-	}
-	return value, true
-}
-
-// terminalStatusValue is set membership with Python semantics: only a string
-// can be a member, any other value is simply not terminal.
-func terminalStatusValue(value any) bool {
-	name, ok := value.(string)
-	return ok && terminalStatuses[name]
-}
-
-func uniqueNames(names []string) []string {
-	seen := make(map[string]bool, len(names))
-	unique := make([]string, 0, len(names))
-	for _, name := range names {
-		if !seen[name] {
-			seen[name] = true
-			unique = append(unique, name)
-		}
-	}
-	return unique
-}
+// ---- shared path helpers -----------------------------------------
 
 // unsafeMemberPath is the PurePosixPath rule: absolute, a '..' component, or
 // a backslash anywhere.
@@ -953,46 +653,4 @@ func parentDirectory(path string) string {
 		return "/"
 	}
 	return "/" + strings.Join(components[:len(components)-1], "/")
-}
-
-// sumSizes adds the removal sizes in remove order, the way Python's sum()
-// did. Inventory sizes are integer literals; a float falls back to float64
-// accumulation in the same order.
-func sumSizes(current *orderedObject, remove []string) any {
-	total := new(big.Int)
-	mixed := false
-	floatSum := 0.0
-	for _, name := range remove {
-		number, ok := proofSize(current.values[name])
-		if !ok {
-			continue // sizes are proof fields; a non-number never reaches here
-		}
-		literal := number.String()
-		if !mixed && !strings.ContainsAny(literal, ".eE") {
-			if add, ok := new(big.Int).SetString(literal, 10); ok {
-				total.Add(total, add)
-				continue
-			}
-		}
-		if !mixed {
-			mixed = true
-			floatSum, _ = new(big.Float).SetInt(total).Float64()
-		}
-		if value, err := strconv.ParseFloat(literal, 64); err == nil {
-			floatSum += value
-		}
-	}
-	if !mixed {
-		return json.Number(total.String())
-	}
-	return floatSum
-}
-
-// proofSize reads the size field out of one inventory proof value.
-func proofSize(value any) (json.Number, bool) {
-	if proof, ok := plainValue(value).(map[string]any); ok {
-		number, ok := proof["size"].(json.Number)
-		return number, ok
-	}
-	return "", false
 }

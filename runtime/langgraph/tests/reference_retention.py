@@ -1,16 +1,18 @@
-"""Pre-migration reference copy of the ten retention judgements (G3b).
+"""Pre-migration reference copy of the retention judgements, on the v2 payloads (G3b rework).
 
-Test-only. Production must not import this module. The bodies below are the
-migration-PRIOR logic of retention.py at HEAD f287033 — inventory admission,
-the archive destination/settlement/index/verify/stale/projection rules and the
-prune admission/bind/plan rules — copied verbatim and lifted onto the payload
-shape the Go bridge operations take. Conditions, branch order and refusal
-wording are the contract the Go ops must reproduce.
+Test-only. Production must not import this module. The conditions, branch
+order and refusal wording below are the migration-PRIOR logic of retention.py
+at HEAD f287033, lifted onto the fact/chunk payload shapes the v2 Go bridge
+operations take: inventories, member proofs and staleness rows travel in
+CHUNK-sized batches, identities travel as small typed facts, every ordering is
+carried by arrays (batch order = walk order, verify entries = the manifest's
+sorted files, stale rows = current-iteration order), and a heterogeneous
+identity value is normalized to None exactly where the Python wrapper
+normalizes it before bridging.
 
-One deliberate, documented divergence: this reference keeps CPython's
-isinstance(int) semantics for pids (a JSON true would pass); the Go op refuses
-it. The corpus below avoids boolean pids so the differential pins everything
-else byte for byte.
+The corpus in test_retention_differential.py pins these shapes against the
+real Go binary call for call, so an implementation that re-wholes a payload,
+reorders the branches or moves a boundary by one turns the differential red.
 """
 from pathlib import PurePosixPath
 
@@ -18,6 +20,7 @@ TERMINAL = {'HARNESS_COMPLETE', 'DEMO_COMPLETE', 'ABORTED'}
 SKIP = {'runner.lock', 'checkpoints.sqlite-wal', 'checkpoints.sqlite-shm', 'archive.json'}
 KEEP = {'manifest.json', 'requirement.md', 'reviewer-base.md', 'runner.lock',
         'transport-adoption.json', 'harness-result.json', 'archive.json'}
+CHUNK = 2000  # mirrors retentionChunk in internal/harness/retention.go
 
 
 def _no(refusal):
@@ -25,7 +28,7 @@ def _no(refusal):
 
 
 def archive_inventory(entries):
-    """inventory()'s admission over [{name, kind}] in walked order, SKIP first."""
+    """inventory()'s admission over one batch of [{name, kind}] in walked order, SKIP first."""
     files = []
     for entry in entries:
         name, kind = entry['name'], entry['kind']
@@ -45,88 +48,95 @@ def archive_destination(directory, destination):
 
 
 def archive_settled(status_name, jobs):
-    """_terminal's status check plus ensure_jobs_settled, order preserved."""
+    """_terminal's status check plus ensure_jobs_settled, order preserved.
+
+    Each process carries the wrapper-computed pid_valid fact (isinstance int,
+    bool excluded, positive) and the plain-int pid (null for a record that
+    held no integer), so no CPython semantics are emulated here.
+    """
     if status_name not in TERMINAL:
         return _no('RUN_NOT_TERMINAL: active or paused run cannot be archived/pruned')
     for job in jobs:
         if job['has_request'] and not job['has_exit']:
             return _no(f"RUN_UNSETTLED: {job['name']} has no exit receipt; no cleanup")
         for process in job['processes']:
-            pid = process['pid']
-            if not isinstance(pid, int) or pid <= 0:
+            if not process['pid_valid'] or process['pid'] is None:
                 return _no('RUN_UNSETTLED: invalid process identity')
-            probe = process['probe']
-            if probe == 'permission':
+            if process['probe'] == 'permission':
                 return _no('RUN_UNSETTLED: process cannot be checked')
-            if probe == 'alive':
-                return _no(f'RUN_UNSETTLED: PID {pid} still exists; no cleanup')
+            if process['probe'] == 'alive':
+                return _no(f"RUN_UNSETTLED: PID {process['pid']} still exists; no cleanup")
     return {'ok': True}
 
 
-def archive_index_plan(destination_exists, source_directory, run_id, revision,
-                       runtime_identity, status, files, database_logical_sha256, checkpoints_proof):
-    """archive_run's existence refusal plus index assembly."""
-    if destination_exists:
-        return _no('ARCHIVE_EXISTS: use a new destination; not overwritten')
-    merged = dict(files); merged['checkpoints.sqlite'] = checkpoints_proof
-    return {'ok': True, 'index': {'format': 'formal-gates-archive-v1',
+def archive_index_plan(source_directory, run_id, revision, runtime_identity,
+                       status, database_logical_sha256):
+    """archive_run's index skeleton; the files proofs join on the Python side."""
+    return {'ok': True, 'skeleton': {'format': 'formal-gates-archive-v1',
             'source_directory': source_directory, 'run_id': run_id, 'revision': revision,
-            'runtime_identity': runtime_identity, 'status': status, 'files': merged,
+            'runtime_identity': runtime_identity, 'status': status,
             'database_logical_sha256': database_logical_sha256}}
 
 
-def archive_verify(names, index=None, member_proofs=None):
-    """checked_archive in two phases: names only, then the manifest rules."""
-    if index is None:
-        if len(names) != len(set(names)): return _no('ARCHIVE_INVALID: duplicate members')
-        return {'ok': True}
-    if index.get('format') != 'formal-gates-archive-v1' or index['status']['status'] not in TERMINAL:
+def archive_verify(duplicates, format, status_name, names_match, entries):
+    """checked_archive over facts plus one batch of entries, verdict order kept:
+    duplicates, format/terminal status, member set, then per-member safety and
+    typed content in the batch's array order."""
+    if duplicates: return _no('ARCHIVE_INVALID: duplicate members')
+    if format != 'formal-gates-archive-v1' or status_name not in TERMINAL:
         return _no('ARCHIVE_INVALID: wrong format or nonterminal run')
-    if set(names) != {'archive-manifest.json', *('run/' + n for n in index['files'])}:
-        return _no('ARCHIVE_INVALID: missing or extra members')
-    for name, expected in index['files'].items():
+    if not names_match: return _no('ARCHIVE_INVALID: missing or extra members')
+    for entry in entries:
+        name = entry['name']
         p = PurePosixPath(name)
         if p.is_absolute() or '..' in p.parts or '\\' in name:
             return _no('ARCHIVE_INVALID: unsafe member path')
-        if member_proofs.get(name) != expected:
+        if entry['actual'] != entry['expected']:
             return _no(f'ARCHIVE_INVALID: content differs: {name}')
-    return {'ok': True, 'index': index}
-
-
-def archive_stale(current, files, allow_missing, database_logical_sha256, live_database_logical_sha256):
-    """_compare_live's drift rules; the live logical db hash is a Python fact."""
-    if set(current) - set(files): return _no('ARCHIVE_STALE: new files appeared; no deletion')
-    if not allow_missing and set(current) != set(files): return _no('ARCHIVE_STALE: source files missing')
-    for name, value in current.items():
-        if name == 'checkpoints.sqlite':
-            equal = live_database_logical_sha256 == database_logical_sha256
-        else: equal = value == files[name]
-        if not equal: return _no(f'ARCHIVE_STALE: source differs: {name}')
     return {'ok': True}
 
 
-def archive_projection(index, archive, marker, directory, archive_proof=None):
-    """archive_status / archived_status, two phases like archive-verify.
+def archive_stale_facts(has_new, has_missing, allow_missing):
+    """_compare_live's set drift as two facts: new files first, then missing."""
+    if has_new: return _no('ARCHIVE_STALE: new files appeared; no deletion')
+    if not allow_missing and has_missing: return _no('ARCHIVE_STALE: source files missing')
+    return {'ok': True}
 
-    Without an index this is archived_status's pre-check: ARCHIVE_CHANGED must
-    fire before any zip is opened. With the verified index it is the
-    projection, the binding check and the cleanup_complete merge.
-    """
-    if index is None:
-        if marker is None: return {'ok': True}
-        if archive_proof != marker['archive_proof']:
-            return _no('ARCHIVE_CHANGED: retained archive missing or altered')
-        return {'ok': True}
-    status = {**index['status'], 'archived': True, 'archive': archive,
-              'archive_verified': True, 'source_directory': index['source_directory'],
-              'file_count': len(index['files']), 'model_calls': 0}
-    if marker is None: return {'ok': True, 'status': status}
+
+def archive_stale_entries(entries):
+    """_compare_live's per-name comparison over one batch, current-iteration
+    order; the database row compares the logical-hash strings."""
+    for entry in entries:
+        if entry['kind'] == 'database':
+            equal = entry['actual_db'] == entry['expected_db']
+        else:
+            equal = entry['actual_proof'] == entry['expected_proof']
+        if not equal: return _no(f"ARCHIVE_STALE: source differs: {entry['name']}")
+    return {'ok': True}
+
+
+def archive_projection_precheck(archive_proof, marker):
+    """archived_status's pre-zip comparison; marker is None or carries archive_proof."""
+    if marker is None: return {'ok': True}
     if archive_proof != marker['archive_proof']:
         return _no('ARCHIVE_CHANGED: retained archive missing or altered')
-    if (status['run_id'] != marker['run_id'] or status['revision'] != marker['revision'] or
-        status['source_directory'] != directory):
+    return {'ok': True}
+
+
+def archive_projection(status, source_directory, file_count, archive, marker, directory):
+    """archive_status / archived_status's full projection, binding and merge.
+
+    marker is None or the wrapper-built {run_id, revision, cleanup_complete}
+    (natural key accesses keep the raw KeyError on the caller's side).
+    """
+    projection = {**status, 'archived': True, 'archive': archive,
+                  'archive_verified': True, 'source_directory': source_directory,
+                  'file_count': file_count, 'model_calls': 0}
+    if marker is None: return {'ok': True, 'status': projection}
+    if (status.get('run_id') != marker['run_id'] or status.get('revision') != marker['revision']
+            or source_directory != directory):
         return _no('ARCHIVE_BINDING: tombstone does not match archive')
-    return {'ok': True, 'status': {**status, 'cleanup_complete': marker.get('cleanup_complete', False)}}
+    return {'ok': True, 'status': {**projection, 'cleanup_complete': marker['cleanup_complete']}}
 
 
 def prune_admission(runs_dir, directory, directory_name, run_id, archive):
@@ -139,26 +149,30 @@ def prune_admission(runs_dir, directory, directory_name, run_id, archive):
 
 
 def prune_bind(directory, run_id, revision, source_directory, index_run_id, index_revision):
-    """prune_run's index binding to this run, revision and directory."""
+    """prune_run's index binding; non-string index values arrive as None."""
     if (source_directory != directory or index_run_id != run_id or index_revision != revision):
         return _no('ARCHIVE_BINDING: wrong run/revision')
     return {'ok': True}
 
 
-def prune_plan(marker, archive, archive_proof, current, files, database_logical_sha256,
-               live_database_logical_sha256, allow_missing, run_id, revision, terminal_status, directory):
-    """prune_run's marker binding, staleness, removal plan and report."""
-    if marker and (marker['archive'] != archive or marker['archive_proof'] != archive_proof):
+def prune_marker(archive, archive_proof, marker_archive, marker_archive_proof):
+    """prune_run's tombstone-to-archive binding (the `if marker and ...` guard)."""
+    if archive != marker_archive or archive_proof != marker_archive_proof:
         return _no('ARCHIVE_BINDING: use the original cleanup archive')
-    stale = archive_stale(current, files, allow_missing, database_logical_sha256,
-                          live_database_logical_sha256)
-    if not stale['ok']: return stale
-    remove = sorted((n for n in current if n not in KEEP), key=lambda n: (-n.count('/'), n))
+    return {'ok': True}
+
+
+def prune_plan(entries, run_id, revision, terminal_status, archive, marker_exists):
+    """prune_run's removal plan over name+size rows, current order. The plan's
+    archive_proof is merged by the wrapper, which owns the hashing."""
+    sizes = {entry['name']: entry['size'] for entry in entries}
+    remove = sorted((name for name in sizes if name not in KEEP),
+                    key=lambda name: (-name.count('/'), name))
     report = {'status': 'PRUNE_PREVIEW', 'run_id': run_id, 'terminal_status': terminal_status,
               'archive': archive, 'files_to_remove': len(remove),
-              'bytes_to_remove': sum(current[n]['size'] for n in remove), 'model_calls': 0}
+              'bytes_to_remove': sum(sizes[name] for name in remove), 'model_calls': 0}
     planned = None
-    if marker is None:
+    if not marker_exists:
         planned = {'format': 'formal-gates-prune-v1', 'run_id': run_id, 'revision': revision,
-                   'archive': archive, 'archive_proof': archive_proof, 'cleanup_complete': False}
+                   'archive': archive, 'cleanup_complete': False}
     return {'ok': True, 'report': report, 'remove': remove, 'marker': planned}

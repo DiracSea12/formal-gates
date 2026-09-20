@@ -32,8 +32,10 @@ ARCHIVED/PRUNED 结果 dict 的最终组装、marker 存在性检查与其常量
   双成员先于 manifest、set/路径/内容三向拒绝、结清四分支、KEEP＋删除序、marker 三拒、
   投影字段、allow_missing 两态、db 逻辑特例（逻辑变拒/字节变过）、分量语义（`/a/bc` 不算 `/a/b` 内）。
 - `internal/harness/retention_test.go`（27 测试）同批边界。
-- 既有功能测试 `test_retention.py`（12 用例：真实 FS/SQLite/zip 全流程、崩溃恢复标记、
+- 既有功能测试 `test_retention.py`（**10** 用例：真实 FS/SQLite/zip 全流程、崩溃恢复标记、
   错归档/中断/源数据变化不误删）**逐字未改、原样全绿**——本单元的能力级验收。
+  （**更正 2026-09-20 返修时**：本记录初版把该项写成"12 用例"，实际为 10 项；当时 36 项子集
+  总数（10＋26）是对的。计数错误由外部评审指出。）
 
 ## 主代理亲验（2026-09-20，最终树上）
 
@@ -71,3 +73,67 @@ ARCHIVED/PRUNED 结果 dict 的最终组装、marker 存在性检查与其常量
   （流/逻辑库哈希），非判断；按"Go 持规则与格式、Python 持进程与文件系统"边界有意留在 Python。
 - 后续单元：G4（Go 内核 K1–K5，独立 Go run 中分项建立调度/流程确认/持久化/恢复）→ G5（切换发布）。
   G4 起前置为 G0–G3b 全链组件组合，属新形态工作，派发前需与机主对齐。
+
+---
+
+# 【返修 2026-09-20】外部评审驳回 → v2 重做（本节为准）
+
+## 评审驳回（对象 dde420b，基线 f287033）
+
+- **F1/P1（阻塞）**：清单整包过桥撞 8 MiB 桥接输入上限。评审用真实终态 run＋30,000 个小文件
+  复现：基线归档并核验 30,006 文件，v1 的归档/archive-show/prune 三个公开入口全部退出 2
+  （`bridge input exceeds 8 MiB`）。**主代理独立复现成立**（同脚本同结果）。
+- **F2/P3**：为模拟 Python 语义引入的辅助逻辑（通用递归相等、任意真值、big.Rat 数值比较、
+  对象键序保留、big.Int 求和）超出业务类型需要；Python 侧还留无赋值键访问模拟异常顺序。
+- **F3/P3**：目的地已存在时先做全量 inventory/哈希/SQLite 备份才拒绝——评审实测 v1 多读
+  16,829,698 字节（8 次 proof＋2 次逻辑哈希），基线为 0。**主代理独立复现成立**。
+- 另指正本记录 test_retention.py 计数错误（12→10，上文已更正）。
+- 评审全文与复现脚本：`/private/tmp/g3b-review/review.md`、`many_files.py`、`existing_destination.py`。
+
+## v2 设计（返修合同定死）
+
+总原则：**清单/证明永不整包过桥**——分块（`CHUNK = 2000` 条/次，Go 侧 `retentionChunk`
+同值且超限熔断报错）或小事实（bool/计数/字符串）；唯一保留的大载荷是 `canonical(index)`
+写 zip 那一次＝基线容量包络。**删除全部语言兼容辅助**改严格类型化＋StrictDecode，顺序由数组
+承载。**ARCHIVE_EXISTS 回到 Python 守卫、基线位置**（_terminal 之后、任何 I/O 之前；事实＋
+常量类，与 RUN_ARCHIVED 同类）。
+
+操作形状变化：`archive-index-plan` 改骨架（files 由 Python 并入，不再过桥）；`archive-verify`
+改"事实（duplicates/format/status_name/names_match）＋分块 entries（manifest 排序序）"单操作，
+成功时 checked_archive 返回 Python 本地解析值；`archive-stale` 改两段（集合事实＋分块内容，
+db 行比逻辑哈希）；`archive-projection` 载荷改小事实（status/source_directory/file_count）；
+新增 `prune-marker`（marker 绑定，基线 203-204 位置）；`prune-plan` 收 names+size 单份
+（≈80B/行）；`archive-settled` 的 pid 改类型化 `{pid, pid_valid, probe}`。
+
+## 返修后亲验（主代理，最终树上）
+
+- 评审脚本回归（主代理亲跑）：**many_files.py**——g3b verify PASS 30,006 文件、archive-show/
+  archive/prune 三 CLI 全部 exit 0（preview 30003 项）；**existing_destination.py**——拒绝前
+  proof 调用 0、读取 0 字节、逻辑哈希 0（v1 为 8/16.8MB/2）。脚本自带的
+  `assert not new.zip.exists()` 是按"CLI 必败"写的收尾守卫，修复后按设计触发，属评审脚本
+  前提过时，非产品缺陷（证据行在其之前已全部打印）。
+- `test_retention*.py` 44 项 OK（既有 10 原样＋差分 33＋**新增 scale 1**：30k 文件全链
+  archive→verify→status→preview→prune→readback，实测 22.5s）；全套与差分见本轮索引。
+- `gofmt` 干净、`go vet` 零输出、全仓 go test / Python 全套 / 差分子集见索引当轮记录。
+- 模型调用 0。
+
+## v2 有界差异（在 v1 九项之上替换/新增）
+
+- v1 第 4 项（ARCHIVE_EXISTS 时机后移）**已消除**——守卫回基线位置。
+- v1 第 5 项（checked_archive 包装序角点）**形式变化**：verify 事实化后，format/status/files
+  的自然访问仍在 Go 判定之前，"错 format 且缺 status 键"双重故障角点仍报包裹 KeyError
+  （单故障行为与基线一致）。
+- v1 第 8 项（腐坏 marker/status 缺键）**大幅收窄**：marker 与 index 的键访问全部回到载荷
+  构造处的自然访问，缺键的裸 KeyError 语义与基线一致。唯一残余：**腐坏归档**的 status 投影
+  本身缺 run_id/revision 键时，基线在读投影时抛裸 KeyError，v2 由 Go 判 ARCHIVE_BINDING
+  拒绝（仅手工构造的畸形归档可达）。
+- v1 第 9 项（bool↔int 相等性）**已消除**——类型化比较不再有该歧义（bool pid 由 pid_valid
+  事实显式排除）。
+- **新增**：verify entries 按 `sorted(files)` 序（基线为 manifest 文档序；本工具产出的 manifest
+  经 canonical 排序，二者一致——仅手工构造的非排序 manifest 上 content-differs 的具名顺序
+  可能不同）；纯构造损坏输入（float size、多余 proof 键、类型损坏值）走桥接硬错误而非基线
+  内容拒绝文案（对抗性输入 P3 范畴）；prune-plan 返回的 marker 计划不含 archive_proof，由
+  prune_run 写入前本地并入（落盘 marker 与基线一致，格式归属轻微拆分）。
+- 容量包络（如实声明）：与基线一致——最大单次桥接载荷为 `canonical(index)` 一份
+  （30k 文件实测 ≈3.5MB；上限约 7 万文件级，基线同样受此约束）；prune-plan 的 names+size
+  单份约 80B/行（30k≈2.4MB）。`CHUNK` 上限由 Go 侧 `chunkLimit` 熔断保护，防止未来回归。

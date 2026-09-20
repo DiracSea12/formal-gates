@@ -677,13 +677,14 @@ func dispatch(e envelope) (any, error) {
 		return candidateAdmission(q), nil
 	case "archive-inventory", "archive-destination", "archive-settled", "archive-index-plan",
 		"archive-verify", "archive-stale", "archive-projection",
-		"prune-admission", "prune-bind", "prune-plan":
+		"prune-admission", "prune-bind", "prune-marker", "prune-plan":
 		// The terminal-retention judgements move here (G3b). Locking, the
 		// SQLite backup, zip reading and writing, hashing, process probing and
 		// the deletions stay in Python; these ops own admission, ordering and
-		// the removal plan. Every retention refusal is HarnessError family, so
-		// the typed outcome carries only the refusal text and retention.py
-		// raises it directly (infra.refuse is not used).
+		// the removal plan. Inventories and proofs cross in chunked batches or
+		// as small facts, never whole. Every retention refusal is
+		// HarnessError family, so the typed outcome carries only the refusal
+		// text and retention.py raises it directly (infra.refuse is not used).
 		return retentionDispatch(e.Operation, e.Payload)
 	default:
 		return nil, fmt.Errorf("unknown harness operation %q", e.Operation)
