@@ -359,11 +359,151 @@ type zcodeClient struct {
 	events    []map[string]any
 }
 
+// zcodePermissionMethod and zcodeUserInputMethod are the two client-directed
+// requests this transport holds for a user decision (G2d): the tool-call
+// permission gate and the structured user input (AskUserQuestion, plan-mode
+// approval). Neither is ever a process approval.
+const zcodePermissionMethod = "interaction/requestPermission"
+
+const zcodeUserInputMethod = "interaction/requestUserInput"
+
+// zcodeInteractionRequestID is the shared request-identity rule for ZCode's
+// held interactions: the requestId param. Reverse-read from the app-server
+// bundle (/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs, 2026-09
+// build): requestClient's re-announce path (bootstrap.zcode_protocol,
+// `requestClient(t,n,o,s)`) re-sends an unanswered request on a doubling
+// 1s..N timer under a FRESH `server-<n>` frame id with the SAME params, so
+// the frame id is not stable; requestId is (the params object is captured
+// once), and the host's own interaction registry keys by it.
+func zcodeInteractionRequestID(params map[string]any, frameID any) (string, error) {
+	if id, isString := getOf(params, "requestId").(string); isString && id != "" {
+		return id, nil
+	}
+	return "", &blockedError{message: "ZCODE_INTERACTION: reverse request carries no requestId"}
+}
+
+// zcodePermissionInteraction declares the permission request's frame contract,
+// reverse-read from the app-server bundle:
+//
+//   - Request params (zcode.cjs protocol schema LBi): {requestId, sessionId,
+//     turnId?, toolCallId, toolName, reason, riskLevel: low|medium|high|
+//     critical, input, origin?, options: [{optionId, kind, name,
+//     description?, response}].min(1)} - each option carries its own response,
+//     the decision object that option stands for (schema XZe declares
+//     response: jL).
+//   - Reply (the request's result schema jL, exported as
+//     zcodePermissionResponseSchema): a STRICT {decision:
+//     allow|deny|escalate|modify, reason?, modifiedInput?,
+//     permissionUpdates?} - no optionId, no freeText member exists at this
+//     boundary (the optionId/freeText mapping is the host's internal
+//     v4AnswerToPermissionResponse for its desktop registry, not the wire).
+//     So the protocol-conformant "chose this option" reply is that option's
+//     own response object, verbatim.
+//   - Cancel: jL has no cancelled member. The protocol's cancellation is the
+//     error reply - resolveClientRequest routes an {id, error} frame to
+//     rejectClientRequest, and the host's own abort path uses code -32021
+//     ("Client request cancelled: <method>"); this reply answers with exactly
+//     that code family.
+var zcodePermissionInteraction = nativeInteractionSpec{
+	method:    zcodePermissionMethod,
+	requestID: zcodeInteractionRequestID,
+	summary: func(params map[string]any) string {
+		toolName := textOf(getOf(params, "toolName"))
+		reason := textOf(getOf(params, "reason"))
+		if toolName != "" && toolName != "null" && reason != "" && reason != "null" {
+			return toolName + ": " + reason
+		}
+		if reason != "" && reason != "null" {
+			return reason
+		}
+		return "permission request"
+	},
+	options: func(params map[string]any) any { return getOf(params, "options") },
+	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
+		if choice.Cancel {
+			return map[string]any{"error": map[string]any{
+				"code":    -32021,
+				"message": "Client request cancelled: interaction/requestPermission"}}, nil
+		}
+		for _, option := range listOf(getOf(params, "options")) {
+			if !valuesEqual(getOf(option, "optionId"), choice.OptionID) {
+				continue
+			}
+			response := getOf(option, "response")
+			if response == nil {
+				return nil, &blockedError{message: "ZCODE_INTERACTION: the host option carries no response object"}
+			}
+			return map[string]any{"result": response}, nil
+		}
+		return nil, &blockedError{message: "ZCODE_INTERACTION: option is not one the host offered: " + choice.OptionID}
+	},
+}
+
+// zcodeUserInputInteraction declares the structured user-input request's frame
+// contract, reverse-read from the app-server bundle:
+//
+//   - Request params (schema FBi): {requestId, sessionId, turnId?,
+//     toolCallId?, toolName?, prompt?, questions: [{question, header,
+//     options: [{value, label, description?, preview?}], multiSelect?}],
+//     input?, origin?, schema?}. The question options carry a `value`, not an
+//     optionId, at this boundary.
+//   - Reply (the request's result schema rYe): {action:
+//     accept|decline|cancel, content?, reason?}.strict(). Accepting a single
+//     question's option is {action: "accept", content: {answer: <value>}} -
+//     the host's own answer normalizer reads content.answer for a
+//     single-question prompt (and content.answers per question otherwise).
+//   - Cancel is first-class here: {action: "cancel"} (the host maps a
+//     cancelled AskUserQuestion to a denied tool outcome itself).
+var zcodeUserInputInteraction = nativeInteractionSpec{
+	method:    zcodeUserInputMethod,
+	requestID: zcodeInteractionRequestID,
+	summary: func(params map[string]any) string {
+		if prompt := textOf(getOf(params, "prompt")); prompt != "" && prompt != "null" {
+			return prompt
+		}
+		for _, question := range listOf(getOf(params, "questions")) {
+			if text := textOf(getOf(question, "question")); text != "" && text != "null" {
+				return text
+			}
+		}
+		return "user input request"
+	},
+	options: func(params map[string]any) any {
+		questions := listOf(getOf(params, "questions"))
+		if len(questions) != 1 {
+			return []any{}
+		}
+		options := listOf(getOf(questions[0], "options"))
+		if options == nil {
+			return []any{}
+		}
+		return options
+	},
+	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
+		if choice.Cancel {
+			return map[string]any{"result": map[string]any{"action": "cancel"}}, nil
+		}
+		questions := listOf(getOf(params, "questions"))
+		if len(questions) != 1 {
+			return nil, &blockedError{message: "ZCODE_INTERACTION: an option answer needs exactly one question; cancel otherwise"}
+		}
+		for _, option := range listOf(getOf(questions[0], "options")) {
+			if valuesEqual(getOf(option, "value"), choice.OptionID) {
+				return map[string]any{"result": map[string]any{
+					"action":  "accept",
+					"content": map[string]any{"answer": choice.OptionID}}}, nil
+			}
+		}
+		return nil, &blockedError{message: "ZCODE_INTERACTION: option is not one the host offered: " + choice.OptionID}
+	},
+}
+
 // newZcodeClient spawns the app-server with ZCode's transport configuration:
 // argv [node, script, --cwd, workspace, app-server], every request bounded by
 // a 60-second total budget (the turn itself is waited out by execute's receive
 // loop, never by an unbounded request), and the plain {id, method, params}
-// shape with the base framing defaults.
+// shape with the base framing defaults. The two user-decision interactions are
+// held (G2d); the machine-answerable ones stay in respond.
 func newZcodeClient(launch map[string]any, workspace, directory string, environment map[string]string) (*zcodeClient, error) {
 	executableValue, err := mustEntry(launch, "executable")
 	if err != nil {
@@ -379,6 +519,7 @@ func newZcodeClient(launch map[string]any, workspace, directory string, environm
 		requestPrefix:   "ZCODE_NATIVE",
 		defaultTimeout:  60 * time.Second,
 		bounded:         true,
+		interactions:    []nativeInteractionSpec{zcodePermissionInteraction, zcodeUserInputInteraction},
 		respond:         z.respond,
 		classify:        zcodeClassify,
 		notification:    z.notification,
@@ -395,8 +536,11 @@ func (z *zcodeClient) request(method string, params map[string]any) (any, error)
 	return z.client.request(method, params)
 }
 
-// respond is ZCode's client-directed reply table (Client.respond): the four
-// ways this transport answers the host.
+// respond is ZCode's client-directed reply table (Client.respond): the three
+// machine-answerable interactions. The two user decisions
+// (interaction/requestPermission, interaction/requestUserInput) never reach
+// here - the transport's interaction specs hold them for a user decision
+// (G2d) - and every other method keeps the default -32601 refusal.
 func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 	switch method {
 	case "session/requestRuntimePreferences":
@@ -434,9 +578,6 @@ func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 				"headersApplied": true,
 				"requestAuth":    map[string]any{"apiKey": secret}}},
 			status: "provider-runtime-headers-applied"}, nil
-	case "interaction/requestPermission", "interaction/requestUserInput":
-		return nil, &blockedError{message: "ZCODE_INTERACTION_REQUIRED: " + method +
-			" needs a native interactive client; no user decision was sent"}
 	}
 	return nil, nil
 }
@@ -1491,10 +1632,27 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// a time, and the loop ends only on this input's terminal event or on the
 	// deadline. A silent host ends it through the receive timeout, whose text
 	// states the session is not assumed lost.
+	//
+	// While a native interaction is held (G2d) the budget pauses: the deadline
+	// is a remaining-budget, not a wall-clock moment, so the time the user
+	// takes to decide does not consume the turn. A silent host during a hold is
+	// therefore not a failure either - the loop keeps waiting for the answer.
 	position := 0
 	terminal := false
 	deadline := time.Now().Add(zcodeTurnBudget)
-	for !terminal && time.Now().Before(deadline) {
+	var pausedSince time.Time
+	for !terminal {
+		held := client.client.pendingHeld()
+		switch {
+		case held && pausedSince.IsZero():
+			pausedSince = time.Now()
+		case !held && !pausedSince.IsZero():
+			deadline = deadline.Add(time.Since(pausedSince))
+			pausedSince = time.Time{}
+		}
+		if !held && !time.Now().Before(deadline) {
+			break
+		}
 		for position < len(client.events) {
 			event := client.events[position]
 			// The evidence copy in native-events.jsonl is the durable record;
@@ -1514,30 +1672,36 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 				terminal = true
 			}
 		}
-		if !terminal {
-			// The buffer is fully drained here: the loop above only leaves
-			// position == len(events), and new events arrive only inside
-			// receive -- the notification hook appends them in this same
-			// goroutine -- so nothing can land between the drain and this
-			// reset. Releasing the drained buffer before waiting keeps a long
-			// streaming turn retaining only the events that have arrived and
-			// not yet been read.
-			client.events = client.events[:0]
-			position = 0
-			wait := time.Until(deadline)
-			if wait > 120*time.Second {
-				wait = 120 * time.Second
-			}
-			if wait < time.Second {
-				wait = time.Second
-			}
-			if _, err := client.client.receive(&wait); err != nil {
-				if errors.Is(err, errNativeTimedOut) {
-					return nil, &blockedError{
-						message: "ZCODE_NATIVE_TIMEOUT: no native message; session is not assumed lost"}
+		if terminal {
+			break
+		}
+		// The buffer is fully drained here: the loop above only leaves
+		// position == len(events), and new events arrive only inside
+		// receive -- the notification hook appends them in this same
+		// goroutine -- so nothing can land between the drain and this
+		// reset. Releasing the drained buffer before waiting keeps a long
+		// streaming turn retaining only the events that have arrived and
+		// not yet been read.
+		client.events = client.events[:0]
+		position = 0
+		wait := time.Until(deadline)
+		if wait > 120*time.Second {
+			wait = 120 * time.Second
+		}
+		if wait < time.Second {
+			wait = time.Second
+		}
+		if _, err := client.client.receive(&wait); err != nil {
+			if errors.Is(err, errNativeTimedOut) {
+				if client.client.pendingHeld() {
+					// The host waits for its user-directed request; so does
+					// this loop, without spending the turn budget.
+					continue
 				}
-				return nil, err
+				return nil, &blockedError{
+					message: "ZCODE_NATIVE_TIMEOUT: no native message; session is not assumed lost"}
 			}
+			return nil, err
 		}
 	}
 	if !terminal {

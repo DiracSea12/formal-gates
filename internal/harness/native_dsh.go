@@ -39,10 +39,61 @@ func dshDispatch(provider string) error {
 		"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(executionAdapters, ", "))}
 }
 
+// dshPermissionInteraction declares DSH's one held client-directed request.
+// Every frame shape below is reverse-read from the host's own protocol stack
+// (2026-09-20, dsh 0.1.5-rc.1):
+//
+//   - Request params: @agentclientprotocol/sdk 1.4.0 (the SDK the dsh acp app
+//     imports) schema/zod.gen.js zRequestPermissionRequest -
+//     {sessionId, toolCall: {toolCallId, ...}, options: [{optionId, name,
+//     kind: allow_once|allow_always|reject_once|reject_always}]}. The dsh acp
+//     app builds exactly this on its approval/request hook
+//     (@deepseek-ai/dsh-acp lib/index.js, "approval/request" handler) with
+//     option ids "allow-once" and "reject-once".
+//   - Request identity: ACP has no id inside the params; the JSON-RPC frame id
+//     is it (sdk dist/jsonrpc.js prepareRequest: {jsonrpc: "2.0", id:
+//     nextRequestId++, method, params}; one connection assigns each id once
+//     and ACP never re-announces).
+//   - Reply shape: zRequestPermissionResponse - {outcome: {outcome:
+//     "selected", optionId}} or {outcome: {outcome: "cancelled"}}. The dsh
+//     acp app reads exactly `outcome.outcome === "cancelled"` and
+//     `outcome.optionId === "allow-once"` off the reply.
+var dshPermissionInteraction = nativeInteractionSpec{
+	method: "session/request_permission",
+	requestID: func(params map[string]any, frameID any) (string, error) {
+		if frameID == nil {
+			return "", &bindingError{message: "DSH_INTERACTION: permission request carries no frame id"}
+		}
+		return nativeSerializeID(frameID), nil
+	},
+	summary: func(params map[string]any) string {
+		toolCall := objectOrEmpty(getOf(params, "toolCall"))
+		if id := textOf(getOf(toolCall, "toolCallId")); id != "" && id != "null" {
+			return "permission for tool call " + id
+		}
+		return "permission request"
+	},
+	options: func(params map[string]any) any { return getOf(params, "options") },
+	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
+		if choice.Cancel {
+			return map[string]any{"result": map[string]any{
+				"outcome": map[string]any{"outcome": "cancelled"}}}, nil
+		}
+		for _, option := range listOf(getOf(params, "options")) {
+			if valuesEqual(getOf(option, "optionId"), choice.OptionID) {
+				return map[string]any{"result": map[string]any{"outcome": map[string]any{
+					"outcome": "selected", "optionId": choice.OptionID}}}, nil
+			}
+		}
+		return nil, &blockedError{message: "DSH_INTERACTION: option is not one the host offered: " + choice.OptionID}
+	},
+}
+
 // dshHooks is DSH's transport configuration: the host decides when a turn
 // ends, so no request carries a total budget (bounded is false: the
 // supervisor-style total deadline discipline must not leak in), and a dead
-// reader is a transport error rather than a clean close.
+// reader is a transport error rather than a clean close. The permission
+// request is held for a user decision (G2d), never answered here.
 func dshHooks() nativeHooks {
 	return nativeHooks{
 		transportPrefix: "DSH_TRANSPORT",
@@ -52,6 +103,7 @@ func dshHooks() nativeHooks {
 		closedKey:       "transport_error",
 		closedMessage:   "native ACP process closed its output",
 		invalidMessage:  "non-JSON ACP output",
+		interactions:    []nativeInteractionSpec{dshPermissionInteraction},
 		identify:        func(c *nativeClient) any { return c.nextCounter() },
 		envelope: func(value map[string]any) map[string]any {
 			framed := map[string]any{"jsonrpc": "2.0"}
@@ -59,16 +111,6 @@ func dshHooks() nativeHooks {
 				framed[key] = item
 			}
 			return framed
-		},
-		respond: func(method string, params any) (*nativeReply, error) {
-			if method == "session/request_permission" {
-				// A user decision belongs to the user; never approve or deny it
-				// here, and never answer or retry.
-				return nil, &blockedError{
-					message: "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
-				}
-			}
-			return nil, nil
 		},
 		classify: dshClassifySessionUnavailable,
 	}

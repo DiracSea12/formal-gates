@@ -745,11 +745,12 @@ func TestZcodeRespondTable(t *testing.T) {
 		t.Fatalf("no provider = %s", reply.status)
 	}
 
+	// The two user decisions never reach respond any more: the transport's
+	// interaction specs hold them (G2d), so respond has no branch for them
+	// and answers nothing.
 	for _, method := range []string{"interaction/requestPermission", "interaction/requestUserInput"} {
-		_, err := z.respond(method, map[string]any{})
-		if err == nil || err.Error() != "ZCODE_INTERACTION_REQUIRED: "+method+
-			" needs a native interactive client; no user decision was sent" {
-			t.Fatalf("%s: err = %v", method, err)
+		if reply, err := z.respond(method, map[string]any{}); err != nil || reply != nil {
+			t.Fatalf("%s: held interactions must not be answered inline: %v %v", method, reply, err)
 		}
 	}
 

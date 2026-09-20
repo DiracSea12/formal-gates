@@ -729,30 +729,46 @@ func TestZcodeExecuteResumeUnavailable(t *testing.T) {
 	}
 }
 
-// TestZcodeExecuteInteractionRequired pins the user-decision boundary: the
-// reverse permission request raises the refusal and no reply frame is sent.
-func TestZcodeExecuteInteractionRequired(t *testing.T) {
+// TestZcodeExecuteInteractionHeldAndInvalidated pins the G2d boundary: the
+// reverse permission request is held pending (no reply frame ever), survives
+// the whole sequence, and is invalidated when the transport closes - the
+// probe report and the run still complete, because a user decision waiting is
+// not a failure.
+func TestZcodeExecuteInteractionHeldAndInvalidated(t *testing.T) {
 	steps := func(string) []peerStep {
 		return []peerStep{
-			{Send: `{"id": "perm-1", "method": "interaction/requestPermission", "params": {"title": "run a tool"}}`},
+			{Send: `{"id": "server-7", "method": "interaction/requestPermission", "params": {"requestId": "req-1", "sessionId": "s-1", "toolCallId": "tc-1", "toolName": "Bash", "reason": "run a tool", "riskLevel": "medium", "input": {"command": "ls"}, "options": [{"optionId": "allow_once", "kind": "allow_once", "name": "Allow once", "response": {"decision": "allow", "reason": "Approved once"}}, {"optionId": "deny", "kind": "deny", "name": "Deny", "response": {"decision": "deny"}}]}}`},
 			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
 	}
-	scenario := newZcodeScenario(t, steps, nil)
+	scenario := newZcodeScenario(t, steps, func(request map[string]any) { request["probe"] = true })
 	var errout strings.Builder
 	code := 0
-	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
-	if code != 1 {
-		t.Fatalf("code = %d", code)
-	}
-	if got := nativeRecordError(t, scenario.directory); got != "RuntimeBlocked: ZCODE_INTERACTION_REQUIRED: "+
-		"interaction/requestPermission needs a native interactive client; no user decision was sent" {
-		t.Fatalf("error = %q", got)
+	stdout := captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+	if code != 0 {
+		t.Fatalf("code = %d stderr = %q", code, errout.String())
 	}
 	echo := readTestFile(t, scenario.echoPath)
-	if strings.Contains(echo, `"id":"perm-1"`) {
+	if strings.Contains(echo, `"id":"server-7"`) {
 		t.Fatalf("a user decision was answered:\n%s", echo)
+	}
+	pendings, err := readJSONFile(filepath.Join(scenario.directory, "interaction-pending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := listOf(pendings)
+	if len(records) != 1 {
+		t.Fatalf("pending records = %s", mustCanonical(t, pendings))
+	}
+	record := objectOrEmpty(records[0])
+	if textOf(record["request_id"]) != "req-1" || textOf(record["status"]) != "invalidated" ||
+		textOf(record["summary"]) != "Bash: run a tool" {
+		t.Fatalf("pending record = %s", mustCanonical(t, record))
+	}
+	// The probe report itself records the held request's lifecycle.
+	if !strings.Contains(stdout, `"request_id":"req-1"`) {
+		t.Fatalf("probe report = %s", stdout)
 	}
 }
 

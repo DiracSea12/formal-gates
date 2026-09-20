@@ -370,14 +370,17 @@ func TestDSHExecuteResumeUnavailable(t *testing.T) {
 	}
 }
 
-// TestDSHExecutePermissionNeverAnswered pins the interaction boundary inside
-// the sequence: the reverse session/request_permission raises the refusal and
-// no reply frame is ever sent.
-func TestDSHExecutePermissionNeverAnswered(t *testing.T) {
+// TestDSHExecutePermissionDisconnectInvalidates pins the G2d boundary inside
+// the sequence: the reverse session/request_permission is held pending (no
+// reply frame ever), and when the host closes its output the pending request
+// is invalidated before the transport error propagates - the old option ids
+// stop being authorized answers.
+func TestDSHExecutePermissionDisconnectInvalidates(t *testing.T) {
 	steps := []peerStep{
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
 		{On: `"method":"session/new"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-		{On: `"method":"session/prompt"`, Send: `{"jsonrpc": "2.0", "id": "p-1", "method": "session/request_permission", "params": {"title": "run a tool"}}`},
+		{On: `"method":"session/prompt"`, Send: `{"jsonrpc": "2.0", "id": 41, "method": "session/request_permission", "params": {"sessionId": "s-1", "toolCall": {"toolCallId": "call-9"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]}}`},
+		{On: `"method":"session/prompt"`, Close: true},
 	}
 	scenario := newDSHScenario(t, steps, nil)
 	var errout bytes.Buffer
@@ -386,7 +389,7 @@ func TestDSHExecutePermissionNeverAnswered(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if got := nativeRecordError(t, scenario.directory); got != "RuntimeBlocked: DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent" {
+	if got := nativeRecordError(t, scenario.directory); got != "RuntimeBlocked: DSH_TRANSPORT: native ACP process closed its output" {
 		t.Fatalf("error = %q", got)
 	}
 	echo := readTestFile(t, scenario.echoPath)
@@ -395,6 +398,15 @@ func TestDSHExecutePermissionNeverAnswered(t *testing.T) {
 		if _, has := objectOrEmpty(frame)["error"]; has {
 			t.Fatalf("a user decision was answered:\n%s", echo)
 		}
+	}
+	pendings, err := readJSONFile(filepath.Join(scenario.directory, "interaction-pending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := listOf(pendings)
+	if len(records) != 1 || textOf(objectOrEmpty(records[0])["status"]) != "invalidated" ||
+		textOf(objectOrEmpty(records[0])["request_id"]) != "41" {
+		t.Fatalf("pending records = %s", mustCanonical(t, pendings))
 	}
 }
 

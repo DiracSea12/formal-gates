@@ -930,19 +930,41 @@ class ZCodeDifferential(unittest.TestCase):
                                'status': 'provider-runtime-headers-unavailable'}])
 
     def test_permission_request_is_never_answered(self):
+        # G2d registered divergence: the frozen reference still refuses (its
+        # era predates the held-interaction contract); the Go binary holds the
+        # request - the reverse-read LBi shape, a requestId plus options that
+        # carry their own response objects - never answers it, and the same
+        # turn still completes.
         knobs = {'reverse_requests': [
             {'id': 'perm-1', 'method': 'interaction/requestPermission',
-             'params': {'title': 'run a tool'}}]}
+             'params': {'requestId': 'req-1', 'sessionId': 's-1', 'turnId': 't-1',
+                        'toolCallId': 'tc-1', 'toolName': 'Bash',
+                        'reason': 'run a tool', 'riskLevel': 'medium',
+                        'input': {'command': 'ls'},
+                        'options': [{'optionId': 'allow_once', 'kind': 'allow_once',
+                                     'name': 'Allow once',
+                                     'response': {'decision': 'allow',
+                                                  'reason': 'Approved once'}}]}}]}
         root, workspace, ref_dir, go_dir = self.scenario(knobs=knobs)
-        self.assert_failure(
-            ref_dir, go_dir,
+        result, error = self.run_reference(ref_dir)
+        self.assertIsNone(result)
+        self.assertEqual(
+            str(error),
             'ZCODE_INTERACTION_REQUIRED: interaction/requestPermission needs a native '
             'interactive client; no user decision was sent')
+        completed = self.run_go(go_dir)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode('utf-8', 'replace'))
         for directory in (ref_dir, go_dir):
             # The fake host confirms it received no reply frame at all.
             replies = directory / 'host-replies.jsonl'
             self.assertEqual(replies.read_text() if replies.exists() else '',
                              '', 'a user decision was sent')
+        # The held request outlived the turn unanswered: invalidated once the
+        # transport closed, so its old option ids are no longer authorized.
+        pendings = read(go_dir / 'interaction-pending.json')
+        self.assertEqual([record['request_id'] for record in pendings], ['req-1'])
+        self.assertEqual(pendings[0]['status'], 'invalidated')
+        self.assertEqual(pendings[0]['summary'], 'Bash: run a tool')
 
     def test_go_side_applied_credential_reaches_only_the_protocol_reply(self):
         # Go side only: the applied-credential reply shape (the reference

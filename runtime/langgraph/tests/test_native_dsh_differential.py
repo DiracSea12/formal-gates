@@ -605,18 +605,40 @@ class DSHDifferential(unittest.TestCase):
 
     # --- 交互边界 -----------------------------------------------------------
     def test_permission_request_never_answered(self):
+        # G2d registered divergence: the frozen reference still refuses (its
+        # era predates the held-interaction contract); the Go binary holds the
+        # request for a user decision - no reply frame, one pending record
+        # with the host's own options verbatim - and the same turn still
+        # completes. The property both sides always pinned, that a user
+        # decision is never answered here, is unchanged.
         knobs = {'reverse_requests': [{'id': 'p-1', 'method': 'session/request_permission',
-                                       'params': {'title': 'run a tool'}}],
+                                       'params': {'sessionId': 'sess-root',
+                                                  'toolCall': {'toolCallId': 'call-1'},
+                                                  'options': [{'optionId': 'allow-once',
+                                                               'name': 'Allow once',
+                                                               'kind': 'allow_once'}]}}],
                  'events': default_events()}
         root, _workspace, _request, ref_dir, go_dir = self.scenario(knobs=knobs)
-        self.assert_failure(
-            ref_dir, go_dir,
-            'DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent')
+        result, error = self.run_reference(ref_dir)
+        self.assertIsNone(result)
+        self.assertEqual(str(error),
+                         'DSH_INTERACTION_REQUIRED: native permission needs a user decision; '
+                         'none was sent')
+        completed = self.run_go(go_dir)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode('utf-8', 'replace'))
         for directory in (ref_dir, go_dir):
             # The fake host confirms it received no reply frame at all.
             replies = directory / 'host-replies.jsonl'
             self.assertEqual(replies.read_text() if replies.exists() else '',
                              '', 'a user decision was sent')
+        # The held request outlived the turn unanswered: one record, its old
+        # options no longer an authorized answer once the transport closed.
+        pendings = read(go_dir / 'interaction-pending.json')
+        self.assertEqual([record['request_id'] for record in pendings], ['p-1'])
+        self.assertEqual(pendings[0]['status'], 'invalidated')
+        self.assertEqual(pendings[0]['options'],
+                         [{'optionId': 'allow-once', 'name': 'Allow once',
+                           'kind': 'allow_once'}])
 
     # --- 传输边界与超时 ------------------------------------------------------
     def test_transport_output_closed_early(self):

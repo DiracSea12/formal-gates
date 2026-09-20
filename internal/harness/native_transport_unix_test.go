@@ -199,16 +199,6 @@ func spawnClient(t *testing.T, script peerScript, customize func(*nativeHooks)) 
 			}
 			return framed
 		},
-		respond: func(method string, params any) (*nativeReply, error) {
-			// The DSH rule: a required user decision is never approved or
-			// denied here, and never answered.
-			if method == "session/request_permission" {
-				return nil, &blockedError{
-					message: "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent",
-				}
-			}
-			return nil, nil
-		},
 	}
 	if customize != nil {
 		customize(&hooks)
@@ -428,22 +418,62 @@ func TestTransportReverseRequestDefaultReply(t *testing.T) {
 	}
 }
 
-// TestTransportRequestPermissionIsNeverAnswered pins the required-user-decision
-// boundary: the error is raised, no reply is sent, no status recorded.
-func TestTransportRequestPermissionIsNeverAnswered(t *testing.T) {
+// TestTransportRequestPermissionIsHeld pins the G2d hold boundary at the
+// transport: the reverse permission request sends no frame and fails nothing,
+// the pending record lands with the host's original options, and the
+// interactions log gains the request's pending entry. A re-announced request
+// (same logical id, fresh frame id) re-aims the held reply frame without a
+// second record.
+func TestTransportRequestPermissionIsHeld(t *testing.T) {
 	client, directory, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
-		{Send: `{"id": 1, "method": "session/request_permission", "params": {}}`},
-	}}, nil)
+		{Send: `{"jsonrpc": "2.0", "id": 3, "method": "session/request_permission", "params": {"sessionId": "s", "toolCall": {"toolCallId": "call-1"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]}}`},
+		{On: "initialize", Send: `{"id": 1, "result": {}}`},
+	}}, func(h *nativeHooks) {
+		h.interactions = []nativeInteractionSpec{dshPermissionInteraction}
+	})
 	defer client.close()
-	_, err := client.request("session/prompt", map[string]any{"sessionId": "s"})
-	if blockedText(t, err) != "DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent" {
-		t.Fatalf("err = %v", err)
+	if _, err := client.request("initialize", map[string]any{}); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(readTestFile(t, echoPath), "Client method not supported") {
-		t.Fatal("a user decision must never be answered")
+	echo := readTestFile(t, echoPath)
+	if strings.Contains(echo, `"id":3`) || strings.Contains(echo, "Client method not supported") {
+		t.Fatalf("a held user decision must never be answered:\n%s", echo)
 	}
-	if _, statErr := os.Stat(filepath.Join(directory, "interaction-status.json")); !os.IsNotExist(statErr) {
-		t.Fatal("no interaction status may be recorded for a refused decision")
+	pendings, err := readJSONFile(filepath.Join(directory, "interaction-pending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := listOf(pendings)
+	if len(records) != 1 {
+		t.Fatalf("one pending record expected, got %s", mustCanonical(t, pendings))
+	}
+	record := objectOrEmpty(records[0])
+	if textOf(record["request_id"]) != "3" || textOf(record["method"]) != "session/request_permission" ||
+		textOf(record["status"]) != "pending" || textOf(record["summary"]) != "permission for tool call call-1" {
+		t.Fatalf("pending record = %s", mustCanonical(t, record))
+	}
+	if !isIntegerLiteral(record["connection"]) {
+		t.Fatalf("connection generation missing: %s", mustCanonical(t, record))
+	}
+	if !valuesEqual(record["options"], []any{
+		map[string]any{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
+		map[string]any{"optionId": "reject-once", "name": "Reject", "kind": "reject_once"},
+	}) {
+		t.Fatalf("options must be the host's originals verbatim: %s", mustCanonical(t, record["options"]))
+	}
+	// ACP has no re-announce and the frame id is the request identity, so
+	// one request is exactly one hold (the re-announce rule is pinned on the
+	// zcode host, where the requestId param is the identity).
+	client.stateMu.Lock()
+	holds := len(client.holdings)
+	client.stateMu.Unlock()
+	if holds != 1 {
+		t.Fatalf("one request is one hold, got %d", holds)
+	}
+	status := readTestFile(t, filepath.Join(directory, "interaction-status.json"))
+	if !strings.Contains(status, `"method":"session/request_permission"`) ||
+		!strings.Contains(status, `"request_id":"3"`) || !strings.Contains(status, `"status":"pending"`) {
+		t.Fatalf("interaction-status = %s", status)
 	}
 }
 

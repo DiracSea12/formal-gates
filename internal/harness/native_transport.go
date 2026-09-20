@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -573,6 +574,47 @@ type nativeReply struct {
 	status  string
 }
 
+// nativeAnswerChoice is one delivered user decision for a held native
+// interaction: a chosen host-offered option id, or a cancel.
+type nativeAnswerChoice struct {
+	Cancel   bool
+	OptionID string
+}
+
+// nativeInteractionSpec is one host's declaration of a client-directed request
+// this transport holds for a user decision instead of answering inline (the
+// G2d contract's "适配器各自只声明其权限方法名与回帧合同"). Every function is
+// pure: the spec never touches client state, so the shared mechanics can hold,
+// re-announce-track, validate and deliver on any transport.
+type nativeInteractionSpec struct {
+	// method is the client-directed method name this spec holds.
+	method string
+	// requestID derives the stable logical identity of the request. DSH's ACP
+	// has no id inside the params, so the frame id is it; ZCode re-announces
+	// the same request under fresh frame ids, so its requestId param is it.
+	requestID func(params map[string]any, frameID any) (string, error)
+	// summary renders the request body for the pending listing.
+	summary func(params map[string]any) string
+	// options returns the host's original options verbatim for the pending
+	// record (nil becomes an empty list on disk).
+	options func(params map[string]any) any
+	// reply builds the reply payload (result/error members, no envelope, no
+	// id) for one validated choice, or refuses a choice the host never
+	// offered. The frame shape is each host's own, reverse-read from its
+	// protocol implementation and cited in the adapter.
+	reply func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error)
+}
+
+// spec returns the held-interaction declaration for one method, or nil.
+func (h nativeHooks) interactionSpec(method string) *nativeInteractionSpec {
+	for i := range h.interactions {
+		if h.interactions[i].method == method {
+			return &h.interactions[i]
+		}
+	}
+	return nil
+}
+
 // nativeHooks is everything an adapter supplies on top of the shared transport
 // mechanics (native_transport.Client's overridables). The zero value is the
 // plain {id, method, params} JSON-RPC shape with a 60s bounded default.
@@ -590,6 +632,9 @@ type nativeHooks struct {
 	closedKey      string
 	closedMessage  string
 	invalidMessage string
+	// The client-directed requests this transport holds for a user decision
+	// instead of answering inline (G2d).
+	interactions []nativeInteractionSpec
 
 	identify     func(c *nativeClient) any
 	envelope     func(value map[string]any) map[string]any
@@ -633,11 +678,39 @@ func (h nativeHooks) defaultTimeoutOr() time.Duration {
 	return 60 * time.Second
 }
 
+// nativePendingHold is one held native interaction's live state: the record
+// the evidence file carries plus everything a later answer needs to reply in
+// the host's own frame shape.
+type nativePendingHold struct {
+	requestID string
+	method    string
+	// frameID is the inbound frame id the reply will answer: the latest one
+	// seen for this logical request, so a re-announcing host is answered on
+	// its freshest frame.
+	frameID   any
+	params    map[string]any
+	spec      *nativeInteractionSpec
+	status    string // pending | delivered | observed | invalidated
+	summary   string
+	options   any
+	updatedAt time.Time
+}
+
+// nativeAnswerPollInterval is how often a job process polls the answer file
+// while a native interaction is held. A variable only so tests can shorten it.
+var nativeAnswerPollInterval = 200 * time.Millisecond
+
+// nativeConnectionGeneration counts native transports this process created:
+// the "连接代次" every pending record carries, so an answer written for one
+// connection can never be mistaken for a later connection's pending request.
+var nativeConnectionGeneration int64
+
 // nativeClient is one host process and the JSON request/reply loop over its
 // stdio (the port of native_transport.Client).
 type nativeClient struct {
 	hooks        nativeHooks
 	directory    string
+	generation   int
 	counter      int
 	interactions []any
 	messages     *nativeQueue
@@ -647,6 +720,14 @@ type nativeClient struct {
 	stdin        io.WriteCloser
 	readerDone   chan struct{}
 	closeOnce    sync.Once
+	sendMu       sync.Mutex
+	// stateMu guards the held-interaction state and the interactions log.
+	stateMu       sync.Mutex
+	holdings      []*nativePendingHold
+	priorPendings []any
+	pendingsRead  bool
+	answerPoller  sync.Once
+	answerStop    chan struct{}
 }
 
 // newNativeClient spawns the host process: cwd is the workspace, the
@@ -668,8 +749,10 @@ func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directo
 	c := &nativeClient{
 		hooks:      hooks,
 		directory:  directory,
+		generation: int(atomic.AddInt64(&nativeConnectionGeneration, 1)),
 		messages:   newNativeQueue(),
 		readerDone: make(chan struct{}),
+		answerStop: make(chan struct{}),
 	}
 	var err error
 	c.errorsFile, err = os.OpenFile(filepath.Join(directory, "host.stderr"),
@@ -854,12 +937,16 @@ func (c *nativeClient) closureOf(message map[string]any) string {
 }
 
 // send writes one outbound frame as a canonical compact JSON line; the host
-// parses by value.
+// parses by value. The write is serialized: the answer poller delivers a held
+// interaction's reply from its own goroutine while the request loop may be
+// sending, and two interleaved lines would corrupt the stream.
 func (c *nativeClient) send(value map[string]any) error {
 	encoded, err := CanonicalJSON(value)
 	if err != nil {
 		return err
 	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	if _, err := c.stdin.Write(append(encoded, '\n')); err != nil {
 		return fmt.Errorf("cannot write to the host process stdin: %w", err)
 	}
@@ -881,7 +968,10 @@ var errNativeTimedOut = errors.New("native message wait timed out")
 
 // receive pops one message, raising the closure error when the transport ended
 // and answering host→client requests inline (a reverse request is consumed,
-// never matched against a pending ident).
+// never matched against a pending ident). A held interaction's request is
+// consumed the same way - no frame leaves, the pending record does - and any
+// later non-request traffic from the host marks a delivered interaction
+// observed (the host continued the original turn).
 func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 	message, ok := c.messages.get(wait)
 	if !ok {
@@ -889,21 +979,27 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 	}
 	if object, isObject := message.(map[string]any); isObject {
 		if reason := c.closureOf(object); reason != "" {
+			// The connection the pending requests belonged to is gone: they
+			// are invalidated before the closure propagates, so the old
+			// option ids stop being authorized answers.
+			c.invalidatePendings()
 			return nil, c.blocked(reason)
 		}
-		answered := false
 		if method, hasMethod := object["method"]; hasMethod && isLiveMethod(method) {
 			if _, hasID := object["id"]; hasID {
 				if err := c.answerReverse(object); err != nil {
 					return nil, err
 				}
-				answered = true
+				return message, nil
 			}
 		}
 		// Everything that is not a reverse request goes to the notification
 		// hook: notifications (a live method without an id) and plain
 		// responses alike, exactly like the reference receive()'s else branch.
-		if !answered && c.hooks.notification != nil {
+		// Such traffic is also the observable fact that a delivered
+		// interaction's original turn continued.
+		c.observePendings()
+		if c.hooks.notification != nil {
 			c.hooks.notification(message)
 		}
 	}
@@ -919,11 +1015,17 @@ func isLiveMethod(v any) bool {
 }
 
 // answerReverse replies to a host request and records what was answered. A
-// respond hook error (a required user decision) propagates without any reply;
-// a nil reply is the base class's default refusal.
+// method one of this transport's interaction specs claims is held for a user
+// decision instead (G2d): no frame leaves now, the pending record lands, and
+// the answer poller delivers the user's reply later under the original
+// request id. A respond hook error (a required user decision) propagates
+// without any reply; a nil reply is the base class's default refusal.
 func (c *nativeClient) answerReverse(message map[string]any) error {
 	method := textOf(message["method"])
 	params := objectOrEmpty(message["params"])
+	if spec := c.hooks.interactionSpec(method); spec != nil {
+		return c.holdInteraction(spec, message, params)
+	}
 	var reply *nativeReply
 	if c.hooks.respond != nil {
 		var err error
@@ -950,8 +1052,321 @@ func (c *nativeClient) answerReverse(message map[string]any) error {
 	if err := c.send(frame); err != nil {
 		return err
 	}
-	c.interactions = append(c.interactions,
-		map[string]any{"method": method, "status": reply.status})
+	c.appendInteraction(map[string]any{"method": method, "status": reply.status})
+	return nil
+}
+
+// --- held native interactions (G2d) ---------------------------------------------
+
+// nativeSerializeID renders a request identity as the stable text the pending
+// record and the answer file share: a string id verbatim (ZCode's requestId
+// strings stay CLI-friendly), any other decoded value as its canonical JSON
+// (DSH's integer frame ids). A number 3 and a string "3" render the same text
+// and cannot meet: one job speaks one host, whose ids are one kind.
+func nativeSerializeID(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	if encoded, err := CanonicalJSON(value); err == nil {
+		return string(encoded)
+	}
+	return fmt.Sprintf("%v", value)
+}
+
+// holdInteraction records one client-directed request this transport holds for
+// a user decision: the pending file gains the request (status pending), the
+// interactions log gains its pending entry, the answer poller starts, and no
+// reply frame is sent. A re-announced request (same logical id, fresh frame
+// id) only re-aims the frame the eventual reply will answer.
+func (c *nativeClient) holdInteraction(spec *nativeInteractionSpec, message map[string]any, params map[string]any) error {
+	frameID, hasFrameID := message["id"]
+	if !hasFrameID {
+		frameID = nil
+	}
+	requestID, err := spec.requestID(params, frameID)
+	if err != nil {
+		return err
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if hold := c.holdByIDLocked(requestID); hold != nil {
+		hold.frameID = frameID
+		hold.updatedAt = time.Now()
+		return c.writePendingsLocked()
+	}
+	options := spec.options(params)
+	if options == nil {
+		options = []any{}
+	}
+	hold := &nativePendingHold{
+		requestID: requestID,
+		method:    textOf(message["method"]),
+		frameID:   frameID,
+		params:    params,
+		spec:      spec,
+		status:    "pending",
+		summary:   spec.summary(params),
+		options:   options,
+		updatedAt: time.Now(),
+	}
+	c.holdings = append(c.holdings, hold)
+	if err := c.writePendingsLocked(); err != nil {
+		return err
+	}
+	if err := c.appendInteractionLocked(map[string]any{
+		"request_id": requestID, "method": hold.method, "status": "pending"}); err != nil {
+		return err
+	}
+	// One poller per transport, started when there is finally something to
+	// poll for; close stops it.
+	c.answerPoller.Do(func() { go c.pollAnswers() })
+	return nil
+}
+
+// holdByIDLocked finds this connection's hold for one logical request id.
+func (c *nativeClient) holdByIDLocked(requestID string) *nativePendingHold {
+	for _, hold := range c.holdings {
+		if hold.requestID == requestID {
+			return hold
+		}
+	}
+	return nil
+}
+
+// pendingHeld reports whether any held interaction of this connection is still
+// waiting for a user decision (the state a turn budget must pause for).
+func (c *nativeClient) pendingHeld() bool {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	for _, hold := range c.holdings {
+		if hold.status == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
+// pollAnswers polls the answer file until the transport closes. The wait path
+// itself never blocks on the poll: a host that sits silent waiting for its
+// permission reply (DSH's ACP has no re-announce) still gets its answer, because
+// the poller delivers it from here.
+func (c *nativeClient) pollAnswers() {
+	ticker := time.NewTicker(nativeAnswerPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.answerStop:
+			return
+		case <-ticker.C:
+			for {
+				if !c.deliverOneAnswer() {
+					break
+				}
+			}
+		}
+	}
+}
+
+// deliverOneAnswer consumes at most one answer file and delivers it; false
+// means there was nothing (more) to consume.
+func (c *nativeClient) deliverOneAnswer() bool {
+	answerPath := filepath.Join(c.directory, "interaction-answer.json")
+	consumedPath := filepath.Join(c.directory, "interaction-answer.consumed.json")
+	// Consume by rename first: the decision is persisted in the answer file,
+	// and the rename makes one answer deliverable exactly once even if the
+	// poll tick races a second file.
+	if err := os.Rename(answerPath, consumedPath); err != nil {
+		return false
+	}
+	body, err := os.ReadFile(consumedPath)
+	if err != nil {
+		return true
+	}
+	value, err := decodeUniqueKeys(body)
+	if err != nil {
+		c.stateMu.Lock()
+		c.appendInteractionLocked(map[string]any{
+			"method": "native-answer", "status": "answer-refused-malformed"})
+		c.stateMu.Unlock()
+		return true
+	}
+	record, isObject := value.(map[string]any)
+	if !isObject {
+		c.stateMu.Lock()
+		c.appendInteractionLocked(map[string]any{
+			"method": "native-answer", "status": "answer-refused-malformed"})
+		c.stateMu.Unlock()
+		return true
+	}
+	requestID, _ := getOrOf(record, "request_id", "").(string)
+	option, _ := getOrOf(record, "option", "").(string)
+	choice := nativeAnswerChoice{Cancel: getOf(record, "cancel") == true, OptionID: option}
+
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	hold := c.holdByIDLocked(requestID)
+	if hold == nil || hold.status != "pending" {
+		// An answer names a request this connection never held, or one that
+		// already got its single vote: refused, recorded, and the wait for the
+		// real user decision continues.
+		c.appendInteractionLocked(map[string]any{
+			"request_id": requestID, "method": "native-answer",
+			"status": "answer-refused-no-pending-request"})
+		return true
+	}
+	payload, err := hold.spec.reply(hold.params, choice)
+	if err != nil {
+		c.appendInteractionLocked(map[string]any{
+			"request_id": requestID, "method": hold.method,
+			"status": "answer-refused-invalid-choice"})
+		return true
+	}
+	frame := map[string]any{"id": hold.frameID}
+	for key, value := range payload {
+		frame[key] = value
+	}
+	if c.hooks.envelope != nil {
+		frame = c.hooks.envelope(frame)
+	}
+	if err := c.send(frame); err != nil {
+		// The reply could not be delivered: the transport is dying and the
+		// next receive reports why. The hold stays pending, so the failure
+		// state is visible rather than laundered into a delivered vote.
+		c.appendInteractionLocked(map[string]any{
+			"request_id": requestID, "method": hold.method,
+			"status": "answer-send-failed"})
+		return true
+	}
+	// Fact two of three: the vote was delivered to the original connection.
+	// (Fact one was the answer file; fact three - observed - lands when the
+	// host's own turn traffic arrives afterwards.)
+	hold.status = "delivered"
+	hold.updatedAt = time.Now()
+	if err := c.writePendingsLocked(); err != nil {
+		return true
+	}
+	c.setInteractionStatusLocked(requestID, "pending", "delivered")
+	_ = c.writeInteractionsLocked()
+	return true
+}
+
+// observePendings marks every delivered interaction observed: traffic that is
+// not the held request itself means the host continued the original turn after
+// the vote. A no-op unless something was delivered.
+func (c *nativeClient) observePendings() {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	changed := false
+	for _, hold := range c.holdings {
+		if hold.status == "delivered" {
+			hold.status = "observed"
+			hold.updatedAt = time.Now()
+			c.setInteractionStatusLocked(hold.requestID, "delivered", "observed")
+			changed = true
+		}
+	}
+	if changed {
+		_ = c.writePendingsLocked()
+		_ = c.writeInteractionsLocked()
+	}
+}
+
+// invalidatePendings invalidates every still-pending interaction: the
+// connection its request belonged to is gone (output closed, host timed out,
+// transport closed), so the host will never read a reply and the old option
+// ids are no longer authorized answers. Delivered and observed records keep
+// their status - those votes did reach their connection.
+func (c *nativeClient) invalidatePendings() {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	changed := false
+	for _, hold := range c.holdings {
+		if hold.status == "pending" {
+			hold.status = "invalidated"
+			hold.updatedAt = time.Now()
+			c.setInteractionStatusLocked(hold.requestID, "pending", "invalidated")
+			changed = true
+		}
+	}
+	if changed {
+		_ = c.writePendingsLocked()
+		_ = c.writeInteractionsLocked()
+	}
+}
+
+// appendInteraction records one inline-answered reverse request (the frozen
+// {method, status} shape the reference transport writes).
+func (c *nativeClient) appendInteraction(entry map[string]any) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.appendInteractionLocked(entry)
+}
+
+func (c *nativeClient) appendInteractionLocked(entry map[string]any) error {
+	c.interactions = append(c.interactions, entry)
+	return writeAtomicJSON(filepath.Join(c.directory, "interaction-status.json"), c.interactions)
+}
+
+// setInteractionStatusLocked advances one held request's lifecycle entry in
+// this process's interactions log (the pending path's extension of the
+// mechanism: one entry per request, advanced through its lifecycle). Only an
+// entry in the expected prior stage matches, so a refused answer recorded for
+// the same request id is never rewritten into a lifecycle status.
+func (c *nativeClient) setInteractionStatusLocked(requestID, prior, status string) {
+	for _, entry := range c.interactions {
+		object, isObject := entry.(map[string]any)
+		if !isObject || !valuesEqual(object["request_id"], requestID) {
+			continue
+		}
+		if valuesEqual(object["status"], prior) {
+			object["status"] = status
+		}
+	}
+}
+
+// pendingRecord is the on-disk shape of one held interaction
+// (interaction-pending.json): the stable request id, the method, the in-process
+// connection generation, a body summary, the host's original options verbatim,
+// the lifecycle status and the last update time.
+func (h *nativePendingHold) pendingRecord(generation int) map[string]any {
+	options := h.options
+	if options == nil {
+		options = []any{}
+	}
+	return map[string]any{
+		"request_id": h.requestID,
+		"method":     h.method,
+		"connection": generation,
+		"summary":    h.summary,
+		"options":    options,
+		"status":     h.status,
+		"updated_at": h.updatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// writePendingsLocked rewrites interaction-pending.json: the records earlier
+// processes left behind stay as evidence, this connection's holds follow in
+// their current state.
+func (c *nativeClient) writePendingsLocked() error {
+	if !c.pendingsRead {
+		c.pendingsRead = true
+		if value, err := readJSONFile(filepath.Join(c.directory, "interaction-pending.json")); err == nil {
+			if records, isList := value.([]any); isList {
+				c.priorPendings = records
+			}
+		}
+	}
+	records := make([]any, 0, len(c.priorPendings)+len(c.holdings))
+	records = append(records, c.priorPendings...)
+	for _, hold := range c.holdings {
+		records = append(records, hold.pendingRecord(c.generation))
+	}
+	return writeAtomicJSON(filepath.Join(c.directory, "interaction-pending.json"), records)
+}
+
+// writeInteractionsLocked flushes the interactions log (kept for symmetry with
+// the append path; both write the same file).
+func (c *nativeClient) writeInteractionsLocked() error {
 	return writeAtomicJSON(filepath.Join(c.directory, "interaction-status.json"), c.interactions)
 }
 
@@ -1056,9 +1471,13 @@ func (c *nativeClient) timeoutError(method string) error {
 
 // close ends the transport: close stdin, give the host 8s to exit on EOF,
 // then SIGTERM with 5s, then SIGKILL; join the read loop (2s) and close the
-// evidence file handles. It is idempotent and never fails the caller.
+// evidence file handles. It is idempotent and never fails the caller. Held
+// interactions that never received a user decision are invalidated here too:
+// their connection is gone, so their old option ids stop being authorized.
 func (c *nativeClient) close() {
 	c.closeOnce.Do(func() {
+		close(c.answerStop)
+		c.invalidatePendings()
 		c.stdin.Close()
 		waited := make(chan struct{}, 1)
 		go func() {
