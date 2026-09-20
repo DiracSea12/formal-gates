@@ -52,6 +52,19 @@ as test_native_dsh_differential.py):
   the transport's own "not advertised; no fallback" text, while the frozen
   reference still sends it - pinned by the Go-side-only scenario below, same
   discipline as the applied-credential half.
+- the permission-mode contract (2026-09-20, the drop of the forced
+  setMode(yolo) that predated the G2d interaction hold): a request without
+  permission_mode switches nothing on the Go side - the session runs the
+  host's own default mode and the evidence records what the host itself
+  reported - while the frozen reference still declares yolo on every new
+  non-read-only session (its era predates the drop). The registered
+  divergence is pinned per side by the default-mode scenario below; the
+  differentially comparable scenarios below request permission_mode='yolo'
+  explicitly, the one value where the frozen reference and the Go explicit
+  path coincide frame for frame. An explicit permission_mode the host does
+  not apply is refused on both sides through the same readback contract
+  (the mismatch scenario below). Resumed and read-only sessions never
+  switch modes on either side.
 
 The two sides are deliberately asymmetric processes: the reference is called
 in-process (reference_native_zcode.execute), while the Go side is its own
@@ -346,7 +359,8 @@ class ZCodeDifferential(unittest.TestCase):
         ensure_driver_binary()
 
     def scenario(self, knobs=None, identity='', probe=False, model='', reasoning_effort='',
-                 read_only=True, environment=None, env=None, prewrite=None, root=None):
+                 read_only=True, environment=None, env=None, prewrite=None, root=None,
+                 permission_mode=''):
         """One shared root: workspace and knobs shared, evidence dirs per side.
 
         The binding names a per-side copy of the fake app-server as the launch
@@ -355,6 +369,10 @@ class ZCodeDifferential(unittest.TestCase):
         the host observes); the comparison normalises each side's directory out
         of the embedded paths. Pass `root` to place the scenario inside a tree
         that already holds shared fixtures (an account catalogue).
+        `permission_mode` lands in the request only when named: the Go adapter
+        switches a NEW non-read-only session to it and verifies the host
+        readback, while the frozen reference ignores the field (the registered
+        divergence in the module docstring).
         """
         if root is None:
             root = Path(tempfile.mkdtemp(prefix='g2c-zcode-')).resolve()
@@ -383,6 +401,8 @@ class ZCodeDifferential(unittest.TestCase):
             request = {'provider': 'zcode', 'binding': binding, 'workspace': str(workspace),
                        'read_only': read_only, 'identity': identity, 'model': model,
                        'reasoning_effort': reasoning_effort, 'prompt': PROMPT, 'schema': SCHEMA}
+            if permission_mode:
+                request['permission_mode'] = permission_mode
             if probe:
                 request['probe'] = True
             atomic(directory / 'native-request.json', request)
@@ -620,7 +640,12 @@ class ZCodeDifferential(unittest.TestCase):
 
     # --- 新建成功回合 ------------------------------------------------------
     def test_new_session_success_turn(self):
-        root, workspace, ref_dir, go_dir = self.scenario(knobs={}, read_only=False)
+        # An explicitly requested permission_mode: the one differentially
+        # comparable value (see the module docstring) - the frozen reference
+        # forces yolo on every new session, the Go adapter sets exactly what
+        # the request names, and 'yolo' is where the two coincide.
+        root, workspace, ref_dir, go_dir = self.scenario(knobs={}, read_only=False,
+                                                         permission_mode='yolo')
         result = self.assert_success(ref_dir, go_dir)
         self.assertEqual(result['provider'], 'zcode')
         self.assertEqual(result['identity'], 's-1')
@@ -629,14 +654,16 @@ class ZCodeDifferential(unittest.TestCase):
                          {'model': CANONICAL_REF, 'reasoning_effort': 'low'})
         self.assertEqual(read(ref_dir / 'answer.json'), ANSWER)
         self.assertEqual(result['usage_evidence'], {'inputTokens': 9, 'outputTokens': 2})
-        # The dev mode was declared once and the host's settings readback (not
-        # the stale projection) is the recorded mode in force.
+        # The requested mode was declared once and the host's settings readback
+        # (not the stale projection) is the recorded mode in force.
         self.assertEqual(read(ref_dir / 'tool-policy.json'),
                          {'read_only': False, 'permission_mode': 'yolo'})
         self.assertEqual(read(ref_dir / 'native-source.json')['permission_mode'], 'yolo')
         for directory in (ref_dir, go_dir):
             methods = [frame.get('method') for frame in self.frames(directory)]
             self.assertEqual(methods.count('session/setMode'), 1)
+            self.assertEqual(self.frame_with_method(directory, 'session/setMode')['params']['mode'],
+                             'yolo')
             self.assertLess(methods.index('session/setMode'), methods.index('session/send'))
             created = self.frame_with_method(directory, 'session/create')
             self.assertEqual(created['params']['persistence'], 'immediate')
@@ -651,6 +678,37 @@ class ZCodeDifferential(unittest.TestCase):
         GoAdapter('zcode').verify_source(ref_dir, persisted)
         self.assertEqual({k: v for k, v in result.items() if k != 'files'},
                          {k: v for k, v in persisted.items() if k != 'files'})
+
+    def test_default_new_session_runs_the_hosts_own_mode(self):
+        # Registered divergence (the module docstring): without a
+        # permission_mode the Go adapter switches nothing - the session runs
+        # the host's own mode, recorded from the snapshot the host reported -
+        # while the frozen reference still declares yolo on every new
+        # non-read-only session. Both complete the same turn; the mode
+        # evidence differs by design.
+        root, workspace, ref_dir, go_dir = self.scenario(knobs={}, read_only=False)
+        result, error = self.run_reference(ref_dir)
+        self.assertIsNone(error, msg=repr(error))
+        self.assertEqual(read(ref_dir / 'tool-policy.json'),
+                         {'read_only': False, 'permission_mode': 'yolo'})
+        ref_methods = [frame.get('method') for frame in self.frames(ref_dir)]
+        self.assertEqual(ref_methods.count('session/setMode'), 1)
+        self.assertEqual(self.frame_with_method(ref_dir, 'session/setMode')['params']['mode'],
+                         'yolo')
+        completed = self.run_go(go_dir)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode('utf-8', 'replace'))
+        go_result = json.loads(completed.stdout)
+        self.assertEqual((go_result['identity'], go_result['native_turn'],
+                          go_result['usage_evidence']),
+                         (result['identity'], result['native_turn'], result['usage_evidence']))
+        self.assertEqual(read(go_dir / 'answer.json'), ANSWER)
+        # The default path sends no setMode frame at all and records whatever
+        # the host itself reported (the fake host's snapshot says 'default').
+        go_methods = [frame.get('method') for frame in self.frames(go_dir)]
+        self.assertNotIn('session/setMode', go_methods)
+        self.assertEqual(read(go_dir / 'tool-policy.json'),
+                         {'read_only': False, 'permission_mode': 'default'})
+        self.assertEqual(read(go_dir / 'native-source.json')['permission_mode'], 'default')
 
     def test_read_only_role_narrows_the_native_toolbox(self):
         root, workspace, ref_dir, go_dir = self.scenario(knobs={}, read_only=True)
@@ -704,11 +762,21 @@ class ZCodeDifferential(unittest.TestCase):
 
     # --- setMode 边界 -------------------------------------------------------
     def test_setmode_readback_mismatch_is_refused(self):
+        # An explicitly requested permission_mode whose host readback differs
+        # is refused on both sides: the Go adapter verifies the readback
+        # against the requested mode, the frozen reference against its own
+        # yolo declaration - the same knob defeats both. (Without an explicit
+        # mode the Go side would not send setMode at all; that registered
+        # divergence is the default-mode scenario above.)
         root, workspace, ref_dir, go_dir = self.scenario(knobs={'setMode_mode': 'build'},
-                                                         read_only=False)
+                                                         read_only=False,
+                                                         permission_mode='yolo')
         self.assert_failure(ref_dir, go_dir, 'ZCODE_CONFIG: permission mode was not applied')
         for directory in (ref_dir, go_dir):
-            # The refusal lands before any turn binding or policy evidence.
+            # The one setMode frame carried the requested mode; the refusal
+            # lands before any turn binding or policy evidence.
+            self.assertEqual(self.frame_with_method(directory, 'session/setMode')['params']['mode'],
+                             'yolo')
             self.assertFalse((directory / 'native-source.json').exists())
             self.assertFalse((directory / 'tool-policy.json').exists())
 
@@ -861,7 +929,7 @@ class ZCodeDifferential(unittest.TestCase):
                        'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': str(v2 / 'provider_config.json')}
         _root, _workspace, ref_dir, go_dir = self.scenario(
             knobs={}, read_only=False, model=CANONICAL_REF, environment=environment,
-            env={'ZCODE_DATA_BASE_DIR': str(data)}, root=root)
+            env={'ZCODE_DATA_BASE_DIR': str(data)}, root=root, permission_mode='yolo')
         self.assert_success(ref_dir, go_dir)
         revision = 'zcode-builtin:7:' + hashlib.sha256(str(catalogue).encode()).hexdigest()
         self.assertEqual(read(ref_dir / 'account-provider.json'),
@@ -912,13 +980,16 @@ class ZCodeDifferential(unittest.TestCase):
     def test_runtime_headers_reverse_request_without_a_credential(self):
         knobs = {'reverse_requests': [
             {'id': 'hdr-1', 'method': RUNTIME_HEADERS, 'params': {'providerId': 'p-absent'}}]}
-        root, workspace, ref_dir, go_dir = self.scenario(knobs=knobs, read_only=False)
+        root, workspace, ref_dir, go_dir = self.scenario(knobs=knobs, read_only=False,
+                                                         permission_mode='yolo')
         # No credential is provisioned for p-absent, so both sides answer the
         # one machine-answered interaction the same honest way. (The
         # credential-applied half needs the production helper next to the
         # production package, which the relocated reference cannot execute; it
         # is pinned by internal/harness/native_zcode_unix_test.go and by the
-        # Go-side-only scenario below.)
+        # Go-side-only scenario below. The explicit permission_mode keeps the
+        # mode faces comparable; the default-mode divergence has its own
+        # scenario above.)
         self.assert_success(ref_dir, go_dir)
         for directory in (ref_dir, go_dir):
             replies = self.jsonl_values(directory, 'host-replies.jsonl')

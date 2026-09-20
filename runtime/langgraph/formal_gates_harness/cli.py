@@ -157,6 +157,26 @@ def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, re
         return {'status': 'TRANSPORT_ADOPTED', 'receipt': str(target), 'changes': sorted(changed),
                 'state_migrated': False, 'model_calls': 0}
 
+def native_pending_interactions(store):
+    """Run-level read-only listing of held native interactions (G2d item 2).
+
+    Each job directory's interaction-pending.json is scanned and only records
+    still pending are open questions; delivered, observed and invalidated
+    holds are evidence. Nothing is written and no graph interrupt is
+    fabricated: the operator answers through native-respond while the graph
+    keeps its own pause semantics.
+    """
+    collected=[]
+    for path in sorted((store.directory/'jobs').glob('*/interaction-pending.json')):
+        records=read(path)
+        if not isinstance(records,list):continue
+        for record in records:
+            if isinstance(record,dict) and record.get('status')=='pending':
+                collected.append({'job':path.parent.name,'request_id':record.get('request_id'),
+                                  'method':record.get('method'),'summary':record.get('summary'),
+                                  'options':record.get('options') or []})
+    return collected
+
 def status_projection(store,app,config):
     snapshot=app.get_state(config,subgraphs=True);state=snapshot.values or {};pending=[]
     def visit(snap):
@@ -165,12 +185,13 @@ def status_projection(store,app,config):
                 if not any(p['id']==item.id for p in pending):pending.append({'id':item.id,'request':item.value})
             if hasattr(task.state,'tasks'):visit(task.state)
     visit(snapshot)
+    native=native_pending_interactions(store)
     terminal=store.get(state['terminal']) if state.get('terminal') else None
     failure_path=store.directory/'runner-error.json'
     return {'run_id':store.manifest['run_id'],'directory':str(store.directory),
             'profile':'harness-v1','revision':store.manifest['revision'],'candidate':state.get('candidate'),
-            'status':terminal['status'] if terminal else ('ABORTED' if state.get('stop_reason') else ('WAITING_USER' if pending else 'PENDING')),
-            'round':state.get('round',0),'next':list(snapshot.next),'interrupts':pending,
+            'status':terminal['status'] if terminal else ('ABORTED' if state.get('stop_reason') else ('WAITING_USER' if pending or native else 'PENDING')),
+            'round':state.get('round',0),'next':list(snapshot.next),'interrupts':pending,'native_interactions':native,
             'terminal':terminal,'stop_reason':state.get('stop_reason',''),
             'last_runner_error':read(failure_path) if failure_path.exists() else None}
 

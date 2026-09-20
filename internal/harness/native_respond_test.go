@@ -250,6 +250,31 @@ func TestInteractionReplyBuilders(t *testing.T) {
 	}
 }
 
+// TestInteractionUserInputPresentation pins the presented body of a held
+// user-input request as pure spec functions: the summary is the question text
+// (the generic prompt only titles it), a multi-question request keeps every
+// question verbatim with its own options, and such a hold offers no single
+// option list for --option to answer with.
+func TestInteractionUserInputPresentation(t *testing.T) {
+	params := objectOrEmpty(decodeTestJSON(t, `{"requestId": "ui-2", "prompt": "Pick two", "questions": [`+
+		`{"question": "First?", "header": "A", "options": [{"value": "1", "label": "One"}]},`+
+		`{"question": "Second?", "header": "B", "options": [{"value": "2", "label": "Two"}]}]}`))
+	if got := zcodeUserInputInteraction.summary(params); got != "Pick two: First?; Second?" {
+		t.Fatalf("summary = %q", got)
+	}
+	if !valuesEqual(zcodeUserInputInteraction.body(params), map[string]any{
+		"prompt": "Pick two", "questions": getOf(params, "questions")}) {
+		t.Fatalf("body = %s", mustCanonical(t, zcodeUserInputInteraction.body(params)))
+	}
+	if options := listOf(zcodeUserInputInteraction.options(params)); len(options) != 0 {
+		t.Fatalf("a multi-question hold answers no single option list: %s", mustCanonical(t, options))
+	}
+	empty := map[string]any{}
+	if got := zcodeUserInputInteraction.summary(empty); got != "user input request" {
+		t.Fatalf("empty summary = %q", got)
+	}
+}
+
 // TestNativePendingOffers pins the host-shape-agnostic option membership the
 // CLI validates with: optionId (ACP/ZCode permissions) and value (ZCode
 // question options).

@@ -129,26 +129,29 @@ func TestReadNativeLine(t *testing.T) {
 
 // TestNativeQueueUnbounded pins the queue mechanics: producers never block,
 // consumers time out or block forever (合同：无界消息队列，mutex＋切片＋通知
-// channel，不用有界 channel).
+// channel，不用有界 channel), and every item carries its arrival sequence.
 func TestNativeQueueUnbounded(t *testing.T) {
 	queue := newNativeQueue()
 	wait := 30 * time.Millisecond
-	if _, ok := queue.get(&wait); ok {
+	if _, _, ok := queue.get(&wait); ok {
 		t.Fatal("empty queue must time out")
 	}
 	for i := 0; i < 100; i++ {
 		queue.put(i)
 	}
 	for i := 0; i < 100; i++ {
-		value, ok := queue.get(&wait)
-		if !ok || value.(int) != i {
-			t.Fatalf("get %d = %v %v", i, value, ok)
+		value, seq, ok := queue.get(&wait)
+		if !ok || value.(int) != i || seq != int64(i+1) {
+			t.Fatalf("get %d = %v %d %v", i, value, seq, ok)
 		}
+	}
+	if got := queue.arrived(); got != 100 {
+		t.Fatalf("arrived = %d, want 100", got)
 	}
 	// A nil wait blocks until a producer arrives.
 	arrived := make(chan any, 1)
 	go func() {
-		value, _ := queue.get(nil)
+		value, _, _ := queue.get(nil)
 		arrived <- value
 	}()
 	select {

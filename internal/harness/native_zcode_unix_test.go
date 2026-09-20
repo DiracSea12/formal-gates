@@ -831,6 +831,11 @@ func TestZcodeExecuteInteractionHeldAndInvalidated(t *testing.T) {
 		textOf(record["summary"]) != "Bash: run a tool" {
 		t.Fatalf("pending record = %s", mustCanonical(t, record))
 	}
+	// The approved operation persists verbatim: the host's tool name and its
+	// own input record.
+	if textOf(record["toolName"]) != "Bash" || !valuesEqual(record["input"], map[string]any{"command": "ls"}) {
+		t.Fatalf("the operation must persist verbatim: %s", mustCanonical(t, record))
+	}
 	// The probe report itself records the held request's lifecycle.
 	if !strings.Contains(stdout, `"request_id":"req-1"`) {
 		t.Fatalf("probe report = %s", stdout)

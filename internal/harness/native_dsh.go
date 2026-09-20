@@ -74,6 +74,11 @@ var dshPermissionInteraction = nativeInteractionSpec{
 		return "permission request"
 	},
 	options: func(params map[string]any) any { return getOf(params, "options") },
+	body: func(params map[string]any) map[string]any {
+		// The toolCall names the operation being approved (its toolCallId and
+		// whatever else the host put in it) and persists verbatim.
+		return nativePickParams(params, "toolCall")
+	},
 	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
 		if choice.Cancel {
 			return map[string]any{"result": map[string]any{
@@ -87,6 +92,20 @@ var dshPermissionInteraction = nativeInteractionSpec{
 		}
 		return nil, &blockedError{message: "DSH_INTERACTION: option is not one the host offered: " + choice.OptionID}
 	},
+}
+
+// dshObservesDelivered is DSH's attribution rule for a delivered hold's
+// continuation (hooks.observes): a session/update of the held session, or a
+// plain response - while a hold is delivered this adapter has exactly one
+// request in flight, that session's prompt, so a response arriving then
+// answers it. Notifications that name no session are not attributable.
+func dshObservesDelivered(hold *nativePendingHold, message map[string]any) bool {
+	if isLiveMethod(getOf(message, "method")) {
+		return valuesEqual(message["method"], "session/update") &&
+			valuesEqual(getOf(objectOrEmpty(message["params"]), "sessionId"),
+				getOf(hold.params, "sessionId"))
+	}
+	return true
 }
 
 // dshHooks is DSH's transport configuration: the host decides when a turn
@@ -104,6 +123,7 @@ func dshHooks() nativeHooks {
 		closedMessage:   "native ACP process closed its output",
 		invalidMessage:  "non-JSON ACP output",
 		interactions:    []nativeInteractionSpec{dshPermissionInteraction},
+		observes:        dshObservesDelivered,
 		identify:        func(c *nativeClient) any { return c.nextCounter() },
 		envelope: func(value map[string]any) map[string]any {
 			framed := map[string]any{"jsonrpc": "2.0"}

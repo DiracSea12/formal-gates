@@ -7,12 +7,12 @@ import unittest
 from unittest.mock import patch, Mock
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from formal_gates_harness.native_result import decode_result
 from reference_native_dsh import reconcile_completed_output
 from formal_gates_harness.infra import atomic, read, RuntimeBlocked, HarnessError, Bridge, Store
 from formal_gates_harness.graph import Flow, State
-from formal_gates_harness.cli import adopt_transport
+from formal_gates_harness.cli import adopt_transport, status_projection
 
 PACKAGE = Path(__file__).resolve().parents[3]
 BINARY = PACKAGE / '.harness/bin/formal-gates'
@@ -84,6 +84,92 @@ class OutputRecovery(unittest.TestCase):
                 final=app.invoke(Command(resume={'decision':'retry','revision':'revision'}),config)
                 self.assertEqual(store.get(final['development']),output)
                 self.assertFalse(app.get_state(config).next)
+
+class NativeInteractionProjection(unittest.TestCase):
+    """R4 (G2d contract item 2): the run-level show projection lists a job's
+    still-pending native interactions read-only, at the same level as a
+    LangGraph interrupt, without touching the flow or writing anything."""
+
+    PENDING = {'request_id': 'req-1', 'method': 'interaction/requestPermission',
+               'connection': 2, 'summary': 'Bash: run a tool',
+               'options': [{'optionId': 'allow_once', 'kind': 'allow_once'}],
+               'status': 'pending', 'updated_at': '2026-09-20T03:04:05Z'}
+    RESOLVED = {**PENDING, 'request_id': 'req-0', 'status': 'invalidated'}
+    # WAL-mode readers may touch the sqlite coordination files; the projection
+    # itself must change nothing (the test_checkpoint_startup discipline).
+    IGNORED = {'checkpoints.sqlite-wal', 'checkpoints.sqlite-shm'}
+
+    def projected(self, root, paused=False):
+        """Invoke a one-node graph, snapshot the tree, then project read-only."""
+        store = Store(root, {'spec': {'base': 'base'}, 'revision': 'revision',
+                             'run_id': 'run-projection'}, Bridge(str(BINARY)))
+        def node(state):
+            if paused: interrupt({'kind': 'runtime'})
+            return {}
+        graph = StateGraph(State); graph.add_node('gate', node)
+        graph.add_edge(START, 'gate'); graph.add_edge('gate', END)
+        config = {'configurable': {'thread_id': 'run-projection'}}
+        with SqliteSaver.from_conn_string(str(root / 'checkpoints.sqlite')) as saver:
+            app = graph.compile(checkpointer=saver)
+            app.invoke({'run_id': 'run-projection'}, config)
+            # Snapshot and compare while the connection is still open: closing
+            # it checkpoints the WAL into the main database, which is the
+            # saver's own write, not the projection's.
+            before = {p: p.read_bytes() for p in root.rglob('*')
+                      if p.is_file() and p.name not in self.IGNORED}
+            projection = status_projection(store, app, config)
+            after = {p: p.read_bytes() for p in root.rglob('*')
+                     if p.is_file() and p.name not in self.IGNORED}
+            self.assertEqual(after, before, 'the projection wrote something')
+        return projection
+
+    def test_active_job_pending_interaction_is_listed_and_waits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            job = root / 'jobs' / 'active-job'; job.mkdir(parents=True)
+            # One open hold next to one invalidated hold: only the still-open
+            # question belongs in the projection.
+            atomic(job / 'interaction-pending.json', [self.RESOLVED, self.PENDING])
+            projection = self.projected(root)
+        self.assertEqual(projection['status'], 'WAITING_USER')
+        self.assertEqual(projection['interrupts'], [])
+        self.assertEqual(projection['native_interactions'],
+                         [{'job': 'active-job', 'request_id': 'req-1',
+                           'method': 'interaction/requestPermission',
+                           'summary': 'Bash: run a tool',
+                           'options': [{'optionId': 'allow_once', 'kind': 'allow_once'}]}])
+
+    def test_without_pending_records_the_projection_is_unchanged(self):
+        # No open hold: a job directory whose holds are all resolved projects
+        # exactly like a run without any job evidence at all, and every
+        # pre-existing key keeps its exact value (the new key is an empty
+        # list).
+        expected = {'run_id': 'run-projection', 'profile': 'harness-v1',
+                    'revision': 'revision', 'candidate': None, 'status': 'PENDING',
+                    'round': 0, 'next': [], 'interrupts': [], 'native_interactions': [],
+                    'terminal': None, 'stop_reason': '', 'last_runner_error': None}
+        with tempfile.TemporaryDirectory() as blank, tempfile.TemporaryDirectory() as resolved:
+            job = Path(resolved).resolve() / 'jobs' / 'active-job'; job.mkdir(parents=True)
+            atomic(job / 'interaction-pending.json', [self.RESOLVED])
+            projections = [self.projected(Path(name).resolve())
+                           for name in (blank, resolved)]
+        self.assertEqual({k: v for k, v in projections[0].items() if k != 'directory'},
+                         {k: v for k, v in projections[1].items() if k != 'directory'})
+        for projection in projections:
+            self.assertEqual({k: v for k, v in projection.items() if k != 'directory'},
+                             expected)
+
+    def test_pending_is_listed_alongside_a_langgraph_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            job = root / 'jobs' / 'active-job'; job.mkdir(parents=True)
+            atomic(job / 'interaction-pending.json', [self.PENDING])
+            projection = self.projected(root, paused=True)
+        self.assertEqual(projection['status'], 'WAITING_USER')
+        self.assertEqual(len(projection['interrupts']), 1)
+        self.assertEqual([item['job'] for item in projection['native_interactions']],
+                         ['active-job'])
+
 
 class TransportAdoption(unittest.TestCase):
     def case(self):

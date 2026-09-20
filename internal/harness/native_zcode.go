@@ -125,8 +125,9 @@ const zcodeAccessModeKey = "mode"
 const zcodeResultFrameError = "RuntimeBlocked: NATIVE_RESULT:"
 
 // zcodeTurnBudget is the reference implementation's total bound on one turn's
-// wait: 900 seconds from the send acknowledgement to the terminal event. A
-// variable only so the bounded-wait tests can shorten it.
+// wait: 900 seconds of host-processing time from the send acknowledgement to
+// the terminal event, paused while a user decision is held (G2d). A variable
+// only so the bounded-wait tests can shorten it.
 var zcodeTurnBudget = 900 * time.Second
 
 // zcodeIsRegularFile mirrors Path.is_file(): follows symlinks, refuses
@@ -410,6 +411,12 @@ var zcodePermissionInteraction = nativeInteractionSpec{
 		return "permission request"
 	},
 	options: func(params map[string]any) any { return getOf(params, "options") },
+	body: func(params map[string]any) map[string]any {
+		// The operation being approved: the host's own tool name and input
+		// record, so the displayed request says what a vote authorizes (the
+		// reason already rides the summary).
+		return nativePickParams(params, "toolName", "input")
+	},
 	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
 		if choice.Cancel {
 			return map[string]any{"error": map[string]any{
@@ -449,15 +456,30 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 	method:    zcodeUserInputMethod,
 	requestID: zcodeInteractionRequestID,
 	summary: func(params map[string]any) string {
-		if prompt := textOf(getOf(params, "prompt")); prompt != "" && prompt != "null" {
-			return prompt
-		}
+		// The question bodies are what the user actually answers, so they are
+		// the summary; the generic prompt only titles them and never replaces
+		// them. Every question is kept.
+		questions := []string{}
 		for _, question := range listOf(getOf(params, "questions")) {
 			if text := textOf(getOf(question, "question")); text != "" && text != "null" {
-				return text
+				questions = append(questions, text)
 			}
 		}
-		return "user input request"
+		prompt := textOf(getOf(params, "prompt"))
+		if prompt == "null" {
+			prompt = ""
+		}
+		switch {
+		case len(questions) == 0 && prompt != "":
+			// The host named no questions; its prompt is all it said.
+			return prompt
+		case len(questions) == 0:
+			return "user input request"
+		case prompt != "":
+			return prompt + ": " + strings.Join(questions, "; ")
+		default:
+			return strings.Join(questions, "; ")
+		}
 	},
 	options: func(params map[string]any) any {
 		questions := listOf(getOf(params, "questions"))
@@ -469,6 +491,12 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 			return []any{}
 		}
 		return options
+	},
+	body: func(params map[string]any) map[string]any {
+		// The questions (each with its own options) are the request's actual
+		// body and persist verbatim; the prompt persists as the title above
+		// them.
+		return nativePickParams(params, "prompt", "questions")
 	},
 	reply: func(params map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
 		if choice.Cancel {
@@ -487,6 +515,25 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 		}
 		return nil, &blockedError{message: "ZCODE_INTERACTION: option is not one the host offered: " + choice.OptionID}
 	},
+}
+
+// zcodeInteractionObserved is zcode's attribution rule for a delivered hold's
+// continuation (hooks.observes): a session/event notification that names the
+// held request's session, turn or tool call - the session's turn lifecycle
+// traffic. Process telemetry and anything without such a binding is not
+// attributable and leaves the decision honestly at delivered.
+func zcodeInteractionObserved(hold *nativePendingHold, message map[string]any) bool {
+	if !valuesEqual(message["method"], "session/event") {
+		return false
+	}
+	event := objectOrEmpty(message["params"])
+	for _, key := range []string{"sessionId", "turnId", "toolCallId"} {
+		value, isString := getOf(hold.params, key).(string)
+		if isString && value != "" && valuesEqual(getOf(event, key), value) {
+			return true
+		}
+	}
+	return false
 }
 
 // newZcodeClient spawns the app-server with ZCode's transport configuration:
@@ -511,6 +558,7 @@ func newZcodeClient(launch map[string]any, workspace, directory string, environm
 		defaultTimeout:  60 * time.Second,
 		bounded:         true,
 		interactions:    []nativeInteractionSpec{zcodePermissionInteraction, zcodeUserInputInteraction},
+		observes:        zcodeInteractionObserved,
 		respond:         z.respond,
 		classify:        zcodeClassify,
 		notification:    z.notification,
@@ -1638,20 +1686,29 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// is a remaining-budget, not a wall-clock moment, so the time the user
 	// takes to decide does not consume the turn. A silent host during a hold is
 	// therefore not a failure either - the loop keeps waiting for the answer.
+	// The paused time is folded back in whenever no hold is pending anymore,
+	// including in the receive-timeout branch below: a wait that expired after
+	// the answer's delivery was derived from the stale deadline and must not
+	// be read as the host going silent.
 	position := 0
 	terminal := false
 	deadline := time.Now().Add(zcodeTurnBudget)
 	var pausedSince time.Time
-	for !terminal {
-		held := client.client.pendingHeld()
-		switch {
-		case held && pausedSince.IsZero():
-			pausedSince = time.Now()
-		case !held && !pausedSince.IsZero():
+	// remainingBudget folds the paused hold time back into the deadline (once
+	// no hold is pending anymore) and reports what is left of the turn.
+	remainingBudget := func() time.Duration {
+		if !client.client.pendingHeld() && !pausedSince.IsZero() {
 			deadline = deadline.Add(time.Since(pausedSince))
 			pausedSince = time.Time{}
 		}
-		if !held && !time.Now().Before(deadline) {
+		return time.Until(deadline)
+	}
+	for !terminal {
+		if client.client.pendingHeld() {
+			if pausedSince.IsZero() {
+				pausedSince = time.Now()
+			}
+		} else if remainingBudget() <= 0 {
 			break
 		}
 		for position < len(client.events) {
@@ -1697,6 +1754,12 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 				if client.client.pendingHeld() {
 					// The host waits for its user-directed request; so does
 					// this loop, without spending the turn budget.
+					continue
+				}
+				// The expired wait may have spanned the answer's delivery:
+				// recompute the remaining budget before calling the silence
+				// a timeout.
+				if remainingBudget() > 0 {
 					continue
 				}
 				return nil, &blockedError{

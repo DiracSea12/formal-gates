@@ -461,6 +461,11 @@ func TestTransportRequestPermissionIsHeld(t *testing.T) {
 	}) {
 		t.Fatalf("options must be the host's originals verbatim: %s", mustCanonical(t, record["options"]))
 	}
+	// The toolCall being approved persists verbatim, so the displayed record
+	// names the operation, not just its id.
+	if !valuesEqual(record["toolCall"], map[string]any{"toolCallId": "call-1"}) {
+		t.Fatalf("toolCall must persist verbatim: %s", mustCanonical(t, record))
+	}
 	// ACP has no re-announce and the frame id is the request identity, so
 	// one request is exactly one hold (the re-announce rule is pinned on the
 	// zcode host, where the requestId param is the identity).

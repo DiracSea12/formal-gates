@@ -5,7 +5,8 @@ package harness
 // The G2d held-interaction flows over the scripted fake hosts, covering the
 // contract's 测试与门 column end to end: pending→答复→同 turn 继续出结果、
 // 拒绝选项、取消（按宿主协议的取消答复形状）、错误 request_id/非宿主选项
-// 被拒、断连失效、双请求竞态（答 A 不误 B）、zcode 预算暂停。POSIX-only:
+// 被拒、断连失效、双请求竞态（答 A 不误 B）、zcode 预算暂停与答复后续算、
+// 无关流量不伪造 observed、问题正文呈递。POSIX-only:
 // the peers run behind #!/bin/sh wrappers.
 
 import (
@@ -133,7 +134,8 @@ func runDSHWithAnswerer(t *testing.T, steps []peerStep, requestID string, respon
 // continue chain: the permission is held, the CLI answer is delivered under
 // the original frame id in the ACP reply shape, and the SAME prompt turn
 // completes and produces the committed answer evidence. The delivered
-// interaction becomes observed once the host's turn traffic resumes.
+// interaction becomes observed once the host's own answer to that prompt
+// arrives.
 func TestInteractionDSHAnswerContinuesSameTurn(t *testing.T) {
 	code, errout, directory := runDSHWithAnswerer(t,
 		dshPermissionSteps(`"outcome":"selected"`), "41",
@@ -549,5 +551,133 @@ func TestInteractionZcodeBudgetPausesWhileHeld(t *testing.T) {
 	}
 	if body := readTestFile(t, filepath.Join(scenario.directory, "answer.json")); body != `{"status":"PASS","summary":"observed"}` {
 		t.Fatalf("answer.json = %s", body)
+	}
+}
+
+// TestInteractionZcodeBudgetSurvivesLateAnswer pins the receive-timeout side
+// of the pause: the wait that expires after the answer's delivery was derived
+// from the stale deadline, and a host that continues inside its remaining
+// budget must complete the turn instead of being read as silence.
+func TestInteractionZcodeBudgetSurvivesLateAnswer(t *testing.T) {
+	saved := zcodeTurnBudget
+	zcodeTurnBudget = 3 * time.Second
+	t.Cleanup(func() { zcodeTurnBudget = saved })
+	steps := func(inputID string) []peerStep {
+		script := zcodeInteractionSteps(zcodePermissionFrame("server-1", "req-1", "Bash"),
+			`"decision":"allow"`)(inputID)
+		// The host continues 1.2s after the answer, inside its 3s budget.
+		script[4].SleepSecs = 1.2
+		return script
+	}
+	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
+		func(directory string, errout *bytes.Buffer) int {
+			// The user waits far past the raw 3s budget, all of it while the
+			// request is held.
+			time.Sleep(5200 * time.Millisecond)
+			return NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+		})
+	if code != 0 || errout != "" {
+		t.Fatalf("the user's wait must not shorten the post-answer budget: code = %d stderr = %q",
+			code, errout)
+	}
+	if record := pendingStatus(t, scenario.directory, "req-1"); record == nil || textOf(record["status"]) != "observed" {
+		t.Fatalf("pending record = %v", record)
+	}
+	if body := readTestFile(t, filepath.Join(scenario.directory, "answer.json")); body != `{"status":"PASS","summary":"observed"}` {
+		t.Fatalf("answer.json = %s", body)
+	}
+}
+
+// TestInteractionZcodeUnrelatedTrafficMustNotConfirm pins the attribution
+// rule: after the answer, host telemetry that names no session is consumed
+// but never advances the decision past delivered; only the held request's own
+// turn traffic does, once it arrives.
+func TestInteractionZcodeUnrelatedTrafficMustNotConfirm(t *testing.T) {
+	steps := func(inputID string) []peerStep {
+		script := zcodeInteractionSteps(zcodePermissionFrame("server-1", "req-1", "Bash"),
+			`"decision":"allow"`)(inputID)
+		// After the reply the host first emits an MCP telemetry heartbeat and
+		// holds the real turn events back for two more seconds.
+		unrelated := []peerStep{
+			{On: `"decision":"allow"`, Send: `{"method": "process/mcpTelemetry", "params": {"event": "heartbeat"}}`},
+			{On: `"decision":"allow"`, SleepSecs: 2},
+		}
+		return append(script[:4:4], append(unrelated, script[4:]...)...)
+	}
+	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
+		func(directory string, errout *bytes.Buffer) int {
+			code := NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			// Wait until the transport has consumed the telemetry line, then
+			// stay inside the two-second window it bought: the decision must
+			// still be delivered, not observed.
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				trace := readTestFile(t, filepath.Join(directory, "protocol.jsonl"))
+				if strings.Contains(trace, "process/mcpTelemetry") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("telemetry never reached the transport: %s", trace)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(500 * time.Millisecond)
+			if record := pendingStatus(t, directory, "req-1"); record == nil || textOf(record["status"]) != "delivered" {
+				t.Fatalf("unrelated telemetry must not confirm the decision: %v", record)
+			}
+			// The held request's own turn events land after the window, and
+			// only they complete the fact.
+			waitStatusContent(t, directory, `"status":"observed"`)
+			return code
+		})
+	if code != 0 || errout != "" {
+		t.Fatalf("code = %d stderr = %q", code, errout)
+	}
+	if record := pendingStatus(t, scenario.directory, "req-1"); record == nil || textOf(record["status"]) != "observed" {
+		t.Fatalf("pending record = %v", record)
+	}
+}
+
+// TestInteractionZcodeQuestionBodyShown pins the display contract of a held
+// user-input request: the summary is the actual question text (the generic
+// prompt only titles it) and the pending record carries the host's questions
+// and prompt verbatim, so native-show lets the user see what they are
+// answering before native-respond speaks for them.
+func TestInteractionZcodeQuestionBodyShown(t *testing.T) {
+	steps := zcodeInteractionSteps(zcodeUserInputFrame("server-9", "ui-1", "Which database should be used?"),
+		`"action":"accept"`)
+	code, errout, scenario := runZcodeWithAnswerer(t, steps, "ui-1",
+		func(directory string, errout *bytes.Buffer) int {
+			var out bytes.Buffer
+			if code := NativeShow([]string{"--job", directory}, &out, errout); code != 0 {
+				t.Fatalf("native-show exited %d: %s", code, errout.String())
+			}
+			if !strings.Contains(out.String(), "Which database should be used?") {
+				t.Fatalf("the actual question must be visible: %s", out.String())
+			}
+			record := pendingStatus(t, directory, "ui-1")
+			if record == nil {
+				t.Fatal("pending record missing")
+			}
+			if summary := textOf(record["summary"]); summary != "Pick one: Which database should be used?" {
+				t.Fatalf("summary = %q", summary)
+			}
+			if !valuesEqual(record["questions"], []any{map[string]any{
+				"question": "Which database should be used?", "header": "Choice",
+				"options": []any{
+					map[string]any{"value": "yes", "label": "Yes"},
+					map[string]any{"value": "no", "label": "No"},
+				}}}) {
+				t.Fatalf("questions must persist verbatim: %s", mustCanonical(t, record["questions"]))
+			}
+			if textOf(record["prompt"]) != "Pick one" {
+				t.Fatalf("prompt = %v", record["prompt"])
+			}
+			return NativeRespond([]string{"--job", directory, "--request", "ui-1", "--option", "yes"}, errout)
+		})
+	if code != 0 || errout != "" {
+		t.Fatalf("code = %d stderr = %q", code, errout)
+	}
+	if record := pendingStatus(t, scenario.directory, "ui-1"); record == nil || textOf(record["status"]) != "observed" {
+		t.Fatalf("pending record = %v", record)
 	}
 }

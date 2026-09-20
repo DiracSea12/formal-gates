@@ -598,6 +598,11 @@ type nativeInteractionSpec struct {
 	// options returns the host's original options verbatim for the pending
 	// record (nil becomes an empty list on disk).
 	options func(params map[string]any) any
+	// body picks the params members the pending record persists verbatim next
+	// to the options, under the host's own field names (the same "host payload
+	// verbatim" rule): what the user must see to decide. Present keys only;
+	// nil persists nothing beyond the summary and options.
+	body func(params map[string]any) map[string]any
 	// reply builds the reply payload (result/error members, no envelope, no
 	// id) for one validated choice, or refuses a choice the host never
 	// offered. The frame shape is each host's own, reverse-read from its
@@ -635,6 +640,13 @@ type nativeHooks struct {
 	// The client-directed requests this transport holds for a user decision
 	// instead of answering inline (G2d).
 	interactions []nativeInteractionSpec
+	// observes reports whether one inbound non-request message is
+	// attributable to a delivered hold's continuation on this host - the fact
+	// that advances a delivered vote to observed. This is host knowledge the
+	// shared transport never guesses; nil keeps every hold honestly at
+	// delivered. Called with the interaction state locked, so it must not
+	// touch client state.
+	observes func(hold *nativePendingHold, message map[string]any) bool
 
 	identify     func(c *nativeClient) any
 	envelope     func(value map[string]any) map[string]any
@@ -687,13 +699,20 @@ type nativePendingHold struct {
 	// frameID is the inbound frame id the reply will answer: the latest one
 	// seen for this logical request, so a re-announcing host is answered on
 	// its freshest frame.
-	frameID   any
-	params    map[string]any
-	spec      *nativeInteractionSpec
-	status    string // pending | delivered | observed | invalidated
-	summary   string
-	options   any
-	updatedAt time.Time
+	frameID any
+	params  map[string]any
+	spec    *nativeInteractionSpec
+	status  string // pending | delivered | observed | invalidated
+	summary string
+	options any
+	// body is the spec-picked params payload the pending record persists
+	// verbatim (nil: none).
+	body map[string]any
+	// deliveredArrival is the message-arrival sequence at delivery time:
+	// only messages that arrived under a higher sequence are facts after
+	// the vote. Zero until delivered.
+	deliveredArrival int64
+	updatedAt        time.Time
 }
 
 // nativeAnswerPollInterval is how often a job process polls the answer file
@@ -701,8 +720,9 @@ type nativePendingHold struct {
 var nativeAnswerPollInterval = 200 * time.Millisecond
 
 // nativeConnectionGeneration counts native transports this process created:
-// the "连接代次" every pending record carries, so an answer written for one
-// connection can never be mistaken for a later connection's pending request.
+// the "连接代次" every pending record carries as the label of the connection
+// that held it. The answer file carries no generation, so this labels the
+// record's connection; it is not a cross-connection isolation guarantee.
 var nativeConnectionGeneration int64
 
 // nativeClient is one host process and the JSON request/reply loop over its
@@ -969,11 +989,12 @@ var errNativeTimedOut = errors.New("native message wait timed out")
 // receive pops one message, raising the closure error when the transport ended
 // and answering host→client requests inline (a reverse request is consumed,
 // never matched against a pending ident). A held interaction's request is
-// consumed the same way - no frame leaves, the pending record does - and any
-// later non-request traffic from the host marks a delivered interaction
-// observed (the host continued the original turn).
+// consumed the same way - no frame leaves, the pending record does - and a
+// later message advances a delivered interaction to observed only when it
+// arrived after the delivery and the host's own rule attributes it to that
+// hold (hooks.observes).
 func (c *nativeClient) receive(wait *time.Duration) (any, error) {
-	message, ok := c.messages.get(wait)
+	message, arrival, ok := c.messages.get(wait)
 	if !ok {
 		return nil, errNativeTimedOut
 	}
@@ -996,9 +1017,7 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 		// Everything that is not a reverse request goes to the notification
 		// hook: notifications (a live method without an id) and plain
 		// responses alike, exactly like the reference receive()'s else branch.
-		// Such traffic is also the observable fact that a delivered
-		// interaction's original turn continued.
-		c.observePendings()
+		c.observePendings(object, arrival)
 		if c.hooks.notification != nil {
 			c.hooks.notification(message)
 		}
@@ -1098,6 +1117,10 @@ func (c *nativeClient) holdInteraction(spec *nativeInteractionSpec, message map[
 	if options == nil {
 		options = []any{}
 	}
+	var body map[string]any
+	if spec.body != nil {
+		body = spec.body(params)
+	}
 	hold := &nativePendingHold{
 		requestID: requestID,
 		method:    textOf(message["method"]),
@@ -1107,6 +1130,7 @@ func (c *nativeClient) holdInteraction(spec *nativeInteractionSpec, message map[
 		status:    "pending",
 		summary:   spec.summary(params),
 		options:   options,
+		body:      body,
 		updatedAt: time.Now(),
 	}
 	c.holdings = append(c.holdings, hold)
@@ -1238,9 +1262,10 @@ func (c *nativeClient) deliverOneAnswer() bool {
 		return true
 	}
 	// Fact two of three: the vote was delivered to the original connection.
-	// (Fact one was the answer file; fact three - observed - lands when the
-	// host's own turn traffic arrives afterwards.)
+	// (Fact one was the answer file; fact three - observed - lands when a
+	// message the host attributes to the held request arrives afterwards.)
 	hold.status = "delivered"
+	hold.deliveredArrival = c.messages.arrived()
 	hold.updatedAt = time.Now()
 	if err := c.writePendingsLocked(); err != nil {
 		return true
@@ -1250,15 +1275,22 @@ func (c *nativeClient) deliverOneAnswer() bool {
 	return true
 }
 
-// observePendings marks every delivered interaction observed: traffic that is
-// not the held request itself means the host continued the original turn after
-// the vote. A no-op unless something was delivered.
-func (c *nativeClient) observePendings() {
+// observePendings advances a delivered interaction to observed when the
+// inbound message both arrived after the delivery (a strictly later arrival
+// sequence) and is attributable to that hold's continuation by the host's own
+// rule (hooks.observes). The shared transport never guesses attribution, and
+// without a rule nothing becomes observed. A no-op unless something was
+// delivered.
+func (c *nativeClient) observePendings(message map[string]any, arrival int64) {
+	if c.hooks.observes == nil {
+		return
+	}
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	changed := false
 	for _, hold := range c.holdings {
-		if hold.status == "delivered" {
+		if hold.status == "delivered" && arrival > hold.deliveredArrival &&
+			c.hooks.observes(hold, message) {
 			hold.status = "observed"
 			hold.updatedAt = time.Now()
 			c.setInteractionStatusLocked(hold.requestID, "delivered", "observed")
@@ -1327,13 +1359,14 @@ func (c *nativeClient) setInteractionStatusLocked(requestID, prior, status strin
 // pendingRecord is the on-disk shape of one held interaction
 // (interaction-pending.json): the stable request id, the method, the in-process
 // connection generation, a body summary, the host's original options verbatim,
-// the lifecycle status and the last update time.
+// the host payload members the spec's body picks (also verbatim, under the
+// host's own field names), the lifecycle status and the last update time.
 func (h *nativePendingHold) pendingRecord(generation int) map[string]any {
 	options := h.options
 	if options == nil {
 		options = []any{}
 	}
-	return map[string]any{
+	record := map[string]any{
 		"request_id": h.requestID,
 		"method":     h.method,
 		"connection": generation,
@@ -1342,6 +1375,23 @@ func (h *nativePendingHold) pendingRecord(generation int) map[string]any {
 		"status":     h.status,
 		"updated_at": h.updatedAt.UTC().Format(time.RFC3339),
 	}
+	for key, value := range h.body {
+		record[key] = value
+	}
+	return record
+}
+
+// nativePickParams picks the named members out of one request's params,
+// present keys only: the host payload a spec's body persists verbatim, under
+// the host's own field names and never renamed or invented here.
+func nativePickParams(params map[string]any, keys ...string) map[string]any {
+	picked := map[string]any{}
+	for _, key := range keys {
+		if _, present := entryOf(params, key); present {
+			picked[key] = params[key]
+		}
+	}
+	return picked
 }
 
 // writePendingsLocked rewrites interaction-pending.json: the records earlier
@@ -1541,11 +1591,20 @@ func readNativeLine(reader *bufio.Reader) (string, error) {
 
 // nativeQueue is an unbounded FIFO: the host may emit arbitrarily many
 // notifications while a response is pending, and Python's queue.Queue never
-// drops or blocks a producer.
+// drops or blocks a producer. Every item is stamped with the sequence it
+// arrived under, so a consumer can tell messages that arrived after a given
+// moment from ones already queued before it.
 type nativeQueue struct {
 	mu     sync.Mutex
-	items  []any
+	items  []nativeQueueItem
 	notify chan struct{}
+	seq    int64
+}
+
+// nativeQueueItem is one queued message with its arrival sequence.
+type nativeQueueItem struct {
+	value any
+	seq   int64
 }
 
 func newNativeQueue() *nativeQueue {
@@ -1554,7 +1613,8 @@ func newNativeQueue() *nativeQueue {
 
 func (q *nativeQueue) put(value any) {
 	q.mu.Lock()
-	q.items = append(q.items, value)
+	q.seq++
+	q.items = append(q.items, nativeQueueItem{value: value, seq: q.seq})
 	q.mu.Unlock()
 	select {
 	case q.notify <- struct{}{}:
@@ -1562,14 +1622,23 @@ func (q *nativeQueue) put(value any) {
 	}
 }
 
-func (q *nativeQueue) get(wait *time.Duration) (any, bool) {
+// arrived is the sequence of the newest message so far: a message queued
+// under this number was already queued (or arriving with it) when the caller
+// looked, and only a higher sequence is strictly later.
+func (q *nativeQueue) arrived() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.seq
+}
+
+func (q *nativeQueue) get(wait *time.Duration) (any, int64, bool) {
 	for {
 		q.mu.Lock()
 		if len(q.items) > 0 {
-			value := q.items[0]
+			item := q.items[0]
 			q.items = q.items[1:]
 			q.mu.Unlock()
-			return value, true
+			return item.value, item.seq, true
 		}
 		q.mu.Unlock()
 		if wait == nil {
@@ -1579,7 +1648,7 @@ func (q *nativeQueue) get(wait *time.Duration) (any, bool) {
 		select {
 		case <-q.notify:
 		case <-time.After(*wait):
-			return nil, false
+			return nil, 0, false
 		}
 	}
 }
