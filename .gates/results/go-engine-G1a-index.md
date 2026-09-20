@@ -340,4 +340,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-20（第八轮，G2d 原生交互，轻装模式收口）】**G2d 按合同实施并实机验证完毕：`7cf58b6`（持有机械＋`native-respond`/`native-show`＋11 项假宿主场景＋差分登记有界分歧）→ `7c85357`（**删除新建非只读会话无条件 `setMode("yolo")`**：缺省完全不设模式、证据只记宿主自身回读值；显式 `permission_mode` 才设置并校验；续用语义不动）。实机（机主授权，探针 `.harness/validation/g2d-zcode-probe-20260920T{1..4}`）：T1＝主代理搭请求漏 `size` 字段致绑定误报（教训归主代理）；T2＝缺省路径零 setMode 帧、**本机宿主默认模式自报 yolo**；T3＝`default` 非 setMode 合法值被宿主拒（权威枚举 `plan|build|edit|yolo|auto`，bundle 有两套枚举）、零模型调用；T4＝`build` 模式**核心证据链全通**——真 `interaction/requestPermission` 持有 ≥70s（宿主换帧重发 10 次被重瞄）、`allow_once` 投递、**同回合完成**（turnId 唯一、prompt 未重发、标记写入）、pending→delivered→observed 走全、消费 2 次模型请求。未覆盖如实：DSH 实机（二批待授权）、实机拒绝/取消路径（离线已证）。现行结论以 `go-engine-G2d.md` 为准。
 
+> **【2026-09-20（第九轮，G2d 评审返修）】**第八轮收口被外部评审驳回（3 P1＋2 P2，五项全部主代理亲复现后并行派发修复，`43e03e4`）：R1 答复后误报宿主超时＝remainingBudget 惰性折回暂停时长、超时分支重算续等；R2 无关消息伪造 observed＝到达序号晚于投递＋适配器归属判定（telemetry 不可归属，诚实停 delivered）——**评审夹具修复后仍红经定时探针实证为夹具自身误报**（30 秒窗口不查时序，抓到 +1s 合法 turn 事件的观察；真缺陷在修复前 0.44s 即翻转）；R3 问题正文丢失＝宿主 questions/input/toolCall 原样持久化＋summary 用实际问题；R4 run 级 show 接入 `native_interactions` 只读投影；R5 差分 4 失败改按新行为＋分歧登记＋新增缺省模式差分用例。统一亲验全绿（评审夹具 R1/R3、探针＋仓库回归 R2、差分 59、Python 287、race、全仓两遍零失败）。现行结论以 `go-engine-G2d.md` 为准。
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

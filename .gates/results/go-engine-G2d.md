@@ -33,7 +33,21 @@
 - DSH 实机（计划二批，需另行授权）；拒绝/取消路径仅离线假宿主证据，实机未跑。
 - 实机未验：zcode `requestUserInput` 真请求、多问题/多选（合同本就只呈递不代答）。
 
+## 外部评审驳回与修复（2026-09-20，`43e03e4`）
+
+评审（对象 `1bbcdba`）判 FAIL：3 P1＋2 P2。五项全部主代理先亲复现再派发修复（Go/Python 两子代理并行，文件集不相交）：
+
+- **R1/P1 答复后误报宿主超时**（已复现：预算 3s/用户等 5.2s/宿主 1.2s 继续仍报 `ZCODE_NATIVE_TIMEOUT`）。修复＝`remainingBudget()` 惰性把持有暂停折回 deadline，超时分支先重算、预算未尽续等。评审夹具 `TestReviewBudgetAfterUserAnswer` 现通过。
+- **R2/P1 无关消息伪造 observed**（已复现：telemetry 心跳即翻 `delivered→observed`）。修复＝到达序号严格晚于投递＋适配器归属判定（zcode：`session/event` 且命名被持有请求的 session/turn/tool 之一；DSH：该 session 的 `session/update` 或 prompt 响应；不可归属诚实停在 delivered）。**评审夹具 `TestReviewUnrelatedTrafficMustNotConfirmDecision` 修复后仍红，经定时探针（`/tmp/g2d-probe`，telemetry-only 3 秒窗口采样）实证为夹具自身误报**：其 `waitStatusContent` 30 秒窗口不检查时序，抓到的是 +1 秒**合法** turn 事件的观察（修复前 telemetry 0.44s 即翻转＝真缺陷；修复后 1.67s 由合法事件触发＝正确行为）。仓库内移植回归 `TestInteractionZcodeUnrelatedTrafficMustNotConfirm`（显式 2 秒 delivered 窗口）钉住真实语义。
+- **R3/P1 问题正文丢失**（已复现："Pick one" 顶替了实际问题）。修复＝宿主原样持久化（userInput 的 prompt+完整 questions；zcode 权限 toolName+input；DSH toolCall），summary 用实际问题正文。评审夹具 `TestReviewQuestionMustBeVisible` 现通过。
+- **R4/P2 run 级 show 未接入**（已核实投影只走 LangGraph interrupts）。修复＝`status_projection` 只读扫描 `jobs/*/interaction-pending.json`，新键 `native_interactions`，有待决时状态 WAITING_USER 与 LangGraph interrupt 同级；纯只读（投影前后整树字节不变有测试钉）。
+- **R5/P2 差分 4 失败**（已亲跑复现，58 项恰 4 失败）。修复＝4 处断言改按新行为＋有界分歧登记（参考实现冻结强制 yolo vs Go 缺省不设模式）；新增差分 `test_default_new_session_runs_the_hosts_own_mode`。未恢复强制 yolo。
+- 注释按评审可读性意见降级为只述真实不变量（"任意流量＝原 turn 已继续"删除；connection 代次改口为进程内记录标签）。
+
+修复后统一亲验（重建二进制后）：评审夹具 R1/R3 过、R2 由探针＋仓库回归钉住；差分 59 全绿；Python 全量 287 全绿；`go test ./internal/harness/`＋race 过；`go test ./...` 全仓两遍零失败；gofmt/双平台 vet 干净。未消费模型调用。未覆盖项同前（DSH 实机、实机 deny/cancel、实机 requestUserInput）。
+
 ## 有界差异登记
 
 - zcode bundle 双模式枚举（UI 注册表 vs setMode 参数 schema），以参数 schema 为权威。
 - 本机宿主默认模式＝yolo：缺省路径作业在本机不触发权限请求（宿主模式说了算，属设计内行为）。
+- 差分登记（test_native_zcode_differential.py 模块清单）：参考实现冻结"强制 yolo"历史行为 vs Go 缺省不设模式只记宿主自报；显式 permission_mode 且回读不符双侧同拒；resumed/read-only 双侧都不切模式。
