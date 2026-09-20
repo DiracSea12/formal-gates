@@ -46,6 +46,17 @@
 
 修复后统一亲验（重建二进制后）：评审夹具 R1/R3 过、R2 由探针＋仓库回归钉住；差分 59 全绿；Python 全量 287 全绿；`go test ./internal/harness/`＋race 过；`go test ./...` 全仓两遍零失败；gofmt/双平台 vet 干净。未消费模型调用。未覆盖项同前（DSH 实机、实机 deny/cancel、实机 requestUserInput）。
 
+## 第二轮评审返修（2026-09-20，`c438713`）
+
+第二轮评审（对象 `c754dc6`）确认 R1/R3/R5 关闭，剩两项未修完整，均主代理先亲复现（评审 r2 夹具 `/private/tmp/g2d-review-r2/`，zcode titleUpdated 与 DSH available_commands_update 双双翻 observed 坐实；F2 投影证据亲核）再派发：
+
+- **F1/P1 同会话元数据伪造 observed**：判据收紧到回执/进度语义——zcode 仅认 ①`permission.resolved` 且 `payload.requestId`＝被持有 requestId（宿主回执，字段形状抄 T4 真迹 seq 57）②`tool.updated` 且 `payload.toolCallId` 匹配 ③`turn.completed`/`turn.failed` 且顶层 `turnId` 匹配；DSH 仅认在途 prompt 的响应或 `session/update` 内容命名被持有 `toolCallId`（工具卡进度）；titleUpdated/available_commands/遥测一律停在 delivered。夹具词汇对齐真宿主，新增双宿主判据真值表单测。
+- **F2/P2 run 级投影裁正文**：`native_pending_interactions` 改排除法透传（只剔 status/connection/updated_at，正文键由 Go 适配器单一出处决定、缺省不出现），权限 input 与逐题 questions 在 `harness show --run` 可见。
+
+**r1 夹具旧 R2 用例说明（如实）**：`/private/tmp/g2d-review/` 的 `TestReviewUnrelatedTrafficMustNotConfirmDecision` 在任何正确实现下都不可能通过——其回调在 observed 出现时无条件报错、永不出现则 30 秒 Fatal，两条路都是失败；评审自己在 r2 已用 150ms 时序窗版本重写同一检查（该版本通过）。此为夹具结构缺陷非回归，上轮定时探针与仓库内回归（telemetry+titleUpdated 后 500ms 窗口断言 delivered）继续钉住真实语义。
+
+统一亲验（`c438713`）：r2 夹具 **4/4 全绿**（含 titleUpdated 150ms 时序与 DSH 元数据两新用例）；r1 夹具 3/4（唯一红即上述结构性缺陷用例）；主代理定时探针过；差分 59 全绿；Python 全量 288 全绿；harness 包＋race 过；gofmt/双平台 vet 干净；`go test ./...` 全仓零失败。零模型调用。未覆盖项不变（DSH 实机、实机 deny/cancel、实机 requestUserInput）。
+
 ## 有界差异登记
 
 - zcode bundle 双模式枚举（UI 注册表 vs setMode 参数 schema），以参数 schema 为权威。

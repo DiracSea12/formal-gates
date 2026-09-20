@@ -342,4 +342,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-20（第九轮，G2d 评审返修）】**第八轮收口被外部评审驳回（3 P1＋2 P2，五项全部主代理亲复现后并行派发修复，`43e03e4`）：R1 答复后误报宿主超时＝remainingBudget 惰性折回暂停时长、超时分支重算续等；R2 无关消息伪造 observed＝到达序号晚于投递＋适配器归属判定（telemetry 不可归属，诚实停 delivered）——**评审夹具修复后仍红经定时探针实证为夹具自身误报**（30 秒窗口不查时序，抓到 +1s 合法 turn 事件的观察；真缺陷在修复前 0.44s 即翻转）；R3 问题正文丢失＝宿主 questions/input/toolCall 原样持久化＋summary 用实际问题；R4 run 级 show 接入 `native_interactions` 只读投影；R5 差分 4 失败改按新行为＋分歧登记＋新增缺省模式差分用例。统一亲验全绿（评审夹具 R1/R3、探针＋仓库回归 R2、差分 59、Python 287、race、全仓两遍零失败）。现行结论以 `go-engine-G2d.md` 为准。
 
+> **【2026-09-20（第十轮，G2d 第二轮评审返修）】**第二轮评审（对象 `c754dc6`）确认 R1/R3/R5 关闭，剩 F1/P1（双宿主同会话元数据——zcode titleUpdated、DSH available_commands_update——仍伪造 observed）与 F2/P2（run 级投影裁掉 Go 侧新保存的正文键），两项主代理均先亲复现再派发，`c438713` 收口：判据收紧到回执/进度语义（zcode＝permission.resolved 按 T4 真迹字段／tool.updated／turn 终态，DSH＝在途 prompt 响应或命名 toolCallId 的工具卡进度；其余停 delivered）；投影改排除法透传（正文键单一出处在 Go 适配器）。亲验：r2 夹具 4/4 全绿（含 150ms 时序新用例）、r1 夹具 3/4（唯一红＝其 R2 旧用例结构上任何正确实现都不可能通过，评审自己在 r2 已重写该检查，详见 G2d 记录）、差分 59、Python 288、race、全仓零失败。现行结论以 `go-engine-G2d.md` 为准。
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
