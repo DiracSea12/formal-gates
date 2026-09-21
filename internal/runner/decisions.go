@@ -1,17 +1,10 @@
 package runner
 
-// K2 — exact process confirmations and durable waiting (plan §6.1, §7).
-// This file owns the decisions table: the gate in front of a task, its
-// pending/answered lifecycle, and the Answer entry point a user's reply
-// travels through.  The gate is MATERIALIZED at CreateRun — the
-// declaration travels with the run's creation transaction, so the
-// requirement "this task needs a user decision" is itself durable — and
-// the run loop then only READS the rows: pending means wait, an answer
-// equal to the row's allow choice means execute, any other answer means
-// refuse for good.  A restarted owner cannot bypass a gate by omitting
-// the Confirm field from its specs, because Run never looks at that
-// field at all — without a persisted user decision the gated task and
-// its successors never execute (§13.2).
+// K2 — exact process confirmations and durable waiting (plan §6.1, §7):
+// the decisions table gates a task behind a persisted user decision,
+// materialized by CreateRun and settled by Store.Answer.  The
+// persistence contract is documented on Confirmation,
+// materializeDecisions and decisionGate.
 
 import (
 	"context"
@@ -84,12 +77,9 @@ const (
 // materializes the pending decisions row plus its decision_created event
 // in the run's creation transaction — run, task, generation, revision,
 // body digest, options and allow choice all freeze on that row, which
-// then defines the gate.  Recovery specs may omit Confirm entirely: Run
-// reads gates and answers from the decisions rows alone, and a later Run
-// passing different Confirm fields changes nothing on the ground (the
-// persisted definition is authoritative; swapping the question while it
-// hangs pending would be the worse failure, and legitimate changes
-// arrive with a generation bump in a later unit).
+// then defines the gate.  The frozen row is authoritative, so a later
+// Run's Confirm fields change nothing on the ground; see decisionGate
+// for how the gate is read.
 type Confirmation struct {
 	// Options are the choices the user may answer with.  Must be
 	// non-empty: a question with no choices could never be answered and
@@ -220,9 +210,8 @@ func materializeDecisions(ctx context.Context, tx *sql.Tx, runID string, specs [
 //     gate and the task runs like any other;
 //   - pending: the question stands unanswered — ErrWaitingDecision, and
 //     nothing behind the gate executes until Store.Answer succeeds;
-//   - answered: the stored answer IS the gate's verdict.  Equal to the
-//     row's allow choice it lets the task through exactly once per Run
-//     selection (an executor failure and retry never re-asks); any other
+//   - answered: the stored answer IS the gate's verdict.  The row's
+//     allow choice lets the task through like ungated work; any other
 //     stored choice is a durable refusal — ErrDecisionRefused, stable
 //     across reopens and re-runs because every read consults the same
 //     stored answer.

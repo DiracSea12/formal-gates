@@ -141,12 +141,9 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // runs at a time — parallelism is a later unit.  specs must cover the
 // run's tasks with the inputs the run was created under; a changed input
 // or a missing spec for ready work fails the run instead of executing
-// blind.  A task whose persisted decision gate is still pending stops Run
-// with ErrWaitingDecision — its work waits for Store.Answer, and no
-// successor runs without that user decision; a gate answered with anything
-// but its allowing choice stops Run with ErrDecisionRefused, just as
-// durably.  Gates are read from the decisions rows alone; the specs'
-// Confirm fields are ignored here.
+// blind.  A gated task stops Run durably: still-pending with
+// ErrWaitingDecision until Store.Answer allows it, otherwise-answered
+// with ErrDecisionRefused — see decisionGate for the read semantics.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -188,20 +185,8 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 		if !ok {
 			return fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
 		}
-		// Every ready task consults its persisted decision gate before
-		// any intent is registered, and the gate is READ, never built
-		// here: CreateRun materialized it, so a run exists with all its
-		// gates or not at all.  A pending row stops Run with
-		// ErrWaitingDecision immediately (this sits ahead of the
-		// no-ready-task exit, so a waiting gate can never be misreported
-		// as a cycle); an answered row either clears the gate — the
-		// stored answer equals the row's allowing choice, execution
-		// proceeds exactly as ungated work and an executor failure plus
-		// retry never re-asks — or refuses it durably
-		// (ErrDecisionRefused).  A task with no row was never declared
-		// gated and runs.  The specs' Confirm fields are deliberately
-		// not consulted: recovery that omits them meets the same gate
-		// (§13.2 — no successor executes without a user decision).
+		// Check the persisted decision gate before registering any
+		// execution intent; the read semantics live on decisionGate.
 		if err := r.store.decisionGate(ctx, t); err != nil {
 			return err
 		}

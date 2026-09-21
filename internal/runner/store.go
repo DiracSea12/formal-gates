@@ -53,12 +53,11 @@ const (
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
-// (tasks.input_digest); version 3 adds the decisions gate table,
-// including its allow column (the choice that authorizes execution)
-// amended into the v3 delta before acceptance — v3 never shipped
-// accepted, so the delta itself is revised in place instead of minting
-// a v4 no accepted database ever needed.  Version 1 databases are
-// refused outright below.
+// (tasks.input_digest); version 3 adds the decisions gate table with
+// its allow column, amended into the delta in place — v3 was never
+// accepted, so no v4 was minted (the full acceptance history is in the
+// stage record .gates/results/go-engine-K2.md).  Version 1 databases
+// are refused outright below.
 const schemaVersion = 3
 
 // Store is the durable state of one run plus exclusive ownership of its
@@ -314,10 +313,8 @@ var schemaV2 = []string{
 // without one could never open.  answer and answered_at stay NULL until
 // the single pending→answered transition, in the style of
 // invocations.result_json.  The allow column is part of the v3 delta
-// itself, not a v4 step: v3 was never accepted (the only accepted
-// baseline is v2/K1), so the delta is amended in place — databases
-// stamped v3 by the unaccepted build exist only in development and are
-// out of scope.
+// itself, not a v4 step (see schemaVersion); databases stamped v3 by
+// the unaccepted build are development-only and out of scope.
 const decisionsTable = `CREATE TABLE decisions (
 	decision_id  TEXT PRIMARY KEY,
 	run_id       TEXT NOT NULL REFERENCES runs (run_id),
