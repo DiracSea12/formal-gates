@@ -148,3 +148,81 @@ DSH 绑定、其余 5 个 worker 阶段走真实 ZCode 绑定（一条链同时�
 
 本会话至此模型调用 0→12（全部属本次授权的实跑；DSH 会话有 usage_evidence 落盘，
 ZCode 走宿主计划计量）。
+
+## 评审返修（首版被驳回后的全面重做，2026-09-21）
+
+**评审结论（`/private/tmp/k5-review/review.md`，候选 `e193b37` vs 基线 `33f7707`）：FAIL，
+8 P1＋1 P2**——R1 业务 FAIL 可跑成 COMPLETE 且末端 FAIL 无可执行返修；R2 材料/冻结候选/
+检查集/harness-result.json 全缺；R3 候选不存在即可批准；R4 返修简报不携带当轮失败材料；
+R5 abort 重开后丢失；R6 恢复调用不受管理；R7 重开不核绑定；R8 无物理归档；R9（P2）契约
+拒绝被误标会话失效。评审核心判断：**参考实现 `runtime/langgraph/formal_gates_harness/graph.py`
+（293 行）就在仓库里，K5 没有完整保留其流程结构与业务语义——"照抄都要抄错"**。机主追加
+两条红线：①不要打表式修测试，要把流程图整个逻辑搞清楚搞顺；②不要让人一眼看出照抄
+LangGraph（项目用于求职）。
+
+### 重做设计（主代理定合同，子代理实施）
+
+**验收判据＝值级语义等价＋地道 Go 双面等价**：既不丢 graph.py 的业务语义（节点序、条件
+边、材料传递、终态），也不复刻其文本/词法形状（不含 Python 惯例、注释不引参考出处）。
+核心映射：
+
+- **ask-task 模式**：每个用户决策＝`<task>:ask` 后缀任务（无依赖，业务任务依赖之）——
+  开放问题挂链＝中断编码，问题在内核 decisions 表持久化（复用 K2/K4 全套 §6.1 规则），
+  ask 任务上的 ReviseTask＝问题答案驱动流转。终态判定＝record.json 终态字段 AND
+  harness-result.json 文件（两者缺一不算完成）。
+- **三账本一记录**：revisions.jsonl（字节载体）、asks.jsonl（幂等标记）、answers.jsonl
+  （写前 WAL）＋ binding.json（R7 重开核对：RunID/需求/项目/基线逐字段命名报错）＋
+  record.json（会话与终态）＋ dispositions/（停驻说明）＋ outcomes/（每 (task,generation)）。
+- **内核唯一新缝**：`Store.OpenQuestion`（88 行）——当前代次挂待决问题、挂起期间幂等、
+  已答返 ErrQuestionAnswered，复用 insertDecision/Answer 既有规则。接回咨询六分类
+  （pending 问→observe；session-refused→零值；可验证结果→Adopt；契约拒绝→运行时问询
+  retry/restart-session/abort；PID＋创建时间存活→observe；无证据→零值问用户）。
+- **两条修订通道**：结构重试环（pre-review/qa-design/development-findings/blocked/
+  runtime/check-runtime）走裸 ReviseTask 不占额度；业务返修**仅** evaluate→repair→
+  RequestRevision 走 0 基 repairAllowance 额度策略（graph.py:291 route 语义），返修简报
+  在完成时从 durable evaluate 反馈包派生（R4）。
+- **收据重放**：内容寻址 {role,brief,revision,generation} 摘要→崩溃后重放不重花钱；
+  CONTINUE 同会话续航；SESSION_UNAVAILABLE→session-refused 标记→K4 restart 请求；
+  契约拒绝（exit-0＋answer.json 违反 worker 契约）→运行时问询（R9 语义修正落地）。
+- **物理归档**：VACUUM INTO 一致备份＋成员准入批判定＋索引骨架＋写后重读验证＋临时文件
+  rename 发布＋ARCHIVE_EXISTS 拒绝覆盖（R8）。
+- **取消**：recordedLiveJobs 按 PID＋创建时间核验扫描含前任的活监督器，回执齐才报结算。
+- **QA 配对检查**（graph.py:136 语义）：qa-review 汇合处同时检查 review **与** design 的
+  needs_repair。
+
+交付 9 个 workflow*.go（≈4,900 行含测试）替换 compose 核心；旧 compose_*.go 六文件删除。
+
+### 主代理亲验与修出的真 bug
+
+1. **语义亲读**：workflow.go/workflow_worker.go/workflow_route.go/workflow_drive.go/
+   workflow_verify.go/workflow_takeover.go 六文件逐文件对照 graph.py 确认映射完整。
+2. **出处注释清理**：41 处"参考实现的…"式注释（求职红线）→ 派回原代理清理至 0，亲核。
+3. **评审探针亲自移植**（k5_review2_test.go，9 探针；只改机械面，期望值零改；移植适配
+   逐处注释披露：RepairBrief 改门审驱动、ArchiveCreatesArtifact 删无 Git 子项、
+   RecoveredHeld 收敛到观察扫描集断言、GateRepair 双门 FAIL、PrematureApproval 改早期
+   问题面断言）。**修出三个真 bug**：
+   - **QA 配对缺失**（真实缺陷）：parkOnResult 只查 qa-review 自身 needs_repair，漏
+     design 侧（graph.py:136）→ 子代理修＋回归测试 TestWorkflowQADesignFailReviewPassAsksDesignRetry。
+   - **evaluate 反馈包空列表**（P1 级）：evaluateRoute 返回 `[]string` 而 listOf 只断言
+     `[]any`→failed_checks/gate_findings 恒 null——返修路由照常触发但修复轮拿到的持久化
+     失败材料是空的（R4 同类，四族测试无一断言包内容故漏网）。
+   - **归档清单同型 bug**：archiveInventoryOp 的 files 同为 `[]string`→"成功"归档只剩
+     run.db 备份、丢弃全部成员文件（既有测试只断言 FileCount≠0，为 1 也过）。
+   后两处同根因（typed-slice 与 listOf 域不匹配），单子代理一次修复（消费点正确断言，
+   净 +8 行）；ArchiveCreatesArtifact 探针顺势**加强**为成员数 >1（披露：超出评审原文
+   表面，匹配"真实验证过的工件"意图）。
+4. **探针移植自身的修正**（如实）：RepairLimit=0 被 ValidateSpec 拒（合法下限 1）→用 1；
+   Cancel 夹具监督器 Process.Release 后成僵尸、kill(pid,0) 恒真→断言改收据证据
+   （exit.json＋130 取消码，与既有取消族测试同一口径）；NoWrite 条目补 Status/Summary。
+
+### 验证（全绿）
+
+9/9 探针亲跑 PASS；harness 全包 -count=1（166s）＋-race（368s）ok；runner 包 ok；
+gofmt/vet 干净；windows 交叉编译＋本机构建 OK；全仓 `go test ./... -count=1` 全部包 ok。
+模型调用 0（本返修零真实宿主调用；实跑证据见上节 run 3 绿链）。
+
+### 实现方偏离（核可披露）
+
+候选拒绝＝致命停而非问询（每个可拒路径已在 worker 环内问过）；BLOCKED＝用户停驻；
+终态判定 record+文件双证据；归档留物理层文件；夹具复用假宿主 peer；探针三处机械适配
+如上逐处注释。
