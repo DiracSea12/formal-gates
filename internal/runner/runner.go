@@ -153,8 +153,8 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // Gates no longer interrupt the loop while independent work remains:
 // once everything dispatchable has drained, settle reports an executor
 // failure, a still-pending gate (ErrWaitingDecision) or a refused one
-// (ErrDecisionRefused) in that order — see decisionGate for the read
-// semantics.
+// (ErrDecisionRefused) in that order — see dispatchableTasks for the
+// gate's read semantics.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -186,18 +186,23 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	}
 	limit := max(r.Parallelism, 1)
 	done := make(chan workerResult)
-	// Tasks this Run has already dispatched.  An admitted task is
-	// finished in the store and never comes back; the map's job is the
-	// others — in flight, or ended without a receipt — which keep their
-	// K1 semantics: the unsettled intent is superseded by the NEXT Run,
-	// never retried inside this one.
+	// Tasks this Run has already dispatched, marked synchronously at
+	// dispatch: registerIntent moves the durable state to running only
+	// on the worker goroutine, so between dispatch and that commit a
+	// refill query would hand the same task back — the map closes that
+	// window.  An admitted task is finished in the store and never comes
+	// back; the map's remaining job is in-flight and no-receipt work,
+	// which keep their K1 semantics: the unsettled intent is superseded
+	// by the NEXT Run, never retried inside this one.
 	attempted := map[string]bool{}
 	var execErrs []error
 	var fatal error
 	inflight := 0
 	for fatal == nil || inflight > 0 {
 		if fatal == nil {
-			batch, err := r.readyBatch(ctx, byTask, attempted)
+			// Only the free slots' worth of dispatchable work is loaded
+			// per round (see readyBatch).
+			batch, err := r.readyBatch(ctx, byTask, attempted, limit-inflight)
 			if err != nil {
 				fatal = err
 				continue
@@ -263,35 +268,32 @@ func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	return r.checkAllFinished(ctx)
 }
 
-// readyBatch filters the ready set down to the tasks that may start now:
-// not already dispatched this Run, covered by a spec (a missing one is
-// the K1 refusal), and gate-open.  Waiting or refused gates are skipped,
-// not errors — their durable rows are what settle reports once the run
-// has drained (§4.1: one task's wait never blocks independent branches).
-func (r *Runner) readyBatch(ctx context.Context, byTask map[string]TaskSpec, attempted map[string]bool) ([]taskRow, error) {
-	ready, err := r.readyTasks(ctx)
+// readyBatch loads at most want — the loop's free slots — dispatchable
+// tasks, minus anything already dispatched this Run (attempted; see Run
+// for why the durable state alone cannot express that).  The rows
+// arrive already gate-open, so the remaining Go-side filter is spec
+// coverage.  A missing spec stays the K1 refusal, with one narrowed
+// surface: it now fires only for tasks that reached the dispatch window,
+// so a gate-blocked task — not dispatchable until its gate answers — no
+// longer triggers it.  Waiting or refused gates are skipped, not errors
+// — their durable rows are what settle reports once the run has drained
+// (§4.1: one task's wait never blocks independent branches).
+func (r *Runner) readyBatch(ctx context.Context, byTask map[string]TaskSpec, attempted map[string]bool, want int) ([]taskRow, error) {
+	batch, err := r.dispatchableTasks(ctx, want)
 	if err != nil {
 		return nil, err
 	}
-	var batch []taskRow
-	for _, t := range ready {
+	var out []taskRow
+	for _, t := range batch {
 		if attempted[t.taskID] {
 			continue
 		}
 		if _, ok := byTask[t.taskID]; !ok {
 			return nil, fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
 		}
-		// The persisted decision gate is checked before any execution
-		// intent is registered; read semantics on decisionGate.
-		if err := r.store.decisionGate(ctx, &t); err != nil {
-			if !errors.Is(err, ErrWaitingDecision) && !errors.Is(err, ErrDecisionRefused) {
-				return nil, err
-			}
-			continue
-		}
-		batch = append(batch, t)
+		out = append(out, t)
 	}
-	return batch, nil
+	return out, nil
 }
 
 // runTask is one dispatched task's whole §4.1 path on its own goroutine:
@@ -375,22 +377,58 @@ func (r *Runner) recoverPending(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// readyTasks returns every unfinished task whose dependencies are all
-// finished, in task_id order — the ready set the loop dispatches from.
-// Readiness is computed from persisted facts (§4.1), never stored; the
-// deterministic order keeps dispatch reproducible.
-func (r *Runner) readyTasks(ctx context.Context) ([]taskRow, error) {
+// dispatchableTasks returns up to want unfinished tasks that may start
+// now, in task_id order — the ready set the loop dispatches from, asked
+// of the store in one query.  Readiness is computed from persisted facts
+// (§4.1), never stored; the deterministic order keeps dispatch
+// reproducible.  Beyond "dependencies all finished", two predicates.
+//
+// The state predicate, t.state = waiting_deps: a task this Run
+// dispatched that has reached its intent is running in the store
+// (registerIntent moved it there — in flight or ended without a
+// receipt), and an admitted task is finished; both stay out until the
+// NEXT Run's recoverPending resets the unsettled one, preserving the K1
+// rule that an unsettled intent is superseded, never retried inside
+// this one.  The dispatch-to-register window before that commit is
+// closed by Run's attempted map, which marks synchronously at dispatch.
+//
+// The gate NOT EXISTS is the authoritative read semantics of the
+// decisions rows — the same rule decisionStatus reports from in
+// settle — with three branches:
+//
+//   - no row: the run never declared this task gated, so there is no
+//     gate and the task runs like any other;
+//   - pending: the question stands unanswered — excluded, and nothing
+//     behind the gate executes until Store.Answer succeeds;
+//   - answered: the stored answer IS the gate's verdict.  The row's
+//     allow choice lets the task through like ungated work; any other
+//     stored choice is a durable refusal — excluded, stably across
+//     reopens and re-runs because every read consults the same stored
+//     answer.
+//
+// The query reads the decisions rows alone, never the specs' Confirm
+// fields, which is what makes a recovery that omits them meet the same
+// gate (see TaskSpec.Confirm).
+func (r *Runner) dispatchableTasks(ctx context.Context, want int) ([]taskRow, error) {
 	rows, err := r.store.db.QueryContext(ctx, `
 		SELECT t.task_id, t.generation
 		  FROM tasks t
-		 WHERE t.run_id = ? AND t.state <> ?
+		 WHERE t.run_id = ? AND t.state = ?
 		   AND NOT EXISTS (
 		       SELECT 1
 		         FROM task_deps d
 		         JOIN tasks dep ON dep.run_id = d.run_id AND dep.task_id = d.depends_on
 		        WHERE d.run_id = t.run_id AND d.task_id = t.task_id AND dep.state <> ?
 		   )
-		 ORDER BY t.task_id`, r.store.runID, taskFinished, taskFinished)
+		   AND NOT EXISTS (
+		       SELECT 1
+		         FROM decisions g
+		        WHERE g.run_id = t.run_id AND g.task_id = t.task_id AND g.generation = t.generation
+		          AND (g.state = ? OR (g.state = ? AND g.answer <> g.allow))
+		   )
+		 ORDER BY t.task_id
+		 LIMIT ?`,
+		r.store.runID, taskWaitingDeps, taskFinished, decisionPending, decisionAnswered, want)
 	if err != nil {
 		return nil, err
 	}
@@ -406,12 +444,12 @@ func (r *Runner) readyTasks(ctx context.Context) ([]taskRow, error) {
 	return out, rows.Err()
 }
 
-// nextReady returns the lowest-task_id ready task, or nil when nothing is
-// ready — the sequential kernel's selector, kept for the K1/K2 tests that
-// drive it directly; the run loop works on the whole ready set
+// nextReady returns the lowest-task_id task that may start now, or nil
+// when nothing can — the sequential kernel's selector, kept for the K1/K2
+// tests that drive it directly; the run loop works on whole batches
 // (readyBatch).
 func (r *Runner) nextReady(ctx context.Context) (*taskRow, error) {
-	ts, err := r.readyTasks(ctx)
+	ts, err := r.dispatchableTasks(ctx, 1)
 	if err != nil || len(ts) == 0 {
 		return nil, err
 	}

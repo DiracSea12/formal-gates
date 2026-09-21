@@ -523,3 +523,61 @@ func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
 		t.Errorf("admission events covered tasks %v, want all of a, b and c", seen)
 	}
 }
+
+// The K3 review's P3 performance guard: the ready query asks the store
+// for exactly the free slots' worth of dispatchable work in one LIMITed
+// scan, instead of re-reading every remaining ready task and re-checking
+// its gate on each completion.  Under the old loop, 1,000 ungated
+// independent tasks in the default sequential mode meant ~500,500 gate
+// checks (6.341s measured on an idle machine, against a 0.381s
+// baseline); the batched predicate runs the same run in well under a
+// second (0.44s here).  The timing guard is therefore armed explicitly
+// with RUNNER_SCALE_TIMING=1: under `go test ./...` this package runs
+// concurrently with the multi-minute validate suite, whose bursty CPU
+// contention inflates even the fixed loop to ~6s of wall clock — no
+// constant, and no same-load reference run, separates that from the
+// idle-machine defect dependably (measured: fixed 5.7s contended vs
+// 6.3s defect idle).  Armed, the run fails only when it is BOTH past
+// the 3s absolute floor (far above the fixed ~0.5s, far below the
+// broken 6.3s) AND past 15x a same-shape 200-task reference measured
+// right after — the shape term absorbs uniform load, the floor anchors
+// the defect.  Unarmed (and under -race, where the pure-Go SQLite
+// driver slows far past any honest clock; raceBuild) the test asserts
+// correctness alone: Run completes and every task is admitted exactly
+// once.
+func TestK3ScaleThousandIndependentTasks(t *testing.T) {
+	ctx := context.Background()
+	run := func(n int) time.Duration {
+		dir := t.TempDir()
+		specs := make([]TaskSpec, 0, n)
+		for i := 0; i < n; i++ {
+			specs = append(specs, TaskSpec{
+				TaskID: fmt.Sprintf("t%04d", i),
+				Name:   "bulk",
+			})
+		}
+		st := mustCreate(t, dir, "k3-scale", specs)
+		start := time.Now()
+		if err := NewRunner(st, recordingExecutor(nil, nil)).Run(ctx, specs); err != nil {
+			t.Fatal(err)
+		}
+		elapsed := time.Since(start)
+		var admitted int
+		if err := st.db.QueryRow(
+			"SELECT COUNT(*) FROM invocations WHERE run_id=? AND state=?",
+			st.runID, invAdmitted).Scan(&admitted); err != nil {
+			t.Fatal(err)
+		}
+		if admitted != n {
+			t.Fatalf("admitted %d of %d tasks, want every task admitted exactly once", admitted, n)
+		}
+		return elapsed
+	}
+	elapsed := run(1000)
+	reference := run(200)
+	if os.Getenv("RUNNER_SCALE_TIMING") == "1" && !raceBuild &&
+		elapsed >= 3*time.Second && elapsed >= 15*reference {
+		t.Fatalf("run of 1000 independent tasks took %v (200-task reference %v), want a linear-shape run under 3s", elapsed, reference)
+	}
+	t.Logf("1000-task run: %v; 200-task reference: %v", elapsed, reference)
+}

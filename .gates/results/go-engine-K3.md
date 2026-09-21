@@ -68,3 +68,28 @@ TestMain 追加 5 行；退出码 70–73/90/91/93 与 80–84/92 未动，K3 �
 ## 后续
 
 K3 待外部评审；下一单元 K4（局部代次、返修额度、失效范围及调用接回）。
+
+---
+
+# 【P3 修复 2026-09-21：就绪筛选限量化（评审 PASS 后纯优化收口）】
+
+机主转达评审 P3（不阻塞 PASS）并指示处理后进入 K4：每收一个完成即全量重读就绪集并逐任务查门，
+1,000 无门独立任务约 500,500 次门查询（实测 6.341s，K2 基线 0.381s）。修复（子代理实施、主代理定合同并亲验）：
+
+- **就绪查询压成一条带 LIMIT 的 SQL**（`dispatchableTasks(ctx, want)`，want＝limit−inflight）：
+  `state='waiting_deps'`（在途/无回执任务已被排除）＋依赖 NOT EXISTS（原样）＋**门开 NOT EXISTS**
+  （pending 或 answered∧answer≠allow 即排除，与 decisionStatus 同规则，注释互指）＋ORDER BY task_id LIMIT want。
+  Go 侧仅剩缺 spec 检查（文案不变）。**decisionGate 删除**（唯一调用方消失），权威读语义并入查询注释。
+- **attempted map 保留**（合同原定删除，子代理实证推翻）：registerIntent 在 worker goroutine 上才提交
+  running 状态，Parallelism≥2 时快兄弟完成会在"派发→提交"窗口内重查取回同一任务（双派发）——
+  旧 map 在派发点同步标记恰好关闭此窗口。**主代理核可**：正确性优先于删减；并以高压探针验证
+  （300 任务×parallelism 8×race×5 轮，恰一 invocation/任务）。
+- **scale 守卫**：`TestK3ScaleThousandIndependentTasks` 默认断言正确性；计时界以 `RUNNER_SCALE_TIMING=1`
+  武装（双条件：≥3s 绝对下界 且 ≥15×200 任务参考形状项）——全仓并行跑时 CPU 争作使修复后代码也测
+  5.7–6.0s，常量界与比值界均不可靠区分；raceBuild（build tag 两小文件）下只断言正确性。
+- 语义微移（披露）：缺 spec 报错只对进入本轮 LIMIT 窗口的门开任务触发；门挂起任务在门答复前不触发。
+
+性能实测（本机空闲）：1,000 任务 **403ms**（200 任务参考 76ms，5.3×＝线性），对评审缺陷 6.341s
+约 **15.7× 加速**。亲验：亲读全部 diff、gofmt/vet/build＋交叉编译、包＋race、武装 scale 亲跑、
+双派发探针×5 race、全仓 -count=1 24 包零 FAIL；K1/K2/K3 既有用例零改动（runner_test/decisions_test/
+crash_test 的 numstat 为空，parallel_test 纯新增）。模型调用 0。

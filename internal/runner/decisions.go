@@ -4,7 +4,7 @@ package runner
 // the decisions table gates a task behind a persisted user decision,
 // materialized by CreateRun and settled by Store.Answer.  The
 // persistence contract is documented on Confirmation,
-// materializeDecisions and decisionGate.
+// materializeDecisions and the gate read of dispatchableTasks (runner.go).
 
 import (
 	"context"
@@ -78,8 +78,8 @@ const (
 // in the run's creation transaction — run, task, generation, revision,
 // body digest, options and allow choice all freeze on that row, which
 // then defines the gate.  The frozen row is authoritative, so a later
-// Run's Confirm fields change nothing on the ground; see decisionGate
-// for how the gate is read.
+// Run's Confirm fields change nothing on the ground; see
+// dispatchableTasks in runner.go for how the gate is read.
 type Confirmation struct {
 	// Options are the choices the user may answer with.  Must be
 	// non-empty: a question with no choices could never be answered and
@@ -202,51 +202,13 @@ func materializeDecisions(ctx context.Context, tx *sql.Tx, runID string, specs [
 	return nil
 }
 
-// decisionGate reads what the persisted decisions row says about
-// executing one task, and nothing else — the hot path of every re-run
-// and recovery.  Three row states, three outcomes:
-//
-//   - no row: the run never declared this task gated, so there is no
-//     gate and the task runs like any other;
-//   - pending: the question stands unanswered — ErrWaitingDecision, and
-//     nothing behind the gate executes until Store.Answer succeeds;
-//   - answered: the stored answer IS the gate's verdict.  The row's
-//     allow choice lets the task through like ungated work; any other
-//     stored choice is a durable refusal — ErrDecisionRefused, stable
-//     across reopens and re-runs because every read consults the same
-//     stored answer.
-//
-// The caller passes no Confirm fields on purpose: gates live in the
-// decisions rows alone, which is what makes a recovery that omits them
-// meet the same gate.
-func (s *Store) decisionGate(ctx context.Context, t *taskRow) error {
-	var state, allow string
-	var answer sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		"SELECT state, allow, answer FROM decisions WHERE run_id=? AND task_id=? AND generation=?",
-		s.runID, t.taskID, t.generation).Scan(&state, &allow, &answer)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil // no row, no gate
-	}
-	if err != nil {
-		return err
-	}
-	if state == decisionPending {
-		return ErrWaitingDecision
-	}
-	// decisionAnswered (the CHECK constraint admits only these two
-	// states); allow is NOT NULL, so it is always readable here.
-	if answer.Valid && answer.String == allow {
-		return nil
-	}
-	return ErrDecisionRefused
-}
-
 // decisionStatus reports whether the run holds any still-pending gate and
 // any answered-without-allowing one.  The drained run loop reports these
 // as its reason for stopping (settle in runner.go); reading the durable
 // rows rather than this Run's visit history keeps the answer identical
-// for every owner.
+// for every owner.  The ready query (dispatchableTasks in runner.go)
+// excludes gated tasks by this same rule, so what it skips and what this
+// reports never disagree.
 func (s *Store) decisionStatus(ctx context.Context) (waiting, refused bool, err error) {
 	var pending, refusedCount int
 	err = s.db.QueryRowContext(ctx, `
