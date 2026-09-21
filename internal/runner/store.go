@@ -9,9 +9,11 @@
 // result admission; K2 adds process confirmations (decisions.go); K3 adds
 // bounded parallel dispatch in the run loop (runner.go); K4 adds local
 // generations and revision scoping through Store.ReviseTask
-// (revision.go), and the K4 repair adds the repair-allowance control
-// chain over it (Store.RequestRevision, revision.go) plus the takeover
-// seam for calls left in flight by a dead owner (takeover.go).  Native
+// (revision.go), and the K4 rework builds the unified request model over
+// it — user_requests (Store.RequestRevision's repair-allowance asks and
+// recovery's restart asks, settled by one Store.Answer) plus the
+// persisted call_observations that keep takeover facts alive across
+// owners (takeover.go).  Native
 // interactions arrive in later K units and are deliberately absent.
 package runner
 
@@ -58,10 +60,15 @@ const (
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
 // (tasks.input_digest); version 3 added the decisions gate table with
-// its allow column; version 4 adds the revision_requests table of the
-// repair-allowance control chain (revision.go).  Every step is additive,
-// so both accepted baselines — v2 and v3 — migrate forward for real,
-// never by refusal.  Version 1 databases are refused outright below.
+// its allow column; version 4 adds the user_requests and
+// call_observations tables of the unified request model (revision.go,
+// takeover.go).  v4 was never accepted, so this build reshapes the v4
+// delta in place rather than adding a v5: databases stamped v4 by the
+// unaccepted build are development-only and out of scope, exactly like
+// the v3-stamped files the decisions note below already excludes.  Every
+// step is additive, so both accepted baselines — v2 and v3 — migrate
+// forward for real, never by refusal.  Version 1 databases are refused
+// outright below.
 const schemaVersion = 4
 
 // Store is the durable state of one run plus exclusive ownership of its
@@ -337,25 +344,85 @@ const decisionsTable = `CREATE TABLE decisions (
 	UNIQUE (run_id, task_id, generation)
 )`
 
-// revisionRequestsTable is the entire v4 delta: the repair-allowance
-// control chain's request rows (Store.RequestRevision, revision.go).  All
-// counts are derived from the rows — used = executed requests, grants =
-// decision-linked granted-or-executed requests — and never stored as
-// counters.  decision_id links a pending request to its non-positive
-// generation-slot inquiry decision (NULL on direct approval); resolved_at
-// is set exactly once, when the request leaves pending/granted for
-// executed or refused.  task_id carries no foreign key on purpose: the
-// target's existence is checked inside RequestRevision's transaction,
-// which rolls back whole.
-const revisionRequestsTable = `CREATE TABLE revision_requests (
-	request_id  TEXT PRIMARY KEY,
-	run_id      TEXT NOT NULL REFERENCES runs (run_id),
-	task_id     TEXT NOT NULL,
-	state       TEXT NOT NULL CHECK (state IN ('pending','granted','executed','refused')),
-	decision_id TEXT,
-	created_at  TEXT NOT NULL,
-	resolved_at TEXT
+// userRequestsTable is the reshaped v4 delta: one row per user request,
+// both kinds sharing ONE lifecycle (this comment and Store.Answer's doc
+// in decisions.go are the two complete statements of it; everything else
+// points here):
+//
+//   - a request is born pending — a revision ask when the repair
+//     allowance is reached (Store.RequestRevision), a restart ask when a
+//     takeover consultation reports a dead or invalidated session
+//     (takeover.go); direct approval below the allowance is born executed
+//     with no answer and no question ever asked;
+//   - pending → granted (Answer chose the row's allow) or refused (any
+//     other offered choice), exactly once, in Store.Answer's transaction
+//     together with answer, answered_at and the request_answered event;
+//   - granted → executed by the completing transition: the revision's
+//     completion RequestRevision call (revision and transition commit
+//     together), or recovery voiding the invalidated invocation a
+//     granted restart asked about (the approved replacement);
+//   - refused is terminal; an already-answered request replays its
+//     original receipt on the same choice and refuses a different one as
+//     a conflict, exactly like an answered decisions row;
+//   - binding validity = the task exists and tasks.generation ==
+//     target_generation (the REAL generation at creation, never a
+//     synthetic slot), plus — while a restart is unresolved — its
+//     invocation_id still pending.  An upstream revision that moves the
+//     task into a new generation invalidates the request by itself; no
+//     closure ever voids requests explicitly.  An invalid binding is
+//     stale for every purpose: answering it, listing it, acting on it.
+//
+// target_generation/invocation_id/initial are the persisted identity the
+// recovery argument cannot be allowed to drift from: initial binds the
+// repair allowance at first use (revision rows only; RequestRevision
+// refuses a different value), invocation_id names the dead call a
+// restart ask is about.  options_json/allow/revision/body freeze the
+// question on the row, in the style of the decisions gate.  All counts
+// the policy needs are derived from these rows, never stored as
+// counters.  task_id carries no foreign key on purpose: existence is
+// checked before any write, and a request must outlive binding checks
+// against tasks.generation.
+const userRequestsTable = `CREATE TABLE user_requests (
+	request_id       TEXT PRIMARY KEY,
+	run_id           TEXT NOT NULL REFERENCES runs (run_id),
+	task_id          TEXT NOT NULL,
+	kind             TEXT NOT NULL CHECK (kind IN ('revision','restart')),
+	target_generation INTEGER NOT NULL,
+	invocation_id    TEXT,
+	options_json     TEXT NOT NULL,
+	allow            TEXT NOT NULL,
+	revision         TEXT NOT NULL,
+	body             TEXT NOT NULL,
+	initial          INTEGER,
+	state            TEXT NOT NULL CHECK (state IN ('pending','granted','refused','executed')),
+	answer           TEXT,
+	answered_at      TEXT,
+	created_at       TEXT NOT NULL,
+	resolved_at      TEXT
 )`
+
+// callObservationsTable is the v4 delta's persisted observation fact:
+// one row per invocation a takeover consultation judged still working
+// under its original supervisor (takeover.go).  The row is idempotent
+// (INSERT OR IGNORE) and never deleted: it outlives the invocation's
+// own settlement, and it is read only while that invocation is still
+// pending — an owner without a Takeover consult must not blindly
+// supersede a call a previous owner observed in flight (F4), and the
+// run reports ErrTakeoverRequired instead of retrying it.
+const callObservationsTable = `CREATE TABLE call_observations (
+	invocation_id TEXT PRIMARY KEY REFERENCES invocations (invocation_id),
+	run_id        TEXT NOT NULL,
+	task_id       TEXT NOT NULL,
+	observed_at   TEXT NOT NULL
+)`
+
+// revisionRequestsView keeps the not-accepted v4 table's NAME readable:
+// revision requests are now the kind='revision' rows of user_requests,
+// and external readers of the development-era name (the K4 re-review
+// probe reads `FROM revision_requests WHERE state=...`) keep working
+// against the same rows.  Read-only by construction.
+const revisionRequestsView = `CREATE VIEW revision_requests AS
+	SELECT * FROM user_requests WHERE kind='revision'`
 
 // migrate applies forward-only schema versioning via PRAGMA user_version:
 // 0 means a fresh file (create the baseline plus every delta and stamp it),
@@ -392,7 +459,13 @@ func migrate(db *sql.DB) error {
 				return err
 			}
 		}
-		if _, err := tx.Exec(revisionRequestsTable); err != nil {
+		if _, err := tx.Exec(userRequestsTable); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(callObservationsTable); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(revisionRequestsView); err != nil {
 			return err
 		}
 		// user_version is a transactional header write: a crash

@@ -1,13 +1,17 @@
 package runner
 
-// K4 repair acceptance tests, F1/F3 — 返修额度控制链 and the pending list's
-// generation filter: Store.RequestRevision builds "allowance reached →
+// K4 rework acceptance tests, F1/F3/F6 — 返修额度控制链 over the unified
+// request model: Store.RequestRevision builds "allowance reached →
 // durable wait → exact answer → only the granted revision executes" over
-// ReviseTask, with every count derived from request rows and the domain's
-// ask rule injected as RepairPolicy; PendingDecisions lists only
-// current-generation questions plus live revision inquiries, so an
-// invalidated old question is never presented as askable.  Everything
-// here runs in-process over real durable state.
+// ReviseTask, with every count derived from user_requests rows and the
+// domain's ask rule injected as RepairPolicy.  Rounds are 0-BASED — the
+// completed-rounds number the accepted graph.py repair() hands its
+// repair-allowance — so initial=1 permits the first revision directly
+// and asks on the second (the F6 rework of the previous first-round-ask
+// expectation).  PendingDecisions lists current-generation questions
+// plus valid-binding pending requests, so an invalidated old question is
+// never presented as askable.  Everything here runs in-process over real
+// durable state.
 
 import (
 	"context"
@@ -26,8 +30,8 @@ func repairLimitPolicy(round, allowance int) bool { return round >= allowance }
 // state ("" = all states).
 func countRequests(t *testing.T, st *Store, taskID, state string) int {
 	t.Helper()
-	query := "SELECT COUNT(*) FROM revision_requests WHERE run_id=? AND task_id=?"
-	args := []any{st.runID, taskID}
+	query := "SELECT COUNT(*) FROM user_requests WHERE run_id=? AND task_id=? AND kind=?"
+	args := []any{st.runID, taskID, kindRevision}
 	if state != "" {
 		query += " AND state=?"
 		args = append(args, state)
@@ -39,27 +43,14 @@ func countRequests(t *testing.T, st *Store, taskID, state string) int {
 	return n
 }
 
-// requestDecisionID returns the task's request row's decision_id in the
-// given state ("" when NULL — direct approval asks nothing).
-func requestDecisionID(t *testing.T, st *Store, taskID, state string) string {
-	t.Helper()
-	var id string
-	if err := st.db.QueryRow(
-		"SELECT COALESCE(decision_id,'') FROM revision_requests WHERE run_id=? AND task_id=? AND state=?",
-		st.runID, taskID, state).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-// §13.2 K4 repair, F1 — the full allowance control chain: initial=1 asks
-// on the first revision (>= boundary); the inquiry persists across
-// Close/Open and is listed; a refusing answer refuses the request with
-// the task untouched (generation, zero invalidation, original specs still
-// run — and no ErrDecisionRefused: declining a revision is not the run
-// refusing); the allowing answer grants, the completion call executes
-// exactly the granted revision; the next revision is round 2 against
-// allowance 2 (initial + one grant) and asks again.
+// §13.2 K4 rework, F1/F6 — the full allowance control chain on 0-based
+// rounds: initial=1 direct-approves round 0 and asks on round 1; the ask
+// persists across Close/Open and is listed; a refusing answer refuses
+// the request with the task untouched (generation, zero invalidation,
+// original specs still run — and no ErrDecisionRefused: declining a
+// revision is not the run refusing); the allowing answer grants, the
+// completion call executes exactly the granted revision; round 2 asks
+// again against allowance 2 (initial 1 + one grant).
 func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -95,23 +86,45 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 		return TaskSpec{TaskID: "a", Name: "task-a", Input: []byte(input)}
 	}
 
-	// First revision, initial allowance 1: round 1 >= 1 asks.
-	if err := st.RequestRevision(ctx, "a", reviseA("input-a2"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
-		t.Fatalf("first RequestRevision err = %v, want ErrWaitingDecision", err)
+	// Round 0 against allowance 1: completed rounds 0 < 1 — the accepted
+	// graph.py boundary — direct approval, no question.
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a2"), exhaustion, repairLimitPolicy, 1); err != nil {
+		t.Fatalf("round-0 RequestRevision err = %v, want nil (direct approval)", err)
+	}
+	if n := countRequests(t, st, "a", reqExecuted); n != 1 {
+		t.Fatalf("executed requests after round 0 = %d, want 1", n)
+	}
+	if gen := taskGeneration(t, st, "a"); gen != 2 {
+		t.Fatalf("task a generation after round 0 = %d, want 2", gen)
+	}
+	if gen := taskGeneration(t, st, "d"); gen != 2 {
+		t.Fatalf("dependent d generation after round 0 = %d, want 2 (scope invalidated)", gen)
+	}
+	failA = false
+	if err := r.Run(ctx, []TaskSpec{
+		{TaskID: "a", Name: "task-a", Input: []byte("input-a2")},
+		{TaskID: "d", Name: "task-d", DependsOn: []string{"a"}, Input: []byte("input-d")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 1 against allowance 1: 1 >= 1 asks.
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a3"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
+		t.Fatalf("round-1 RequestRevision err = %v, want ErrWaitingDecision", err)
 	}
 	if n := countRequests(t, st, "a", reqPending); n != 1 {
 		t.Fatalf("pending requests after the ask = %d, want 1", n)
 	}
 	// One open inquiry per task: a duplicate call is a named refusal.
-	if err := st.RequestRevision(ctx, "a", reviseA("input-a2"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrRevisionPending) {
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a3"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrRevisionPending) {
 		t.Fatalf("duplicate RequestRevision err = %v, want ErrRevisionPending", err)
 	}
-	if n := countRequests(t, st, "a", ""); n != 1 {
-		t.Fatalf("request rows after the duplicate = %d, want still 1", n)
+	if n := countRequests(t, st, "a", ""); n != 2 {
+		t.Fatalf("request rows after the duplicate = %d, want still 2", n)
 	}
 	// The task is untouched while the question waits.
-	if gen := taskGeneration(t, st, "a"); gen != 1 {
-		t.Fatalf("task a generation while the inquiry waits = %d, want 1", gen)
+	if gen := taskGeneration(t, st, "a"); gen != 2 {
+		t.Fatalf("task a generation while the inquiry waits = %d, want 2", gen)
 	}
 
 	// The inquiry persists across Close/Open and stays listed.
@@ -122,6 +135,9 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 	inquiry := pendingBefore[0]
 	if inquiry.TaskID != "a" || inquiry.Revision != "rev-2" || inquiry.Body != "allow one more repair round of task a?" {
 		t.Fatalf("inquiry = %+v, want the exhaustion question for task a", inquiry)
+	}
+	if !containsChoice(inquiry.Options, "allow") || !containsChoice(inquiry.Options, "refuse") {
+		t.Fatalf("inquiry options = %v, want [allow refuse]", inquiry.Options)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
@@ -143,30 +159,27 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 	if n := countRequests(t, st, "a", reqRefused); n != 1 {
 		t.Fatalf("refused requests after the decline = %d, want 1", n)
 	}
-	if gen := taskGeneration(t, st, "a"); gen != 1 {
-		t.Fatalf("task a generation after the refusal = %d, want 1 (untouched)", gen)
+	if gen := taskGeneration(t, st, "a"); gen != 2 {
+		t.Fatalf("task a generation after the refusal = %d, want 2 (untouched)", gen)
 	}
-	if gen := taskGeneration(t, st, "d"); gen != 1 {
-		t.Fatalf("dependent d generation after the refusal = %d, want 1 (zero invalidation)", gen)
+	if gen := taskGeneration(t, st, "d"); gen != 2 {
+		t.Fatalf("dependent d generation after the refusal = %d, want 2 (zero invalidation)", gen)
 	}
-	if n := countInvocations(t, st, "a", invSuperseded); n != 0 {
-		t.Fatalf("task a superseded rows after the refusal = %d, want 0 (the failed attempt stays pending)", n)
+	// The current-generation specs still run to completion — and the
+	// refused request must not turn the run into ErrDecisionRefused.
+	gen2 := []TaskSpec{
+		{TaskID: "a", Name: "task-a", Input: []byte("input-a2")},
+		{TaskID: "d", Name: "task-d", DependsOn: []string{"a"}, Input: []byte("input-d")},
 	}
-	if pending, _ := st.PendingDecisions(ctx); len(pending) != 0 {
-		t.Fatalf("pending decisions after the refusal = %d, want 0", len(pending))
-	}
-	// The original specs still run to completion — and the refused
-	// inquiry must not turn the run into ErrDecisionRefused.
-	failA = false
 	if err := NewRunner(st, func(_ context.Context, inv Invocation) (Result, error) {
 		return Result{Payload: json.RawMessage(`"ok-` + inv.TaskID + `"`)}, nil
-	}).Run(ctx, specs); err != nil {
-		t.Fatalf("run on original specs after the refusal: %v", err)
+	}).Run(ctx, gen2); err != nil {
+		t.Fatalf("run on current specs after the refusal: %v", err)
 	}
 
 	// Ask again (the refusal consumed no round: round 1 >= 1 once more),
 	// then grant and complete.
-	if err := st.RequestRevision(ctx, "a", reviseA("input-a2"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a3"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("second ask err = %v, want ErrWaitingDecision", err)
 	}
 	pending, err := st.PendingDecisions(ctx)
@@ -174,7 +187,7 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 		t.Fatalf("pending decisions at the second ask = %v (err %v), want 1", pending, err)
 	}
 	if pending[0].DecisionID == inquiry.DecisionID {
-		t.Fatal("the second ask reused the answered decision row")
+		t.Fatal("the second ask reused the answered request row")
 	}
 	if _, err := st.Answer(ctx, pending[0].DecisionID, "allow"); err != nil {
 		t.Fatal(err)
@@ -183,28 +196,34 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 		t.Fatalf("granted requests after the allow = %d, want 1", n)
 	}
 	// The grant executes nothing by itself (input bytes are §7-external);
-	// the completion call supplies them and lands both in one transaction.
-	if gen := taskGeneration(t, st, "a"); gen != 1 {
-		t.Fatalf("task a generation after the grant = %d, want still 1 (not yet executed)", gen)
+	// OpenRequests exposes the recoverable identity and the completion
+	// call supplies the input and lands both in one transaction.
+	open, err := st.OpenRequests(ctx)
+	if err != nil || len(open) != 1 {
+		t.Fatalf("open requests after the grant = %v (err %v), want the granted one", open, err)
 	}
-	if err := st.RequestRevision(ctx, "a", reviseA("input-a2"), exhaustion, repairLimitPolicy, 1); err != nil {
-		t.Fatalf("completion call err = %v, want nil", err)
-	}
-	if n := countRequests(t, st, "a", reqExecuted); n != 1 {
-		t.Fatalf("executed requests after the completion = %d, want 1", n)
-	}
-	if got := requestDecisionID(t, st, "a", reqExecuted); got == "" {
-		t.Fatal("the granted request lost its decision link on execution")
+	if open[0].RequestID != pending[0].DecisionID || open[0].Kind != kindRevision ||
+		open[0].TaskID != "a" || open[0].Generation != 2 || open[0].State != reqGranted {
+		t.Fatalf("open request = %+v, want the granted revision of task a at generation 2", open[0])
 	}
 	if gen := taskGeneration(t, st, "a"); gen != 2 {
-		t.Fatalf("task a generation after the completion = %d, want 2", gen)
+		t.Fatalf("task a generation after the grant = %d, want still 2 (not yet executed)", gen)
 	}
-	if gen := taskGeneration(t, st, "d"); gen != 2 {
-		t.Fatalf("dependent d generation after the completion = %d, want 2 (scope invalidated)", gen)
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a3"), exhaustion, repairLimitPolicy, 1); err != nil {
+		t.Fatalf("completion call err = %v, want nil", err)
+	}
+	if n := countRequests(t, st, "a", reqExecuted); n != 2 {
+		t.Fatalf("executed requests after the completion = %d, want 2", n)
+	}
+	if gen := taskGeneration(t, st, "a"); gen != 3 {
+		t.Fatalf("task a generation after the completion = %d, want 3", gen)
+	}
+	if gen := taskGeneration(t, st, "d"); gen != 3 {
+		t.Fatalf("dependent d generation after the completion = %d, want 3 (scope invalidated)", gen)
 	}
 
 	// Round 2 against allowance 2 (initial 1 + one grant): asks again.
-	if err := st.RequestRevision(ctx, "a", reviseA("input-a3"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
+	if err := st.RequestRevision(ctx, "a", reviseA("input-a4"), exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("round-2 ask err = %v, want ErrWaitingDecision (round 2 >= allowance 2)", err)
 	}
 	if n := countRequests(t, st, "a", reqPending); n != 1 {
@@ -215,9 +234,20 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 	}
 }
 
-// F1, direct approval — round below the allowance never asks: the request
-// is born executed with no decision row, the revision lands, and a larger
-// initial (增额) reaches the same path.
+// containsChoice reports whether the option list offers the choice.
+func containsChoice(options []string, choice string) bool {
+	for _, o := range options {
+		if o == choice {
+			return true
+		}
+	}
+	return false
+}
+
+// F1/F6, direct approval — a round below the allowance never asks: the
+// request is born executed with no answer and no question, the revision
+// lands bound to the creation-time generation, and a larger initial
+// (增额) reaches the same path.
 func TestK4RequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -235,22 +265,29 @@ func TestK4RequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
 	if err := st.RequestRevision(ctx, "a",
 		TaskSpec{TaskID: "a", Name: "task-a", Input: []byte("input-a2")},
 		exhaustion, repairLimitPolicy, 2); err != nil {
-		t.Fatalf("direct approval err = %v, want nil (round 1 < allowance 2)", err)
+		t.Fatalf("direct approval err = %v, want nil (round 0 < allowance 2)", err)
 	}
 	if n := countRequests(t, st, "a", reqExecuted); n != 1 {
 		t.Fatalf("executed requests after direct approval = %d, want 1", n)
 	}
-	if got := requestDecisionID(t, st, "a", reqExecuted); got != "" {
-		t.Fatalf("direct approval linked decision %q, want none (no question was asked)", got)
-	}
-	var slots int
-	if err := st.db.QueryRow(
-		"SELECT COUNT(*) FROM decisions WHERE run_id=? AND task_id=? AND generation<=0",
-		st.runID, "a").Scan(&slots); err != nil {
+	// The row was never a question: bound to the creation generation,
+	// no answer, the initial allowance carried, no ask event.
+	var answer, answeredAt string
+	var initial, target int64
+	if err := st.db.QueryRow(`
+		SELECT COALESCE(answer,''), COALESCE(answered_at,''), initial, target_generation
+		  FROM user_requests WHERE run_id=? AND task_id=? AND kind=?`,
+		st.runID, "a", kindRevision).Scan(&answer, &answeredAt, &initial, &target); err != nil {
 		t.Fatal(err)
 	}
-	if slots != 0 {
-		t.Fatalf("inquiry decision rows after direct approval = %d, want 0", slots)
+	if answer != "" || answeredAt != "" {
+		t.Fatalf("direct approval row = (%q,%q), want no answer (no question was asked)", answer, answeredAt)
+	}
+	if initial != 2 || target != 1 {
+		t.Fatalf("direct approval row initial/target = (%d,%d), want (2,1: bound allowance, creation generation)", initial, target)
+	}
+	if n := countEvents(t, st, eventKindRequestCreated); n != 0 {
+		t.Fatalf("request_created events after direct approval = %d, want 0", n)
 	}
 	if gen := taskGeneration(t, st, "a"); gen != 2 {
 		t.Fatalf("task a generation after direct approval = %d, want 2", gen)
@@ -267,11 +304,12 @@ func TestK4RequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
 	}
 }
 
-// F1, CONTINUE/查询不计业务轮数 — executor-failure retries (the no-receipt
-// path) and PendingDecisions queries create zero request rows, so the
-// first business revision is still round 1.  The inquiry is answerable
-// even on an all-finished run: the open question is unfinished business,
-// not a terminal run.
+// F1/F6, CONTINUE/查询不计业务轮数 — executor-failure retries (the
+// no-receipt path) and PendingDecisions queries create zero request
+// rows, so the first business revision is still round 0 and
+// direct-approves under initial=1; only the second round asks.  An ask
+// is answerable even on an all-finished run: the open question is
+// unfinished business, not a terminal run.
 func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -305,7 +343,8 @@ func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 	if n := countRequests(t, st, "a", ""); n != 0 {
 		t.Fatalf("revision request rows after failures and queries = %d, want 0", n)
 	}
-	// Every run is finished now; the first business revision still asks.
+	// Every run is finished now; the first business revision is still
+	// round 0 — direct approval, proving the retries consumed no round.
 	exhaustion := &Confirmation{
 		Options:  []string{"allow", "refuse"},
 		Allow:    "allow",
@@ -314,6 +353,16 @@ func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 	}
 	if err := st.RequestRevision(ctx, "a",
 		TaskSpec{TaskID: "a", Name: "task-a", Input: []byte("input-a2")},
+		exhaustion, repairLimitPolicy, 1); err != nil {
+		t.Fatalf("first business revision err = %v, want nil (round 0, retries consumed nothing)", err)
+	}
+	gen2 := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a2")}}
+	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, gen2); err != nil {
+		t.Fatal(err)
+	}
+	// The second round asks on the finished run.
+	if err := st.RequestRevision(ctx, "a",
+		TaskSpec{TaskID: "a", Name: "task-a", Input: []byte("input-a3")},
 		exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("ask on finished run err = %v, want ErrWaitingDecision (round 1 >= 1)", err)
 	}
@@ -329,7 +378,7 @@ func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 	if n := countRequests(t, st, "a", reqRefused); n != 1 {
 		t.Fatalf("refused requests = %d, want 1", n)
 	}
-	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, specs); err != nil {
+	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, gen2); err != nil {
 		t.Fatalf("settled run after declining: %v", err)
 	}
 	if pending, _ := st.PendingDecisions(ctx); len(pending) != 0 {
@@ -403,11 +452,11 @@ func TestK4PendingDecisionsListOnlyCurrentGeneration(t *testing.T) {
 }
 
 // F3×F1 coexistence — the current-generation rule and the revision
-// inquiry share one list: a carried generation-2 gate is listed while
-// its invalidated generation-1 predecessor is not, a live inquiry is
-// listed alongside it, and a REFUSED inquiry neither waits nor refuses
-// the run.
-func TestK4PendingDecisionsShowRevisionInquiryAlongsideCurrentGate(t *testing.T) {
+// request share one list: a carried generation-2 gate is listed while
+// its invalidated generation-1 predecessor is not, a live revision
+// request is listed alongside it, and a REFUSED request neither waits
+// nor refuses the run.
+func TestK4PendingDecisionsShowRevisionRequestAlongsideCurrentGate(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -440,17 +489,18 @@ func TestK4PendingDecisionsShowRevisionInquiryAlongsideCurrentGate(t *testing.T)
 		Revision: "rev-2",
 		Body:     []byte("allow one more repair round of task b?"),
 	}
+	// Round 0 against a zero allowance asks immediately.
 	if err := st.RequestRevision(ctx, "b",
 		TaskSpec{TaskID: "b", Name: "task-b", Input: []byte("input-b2")},
-		exhaustion, repairLimitPolicy, 1); !errors.Is(err, ErrWaitingDecision) {
-		t.Fatalf("inquiry err = %v, want ErrWaitingDecision", err)
+		exhaustion, repairLimitPolicy, 0); !errors.Is(err, ErrWaitingDecision) {
+		t.Fatalf("request err = %v, want ErrWaitingDecision", err)
 	}
 	pending, err := st.PendingDecisions(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pending) != 2 {
-		t.Fatalf("pending = %d, want 2 (carried gate plus live inquiry)", len(pending))
+		t.Fatalf("pending = %d, want 2 (carried gate plus live request)", len(pending))
 	}
 	seen := map[string]bool{}
 	for _, d := range pending {
@@ -460,18 +510,18 @@ func TestK4PendingDecisionsShowRevisionInquiryAlongsideCurrentGate(t *testing.T)
 		t.Fatal("the invalidated generation-1 gate is still listed")
 	}
 
-	// Decline the inquiry: the run keeps waiting on the gate, and a
-	// refused inquiry is neither a wait nor a run refusal.
-	var inquiryID string
+	// Decline the request: the run keeps waiting on the gate, and a
+	// refused request is neither a wait nor a run refusal.
+	var requestID string
 	for _, d := range pending {
 		if d.TaskID == "b" {
-			inquiryID = d.DecisionID
+			requestID = d.DecisionID
 		}
 	}
-	if inquiryID == "" {
-		t.Fatal("no inquiry for task b in the pending list")
+	if requestID == "" {
+		t.Fatal("no request for task b in the pending list")
 	}
-	if _, err := st.Answer(ctx, inquiryID, "refuse"); err != nil {
+	if _, err := st.Answer(ctx, requestID, "refuse"); err != nil {
 		t.Fatal(err)
 	}
 	if n := countRequests(t, st, "b", reqRefused); n != 1 {
@@ -493,7 +543,7 @@ func TestK4PendingDecisionsShowRevisionInquiryAlongsideCurrentGate(t *testing.T)
 	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, originalB); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("run after declining err = %v, want ErrWaitingDecision on the carried gate", err)
 	}
-	// Answering the gate completes everything; the declined inquiry is
+	// Answering the gate completes everything; the declined request is
 	// gone from the list.
 	gateID, _, _, _, _, _ := decisionRowAtGeneration(t, st, "a", 2)
 	if _, err := st.Answer(ctx, gateID, "approve"); err != nil {

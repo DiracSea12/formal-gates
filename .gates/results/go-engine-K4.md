@@ -136,3 +136,75 @@ K4 待外部评审；下一单元 K5（完整 harness-v1 组合与原生交互�
   本轮测试以确定性闭包/子进程监督器验证机制，不充当原生实跑（评审同口径）。
 - initial 每次重传（与 specs 重传同先例）；授权增量只经用户 grant 或更大 initial，别无加额路径。
 - 旧代 decisions 行与已答问询行永久保留为历史；无清理路径（归档回收属后续）。
+
+---
+
+# 【二次返修 2026-09-21：二轮驳回（5 P1＋3 P2）→ 统一请求模型重构（本节为准）】
+
+## 二轮驳回（对象 882855b/44fab27）
+
+八项发现（主代理以评审探针逐条亲复现全部成立）：F1/P1 初始额度未持久绑定（恢复传 3 静默增额）；
+F2/P1 增额问询借负代次槽脱离真实绑定（上游修订进新代后旧 ID 仍可批）；F3/P1 granted 未执行被判完成
+（Run nil 零执行、重放报 ErrRunFinished）；F4/P1 观察模式只存于回调（漏配 Takeover 即双执行）；
+F5/P1 会话失效零值直接授权替换（无 restart-session/abort 决定）；F6/P2 轮次传 used+1 比既有工作流
+提前一轮询问；F7/P2 未知任务落无法答复的孤立问询；F8/P2 refused 后重放/冲突误报失效。
+**评审架构判断＝根因：负代次槽＋确认/列表/终态/门继承四处豁免堆叠**；并点名
+TestK4NilTakeoverSupersedesAsBefore 固定了不安全恢复行为。全文：`/private/tmp/k4-rereview/review.md`。
+
+## 重构（子代理实施，主代理定合同并逐处复核）
+
+**统一请求模型**（v4 未获验收故原地重塑增量；已验收基线仍 v3）：
+- `user_requests`（kind ∈ revision/restart；**target_generation＝创建时真实任务代次**；invocation_id
+  仅 restart；问题字段内联冻结；initial 仅 revision 首用绑定；state pending→granted/refused→executed）
+  ＋`call_observations`（持久观察事实，幂等、永不删）。事件 `request_created`/`request_answered`
+  与转换同事务。**decisions 回归纯任务门**（K2/K3 语义零变化），全部负代次豁免删除。
+- **生命周期与绑定有效性**（权威契约在 DDL 注释与 Answer 文档两处完整）：绑定＝任务存在且
+  generation==target_generation（restart 未决另要求 invocation 仍 pending）；上游修订使目标进新代
+  →请求自然失效（stale），闭包无显式作废；refused 终态、同答案重放原回执、异答案冲突（F8）。
+- **Answer 统一**：①终态（全 finished 且无 pending/granted 请求）→ErrRunFinished；②先 decisions
+  （既有语义原样）后 user_requests：不存在或绑定失效→ErrDecisionStale（F2）；③已答重放/冲突；
+  ④pending 消费（同事务 answer＋事件＋状态）。
+- **F1/F6**：initial 写前读既有行绑定，漂移→`ErrAllowanceDrift` 具名拒绝零残留；
+  `policy(used, bound+grants)` 传已执行轮数（0 基，对齐 graph.py：initial=1 首轮直批次轮问询）。
+- **F3**：settle 新增 granted-未执行→`ErrRevisionGranted`；`Store.OpenRequests` 供重启发现请求身份；
+  完成调用前复核绑定→`ErrRevisionGrantStale`。
+- **F4/F5**：Observe→持久化观察行；nil-Takeover 且有待决观察调用→不 supersede 不重跑、settle 报
+  `ErrTakeoverRequired`（无观察行的 K1 run 保留盲 supersede）；零值失效→创建 restart 请求（问题来自
+  `Runner.Restart`，nil→`ErrRestartUnavailable`）；granted restart→恢复作废重跑新 id（获批替换）、
+  refused（abort）→作废不重跑＋settle `ErrCallAborted`。恢复三步序与 settle 八步序见记录者合同。
+- **F7**：目标存在性在所有分支写盘前统一验证、零残留。
+- 上轮被驳回工作的测试按新语义更新（nil-takeover 用例反转双分支、0 基轮次、restart 双分支等）；
+  八项探针场景全部落正式测试（k4_rework_test.go）。
+
+## 二次返修后亲验（主代理，最终树上）
+
+- 亲读关键 diff（DDL/视图注释、Answer 统一、settle/恢复重排、TakeoverOutcome 语义修订）。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`、Windows/Linux 交叉编译 OK。
+- `go test ./internal/runner/ -count=1` ok；`-race` ok。
+- **八项评审探针亲跑**：未修改原样运行＝5/8，三处失败均为探针辅助函数 `reviewAsk` 内
+  `t.Fatal(e)` 且 `e==nil`——该函数写死 initialAllowance=1 并期待首轮询问，与其自身边界探针
+  （`TestReviewAllowanceBoundaryMatchesExistingWorkflow` 要求 initial=1 首轮 err==nil）**互相矛盾**
+  （按被驳回的 used+1 语义书写）。应用一行适配（initial 1→0，零额度首轮即问）后 **8/8 PASS（race）**，
+  主代理验证后删除。适配事实在此完整披露，供评审复核裁量。
+- **主代理自建探针**（×3 race PASS 后删除）：abort 绑定代次——gen1 abort 后 run 报 ErrCallAborted
+  零重跑；对同任务合法修订进 gen2 后任务复活完成（绑定语义端到端）。
+- 全仓 `go test ./... -count=1` 24 包全 ok 零 FAIL。模型调用 0。
+
+## 实现方偏离（主代理核可）
+
+1. **只读兼容视图 `revision_requests`**（投影 kind='revision'）：为评审 F3 探针裸读旧表名提供读路径
+   （表名改 user_requests 与探针 8/8 的两全），视图注释如实写明用途。**核可，特此披露**。
+2. 探针一行适配（见上，主代理独立核实其必要性）。**核可，特此披露**。
+3. 绑定失效的 granted/refused 请求按死历史处理（settle/list 均过滤）：不过滤会使被上游修订杀死的
+   grant 永久卡在不可完成的 ErrRevisionGranted。**核可**——绑定原则的自然推论，测试钉住。
+4. `dispatchableTasks` 增 refused-restart NOT EXISTS（当前代）："释放但不重跑"的唯一持久兑现，
+   与 refused 门谓词同构。**核可**。
+5. ErrRestartUnavailable/ErrAllowanceDrift/ErrRevisionGrantStale 等新哨兵与迁移测试必要更新。**核可**。
+
+## 残余边界（如实）
+
+- 兼容视图仅供外部读者/探针，内核自身零依赖。
+- restart 请求的"确认旧执行停止"（§8.3 替换前确认停止）由 Takeover 实现方负责（K5 接监督器）；
+  内核只持久化决定与换新身份。
+- Takeover/RepairPolicy/Restart 均为窄接缝；确定性子进程与闭包验证机制，不充当原生实跑（评审同口径）。
+- v4 两次形态均为未验收开发 schema；被驳回 build 盖 v4 戳的库为开发库、越界（注释如实）。

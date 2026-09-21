@@ -129,15 +129,31 @@ type Runner struct {
 	exec  Executor
 	hooks crashHooks
 	// Takeover, when non-nil, is consulted during recovery for every
-	// still-pending invocation a previous owner left behind (see
-	// recoverPending): adopt its verifiable result under the original
-	// call identity, observe it while its original supervisor lives, or
-	// return the zero outcome to void it and re-run.  nil — the default —
-	// keeps K1's recovery byte for byte: every pending invocation is
-	// superseded and the task re-registered.  K5 wires the accepted
-	// supervisor/adapter components here; the kernel defines only this
-	// narrow seam (takeover.go).
+	// still-pending invocation a previous owner left behind and no
+	// restart request already covers (see recoverPending): adopt its
+	// verifiable result under the original call identity, observe it
+	// while its original supervisor lives (a fact persisted to
+	// call_observations), or return the zero outcome — the dead-session
+	// fact — which asks for a replacement through a restart request
+	// instead of authorizing one.  nil — the default — keeps K1's
+	// recovery byte for byte for runs without a persisted observation:
+	// every pending invocation is superseded and the task re-registered.
+	// A run whose call WAS observed reports ErrTakeoverRequired to a
+	// nil-consult owner rather than retrying blind.  K5 wires the
+	// accepted supervisor/adapter components here; the kernel defines
+	// only this narrow seam (takeover.go).
 	Takeover Takeover
+	// Restart is the question asked when a takeover consultation
+	// reports a dead or invalidated session (the zero TakeoverOutcome):
+	// typically Options ["restart-session","abort"] with Allow
+	// "restart-session" (§8.2/§8.3).  It is frozen on the pending
+	// restart request the fact creates; only an allowing answer lets
+	// recovery void the dead call and re-run under a fresh invocation
+	// id, an aborting one voids it and blocks the task for good.  nil
+	// with a dead-session verdict is a named refusal,
+	// ErrRestartUnavailable — the kernel never treats the fact alone as
+	// authorization to replace.
+	Restart *Confirmation
 	// Parallelism is the local bounded concurrency of §4.1: how many
 	// ready tasks may execute at once.  The zero value — anything ≤ 1 —
 	// runs one task at a time, the K1 behaviour; no distributed lease or
@@ -162,10 +178,12 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // missing spec for ready work fails the run instead of executing blind.
 // Gates no longer interrupt the loop while independent work remains:
 // once everything dispatchable has drained, settle reports an executor
-// failure, a still-pending gate (ErrWaitingDecision), a refused one
-// (ErrDecisionRefused) or — with a takeover consult — a call still
-// pending under observation (ErrCallObserved) in that order — see
-// dispatchableTasks for the gate's read semantics.
+// failure, a still-pending question (ErrWaitingDecision), a granted-
+// but-unexecuted revision (ErrRevisionGranted), a refused one
+// (ErrDecisionRefused), an aborted restart (ErrCallAborted) or — with a
+// takeover consult — a call still pending under observation
+// (ErrCallObserved) in that order — see dispatchableTasks for the gate's
+// read semantics.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -258,12 +276,17 @@ type workerResult struct {
 
 // settle is the drained loop's terminal judgment, in fixed order: an
 // executor failure (aggregated over every failed task), then a
-// still-pending decision (ErrWaitingDecision), then an answered decision
-// whose choice does not allow (ErrDecisionRefused), then — only when a
-// Takeover consult is configured — an invocation still pending under
-// observation (ErrCallObserved), then the unfinished-but-nothing-ready
-// stagnation check, otherwise nil.  §4.1: the wait is reported only after
-// no independent work is left.
+// still-pending question — a current-generation gate OR a valid-binding
+// pending user request (ErrWaitingDecision), then a granted-but-
+// unexecuted revision (ErrRevisionGranted: approved work nobody
+// completed), then an answered-without-allowing gate
+// (ErrDecisionRefused), then a refused restart — the user aborted
+// (ErrCallAborted: the run must not claim success), then the takeover
+// facts — a still-pending invocation under a configured consult
+// (ErrCallObserved) or a persisted observation without one
+// (ErrTakeoverRequired), then the unfinished-but-nothing-ready
+// stagnation check, otherwise nil.  §4.1: the wait is reported only
+// after no independent work is left.
 func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	if len(execErrs) > 0 {
 		return errors.Join(execErrs...)
@@ -272,18 +295,27 @@ func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	if err != nil {
 		return err
 	}
-	if waiting {
+	reqWaiting, grantedRevision, aborted, err := r.store.requestStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if waiting || reqWaiting {
 		return ErrWaitingDecision
+	}
+	if grantedRevision {
+		return ErrRevisionGranted
 	}
 	if refused {
 		return ErrDecisionRefused
 	}
+	if aborted {
+		return ErrCallAborted
+	}
 	if r.Takeover != nil {
 		// At settle time a pending invocation can only be one kept under
-		// observation — this Run's own no-receipt failures returned
-		// above, and every other pending was adopted or voided in
-		// recovery.  Without a consult this never fires: recovery
-		// superseded everything before the loop began.
+		// observation or awaiting a restart decision — this Run's own
+		// no-receipt failures returned above, and every other pending
+		// was adopted or asked about in recovery.
 		var pending int
 		if err := r.store.db.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM invocations WHERE run_id=? AND state=?",
@@ -293,6 +325,10 @@ func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 		if pending > 0 {
 			return ErrCallObserved
 		}
+	} else if observed, err := r.observedPendingCount(ctx); err != nil {
+		return err
+	} else if observed > 0 {
+		return ErrTakeoverRequired
 	}
 	return r.checkAllFinished(ctx)
 }
@@ -382,17 +418,41 @@ func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 }
 
 // recoverPending closes out unsettled intents from a previous owner
-// process.  Without a takeover consult (Runner.Takeover nil — every
-// K1–K4 default), every still-pending invocation has no receipt (the
-// owner died or the executor failed), so it is superseded — kept, never
-// deleted — and the next registration for the same task replaces it, in
-// one transaction.  With a consult, each pending invocation is judged
-// first (takeoverPending): only the dead ones are voided.  Recovery
-// touches only current tasks and unsettled invocations; it never replays
-// the event history (§7).
+// process, in a fixed order:
+//
+//  1. pending invocations an existing restart request is about are
+//     settled by the stored answer alone (settleRestartRequests,
+//     takeover.go) — a granted one voids its dead call and frees the
+//     task for this Run's replacement, a refused one voids it and
+//     leaves the task durably out of the ready set;
+//  2. with Takeover nil — every K1–K4 default — the K1 blind supersede
+//     runs verbatim, unless a persisted call_observations row marks a
+//     pending invocation as observed in flight by a previous owner:
+//     then nothing is superseded and nothing re-runs, and settle
+//     reports ErrTakeoverRequired (F4);
+//  3. with a consult, each remaining pending invocation is judged
+//     outside any transaction (takeoverPending, takeover.go): Adopt,
+//     Observe (the fact persisted), or the dead-session fact that
+//     creates a restart request.
+//
+// Recovery touches only current tasks and unsettled invocations; it
+// never replays the event history (§7).
 func (r *Runner) recoverPending(ctx context.Context) error {
+	if err := r.settleRestartRequests(ctx); err != nil {
+		return err
+	}
 	if r.Takeover != nil {
 		return r.takeoverPending(ctx)
+	}
+	observed, err := r.observedPendingCount(ctx)
+	if err != nil {
+		return err
+	}
+	if observed > 0 {
+		// A previous owner vouched for this call; a nil consult must
+		// not blind-supersede it.  Leave everything as it is — settle
+		// reports ErrTakeoverRequired.
+		return nil
 	}
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -443,9 +503,16 @@ func (r *Runner) recoverPending(ctx context.Context) error {
 //     reopens and re-runs because every read consults the same stored
 //     answer.
 //
-// The query reads the decisions rows alone, never the specs' Confirm
-// fields, which is what makes a recovery that omits them meet the same
-// gate (see TaskSpec.Confirm).
+// The restart NOT EXISTS is the same rule on the request side: a task
+// whose current generation holds a REFUSED restart (the user aborted
+// the replacement) is durably out of the ready set, the request-side
+// mirror of a refused gate.  A pending restart keeps its task running
+// (already excluded by the state predicate); a granted one was executed
+// by recovery before the loop began.
+//
+// The query reads the decisions and user_requests rows alone, never the
+// specs' Confirm fields, which is what makes a recovery that omits them
+// meet the same gate (see TaskSpec.Confirm).
 func (r *Runner) dispatchableTasks(ctx context.Context, want int) ([]taskRow, error) {
 	rows, err := r.store.db.QueryContext(ctx, `
 		SELECT t.task_id, t.generation
@@ -463,9 +530,16 @@ func (r *Runner) dispatchableTasks(ctx context.Context, want int) ([]taskRow, er
 		        WHERE g.run_id = t.run_id AND g.task_id = t.task_id AND g.generation = t.generation
 		          AND (g.state = ? OR (g.state = ? AND g.answer <> g.allow))
 		   )
+		   AND NOT EXISTS (
+		       SELECT 1
+		         FROM user_requests rr
+		        WHERE rr.run_id = t.run_id AND rr.task_id = t.task_id
+		          AND rr.kind = ? AND rr.state = ? AND rr.target_generation = t.generation
+		   )
 		 ORDER BY t.task_id
 		 LIMIT ?`,
-		r.store.runID, taskWaitingDeps, taskFinished, decisionPending, decisionAnswered, want)
+		r.store.runID, taskWaitingDeps, taskFinished, decisionPending, decisionAnswered,
+		kindRestart, reqRefused, want)
 	if err != nil {
 		return nil, err
 	}

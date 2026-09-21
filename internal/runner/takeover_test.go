@@ -1,16 +1,19 @@
 package runner
 
-// K4 repair acceptance tests, F2 — 调用接回 over real subprocesses and real
-// durable state: an owner child really exits (os.Exit) right after its
-// executor spawns a supervisor subprocess that owns the registered
-// invocation — slowly writing its result, still sleeping, or dying with
-// partial progress only.  The parent reopens the same directory, consults
-// Takeover over the work artifacts, and must adopt the ORIGINAL call
-// without re-executing, observe it while it lives (ErrCallObserved), or
-// void the dead session and re-run under a NEW invocation id that picks
-// the partial work up (§8.3).  TestMain re-executes this binary for both
-// children (crash_test.go's appended branches); the takeover scenarios
-// stay separate from revision — no generation ever moves.
+// K4 rework acceptance tests, F2/F4/F5 — 调用接回 over real subprocesses
+// and real durable state: an owner child really exits (os.Exit) right
+// after its executor spawns a supervisor subprocess that owns the
+// registered invocation — slowly writing its result, still sleeping, or
+// dying with partial progress only.  The parent reopens the same
+// directory, consults Takeover over the work artifacts, and must adopt
+// the ORIGINAL call without re-executing, or observe it while it lives
+// (ErrCallObserved, the fact PERSISTED so a later nil-consult owner
+// gets ErrTakeoverRequired instead of a blind retry), while a dead
+// session is a FACT that asks through a restart request — only an
+// allowing answer replaces the execution identity (§8.2/§8.3).
+// TestMain re-executes this binary for the children (crash_test.go's
+// appended branches); the takeover scenarios stay separate from revision
+// — no generation ever moves.
 
 import (
 	"context"
@@ -20,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -195,6 +199,18 @@ func takeoverSpecs() []TaskSpec {
 	return []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
 }
 
+// restartQuestion is the parent's Restart declaration for the
+// dead-session asks: restart-session allows the replacement, abort
+// refuses it (§8.2/§8.3).
+func restartQuestion() *Confirmation {
+	return &Confirmation{
+		Options:  []string{"restart-session", "abort"},
+		Allow:    "restart-session",
+		Revision: "rev-1",
+		Body:     []byte("the session owning task a's call is dead — restart it under a new identity?"),
+	}
+}
+
 // 结果已存在→接纳原调用: the supervisor finished after the owner died; the
 // reopened parent adopts the original invocation — same id, same stored
 // result, marker exactly once, zero re-execution, task finished — and no
@@ -276,6 +292,27 @@ func TestK4TakeoverObservesOriginalCallStillInFlight(t *testing.T) {
 	if err := r.Run(ctx, takeoverSpecs()); !errors.Is(err, ErrCallObserved) {
 		t.Fatalf("first run err = %v, want ErrCallObserved", err)
 	}
+	// The observation is a PERSISTED fact now (F4): the row names the
+	// original call, so the fact survives owners that never consult.
+	var observed int
+	if err := st.db.QueryRow(
+		"SELECT COUNT(*) FROM call_observations WHERE invocation_id=?", orig).Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed != 1 {
+		t.Fatalf("call_observations rows for the observed call = %d, want 1", observed)
+	}
+	// Re-observing the same call is idempotent.
+	if err := r.Run(ctx, takeoverSpecs()); !errors.Is(err, ErrCallObserved) {
+		t.Fatalf("second run err = %v, want ErrCallObserved", err)
+	}
+	if err := st.db.QueryRow(
+		"SELECT COUNT(*) FROM call_observations WHERE invocation_id=?", orig).Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed != 1 {
+		t.Fatalf("call_observations rows after re-observation = %d, want still 1", observed)
+	}
 	if n := countInvocations(t, st, "a", invPending); n != 1 {
 		t.Errorf("pending invocations after observation = %d, want still 1", n)
 	}
@@ -308,97 +345,241 @@ func TestK4TakeoverObservesOriginalCallStillInFlight(t *testing.T) {
 	}
 }
 
-// 失效会话＋部分工作接手: the supervisor wrote partial progress and a
-// session-invalid marker, then died without a result: the zero outcome
-// voids the original invocation (row kept, superseded, result-less) and
-// the re-run registers a NEW invocation id — the retry carries the
-// newest native identity, not the invalidated one — whose executor picks
-// the partial work up (§8.3's minimal proof on the kernel's identity
-// machinery).
-func TestK4TakeoverDeadSessionRerunsUnderNewIdentity(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	runTakeoverOwner(t, dir, "die-partial")
-	waitForGlob(t, dir, "dead-*")
-
-	st, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	orig := pendingInvocationID(t, st, "a")
-	r := NewRunner(st, func(ctx context.Context, inv Invocation) (Result, error) {
-		partials, err := filepath.Glob(filepath.Join(dir, "partial-*"))
-		if err != nil {
-			return Result{}, err
-		}
-		carry := ""
-		if len(partials) > 0 {
-			b, err := os.ReadFile(partials[0])
+// 失效会话的事实需要用户决定（F5 rework）: the supervisor wrote partial
+// progress and a session-invalid marker, then died without a result.
+// The zero outcome is the dead-session FACT — it no longer authorizes a
+// replacement: recovery creates a pending restart request and waits.
+// Answering restart-session voids the dead call and re-runs under a NEW
+// invocation id — the retry carries the newest native identity and picks
+// the partial work up (§8.3); answering abort voids it, re-runs nothing
+// and the run reports ErrCallAborted, durably.
+func TestK4TakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
+	// partialExecutor picks the dead session's partial work up — the
+	// §8.3 carry the replacement must be able to perform.
+	partialExecutor := func(dir string, execs *int) Executor {
+		return func(ctx context.Context, inv Invocation) (Result, error) {
+			*execs++
+			partials, err := filepath.Glob(filepath.Join(dir, "partial-*"))
 			if err != nil {
 				return Result{}, err
 			}
-			carry = "+" + string(b)
+			carry := ""
+			if len(partials) > 0 {
+				b, err := os.ReadFile(partials[0])
+				if err != nil {
+					return Result{}, err
+				}
+				carry = "+" + string(b)
+			}
+			if _, err := markerExecutor(dir)(ctx, inv); err != nil {
+				return Result{}, err
+			}
+			return Result{Payload: json.RawMessage(`"rerun-a` + carry + `"`)}, nil
 		}
-		if _, err := markerExecutor(dir)(ctx, inv); err != nil {
-			return Result{}, err
+	}
+	// setup drives the child, reopens, and reaches the durable ask.
+	setup := func(t *testing.T) (*Store, string, string, *int) {
+		t.Helper()
+		dir := t.TempDir()
+		runTakeoverOwner(t, dir, "die-partial")
+		waitForGlob(t, dir, "dead-*")
+		st, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return Result{Payload: json.RawMessage(`"rerun-a` + carry + `"`)}, nil
+		orig := pendingInvocationID(t, st, "a")
+		parentExecs := 0
+		r := NewRunner(st, partialExecutor(dir, &parentExecs))
+		r.Takeover = fileTakeover(dir)
+		r.Restart = restartQuestion()
+		if err := r.Run(context.Background(), takeoverSpecs()); !errors.Is(err, ErrWaitingDecision) {
+			t.Fatalf("run after the dead-session fact err = %v, want ErrWaitingDecision (the ask)", err)
+		}
+		// The fact neither voided nor re-ran anything, and the ask is
+		// listed with the frozen question.
+		if parentExecs != 0 {
+			t.Fatalf("parent executed task a %d times on the dead-session fact, want 0", parentExecs)
+		}
+		if n := markerLines(t, dir, "a"); n != 0 {
+			t.Fatalf("marker lines on the dead-session fact = %d, want 0", n)
+		}
+		if state, _ := invocationState(t, st, orig); state != invPending {
+			t.Fatalf("dead call state after the fact = %q, want still pending (nothing voided)", state)
+		}
+		pending, err := st.PendingDecisions(context.Background())
+		if err != nil || len(pending) != 1 {
+			t.Fatalf("pending after the dead-session fact = %v (err %v), want the restart ask", pending, err)
+		}
+		ask := pending[0]
+		if ask.TaskID != "a" || !containsChoice(ask.Options, "restart-session") || !containsChoice(ask.Options, "abort") {
+			t.Fatalf("restart ask = %+v, want task a offering restart-session and abort", ask)
+		}
+		return st, dir, ask.DecisionID, &parentExecs
+	}
+
+	t.Run("restart-session replaces under a new identity", func(t *testing.T) {
+		st, dir, askID, parentExecs := setup(t)
+		defer st.Close()
+		ctx := context.Background()
+		orig := pendingInvocationID(t, st, "a")
+		if _, err := st.Answer(ctx, askID, "restart-session"); err != nil {
+			t.Fatal(err)
+		}
+		// Recovery settles the stored decision alone — no consult and no
+		// Restart declaration needed — and the replacement runs under a
+		// fresh identity, carrying the partial work in.
+		plain := NewRunner(st, partialExecutor(dir, parentExecs))
+		if err := plain.Run(ctx, takeoverSpecs()); err != nil {
+			t.Fatal(err)
+		}
+		if *parentExecs != 1 {
+			t.Fatalf("replacement executions = %d, want exactly 1", *parentExecs)
+		}
+		if state, res := invocationState(t, st, orig); state != invSuperseded || res != "" {
+			t.Errorf("dead session row = (%q,%q), want (superseded, no result)", state, res)
+		}
+		newID, gen, _ := admittedInvocation(t, st, "a")
+		if newID == orig {
+			t.Fatal("replacement reused the invalidated invocation id; the retry must carry a fresh native identity")
+		}
+		if gen != 1 {
+			t.Errorf("replacement generation = %d, want 1 (replacement, no revision)", gen)
+		}
+		if _, res := invocationState(t, st, newID); res != `{"payload":"rerun-a+half-done"}` {
+			t.Errorf("replacement result = %s, want the partial work carried in", res)
+		}
+		if n := markerLines(t, dir, "a"); n != 1 {
+			t.Errorf("marker lines = %d, want exactly the replacement's 1", n)
+		}
+		if n := invocationTotal(t, st); n != 2 {
+			t.Errorf("invocation rows = %d, want 2 (dead original plus replacement)", n)
+		}
+		if s, eff := taskState(t, st, "a"); s != taskFinished || eff != newID {
+			t.Errorf("task a = (%q,%q), want finished with the replacement effective", s, eff)
+		}
+		var reqState string
+		if err := st.db.QueryRow(
+			"SELECT state FROM user_requests WHERE request_id=?", askID).Scan(&reqState); err != nil {
+			t.Fatal(err)
+		}
+		if reqState != reqExecuted {
+			t.Errorf("restart request state after the replacement = %q, want executed", reqState)
+		}
 	})
-	r.Takeover = fileTakeover(dir)
-	if err := r.Run(ctx, takeoverSpecs()); err != nil {
-		t.Fatal(err)
-	}
-	// The dead session's row survives as voided history.
-	if state, res := invocationState(t, st, orig); state != invSuperseded || res != "" {
-		t.Errorf("dead session row = (%q,%q), want (superseded, no result)", state, res)
-	}
-	newID, gen, _ := admittedInvocation(t, st, "a")
-	if newID == orig {
-		t.Fatal("re-run reused the invalidated invocation id; the retry must carry a fresh native identity")
-	}
-	if gen != 1 {
-		t.Errorf("re-run generation = %d, want 1 (void-and-rerun, no revision)", gen)
-	}
-	if _, res := invocationState(t, st, newID); res != `{"payload":"rerun-a+half-done"}` {
-		t.Errorf("re-run result = %s, want the partial work carried in", res)
-	}
-	if n := markerLines(t, dir, "a"); n != 1 {
-		t.Errorf("marker lines = %d, want exactly the re-run's 1", n)
-	}
-	if n := invocationTotal(t, st); n != 2 {
-		t.Errorf("invocation rows = %d, want 2 (dead original plus re-run)", n)
-	}
-	if s, eff := taskState(t, st, "a"); s != taskFinished || eff != newID {
-		t.Errorf("task a = (%q,%q), want finished with the re-run effective", s, eff)
-	}
+
+	t.Run("abort voids and never re-runs", func(t *testing.T) {
+		st, dir, askID, parentExecs := setup(t)
+		defer st.Close()
+		ctx := context.Background()
+		orig := pendingInvocationID(t, st, "a")
+		if _, err := st.Answer(ctx, askID, "abort"); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			if err := NewRunner(st, partialExecutor(dir, parentExecs)).Run(ctx, takeoverSpecs()); !errors.Is(err, ErrCallAborted) {
+				t.Fatalf("run %d after abort err = %v, want ErrCallAborted", i, err)
+			}
+		}
+		if *parentExecs != 0 {
+			t.Fatalf("parent executed task a %d times after abort, want 0", *parentExecs)
+		}
+		if n := markerLines(t, dir, "a"); n != 0 {
+			t.Fatalf("marker lines after abort = %d, want 0", n)
+		}
+		if state, _ := invocationState(t, st, orig); state != invSuperseded {
+			t.Errorf("aborted call state = %q, want superseded (voided, row kept)", state)
+		}
+		if s, _ := taskState(t, st, "a"); s == taskRunning {
+			t.Errorf("task a still running after the abort void")
+		}
+		if n := countInvocations(t, st, "a", invPending); n != 0 {
+			t.Errorf("pending invocations after abort = %d, want 0", n)
+		}
+		if n := invocationTotal(t, st); n != 1 {
+			t.Errorf("invocation rows after abort = %d, want exactly the voided original", n)
+		}
+	})
 }
 
-// A nil Takeover keeps the K1 recovery byte for byte on the same durable
-// state: the pending invocation is superseded and the task re-executed —
-// the contrast that proves the consult, not the state, makes the
-// difference.
-func TestK4NilTakeoverSupersedesAsBefore(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	runTakeoverOwner(t, dir, "slow-result") // the supervisor will land late; irrelevant here
-	st, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	orig := pendingInvocationID(t, st, "a")
-	r := NewRunner(st, markerExecutor(dir)) // Takeover deliberately nil
-	if err := r.Run(ctx, takeoverSpecs()); err != nil {
-		t.Fatal(err)
-	}
-	if state, _ := invocationState(t, st, orig); state != invSuperseded {
-		t.Errorf("orphaned invocation state after nil-Takeover recovery = %q, want superseded", state)
-	}
-	if n := countInvocations(t, st, "a", invAdmitted); n != 1 {
-		t.Errorf("task a admitted %d times, want 1 (re-registered and re-executed)", n)
-	}
-	if id, _, _ := admittedInvocation(t, st, "a"); id == orig {
-		t.Error("nil-Takeover recovery admitted the orphaned invocation itself; want a fresh registration")
-	}
+// The nil-Takeover recovery, reversed out of its unsafe half (the K4
+// re-review's named test): with NO persisted observation the K1 blind
+// supersede is exactly what the accepted baselines do — the pending
+// invocation is superseded and the task re-executed; with a persisted
+// observation (a previous owner vouched for the call) a nil-consult
+// owner must supersede nothing, re-run nothing, and get
+// ErrTakeoverRequired (F4).
+func TestK4NilTakeoverSupersedesOnlyUnobservedCalls(t *testing.T) {
+	t.Run("nil consult, no observation: K1 blind supersede as before", func(t *testing.T) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		runTakeoverOwner(t, dir, "slow-result") // never observed: the nil owner never consults
+		st, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		orig := pendingInvocationID(t, st, "a")
+		r := NewRunner(st, markerExecutor(dir)) // Takeover deliberately nil
+		if err := r.Run(ctx, takeoverSpecs()); err != nil {
+			t.Fatal(err)
+		}
+		if state, _ := invocationState(t, st, orig); state != invSuperseded {
+			t.Errorf("orphaned invocation state after nil-Takeover recovery = %q, want superseded", state)
+		}
+		if n := countInvocations(t, st, "a", invAdmitted); n != 1 {
+			t.Errorf("task a admitted %d times, want 1 (re-registered and re-executed)", n)
+		}
+		if id, _, _ := admittedInvocation(t, st, "a"); id == orig {
+			t.Error("nil-Takeover recovery admitted the orphaned invocation itself; want a fresh registration")
+		}
+	})
+
+	t.Run("nil consult, persisted observation: zero re-execution, ErrTakeoverRequired", func(t *testing.T) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		specs := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
+		st := mustCreate(t, dir, "k4-nilobs", specs)
+		calls := 0
+		execute := func(context.Context, Invocation) (Result, error) {
+			calls++
+			if calls == 1 {
+				return Result{}, errors.New("owner disconnected while the original call still ran")
+			}
+			return Result{}, nil
+		}
+		observing := NewRunner(st, execute)
+		observing.Takeover = func(context.Context, Invocation) (TakeoverOutcome, error) {
+			return TakeoverOutcome{Observe: true}, nil
+		}
+		if err := observing.Run(ctx, specs); err == nil || !strings.Contains(err.Error(), "disconnected") {
+			t.Fatalf("first run err = %v, want the executor failure", err)
+		}
+		if err := observing.Run(ctx, specs); !errors.Is(err, ErrCallObserved) {
+			t.Fatalf("observing run err = %v, want ErrCallObserved", err)
+		}
+		// A later owner's reconstruction omits the optional consult — the
+		// persisted fact alone must stop the blind retry.
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		for i := 0; i < 2; i++ {
+			if err := NewRunner(st, execute).Run(ctx, specs); !errors.Is(err, ErrTakeoverRequired) {
+				t.Fatalf("nil-consult run %d err = %v, want ErrTakeoverRequired", i, err)
+			}
+		}
+		if calls != 1 {
+			t.Errorf("total executions = %d, want exactly the original 1", calls)
+		}
+		if n := countInvocations(t, st, "a", invPending); n != 1 {
+			t.Errorf("observed invocation state rows = %d pending, want still 1 (nothing superseded)", n)
+		}
+		if s, _ := taskState(t, st, "a"); s != taskRunning {
+			t.Errorf("task a state = %q, want running (out of the ready set)", s)
+		}
+	})
 }

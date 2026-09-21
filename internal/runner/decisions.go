@@ -18,12 +18,15 @@ import (
 
 // Answer-side sentinels.  Each corresponds to one §6.1 refusal class;
 // together with ErrWaitingDecision they let callers tell every refusal
-// apart without string matching.
+// apart without string matching.  They govern BOTH request families —
+// decisions gates and user_requests rows — with one set of rules.
 var (
 	// ErrWaitingDecision: Run stopped because the selected task's
 	// decision gate is pending — the gated work, and everything behind
 	// it, waits for Store.Answer to succeed.  Store.RequestRevision
-	// returns it when the repair allowance asks the user (revision.go).
+	// returns it when the repair allowance asks the user, and recovery
+	// reports it while a restart request waits (revision.go,
+	// takeover.go).
 	ErrWaitingDecision = errors.New("runner: task is waiting for a user decision")
 	// ErrDecisionRefused: the gate's decision was answered with a choice
 	// other than the one that allows execution.  The refusal is a
@@ -31,34 +34,35 @@ var (
 	// gated task and its successors do not execute, and re-running
 	// reproduces the same refusal from the stored answer every time.
 	// Contrast ErrWaitingDecision (no answer yet — still askable).  A
-	// REFUSED revision inquiry is never this: its non-positive generation
-	// slot is not the run refusing, so decisionStatus does not count it.
+	// REFUSED request is never this: declining a revision leaves the
+	// task on its current definition, and aborting a restart is
+	// ErrCallAborted's business (takeover.go).
 	ErrDecisionRefused = errors.New("runner: decision was answered without allowing execution")
 	// ErrRunFinished: the run reached its terminal state and accepts no
 	// answer at all, not even an idempotent replay of an already
 	// accepted one — the same precedence run_graph gives RUN_TERMINAL.
-	// A run holding a pending revision inquiry is not terminal: the open
-	// question is unfinished business (RequestRevision, revision.go).
-	// Contrast ErrDecisionStale (the request itself is invalid) and
-	// ErrDecisionConflict (the request exists but was answered
-	// otherwise).
+	// A run holding a pending or granted user request is not terminal:
+	// the open question (or the approved-but-unexecuted revision) is
+	// unfinished business.  Contrast ErrDecisionStale (the request
+	// itself is invalid) and ErrDecisionConflict (the request exists
+	// but was answered otherwise).
 	ErrRunFinished = errors.New("runner: finished run does not accept a decision answer")
-	// ErrDecisionStale: no decision row with this id exists in this run —
-	// an old id from an earlier run or a request that never existed — or
-	// the row belongs to a generation its task has since left: a revision
-	// invalidated the request (§6.1), and the old answer authorizes
-	// nothing of the new generation's work.  Revision inquiries live
-	// below every task generation and are the one exception: linked to a
-	// live (pending or granted) request they are answerable, not stale.
-	// A pending question elsewhere never substitutes for the addressed
-	// one.  Contrast ErrRunFinished (the run itself refuses everything)
-	// and ErrDecisionConflict (this request exists but was answered
-	// otherwise).
+	// ErrDecisionStale: no row with this id exists in this run — an old
+	// id from an earlier run, a request that never existed — or the row
+	// exists but its binding is invalid: a decision whose generation no
+	// longer equals its task's current one, a user request whose
+	// target_generation the task has left, or an unresolved restart
+	// whose invocation is no longer pending.  A revision invalidated
+	// the request (§6.1), and the old answer authorizes nothing of the
+	// new generation's work.  A pending question elsewhere never
+	// substitutes for the addressed one.  Contrast ErrRunFinished (the
+	// run itself refuses everything) and ErrDecisionConflict (this
+	// request exists but was answered otherwise).
 	ErrDecisionStale = errors.New("runner: unknown decision id in this run")
 	// ErrDecisionConflict: the decision exists and was already answered
 	// with a different choice (§6.1 "same id, different answer"); the
-	// stored answer stands.  Contrast ErrDecisionStale (no such request)
-	// and ErrRunFinished (the run itself is terminal).
+	// stored answer stands.  Contrast ErrDecisionStale (no such
+	// request) and ErrRunFinished (the run itself is terminal).
 	ErrDecisionConflict = errors.New("runner: decision already answered with a different choice")
 )
 
@@ -232,59 +236,59 @@ func insertDecision(ctx context.Context, tx *sql.Tx, runID, taskID string, gener
 // any answered-without-allowing one — counting only rows at their task's
 // CURRENT generation: a revision leaves old-generation rows behind as
 // history, and a stale row must neither hold the drained loop in a
-// permanent wait nor refuse a revised run.  One deliberate exception on
-// the pending side: a pending revision inquiry (a non-positive generation
-// slot linked to a pending request, revision.go) counts as waiting — the
-// allowance question is an open gate for the run.  A REFUSED inquiry
-// never counts as refusal: declining a revision is not the run refusing
-// (ErrDecisionRefused stays about current-generation task gates).  The
-// ready query's generation-matched gate predicate (dispatchableTasks in
-// runner.go) agrees by construction — inquiry slots never match a task
-// generation.  The drained run loop reports these as its reason for
-// stopping (settle in runner.go); reading the durable rows rather than
-// this Run's visit history keeps the answer identical for every owner.
+// permanent wait nor refuse a revised run.  This is the pure task-gate
+// read (K2/K3 semantics); the request-side waits live in
+// Store.requestStatus (revision.go).  The drained run loop reports these
+// as its reason for stopping (settle in runner.go); reading the durable
+// rows rather than this Run's visit history keeps the answer identical
+// for every owner.
 func (s *Store) decisionStatus(ctx context.Context) (waiting, refused bool, err error) {
 	var pending, refusedCount int
 	err = s.db.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM decisions d
 			  WHERE d.run_id=? AND d.state=?
-			    AND (EXISTS (SELECT 1 FROM tasks t
-			                  WHERE t.run_id=d.run_id AND t.task_id=d.task_id
-			                    AND t.generation=d.generation)
-			         OR (d.generation<=0 AND EXISTS (SELECT 1 FROM revision_requests rr
-			                  WHERE rr.run_id=d.run_id AND rr.decision_id=d.decision_id
-			                    AND rr.state='pending')))),
+			    AND EXISTS (SELECT 1 FROM tasks t
+			                WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                  AND t.generation=d.generation)),
 			(SELECT COUNT(*) FROM decisions d
 			  WHERE d.run_id=? AND d.state=? AND d.answer<>d.allow
 			    AND EXISTS (SELECT 1 FROM tasks t
-			                 WHERE t.run_id=d.run_id AND t.task_id=d.task_id
-			                   AND t.generation=d.generation))`,
+			                WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                  AND t.generation=d.generation))`,
 		s.runID, decisionPending, s.runID, decisionAnswered).
 		Scan(&pending, &refusedCount)
 	return pending > 0, refusedCount > 0, err
 }
 
-// PendingDecisions lists this run's unanswered decisions, ordered by task
-// id for a stable display.  The same current-generation rule as Answer
-// and decisionStatus applies: a revision invalidates an old question, so
-// it is history an answer can no longer reach — answering it is
-// ErrDecisionStale and it must not be presented as askable.  Live
-// revision inquiries (non-positive generation slots linked to pending
-// requests) are listed alongside current-generation gates.  Answered
-// decisions are history, not open questions, and never appear.
+// PendingDecisions lists this run's unanswered questions, ordered by task
+// id for a stable display: current-generation decision gates plus
+// valid-binding pending user requests (Store.RequestRevision's asks and
+// the restart asks recovery creates).  The same binding rule as Answer
+// applies on both sides: a revision invalidated an old question, so it
+// is history an answer can no longer reach — answering it is
+// ErrDecisionStale and it must not be presented as askable.  Answered
+// rows are history, not open questions, and never appear.
 func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT decision_id, task_id, revision, body, options_json
-		  FROM decisions d
-		 WHERE d.run_id=? AND d.state=?
-		   AND (EXISTS (SELECT 1 FROM tasks t
-		                 WHERE t.run_id=d.run_id AND t.task_id=d.task_id
-		                   AND t.generation=d.generation)
-		        OR (d.generation<=0 AND EXISTS (SELECT 1 FROM revision_requests rr
-		                 WHERE rr.run_id=d.run_id AND rr.decision_id=d.decision_id
-		                   AND rr.state='pending')))
-		 ORDER BY task_id`, s.runID, decisionPending)
+		SELECT id, task_id, revision, body, options_json FROM (
+			SELECT d.decision_id AS id, d.task_id, d.revision, d.body, d.options_json
+			  FROM decisions d
+			 WHERE d.run_id=? AND d.state=?
+			   AND EXISTS (SELECT 1 FROM tasks t
+			               WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                 AND t.generation=d.generation)
+			UNION ALL
+			SELECT r.request_id, r.task_id, r.revision, r.body, r.options_json
+			  FROM user_requests r
+			 WHERE r.run_id=? AND r.state=?
+			   AND EXISTS (SELECT 1 FROM tasks t
+			               WHERE t.run_id=r.run_id AND t.task_id=r.task_id
+			                 AND t.generation=r.target_generation)
+			   AND (r.kind<>'restart' OR EXISTS (SELECT 1 FROM invocations i
+			               WHERE i.invocation_id=r.invocation_id AND i.state=?))
+		) ORDER BY task_id`,
+		s.runID, decisionPending, s.runID, reqPending, invPending)
 	if err != nil {
 		return nil, err
 	}
@@ -304,40 +308,44 @@ func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 	return out, rows.Err()
 }
 
-// Answer settles one decision with a user's choice, enforcing the §6.1
-// answer rules inside a single short transaction and in a fixed order:
+// Answer settles one question with a user's choice — a decision gate or
+// a user request, one set of §6.1 rules — inside a single short
+// transaction and in a fixed order.  The user_requests lifecycle is
+// documented in full on the table (store.go); this doc and that one are
+// the two complete statements.
 //
-//  1. a terminal run (all its tasks finished, no pending revision
-//     request — an open inquiry is unfinished business) refuses
-//     everything, even the idempotent replay of an already accepted
-//     answer — mirroring the precedence run_graph gives RUN_TERMINAL;
-//  2. an id matching no row of THIS run is stale (an old id, another
-//     run's id, or a request that never existed); no "there is only one
-//     open question" inference ever substitutes a different target;
-//  3. a row whose generation no longer equals its task's current one is
-//     refused as stale the same way — a revision invalidated the request
-//     (§6.1 binds it to the local generation), so the old row, pending
-//     or answered, authorizes nothing of the new generation's work; the
-//     one exception is a revision inquiry (revision.go): its
-//     non-positive slot never equals any task generation by design, and
-//     linked to a live pending or granted request it is answerable;
-//  4. an already-answered decision replays exactly: the same choice
-//     returns the original receipt with zero new transitions and
-//     events, a different choice is a conflict that leaves the stored
-//     answer standing;
-//  5. a pending decision accepts only one of its stored options — any
-//     other choice is refused descriptively with the row still pending —
-//     and a valid choice is consumed exactly once: state, answer,
-//     answered_at and the decision_answered event commit together.  When
-//     the row is a revision inquiry, its request settles in the same
-//     transaction: the allowing choice grants the revision (the caller's
-//     next RequestRevision call executes it), any other choice refuses
-//     it and the task is untouched.
+//  1. a terminal run (all its tasks finished AND no pending or granted
+//     user request — an open question, or an approved-but-unexecuted
+//     revision, is unfinished business) refuses everything, even the
+//     idempotent replay of an already accepted answer — mirroring the
+//     precedence run_graph gives RUN_TERMINAL;
+//  2. the id is looked up in decisions first, then user_requests.  An id
+//     matching no row of THIS run is stale (an old id, another run's id,
+//     or a request that never existed); no "there is only one open
+//     question" inference ever substitutes a different target.  A row
+//     whose binding is invalid is refused as stale the same way: a gate
+//     whose generation no longer equals its task's current one, or a
+//     request whose target_generation the task has left (a restart also
+//     goes stale once its invocation is no longer pending while the
+//     request is unresolved) — a revision invalidated the request
+//     (§6.1), so the old row, pending or answered, authorizes nothing
+//     of the new generation's work;
+//  3. an already-answered row replays exactly: the same choice returns
+//     the original receipt with zero new transitions and events, a
+//     different choice is a conflict that leaves the stored answer
+//     standing;
+//  4. a pending row accepts only one of its stored options — any other
+//     choice is refused descriptively with the row still pending — and
+//     a valid choice is consumed exactly once.  A gate commits state,
+//     answer, answered_at and the decision_answered event together; a
+//     request commits the same fields plus its state transition (the
+//     allowing choice grants it, any other offered choice refuses it)
+//     and the request_answered event, all in the one transaction.
 //
 // Answer deliberately takes no advance lock: it schedules and executes
 // nothing, and its short write transaction is serialized by SQLite like
 // every other write here.
-func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerReceipt, error) {
+func (s *Store) Answer(ctx context.Context, id, choice string) (AnswerReceipt, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AnswerReceipt{}, err
@@ -346,8 +354,9 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	// ① Terminal runs answer nothing, and are checked before anything
 	// about the request: "finished" is a fact about the run, not the
 	// request, so it outranks even the idempotent replay below.  A
-	// pending revision inquiry keeps the run answerable — the open
-	// question is itself unfinished business.
+	// pending or granted user request keeps the run answerable — the
+	// open question, and the approved-but-unexecuted revision behind a
+	// granted one, are themselves unfinished business.
 	var unfinished int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM tasks WHERE run_id=? AND state<>?",
@@ -355,17 +364,17 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 		return AnswerReceipt{}, err
 	}
 	if unfinished == 0 {
-		var inquiries int
+		var open int
 		if err := tx.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM revision_requests WHERE run_id=? AND state=?",
-			s.runID, reqPending).Scan(&inquiries); err != nil {
+			"SELECT COUNT(*) FROM user_requests WHERE run_id=? AND state IN (?,?)",
+			s.runID, reqPending, reqGranted).Scan(&open); err != nil {
 			return AnswerReceipt{}, err
 		}
-		if inquiries == 0 {
+		if open == 0 {
 			return AnswerReceipt{}, ErrRunFinished
 		}
 	}
-	// ② The request must exist in this run.
+	// ② The task gates own the id space's first half.
 	var (
 		taskID, state, optionsJSON, allow string
 		generation                        int64
@@ -374,18 +383,16 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	err = tx.QueryRowContext(ctx, `
 		SELECT task_id, generation, state, options_json, answer, answered_at, allow
 		  FROM decisions
-		 WHERE decision_id=? AND run_id=?`, decisionID, s.runID).
+		 WHERE decision_id=? AND run_id=?`, id, s.runID).
 		Scan(&taskID, &generation, &state, &optionsJSON, &answer, &answeredAt, &allow)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AnswerReceipt{}, ErrDecisionStale
+		return s.answerRequest(ctx, tx, id, choice)
 	}
 	if err != nil {
 		return AnswerReceipt{}, err
 	}
-	// ③ The request must still belong to the task's current generation:
-	// a revision (§6.1) invalidated anything older, answered or not —
-	// except a revision inquiry, which never matches a task generation
-	// and is answerable while its request is live.
+	// ② The gate must still belong to the task's current generation: a
+	// revision (§6.1) invalidated anything older, answered or not.
 	var current int64
 	if err := tx.QueryRowContext(ctx,
 		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
@@ -393,18 +400,10 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 		return AnswerReceipt{}, err
 	}
 	if generation != current {
-		var linked int
-		if err := tx.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM revision_requests WHERE run_id=? AND decision_id=? AND state IN (?,?)",
-			s.runID, decisionID, reqPending, reqGranted).Scan(&linked); err != nil {
-			return AnswerReceipt{}, err
-		}
-		if linked == 0 {
-			return AnswerReceipt{}, ErrDecisionStale
-		}
+		return AnswerReceipt{}, ErrDecisionStale
 	}
 	if state == decisionAnswered {
-		// ④ Same choice replays the original receipt; a different one is
+		// ③ Same choice replays the original receipt; a different one is
 		// a conflict.  Either way nothing is written.
 		if !answer.Valid || answer.String != choice {
 			return AnswerReceipt{}, ErrDecisionConflict
@@ -412,11 +411,11 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 		at, err := time.Parse(time.RFC3339, answeredAt.String)
 		if err != nil {
 			return AnswerReceipt{}, fmt.Errorf("runner: decision %s answered_at %q unreadable: %w",
-				decisionID, answeredAt.String, err)
+				id, answeredAt.String, err)
 		}
-		return AnswerReceipt{DecisionID: decisionID, Choice: choice, AnsweredAt: at}, nil
+		return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
 	}
-	// ⑤ Pending (the CHECK constraint admits only pending and answered):
+	// ④ Pending (the CHECK constraint admits only pending and answered):
 	// the row's frozen options alone are valid choices.
 	var options []string
 	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
@@ -424,11 +423,11 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	}
 	if !slices.Contains(options, choice) {
 		return AnswerReceipt{}, fmt.Errorf("runner: choice %q is not an offered option of decision %s (options: %v)",
-			choice, decisionID, options)
+			choice, id, options)
 	}
 	now := nowUTC()
 	eventJSON, err := json.Marshal(decisionEvent{
-		DecisionID: decisionID,
+		DecisionID: id,
 		TaskID:     taskID,
 		Generation: generation,
 		Choice:     choice,
@@ -438,24 +437,12 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE decisions SET state=?, answer=?, answered_at=? WHERE decision_id=?",
-		decisionAnswered, choice, now, decisionID); err != nil {
+		decisionAnswered, choice, now, id); err != nil {
 		return AnswerReceipt{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
 		s.runID, eventKindDecisionAnswered, eventJSON); err != nil {
-		return AnswerReceipt{}, err
-	}
-	// A revision inquiry's answer settles its request in the same
-	// transaction: the allowing choice grants the revision (the caller's
-	// next RequestRevision call executes it); any other choice refuses it.
-	reqState := reqRefused
-	if choice == allow {
-		reqState = reqGranted
-	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE revision_requests SET state=?, resolved_at=? WHERE run_id=? AND decision_id=? AND state=?",
-		reqState, now, s.runID, decisionID, reqPending); err != nil {
 		return AnswerReceipt{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -465,5 +452,122 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	if err != nil {
 		return AnswerReceipt{}, err
 	}
-	return AnswerReceipt{DecisionID: decisionID, Choice: choice, AnsweredAt: at}, nil
+	return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
+}
+
+// answerRequest is Answer's user_requests half, inside Answer's open
+// transaction (steps ②–④ of its contract): the id names a request row
+// whose binding must still be its task's current generation — plus, for
+// an unresolved restart, a still-pending invocation — and whose stored
+// answer, if any, replays or conflicts before a pending row is consumed
+// exactly once with its request_answered event.
+func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string) (AnswerReceipt, error) {
+	var (
+		taskID, kind, state, optionsJSON, allow string
+		target                                  int64
+		invocationID                            sql.NullString
+		answer, answeredAt                      sql.NullString
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT task_id, kind, target_generation, invocation_id,
+		       options_json, state, answer, answered_at, allow
+		  FROM user_requests
+		 WHERE request_id=? AND run_id=?`, id, s.runID).
+		Scan(&taskID, &kind, &target, &invocationID,
+			&optionsJSON, &state, &answer, &answeredAt, &allow)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AnswerReceipt{}, ErrDecisionStale
+	}
+	if err != nil {
+		return AnswerReceipt{}, err
+	}
+	// ② Binding validity (user_requests DDL, store.go): the task's real
+	// generation must still match, and an unresolved restart must still
+	// be about a pending invocation.  An upstream revision invalidates
+	// the request by itself — no state-based exemption (F2/F8).
+	var current int64
+	err = tx.QueryRowContext(ctx,
+		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AnswerReceipt{}, ErrDecisionStale
+	}
+	if err != nil {
+		return AnswerReceipt{}, err
+	}
+	if current != target {
+		return AnswerReceipt{}, ErrDecisionStale
+	}
+	if kind == kindRestart && state == reqPending {
+		var invState string
+		err = tx.QueryRowContext(ctx,
+			"SELECT state FROM invocations WHERE invocation_id=?",
+			invocationID.String).Scan(&invState)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && invState != invPending) {
+			return AnswerReceipt{}, ErrDecisionStale
+		}
+		if err != nil {
+			return AnswerReceipt{}, err
+		}
+	}
+	if state != reqPending {
+		// ③ Same choice replays the original receipt; a different one is
+		// a conflict.  Either way nothing is written.  An answered row
+		// without an answer never existed as a question (direct approval
+		// below the allowance) — and its binding check above has already
+		// refused it as stale.
+		if !answer.Valid || answer.String != choice {
+			return AnswerReceipt{}, ErrDecisionConflict
+		}
+		at, err := time.Parse(time.RFC3339, answeredAt.String)
+		if err != nil {
+			return AnswerReceipt{}, fmt.Errorf("runner: request %s answered_at %q unreadable: %w",
+				id, answeredAt.String, err)
+		}
+		return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
+	}
+	// ④ Pending: the row's frozen options alone are valid choices.
+	var options []string
+	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
+		return AnswerReceipt{}, err
+	}
+	if !slices.Contains(options, choice) {
+		return AnswerReceipt{}, fmt.Errorf("runner: choice %q is not an offered option of request %s (options: %v)",
+			choice, id, options)
+	}
+	next := reqRefused
+	if choice == allow {
+		next = reqGranted
+	}
+	now := nowUTC()
+	eventJSON, err := json.Marshal(requestEvent{
+		RequestID:        id,
+		Kind:             kind,
+		TaskID:           taskID,
+		TargetGeneration: target,
+		Choice:           choice,
+	})
+	if err != nil {
+		return AnswerReceipt{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE user_requests
+		   SET state=?, answer=?, answered_at=?, resolved_at=?
+		 WHERE request_id=? AND state=?`,
+		next, choice, now, now, id, reqPending); err != nil {
+		return AnswerReceipt{}, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
+		s.runID, eventKindRequestAnswered, eventJSON); err != nil {
+		return AnswerReceipt{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AnswerReceipt{}, err
+	}
+	at, err := time.Parse(time.RFC3339, now)
+	if err != nil {
+		return AnswerReceipt{}, err
+	}
+	return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
 }
