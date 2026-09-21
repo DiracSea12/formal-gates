@@ -92,3 +92,59 @@ compose_unix_test.go（四族场景）。
 - K1–K4 与既有 harness 用例零改动；Python 侧零改动。
 
 **K5 待外部评审。**最终入口切换（§13.3，LangGraph→Go）在 K5 验收后另行与机主对齐。
+
+---
+
+# 【真实宿主验收 2026-09-21：机主授权实跑，绿链达成（本节为实跑记录）】
+
+## 授权与范围
+
+机主于 K5 汇报后明示授权（"授权"）。范围＝组合层真实宿主绿链：product-review 走真实
+DSH 绑定、其余 5 个 worker 阶段走真实 ZCode 绑定（一条链同时验证两宿主适配器实跑）；
+花费限额＝过程确认按允许项作答、返修最多允许一轮、restart 询问一律 abort、held 交互取
+第一选项；25 分钟上下文超时兜底。探针为 env 门控常驻测试
+`internal/harness/compose_live_test.go`（`FORMAL_GATES_LIVE_ACCEPTANCE=1` 才运行，发布门
+可直接复跑；无变量时零开销跳过）。真实工件目录持久化（失败现场可复查）。
+
+## 三次实跑（总花费 12 个真实原生 turn：DSH×3、ZCode×9）
+
+- **run 1（4 turn）**：技术审（ZCode）与产品审（DSH）成功推进；development/qa-design
+  （双 ZCode 并行波）落 restart 询问被限额策略 abort。现场被 TempDir 清除，仅留日志。
+- **run 2（2 turn，工件持久化后）**：技术审（ZCode）真实模型完美作答（accept/PASS）；
+  product-review（DSH）turn 正常（exit=0、有身份）但无 outcome → restart 询问 → abort。
+  **定因**：DSH worker 返回完全符合 schema 的答案（PASS、findings 空），但自发填了
+  `check_ids:["workspace-empty","no-changes-required"]`——组合层以空已知检查集调
+  ValidateWorker，任何 check id 都判 "unknown check" 拒绝。run 1 的失败同路径（推断：
+  同错误形态同询问类别；工件已失，如实标注为推断）。
+- **run 3（6 turn，简报补检查合同后）：绿链达成**——六个 worker 阶段各一次 turn 全部
+  accept/PASS（product-review=DSH，其余=ZCode），候选准入，approve 门放行，**终态
+  HARNESS_COMPLETE 断言通过**；期间一次**真实 held 交互**（interaction/requestPermission）
+  经组合层路由 surfaced 并由 NativeRespond 以 allow_once 作答（原生交互路由实跑验证）。
+  归档调用因探针把目的地写在 run 目录内被 retention 判定正确拒绝（"output must be
+  outside the run"）——**该拒绝本身即是 destination 判定在真实状态上的验证**；探针
+  目的地已改至 run 外（发布门复跑用）。归档 walk 的完整路径（settlement/成员准入/索引）
+  由确定性测试覆盖（TestComposeNormalChainGreenEndToEnd），未为它再烧真实调用。
+
+## 修复与发现
+
+1. **修复（简报检查合同）**：stageBrief/repairBrief 增加 `authorized_checks: []` 与
+   instructions（"本 run 无授权检查，check_ids 必须为空数组"）——worker 无法从结果
+   schema 单独得知空集，属合同告知缺口而非模型错误。子代理实施，主代理亲核 diff，
+   四族确定性场景 13/13 复跑绿。
+2. **发现（交评审裁量，未擅改语义）**：被 worker 契约拒绝的答案走"无回执错误→接回
+   咨询零值→restart 询问"路径——处置安全（用户决定、不盲重跑）但**问询措辞误导**
+   （会话失效类问题掩盖确定性契约拒绝；§8.2 UNKNOWN 行的前提"是否执行过无法证明"
+   并不成立：exit.json/answer.json 都在）。本轮以简报合同消除主因；语义修正（如
+   接回咨询区分"契约拒绝"与"结局未知"）留待评审定夺。
+
+## 实跑花费台账（如实）
+
+| run | turn 数 | DSH | ZCode | 结果 |
+|---|---|---|---|---|
+| 1 | 4 | 1 | 3 | 波 2 落 restart 询问，限额 abort |
+| 2 | 2 | 1 | 1 | 定因样本；restart 询问，限额 abort |
+| 3 | 6 | 1 | 5 | **绿链 HARNESS_COMPLETE**＋真实 held 交互＋归档 destination 判定 |
+| 合计 | **12** | 3 | 9 | — |
+
+本会话至此模型调用 0→12（全部属本次授权的实跑；DSH 会话有 usage_evidence 落盘，
+ZCode 走宿主计划计量）。
