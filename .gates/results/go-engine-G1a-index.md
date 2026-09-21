@@ -378,4 +378,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-21（第二十七轮，K4 四次返修：死 grant 特判删除，轻装）】**三次返修（`e8bfd40`）被四审驳回 1 P1（`/private/tmp/k4-rereview3/review.md`，探针 TestReview3FailedGenerationCanAskForFreshRevision 主代理亲复现成立——granted 分支稳定失败、pending 对照通过）：`staleGrants>0 && taskState!=taskFinished` 特判在上游修订＋新代执行失败时死锁（不修跑不完、没跑完不让申请新批准）；其余修复四审确认有效。四次返修＝**删除该特判整块**（含失效 grant 计数查询与 taskState 读取）：失效 granted 在任何任务状态下都是死历史——不挡新申请、不增额度、不授权，新申请直落既有额度判决；活性 grant 完成路径的不变量守卫与哨兵保留。三次返修"语义裁定"整体撤回（其"未完成"半边即死锁根源），终局规则更简：**失效 grant 一律死历史，GrantStale 仅存于活性完成路径不变量**。k4_rework_test.go 期望翻转＋新回归双分支（失败代修正输入全链路、c 零重跑、[a b b]）。亲验（**按改动面收窄提速**）：修复前 granted 分支亲复现 FAIL；修复后三份评审探针 2×race＋verbose 全 PASS 后删除；gofmt/vet/build＋交叉编译、runner 包 -count=1＋-race ok；未重跑全仓慢测试（改动面限于 runner，四审已全绿），模型调用 0。记录 `go-engine-K4.md` 四次返修节。**K4 四次返修待外部评审复核；K5 派发前仍须与机主对齐。**
 
+> **【2026-09-21（第二十八轮，K4 验收 PASS 收口，轻装）】**机主转达四审（`157fc10`）：**K4 代码评审与分项验收 PASS，无 P0/P1/P2**——死循环消除确认（新代失败可重新申请并完成修复、旧批准不挡路、无关分支不重跑），删除特判的取向获认可；补充验证含 28 项累计探针、连续两次获批会话替换（最新身份、不计业务返修轮数）、真实旧库迁移、335 Python、全仓 vet/build。唯一遗留 P3（注释过时，非阻塞）随后关闭（`33f7707`，纯注释零行为，主代理亲核）。**K4 终态基线＝`33f7707`**。K5 已由机主明示派发：组合层 internal/harness 导入内核（内核零改动）、harness-v1 阶段图、workerOutcome FAIL 驱动返修环/CONTINUE 不占轮次的实质接入、正常/异常/取消/归档四族确定性场景。记录 `go-engine-K4.md` 验收节。**K5 实施中；待完成后送外审。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

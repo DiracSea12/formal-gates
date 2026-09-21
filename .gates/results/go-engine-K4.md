@@ -328,3 +328,23 @@ TestReview2PendingRestartMustSurviveMissingCallback、TestReview2RestartQuestion
 
 - 同三次返修节：requestActiveSQL 单一活性定义、Takeover/RepairPolicy/Restart 窄接缝不充当原生
   实跑、死历史行永久保留无清理路径。
+
+---
+
+# 【验收 2026-09-21：四审 PASS——K4 收口】
+
+- 机主转达四审（对象 `157fc10`，实现 `053aaaa`）：**PASS，代码评审与分项验收通过，无
+  P0/P1/P2**。上轮死循环消除确认——新代失败后可重新申请批准并完成修复、旧批准不挡路、
+  无关分支不重跑；"删除特判而非继续打补丁"的取向被明确认可。四审补充验证全绿：runner
+  全集＋race、28 项累计独立探针、**连续两次获批会话替换**（每次新待答问题、漏配
+  Takeover 保持等待、批准后才换 invocation、后续用最新身份、3 个 invocation ID 互异、
+  独立兄弟仅执行 1 次、会话替换不消费业务返修轮数 round=0/allowance=1）、真实旧库
+  v3→v4 迁移、335 项 Python、全仓 vet/build、1000 独立任务约 0.488s。全文
+  `/private/tmp/k4-rereview4/review.md`。
+- 唯一遗留 P3（非阻塞，评审明确"不必单独返修一轮"）：revision.go:301
+  ErrRevisionGrantStale 注释仍描述已撤销的旧限制。已随后关闭（`33f7707`）：注释同步为
+  现状（仅活性 grant 完成路径的不变量守卫；失效 grant 任何状态下都是死历史），纯注释
+  零行为，子代理实施、主代理亲核 diff，gofmt/build/runner 包亲验通过。
+- **K4 终态基线＝`33f7707`**。K5 已由机主明示派发（2026-09-21）：组合层落
+  internal/harness 导入内核（内核零改动约束）、harness-v1 阶段图真实走内核路径、
+  workerOutcome FAIL/CONTINUE 实质接入、正常/异常/取消/归档四族场景确定性验证。
