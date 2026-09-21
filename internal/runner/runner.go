@@ -135,13 +135,13 @@ type Runner struct {
 	// while its original supervisor lives (a fact persisted to
 	// call_observations), or return the zero outcome — the dead-session
 	// fact — which asks for a replacement through a restart request
-	// instead of authorizing one.  nil — the default — keeps K1's
-	// recovery byte for byte for runs without a persisted observation:
-	// every pending invocation is superseded and the task re-registered.
-	// A run whose call WAS observed reports ErrTakeoverRequired to a
-	// nil-consult owner rather than retrying blind.  K5 wires the
-	// accepted supervisor/adapter components here; the kernel defines
-	// only this narrow seam (takeover.go).
+	// instead of authorizing one.  nil — the default — applies K1's
+	// supersede per call: an invocation carrying a durable constraint
+	// (an ACTIVE restart request about it, or a persisted observation)
+	// is kept and the run reports the wait; every unconstrained intent
+	// is superseded and its task re-registered exactly as in K1.  K5
+	// wires the accepted supervisor/adapter components here; the kernel
+	// defines only this narrow seam (takeover.go).
 	Takeover Takeover
 	// Restart is the question asked when a takeover consultation
 	// reports a dead or invalidated session (the zero TakeoverOutcome):
@@ -425,11 +425,13 @@ func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 //     takeover.go) — a granted one voids its dead call and frees the
 //     task for this Run's replacement, a refused one voids it and
 //     leaves the task durably out of the ready set;
-//  2. with Takeover nil — every K1–K4 default — the K1 blind supersede
-//     runs verbatim, unless a persisted call_observations row marks a
-//     pending invocation as observed in flight by a previous owner:
-//     then nothing is superseded and nothing re-runs, and settle
-//     reports ErrTakeoverRequired (F4);
+//  2. with Takeover nil — every K1–K4 default — the K1 supersede runs
+//     per call, not as one blind batch: a pending invocation an ACTIVE
+//     restart request is about, or a persisted call_observations row
+//     marks in flight by a previous owner, is kept untouched with its
+//     task running (settle reports ErrWaitingDecision /
+//     ErrTakeoverRequired), while every unconstrained intent is
+//     superseded and its task reset exactly as in K1;
 //  3. with a consult, each remaining pending invocation is judged
 //     outside any transaction (takeoverPending, takeover.go): Adopt,
 //     Observe (the fact persisted), or the dead-session fact that
@@ -444,31 +446,30 @@ func (r *Runner) recoverPending(ctx context.Context) error {
 	if r.Takeover != nil {
 		return r.takeoverPending(ctx)
 	}
-	observed, err := r.observedPendingCount(ctx)
-	if err != nil {
-		return err
-	}
-	if observed > 0 {
-		// A previous owner vouched for this call; a nil consult must
-		// not blind-supersede it.  Leave everything as it is — settle
-		// reports ErrTakeoverRequired.
-		return nil
-	}
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() // no-op after Commit
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE invocations SET state=? WHERE run_id=? AND state=?",
-		invSuperseded, r.store.runID, invPending); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE invocations SET state=?
+		 WHERE run_id=? AND state=?
+		   AND invocation_id NOT IN (
+		       SELECT r.invocation_id FROM user_requests r
+		        WHERE r.run_id=? AND r.invocation_id IS NOT NULL AND `+requestActiveSQL+`)
+		   AND invocation_id NOT IN (SELECT invocation_id FROM call_observations)`,
+		invSuperseded, r.store.runID, invPending, r.store.runID); err != nil {
 		return err
 	}
 	// A task stuck in running belongs to an unsettled intent; back to
-	// waiting_deps so readiness is computed fresh from dependencies.
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE tasks SET state=? WHERE run_id=? AND state=?",
-		taskWaitingDeps, r.store.runID, taskRunning); err != nil {
+	// waiting_deps so readiness is computed fresh — unless one of its
+	// invocations was kept above (still pending under its constraint).
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tasks SET state=?
+		 WHERE run_id=? AND state=?
+		   AND task_id NOT IN (
+		       SELECT task_id FROM invocations WHERE run_id=? AND state=?)`,
+		taskWaitingDeps, r.store.runID, taskRunning, r.store.runID, invPending); err != nil {
 		return err
 	}
 	return tx.Commit()

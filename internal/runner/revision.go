@@ -228,13 +228,11 @@ func reviseOneTask(ctx context.Context, tx *sql.Tx, runID, targetID, taskID stri
 	return err
 }
 
-// Request kinds and states of the user_requests table (store.go holds the
-// authoritative lifecycle; Answer's doc in decisions.go is the other
-// complete statement).  A request is born pending (waiting for the user)
-// or executed (direct approval below the allowance) and settles at most
-// once — granted by an allowing answer, then executed by the completing
-// transition, or refused by a declining one.  Rows are never deleted:
-// every count the policy needs is derived from them.
+// Request kinds and states of the user_requests table — the CHECK
+// values of its DDL.  The table's DDL comment (store.go) is the single
+// authoritative statement of the request lifecycle and its binding
+// rule; requestActiveSQL below is the one composed form of that rule
+// every reader shares.
 const (
 	kindRevision = "revision"
 	kindRestart  = "restart"
@@ -247,6 +245,25 @@ const (
 	reqExecuted = "executed"
 	reqRefused  = "refused"
 )
+
+// requestActiveSQL is THE single definition of an active request — the
+// one composed form of the user_requests binding rule (the table's DDL
+// comment in store.go is the authoritative statement): a pending or
+// granted row whose task still sits at the row's target_generation and,
+// while a restart is unresolved, whose invocation is still pending.
+// Every reader that must treat dead history as dead composes this
+// fragment against the row alias r — RequestRevision's open-inquiry and
+// completion checks and its grants count, OpenRequests,
+// PendingDecisions, requestStatus, Answer's terminal exemption, and
+// recovery's nil-consult supersede exclusion (runner.go) — no site
+// hand-writes the rule.  A row that fails it authorizes nothing,
+// blocks nothing and is listed nowhere.
+const requestActiveSQL = `r.state IN ('` + reqPending + `','` + reqGranted + `')
+	AND EXISTS (SELECT 1 FROM tasks t
+	            WHERE t.run_id = r.run_id AND t.task_id = r.task_id
+	              AND t.generation = r.target_generation)
+	AND (r.kind <> '` + kindRestart + `' OR EXISTS (SELECT 1 FROM invocations i
+	            WHERE i.invocation_id = r.invocation_id AND i.state = '` + invPending + `'))`
 
 // Event kinds for the request transitions that carry one; each is
 // appended in the same transaction as the transition it describes (§7
@@ -281,14 +298,18 @@ var ErrRevisionPending = errors.New("runner: task already has an unresolved revi
 // (a grant), never a recovery argument.
 var ErrAllowanceDrift = errors.New("runner: repair allowance drifts: increases go through the user, not the recovery argument")
 
-// ErrRevisionGrantStale: the completion call found the granted revision's
-// target_generation behind the task's current one — an upstream revision
-// moved the scope, so the old authorization must not act on the new one.
-// The request stays granted for the domain to dispose of.
+// ErrRevisionGrantStale: the completion call found the granted revision
+// stale — its target_generation behind the task's current one while
+// that current generation is still unexecuted (an upstream revision
+// moved the scope), so the old authorization must not act on the new
+// one.  The request stays granted for the domain to dispose of.  Once
+// the task's current generation has executed, the dead grant is plain
+// history: it no longer refuses, counts or authorizes anything, and the
+// task may ask anew under its real allowance.
 var ErrRevisionGrantStale = errors.New("runner: the granted revision no longer matches the task's current generation; the old authorization must not act on the new scope")
 
 // ErrRevisionGranted: the drained loop found a revision the user allowed
-// but nobody executed yet (F3).  The grant executes nothing by itself —
+// but nobody executed yet.  The grant executes nothing by itself —
 // input bytes are §7-external — so the caller completes it by re-sending
 // the revised input through RequestRevision, and only then may the run
 // reach a terminal state.  Store.OpenRequests surfaces the request's
@@ -308,41 +329,42 @@ var ErrRevisionGranted = errors.New("runner: a granted revision awaits its compl
 type RepairPolicy func(round, allowance int) bool
 
 // RequestRevision is the executable control chain over ReviseTask: one
-// business revision of taskID, gated by the repair allowance.  exhaustion
-// is the question asked when the allowance is reached; policy is the
-// domain's ask-or-approve rule; initialAllowance binds on first use and
-// must be re-sent unchanged on every later call (ErrAllowanceDrift
-// otherwise — increases arrive as user grants, never as a larger
-// argument).
-//
-// State machine (every count derived from user_requests rows; the table
-// doc in store.go is the authoritative lifecycle):
+// business revision of taskID, gated by the repair allowance.
+// exhaustion is the question asked when the allowance is reached;
+// policy is the domain's ask-or-approve rule; initialAllowance binds on
+// first use and must be re-sent unchanged on every later call
+// (ErrAllowanceDrift otherwise — increases arrive as user grants,
+// never as a larger argument).  The request rows and their whole
+// lifecycle are the user_requests table's (store.go — the single
+// authoritative statement); what this call itself does:
 //
 //   - the task must exist in this run — a named refusal before ANY
 //     branch writes, so a mistyped id leaves zero residue;
-//   - an existing pending request is a named refusal, ErrRevisionPending
-//     (one open inquiry per task);
-//   - an existing granted request is COMPLETED by this call, after
-//     re-verifying its binding (the task must still sit at the
-//     target_generation the grant was given for — ErrRevisionGrantStale
-//     otherwise, the request staying granted): the revision (reviseScope
-//     — ReviseTask's transaction body) and the request's move to
-//     executed land in one transaction.  The new input travels in this
-//     call because input bytes are never persisted (§7): the grant
-//     itself executes nothing;
-//   - otherwise policy(used, bound+grants) decides — used is the count
-//     of already-executed revision rounds, 0-based, so initial=1 permits
-//     the first round and asks on the second (the accepted boundary).
-//     false approves directly — one transaction writes the request as
-//     executed (no question was asked, no answer exists) and executes
-//     the revision.  true asks — one transaction writes the request as
-//     pending, bound to the task's CURRENT generation (an upstream
-//     revision that moves the task invalidates it by itself:
-//     ErrDecisionStale), plus a request_created event, and returns
-//     ErrWaitingDecision.  Store.Answer settles it in the same
-//     transaction that consumes the request: the allowing choice grants
-//     it (this call then completes it), any other offered choice refuses
-//     it and the task is untouched.
+//   - a task holding an ACTIVE pending request is refused with
+//     ErrRevisionPending (one open inquiry per task; requestActiveSQL
+//     decides activity, so a dead request never holds the entry);
+//   - a task holding an ACTIVE granted request treats this call as its
+//     completion: the revision (ReviseTask's transaction body) and the
+//     request's move to executed land in one transaction, the new input
+//     travelling in this call because input bytes are never persisted
+//     (§7) — the grant executes nothing by itself.  A granted request
+//     whose binding an upstream revision broke is refused with
+//     ErrRevisionGrantStale while the task's current generation is
+//     still unexecuted: that call is the completion the old grant was
+//     waiting for, and the old authorization must not act on the moved
+//     scope.  Once the current generation has run, the dead grant is
+//     history and the allowance below decides anew;
+//   - otherwise policy(used, bound+grants) decides.  used is the count
+//     of executed revision rounds, 0-based, so initial=1 permits the
+//     first round and asks on the second (the accepted boundary);
+//     grants counts the answer-carrying requests that may still act —
+//     executed ones, or granted ones with a whole binding — so a dead
+//     grant raises nothing.  false approves directly — one transaction
+//     writes the request as executed (no question was asked) and
+//     executes the revision.  true asks — one transaction writes the
+//     request as pending, bound to the task's CURRENT generation, plus
+//     a request_created event, and returns ErrWaitingDecision;
+//     Store.Answer settles it.
 //
 // RequestRevision joins the same advance guard as Run and ReviseTask.
 func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpec, exhaustion *Confirmation, policy RepairPolicy, initialAllowance int) error {
@@ -358,12 +380,15 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 	if err := validateConfirmationBody(taskID, exhaustion); err != nil {
 		return err
 	}
-	// F7: the target must exist before ANY branch's write — a mistyped
-	// id must not persist an unanswerable question.
+	// The target must exist before ANY branch's write — a mistyped id
+	// must not persist an unanswerable question.  The state rides the
+	// same read: the stale-grant refusal below needs to know whether
+	// the task's current generation has executed.
 	var generation int64
+	var taskState string
 	err := s.db.QueryRowContext(ctx,
-		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
-		s.runID, taskID).Scan(&generation)
+		"SELECT generation, state FROM tasks WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&generation, &taskState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("runner: no task %q in run %q", taskID, s.runID)
 	}
@@ -375,8 +400,8 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 		return err
 	}
 	defer tx.Rollback() // no-op after Commit
-	// F1: the initial allowance binds on first use; every later call
-	// must re-send the bound value.  All revision rows carry it, so one
+	// The initial allowance binds on first use; every later call must
+	// re-send the bound value.  All revision rows carry it, so one
 	// aggregate read both checks the drift and yields the bound value.
 	var rows int
 	var bound sql.NullInt64
@@ -395,27 +420,32 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 	} else {
 		bound.Int64, bound.Valid = int64(initialAllowance), true
 	}
+	// One open inquiry per task, and the completion call for a granted
+	// one — both see ACTIVE requests only (requestActiveSQL): a request
+	// whose binding an upstream revision broke is dead history and must
+	// not hold the task's repair entry.
 	var pendingReqs, grantedReqs int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(CASE WHEN state=? THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN state=? THEN 1 ELSE 0 END), 0)
-		  FROM user_requests
-		 WHERE run_id=? AND task_id=? AND kind=?`,
+		SELECT COALESCE(SUM(CASE WHEN r.state=? THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN r.state=? THEN 1 ELSE 0 END), 0)
+		  FROM user_requests r
+		 WHERE r.run_id=? AND r.task_id=? AND r.kind=? AND `+requestActiveSQL,
 		reqPending, reqGranted, s.runID, taskID, kindRevision).Scan(&pendingReqs, &grantedReqs); err != nil {
 		return err
 	}
-	switch {
-	case pendingReqs > 0:
+	if pendingReqs > 0 {
 		return fmt.Errorf("%w: task %q in run %q", ErrRevisionPending, taskID, s.runID)
-	case grantedReqs > 0:
+	}
+	if grantedReqs > 0 {
 		// The completion call: the user already allowed this revision —
-		// but only for the scope it was granted for.
+		// and only for the scope it was granted for (the selection is
+		// activity-filtered, so the guard is an invariant, not a path).
 		var grantedID string
 		var target int64
 		if err := tx.QueryRowContext(ctx, `
-			SELECT request_id, target_generation
-			  FROM user_requests
-			 WHERE run_id=? AND task_id=? AND kind=? AND state=?
+			SELECT r.request_id, r.target_generation
+			  FROM user_requests r
+			 WHERE r.run_id=? AND r.task_id=? AND r.kind=? AND r.state=? AND `+requestActiveSQL+`
 			 LIMIT 1`,
 			s.runID, taskID, kindRevision, reqGranted).Scan(&grantedID, &target); err != nil {
 			return err
@@ -434,15 +464,35 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 		}
 		return tx.Commit()
 	}
+	// A granted request whose binding broke, with the task's current
+	// generation still unexecuted: this call is the completion that old
+	// grant was waiting for, and the moved scope refuses it by name.
+	// Once the current generation has run, the dead grant is history —
+	// it authorizes nothing here and raises no allowance below.
+	var staleGrants int
+	var staleTarget sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*), MIN(r.target_generation)
+		  FROM user_requests r
+		 WHERE r.run_id=? AND r.task_id=? AND r.kind=? AND r.state=? AND NOT (`+requestActiveSQL+`)`,
+		s.runID, taskID, kindRevision, reqGranted).Scan(&staleGrants, &staleTarget); err != nil {
+		return err
+	}
+	if staleGrants > 0 && taskState != taskFinished {
+		return fmt.Errorf("%w: task %q in run %q granted at generation %d, now %d; the scope must finish its current generation before a new one is asked",
+			ErrRevisionGrantStale, taskID, s.runID, staleTarget.Int64, generation)
+	}
 	// The allowance verdict: used is 0-based executed rounds, grants are
-	// the user's answered increases, allowance is the bound initial.
+	// the user's answered increases that may still act (a dead grant
+	// never counted), allowance is the bound initial.
 	var used, grants int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(CASE WHEN state=? THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN answer IS NOT NULL AND state IN (?,?) THEN 1 ELSE 0 END), 0)
-		  FROM user_requests
-		 WHERE run_id=? AND task_id=? AND kind=?`,
-		reqExecuted, reqGranted, reqExecuted, s.runID, taskID, kindRevision).Scan(&used, &grants); err != nil {
+		SELECT COALESCE(SUM(CASE WHEN r.state=? THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN r.answer IS NOT NULL
+		                          AND (r.state=? OR `+requestActiveSQL+`) THEN 1 ELSE 0 END), 0)
+		  FROM user_requests r
+		 WHERE r.run_id=? AND r.task_id=? AND r.kind=?`,
+		reqExecuted, reqExecuted, s.runID, taskID, kindRevision).Scan(&used, &grants); err != nil {
 		return err
 	}
 	if !policy(used, int(bound.Int64)+grants) {
@@ -546,18 +596,21 @@ type RequestView struct {
 	State      string
 }
 
-// OpenRequests lists this run's recoverable requests — pending and
-// granted, ordered by creation then id for a stable display — so an
-// owner that reopened the directory can discover what the previous one
-// was waiting for (or what the user approved but nobody executed yet,
-// F3) and act on it through Answer and RequestRevision.
+// OpenRequests lists this run's ACTIVE requests — pending and granted
+// whose binding is still whole (requestActiveSQL) — ordered by creation
+// then id for a stable display, so an owner that reopened the directory
+// can discover what the previous one was waiting for (or what the user
+// approved but nobody executed yet) and act on it through Answer and
+// RequestRevision.  A request an upstream revision invalidated is dead
+// history: it is never recoverable work, exactly as it is never
+// answerable.
 func (s *Store) OpenRequests(ctx context.Context) ([]RequestView, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT request_id, kind, task_id, target_generation, state
-		  FROM user_requests
-		 WHERE run_id=? AND state IN (?,?)
-		 ORDER BY created_at, request_id`,
-		s.runID, reqPending, reqGranted)
+		SELECT r.request_id, r.kind, r.task_id, r.target_generation, r.state
+		  FROM user_requests r
+		 WHERE r.run_id=? AND `+requestActiveSQL+`
+		 ORDER BY r.created_at, r.request_id`,
+		s.runID)
 	if err != nil {
 		return nil, err
 	}
@@ -576,12 +629,12 @@ func (s *Store) OpenRequests(ctx context.Context) ([]RequestView, error) {
 // requestStatus is the request-side companion of decisionStatus: the
 // drained loop's request facts, in settle's order —
 //
-//   - waiting: a pending request with a valid binding (task at its
-//     target generation; an unresolved restart additionally about a
-//     still-pending invocation) holds the run at ErrWaitingDecision;
-//   - grantedRevision: a granted-but-unexecuted revision with a valid
-//     binding — approved work nobody completed yet (ErrRevisionGranted);
-//     one whose binding an upstream revision broke is dead history;
+//   - waiting: an ACTIVE pending request (requestActiveSQL — binding
+//     whole, an unresolved restart about a still-pending invocation)
+//     holds the run at ErrWaitingDecision;
+//   - grantedRevision: an ACTIVE granted-but-unexecuted revision —
+//     approved work nobody completed yet (ErrRevisionGranted); one
+//     whose binding an upstream revision broke is dead history;
 //   - aborted: a refused restart bound to its task's current
 //     generation — the user chose abort, and the run must not claim
 //     success (ErrCallAborted).
@@ -590,23 +643,15 @@ func (s *Store) requestStatus(ctx context.Context) (waiting, grantedRevision, ab
 	err = s.db.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM user_requests r
-			  WHERE r.run_id=? AND r.state=?
-			    AND EXISTS (SELECT 1 FROM tasks t
-			                WHERE t.run_id=r.run_id AND t.task_id=r.task_id
-			                  AND t.generation=r.target_generation)
-			    AND (r.kind<>? OR EXISTS (SELECT 1 FROM invocations i
-			                WHERE i.invocation_id=r.invocation_id AND i.state=?))),
+			  WHERE r.run_id=? AND r.state=? AND `+requestActiveSQL+`),
 			(SELECT COUNT(*) FROM user_requests r
-			  WHERE r.run_id=? AND r.kind=? AND r.state=?
-			    AND EXISTS (SELECT 1 FROM tasks t
-			                WHERE t.run_id=r.run_id AND t.task_id=r.task_id
-			                  AND t.generation=r.target_generation)),
+			  WHERE r.run_id=? AND r.kind=? AND r.state=? AND `+requestActiveSQL+`),
 			(SELECT COUNT(*) FROM user_requests r
 			  WHERE r.run_id=? AND r.kind=? AND r.state=?
 			    AND EXISTS (SELECT 1 FROM tasks t
 			                WHERE t.run_id=r.run_id AND t.task_id=r.task_id
 			                  AND t.generation=r.target_generation))`,
-		s.runID, reqPending, kindRestart, invPending,
+		s.runID, reqPending,
 		s.runID, kindRevision, reqGranted,
 		s.runID, kindRestart, reqRefused).
 		Scan(&pending, &granted, &refused)

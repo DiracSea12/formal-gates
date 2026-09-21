@@ -345,9 +345,10 @@ const decisionsTable = `CREATE TABLE decisions (
 )`
 
 // userRequestsTable is the reshaped v4 delta: one row per user request,
-// both kinds sharing ONE lifecycle (this comment and Store.Answer's doc
-// in decisions.go are the two complete statements of it; everything else
-// points here):
+// both kinds sharing ONE lifecycle — this comment is its single
+// complete and authoritative statement; every other doc block that
+// touches requests (RequestRevision, Answer, the takeover seams)
+// describes only its own step and points here:
 //
 //   - a request is born pending — a revision ask when the repair
 //     allowance is reached (Store.RequestRevision), a restart ask when a
@@ -369,8 +370,12 @@ const decisionsTable = `CREATE TABLE decisions (
 //     synthetic slot), plus — while a restart is unresolved — its
 //     invocation_id still pending.  An upstream revision that moves the
 //     task into a new generation invalidates the request by itself; no
-//     closure ever voids requests explicitly.  An invalid binding is
-//     stale for every purpose: answering it, listing it, acting on it.
+//     closure ever voids requests explicitly.  A pending or granted row
+//     with a whole binding is ACTIVE — the one rule every reader
+//     composes through requestActiveSQL (revision.go): an invalid
+//     binding is stale for every purpose, answering it, listing it,
+//     counting it or acting on it, so dead history never blocks,
+//     authorizes or outlives its scope.
 //
 // target_generation/invocation_id/initial are the persisted identity the
 // recovery argument cannot be allowed to drift from: initial binds the
@@ -407,22 +412,14 @@ const userRequestsTable = `CREATE TABLE user_requests (
 // (INSERT OR IGNORE) and never deleted: it outlives the invocation's
 // own settlement, and it is read only while that invocation is still
 // pending — an owner without a Takeover consult must not blindly
-// supersede a call a previous owner observed in flight (F4), and the
-// run reports ErrTakeoverRequired instead of retrying it.
+// supersede a call a previous owner observed in flight, and the run
+// reports ErrTakeoverRequired instead of retrying it.
 const callObservationsTable = `CREATE TABLE call_observations (
 	invocation_id TEXT PRIMARY KEY REFERENCES invocations (invocation_id),
 	run_id        TEXT NOT NULL,
 	task_id       TEXT NOT NULL,
 	observed_at   TEXT NOT NULL
 )`
-
-// revisionRequestsView keeps the not-accepted v4 table's NAME readable:
-// revision requests are now the kind='revision' rows of user_requests,
-// and external readers of the development-era name (the K4 re-review
-// probe reads `FROM revision_requests WHERE state=...`) keep working
-// against the same rows.  Read-only by construction.
-const revisionRequestsView = `CREATE VIEW revision_requests AS
-	SELECT * FROM user_requests WHERE kind='revision'`
 
 // migrate applies forward-only schema versioning via PRAGMA user_version:
 // 0 means a fresh file (create the baseline plus every delta and stamp it),
@@ -463,9 +460,6 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 		if _, err := tx.Exec(callObservationsTable); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(revisionRequestsView); err != nil {
 			return err
 		}
 		// user_version is a transactional header write: a crash

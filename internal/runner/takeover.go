@@ -4,16 +4,17 @@ package runner
 // opens a run whose previous owner died with a call in flight, whether
 // that call is dead is a domain fact the kernel cannot derive from the
 // durable rows alone.  Runner.Takeover is the single consultation point;
-// nil — the default — keeps K1's recovery semantics byte for byte for
-// runs that never recorded an observation.
+// nil — the default — applies K1's supersede per call, keeping every
+// invocation that carries a durable constraint (see recoverPending).
 //
-// The K4 rework splits the consultation's facts from their
-// authorization: an Observe verdict is PERSISTED (call_observations,
-// store.go) so the next owner cannot lose it by omitting the optional
-// consult (F4), and the dead-session verdict (the zero outcome) no
-// longer authorizes replacement by itself — it asks, through a restart
-// request, and only an allowing answer replaces the execution identity
-// (F5).
+// The consultation's facts are split from their authorization: an
+// Observe verdict is PERSISTED (call_observations, store.go) so the
+// next owner cannot lose it by omitting the optional consult, and the
+// dead-session verdict (the zero outcome) does not authorize
+// replacement by itself — it asks, through a restart request, and only
+// an allowing answer replaces the execution identity.  The requests
+// live in user_requests under the lifecycle documented on that table
+// (store.go).
 
 import (
 	"context"
@@ -31,8 +32,9 @@ var ErrCallObserved = errors.New("runner: original invocation still in flight an
 // ErrTakeoverRequired: a previous owner observed this call in flight
 // (the durable call_observations row) and this owner configured no
 // Takeover consult — blindly superseding a call another owner vouched
-// for is exactly the unsafe retry F4 closes, so nothing is superseded,
-// nothing re-runs, and the run reports this instead (settle ⑥).
+// for is exactly the unsafe retry this closes, so nothing is
+// superseded, nothing re-runs, and the run reports this instead
+// (settle).
 var ErrTakeoverRequired = errors.New("runner: a previous owner observed this call in flight and this owner has no Takeover consult; refusing to retry it blind")
 
 // ErrCallAborted: a restart request was answered with a choice other

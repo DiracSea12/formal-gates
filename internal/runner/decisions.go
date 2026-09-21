@@ -41,9 +41,10 @@ var (
 	// ErrRunFinished: the run reached its terminal state and accepts no
 	// answer at all, not even an idempotent replay of an already
 	// accepted one — the same precedence run_graph gives RUN_TERMINAL.
-	// A run holding a pending or granted user request is not terminal:
-	// the open question (or the approved-but-unexecuted revision) is
-	// unfinished business.  Contrast ErrDecisionStale (the request
+	// A run holding an ACTIVE user request is not terminal: the open
+	// question (or the approved-but-unexecuted revision) is unfinished
+	// business, while a request whose binding broke is history that
+	// keeps nothing answerable.  Contrast ErrDecisionStale (the request
 	// itself is invalid) and ErrDecisionConflict (the request exists
 	// but was answered otherwise).
 	ErrRunFinished = errors.New("runner: finished run does not accept a decision answer")
@@ -263,10 +264,9 @@ func (s *Store) decisionStatus(ctx context.Context) (waiting, refused bool, err 
 
 // PendingDecisions lists this run's unanswered questions, ordered by task
 // id for a stable display: current-generation decision gates plus
-// valid-binding pending user requests (Store.RequestRevision's asks and
-// the restart asks recovery creates).  The same binding rule as Answer
-// applies on both sides: a revision invalidated an old question, so it
-// is history an answer can no longer reach — answering it is
+// ACTIVE pending user requests (requestActiveSQL, revision.go — the one
+// composed binding rule).  A revision invalidated an old question, so
+// it is history an answer can no longer reach — answering it is
 // ErrDecisionStale and it must not be presented as askable.  Answered
 // rows are history, not open questions, and never appear.
 func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
@@ -281,14 +281,9 @@ func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 			UNION ALL
 			SELECT r.request_id, r.task_id, r.revision, r.body, r.options_json
 			  FROM user_requests r
-			 WHERE r.run_id=? AND r.state=?
-			   AND EXISTS (SELECT 1 FROM tasks t
-			               WHERE t.run_id=r.run_id AND t.task_id=r.task_id
-			                 AND t.generation=r.target_generation)
-			   AND (r.kind<>'restart' OR EXISTS (SELECT 1 FROM invocations i
-			               WHERE i.invocation_id=r.invocation_id AND i.state=?))
+			 WHERE r.run_id=? AND r.state=? AND `+requestActiveSQL+`
 		) ORDER BY task_id`,
-		s.runID, decisionPending, s.runID, reqPending, invPending)
+		s.runID, decisionPending, s.runID, reqPending)
 	if err != nil {
 		return nil, err
 	}
@@ -311,14 +306,14 @@ func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 // Answer settles one question with a user's choice — a decision gate or
 // a user request, one set of §6.1 rules — inside a single short
 // transaction and in a fixed order.  The user_requests lifecycle is
-// documented in full on the table (store.go); this doc and that one are
-// the two complete statements.
+// documented in full on the table (store.go — the single authoritative
+// statement); the steps below cover only what Answer itself does.
 //
-//  1. a terminal run (all its tasks finished AND no pending or granted
-//     user request — an open question, or an approved-but-unexecuted
-//     revision, is unfinished business) refuses everything, even the
-//     idempotent replay of an already accepted answer — mirroring the
-//     precedence run_graph gives RUN_TERMINAL;
+//  1. a terminal run (all its tasks finished AND no ACTIVE user
+//     request — an open question, or an approved-but-unexecuted
+//     revision, is unfinished business; a dead one is not) refuses
+//     everything, even the idempotent replay of an already accepted
+//     answer — mirroring the precedence run_graph gives RUN_TERMINAL;
 //  2. the id is looked up in decisions first, then user_requests.  An id
 //     matching no row of THIS run is stale (an old id, another run's id,
 //     or a request that never existed); no "there is only one open
@@ -353,10 +348,12 @@ func (s *Store) Answer(ctx context.Context, id, choice string) (AnswerReceipt, e
 	defer tx.Rollback() // no-op after Commit
 	// ① Terminal runs answer nothing, and are checked before anything
 	// about the request: "finished" is a fact about the run, not the
-	// request, so it outranks even the idempotent replay below.  A
-	// pending or granted user request keeps the run answerable — the
-	// open question, and the approved-but-unexecuted revision behind a
-	// granted one, are themselves unfinished business.
+	// request, so it outranks even the idempotent replay below.  A run
+	// holding an ACTIVE user request (requestActiveSQL, revision.go) is
+	// not terminal — the open question, and the approved-but-unexecuted
+	// revision behind a granted one, are themselves unfinished business;
+	// a request whose binding broke is dead history and keeps nothing
+	// answerable.
 	var unfinished int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM tasks WHERE run_id=? AND state<>?",
@@ -366,8 +363,8 @@ func (s *Store) Answer(ctx context.Context, id, choice string) (AnswerReceipt, e
 	if unfinished == 0 {
 		var open int
 		if err := tx.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM user_requests WHERE run_id=? AND state IN (?,?)",
-			s.runID, reqPending, reqGranted).Scan(&open); err != nil {
+			"SELECT COUNT(*) FROM user_requests r WHERE r.run_id=? AND "+requestActiveSQL,
+			s.runID).Scan(&open); err != nil {
 			return AnswerReceipt{}, err
 		}
 		if open == 0 {
@@ -481,10 +478,10 @@ func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string
 	if err != nil {
 		return AnswerReceipt{}, err
 	}
-	// ② Binding validity (user_requests DDL, store.go): the task's real
+	// ② Binding validity (the user_requests DDL, store.go): the task's real
 	// generation must still match, and an unresolved restart must still
 	// be about a pending invocation.  An upstream revision invalidates
-	// the request by itself — no state-based exemption (F2/F8).
+	// the request by itself — no state-based exemption.
 	var current int64
 	err = tx.QueryRowContext(ctx,
 		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
