@@ -362,4 +362,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-21（第十九轮，K2 评审返修，轻装）】**第十八轮收口（`029f2b7`）被外部评审驳回 2 P1＋1 P2（`/private/tmp/k2-review/review.md`，三项均主代理以探针亲复现）：F1＝确认要求由本次可选字段控制，恢复漏传 Confirm 即绕门执行（含已有 pending 请求路径）；F2＝所有合法答案都放行，reject 与 approve 无执行区别；F3＝空选项固化成不可答问题。返修：**门改在 CreateRun 事务内物化**（带 Confirm 的 spec 落 pending 行＋created 事件；Run 门检查改无条件纯读，`sp.Confirm` 完全不读——"创建后未跑即退出"天然覆盖）；**`Confirmation.Allow` 类型化拒绝语义**（授权选项；answered 且 answer≠allow → 新哨兵 `ErrDecisionRefused`，零执行、跨重开稳定复现，恢复读同一持久答案；decisions 加 `allow NOT NULL` 列）；**CreateRun 前置校验**拒绝空 Options/空 Allow/Allow∉Options（零残留可重试）。schema：v3 未获验收，**原地修订 v3 增量**不升 v4（基线仍 v2）。新增 F1 双路径/F2 拒绝跨重开＋子进程"refused"场景（退出码 93）/F3 三变体测试。亲验：亲读四文件 diff、gofmt/vet/build＋交叉编译、runner 包＋race ok、全仓 -count=1 全 ok、**评审探针改造亲验**（F1/F2 补必填 Allow、断言原样，三场景全 PASS 后删除）＋主代理两条补充检查（门建库即持久、拒绝重放不可翻案），模型调用 0。评审同时确认 K1 收尾三项复验通过。记录 `go-engine-K2.md` 返修节。**K2 返修待外部评审复核；下一单元 K3。**
 
+> **【2026-09-21（第二十轮，K2 返修 PASS＋P3 注释精简，轻装）】**机主裁定 K2 返修（`b46f4f7`）复核 **PASS**（P3 建议保留不阻塞），并指示处理后进入下一单元。P3＝主循环门检查调用点等处注释重复铺陈：子代理纯注释精简（调用点 14 行→2 行，权威契约保留在类型/函数说明，验收史归阶段记录，净 −29 行），主代理亲验零行为（diff 过滤注释/空行后无 +/- 行）＋全套绿，提交 `d8e3a36`。**K2 收口；下一单元 K3（并行、汇合和成功结果保留）。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。
