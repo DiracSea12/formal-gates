@@ -298,14 +298,11 @@ var ErrRevisionPending = errors.New("runner: task already has an unresolved revi
 // (a grant), never a recovery argument.
 var ErrAllowanceDrift = errors.New("runner: repair allowance drifts: increases go through the user, not the recovery argument")
 
-// ErrRevisionGrantStale: the completion call found the granted revision
-// stale — its target_generation behind the task's current one while
-// that current generation is still unexecuted (an upstream revision
-// moved the scope), so the old authorization must not act on the new
-// one.  The request stays granted for the domain to dispose of.  Once
-// the task's current generation has executed, the dead grant is plain
-// history: it no longer refuses, counts or authorizes anything, and the
-// task may ask anew under its real allowance.
+// ErrRevisionGrantStale: raised only by the live-grant completion path's
+// invariant guard; the selection is already requestActiveSQL-filtered
+// (target_generation = the current generation), so the guard only names
+// intra-transaction drift.  A grant whose binding broke is dead history in
+// ANY task state — refuses, raises or authorizes nothing (RequestRevision).
 var ErrRevisionGrantStale = errors.New("runner: the granted revision no longer matches the task's current generation; the old authorization must not act on the new scope")
 
 // ErrRevisionGranted: the drained loop found a revision the user allowed
