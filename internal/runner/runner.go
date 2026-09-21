@@ -329,8 +329,10 @@ func (r *Runner) runTask(ctx context.Context, t taskRow, input []byte) workerRes
 
 // verifySpecs checks the caller's specs against the persisted task
 // definitions: every spec must name an existing task, and its input digest
-// must equal the one bound at CreateRun.  K1 refuses changed inputs
-// outright — re-evaluation with a new generation is a later unit's rule.
+// must equal the bound one.  A definition's digest moves only through
+// Store.ReviseTask (revision.go) — bumping the generation and invalidating
+// the dependents — so a restarted owner can never settle old work with
+// inputs the run did not declare.
 func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 	for _, sp := range specs {
 		var bound string
@@ -344,7 +346,7 @@ func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 			return err
 		}
 		if got := inputDigest(sp.Input); got != bound {
-			return fmt.Errorf("runner: input for task %q differs from the run's definition; K1 refuses input changes (re-evaluation arrives in a later unit)", sp.TaskID)
+			return fmt.Errorf("runner: input for task %q differs from the run's definition; changing a task's input goes through Store.ReviseTask, which bumps its generation and invalidates its dependents", sp.TaskID)
 		}
 	}
 	return nil

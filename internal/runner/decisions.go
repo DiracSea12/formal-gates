@@ -39,11 +39,13 @@ var (
 	// otherwise).
 	ErrRunFinished = errors.New("runner: finished run does not accept a decision answer")
 	// ErrDecisionStale: no decision row with this id exists in this run —
-	// an old id from an earlier run or a request that never existed.
-	// A pending question elsewhere never substitutes for the addressed
-	// one.  Contrast ErrRunFinished (the run itself refuses everything)
-	// and ErrDecisionConflict (this request exists but was answered
-	// otherwise).
+	// an old id from an earlier run or a request that never existed — or
+	// the row belongs to a generation its task has since left: a revision
+	// invalidated the request (§6.1), and the old answer authorizes
+	// nothing of the new generation's work.  A pending question elsewhere
+	// never substitutes for the addressed one.  Contrast ErrRunFinished
+	// (the run itself refuses everything) and ErrDecisionConflict (this
+	// request exists but was answered otherwise).
 	ErrDecisionStale = errors.New("runner: unknown decision id in this run")
 	// ErrDecisionConflict: the decision exists and was already answered
 	// with a different choice (§6.1 "same id, different answer"); the
@@ -156,65 +158,85 @@ func validateConfirmation(sp TaskSpec) error {
 // transaction — the gate exists exactly when the run does, so "this task
 // needs a user decision" survives even an owner that dies before the
 // first Run (§13.2).  generation matches the generation CreateRun gives
-// the task itself (1); when later units introduce re-evaluation, a
-// bumped task carries its own new gate.  Called only from CreateRun;
-// Answer and the run loop never write gates.
+// the task itself (1); a revision-bumped task gets its own new gate from
+// ReviseTask (revision.go).  Called only from CreateRun; Answer and the
+// run loop never write gates.
 func materializeDecisions(ctx context.Context, tx *sql.Tx, runID string, specs []TaskSpec) error {
 	for _, sp := range specs {
 		if sp.Confirm == nil {
 			continue
 		}
-		c := sp.Confirm
-		id, err := newID128()
-		if err != nil {
-			return err
-		}
-		optionsJSON, err := json.Marshal(c.Options)
-		if err != nil {
-			return err
-		}
-		eventJSON, err := json.Marshal(decisionEvent{
-			DecisionID: id,
-			TaskID:     sp.TaskID,
-			Generation: 1,
-			Revision:   c.Revision,
-			Options:    c.Options,
-			Allow:      c.Allow,
-		})
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO decisions
-				(decision_id, run_id, task_id, generation, revision, body,
-				 body_digest, options_json, allow, created_at, state)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			id, runID, sp.TaskID, 1, c.Revision, string(c.Body),
-			inputDigest(c.Body), string(optionsJSON), c.Allow, nowUTC(), decisionPending); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
-			runID, eventKindDecisionCreated, eventJSON); err != nil {
+		if err := insertDecision(ctx, tx, runID, sp.TaskID, 1, sp.Confirm); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// insertDecision writes one pending decisions row at generation plus its
+// decision_created event, inside the caller's transaction — the single
+// write path for gates, shared by CreateRun's materialization (above) and
+// ReviseTask's generation carry (revision.go).  The row freezes
+// revision/body/options/allow exactly as passed and mints a fresh id.
+func insertDecision(ctx context.Context, tx *sql.Tx, runID, taskID string, generation int64, c *Confirmation) error {
+	id, err := newID128()
+	if err != nil {
+		return err
+	}
+	optionsJSON, err := json.Marshal(c.Options)
+	if err != nil {
+		return err
+	}
+	eventJSON, err := json.Marshal(decisionEvent{
+		DecisionID: id,
+		TaskID:     taskID,
+		Generation: generation,
+		Revision:   c.Revision,
+		Options:    c.Options,
+		Allow:      c.Allow,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO decisions
+			(decision_id, run_id, task_id, generation, revision, body,
+			 body_digest, options_json, allow, created_at, state)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		id, runID, taskID, generation, c.Revision, string(c.Body),
+		inputDigest(c.Body), string(optionsJSON), c.Allow, nowUTC(), decisionPending); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
+		runID, eventKindDecisionCreated, eventJSON)
+	return err
+}
+
 // decisionStatus reports whether the run holds any still-pending gate and
-// any answered-without-allowing one.  The drained run loop reports these
-// as its reason for stopping (settle in runner.go); reading the durable
-// rows rather than this Run's visit history keeps the answer identical
-// for every owner.  The ready query (dispatchableTasks in runner.go)
-// excludes gated tasks by this same rule, so what it skips and what this
-// reports never disagree.
+// any answered-without-allowing one — counting only rows at their task's
+// CURRENT generation: a revision leaves old-generation rows behind as
+// history, and a stale row must neither hold the drained loop in a
+// permanent wait nor refuse a revised run.  The ready query's
+// generation-matched gate predicate (dispatchableTasks in runner.go)
+// agrees by construction.  The drained run loop reports these as its
+// reason for stopping (settle in runner.go); reading the durable rows
+// rather than this Run's visit history keeps the answer identical for
+// every owner.
 func (s *Store) decisionStatus(ctx context.Context) (waiting, refused bool, err error) {
 	var pending, refusedCount int
 	err = s.db.QueryRowContext(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM decisions WHERE run_id=? AND state=?),
-			(SELECT COUNT(*) FROM decisions WHERE run_id=? AND state=? AND answer<>allow)`,
+			(SELECT COUNT(*) FROM decisions d
+			  WHERE d.run_id=? AND d.state=?
+			    AND EXISTS (SELECT 1 FROM tasks t
+			                 WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                   AND t.generation=d.generation)),
+			(SELECT COUNT(*) FROM decisions d
+			  WHERE d.run_id=? AND d.state=? AND d.answer<>d.allow
+			    AND EXISTS (SELECT 1 FROM tasks t
+			                 WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                   AND t.generation=d.generation))`,
 		s.runID, decisionPending, s.runID, decisionAnswered).
 		Scan(&pending, &refusedCount)
 	return pending > 0, refusedCount > 0, err
@@ -257,11 +279,15 @@ func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 //  2. an id matching no row of THIS run is stale (an old id, another
 //     run's id, or a request that never existed); no "there is only one
 //     open question" inference ever substitutes a different target;
-//  3. an already-answered decision replays exactly: the same choice
+//  3. a row whose generation no longer equals its task's current one is
+//     refused as stale the same way — a revision invalidated the request
+//     (§6.1 binds it to the local generation), so the old row, pending
+//     or answered, authorizes nothing of the new generation's work;
+//  4. an already-answered decision replays exactly: the same choice
 //     returns the original receipt with zero new transitions and
 //     events, a different choice is a conflict that leaves the stored
 //     answer standing;
-//  4. a pending decision accepts only one of its stored options — any
+//  5. a pending decision accepts only one of its stored options — any
 //     other choice is refused descriptively with the row still pending —
 //     and a valid choice is consumed exactly once: state, answer,
 //     answered_at and the decision_answered event commit together.
@@ -304,8 +330,19 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 	if err != nil {
 		return AnswerReceipt{}, err
 	}
+	// ③ The request must still belong to the task's current generation:
+	// a revision (§6.1) invalidated anything older, answered or not.
+	var current int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&current); err != nil {
+		return AnswerReceipt{}, err
+	}
+	if generation != current {
+		return AnswerReceipt{}, ErrDecisionStale
+	}
 	if state == decisionAnswered {
-		// ③ Same choice replays the original receipt; a different one is
+		// ④ Same choice replays the original receipt; a different one is
 		// a conflict.  Either way nothing is written.
 		if !answer.Valid || answer.String != choice {
 			return AnswerReceipt{}, ErrDecisionConflict
@@ -317,7 +354,7 @@ func (s *Store) Answer(ctx context.Context, decisionID, choice string) (AnswerRe
 		}
 		return AnswerReceipt{DecisionID: decisionID, Choice: choice, AnsweredAt: at}, nil
 	}
-	// ④ Pending (the CHECK constraint admits only pending and answered):
+	// ⑤ Pending (the CHECK constraint admits only pending and answered):
 	// the row's frozen options alone are valid choices.
 	var options []string
 	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {

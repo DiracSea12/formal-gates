@@ -52,6 +52,12 @@ func TestMain(m *testing.M) {
 	if os.Getenv(envK3Scenario) != "" {
 		k3Child() // never returns
 	}
+	// K4's revision-takeover scenario follows the same re-exec pattern
+	// with its own env (revision_test.go); the branches above are
+	// untouched.
+	if os.Getenv(envK4Scenario) != "" {
+		k4Child() // never returns
+	}
 	os.Exit(m.Run())
 }
 

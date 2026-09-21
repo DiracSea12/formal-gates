@@ -7,8 +7,9 @@
 //
 // K1 added the single owner, task transactions, sequential execution and
 // result admission; K2 adds process confirmations (decisions.go); K3 adds
-// bounded parallel dispatch in the run loop (runner.go).  Native
-// interactions and generation bumps arrive in later K units and are
+// bounded parallel dispatch in the run loop (runner.go); K4 adds local
+// generations and revision scoping through Store.ReviseTask
+// (revision.go).  Native interactions arrive in later K units and are
 // deliberately absent.
 package runner
 
@@ -141,9 +142,9 @@ func (s *Store) Close() error {
 }
 
 // CreateRun persists the run definition in one transaction: the runs row,
-// one tasks row per spec (all starting waiting_deps at generation 1 — the
-// generation column is reserved for later units' re-evaluation rules, K1
-// never bumps it), the dependency edges, and every declared confirmation
+// one tasks row per spec (all starting waiting_deps at generation 1 —
+// Store.ReviseTask is the only writer that ever bumps a generation,
+// revision.go), the dependency edges, and every declared confirmation
 // gate as a pending decisions row plus its decision_created event
 // (materializeDecisions) — the gate exists exactly when the run does, so
 // the requirement survives owners that never even ran once.  Malformed
@@ -241,14 +242,15 @@ var schemaV2 = []string{
 	// One row per task.  input_digest binds the task DEFINITION to the
 	// input declared at CreateRun — Run refuses any spec whose digest
 	// differs, so a restarted owner cannot settle old work with new
-	// inputs (K1 has no re-evaluation rule; generation bumps arrive in
-	// a later unit).  invocations.input_digest plays a different,
-	// per-call role below: it records what one specific call ran with
-	// and is part of the admission identity.  state is execution state
-	// (§4.2); "ready" is computed from dependencies and never stored.
-	// generation is reserved for later units.  result_invocation_id
-	// points at the one admitted invocation whose result is effective —
-	// a late result never moves it.
+	// inputs (a changed input reaches execution only through
+	// Store.ReviseTask's new generation, revision.go).
+	// invocations.input_digest plays a different, per-call role below: it
+	// records what one specific call ran with and is part of the
+	// admission identity.  state is execution state (§4.2); "ready" is
+	// computed from dependencies and never stored.  generation is the
+	// task's local revision counter, bumped only by Store.ReviseTask.
+	// result_invocation_id points at the one admitted invocation whose
+	// result is effective — a late result never moves it.
 	`CREATE TABLE tasks (
 		run_id               TEXT NOT NULL REFERENCES runs (run_id),
 		task_id              TEXT NOT NULL,
