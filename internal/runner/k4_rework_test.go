@@ -165,8 +165,9 @@ func TestK4ReworkInquiryExpiresWithTaskGeneration(t *testing.T) {
 // recoverable identity through OpenRequests, replays its answer as the
 // original receipt (not ErrRunFinished), refuses a different answer as a
 // conflict, and only the completion call consumes it.  A grant whose
-// scope an upstream revision moved past is dead: the completion call is
-// refused by name and the run is not held.
+// scope an upstream revision moved past is dead: it refuses no fresh
+// request and holds no run — the fresh ask is a live question, and
+// settling it lets the current scope finish.
 func TestK4ReworkGrantedRevisionPreventsFalseCompletion(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -248,19 +249,32 @@ func TestK4ReworkGrantedRevisionPreventsFalseCompletion(t *testing.T) {
 	if err := st2.ReviseTask(ctx, "a", TaskSpec{TaskID: "a", Input: []byte("v2")}); err != nil {
 		t.Fatal(err)
 	}
+	// The dead grant blocks nothing in any task state: the request falls
+	// straight to the allowance verdict, which at a zero allowance asks
+	// anew for the task's current generation.
 	err = st2.RequestRevision(ctx, "a",
 		TaskSpec{TaskID: "a", Input: []byte("v3")},
 		reworkExhaustion(), repairLimitPolicy, 0)
-	if !errors.Is(err, ErrRevisionGrantStale) {
-		t.Fatalf("completion after the scope moved err = %v, want ErrRevisionGrantStale", err)
+	if !errors.Is(err, ErrWaitingDecision) {
+		t.Fatalf("ask after the scope moved err = %v, want ErrWaitingDecision (dead grant blocks nothing)", err)
 	}
 	if n := countRequests(t, st2, "a", reqGranted); n != 1 {
 		t.Fatalf("dead grant state rows = %d granted, want 1 (kept for the domain)", n)
 	}
-	// The dead grant holds nothing: the revised scope runs to nil.
+	// The dead grant holds nothing, but the LIVE ask does: the run waits
+	// on it, so settle the question first.  Refusing is the fewest steps
+	// — the task keeps generation 2's input v2, and the current scope
+	// then runs to nil.
+	pending, err := st2.PendingDecisions(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending after the ask = %v (err %v), want the question", pending, err)
+	}
+	if _, err := st2.Answer(ctx, pending[0].DecisionID, "refuse"); err != nil {
+		t.Fatal(err)
+	}
 	if err := NewRunner(st2, recordingExecutor(nil, nil)).Run(ctx,
 		[]TaskSpec{{TaskID: "a", Input: []byte("v2")}}); err != nil {
-		t.Fatalf("run with a dead grant err = %v, want nil", err)
+		t.Fatalf("run after refusing the ask err = %v, want nil", err)
 	}
 }
 

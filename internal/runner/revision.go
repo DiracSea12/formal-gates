@@ -348,12 +348,10 @@ type RepairPolicy func(round, allowance int) bool
 //     request's move to executed land in one transaction, the new input
 //     travelling in this call because input bytes are never persisted
 //     (§7) — the grant executes nothing by itself.  A granted request
-//     whose binding an upstream revision broke is refused with
-//     ErrRevisionGrantStale while the task's current generation is
-//     still unexecuted: that call is the completion the old grant was
-//     waiting for, and the old authorization must not act on the moved
-//     scope.  Once the current generation has run, the dead grant is
-//     history and the allowance below decides anew;
+//     whose binding an upstream revision broke is dead history in ANY
+//     task state — it blocks no new request, raises no allowance below
+//     and authorizes nothing — so the call falls straight through to
+//     that allowance verdict;
 //   - otherwise policy(used, bound+grants) decides.  used is the count
 //     of executed revision rounds, 0-based, so initial=1 permits the
 //     first round and asks on the second (the accepted boundary);
@@ -381,14 +379,11 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 		return err
 	}
 	// The target must exist before ANY branch's write — a mistyped id
-	// must not persist an unanswerable question.  The state rides the
-	// same read: the stale-grant refusal below needs to know whether
-	// the task's current generation has executed.
+	// must not persist an unanswerable question.
 	var generation int64
-	var taskState string
 	err := s.db.QueryRowContext(ctx,
-		"SELECT generation, state FROM tasks WHERE run_id=? AND task_id=?",
-		s.runID, taskID).Scan(&generation, &taskState)
+		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("runner: no task %q in run %q", taskID, s.runID)
 	}
@@ -463,24 +458,6 @@ func (s *Store) RequestRevision(ctx context.Context, taskID string, spec TaskSpe
 			return err
 		}
 		return tx.Commit()
-	}
-	// A granted request whose binding broke, with the task's current
-	// generation still unexecuted: this call is the completion that old
-	// grant was waiting for, and the moved scope refuses it by name.
-	// Once the current generation has run, the dead grant is history —
-	// it authorizes nothing here and raises no allowance below.
-	var staleGrants int
-	var staleTarget sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*), MIN(r.target_generation)
-		  FROM user_requests r
-		 WHERE r.run_id=? AND r.task_id=? AND r.kind=? AND r.state=? AND NOT (`+requestActiveSQL+`)`,
-		s.runID, taskID, kindRevision, reqGranted).Scan(&staleGrants, &staleTarget); err != nil {
-		return err
-	}
-	if staleGrants > 0 && taskState != taskFinished {
-		return fmt.Errorf("%w: task %q in run %q granted at generation %d, now %d; the scope must finish its current generation before a new one is asked",
-			ErrRevisionGrantStale, taskID, s.runID, staleTarget.Int64, generation)
 	}
 	// The allowance verdict: used is 0-based executed rounds, grants are
 	// the user's answered increases that may still act (a dead grant

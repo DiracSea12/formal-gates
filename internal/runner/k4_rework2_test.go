@@ -2,11 +2,13 @@ package runner
 
 // K4 rework 2 acceptance tests — one formal test per second re-review
 // probe scenario: dead requests must not hold the task's repair entry
-// nor the terminal judgment, a dead grant must raise no allowance, the
-// nil-consult recovery must tell constrained calls from free ones, and
-// the durable restart ask must outlive an owner that omits the optional
-// Takeover consult — including a real os.Exit.  Every test drives the
-// public API over real durable state with deterministic executors.
+// nor the terminal judgment, a dead grant must raise no allowance, a
+// FAILED current generation must still be able to ask for a fresh
+// revision, the nil-consult recovery must tell constrained calls from
+// free ones, and the durable restart ask must outlive an owner that
+// omits the optional Takeover consult — including a real os.Exit.
+// Every test drives the public API over real durable state with
+// deterministic executors.
 
 import (
 	"context"
@@ -14,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -122,6 +125,101 @@ func TestK4Rework2StaleGrantRaisesNoAllowance(t *testing.T) {
 	}
 	if n := countRequests(t, st, "b", reqGranted); n != 1 {
 		t.Fatalf("dead granted rows = %d, want 1 kept as history", n)
+	}
+}
+
+// 当前代执行失败仍可申请新返修: a dependent's current-generation input no
+// longer fits the revised upstream, so its execution FAILS — correcting
+// that input needs a fresh revision request, and the request the same
+// upstream revision already invalidated (pending or granted alike) must
+// not stand in the way: without the fresh ask the run can neither finish
+// nor repair itself.  The sibling branch outside the revision's scope
+// keeps its valid result and never re-runs.
+func TestK4Rework2FailedGenerationCanAskForFreshRevision(t *testing.T) {
+	for _, oldState := range []string{reqPending, reqGranted} {
+		t.Run(oldState, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			specs := []TaskSpec{
+				{TaskID: "a", Name: "task-a", Input: []byte("a1")},
+				{TaskID: "b", Name: "task-b", DependsOn: []string{"a"}, Input: []byte("b1")},
+				{TaskID: "c", Name: "task-c", Input: []byte("c1")},
+			}
+			st := mustCreate(t, dir, "k4-r2-fail", specs)
+			if err := NewRunner(st, recordingExecutor(nil, nil)).Run(ctx, specs); err != nil {
+				t.Fatal(err)
+			}
+			oldID := reworkAsk(t, st, "b", []byte("b2"))
+			if oldState == reqGranted {
+				if _, err := st.Answer(ctx, oldID, "allow"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The upstream revision moves b into generation 2 and kills
+			// b's request with its binding; c stays outside the scope.
+			if err := st.ReviseTask(ctx, "a", TaskSpec{TaskID: "a", Input: []byte("a2")}); err != nil {
+				t.Fatal(err)
+			}
+			// Generation 2: a finishes, b's old input no longer fits and
+			// fails execution — c never re-runs, its gen1 result holds.
+			badInput := errors.New("b input no longer matches the revised upstream")
+			var calls []string
+			exec := func(_ context.Context, inv Invocation) (Result, error) {
+				calls = append(calls, inv.TaskID)
+				if inv.TaskID == "b" && string(inv.Input) == "b1" {
+					return Result{}, badInput
+				}
+				return Result{}, nil
+			}
+			revised := []TaskSpec{
+				{TaskID: "a", Name: "task-a", Input: []byte("a2")},
+				{TaskID: "b", Name: "task-b", DependsOn: []string{"a"}, Input: []byte("b1")},
+				{TaskID: "c", Name: "task-c", Input: []byte("c1")},
+			}
+			if err := NewRunner(st, exec).Run(ctx, revised); !errors.Is(err, badInput) {
+				t.Fatalf("generation-2 run err = %v, want b's executor failure", err)
+			}
+			if !slices.Equal(calls, []string{"a", "b"}) {
+				t.Fatalf("generation-2 executions = %v, want [a b] (c keeps its result)", calls)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			// The failed generation needs a corrected input: a fresh
+			// revision ask that the dead row must not block.
+			err = st.RequestRevision(ctx, "b",
+				TaskSpec{TaskID: "b", Input: []byte("b2")},
+				reworkExhaustion(), repairLimitPolicy, 0)
+			if !errors.Is(err, ErrWaitingDecision) {
+				t.Fatalf("fresh ask after the failed generation (old %s) err = %v, want ErrWaitingDecision", oldState, err)
+			}
+			qs, err := st.PendingDecisions(ctx)
+			if err != nil || len(qs) != 1 || qs[0].DecisionID == oldID {
+				t.Fatalf("pending after the fresh ask = %v (err %v), want exactly the new question", qs, err)
+			}
+			if _, err := st.Answer(ctx, qs[0].DecisionID, "allow"); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.RequestRevision(ctx, "b",
+				TaskSpec{TaskID: "b", Input: []byte("b2")},
+				reworkExhaustion(), repairLimitPolicy, 0); err != nil {
+				t.Fatalf("completion call err = %v, want nil", err)
+			}
+			revised[1].Input = []byte("b2")
+			if err := NewRunner(st, exec).Run(ctx, revised); err != nil {
+				t.Fatalf("run after the repair err = %v, want nil", err)
+			}
+			// c's zero re-runs: it executed once in gen1 (before the
+			// selective executor took over) and never appears in calls.
+			if !slices.Equal(calls, []string{"a", "b", "b"}) {
+				t.Fatalf("total new-scope executions = %v, want [a b b] with c never re-run", calls)
+			}
+		})
 	}
 }
 
