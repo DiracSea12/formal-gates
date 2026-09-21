@@ -161,6 +161,26 @@ func waitForGlob(t *testing.T, dir, pattern string) string {
 	}
 }
 
+// waitForMarker polls until the task's marker file holds exactly want
+// execution lines.  The supervisor's writeResult writes the result
+// artifact first and appends the marker line last, so the marker is its
+// final durable write: waiting for it fences the result that precedes
+// it.  Polling the result file instead (waitForGlob) leaves a window
+// where the marker has not landed yet, and a same-instant markerLines
+// assertion right after would flake.
+func waitForMarker(t *testing.T, dir, task string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if n := markerLines(t, dir, task); n == want {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("marker lines for task %q in %s = %d after 15s, want %d", task, dir, n, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // pendingInvocationID returns the task's single pending invocation id.
 func pendingInvocationID(t *testing.T, st *Store, taskID string) string {
 	t.Helper()
@@ -219,10 +239,7 @@ func TestK4TakeoverAdoptsExistingResultWithoutReExecution(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	runTakeoverOwner(t, dir, "write-result")
-	waitForGlob(t, dir, "work-*.result")
-	if n := markerLines(t, dir, "a"); n != 1 {
-		t.Fatalf("supervisor marker lines before takeover = %d, want 1", n)
-	}
+	waitForMarker(t, dir, "a", 1)
 
 	st, err := Open(dir)
 	if err != nil {
@@ -330,7 +347,7 @@ func TestK4TakeoverObservesOriginalCallStillInFlight(t *testing.T) {
 	}
 
 	// The supervisor finishes; the original call is adopted, not re-run.
-	waitForGlob(t, dir, "work-*.result")
+	waitForMarker(t, dir, "a", 1)
 	if err := r.Run(ctx, takeoverSpecs()); err != nil {
 		t.Fatal(err)
 	}
