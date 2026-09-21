@@ -208,3 +208,73 @@ TestK4NilTakeoverSupersedesAsBefore 固定了不安全恢复行为。全文：`/
   内核只持久化决定与换新身份。
 - Takeover/RepairPolicy/Restart 均为窄接缝；确定性子进程与闭包验证机制，不充当原生实跑（评审同口径）。
 - v4 两次形态均为未验收开发 schema；被驳回 build 盖 v4 戳的库为开发库、越界（注释如实）。
+
+---
+
+# 【三次返修 2026-09-21：三轮驳回（2 P1＋2 P3）→ 单一活性谓词＋按调用区分的 nil 恢复（本节为准）】
+
+## 三轮驳回（对象 df1574a）
+
+两项 P1＋两项 P3（四条探针主代理逐条亲复现成立，含真实子进程 os.Exit 87；全文
+`/private/tmp/k4-rereview2/`）：
+- **P1-1 失效请求永久占住该任务后续返修入口，且拖住终态判定**（revision.go:399／OpenRequests:554／
+  Answer:366）——上游修订杀死请求后，其 pending/granted 行仍按裸 state 命中"已有请求"分支与
+  终态豁免，新代返修永远 ErrRevisionPending、全 finished 的 run 仍可被旧 ID 唤醒。
+- **P1-2 省略 Takeover 的恢复会绕过已经落盘的重开询问**（runner.go:462／settleRestartRequests）——
+  nil-Takeover 的批量 supersede 不看 restart 请求，把询问所约束的原调用作废重跑，等于替用户答了题。
+- **P3-1 删除 `revision_requests` 兼容视图**（store.go:419）——为旧探针裸读保留的投影不应变成
+  生产兼容承诺；本轮评审自己的断言已改查真实 user_requests。
+- **P3-2 生命周期文档多处重复＋F 编号堆叠**——权威契约应收敛到一处。
+探针：TestReview2StaleRevisionMustNotBlockFutureRequests、TestReview2StaleRequestMustNotReopenTerminalAnswers、
+TestReview2PendingRestartMustSurviveMissingCallback、TestReview2RestartQuestionAfterProcessExit。
+
+## 返修内容（子代理实施，主代理定合同并逐处复核）
+
+- **`requestActiveSQL`＝活性请求的唯一组合谓词**（revision.go）：`state ∈ (pending, granted)` ∧
+  任务存在且 `generation == target_generation` ∧（restart 未决另要求其 invocation 仍 pending）。
+  七个复用点：RequestRevision 的 pending/granted 检查、grants 计数（answer 非空且 executed 或仍活性
+  ——失效 grant 不计额度）、OpenRequests、Answer 终态豁免、requestStatus、PendingDecisions，外加
+  nil 恢复排除集。**P1-1 由此关闭**：失效请求是死历史，不占入口、不拖终态、不虚增额度。
+- **nil-Takeover 恢复按调用区分**（runner.go recoverPending）：批量 supersede 的两条 UPDATE 增加
+  排除集——活跃 restart 请求绑定的 invocation ∪ 已观察调用（call_observations）不作废；其余自由
+  调用照 K1 语义 supersede 重跑。**P1-2 由此关闭**：漏配 Takeover 的 owner 不得重跑有未决重开
+  询问的调用，同时也不能借排除集挡住无约束调用的正常恢复。
+- **P3-1**：视图删除；schema v4 终态＝user_requests＋call_observations 两表。
+- **P3-2**：注释收敛——完整生命周期契约只在 user_requests DDL 注释一处权威，各调用点一句短注释，
+  全部 F 编号与重复段落删除（先删旧再写新）。
+- 新增 k4_rework2_test.go 六项正式测试（新代入口×pending/granted、死 grant 不增额度、
+  nil 恢复保留已落盘询问（Close/Open 与真实进程退出两种形态）、终态不被死历史拖住、
+  nil 恢复区分约束调用与自由调用）。
+
+## 三次返修后亲验（主代理，最终树上）
+
+- 亲读全部 diff（谓词七处复用、恢复排除集、注释收敛、视图删除）。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`＋Windows/Linux 交叉编译 OK；
+  `go test ./internal/runner -count=1` 与 `-race` ok；**全仓 `go test ./... -count=1`
+  24 包全 ok 零 FAIL**（validate 436.6s）。
+- **两轮评审探针合并亲跑**：首跑 11/12——败项系旧二轮探针裸读已删视图
+  （`no such table: revision_requests`）；应用其裸 SQL 适配
+  （`FROM revision_requests WHERE state='granted'` → `FROM user_requests WHERE kind='revision'
+  AND state='granted'`，首轮 sed 误产 `AND WHERE` 已重做）后 3× race ok、verbose **12/12 PASS**。
+  连同既往 initial 1→0 共两处适配，均与三轮评审自身口径一致（其断言已改查 user_requests；
+  initial 边界与其自身边界探针矛盾）。验证后删除，适配事实完整披露供裁量。
+- **主代理自建探针**（×race PASS 后删除）：stale-grant 判别双侧——当前代未执行时死 grant 的
+  完成调用报 ErrRevisionGrantStale；当前代执行完毕后死 grant 纯历史、新询问按真实额度落 gen2 新行。
+- **既有偶发 TOCTOU 收口（takeover_test.go，与本次改动无关的既有缺陷）**：supervisor 严格先写
+  result 后追加 marker，父测试轮询到 result 即断言 marker 行数，负载下 5/25 复现（stash 亲证与
+  K4 改动无关）。微修派发子代理（生产代码零改动）：`waitForMarker` 栅栏助手替换两处
+  waitForGlob＋立即断言（marker 是 supervisor 退出前最后一次持久写，等它即顺带栅栏 result）；
+  子代理 25 轮顺序＋包＋race 全绿，主代理亲读 diff＋6 轮 race 复核。
+
+## 语义裁定（显著披露，两端测试共同钉住）
+
+**失效 granted 仅在任务当前代未完成时报 `ErrRevisionGrantStale`；当前代跑完后失效 grant 纯历史，
+后续返修按真实额度重新询问或直批。**该裁定非拍定：既有测试（k4_rework_test.go 完成调用复核——
+当前代未执行即拒绝）与三轮评审探针（当前代执行后的新询问）在树内并存强制两端，探针 12/12、
+既有用例零改动共同成立。
+
+## 残余边界（如实）
+
+- requestActiveSQL 为内核层活性定义；K5 接入直接复用，不再派生第二套判断。
+- Takeover/RepairPolicy/Restart 仍为窄接缝；确定性子进程与闭包验证机制，不充当原生实跑（评审同口径）。
+- 死历史请求行永久保留（含失效 granted/refused），无清理路径（归档回收属后续）。
