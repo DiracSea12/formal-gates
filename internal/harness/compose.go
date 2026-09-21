@@ -398,11 +398,22 @@ func initialSpecs(requirement string) ([]runner.TaskSpec, error) {
 	return specs, nil
 }
 
+// workerAnswerInstructions states the check contract both briefs carry: the
+// composition validates answers against an empty known-check set, which the
+// worker cannot learn from the result schema alone and would otherwise answer
+// with invented check ids the contract rejects.
+const workerAnswerInstructions = "Answer with the worker result schema the host provides. This run authorizes no checks, so check_ids must be an empty array; findings must be concrete or empty."
+
 // stageBrief is the input bytes of one stage at generation 1: canonical JSON
 // of the stage identity plus the requirement, so the digest the kernel binds
 // is a function of declared data only.
 func stageBrief(st composeStage, requirement string) ([]byte, error) {
-	brief := map[string]any{"stage": st.TaskID, "requirement": requirement}
+	brief := map[string]any{
+		"stage":             st.TaskID,
+		"requirement":       requirement,
+		"authorized_checks": []any{},
+		"instructions":      workerAnswerInstructions,
+	}
 	if st.Role != "" {
 		brief["role"] = st.Role
 	}
@@ -424,9 +435,11 @@ func repairBrief(st composeStage, requirement string, round int, findings []Find
 		})
 	}
 	brief := map[string]any{
-		"stage":       st.TaskID,
-		"requirement": requirement,
-		"repair":      map[string]any{"round": round, "findings": plain},
+		"stage":             st.TaskID,
+		"requirement":       requirement,
+		"authorized_checks": []any{},
+		"instructions":      workerAnswerInstructions,
+		"repair":            map[string]any{"round": round, "findings": plain},
 	}
 	if st.Role != "" {
 		brief["role"] = st.Role
