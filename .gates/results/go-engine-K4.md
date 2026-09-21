@@ -65,3 +65,74 @@ crash_test 仅 TestMain 追加 K4 分支；退出码 96 避开 70–95 已用值
 ## 后续
 
 K4 待外部评审；下一单元 K5（完整 harness-v1 组合与原生交互路由）——派发前须与机主对齐（G4 期同款前置）。
+
+---
+
+# 【返修 2026-09-21：外部评审驳回 → 修复（本节为准）】
+
+## 评审驳回（对象 b5a5020）
+
+- **F1/P1**：返修额度没有可执行控制链——只有 ReviseTask 原语，无额度配置、业务返修计数、耗尽待答、
+  答复后放行；全仓无调用方；代次不能当业务轮数（一次修订多个下游一起加代、业务范围变化≠领域返修）。
+- **F2/P1**：调用接回未实现——k4Child 在 executor 启动前退出，未建立原生调用/失效会话/部分成果；
+  普通 Run 恢复先把 pending 全部 superseded。
+- **F3/P2**：PendingDecisions 不滤旧代失效请求——修订重开列表两个问题、旧问题答即 stale、run 完成后
+  仍残留。**主代理以评审探针亲复现成立**。
+- 评审全文与探针：`/private/tmp/k4-review/review.md`、`snapshot/internal/runner/k4_review_test.go`。
+  同时确认：菱形闭包/独立保留/事务边界通过；K3 性能 P3 修复复验（1000 任务 0.627s）。
+- **记录更正（评审指出）**：首版记录把"executor 失败注入的返修样例"描述为覆盖"失败不被其他 PASS
+  覆盖"——过当。该样例只证明执行失败路径的返修与历史保留；**领域 FAIL/返修资格验证属领域层（K5）**，
+  本节更正。
+
+## 修复（子代理实施，主代理定合同并逐处复核）
+
+- **F1 额度控制链**：schema v4 加法迁移新表 `revision_requests`（pending/granted/executed/refused；
+  **计数全部行派生**：used=executed、grants=决策关联的 granted∪executed；initial 每次重传不持久化）。
+  `RepairPolicy func(round, allowance int) bool` 窄政策接口（镜像 domain.repairAllowance 的
+  round>=allowance 语义，K5 接真函数）。`Store.RequestRevision(ctx, taskID, spec, exhaustion,
+  policy, initial)`：额度内直批（单事务 executed 行＋修订）；耗尽则单事务落**问询门**（decisions
+  非正代槽 0,-1,-2,…——永不匹配任务代、UNIQUE 保每任务至多一个未决问询、已答留史）＋pending 请求，
+  返回 ErrWaitingDecision；`Answer` 消费问询时同事务结算请求（allow→granted、否则 refused）；
+  granted 后的下一次 RequestRevision 即完成调用（输入字节 §7 不入库故 grant 不即执行）。
+  Answer ③代次检查对联结 pending/granted 请求的问询豁免 stale；①终局检查对存在 pending 问询的
+  run 不报 ErrRunFinished（问询＝未竟业务）；decisionStatus：pending＝当前代∪未决问询、
+  refused＝仅当前代（婉拒修订≠run 被拒）。ReviseTask 事务体重构为共享 `reviseScope`。
+- **F2 接回**：`Runner.Takeover`（`TakeoverOutcome{Adopt+Result | Observe | 零值=死/失效}`，
+  nil＝K1 语义逐字节不变）。recoverPending 分叉：按 (task,generation) 序**事务外**逐个咨询 pending
+  invocation——Adopt→`admit` 原身份接纳零重执行；Observe→保留 pending、任务保持 running（就绪谓词
+  排除）；零值→`voidInvocation` 短事务作废、重跑注册**新 invocation id**（§8.3 最新身份）。settle 在
+  refused 后插入哨兵 `ErrCallObserved`（仅 Takeover 非空可触发）。三个真实子进程监督器场景（退出码
+  98/99）：结果已存在→纳原调用（原 id admitted、marker 恰一次、gen 不变）；仍在工作→观察（零重派
+  零执行、完成后再 Run 收原结果）；会话失效＋部分进度工件→作废重跑（新 id≠旧、读部分进度完成）。
+- **F3**：PendingDecisions 加当前代过滤（当前代 ∪ 代 0 未决问询）——修订后恰一问、完成后列表空。
+
+## 返修后亲验（主代理，最终树上）
+
+- 亲读全部 diff：takeover.go/revision.go（RequestRevision 状态机、槽位 MIN-1、reviseScope）、
+  decisions.go（①③⑤扩展与豁免规则）、runner.go（Takeover 字段/recoverPending 分叉/settle）、
+  store.go v4、迁移测试最小必要修改（schemaVersion 常量＋补 DROP，意图原样）。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`、Windows/Linux 交叉编译 OK。
+- `go test ./internal/runner/ -count=1` ok；`-race` ok。
+- **评审探针三用例 copy 进树 `-run TestReviewK4` 3/3 PASS**（主代理亲跑后删除）：待答列表恰一问/
+  完成后空；菱形跨重开 a=1,b=2,c=1,d=2；额度 API 可配置（gen=5 探针硬断言照过）。
+- **主代理两条自建探针**（×3 race PASS 后删除）：①同任务二次问询取新槽（拒后再问恰一问、拒后
+  no-op Run 得 nil 非 refused、grant 完成调用代次 2）；②被观察调用不阻塞独立分支（b finished、
+  a 保持 pending 零接纳、Run 得 ErrCallObserved）。
+- 全仓 `go test ./... -count=1` 24 包全 ok 零 FAIL。模型调用 0。
+
+## 实现方偏离（主代理核可）
+
+1. `TestK2MigratesV2ToV3` 三处最小必要修改（schemaVersion 常量化＋补 DROP revision_requests）——
+   合同"测试不许改"与"v4 真迁移"冲突，取后者，测试意图保留并加强。**核可**。
+2. 问询槽序列 0,-1,-2,…（同任务二次问询不撞已答 UNIQUE 行）。**核可**。
+3. Answer ①终局扩展（pending 问询使 run 可答）。**核可**——否则 finished run 上问询永不可答。
+4. reviseOneTask 门携带查询加 `generation>0`（自测发现问询行会污染门继承）。**核可**。
+5. `validateConfirmationBody` 拆分共用＋耗尽问询 nil 且需问时具名拒绝。**核可**。
+
+## 残余边界（如实）
+
+- 返修计数粒度＝**任务级**（revision_requests 按任务计数；领域若需 run 级轮次，K5 由调用方聚合）。
+- Takeover/RepairPolicy 是窄接缝，K5 才接已验收监督器/适配组件与 domain.repairAllowance 真函数；
+  本轮测试以确定性闭包/子进程监督器验证机制，不充当原生实跑（评审同口径）。
+- initial 每次重传（与 specs 重传同先例）；授权增量只经用户 grant 或更大 initial，别无加额路径。
+- 旧代 decisions 行与已答问询行永久保留为历史；无清理路径（归档回收属后续）。

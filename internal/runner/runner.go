@@ -128,6 +128,16 @@ type Runner struct {
 	store *Store
 	exec  Executor
 	hooks crashHooks
+	// Takeover, when non-nil, is consulted during recovery for every
+	// still-pending invocation a previous owner left behind (see
+	// recoverPending): adopt its verifiable result under the original
+	// call identity, observe it while its original supervisor lives, or
+	// return the zero outcome to void it and re-run.  nil — the default —
+	// keeps K1's recovery byte for byte: every pending invocation is
+	// superseded and the task re-registered.  K5 wires the accepted
+	// supervisor/adapter components here; the kernel defines only this
+	// narrow seam (takeover.go).
+	Takeover Takeover
 	// Parallelism is the local bounded concurrency of §4.1: how many
 	// ready tasks may execute at once.  The zero value — anything ≤ 1 —
 	// runs one task at a time, the K1 behaviour; no distributed lease or
@@ -152,9 +162,10 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // missing spec for ready work fails the run instead of executing blind.
 // Gates no longer interrupt the loop while independent work remains:
 // once everything dispatchable has drained, settle reports an executor
-// failure, a still-pending gate (ErrWaitingDecision) or a refused one
-// (ErrDecisionRefused) in that order — see dispatchableTasks for the
-// gate's read semantics.
+// failure, a still-pending gate (ErrWaitingDecision), a refused one
+// (ErrDecisionRefused) or — with a takeover consult — a call still
+// pending under observation (ErrCallObserved) in that order — see
+// dispatchableTasks for the gate's read semantics.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -248,9 +259,11 @@ type workerResult struct {
 // settle is the drained loop's terminal judgment, in fixed order: an
 // executor failure (aggregated over every failed task), then a
 // still-pending decision (ErrWaitingDecision), then an answered decision
-// whose choice does not allow (ErrDecisionRefused), then the unfinished-
-// but-nothing-ready stagnation check, otherwise nil.  §4.1: the wait is
-// reported only after no independent work is left.
+// whose choice does not allow (ErrDecisionRefused), then — only when a
+// Takeover consult is configured — an invocation still pending under
+// observation (ErrCallObserved), then the unfinished-but-nothing-ready
+// stagnation check, otherwise nil.  §4.1: the wait is reported only after
+// no independent work is left.
 func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	if len(execErrs) > 0 {
 		return errors.Join(execErrs...)
@@ -264,6 +277,22 @@ func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	}
 	if refused {
 		return ErrDecisionRefused
+	}
+	if r.Takeover != nil {
+		// At settle time a pending invocation can only be one kept under
+		// observation — this Run's own no-receipt failures returned
+		// above, and every other pending was adopted or voided in
+		// recovery.  Without a consult this never fires: recovery
+		// superseded everything before the loop began.
+		var pending int
+		if err := r.store.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM invocations WHERE run_id=? AND state=?",
+			r.store.runID, invPending).Scan(&pending); err != nil {
+			return err
+		}
+		if pending > 0 {
+			return ErrCallObserved
+		}
 	}
 	return r.checkAllFinished(ctx)
 }
@@ -353,12 +382,18 @@ func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 }
 
 // recoverPending closes out unsettled intents from a previous owner
-// process: every still-pending invocation has no receipt (the owner died
-// or the executor failed), so it is superseded — kept, never deleted — and
-// the next registration for the same task replaces it.  Recovery touches
-// only current tasks and unsettled invocations; it never replays the event
-// history (§7).
+// process.  Without a takeover consult (Runner.Takeover nil — every
+// K1–K4 default), every still-pending invocation has no receipt (the
+// owner died or the executor failed), so it is superseded — kept, never
+// deleted — and the next registration for the same task replaces it, in
+// one transaction.  With a consult, each pending invocation is judged
+// first (takeoverPending): only the dead ones are voided.  Recovery
+// touches only current tasks and unsettled invocations; it never replays
+// the event history (§7).
 func (r *Runner) recoverPending(ctx context.Context) error {
+	if r.Takeover != nil {
+		return r.takeoverPending(ctx)
+	}
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -58,6 +58,16 @@ func TestMain(m *testing.M) {
 	if os.Getenv(envK4Scenario) != "" {
 		k4Child() // never returns
 	}
+	// The K4 repair's takeover scenarios follow the same re-exec pattern
+	// (takeover_test.go): a real supervisor subprocess, then an owner
+	// child that dies right after handing it the invocation; the
+	// branches above are untouched.
+	if os.Getenv(envK4SupervisorMode) != "" {
+		k4Supervisor(os.Getenv(envK4SupervisorMode)) // never returns
+	}
+	if os.Getenv(envK4TakeoverScenario) != "" {
+		k4TakeoverOwner(os.Getenv(envK4TakeoverScenario)) // never returns
+	}
 	os.Exit(m.Run())
 }
 

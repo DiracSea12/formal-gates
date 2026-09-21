@@ -849,13 +849,17 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Rewind the file to the v2 shape: drop the v3 delta and stamp the
-	// old version — exactly what a K1-accepted baseline looks like.
+	// Rewind the file to the v2 shape: drop the post-v2 delta tables and
+	// stamp the old version — exactly what a K1-accepted baseline looks
+	// like (the K4 repair's v4 delta included).
 	db, err := sql.Open("sqlite", filepath.Join(dir, dbFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("DROP TABLE decisions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DROP TABLE revision_requests"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("PRAGMA user_version = 2"); err != nil {
@@ -875,8 +879,8 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 	if err := st2.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("user_version = %d after migration, want 3", version)
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d after migration, want %d", version, schemaVersion)
 	}
 	if n := countDecisions(t, st2, ""); n != 0 {
 		t.Fatalf("decisions rows after migration = %d, want 0 (empty table)", n)

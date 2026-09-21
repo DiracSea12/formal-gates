@@ -9,8 +9,10 @@
 // result admission; K2 adds process confirmations (decisions.go); K3 adds
 // bounded parallel dispatch in the run loop (runner.go); K4 adds local
 // generations and revision scoping through Store.ReviseTask
-// (revision.go).  Native interactions arrive in later K units and are
-// deliberately absent.
+// (revision.go), and the K4 repair adds the repair-allowance control
+// chain over it (Store.RequestRevision, revision.go) plus the takeover
+// seam for calls left in flight by a dead owner (takeover.go).  Native
+// interactions arrive in later K units and are deliberately absent.
 package runner
 
 import (
@@ -55,12 +57,12 @@ const (
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
-// (tasks.input_digest); version 3 adds the decisions gate table with
-// its allow column, amended into the delta in place — v3 was never
-// accepted, so no v4 was minted (the full acceptance history is in the
-// stage record .gates/results/go-engine-K2.md).  Version 1 databases
-// are refused outright below.
-const schemaVersion = 3
+// (tasks.input_digest); version 3 added the decisions gate table with
+// its allow column; version 4 adds the revision_requests table of the
+// repair-allowance control chain (revision.go).  Every step is additive,
+// so both accepted baselines — v2 and v3 — migrate forward for real,
+// never by refusal.  Version 1 databases are refused outright below.
+const schemaVersion = 4
 
 // Store is the durable state of one run plus exclusive ownership of its
 // directory.  Open acquires ownership, Close releases it; between the two,
@@ -335,12 +337,32 @@ const decisionsTable = `CREATE TABLE decisions (
 	UNIQUE (run_id, task_id, generation)
 )`
 
+// revisionRequestsTable is the entire v4 delta: the repair-allowance
+// control chain's request rows (Store.RequestRevision, revision.go).  All
+// counts are derived from the rows — used = executed requests, grants =
+// decision-linked granted-or-executed requests — and never stored as
+// counters.  decision_id links a pending request to its non-positive
+// generation-slot inquiry decision (NULL on direct approval); resolved_at
+// is set exactly once, when the request leaves pending/granted for
+// executed or refused.  task_id carries no foreign key on purpose: the
+// target's existence is checked inside RequestRevision's transaction,
+// which rolls back whole.
+const revisionRequestsTable = `CREATE TABLE revision_requests (
+	request_id  TEXT PRIMARY KEY,
+	run_id      TEXT NOT NULL REFERENCES runs (run_id),
+	task_id     TEXT NOT NULL,
+	state       TEXT NOT NULL CHECK (state IN ('pending','granted','executed','refused')),
+	decision_id TEXT,
+	created_at  TEXT NOT NULL,
+	resolved_at TEXT
+)`
+
 // migrate applies forward-only schema versioning via PRAGMA user_version:
-// 0 means a fresh file (create the baseline plus the delta and stamp it),
-// 2 is the accepted K1 baseline (take the additive decisions-only step to
-// v3 — a real migration, never a refusal), the current version means
-// nothing to do, version 1 is refused outright, and anything larger means
-// a newer runner wrote this database and must not be touched by this
+// 0 means a fresh file (create the baseline plus every delta and stamp it),
+// 2 and 3 are accepted baselines (take the additive steps up to this
+// build's version — real migrations, never refusals), the current version
+// means nothing to do, version 1 is refused outright, and anything larger
+// means a newer runner wrote this database and must not be touched by this
 // build.
 func migrate(db *sql.DB) error {
 	var version int
@@ -351,21 +373,26 @@ func migrate(db *sql.DB) error {
 		return nil
 	}
 	switch version {
-	case 0, 2:
+	case 0, 2, 3:
 		tx, err := db.Begin()
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback() // no-op after Commit
 		if version == 0 {
-			// A fresh file needs the whole baseline, not just the delta.
+			// A fresh file needs the whole baseline, not just the deltas.
 			for _, stmt := range schemaV2 {
 				if _, err := tx.Exec(stmt); err != nil {
 					return err
 				}
 			}
 		}
-		if _, err := tx.Exec(decisionsTable); err != nil {
+		if version < 3 {
+			if _, err := tx.Exec(decisionsTable); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(revisionRequestsTable); err != nil {
 			return err
 		}
 		// user_version is a transactional header write: a crash
