@@ -278,3 +278,53 @@ TestReview2PendingRestartMustSurviveMissingCallback、TestReview2RestartQuestion
 - requestActiveSQL 为内核层活性定义；K5 接入直接复用，不再派生第二套判断。
 - Takeover/RepairPolicy/Restart 仍为窄接缝；确定性子进程与闭包验证机制，不充当原生实跑（评审同口径）。
 - 死历史请求行永久保留（含失效 granted/refused），无清理路径（归档回收属后续）。
+
+---
+
+# 【四次返修 2026-09-21：四审驳回（1 P1＝三轮残余路径）→ 死 grant 特判整体删除（本节为准）】
+
+## 四审驳回（对象 e8bfd40）
+
+- **1 P1：失败的新代次仍被失效的旧批准堵住返修**（revision.go:481，根因分支 467–484）——
+  `staleGrants > 0 && taskState != taskFinished` 特判在上游修订＋新代执行失败时形成死锁：不修输入
+  跑不完、没跑完又不让申请新批准。评审以 pending/granted 同操作对照把因果限定到该分支
+  （探针 TestReview3FailedGenerationCanAskForFreshRevision，公开 API＋真实库＋Close/Open 复现）。
+  其余修复确认有效：重开确认绕过关闭、失效请求列表/终态污染消除、兼容视图删除、TOCTOU 微修
+  有据。四审自身验证全绿（runner＋race、全仓 vet/build、335 Python、27 累计独立探针、真实旧库
+  迁移）。全文 `/private/tmp/k4-rereview3/review.md`。
+- 架构判断：新特判再次破坏"失效历史不阻断当前工作"的共享规则一致性——修复方向即删除而非解释。
+
+## 返修内容（子代理实施，主代理定合同并逐处复核）
+
+- **删除 revision.go 原 467–484 行特判整块**（注释＋`NOT(requestActiveSQL)` 失效 grant 计数查询＋
+  taskState 条件拒绝），`taskState` 局部变量及其读取一并删除（SELECT 只取 generation）。失效
+  granted 请求在任务**任何**状态下都是死历史：不挡新申请、不增额度（下方 grants 计数本就排除
+  失效行）、不授权任何事——新申请直接落到既有额度判决（零额度 always-ask 政策＝落新问询）。
+- 活性 grant 完成路径的 `generation != target` 不变量守卫与 ErrRevisionGrantStale 哨兵保留不动。
+- k4_rework_test.go dead-grant 段期望翻转：完成调用由 ErrRevisionGrantStale 改为 ErrWaitingDecision
+  （gen2 新问询）→ refuse → Run 现规格到 nil（活跃新问询会挡运行，先 settle）。
+- 新增正式回归 `TestK4Rework2FailedGenerationCanAskForFreshRevision`（pending/granted 双分支，
+  移植评审探针）：a→b＋独立 c 完成 gen1 → b 旧请求（granted 分支先 allow）→ 上游修订进 gen2 →
+  gen2 运行 a 完成、b 旧输入执行失败、c 零重跑 → Close/Open → RequestRevision(b,b2) 得新问询
+  （id ≠ 旧 id）→ allow → 完成调用 → Run 到 nil，总执行 [a b b]。
+
+## 三次返修"语义裁定"的撤回（显著披露）
+
+三次返修节裁定的"失效 granted 仅在任务当前代未完成时报 GrantStale"被四审整体推翻——其
+"未完成"半边正是死锁根源。**终局规则更简：失效 grant 一律死历史；ErrRevisionGrantStale 仅存于
+活性 grant 完成路径的不变量守卫**（该处选择受 requestActiveSQL 约束，target==当前代恒成立，
+守卫只防事务内漂移）。k4_rework_test.go 该处期望两轮间翻转两次，如实记录。
+
+## 四次返修后亲验（主代理，按改动面收窄）
+
+- 探针 TestReview3 granted 分支修复前亲复现 FAIL（pending 对照 PASS，错误信息与评审一致）；
+  修复后三份评审探针（rework/rework2/rework3）**2× race ok、verbose 全 PASS**，验证后删除。
+- gofmt 空、go vet 零输出、go build ./...＋Windows/Linux 交叉编译 OK；runner 包
+  -count=1 与 -race ok；新回归测试双分支 PASS。
+- **未重跑全仓慢测试**：改动面限于 internal/runner（四审自身已跑全仓 vet/build＋335 Python＋
+  27 累计探针＋真实旧库迁移全绿），本轮按改动面收窄验证。模型调用 0。
+
+## 残余边界（如实）
+
+- 同三次返修节：requestActiveSQL 单一活性定义、Takeover/RepairPolicy/Restart 窄接缝不充当原生
+  实跑、死历史行永久保留无清理路径。
