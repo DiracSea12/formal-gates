@@ -1,15 +1,16 @@
 package runner
 
 // K2 acceptance tests for the §13.2 decision sample: task a is gated
-// behind a confirmation (approve/reject) and task b depends on a.  The
-// first two scenarios re-exec this binary through TestMain
-// (RUNNER_K2_SCENARIO) and really exit — one before the decision is
-// answered, one right after Answer committed but before any successor
-// ran; the parent then reopens and finishes the run.  The remaining §6.1
-// refusal classes (old ids, replays, terminal answers) and the unit
-// behaviours are covered by the in-process tests below.  The K1 crash
-// machinery in crash_test.go keeps its env, injection points and exit
-// codes untouched.
+// behind a confirmation (approve/reject, approve allows) and task b
+// depends on a.  The first three scenarios re-exec this binary through
+// TestMain (RUNNER_K2_SCENARIO) and really exit — one before the
+// decision is answered, one right after an allowing Answer committed but
+// before any successor ran, one right after a refusing Answer — the
+// parent then reopens and observes the run.  The remaining §6.1 refusal
+// classes (old ids, replays, terminal answers) and the unit behaviours
+// are covered by the in-process tests below.  The K1 crash machinery in
+// crash_test.go keeps its env, injection points and exit codes
+// untouched.
 
 import (
 	"context"
@@ -30,21 +31,25 @@ const (
 	k2RunID       = "k2-sample"
 )
 
-// K2 child exit codes: 90 and 91 are the two on-purpose exits (waiting
-// point, answered point); 92+ mark wiring bugs in the child itself.
+// K2 child exit codes: 90, 91 and 93 are the three on-purpose exits
+// (waiting point, answered point, refused point); 92+ mark wiring bugs
+// in the child itself.
 const (
 	exitK2Waiting  = 90
 	exitK2Answered = 91
 	exitK2Wiring   = 92
+	exitK2Refused  = 93
 )
 
-// gatedSpecs is the §13.2 K2 sample: a gated a, and b behind it.
+// gatedSpecs is the §13.2 K2 sample: a gated a (answering "approve"
+// allows execution), and b behind it.
 func gatedSpecs() []TaskSpec {
 	return []TaskSpec{
 		{
 			TaskID: "a", Name: "task-a", Input: []byte("input-a"),
 			Confirm: &Confirmation{
 				Options:  []string{"approve", "reject"},
+				Allow:    "approve",
 				Revision: "rev-1",
 				Body:     []byte("approve plan revision rev-1?"),
 			},
@@ -53,10 +58,12 @@ func gatedSpecs() []TaskSpec {
 	}
 }
 
-// k2Child drives the gated sample in RUNNER_K2_DIR.  Both scenarios stop
+// k2Child drives the gated sample in RUNNER_K2_DIR.  All scenarios stop
 // at the same durable point — Run returned ErrWaitingDecision, so one
 // pending decision exists and nothing after a's gate has executed — and
-// differ only in whether the child's Answer has already consumed it.
+// differ only in what the child's Answer did to it: nothing (waiting),
+// consume it with the allowing choice (answered), or consume it with a
+// refusing one (refused).
 func k2Child(scenario string) {
 	dir := os.Getenv(envK2Dir)
 	if dir == "" {
@@ -96,6 +103,19 @@ func k2Child(scenario string) {
 			os.Exit(exitK2Wiring)
 		}
 		os.Exit(exitK2Answered)
+	case "refused":
+		// The user answers with a choice that does NOT allow execution;
+		// the durable refusal is the point the parent must observe.
+		pending, err := st.PendingDecisions(ctx)
+		if err != nil || len(pending) != 1 {
+			fmt.Fprintln(os.Stderr, "child pending:", err, len(pending))
+			os.Exit(exitK2Wiring)
+		}
+		if _, err := st.Answer(ctx, pending[0].DecisionID, "reject"); err != nil {
+			fmt.Fprintln(os.Stderr, "child answer:", err)
+			os.Exit(exitK2Wiring)
+		}
+		os.Exit(exitK2Refused)
 	default:
 		fmt.Fprintln(os.Stderr, "child: unknown scenario:", scenario)
 		os.Exit(exitK2Wiring)
@@ -321,6 +341,247 @@ func TestK2ExitAfterDecisionRunsSuccessorWithoutReAsk(t *testing.T) {
 		eventKindAdmitted, eventKindAdmitted)
 	if kinds := eventKinds(t, st); !slices.Equal(kinds, wantAfter) {
 		t.Errorf("event kinds after resume = %v, want %v", kinds, wantAfter)
+	}
+}
+
+// §13.2 refusal sample — the child reaches the wait, answers "reject"
+// and really exits; the reopened parent's Run is refused from the stored
+// answer alone: no re-ask, no execution, no invocation.
+func TestK2ExitAfterRefusalRefusesOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	runK2Child(t, dir, "refused", exitK2Refused)
+	ctx := context.Background()
+
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, gatedSpecs()); !errors.Is(err, ErrDecisionRefused) {
+		t.Fatalf("reopened run err = %v, want ErrDecisionRefused", err)
+	}
+	for _, task := range []string{"a", "b"} {
+		if n := markerLines(t, dir, task); n != 0 {
+			t.Errorf("task %s executed %d times after the refusal, want 0", task, n)
+		}
+	}
+	if n := invocationTotal(t, st); n != 0 {
+		t.Errorf("invocations after the refusal = %d, want 0", n)
+	}
+	// The question is not asked again either.
+	if pending, err := st.PendingDecisions(ctx); err != nil || len(pending) != 0 {
+		t.Errorf("pending decisions after refusal = %v (err %v), want none", pending, err)
+	}
+	if kinds := eventKinds(t, st); !slices.Equal(kinds,
+		[]string{eventKindDecisionCreated, eventKindDecisionAnswered}) {
+		t.Errorf("event kinds = %v, want [decision_created decision_answered]", kinds)
+	}
+}
+
+// F1 — the confirmation requirement is persisted by CreateRun, so a
+// reopened owner that omits the Confirm field from its recovery specs
+// still meets the same gate: both when it reopens before any Run and
+// when it reopens from the waiting state.  Answering through the store
+// then completes the chain with the Confirm-free specs alone.
+func TestK2OmittedConfirmFieldStillGatesAfterReopen(t *testing.T) {
+	// Same task ids, dependencies and byte inputs as gatedSpecs, minus
+	// the Confirm declaration entirely.
+	plainSpecs := []TaskSpec{
+		{TaskID: "a", Name: "task-a", Input: []byte("input-a")},
+		{TaskID: "b", Name: "task-b", DependsOn: []string{"a"}, Input: []byte("input-b")},
+	}
+	for _, tc := range []struct {
+		name     string
+		runFirst bool
+	}{
+		{"reopen before the first Run", false},
+		{"reopen from the waiting state", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.CreateRun(ctx, "r-f1", gatedSpecs()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.runFirst {
+				if err := NewRunner(st, recordingExecutor(nil, nil)).Run(ctx, gatedSpecs()); !errors.Is(err, ErrWaitingDecision) {
+					t.Fatalf("first Run err = %v, want ErrWaitingDecision", err)
+				}
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			st2, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st2.Close()
+
+			// Recovery without the Confirm field: the persisted gate
+			// still stops the run, and nothing executes.
+			var calls []string
+			exec := recordingExecutor(&calls, nil)
+			if err := NewRunner(st2, exec).Run(ctx, plainSpecs); !errors.Is(err, ErrWaitingDecision) {
+				t.Fatalf("Confirm-free Run err = %v, want ErrWaitingDecision", err)
+			}
+			if len(calls) != 0 {
+				t.Fatalf("Confirm-free run executed %v, want nothing", calls)
+			}
+			if n := invocationTotal(t, st2); n != 0 {
+				t.Fatalf("Confirm-free run registered %d invocations, want 0", n)
+			}
+
+			// The user approves through the store; the very same
+			// Confirm-free specs then drive the whole chain, each task
+			// exactly once.
+			pending, err := st2.PendingDecisions(ctx)
+			if err != nil || len(pending) != 1 {
+				t.Fatalf("pending decisions = %d (err %v), want 1", len(pending), err)
+			}
+			if _, err := st2.Answer(ctx, pending[0].DecisionID, "approve"); err != nil {
+				t.Fatal(err)
+			}
+			if err := NewRunner(st2, exec).Run(ctx, plainSpecs); err != nil {
+				t.Fatal(err)
+			}
+			for _, task := range []string{"a", "b"} {
+				if n := countInvocations(t, st2, task, invAdmitted); n != 1 {
+					t.Errorf("task %s admitted %d times, want exactly 1", task, n)
+				}
+			}
+			if strings.Join(calls, ",") != "a,b" {
+				t.Errorf("executions = %v, want [a b]", calls)
+			}
+		})
+	}
+}
+
+// F2 — a refusing answer denies execution as durably as an allowing one
+// grants it: across a close/reopen the same stored answer refuses again
+// and again, the gated task and its successor never execute, and the row
+// and events stay exactly as the refusal left them.  The approve path on
+// an identical fresh run completes normally, proving the choice — not
+// the mechanism — makes the difference.
+func TestK2RefusedDecisionSurvivesReopenAndBlocksExecution(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st := mustCreate(t, dir, "r-refuse", gatedSpecs())
+	gate := reachPendingGate(t, st)
+	if _, err := st.Answer(ctx, gate.DecisionID, "reject"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+
+	var calls []string
+	r := NewRunner(st2, recordingExecutor(&calls, nil))
+	for i := 0; i < 2; i++ {
+		if err := r.Run(ctx, gatedSpecs()); !errors.Is(err, ErrDecisionRefused) {
+			t.Fatalf("refused run %d err = %v, want ErrDecisionRefused", i, err)
+		}
+		if len(calls) != 0 {
+			t.Fatalf("refused run %d executed %v, want nothing", i, calls)
+		}
+	}
+	if n := invocationTotal(t, st2); n != 0 {
+		t.Fatalf("refused runs registered %d invocations, want 0", n)
+	}
+	// The row carries the refusal verbatim; the events are exactly the
+	// creation and the answer — no admission ever happened.
+	if answer, at := decisionAnswer(t, st2, gate.DecisionID); answer != "reject" || at == "" {
+		t.Fatalf("stored decision = (%q,%q), want (reject, timestamp)", answer, at)
+	}
+	if n := countDecisions(t, st2, decisionAnswered); n != 1 {
+		t.Fatalf("answered rows = %d, want exactly 1", n)
+	}
+	if kinds := eventKinds(t, st2); !slices.Equal(kinds,
+		[]string{eventKindDecisionCreated, eventKindDecisionAnswered}) {
+		t.Fatalf("event kinds = %v, want [decision_created decision_answered]", kinds)
+	}
+
+	// Contrast: the allowing choice on an identical fresh run completes
+	// the chain normally.
+	dirOK := t.TempDir()
+	stOK := mustCreate(t, dirOK, "r-allow", gatedSpecs())
+	gateOK := reachPendingGate(t, stOK)
+	if _, err := stOK.Answer(ctx, gateOK.DecisionID, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(stOK, recordingExecutor(nil, nil)).Run(ctx, gatedSpecs()); err != nil {
+		t.Fatalf("allowing run err = %v, want nil", err)
+	}
+	for _, task := range []string{"a", "b"} {
+		if n := countInvocations(t, stOK, task, invAdmitted); n != 1 {
+			t.Errorf("contrast: task %s admitted %d times, want exactly 1", task, n)
+		}
+	}
+}
+
+// F3 — the three malformed gate declarations are refused before anything
+// is written: no decisions row, no run row (a reopen finds no run), and
+// the corrected declaration then creates normally in the same directory.
+func TestK2MalformedConfirmationsRefusedBeforeAnyWrite(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Confirmation)
+		want   string
+	}{
+		{"no options", func(c *Confirmation) { c.Options = nil }, "without options"},
+		{"no allowing choice", func(c *Confirmation) { c.Allow = "" }, "without an allowing choice"},
+		{"allowing choice not offered", func(c *Confirmation) { c.Allow = "maybe" }, "outside its confirmation options"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			specs := gatedSpecs()
+			tc.mutate(specs[0].Confirm)
+			err = st.CreateRun(ctx, "r-f3", specs)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("malformed CreateRun err = %v, want refusal containing %q", err, tc.want)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			// Zero residue: reopening finds no run at all.
+			st2, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st2.Close()
+			if st2.runID != "" {
+				t.Fatalf("refused creation left run %q behind, want none", st2.runID)
+			}
+			var nRuns, nDecisions int
+			if err := st2.db.QueryRow("SELECT COUNT(*) FROM runs").Scan(&nRuns); err != nil {
+				t.Fatal(err)
+			}
+			if err := st2.db.QueryRow("SELECT COUNT(*) FROM decisions").Scan(&nDecisions); err != nil {
+				t.Fatal(err)
+			}
+			if nRuns != 0 || nDecisions != 0 {
+				t.Fatalf("residue after refusal: runs=%d decisions=%d, want 0/0", nRuns, nDecisions)
+			}
+			// The corrected declaration creates normally in the same
+			// directory.
+			if err := st2.CreateRun(ctx, "r-f3", gatedSpecs()); err != nil {
+				t.Fatalf("corrected CreateRun after refusal: %v", err)
+			}
+		})
 	}
 }
 

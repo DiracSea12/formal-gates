@@ -1,11 +1,17 @@
 package runner
 
 // K2 — exact process confirmations and durable waiting (plan §6.1, §7).
-// This file owns the decisions table: the lazily materialized gate in
-// front of a task, its pending/answered lifecycle, and the Answer entry
-// point a user's reply travels through.  The run loop only consults the
-// gate; it never interprets an answer itself — without a persisted user
-// decision the gated task and its successors never execute.
+// This file owns the decisions table: the gate in front of a task, its
+// pending/answered lifecycle, and the Answer entry point a user's reply
+// travels through.  The gate is MATERIALIZED at CreateRun — the
+// declaration travels with the run's creation transaction, so the
+// requirement "this task needs a user decision" is itself durable — and
+// the run loop then only READS the rows: pending means wait, an answer
+// equal to the row's allow choice means execute, any other answer means
+// refuse for good.  A restarted owner cannot bypass a gate by omitting
+// the Confirm field from its specs, because Run never looks at that
+// field at all — without a persisted user decision the gated task and
+// its successors never execute (§13.2).
 
 import (
 	"context"
@@ -25,6 +31,13 @@ var (
 	// decision gate is pending — the gated work, and everything behind
 	// it, waits for Store.Answer to succeed.
 	ErrWaitingDecision = errors.New("runner: task is waiting for a user decision")
+	// ErrDecisionRefused: the gate's decision was answered with a choice
+	// other than the one that allows execution.  The refusal is a
+	// durable fact of the decisions row, not a Run-time opinion: the
+	// gated task and its successors do not execute, and re-running
+	// reproduces the same refusal from the stored answer every time.
+	// Contrast ErrWaitingDecision (no answer yet — still askable).
+	ErrDecisionRefused = errors.New("runner: decision was answered without allowing execution")
 	// ErrRunFinished: the run reached its terminal state and accepts no
 	// answer at all, not even an idempotent replay of an already
 	// accepted one — the same precedence run_graph gives RUN_TERMINAL.
@@ -46,10 +59,11 @@ var (
 	ErrDecisionConflict = errors.New("runner: decision already answered with a different choice")
 )
 
-// Persisted decision states.  A row is created pending and consumed once:
-// pending→answered is the only transition, so a gate never re-asks — an
-// executor failure after the answer means the answer stands and the retry
-// runs straight through.
+// Persisted decision states.  A row is created pending (by CreateRun's
+// materialization) and consumed once: pending→answered is the only
+// transition, so a gate never re-asks — an executor failure after the
+// answer means the answer stands and the retry runs straight through (or,
+// after a refusing answer, is refused again, just as durably).
 const (
 	decisionPending  = "pending"
 	decisionAnswered = "answered"
@@ -63,16 +77,31 @@ const (
 )
 
 // Confirmation is the gate declaration on a TaskSpec: what the user may
-// choose, which requirement revision the question belongs to, and the
-// small display body shown with it.  §6.1's binding is persisted when the
-// gate first materializes — run, task and generation on the decisions
-// row; revision, body digest and options as its columns — and the row
-// then freezes the question: a later Run passing different Confirm fields
-// does not rewrite it (swapping the question while it hangs pending would
-// be the worse failure; legitimate changes arrive with a generation bump
-// in a later unit).
+// choose, which choice authorizes executing the gated task, which
+// requirement revision the question belongs to, and the small display
+// body shown with it.  It is a creation-time declaration, persisted with
+// the run: CreateRun validates it (see validateConfirmation) and
+// materializes the pending decisions row plus its decision_created event
+// in the run's creation transaction — run, task, generation, revision,
+// body digest, options and allow choice all freeze on that row, which
+// then defines the gate.  Recovery specs may omit Confirm entirely: Run
+// reads gates and answers from the decisions rows alone, and a later Run
+// passing different Confirm fields changes nothing on the ground (the
+// persisted definition is authoritative; swapping the question while it
+// hangs pending would be the worse failure, and legitimate changes
+// arrive with a generation bump in a later unit).
 type Confirmation struct {
-	Options  []string
+	// Options are the choices the user may answer with.  Must be
+	// non-empty: a question with no choices could never be answered and
+	// would deadlock the gate forever.
+	Options []string
+	// Allow is the one option that authorizes executing the gated task
+	// (§6.1 "whether execution is allowed").  Must be non-empty and one
+	// of Options.  Any other answered choice leaves the gate closed for
+	// good — see ErrDecisionRefused.  It is stored as a plain choice,
+	// not a hard-coded English word, because the vocabulary belongs to
+	// the declaring run, not this kernel.
+	Allow    string
 	Revision string
 	Body     []byte
 }
@@ -96,77 +125,132 @@ type AnswerReceipt struct {
 }
 
 // decisionEvent is the events payload of both decision transitions:
-// creation carries the question as asked (revision and options),
-// consumption carries the chosen answer.
+// creation carries the question as asked (revision, options and the
+// allowing choice), consumption carries the chosen answer.
 type decisionEvent struct {
 	DecisionID string   `json:"decision_id"`
 	TaskID     string   `json:"task_id"`
 	Generation int64    `json:"generation"`
 	Revision   string   `json:"revision,omitempty"`
 	Options    []string `json:"options,omitempty"`
+	Allow      string   `json:"allow,omitempty"`
 	Choice     string   `json:"choice,omitempty"`
 }
 
-// gateDecision materializes the decision gate of a ready gated task and
-// reports whether it is still pending.  An existing row is authoritative
-// and only read — that read is the hot path of every re-run after the
-// gate exists; a missing row is created pending together with its
-// decision_created event in one short transaction, exactly like every
-// other transition-and-event pair in this kernel.  The same gate
-// therefore has exactly one row and one creation event no matter how
-// often Run reaches it, in how many owner processes.
-func (s *Store) gateDecision(ctx context.Context, t *taskRow, c *Confirmation) (bool, error) {
-	var state string
+// validateConfirmation rejects the three malformed gate declarations
+// that, once persisted, could never be repaired through the answer path:
+// no options (no answer would ever be legal), no allowing choice (no
+// answer could ever authorize execution) and an allowing choice outside
+// the options (a choice that cannot be answered would have to authorize
+// execution).  CreateRun calls this for every spec BEFORE writing
+// anything, so a refusal leaves the directory empty for the corrected
+// attempt — a malformed declaration must not become durable state.
+func validateConfirmation(sp TaskSpec) error {
+	c := sp.Confirm
+	if c == nil {
+		return nil
+	}
+	switch {
+	case len(c.Options) == 0:
+		return fmt.Errorf("runner: task %q declares a confirmation without options; a question with no choices could never be answered", sp.TaskID)
+	case c.Allow == "":
+		return fmt.Errorf("runner: task %q declares a confirmation without an allowing choice; no answer could ever authorize its execution", sp.TaskID)
+	case !slices.Contains(c.Options, c.Allow):
+		return fmt.Errorf("runner: task %q declares allowing choice %q outside its confirmation options %v", sp.TaskID, c.Allow, c.Options)
+	}
+	return nil
+}
+
+// materializeDecisions writes every declared gate as a pending decisions
+// row plus its decision_created event, inside the run's CREATION
+// transaction — the gate exists exactly when the run does, so "this task
+// needs a user decision" survives even an owner that dies before the
+// first Run (§13.2).  generation matches the generation CreateRun gives
+// the task itself (1); when later units introduce re-evaluation, a
+// bumped task carries its own new gate.  Called only from CreateRun;
+// Answer and the run loop never write gates.
+func materializeDecisions(ctx context.Context, tx *sql.Tx, runID string, specs []TaskSpec) error {
+	for _, sp := range specs {
+		if sp.Confirm == nil {
+			continue
+		}
+		c := sp.Confirm
+		id, err := newID128()
+		if err != nil {
+			return err
+		}
+		optionsJSON, err := json.Marshal(c.Options)
+		if err != nil {
+			return err
+		}
+		eventJSON, err := json.Marshal(decisionEvent{
+			DecisionID: id,
+			TaskID:     sp.TaskID,
+			Generation: 1,
+			Revision:   c.Revision,
+			Options:    c.Options,
+			Allow:      c.Allow,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO decisions
+				(decision_id, run_id, task_id, generation, revision, body,
+				 body_digest, options_json, allow, created_at, state)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			id, runID, sp.TaskID, 1, c.Revision, string(c.Body),
+			inputDigest(c.Body), string(optionsJSON), c.Allow, nowUTC(), decisionPending); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
+			runID, eventKindDecisionCreated, eventJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decisionGate reads what the persisted decisions row says about
+// executing one task, and nothing else — the hot path of every re-run
+// and recovery.  Three row states, three outcomes:
+//
+//   - no row: the run never declared this task gated, so there is no
+//     gate and the task runs like any other;
+//   - pending: the question stands unanswered — ErrWaitingDecision, and
+//     nothing behind the gate executes until Store.Answer succeeds;
+//   - answered: the stored answer IS the gate's verdict.  Equal to the
+//     row's allow choice it lets the task through exactly once per Run
+//     selection (an executor failure and retry never re-asks); any other
+//     stored choice is a durable refusal — ErrDecisionRefused, stable
+//     across reopens and re-runs because every read consults the same
+//     stored answer.
+//
+// The caller passes no Confirm fields on purpose: gates live in the
+// decisions rows alone, which is what makes a recovery that omits them
+// meet the same gate.
+func (s *Store) decisionGate(ctx context.Context, t *taskRow) error {
+	var state, allow string
+	var answer sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		"SELECT state FROM decisions WHERE run_id=? AND task_id=? AND generation=?",
-		s.runID, t.taskID, t.generation).Scan(&state)
-	if err == nil {
-		return state == decisionPending, nil
+		"SELECT state, allow, answer FROM decisions WHERE run_id=? AND task_id=? AND generation=?",
+		s.runID, t.taskID, t.generation).Scan(&state, &allow, &answer)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no row, no gate
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return false, err
-	}
-	id, err := newID128()
 	if err != nil {
-		return false, err
+		return err
 	}
-	optionsJSON, err := json.Marshal(c.Options)
-	if err != nil {
-		return false, err
+	if state == decisionPending {
+		return ErrWaitingDecision
 	}
-	eventJSON, err := json.Marshal(decisionEvent{
-		DecisionID: id,
-		TaskID:     t.taskID,
-		Generation: t.generation,
-		Revision:   c.Revision,
-		Options:    c.Options,
-	})
-	if err != nil {
-		return false, err
+	// decisionAnswered (the CHECK constraint admits only these two
+	// states); allow is NOT NULL, so it is always readable here.
+	if answer.Valid && answer.String == allow {
+		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() // no-op after Commit
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO decisions
-			(decision_id, run_id, task_id, generation, revision, body,
-			 body_digest, options_json, created_at, state)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		id, s.runID, t.taskID, t.generation, c.Revision, string(c.Body),
-		inputDigest(c.Body), string(optionsJSON), nowUTC(), decisionPending); err != nil {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
-		s.runID, eventKindDecisionCreated, eventJSON); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return ErrDecisionRefused
 }
 
 // PendingDecisions lists this run's unanswered decisions, ordered by task

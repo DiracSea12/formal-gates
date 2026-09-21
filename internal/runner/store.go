@@ -53,8 +53,12 @@ const (
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
-// (tasks.input_digest); version 3 adds the decisions gate table; version 1
-// databases are refused outright below.
+// (tasks.input_digest); version 3 adds the decisions gate table,
+// including its allow column (the choice that authorizes execution)
+// amended into the v3 delta before acceptance — v3 never shipped
+// accepted, so the delta itself is revised in place instead of minting
+// a v4 no accepted database ever needed.  Version 1 databases are
+// refused outright below.
 const schemaVersion = 3
 
 // Store is the durable state of one run plus exclusive ownership of its
@@ -139,8 +143,12 @@ func (s *Store) Close() error {
 // CreateRun persists the run definition in one transaction: the runs row,
 // one tasks row per spec (all starting waiting_deps at generation 1 — the
 // generation column is reserved for later units' re-evaluation rules, K1
-// never bumps it) and the dependency edges.  A directory holds exactly one
-// run; a second CreateRun is refused.
+// never bumps it), the dependency edges, and every declared confirmation
+// gate as a pending decisions row plus its decision_created event
+// (materializeDecisions) — the gate exists exactly when the run does, so
+// the requirement survives owners that never even ran once.  Malformed
+// gate declarations are refused before any write.  A directory holds
+// exactly one run; a second CreateRun is refused.
 func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) error {
 	if s.runID != "" {
 		return fmt.Errorf("runner: directory already holds run %q", s.runID)
@@ -150,6 +158,16 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 	// poisoning the directory for every later corrected attempt.
 	if runID == "" {
 		return errors.New("runner: run id must not be empty")
+	}
+	// Same before-the-write rule for the gate declarations: a malformed
+	// confirmation (no options, no allowing choice, allowing choice not
+	// offered) would persist as a question that can never be answered
+	// or never authorize anything, with no answer-path repair — refuse
+	// it here so the directory stays empty for the corrected attempt.
+	for _, sp := range specs {
+		if err := validateConfirmation(sp); err != nil {
+			return err
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -176,6 +194,9 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 				return err
 			}
 		}
+	}
+	if err := materializeDecisions(ctx, tx, runID, specs); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -285,11 +306,18 @@ var schemaV2 = []string{
 
 // decisionsTable is the entire v3 delta: the process-confirmation gate of
 // plan §6.1/§7 — one row per (run, task, generation), created pending by
-// the run loop the first time it selects the gated task and consumed once
-// by Store.Answer.  revision/body_digest/options_json freeze the question
-// at creation: the row, not a later Run's Confirm fields, defines the
-// gate.  answer and answered_at stay NULL until the single
-// pending→answered transition, in the style of invocations.result_json.
+// CreateRun's materialization (decisions.go) and consumed once by
+// Store.Answer.  revision/body_digest/options_json/allow freeze the
+// question at creation: the row, not a later Run's Confirm fields, defines
+// the gate.  allow is the choice that authorizes execution and is NOT
+// NULL: an answered row always carries a comparable verdict, and a gate
+// without one could never open.  answer and answered_at stay NULL until
+// the single pending→answered transition, in the style of
+// invocations.result_json.  The allow column is part of the v3 delta
+// itself, not a v4 step: v3 was never accepted (the only accepted
+// baseline is v2/K1), so the delta is amended in place — databases
+// stamped v3 by the unaccepted build exist only in development and are
+// out of scope.
 const decisionsTable = `CREATE TABLE decisions (
 	decision_id  TEXT PRIMARY KEY,
 	run_id       TEXT NOT NULL REFERENCES runs (run_id),
@@ -299,6 +327,7 @@ const decisionsTable = `CREATE TABLE decisions (
 	body         TEXT NOT NULL,
 	body_digest  TEXT NOT NULL,
 	options_json TEXT NOT NULL,
+	allow        TEXT NOT NULL,
 	created_at   TEXT NOT NULL,
 	state        TEXT NOT NULL CHECK (state IN ('pending','answered')),
 	answer       TEXT,

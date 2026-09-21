@@ -31,10 +31,14 @@ type TaskSpec struct {
 	Name      string
 	DependsOn []string
 	Input     []byte
-	// Confirm, when non-nil, gates this task behind a persisted user
-	// decision (§6.1): Run materializes the decision row the first time
-	// the task is selected and returns ErrWaitingDecision while it is
-	// pending — the task's successors never run without a user decision.
+	// Confirm declares this task gated behind a persisted user decision
+	// (§6.1).  It is a creation-time declaration, persisted with the run:
+	// CreateRun validates it and materializes the pending decision row
+	// and its decision_created event in the run's creation transaction.
+	// Run never reads this field — the gate and its answer are consulted
+	// on the decisions rows alone — so recovery specs may omit it and
+	// still meet exactly the same gate: the persisted definition is
+	// authoritative, and no after-the-fact diffing against it is done.
 	// See decisions.go.
 	Confirm *Confirmation
 }
@@ -137,9 +141,12 @@ func NewRunner(store *Store, exec Executor) *Runner {
 // runs at a time — parallelism is a later unit.  specs must cover the
 // run's tasks with the inputs the run was created under; a changed input
 // or a missing spec for ready work fails the run instead of executing
-// blind.  A task gated by a still-pending decision stops Run with
-// ErrWaitingDecision — its work waits for Store.Answer, and no successor
-// runs without that user decision.
+// blind.  A task whose persisted decision gate is still pending stops Run
+// with ErrWaitingDecision — its work waits for Store.Answer, and no
+// successor runs without that user decision; a gate answered with anything
+// but its allowing choice stops Run with ErrDecisionRefused, just as
+// durably.  Gates are read from the decisions rows alone; the specs'
+// Confirm fields are ignored here.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -181,21 +188,22 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 		if !ok {
 			return fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
 		}
-		// A gated task consults its decision before any intent is
-		// registered: pending means Run reports the wait and returns
-		// immediately (this sits ahead of the no-ready-task exit, so a
-		// waiting gate can never be misreported as a cycle), answered
-		// means the gate is already consumed and execution proceeds
-		// exactly as ungated work — an executor failure and retry after
-		// the answer never re-asks.
-		if sp.Confirm != nil {
-			pending, err := r.store.gateDecision(ctx, t, sp.Confirm)
-			if err != nil {
-				return err
-			}
-			if pending {
-				return ErrWaitingDecision
-			}
+		// Every ready task consults its persisted decision gate before
+		// any intent is registered, and the gate is READ, never built
+		// here: CreateRun materialized it, so a run exists with all its
+		// gates or not at all.  A pending row stops Run with
+		// ErrWaitingDecision immediately (this sits ahead of the
+		// no-ready-task exit, so a waiting gate can never be misreported
+		// as a cycle); an answered row either clears the gate — the
+		// stored answer equals the row's allowing choice, execution
+		// proceeds exactly as ungated work and an executor failure plus
+		// retry never re-asks — or refuses it durably
+		// (ErrDecisionRefused).  A task with no row was never declared
+		// gated and runs.  The specs' Confirm fields are deliberately
+		// not consulted: recovery that omits them meets the same gate
+		// (§13.2 — no successor executes without a user decision).
+		if err := r.store.decisionGate(ctx, t); err != nil {
+			return err
 		}
 		inv, err := r.registerIntent(ctx, t, sp.Input)
 		if err != nil {

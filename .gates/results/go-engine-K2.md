@@ -80,3 +80,68 @@ mustCreate 与 TestMain reexec 模式。
 ## 后续
 
 K2 待外部评审；下一单元 K3（并行、汇合和成功结果保留）。
+
+---
+
+# 【返修 2026-09-21】外部评审驳回 → 修复（本节为准）
+
+## 评审驳回（对象 029f2b7）
+
+- **F1/P1**：确认要求由本次可选字段控制——Run 只在 `sp.Confirm != nil` 时查门，CreateRun 不持久化
+  "任务需要确认"声明；恢复漏传 Confirm 即整体跳过门检查（含已有 pending 请求的路径），a/b 执行返回 nil。
+  **主代理以评审探针亲复现**（两条子路径均成立）。
+- **F2/P1**：所有合法答案都放行——门读 state 不读 choice，Answer(id,"reject") 落盘后重开 Run 仍执行
+  [a b] 返回 nil，与 approve 完全同效。**亲复现成立**。
+- **F3/P2**：空选项被固化成永远无法回答的问题——CreateRun 接受空 Options 并落盘，任何答案非法且无法纠正。
+  **亲复现成立**。
+- 评审全文与探针：`/private/tmp/k2-review/review.md` 及 `snapshot/internal/runner/k2_review_test.go`。
+  评审同时确认：K1 收尾三项（相对路径/空 ID/在途 Close）复验通过；确认前后真实进程退出、旧 ID、重放/冲突、
+  终态答复、真旧库 v2→v3 迁移（用 4822b8d 代码生成现场）均通过。
+
+## 修复（子代理实施，主代理定合同并逐处复核）
+
+- **F1 门持久化**：门改在 **CreateRun 事务内物化**（materializeDecisions——每个带 Confirm 的 spec 落
+  pending decisions 行＋decision_created 事件，与 runs/tasks/deps 同事务）；Run 的门检查改为**无条件纯读**
+  `decisionGate(ctx, t)`：无行＝无门照常执行／pending＝ErrWaitingDecision／answered＝按 F2 语义。
+  `sp.Confirm` 在 Run 中完全不读（字段注释改写：创建时声明并持久化，恢复 specs 可省略，持久定义权威、
+  不做事后差异校验）；"创建后未跑即退出"由建库即有门天然覆盖。懒建 gateDecision 改造为纯读并更名。
+- **F2 类型化拒绝语义**：`Confirmation` 增 **`Allow string`**（授权执行的选项；不硬编码英文词、不建规则
+  引擎）；decisions 表加 `allow TEXT NOT NULL`；门读到 answered 行时 `answer == allow` 才放行，否则返回
+  新导出哨兵 **`ErrDecisionRefused`**——受控任务与后继零执行，行不变，重跑/重开读同一持久答案稳定复现
+  拒绝。`decisionEvent` 增 Allow 字段（created 事件随问题带上）。Answer 判定序①②③④一字未动。
+- **F3 创建前校验**：CreateRun 在 BeginTx 之前逐 spec `validateConfirmation`，拒绝三种畸形（空 Options／
+  空 Allow／Allow∉Options），各自描述性错误；拒绝后零残留，修正后同目录重试正常。
+- **schema 处置**：029f2b7 的 v3 未获验收、已验收基线仍是 v2，故**直接修订 v3 增量**（decisions DDL 加
+  allow 列）而不升 v4；迁移机制不变（v0＝基线＋增量／v2→v3 仅增量／v1 拒开／>3 拒开），注释写明依据。
+
+新增测试：F1 两条子路径（未跑即重开／等待态重开，恢复用去 Confirm 的 specs→均等待零执行，Answer 后仍用
+无 Confirm specs 完成链）；F2 拒绝跨重开稳定阻断（两次 Run 均 ErrDecisionRefused 零执行零 invocation，
+行 answered reject、事件恰 created+answered；对照 approve 正常完成）＋**子进程样例**（k2Child "refused"：
+跑到等待、Answer("reject") 后真实退出码 93，parent 重开 Run 得拒绝、零执行、不再问）；F3 三变体零残留
+（重开无 runID、runs/decisions 计 0）＋修正重试。k2Child 退出码 90/91/93＝正常场景、92+＝接线错误。
+
+## 返修后亲验（主代理，最终树上）
+
+- 亲读全部 diff（恰 internal/runner 四文件；runner_test.go/crash_test.go 的 K1 部分零改动）：
+  物化/校验位置（BeginTx 前＋创建事务内）、decisionGate 三分支、sp.Confirm 不再被 Run 读取、
+  v3 原地修订注释——与合同逐条对上。
+- `gofmt` 空、`go vet` 零输出、`go build ./...`、Windows/Linux 交叉编译 OK。
+- `go test ./internal/runner/ -count=1` ok（K1＋K2 全量含三个新场景）；`-race` ok。
+- 全仓 `go test ./... -count=1` 全 ok（validate 409.7s 慢套件照跑）。
+- **评审探针改造后亲验**（F1/F2 补规格新增的必填 Allow 字段，断言保持评审原样；跑 `-run TestReviewK2`
+  全 PASS 后删除）：F1 两条子路径＝Confirm-free Run 得 ErrWaitingDecision、执行 []、pending 1；
+  F2＝reject 落盘重开 Run 得 ErrDecisionRefused、执行 []；F3＝CreateRun 拒绝（该探针以"创建被拒"为
+  通过路径，即修复语义本身）。另加两条主代理补充检查（同文件同跑）：门在 CreateRun 后、任何 Run 前即
+  持久存在（pending=1）；拒绝后的重放语义（同 choice 返原回执、异 choice 得 ErrDecisionConflict——
+  拒绝无法被异答案翻案）。
+- 模型调用 0。
+
+## 残余边界（如实）
+
+- 拒绝是稳定终态：K2 无"撤销拒绝/重新提问"路径（合法变更走 K4 代次）。Run 对已拒任务每次返回
+  ErrDecisionRefused，任务行留在未完成状态。
+- 恢复时**新增** Confirm（原声明无门）被忽略（无行＝无门）——持久定义权威、不做双向差异校验，与评审
+  给出的"读取原定义或拒绝"中的前者一致，已注释声明。
+- K2 仍是单线调度：门挂起/拒绝时整个推进停在第一个被选中的门（原披露边界不变，并行属 K3）。
+- v3 只存在过未验收形态，开发期 v3 库不作兼容对象（注释已声明）。
+
