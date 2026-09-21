@@ -242,6 +242,22 @@ func (s *Store) decisionGate(ctx context.Context, t *taskRow) error {
 	return ErrDecisionRefused
 }
 
+// decisionStatus reports whether the run holds any still-pending gate and
+// any answered-without-allowing one.  The drained run loop reports these
+// as its reason for stopping (settle in runner.go); reading the durable
+// rows rather than this Run's visit history keeps the answer identical
+// for every owner.
+func (s *Store) decisionStatus(ctx context.Context) (waiting, refused bool, err error) {
+	var pending, refusedCount int
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM decisions WHERE run_id=? AND state=?),
+			(SELECT COUNT(*) FROM decisions WHERE run_id=? AND state=? AND answer<>allow)`,
+		s.runID, decisionPending, s.runID, decisionAnswered).
+		Scan(&pending, &refusedCount)
+	return pending > 0, refusedCount > 0, err
+}
+
 // PendingDecisions lists this run's unanswered decisions, ordered by task
 // id for a stable display.  Answered decisions are history, not open
 // questions, and never appear.

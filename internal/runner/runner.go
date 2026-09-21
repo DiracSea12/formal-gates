@@ -13,9 +13,10 @@ import (
 
 // Executor runs one invocation of a task and returns its business result
 // (execution state lives in the store, §4.2 — the two are separate).  A
-// non-nil error means "no receipt": the runner stops and leaves the intent
-// pending; the next Run supersedes it with a fresh invocation instead of
-// trusting a result that never arrived.  The §4.3 domain workflow interface
+// non-nil error means "no receipt": the invocation stays pending and the
+// task is left to the next Run, which supersedes it with a fresh
+// invocation instead of trusting a result that never arrived; sibling
+// tasks are not interrupted.  The §4.3 domain workflow interface
 // is deliberately not defined yet — K1 drives everything through this
 // function type; later units will shape the interface from real need.
 type Executor func(ctx context.Context, inv Invocation) (Result, error)
@@ -127,6 +128,11 @@ type Runner struct {
 	store *Store
 	exec  Executor
 	hooks crashHooks
+	// Parallelism is the local bounded concurrency of §4.1: how many
+	// ready tasks may execute at once.  The zero value — anything ≤ 1 —
+	// runs one task at a time, the K1 behaviour; no distributed lease or
+	// leader election is involved.
+	Parallelism int
 }
 
 // NewRunner wires a runner to its store and executor.
@@ -135,15 +141,20 @@ func NewRunner(store *Store, exec Executor) *Runner {
 }
 
 // Run drives the single-owner loop (§4.1) until no work remains: compute
-// the next ready task from persisted facts, register the intent in a short
-// transaction, execute outside any transaction, then admit the result in a
-// short transaction that also appends the event.  Exactly one ready task
-// runs at a time — parallelism is a later unit.  specs must cover the
-// run's tasks with the inputs the run was created under; a changed input
-// or a missing spec for ready work fails the run instead of executing
-// blind.  A gated task stops Run durably: still-pending with
-// ErrWaitingDecision until Store.Answer allows it, otherwise-answered
-// with ErrDecisionRefused — see decisionGate for the read semantics.
+// the ready set from persisted facts, dispatch up to Parallelism tasks at
+// once, and run each through the §4.1 path — register the intent in a
+// short transaction, execute outside any transaction, then admit the
+// result in a short transaction that also appends the event.  Every
+// completion frees its slot and triggers a fresh ready-set computation,
+// so a join starts as soon as all its inputs are finished (§3.1) and one
+// admission never waits for its batch.  specs must cover the run's tasks
+// with the inputs the run was created under; a changed input or a
+// missing spec for ready work fails the run instead of executing blind.
+// Gates no longer interrupt the loop while independent work remains:
+// once everything dispatchable has drained, settle reports an executor
+// failure, a still-pending gate (ErrWaitingDecision) or a refused one
+// (ErrDecisionRefused) in that order — see decisionGate for the read
+// semantics.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -173,44 +184,145 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if err := r.recoverPending(ctx); err != nil {
 		return err
 	}
-	for {
-		t, err := r.nextReady(ctx)
-		if err != nil {
-			return err
+	limit := max(r.Parallelism, 1)
+	done := make(chan workerResult)
+	// Tasks this Run has already dispatched.  An admitted task is
+	// finished in the store and never comes back; the map's job is the
+	// others — in flight, or ended without a receipt — which keep their
+	// K1 semantics: the unsettled intent is superseded by the NEXT Run,
+	// never retried inside this one.
+	attempted := map[string]bool{}
+	var execErrs []error
+	var fatal error
+	inflight := 0
+	for fatal == nil || inflight > 0 {
+		if fatal == nil {
+			batch, err := r.readyBatch(ctx, byTask, attempted)
+			if err != nil {
+				fatal = err
+				continue
+			}
+			for inflight < limit && len(batch) > 0 {
+				t := batch[0]
+				batch = batch[1:]
+				attempted[t.taskID] = true
+				input := byTask[t.taskID].Input
+				inflight++
+				go func() { done <- r.runTask(ctx, t, input) }()
+			}
 		}
-		if t == nil {
-			return r.checkAllFinished(ctx)
+		if inflight == 0 {
+			return r.settle(ctx, execErrs)
 		}
-		sp, ok := byTask[t.taskID]
-		if !ok {
-			return fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
+		res := <-done
+		inflight--
+		if res.err == nil {
+			continue // admitted; the store already knows
 		}
-		// Check the persisted decision gate before registering any
-		// execution intent; the read semantics live on decisionGate.
-		if err := r.store.decisionGate(ctx, t); err != nil {
-			return err
-		}
-		inv, err := r.registerIntent(ctx, t, sp.Input)
-		if err != nil {
-			return err
-		}
-		if r.hooks.afterRegisterIntent != nil {
-			r.hooks.afterRegisterIntent() // §13.2 point ①
-		}
-		res, execErr := r.exec(ctx, inv)
-		if execErr != nil {
-			// No receipt: the intent stays pending so its work is
-			// never silently dropped; the next Run supersedes it.
-			return fmt.Errorf("runner: task %s invocation %s ended without receipt: %w",
-				t.taskID, inv.InvocationID, execErr)
-		}
-		if r.hooks.afterResult != nil {
-			r.hooks.afterResult() // §13.2 point ②
-		}
-		if err := r.admit(ctx, inv, res); err != nil {
-			return err
+		if res.noReceipt {
+			execErrs = append(execErrs, res.err)
+		} else if fatal == nil {
+			fatal = res.err
 		}
 	}
+	// A non-executor failure (store trouble, refused specs) aborts the
+	// run; sibling executor failures ride along so no lost receipt is
+	// silently dropped.
+	return errors.Join(append([]error{fatal}, execErrs...)...)
+}
+
+// workerResult is one dispatched task's outcome on the Run loop's
+// channel.
+type workerResult struct {
+	err error
+	// noReceipt marks err as an executor failure — no result ever
+	// arrived.  Recorded, not fatal: independent tasks keep running.
+	noReceipt bool
+}
+
+// settle is the drained loop's terminal judgment, in fixed order: an
+// executor failure (aggregated over every failed task), then a
+// still-pending decision (ErrWaitingDecision), then an answered decision
+// whose choice does not allow (ErrDecisionRefused), then the unfinished-
+// but-nothing-ready stagnation check, otherwise nil.  §4.1: the wait is
+// reported only after no independent work is left.
+func (r *Runner) settle(ctx context.Context, execErrs []error) error {
+	if len(execErrs) > 0 {
+		return errors.Join(execErrs...)
+	}
+	waiting, refused, err := r.store.decisionStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if waiting {
+		return ErrWaitingDecision
+	}
+	if refused {
+		return ErrDecisionRefused
+	}
+	return r.checkAllFinished(ctx)
+}
+
+// readyBatch filters the ready set down to the tasks that may start now:
+// not already dispatched this Run, covered by a spec (a missing one is
+// the K1 refusal), and gate-open.  Waiting or refused gates are skipped,
+// not errors — their durable rows are what settle reports once the run
+// has drained (§4.1: one task's wait never blocks independent branches).
+func (r *Runner) readyBatch(ctx context.Context, byTask map[string]TaskSpec, attempted map[string]bool) ([]taskRow, error) {
+	ready, err := r.readyTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var batch []taskRow
+	for _, t := range ready {
+		if attempted[t.taskID] {
+			continue
+		}
+		if _, ok := byTask[t.taskID]; !ok {
+			return nil, fmt.Errorf("runner: no spec supplied for ready task %q", t.taskID)
+		}
+		// The persisted decision gate is checked before any execution
+		// intent is registered; read semantics on decisionGate.
+		if err := r.store.decisionGate(ctx, &t); err != nil {
+			if !errors.Is(err, ErrWaitingDecision) && !errors.Is(err, ErrDecisionRefused) {
+				return nil, err
+			}
+			continue
+		}
+		batch = append(batch, t)
+	}
+	return batch, nil
+}
+
+// runTask is one dispatched task's whole §4.1 path on its own goroutine:
+// register the execution intent in a short transaction, run the executor
+// outside any transaction, then admit the result in a short transaction.
+// An executor failure is reported as noReceipt: the intent stays pending
+// so its work is never silently dropped, and the next Run supersedes it —
+// sibling tasks are not interrupted.
+func (r *Runner) runTask(ctx context.Context, t taskRow, input []byte) workerResult {
+	inv, err := r.registerIntent(ctx, &t, input)
+	if err != nil {
+		return workerResult{err: err}
+	}
+	if r.hooks.afterRegisterIntent != nil {
+		r.hooks.afterRegisterIntent() // §13.2 point ①
+	}
+	res, execErr := r.exec(ctx, inv)
+	if execErr != nil {
+		return workerResult{
+			noReceipt: true,
+			err: fmt.Errorf("runner: task %s invocation %s ended without receipt: %w",
+				t.taskID, inv.InvocationID, execErr),
+		}
+	}
+	if r.hooks.afterResult != nil {
+		r.hooks.afterResult() // §13.2 point ②
+	}
+	if err := r.admit(ctx, inv, res); err != nil {
+		return workerResult{err: err}
+	}
+	return workerResult{}
 }
 
 // verifySpecs checks the caller's specs against the persisted task
@@ -263,12 +375,12 @@ func (r *Runner) recoverPending(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// nextReady returns the lowest-task_id task whose dependencies are all
-// finished, or nil when nothing is ready.  Readiness is computed from
-// persisted facts (§4.1), never stored; the deterministic order keeps the
-// sequential kernel's behaviour reproducible.
-func (r *Runner) nextReady(ctx context.Context) (*taskRow, error) {
-	row := r.store.db.QueryRowContext(ctx, `
+// readyTasks returns every unfinished task whose dependencies are all
+// finished, in task_id order — the ready set the loop dispatches from.
+// Readiness is computed from persisted facts (§4.1), never stored; the
+// deterministic order keeps dispatch reproducible.
+func (r *Runner) readyTasks(ctx context.Context) ([]taskRow, error) {
+	rows, err := r.store.db.QueryContext(ctx, `
 		SELECT t.task_id, t.generation
 		  FROM tasks t
 		 WHERE t.run_id = ? AND t.state <> ?
@@ -278,17 +390,32 @@ func (r *Runner) nextReady(ctx context.Context) (*taskRow, error) {
 		         JOIN tasks dep ON dep.run_id = d.run_id AND dep.task_id = d.depends_on
 		        WHERE d.run_id = t.run_id AND d.task_id = t.task_id AND dep.state <> ?
 		   )
-		 ORDER BY t.task_id
-		 LIMIT 1`, r.store.runID, taskFinished, taskFinished)
-	var t taskRow
-	err := row.Scan(&t.taskID, &t.generation)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+		 ORDER BY t.task_id`, r.store.runID, taskFinished, taskFinished)
 	if err != nil {
 		return nil, err
 	}
-	return &t, nil
+	defer rows.Close()
+	var out []taskRow
+	for rows.Next() {
+		var t taskRow
+		if err := rows.Scan(&t.taskID, &t.generation); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// nextReady returns the lowest-task_id ready task, or nil when nothing is
+// ready — the sequential kernel's selector, kept for the K1/K2 tests that
+// drive it directly; the run loop works on the whole ready set
+// (readyBatch).
+func (r *Runner) nextReady(ctx context.Context) (*taskRow, error) {
+	ts, err := r.readyTasks(ctx)
+	if err != nil || len(ts) == 0 {
+		return nil, err
+	}
+	return &ts[0], nil
 }
 
 // checkAllFinished guards the loop's exit: no task ready but some task

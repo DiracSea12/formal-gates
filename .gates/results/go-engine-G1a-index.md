@@ -364,4 +364,6 @@ python3 scripts/go-engine/admission.py --record .gates/results/go-engine-M3.json
 
 > **【2026-09-21（第二十轮，K2 返修 PASS＋P3 注释精简，轻装）】**机主裁定 K2 返修（`b46f4f7`）复核 **PASS**（P3 建议保留不阻塞），并指示处理后进入下一单元。P3＝主循环门检查调用点等处注释重复铺陈：子代理纯注释精简（调用点 14 行→2 行，权威契约保留在类型/函数说明，验收史归阶段记录，净 −29 行），主代理亲验零行为（diff 过滤注释/空行后无 +/- 行）＋全套绿，提交 `d8e3a36`。**K2 收口；下一单元 K3（并行、汇合和成功结果保留）。**
 
+> **【2026-09-21（第二十一轮，K3 并行汇合与结果保留，轻装）】**K3 落成（基线＝K2 收口 `70731b4`）：`Runner.Parallelism`（零值/≤1＝顺序，K1 行为不变）；就绪集查询（原 nextReady 去 LIMIT 1）＋`readyBatch` 过滤（缺 spec 沿用 K1 报错；门 pending/refused **跳过不派发**）；按 task_id 序有界派发，每任务一 goroutine 走既有 §4.1 路径（意图短事务→事务外执行→接纳短事务），executor 失败记入 execErrs **不中断兄弟**、非 executor 错误排空后 join；排空后 `settle` 固定序＝失败聚合→ErrWaitingDecision→ErrDecisionRefused→停滞→nil——**门不再打断有独立工作的推进**（§4.1，K2 披露边界正式反转，既有用例形态下行为不变）。§13.2 三样例＋一次接纳不等同批（b 已 durable 接纳而 a 在途）＋有界并行（2 会合重叠/零值防重入）＋真实子进程崩溃（并行中首个接纳提交后 os.Exit 94，兄弟在途中断，恢复各恰一次接纳）全落测试；K1/K2 用例零改动全绿。亲验：亲读 runner.go 逐路径推演、gofmt/vet/build＋交叉编译、包＋race＋TestK3×3、全仓 24 包零 FAIL、主代理三条探针（高水位恰 2／失败优先于等待／等待优先于拒绝＋浮现）全 PASS 后删除，模型调用 0。实现方三项偏离（decisionStatus 读持久行、fatal 排空 join、nextReady 薄包装）核可并记录。记录 `go-engine-K3.md`。**K3 待外部评审；下一单元 K4（局部代次、返修额度、失效范围及调用接回）。**
+
 本索引只汇总各单元记录中已观测的结果；不含密钥或认证材料。

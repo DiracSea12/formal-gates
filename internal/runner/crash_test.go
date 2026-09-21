@@ -47,6 +47,11 @@ func TestMain(m *testing.M) {
 	if scenario := os.Getenv(envK2Scenario); scenario != "" {
 		k2Child(scenario) // never returns
 	}
+	// K3's parallel crash scenario follows the same re-exec pattern with
+	// its own env (parallel_test.go); the branches above are untouched.
+	if os.Getenv(envK3Scenario) != "" {
+		k3Child() // never returns
+	}
 	os.Exit(m.Run())
 }
 

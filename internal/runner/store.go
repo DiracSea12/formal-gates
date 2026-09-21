@@ -6,9 +6,10 @@
 // directory ownership and durable state; runner.go owns the loop.
 //
 // K1 added the single owner, task transactions, sequential execution and
-// result admission; K2 adds process confirmations (decisions.go).  Native
-// interactions, parallelism and generation bumps arrive in later K units
-// and are deliberately absent.
+// result admission; K2 adds process confirmations (decisions.go); K3 adds
+// bounded parallel dispatch in the run loop (runner.go).  Native
+// interactions and generation bumps arrive in later K units and are
+// deliberately absent.
 package runner
 
 import (
