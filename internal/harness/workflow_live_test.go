@@ -3,21 +3,19 @@
 package harness
 
 // Live acceptance (plan §13.2: "K5 及发布门再使用真实宿主验收") — the
-// composition's one real-host pass.  Skipped unless
+// composition's one real-host pass. Skipped unless
 // FORMAL_GATES_LIVE_ACCEPTANCE=1, because every worker turn is a real host
 // call with real spend: the gate exists so no ordinary test run ever spends
-// one.  The chain routes the product review through the real DSH binding and
+// one. The chain routes the product review through the real DSH binding and
 // every other worker stage through the real ZCode binding, so both accepted
 // adapters carry live work in one run.
 //
 // The drive answers process confirmations with their allowing choice, allows
-// at most ONE repair round (a second ask, or any restart ask, aborts — the
-// pass is bounded spend, not an open wallet), answers a held host interaction
-// with its first offered option (the fixture requirement asks for no tools;
-// the machine-answerable credential interactions the hosts raise are answered
-// inside the adapters themselves), and asserts the run reaches
-// HARNESS_COMPLETE with a walkable archive plan.  Every turn, provider and
-// session identity the run spent is printed for the record.
+// at most ONE extra repair round (any further allowance ask, and any restart
+// ask, aborts — the pass is bounded spend, not an open wallet), answers a
+// held host interaction with its first offered option, and asserts the run
+// reaches HARNESS_COMPLETE with a verified physical archive. Every turn,
+// provider and session identity the run spent is printed for the record.
 
 import (
 	"context"
@@ -32,11 +30,34 @@ import (
 	"time"
 )
 
-func TestComposeLiveAcceptanceGreenChain(t *testing.T) {
+func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 	if os.Getenv("FORMAL_GATES_LIVE_ACCEPTANCE") != "1" {
 		t.Skip("live acceptance: set FORMAL_GATES_LIVE_ACCEPTANCE=1 (real host calls, real spend)")
 	}
 	bin := supervisorBinary(t)
+	// The fixture project: one empty commit. The requirement asks the
+	// reviews to judge the delivered state as the initial empty workspace
+	// and finish in one turn, so the whole chain is green without edits and
+	// the authorized check is a command that holds on any empty tree.
+	project := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", project}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=fixture", "GIT_AUTHOR_EMAIL=fixture@localhost",
+			"GIT_COMMITTER_NAME=fixture", "GIT_COMMITTER_EMAIL=fixture@localhost",
+			"commit.gpgsign=false")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", args, err, out)
+		}
+	}
+	run("init", "--initial-branch=main", "--quiet")
+	run("commit", "--quiet", "--allow-empty", "-m", "live acceptance base")
+	baseOut, err := exec.Command("git", "-C", project, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := strings.TrimSpace(string(baseOut))
+
 	// The run directory survives the test (FORMAL_GATES_LIVE_DIR or a
 	// stamped /tmp path): a failed pass keeps its job artifacts — receipts,
 	// native errors, outcome records — because that is the only place the
@@ -50,20 +71,26 @@ func TestComposeLiveAcceptanceGreenChain(t *testing.T) {
 	}
 	t.Logf("live run directory: %s", dir)
 	binding := func(call NativeCall) (map[string]any, error) {
-		if call.TaskID == stageProductReview {
+		if call.TaskID == taskProduct {
 			return dshCaptureBinding()
 		}
 		return zcodeCaptureBinding()
 	}
 	c, err := ComposeHarnessV1(ComposeConfig{
-		Dir:    dir,
-		RunID:  "k5-live",
-		Binary: bin,
-		Requirement: "Acceptance fixture (live): the delivered state is the initial empty " +
-			"workspace and no changes are required. Judge the empty state as adequate and " +
-			"finish in one turn with status PASS and no findings.",
+		Dir:   dir,
+		RunID: "k5-live",
+		Spec: ComposeSpec{
+			Project: project,
+			Base:    base,
+			Requirement: "Acceptance fixture (live): the delivered state is the initial empty " +
+				"workspace and no changes are required. Judge the empty state as adequate and " +
+				"finish in one turn with status PASS and no findings.",
+			Checks:      []Check{{ID: "noop", Argv: []string{"/usr/bin/true"}}},
+			Gates:       []string{"complexity-gate"},
+			RepairLimit: 1,
+		},
+		Binary:      bin,
 		Binding:     binding,
-		RepairLimit: 1,
 		Parallelism: 2,
 	})
 	if err != nil {
@@ -73,7 +100,7 @@ func TestComposeLiveAcceptanceGreenChain(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
-	repairs := 0
+	extraRounds := 0
 	for {
 		state := c.Drive(ctx)
 		switch state.Status {
@@ -82,18 +109,18 @@ func TestComposeLiveAcceptanceGreenChain(t *testing.T) {
 				choice := ""
 				for _, option := range question.Options {
 					switch option {
-					case "approve", "continue-repair", "restart-session":
+					case "approve", "continue", "restart-session":
 						choice = option
 					}
 				}
 				switch choice {
 				case "":
 					t.Fatalf("live ask without a known allowing choice: %+v", question)
-				case "continue-repair":
-					if repairs > 0 {
-						choice = "abort" // bounded spend: one repair round at most
+				case "continue":
+					if extraRounds > 0 {
+						choice = "abort" // bounded spend: one authorized extra round at most
 					} else {
-						repairs++
+						extraRounds++
 					}
 				case "restart-session":
 					choice = "abort" // bounded spend: no replacement sessions
@@ -121,21 +148,20 @@ func TestComposeLiveAcceptanceGreenChain(t *testing.T) {
 			if state.Terminal != statusHarnessComplete {
 				t.Fatalf("terminal = %q, want HARNESS_COMPLETE", state.Terminal)
 			}
-			// The destination must sit OUTSIDE the run directory — the
-			// retention destination judgement refuses one inside it (the
-			// live run proved that refusal on real state).
-			plan, err := c.Archive(filepath.Join(os.TempDir(),
-				fmt.Sprintf("formal-gates-live-archive-%d", time.Now().UnixNano())))
+			// The destination sits OUTSIDE the run directory — the
+			// retention destination judgement refuses one inside it.
+			report, err := c.Archive(filepath.Join(os.TempDir(),
+				fmt.Sprintf("formal-gates-live-archive-%d.zip", time.Now().UnixNano())))
 			if err != nil {
-				t.Fatalf("archive plan: %v", err)
+				t.Fatalf("archive: %v", err)
 			}
 			reportLiveSpend(t, dir)
-			t.Logf("live chain complete: terminal=%s archive-status=%s files=%d repairs-allowed=%d",
-				state.Terminal, plan.StatusName, plan.FileCount, repairs)
+			t.Logf("live chain complete: terminal=%s archive=%s files=%d extra-rounds-allowed=%d",
+				state.Terminal, report.Status, report.FileCount, extraRounds)
 			return
 		default:
 			reportLiveSpend(t, dir)
-			t.Fatalf("live chain stopped: status=%s err=%v repairs-allowed=%d", state.Status, state.Err, repairs)
+			t.Fatalf("live chain stopped: status=%s err=%v extra-rounds-allowed=%d", state.Status, state.Err, extraRounds)
 		}
 	}
 }

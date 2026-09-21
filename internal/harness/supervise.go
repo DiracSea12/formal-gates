@@ -454,11 +454,12 @@ func proofToMap(p ContentProof) map[string]any {
 }
 
 // writeAtomicJSON serialises value with the single canonical encoder and writes
-// it atomically (temp file, fsync, rename). Reusing CanonicalJSON means the
-// receipt is byte-identical to the Python reference's canonical() output; no
-// second JSON encoder is introduced.
+// it atomically (temp file, fsync, rename). The value may be a typed record;
+// canonicalBody routes it through its JSON tags into the canonical encoder, so
+// the receipt is byte-identical to the Python reference's canonical() output
+// and no second JSON encoding is introduced.
 func writeAtomicJSON(path string, value any) error {
-	encoded, err := CanonicalJSON(value)
+	encoded, err := canonicalBody(value)
 	if err != nil {
 		return err
 	}
