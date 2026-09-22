@@ -1,7 +1,7 @@
-// Package coordination contains the small cross-runtime locks used by
-// workflow start and admission.  The lock files deliberately use the same
-// pid/token shape as the existing phase-0 and engine locks so all writers
-// agree on ownership and stale-lock recovery.
+// Package coordination holds this repository's path-lock primitive.  The
+// lock file records the owning pid and a unique token; that pid/token shape
+// is the lock-file format contract, and it is what ownership verification
+// and stale-lock recovery interpret.
 package coordination
 
 import (
@@ -39,22 +39,33 @@ func AcquireRun(root, runID string) (func(), error) {
 // AcquirePath acquires an exclusive, crash-reclaimable lock at path.
 func AcquirePath(path, description string) (func(), error) {
 	path = filepath.Clean(path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	for {
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err == nil {
-			owner := fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))
-			if _, writeErr := file.WriteString(owner); writeErr != nil {
-				_ = file.Close()
-				_ = os.Remove(path)
-				return nil, writeErr
-			}
-			if closeErr := file.Close(); closeErr != nil {
-				_ = os.Remove(path)
-				return nil, closeErr
-			}
+		owner := fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))
+		temp, err := os.CreateTemp(dir, ".lock-*")
+		if err != nil {
+			return nil, err
+		}
+		tempName := temp.Name()
+		_, writeErr := temp.WriteString(owner)
+		if writeErr == nil {
+			writeErr = temp.Close()
+		} else {
+			_ = temp.Close()
+		}
+		if writeErr != nil {
+			_ = os.Remove(tempName)
+			return nil, writeErr
+		}
+		// 锁内容先在临时文件中完整写好，再以硬链接一次性发布到锁路径：锁路径
+		// 上的文件从可见那一刻起就带完整 pid/token，不存在"已创建但内容为空"
+		// 的窗口，竞争申请者因此不会把刚发布的锁判为陈旧并删除。
+		linkErr := os.Link(tempName, path)
+		_ = os.Remove(tempName)
+		if linkErr == nil {
 			stop := make(chan struct{})
 			go heartbeat(path, owner, stop)
 			return func() {
@@ -65,8 +76,8 @@ func AcquirePath(path, description string) (func(), error) {
 				}
 			}, nil
 		}
-		if !os.IsExist(err) {
-			return nil, err
+		if !os.IsExist(linkErr) {
+			return nil, linkErr
 		}
 		if stale(path) {
 			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
