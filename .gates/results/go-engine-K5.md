@@ -461,3 +461,55 @@ windows/amd64 交叉编译过＋vet/gofmt 干净。模型调用 0。
 与 validate 全包重跑绿。教训已入记忆：overlay 副本恢复一律 cp 自源目录，git checkout 会回到旧提交态。
 另：代理第二轮全仓曾现一次负载型超时（TestTransportPerMessageWaitHasNoTotalDeadline，脚本假对端、
 机器空载第三轮全绿，断言未动）。
+
+## 六轮评审返修：锁原语照抄参考（round 37，2026-09-23）
+
+六轮评审（/private/tmp/k5-review6/review.md，候选 `9689b4f`）FAIL 1 P1：锁回收竞争——stale 判定与
+删除非原子，旧持有者退出后双恢复者竞争，B 用旧判定删掉 A 刚发布的新锁，双方同时持有；评审并以真实
+跨进程 Save 证明业务后果（双 ExpectedRevision=0 提交均返 revision=1、后写静默丢失）。
+
+**根因在设计层（机主问责后定论）**：参考 run_lock（runtime/langgraph/formal_gates_harness/infra.py:
+158-176）全文只有 open("a+b")→flock(LOCK_EX|LOCK_NB)→close——内核托管跨进程互斥、进程死亡自动释放、
+锁文件永不删除，**没有任何回收逻辑**。Go 版的 pid/token 判定、心跳、stale 回收、verify-owner 释放、
+link 原子发布全部是自造复杂度；五审修的还是自造机器的一个窗口。机主红线定立并已入 AGENTS.md 与记忆：
+**凡有参考对应物的子系统，派发合同必须先逐字引参考原文＋行号才允许出现设计，无出处＝设计未完成；
+设计层最简判据以 prompts/actions/start-readiness.md 方案判据原文为准——"即使某个多余的系统在内部
+设计上自洽，也要否决它"。**
+
+### 修复（单代理，主代理逐行亲验）
+
+锁原语净删除重写，映射表（参考行→Go 行）：mkdir→MkdirAll；open("a+b")→OpenFile(O_CREATE|O_RDWR)
+（无 O_EXCL、无内容要求）；posix flock(LOCK_EX|LOCK_NB)→lock_unix.go syscall.Flock；windows
+msvcrt.locking(LK_NBLCK,1)→lock_windows.go LockFileEx(EXCLUSIVE|FAIL_IMMEDIATELY, 1 字节，先写
+首字节，x/sys/windows 为 runner 既有先例）；RUN_BUSY→LockHeldError（类型/JSON 面不变）；释放＝
+close(fd)，锁文件永不删除。**删除**：stale()、heartbeat()、legacy pid-only 内容判定、verify-owner
+删除、CreateTemp+Link 发布、staleAge/heartbeatAge；AcquireRun 不再删 run-locks 目录。成功后
+best-effort 写 pid/token 纯诊断内容（不参与判定）。persistence 进程内 per-dir 互斥层保留（flock 不
+检测同进程两次独立 open）。配套：vcs.go 运行期豁免补 .gates/run-locks/ 与折叠 ?? .gates/ 条目
+（锁文件转为持久存在后的快照脏检查适配；本仓库自身跟踪 .gates/results 故不触发折叠分支）；persistence
+包注释 P3（O_CREATE|O_EXCL 叙事与已删 shadow 提及）一并改述。
+
+### 探针与测试（先失败基线，后转绿；重锚均为加强）
+
+- 采纳评审两探针：TestAcquirePathRecoveryAfterOwnerExitNeverDoubleGrants（真子进程持锁退出＋双恢复者
+  竞争；断言绝不同时持有＋至少一方确定结局＋失败必为 LockHeldError——"双方都失败"不算过）、
+  TestAcquirePathAbandonedOwnerIsReclaimed（存活子进程阻塞、死亡即释放）。
+- 新增 TestSaveMutualExclusionAcrossProcesses（评审业务场景）：两子进程同目录 NewStore→Save
+  （ExpectedRevision=0、内容不同），断言至多一方成功、绝不双成功、终态＝唯一成功方。
+- 失败基线：旧实现上协调探针第 8/12 轮触发、Save 探针第 7/10 轮触发；修复后探针定稿又在原始 9689b4f
+  干净克隆上各 1 次复现（round 109 双持有、round 143 终态不符）。主代理本机对旧实现 6 次未触发
+  （调度相关，如实披露；机制经逐行核证＋评审日志采信）。
+- 重锚（无弱化）：互斥测试追加"释放后文件持久＋可再获取"；4 个 stale 测试替换为
+  TestLockLeftoverFileNeverBlocks（任何内容/任何龄期遗留文件不阻塞，死 PID 实测）；多包 fixture 的
+  精确集合断言加入 write.lock 工件（强度不减）。TestAcquirePathNeverGrantsTwoHolders 原断言未动。
+
+### 验证（主代理亲跑，干净副本）
+
+实现逐行对参考核验；**评审原始探针文件原样**（/private/tmp/k5-review6/lock-probe/review_reclaim_
+test.go，非树内改写版）打修复后树 5×race 全绿；树内 coordination -race -count=5、跨进程 Save
+-race -count=3 绿；干净副本（clone＋rsync 排除 .git/.harness）全仓 22 包绿（harness 457.3s、
+validate 402.9s）＋coordination/persistence/runner race 绿＋windows/amd64 交叉编译过＋vet/gofmt 干净。
+模型调用 0。
+
+**残留如实**：Windows 分支仅编译＋语义映射核对，无真机运行（评审边界同）；AGENTS.md 本轮出现机主
+授权的主代理并发编辑（start-readiness 判据绑定），代理正确未回退。
