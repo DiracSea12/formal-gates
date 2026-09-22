@@ -421,3 +421,43 @@ AGENTS.md 增"代码与工程准则"：简洁与注释、架构与状态、测�
 
 残留（已登记待下次派发）：internal/coordination/lock.go 包注释仍述"与既有 phase-0 与 engine 锁
 同形"——收敛后两者已删，注释过时且带 phase-0。五轮送审报告待出。
+
+## 五轮评审返修：全账收口（round 36，2026-09-22）
+
+五轮评审（`/private/tmp/k5-review5/review.md`，候选 `aa2714d`）FAIL 1 P1：测试改名/删除后机器证据引用
+断链——干净检出全仓 FAIL，开发目录因 `.harness/` 旧源码副本被引用索引扫描而假绿。另单列既有锁双授
+缺陷（评审探针 100 轮 28 次双持有；收敛前旧实现 12 次，非本轮引入）与四项 P3 可读性。**更正 round 35
+表述**："零 schema 变更"不准确——SQLite 版本号未变，但 task_dispositions 新增 question_id、
+QAResultRecord 新增可序列化 Test 字段，结构有增。
+
+### 修复（单代理，主代理亲验，范围严格限定评审点名清单）
+
+- **A 引用断链**：route-matrix.md/stage-records.md 共 25 处＝22 处改名映射（依据 git R 记录＋逐体
+  diff 比对，含 TestWhiteboxPhase0Round16AdmissionRejectsStaleInstalledDigest→
+  TestWorkflowStartRefusesEditedInstalledTarget 类语义改名逐体确认）＋1 处历史绑定
+  （TestShadowReadOnlyObservesWithoutWriting@b9eb03c，绑定提交内真实声明经主代理 git show 亲核：
+  shadow_test.go:103）＋2 处旧文件名速记删（指向已改名文件，现役事实由保留文件覆盖）。新增最小
+  历史绑定语法 `TestX@<40位哈希>`：现役证据必须由交付源码声明（原强度不变），历史证据必须在绑定
+  提交内 `git grep "func X("` 真实命中。qaRepoTestIndex 从"全仓 WalkDir 只跳 .git"收窄为显式交付根
+  cmd/＋internal/（枚举即排除 .harness/验证副本）。
+- **B 锁原子发布**：完整 pid/token 先写同目录唯一临时文件（CreateTemp 0600），再 os.Link 一次性发布
+  ——锁路径从可见起即带完整内容，"已创建但内容为空"的窗口消除（该窗口曾让竞争者把新锁判为陈旧删除，
+  双方同时持有）。心跳/stale（含 legacy pid-only）/verify-owner 释放/per-dir 进程内互斥层全部不动。
+  评审探针采纳为 TestAcquirePathNeverGrantsTwoHolders：未修复实现先证失败（9 轮双持有），修复后绿。
+- **C 可读性四项**：applyRetry 的 resolveBrief 平铺（不再返回闭包）、unmarshalBrief 双层包装删一层、
+  repairBrief 废行 `_ = body` 删、coordination 包注释改述当前事实（本包持有仓库唯一路径锁原语，
+  pid/token 形状即锁文件格式契约）。
+
+### 验证（主代理亲跑，全部在干净副本）
+
+干净副本＝git clone（自带历史供历史绑定校验）＋rsync 覆盖工作区改动（排除 .git/.harness/bin/
+__pycache__），副本内恰 6 处改动、无任何历史源码副本。定向：锁三测（互斥/legacy/竞态探针）绿、
+引用校验绿；**主代理双负控亲证判别性**——伪现役引用与全零哈希历史绑定均被正确拒绝。全量：全仓 23
+包绿（validate 370.9s、harness 502.6s、cli 104.2s）＋coordination/persistence/runner race 绿＋
+windows/amd64 交叉编译过＋vet/gofmt 干净。模型调用 0。
+
+**过程事故如实入账**：主代理负控恢复误用 `git checkout --`，把 rsync 覆盖的修好版 route-matrix.md
+打回 clone 内 aa2714d 旧版，制造一次假 FAIL（23 条旧名断链重现）；发现后自源目录 cp 恢复、引用校验
+与 validate 全包重跑绿。教训已入记忆：overlay 副本恢复一律 cp 自源目录，git checkout 会回到旧提交态。
+另：代理第二轮全仓曾现一次负载型超时（TestTransportPerMessageWaitHasNoTotalDeadline，脚本假对端、
+机器空载第三轮全绿，断言未动）。
