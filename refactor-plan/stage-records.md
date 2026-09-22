@@ -8,7 +8,9 @@
 >
 > 通用缩写：`P0-JSON` = `.gates/results/phase-0-distribution-002.json`，
 > `P1-JSON` = `.gates/results/phase-1-decision-kernel.json`；`CASE-nnn` 指对应 JSON 的
-> qaExecution 案例。git 对象均以全哈希登记。
+> qaExecution 案例。git 对象均以全哈希登记。测试名后缀 `@<全哈希>` 表示该证据绑定于
+> 该历史提交（历史证据，按该提交解析，不要求仍存在于当前源码）；无后缀测试名为现役
+> 证据，须由当前交付源码声明。
 
 ## 阶段 0：分发安全与基线冻结
 
@@ -162,7 +164,9 @@
 - 一句式结论：公开 workflow 面维持全部 legacy（候选 installed binary legacy 正常路径
   回归，CASE-018）；新增能力为只读 Shadow/诊断——engine decision/shadow 不经任何公开
   CLI 入口写权威 state（Shadow harness 为候选安装内测试入口，
-  `internal/engine/shadow` `TestShadowReadOnlyObservesWithoutWriting`）；唯一 workflow
+  `internal/engine/shadow`
+  `TestShadowReadOnlyObservesWithoutWriting@b9eb03c0cbfa8e66d235074ff4d5520f5b0e3535`
+  ——证据绑定阶段 1 sealed commit，该只读诊断包现已退役删除）；唯一 workflow
   writer 仍是 stable legacy runtime，不存在第二个状态写入权威。
 
 ### 5. 正常入口 smoke、新增能力 E2E、QA/gates 与 canary 证据

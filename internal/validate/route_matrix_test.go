@@ -856,38 +856,39 @@ func qaPhaseJSONCaseIDs(t *testing.T) map[string]bool {
 	return ids
 }
 
-// qaRepoTestIndex 遍历仓库全部 *_test.go（含带构建标签的测试文件），收集已声明
-// 的测试函数名与测试文件基名，作为引用解析的仓库侧索引。
+// deliveredTestRoots 是机器证据索引唯一认可的交付源码根。仓库交付的 Go 源码与
+// 测试只存在于 cmd/ 与 internal/；工作区内其他目录（本地验证副本、历史快照等）
+// 不是交付源码，其中的测试声明不得为现役机器证据背书。
+var deliveredTestRoots = []string{"cmd", "internal"}
+
+// qaRepoTestIndex 遍历交付源码根下的全部 *_test.go（含带构建标签的测试文件），
+// 收集已声明的测试函数名与测试文件基名，作为现役引用解析的仓库侧索引。
 func qaRepoTestIndex(t *testing.T) (funcs map[string]bool, basenames map[string]bool) {
 	t.Helper()
 	funcs, basenames = map[string]bool{}, map[string]bool{}
 	root := repoRootValidateTest(t)
 	declRe := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
+	for _, rel := range deliveredTestRoots {
+		err := filepath.WalkDir(filepath.Join(root, rel), func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(d.Name(), "_test.go") {
+				return nil
+			}
+			basenames[d.Name()] = true
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range declRe.FindAllStringSubmatch(string(data), -1) {
+				funcs[m[1]] = true
 			}
 			return nil
-		}
-		if !strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		basenames[d.Name()] = true
-		data, err := os.ReadFile(path)
+		})
 		if err != nil {
-			return err
+			t.Fatalf("walk delivered test files under %s: %v", rel, err)
 		}
-		for _, m := range declRe.FindAllStringSubmatch(string(data), -1) {
-			funcs[m[1]] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk repo test files: %v", err)
 	}
 	if len(funcs) == 0 || len(basenames) == 0 {
 		t.Fatal("repo test index is empty; the source-format assumption is stale")
@@ -896,10 +897,11 @@ func qaRepoTestIndex(t *testing.T) (funcs map[string]bool, basenames map[string]
 }
 
 // TestRouteMatrixMachineEvidenceCitationsResolveInRepo 落实 RQ-1 的 negative-tests
-// 证据口径与验收 3：矩阵与阶段记录引用的每条机器证据都必须在仓库中真实存在——
-// CASE-nnn 必须是封板 run JSON 的真实案例、测试函数必须由某个 *_test.go 声明、
-// *_test.go 文件引用必须真实存在；机器证据列不得既无可解析引用又无"证据缺口"
-// 标注（不得静默留空）。
+// 证据口径与验收 3：矩阵与阶段记录引用的每条机器证据都必须真实存在——CASE-nnn
+// 必须是封板 run JSON 的真实案例、现役测试函数必须由交付源码的某个 *_test.go 声明、
+// *_test.go 文件引用必须真实存在；带 `@<全哈希>` 后缀的历史测试证据不要求存在于
+// 当前源码，但必须由绑定提交的 *_test.go 真实声明。机器证据列不得既无可解析引用
+// 又无"证据缺口"标注（不得静默留空）。
 func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 	matrix := loadRepoFileForMatrixTest(t, "refactor-plan/route-matrix.md")
 	records := loadRepoFileForMatrixTest(t, "refactor-plan/stage-records.md")
@@ -914,6 +916,8 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 	caseRe := regexp.MustCompile(`CASE-\d+`)
 	testRe := regexp.MustCompile(`Test[A-Za-z0-9_]+`)
 	fileRe := regexp.MustCompile(`[A-Za-z0-9_]+_test\.go`)
+	// 历史绑定后缀必须紧跟测试名（`TestX@<全哈希>`），且哈希恰好 40 位。
+	commitRe := regexp.MustCompile(`^@([0-9a-f]{40})(?:$|[^0-9a-f])`)
 
 	for artifact, content := range docs {
 		for _, cited := range caseRe.FindAllString(content, -1) {
@@ -921,9 +925,14 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 				t.Errorf("%s cites %s which is not a case in any sealed phase JSON", artifact, cited)
 			}
 		}
-		for _, cited := range testRe.FindAllString(content, -1) {
+		for _, loc := range testRe.FindAllStringIndex(content, -1) {
+			cited := content[loc[0]:loc[1]]
+			if m := commitRe.FindStringSubmatch(content[loc[1]:]); m != nil {
+				qaAssertHistoricalTestCitation(t, artifact, cited, m[1])
+				continue
+			}
 			if !testFuncs[cited] {
-				t.Errorf("%s cites test %q which is not declared by any *_test.go in the repo", artifact, cited)
+				t.Errorf("%s cites test %q which is not declared by any *_test.go in the delivered source", artifact, cited)
 			}
 		}
 		for _, loc := range fileRe.FindAllStringIndex(content, -1) {
@@ -948,6 +957,17 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 				t.Errorf("%s row %q: the 机器证据 cell has no resolvable citation and no 证据缺口 marker: %q", section, matrixRowEntry(row[0]), cell)
 			}
 		}
+	}
+}
+
+// qaAssertHistoricalTestCitation 校验历史证据绑定：被引用的测试必须由绑定提交
+// 树内的某个 *_test.go 真实声明（按全哈希 git 对象解析，不依赖当前工作区内容）。
+func qaAssertHistoricalTestCitation(t *testing.T, artifact, test, commit string) {
+	t.Helper()
+	cmd := exec.Command("git", "grep", "-F", "-l", "func "+test+"(", commit, "--", "*_test.go")
+	cmd.Dir = repoRootValidateTest(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%s cites historical test %s@%s which is not declared by any *_test.go at that commit: %v\n%s", artifact, test, commit, err, out)
 	}
 }
 
