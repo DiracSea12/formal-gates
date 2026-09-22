@@ -226,3 +226,53 @@ gofmt/vet 干净；windows 交叉编译＋本机构建 OK；全仓 `go test ./..
 候选拒绝＝致命停而非问询（每个可拒路径已在 worker 环内问过）；BLOCKED＝用户停驻；
 终态判定 record+文件双证据；归档留物理层文件；夹具复用假宿主 peer；探针三处机械适配
 如上逐处注释。
+
+## 二轮评审返修（六发现全修＋三方输入的架构收敛，2026-09-22）
+
+**二轮评审（`/private/tmp/k5-review2/review.md`，候选 `a65f6a7`）：FAIL，5 P1＋1 P2**——主图已确认补齐
+（正向探针过），但异常边与恢复路径未对齐：R1 重开重复消费旧 evaluate 判断→并发返修＋提前 COMPLETE；
+R2 任务逻辑名与目录名混用→门审处置/恢复权限中断；R3 check-runtime 问询 []string 过编码边界崩；R4 答
+restart-session 后仍带旧身份；R5 接回把检查/门审当普通 worker→丢领域结果；R6 计划确认引用的工件
+不存在。机主取回第二意见（外部 AI）纠正了主代理的错误前提——**参考实现并非"没有恢复能力"**：
+infra.py Store.job 按原 key 接回（intent 同则不重启监督器、无收据拒绝盲跑）、test_driver.py:153 真实
+杀 controller 断言副作用恰一次、handover.py 未结算拒启第二写入者、workers.py 收据按 key 复用、
+graph.py 恢复重放走同一业务函数——R1/R4/R5 的正确归因是"Go 造了第二套实现/权威在文件"，不是
+"参考没有"。主代理逐条亲核五处引文确认后按三方收敛执行。
+
+### 返修结构（四阶段，每阶段亲验后进下一个）
+
+- **Phase 0 探针与约束先行**：评审独立探针原样入树（k5_independent_test.go，机械搬运＋出处头，
+  期望零改）＝7 FAIL 基线；派发不变量/轨迹对照框架（k5_invariants_test.go：单活写入者、evaluate
+  单驱动、COMPLETE 零未结算、结果绑候选、重建换身份五断言＋中断/不中断轨迹对照＋行为对照表），
+  先于修复落地防打表。
+- **Phase 1 发现全修**：R2/R3（dispositions 枚举读正文逻辑名、jobs 路径三处补 pathSafe、问询构造
+  统一过 canonicalBody；顺带修出第 4 处混用 relJobPath——带冒号任务的回执验证一直被静默跳过）；
+  R1/R4/R5＝单一接纳链（收据→按类型核验→领域结果→统一接纳，live 与恢复共用：settleCheckResult/
+  finishGate/settleWorkerResult；adoptable 第四套接纳删除；幻影 turn 目录一并消除）；R1 消费绑定＝
+  内核世代前移 ∨ task_revisions 字节绑定 ref 双事实合取；R4＝内核 granted restart 行单权威，
+  答案事务内同清 task_sessions；R6＝计划确认指向真实 outcomes 记录。
+- **Phase 2 六账本回库删除（反屎山主线）**：内核 v5（task_revisions 修订输入字节、task_sessions
+  会话、task_dispositions 停驻、runs.terminal 终态；0/2/3/4 全起点加法步进自检）；revisions/
+  answers/asks 三个 jsonl、dispositions/ 目录、record.json 全删；R4 投影桥（granted→record 清会话）
+  删除；outcomes "哪个结果有效"从 glob 排序改内核事实定代（无旧代回退）；路由答案判读从账本影子
+  改 decisions 行（TaskQuestion/AnsweredQuestions 只读出口）。文件系统只余载荷与证据（jobs/
+  outcomes/artifacts/events）。顺带修出两个存量 bug：停驻不盖代次戳（同 attempt 跨代静默重放旧答案）、
+  takeover 运行时问题答后再问一次。
+- **Phase 4 屎山审计**：700 符号两轮普查仅 1 孤儿（stageTaskOf）；14 个死机制名零命中；七项控制
+  事实单一权威逐项 grep 佐证；行数 4,898 vs 返修前 4,906——**删六账本＋第四接纳的减量恰好抵消内核
+  表＋接纳链的增量，净 -8 行而架构严格变简**；可读性四问（做到哪/为何等/为何有效/重开为何不重做）
+  通读核验可答，头注补文件地图（注释级）。
+
+### 验证
+
+评审探针 9/9（含正控）；不变量/轨迹对照全绿（两条中断轨迹与对照逐项一致）；harness 全包 -count=1
+多轮绿（330-350s）＋race 绿；runner -race 绿；vet/gofmt 干净；全仓 -count=1 全包 ok；交叉编译未回退
+（build ok）。已知偶发：全包 9 轮中 1 次失败、无现场（失败轮未留 -v 输出），后续 8 轮皆绿，未定位
+——如实交评审观察。模型调用 0（全程零真实宿主调用）。
+
+### 偏离与发现披露
+
+第二意见的"业务图可读性＋ask 状态简化"收缩为审计内注释级核验（评审原话"无需围绕纯风格建议再展
+开独立返工"；深夜段全绿树上做结构重组风险大于收益，结构问题如出现单独再派）——四问核验通过，
+仅补头注文件地图。存量 bug 修复两处（代次戳、双问）无既有测试依赖旧形态（grep 佐证）。测试助手
+同源化（账本读→内核读）三处，断言强度不减反增（内核读覆盖任意世代）。
