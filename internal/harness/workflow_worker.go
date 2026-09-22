@@ -346,68 +346,71 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 	attempt := 0
 	for {
 		attempt++
-		key := c.turnKey(series, attempt)
-		jobDir := filepath.Join(c.dir, "jobs", pathSafe(taskID), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
+		var output *workerOutput
 		// Receipt replay: a re-entered generation (a doubled retry bump, an
 		// owner dying between the revision and its outcome) continues from
-		// the recorded turn instead of re-spending the host — and settles
-		// through the same admission chain as a fresh answer.
-		if output, ok := c.replayWorkerTurn(taskID, inv.Generation, series, attempt); ok {
-			return c.settleWorkerResult(taskID, inv.Generation, series, brief, output)
+		// the recorded turn instead of re-spending the host. The replayed
+		// output is then judged by exactly the branches below — the same
+		// ones a live answer meets, never a separate settlement.
+		if replayed, ok := c.replayWorkerTurn(taskID, inv.Generation, series, attempt); ok {
+			output = replayed
+		} else {
+			key := c.turnKey(series, attempt)
+			jobDir := filepath.Join(c.dir, "jobs", pathSafe(taskID), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
+			c.event("worker-start", map[string]any{"role": brief.Role, "task": taskID, "operation": key, "attempt": attempt})
+			// The turn directory appears with its request (writeNativeRequest
+			// creates it), never during the material preparation: recovery
+			// judges a turn by its files, and a directory holding nothing is a
+			// call that cannot be classified — an owner dying mid-preparation
+			// must leave no phantom turn behind.
+			materials, err := c.writeMaterials(jobDir, key, brief, workspace, attempt > 1, initialFeedback)
+			if err != nil {
+				return runner.Result{}, err
+			}
+			binding, err := c.cfg.Binding(NativeCall{
+				TaskID: taskID, Role: brief.Role, Generation: inv.Generation, Attempt: attempt, JobDir: jobDir,
+			})
+			if err != nil {
+				return runner.Result{}, fmt.Errorf("compose: binding for %s: %w", taskID, err)
+			}
+			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
+				return runner.Result{}, err
+			}
+			receipt, err := c.runSupervised(ctx, taskID, jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
+				"LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
+			})
+			if err != nil {
+				return runner.Result{}, err
+			}
+			answer, err := settleNativeReceipt(jobDir, receipt)
+			if err != nil {
+				return runner.Result{}, c.parkTurnFailure(taskID, inv.Generation, attempt, jobDir, err)
+			}
+			worker, err := validateWorkerAnswer(brief.Role, answer, c.spec.spec.Checks)
+			if err != nil {
+				return runner.Result{}, c.parkTurnFailure(taskID, inv.Generation, attempt, jobDir, err)
+			}
+			output = &workerOutput{
+				Result: *worker, NeedsRepair: NeedsRepair(*worker), Role: brief.Role,
+				Revision: c.spec.revision, Generation: inv.Generation,
+				Series: series, Turn: attempt, Job: relJobPath(taskID, inv.InvocationID, attempt),
+				Identity: turnIdentity(jobDir), InputFiles: materials.inputFiles,
+			}
+			if err := c.recordWorkerTurn(output); err != nil {
+				return runner.Result{}, err
+			}
+			c.event("worker-complete", map[string]any{
+				"role": brief.Role, "task": taskID, "operation": key, "status": worker.Status,
+			})
 		}
-		c.event("worker-start", map[string]any{"role": brief.Role, "task": taskID, "operation": key, "attempt": attempt})
-		// The turn directory appears with its request (writeNativeRequest
-		// creates it), never during the material preparation: recovery
-		// judges a turn by its files, and a directory holding nothing is a
-		// call that cannot be classified — an owner dying mid-preparation
-		// must leave no phantom turn behind.
-		materials, err := c.writeMaterials(jobDir, key, brief, workspace, attempt > 1, initialFeedback)
-		if err != nil {
-			return runner.Result{}, err
-		}
-		binding, err := c.cfg.Binding(NativeCall{
-			TaskID: taskID, Role: brief.Role, Generation: inv.Generation, Attempt: attempt, JobDir: jobDir,
-		})
-		if err != nil {
-			return runner.Result{}, fmt.Errorf("compose: binding for %s: %w", taskID, err)
-		}
-		if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
-			return runner.Result{}, err
-		}
-		receipt, err := c.runSupervised(ctx, taskID, jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
-			"LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
-		})
-		if err != nil {
-			return runner.Result{}, err
-		}
-		answer, err := settleNativeReceipt(jobDir, receipt)
-		if err != nil {
-			return runner.Result{}, c.parkTurnFailure(taskID, inv.Generation, attempt, jobDir, err)
-		}
-		worker, err := validateWorkerAnswer(brief.Role, answer, c.spec.spec.Checks)
-		if err != nil {
-			return runner.Result{}, c.parkTurnFailure(taskID, inv.Generation, attempt, jobDir, err)
-		}
-		source := turnIdentity(jobDir)
-		output := &workerOutput{
-			Result: *worker, NeedsRepair: NeedsRepair(*worker), Role: brief.Role,
-			Revision: c.spec.revision, Generation: inv.Generation,
-			Series: series, Turn: attempt, Job: relJobPath(taskID, inv.InvocationID, attempt),
-			Identity: source, InputFiles: materials.inputFiles,
-		}
-		if err := c.recordWorkerTurn(output); err != nil {
-			return runner.Result{}, err
-		}
-		c.event("worker-complete", map[string]any{
-			"role": brief.Role, "task": taskID, "operation": key, "status": worker.Status,
-		})
-		// The worker-outcome judgement drives the loop, in a fixed branch
-		// order: CONTINUE continues the session; everything else settles
-		// through the one admission chain below.
+		// The worker-outcome judgement drives the loop — for a replayed
+		// receipt exactly as for a live answer, in a fixed branch order:
+		// CONTINUE continues the session; everything else settles through
+		// the one admission chain.
 		action := textOf(workerOutcome(workerOutcomeInput{
-			Role: brief.Role, Status: worker.Status, NeedsRepair: output.NeedsRepair})["action"])
+			Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
 		if action == "continue" {
-			identity = source
+			identity = output.Identity
 			initialFeedback = map[string]any{
 				"continuation":     continuationWrapper(taskID, inv.Generation, output, c.spec.revision),
 				"initial_feedback": decodedFeedback(brief.Feedback),
@@ -422,12 +425,15 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 // the live invoke loop (a fresh answer and a receipt replay alike) and the
 // takeover consultation's adoption of a recovered receipt all end here, so
 // the same receipt lands the same domain facts whichever path found it.
-// BLOCKED and unresolved findings park with the recorded result; an
-// admissible result is judged by the stage's own rules (parkOnResult),
-// recorded, its session remembered, and returned.
+// CONTINUE (recovery only — the loops keep looping) parks the continuation
+// to be re-armed; BLOCKED and unresolved findings park with the recorded
+// result; an admissible result is judged by the stage's own rules
+// (parkOnResult), recorded, its session remembered, and returned.
 func (c *Compose) settleWorkerResult(taskID string, generation int64, series string, brief workerBrief, output *workerOutput) (runner.Result, error) {
 	switch textOf(workerOutcome(workerOutcomeInput{
 		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
+	case "continue":
+		return runner.Result{}, c.parkContinue(taskID, generation, output)
 	case "blocked":
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, series, output, runner.Disposition{
 			Kind: "worker-blocked", Reason: output.Result.Summary,
@@ -654,13 +660,21 @@ func (c *Compose) parkOnResult(taskID string, generation int64, series string, b
 	return nil
 }
 
+// errParked marks an invocation the admission chain parked on a standing
+// disposition. Executors return it as their no-receipt failure (the text
+// names the park); recovery reads it back with errors.Is so a CLASSIFIED
+// result awaiting its disposal is never mistaken for an unclassifiable
+// call.
+var errParked = errors.New("compose: parked on a standing disposition")
+
 // park lands the disposition row in the kernel and returns the parking
-// error: the invocation keeps its pending row (the task stays
-// unfinished, its dependents blocked) and the transitions between runs
-// turn the row into a question. TaskID, Generation and Attempt are
-// stamped here, in one place — the disposition id the question body
-// freezes is derived from exactly these, so a re-parked round (a later
-// generation or attempt of the same stage and kind) asks afresh.
+// error (wrapping errParked): the invocation keeps its pending row (the
+// task stays unfinished, its dependents blocked) and the transitions
+// between runs turn the row into a question. TaskID, Generation and
+// Attempt are stamped here, in one place — the disposition id the
+// question body freezes is derived from exactly these, so a re-parked
+// round (a later generation or attempt of the same stage and kind) asks
+// afresh.
 func (c *Compose) park(taskID string, generation int64, attempt int, d runner.Disposition) error {
 	d.TaskID = taskID
 	d.Generation = generation
@@ -668,7 +682,22 @@ func (c *Compose) park(taskID string, generation int64, attempt int, d runner.Di
 	if err := c.store.SetDisposition(context.Background(), d); err != nil {
 		return err
 	}
-	return fmt.Errorf("compose: %s parked on %s: %s", taskID, d.Kind, d.Reason)
+	return fmt.Errorf("compose: %s parked on %s: %s: %w", taskID, d.Kind, d.Reason, errParked)
+}
+
+// parkContinue parks one CONTINUE answer that recovery found: the
+// answer's turn is done and its next turn never started. The unfinished
+// session is remembered so the re-armed stage resumes the SAME session,
+// and the "continue" park row drives the route's automatic re-arm —
+// unfinished work is continued under its own identity, never judged a
+// lost session.
+func (c *Compose) parkContinue(taskID string, generation int64, output *workerOutput) error {
+	if output.Identity != "" {
+		_ = c.store.SetSession(context.Background(), taskID, output.Identity)
+	}
+	return c.park(taskID, generation, output.Turn, runner.Disposition{
+		Kind: "continue", Reason: output.Result.Summary,
+	})
 }
 
 // parkRuntime parks on a runtime failure (the host refused, or the answer

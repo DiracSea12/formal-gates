@@ -364,64 +364,70 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 	series := c.seriesKey(gateTaskID(gate), inv.Generation, brief)
 	for {
 		attempt++
-		if output, ok := c.replayWorkerTurn(gateTaskID(gate), inv.Generation, series, attempt); ok {
-			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
+		var output *workerOutput
+		// Receipt replay continues from the recorded turn instead of
+		// re-spending the host, and the replayed output is judged by
+		// exactly the branches below — the same ones a live answer meets.
+		if replayed, ok := c.replayWorkerTurn(gateTaskID(gate), inv.Generation, series, attempt); ok {
+			output = replayed
+		} else {
+			jobDir := filepath.Join(c.dir, "jobs", pathSafe(gateTaskID(gate)), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
+			// The turn directory appears with its request (writeNativeRequest
+			// creates it), never during the preparation above: recovery judges
+			// a turn by its files, and a directory holding nothing means a
+			// call that cannot be classified — an owner dying mid-preparation
+			// must leave no such phantom turn.
+			key := c.turnKey(series, attempt)
+			materials, err := c.writeMaterials(jobDir, key, brief, workspace, false, nil)
+			if err != nil {
+				return runner.Result{}, err
+			}
+			binding, err := c.cfg.Binding(NativeCall{
+				TaskID: gateTaskID(gate), Role: gate, Generation: inv.Generation, Attempt: attempt, JobDir: jobDir,
+			})
+			if err != nil {
+				return runner.Result{}, err
+			}
+			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
+				return runner.Result{}, err
+			}
+			receipt, err := c.runSupervised(ctx, gateTaskID(gate), jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
+				"LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
+			})
+			if err != nil {
+				return runner.Result{}, err
+			}
+			answer, err := settleNativeReceipt(jobDir, receipt)
+			if err != nil {
+				return runner.Result{}, c.parkRuntime(gateTaskID(gate), inv.Generation, attempt, err)
+			}
+			worker, err := validateWorkerAnswer(gate, answer, c.spec.spec.Checks)
+			if err != nil {
+				return runner.Result{}, c.parkRuntime(gateTaskID(gate), inv.Generation, attempt, err)
+			}
+			output = &workerOutput{
+				Result: *worker, NeedsRepair: NeedsRepair(*worker), Role: gate,
+				Revision: c.spec.revision, Generation: inv.Generation, Series: series,
+				Turn: attempt, Job: relJobPath(gateTaskID(gate), inv.InvocationID, attempt),
+				Identity: turnIdentity(jobDir),
+			}
+			if err := c.recordWorkerTurn(output); err != nil {
+				return runner.Result{}, err
+			}
+			c.event("worker-complete", map[string]any{"role": gate, "task": gateTaskID(gate), "status": worker.Status})
 		}
-		jobDir := filepath.Join(c.dir, "jobs", pathSafe(gateTaskID(gate)), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
-		// The turn directory appears with its request (writeNativeRequest
-		// creates it), never during the preparation above: recovery judges
-		// a turn by its files, and a directory holding nothing means a
-		// call that cannot be classified — an owner dying mid-preparation
-		// must leave no such phantom turn.
-		key := c.turnKey(series, attempt)
-		materials, err := c.writeMaterials(jobDir, key, brief, workspace, false, nil)
-		if err != nil {
-			return runner.Result{}, err
-		}
-		binding, err := c.cfg.Binding(NativeCall{
-			TaskID: gateTaskID(gate), Role: gate, Generation: inv.Generation, Attempt: attempt, JobDir: jobDir,
-		})
-		if err != nil {
-			return runner.Result{}, err
-		}
-		if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
-			return runner.Result{}, err
-		}
-		receipt, err := c.runSupervised(ctx, gateTaskID(gate), jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
-			"LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
-		})
-		if err != nil {
-			return runner.Result{}, err
-		}
-		answer, err := settleNativeReceipt(jobDir, receipt)
-		if err != nil {
-			return runner.Result{}, c.parkRuntime(gateTaskID(gate), inv.Generation, attempt, err)
-		}
-		worker, err := validateWorkerAnswer(gate, answer, c.spec.spec.Checks)
-		if err != nil {
-			return runner.Result{}, c.parkRuntime(gateTaskID(gate), inv.Generation, attempt, err)
-		}
-		output := &workerOutput{
-			Result: *worker, NeedsRepair: NeedsRepair(*worker), Role: gate,
-			Revision: c.spec.revision, Generation: inv.Generation, Series: series,
-			Turn: attempt, Job: relJobPath(gateTaskID(gate), inv.InvocationID, attempt),
-			Identity: turnIdentity(jobDir),
-		}
-		if err := c.recordWorkerTurn(output); err != nil {
-			return runner.Result{}, err
-		}
-		c.event("worker-complete", map[string]any{"role": gate, "task": gateTaskID(gate), "status": worker.Status})
+		// The worker-outcome judgement drives the loop — for a replayed
+		// receipt exactly as for a live answer: CONTINUE continues the
+		// session; everything else settles through finishGate, the one
+		// admission the recovery consult adopts through too.
 		action := textOf(workerOutcome(workerOutcomeInput{
-			Role: gate, Status: worker.Status, NeedsRepair: output.NeedsRepair})["action"])
+			Role: gate, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
 		switch action {
 		case "continue":
 			identity = output.Identity
 			continue
 		case "blocked":
-			return runner.Result{}, c.park(gateTaskID(gate), inv.Generation, attempt, runner.Disposition{
-				Kind: "worker-blocked", Reason: worker.Summary,
-				Evidence: turnEvidenceRef(gateTaskID(gate), inv.Generation, series, attempt),
-			})
+			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
 		default:
 			// A gate verdict — PASS or FAIL with findings — is a legitimate
 			// admitted result: the route judgement consumes it.
@@ -433,8 +439,29 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 	}
 }
 
-// finishGate records and admits one gate verdict.
+// finishGate is THE admission of one gate turn's output: the live gate
+// loop (a fresh answer and a receipt replay alike) and the takeover
+// consultation's adoption of a recovered receipt all end here, so the
+// same output lands the same gate facts whichever path found it. A
+// BLOCKED answer parks on the same worker-blocked disposition the live
+// loop parks on — run-condition trouble waits for the user's disposal and
+// is never a verdict evaluate can read as a business failure — and a
+// verdict is recorded and admitted with its candidate binding, so the
+// seal can later prove the same-candidate evidence.
 func (c *Compose) finishGate(taskID string, generation int64, candidate string, output *workerOutput) (runner.Result, error) {
+	switch textOf(workerOutcome(workerOutcomeInput{
+		Role: output.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
+	case "continue":
+		// Only recovery settles a CONTINUE here (the live loop keeps
+		// looping): the continuation parks to be re-armed on its session.
+		return runner.Result{}, c.parkContinue(taskID, generation, output)
+	case "blocked":
+		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, output.Series, output, runner.Disposition{
+			Kind:     "worker-blocked",
+			Reason:   output.Result.Summary,
+			Evidence: turnEvidenceRef(taskID, generation, output.Series, output.Turn),
+		})
+	}
 	record := outcomeRecord{
 		Task: taskID, Generation: generation, Action: "gate",
 		Worker: &output.Result, Output: output, Candidate: candidate,

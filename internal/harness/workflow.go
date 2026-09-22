@@ -200,13 +200,14 @@ type Compose struct {
 	baseCancel context.CancelFunc
 
 	// mu guards the in-memory caches: the live supervised calls, the
-	// held-interaction bookkeeping, the takeover observations and the
-	// progress signature.
+	// held-interaction bookkeeping, the takeover observations (each pinned
+	// to the invocation the consultation judged) and the progress
+	// signature.
 	mu            sync.Mutex
 	live          map[string]*liveJob
 	announced     map[string]bool
 	heldCh        chan heldNotice
-	observed      map[string]bool
+	observed      map[string]string
 	lastSignature string
 
 	// runMu guards the single in-flight Run goroutine.
@@ -326,7 +327,7 @@ func ComposeHarnessV1(cfg ComposeConfig) (c *Compose, err error) {
 		binding:   bindingOf(cfg, spec, binary),
 		live:      map[string]*liveJob{},
 		announced: map[string]bool{},
-		observed:  map[string]bool{},
+		observed:  map[string]string{},
 		heldCh:    make(chan heldNotice, 16),
 	}
 	if err := c.adoptOrCreate(); err != nil {

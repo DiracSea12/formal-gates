@@ -80,7 +80,7 @@ func (s composeScripts) forCall(call NativeCall, ordinal int) scriptedAnswer {
 // dshScriptSteps renders one scripted answer as the fake peer's protocol
 // sequence, the adapter tests' shape. Identity empty is a new session; a
 // continuation resumes it.
-func dshScriptSteps(jobDir string, answer scriptedAnswer, identity string) []peerStep {
+func dshScriptSteps(jobDir string, answer scriptedAnswer) []peerStep {
 	worker := WorkerResult{
 		Status:   answer.Status,
 		Summary:  answer.Summary,
@@ -107,20 +107,24 @@ func dshScriptSteps(jobDir string, answer scriptedAnswer, identity string) []pee
 			map[string]any{"type": "text", "text": "\n```"},
 		}}}) + "\n" +
 		peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
-	sessionOpen := peerStep{
+	// The fake host answers whichever session-open method the adapter
+	// uses: a recovered continuation resumes its remembered session on the
+	// FIRST attempt of a fresh invocation, so "attempt 1 means session/new"
+	// does not hold — both handlers stand and the unused one never fires
+	// (a step matches by substring, at most once).
+	openNew := peerStep{
 		On:   `"method":"session/new"`,
+		Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`,
+	}
+	openResume := peerStep{
+		On:   `"method":"session/resume"`,
 		Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`,
 	}
 	if answer.SessionUnavailable {
 		// The host refuses the persistent identity on whichever method the
 		// call opens the session with.
-		method := `"method":"session/new"`
-		if identity != "" {
-			method = `"method":"session/resume"`
-		}
-		sessionOpen = peerStep{On: method, Send: `{"id": "@ID@", "error": {"code": -32004, "message": "Session not found: s-1"}}`}
-	} else if identity != "" {
-		sessionOpen = peerStep{On: `"method":"session/resume"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`}
+		openNew = peerStep{On: openNew.On, Send: `{"id": "@ID@", "error": {"code": -32004, "message": "Session not found: s-1"}}`}
+		openResume = peerStep{On: openResume.On, Send: `{"id": "@ID@", "error": {"code": -32004, "message": "Session not found: s-1"}}`}
 	}
 	step := peerStep{
 		On: `"method":"session/prompt"`, SleepSecs: answer.SleepSecs, Send: `{"id": "@ID@", "result": {"stopReason": "end_turn"}}`,
@@ -133,7 +137,8 @@ func dshScriptSteps(jobDir string, answer scriptedAnswer, identity string) []pee
 	step.Files = append(step.Files, answer.Writes...)
 	return []peerStep{
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
-		sessionOpen,
+		openNew,
+		openResume,
 		step,
 		{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 	}
@@ -261,21 +266,12 @@ func openWorkflow(t *testing.T, runID string, scripts composeScripts, repairLimi
 					Path: filepath.Join(devWorkspace, "state.txt"), Body: "ok\n",
 				})
 			}
-			identity := ""
-			// A continuation turn resumes the session it opened; a repair
-			// round resumes exactly what the harness asks it to resume —
-			// read from the same kernel row the executor reads (Binding
-			// only runs during Drive, after the composition exists), so a
-			// replacement call that opens a fresh session (after an
-			// explicit restart) is answered with a fresh session, never a
-			// resume the harness did not request.
-			if call.Attempt > 1 {
-				identity = "s-1"
-			}
-			if call.Role == "repair" {
-				identity = c.session(taskDevelopment)
-			}
-			return dshBindingFor(t, fixedPeerPath(t, dshScriptSteps(call.JobDir, answer, identity),
+			// The fake host answers whichever session-open method the call
+			// uses (see dshScriptSteps): a continuation, a repair round and
+			// a replacement after an explicit restart are all answered
+			// exactly as opened — a fresh open with a fresh session, a
+			// resume with the same session id.
+			return dshBindingFor(t, fixedPeerPath(t, dshScriptSteps(call.JobDir, answer),
 				filepath.Join(call.JobDir, "peer-echo.txt"))), nil
 		},
 		Parallelism: 2,
@@ -1058,7 +1054,7 @@ func makeRejectedAnswer(t *testing.T, c *Compose, jobDir string) {
 		t.Fatal(err)
 	}
 	answer := scriptedAnswer{Garbage: true, Status: "PASS", Summary: "unparseable"}
-	peer := fixedPeerPath(t, dshScriptSteps(jobDir, answer, ""), filepath.Join(jobDir, "peer-echo.txt"))
+	peer := fixedPeerPath(t, dshScriptSteps(jobDir, answer), filepath.Join(jobDir, "peer-echo.txt"))
 	binding := dshBindingFor(t, peer)
 	request := map[string]any{
 		"kind":  "native",
@@ -1102,7 +1098,7 @@ func fabricatePredecessor(t *testing.T, c *Compose, taskID, invocation string, s
 		t.Fatal(err)
 	}
 	answer := scriptedAnswer{Status: "PASS", Summary: "green", SleepSecs: sleep}
-	peer := fixedPeerPath(t, dshScriptSteps(jobDir, answer, ""), filepath.Join(jobDir, "peer-echo.txt"))
+	peer := fixedPeerPath(t, dshScriptSteps(jobDir, answer), filepath.Join(jobDir, "peer-echo.txt"))
 	binding := dshBindingFor(t, peer)
 	request := map[string]any{
 		"kind":  "native",

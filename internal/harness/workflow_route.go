@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"formal-gates/internal/runner"
 )
@@ -124,11 +123,13 @@ func dispositionIDOf(task string, d *runner.Disposition) string {
 	return fmt.Sprintf("%s@%d:%d:%s", task, d.Generation, d.Attempt, d.Kind)
 }
 
-// routeDisposition walks one parked stage's disposition row: no question
-// yet — place it; answered retry — revise the stage (its retry brief, or
-// the other stage's brief when the question retried a different stage, as
-// the QA loop does); answered restart-session — drop the stage's session
-// and revise.
+// routeDisposition walks one parked stage's disposition row: a
+// continuation re-arms its stage without a question (unfinished work is
+// continued, never asked about); every other row becomes a question —
+// no question yet, place it; answered retry — revise the stage (its
+// retry brief, or the other stage's brief when the question retried a
+// different stage, as the QA loop does); answered restart-session — drop
+// the stage's session and revise.
 func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeState, bool) {
 	d := c.readDisposition(task)
 	if d == nil {
@@ -141,6 +142,21 @@ func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeSta
 		if c.taskGeneration(task) > d.Generation {
 			c.clearDisposition(task)
 		}
+		return ComposeState{}, false
+	}
+	if d.Kind == "continue" {
+		// The live loop would simply start the next turn: recovery re-arms
+		// the stage on its current brief — the remembered session identity
+		// carries the work under the SAME session — and no question is
+		// asked. The row is spent once the task moved past the parked
+		// generation (a crash between the revision and this clear re-reads
+		// the moved generation and only cleans up).
+		if c.taskGeneration(task) <= d.Generation {
+			if err := c.revise(ctx, task, c.lastBrief(task)); err != nil {
+				return ComposeState{Status: StatusFailed, Err: err}, true
+			}
+		}
+		c.clearDisposition(task)
 		return ComposeState{}, false
 	}
 	question := askTask(c.dispositionTarget(d, task))
@@ -204,10 +220,11 @@ func (c *Compose) pendingQuestionOn(ctx context.Context, task string) bool {
 // gate-carry never resurrects an answered one). The question body carries
 // the disposition id, which — with the kernel row's generation binding —
 // IS the ask-once marker: a reopened owner reads it back off the row
-// itself. For a runtime disposition raised mid-run the executor may
-// already have opened the question at the current generation through
-// OpenQuestion with the same id in its body; both spellings therefore ask
-// exactly once.
+// itself. A runtime disposition the recovery consult already asked
+// through OpenQuestion carries the same id in its body, so both
+// spellings ask exactly once; a later disposition on the same ask task
+// is a new revision with a fresh decision id, never a replay of the
+// answered row.
 func (c *Compose) placeQuestion(ctx context.Context, questionTask, dispositionID string, d *runner.Disposition) error {
 	// canonicalBody is the encoding boundary for values that may carry typed
 	// Go fields: the body must cross as plain decoded values.
@@ -483,6 +500,28 @@ func (c *Compose) dispositionStands(task string) bool {
 	return c.readDisposition(task) != nil
 }
 
+// unplacedDisposition reports whether any standing park row still has
+// transition work: a continuation not yet re-armed, or a question not yet
+// placed on its ask task. The drive loop keeps advancing while one does,
+// so a single waiting stop carries every askable question (a parked
+// result's disposal and a pending restart ask surface together instead of
+// one hiding the other). Inert rows (route-guard) are no work.
+func (c *Compose) unplacedDisposition(ctx context.Context) bool {
+	for _, task := range c.disposedTasks() {
+		d := c.readDisposition(task)
+		if d == nil || d.Kind == "route-guard" {
+			continue
+		}
+		if d.Kind == "continue" {
+			return true
+		}
+		if !c.pendingQuestionOn(ctx, askTask(c.dispositionTarget(d, task))) {
+			return true
+		}
+	}
+	return false
+}
+
 // routePlanAdvance continues the chain after the plan approval was
 // answered: approve re-arms the plan task (its errored invocation WAS the
 // interrupt — the executor asked through the kernel's OpenQuestion seam and
@@ -519,25 +558,6 @@ func (c *Compose) routePlanAdvance(ctx context.Context) (ComposeState, bool) {
 	return ComposeState{}, false // asked, not yet answered
 }
 
-// repairDriven reports whether the evaluate verdict's failed-verification
-// bundle has already driven its repair round: the kernel's persisted
-// revision inputs (task_revisions) hold bytes binding this bundle's
-// content reference — the repair brief embeds the wrapper's
-// source.artifact, so the reference appears verbatim in the input. A
-// granted restart's session replacement needs no projection here either —
-// the kernel clears the identity with the grant itself (decisions.go).
-func (c *Compose) repairDriven(ref string) bool {
-	if ref == "" {
-		return false
-	}
-	for _, row := range c.kernelRevisionInputs() {
-		if strings.Contains(string(row.Input), ref) {
-			return true
-		}
-	}
-	return false
-}
-
 // routeRepair drives the repair loop: evaluate's repair route, the
 // allowance boundary (the accepted repair-allowance judgement through the
 // kernel's request), and the repair brief derived — at this moment — from
@@ -547,31 +567,14 @@ func (c *Compose) routeRepair(ctx context.Context) (ComposeState, bool) {
 	if outcome == nil || outcome.Route != "repair" {
 		return ComposeState{}, false
 	}
-	// The consumption binding: one evaluate verdict drives exactly its own
-	// repair round — never a second one. Two facts decide it together:
-	//
-	//   - the evaluate task's kernel generation has moved past the
-	//     verdict's (the repair revision bumps evaluate with the whole
-	//     dependent closure, so once the round's revision landed, the
-	//     verdict is superseded history), and
-	//   - the kernel's persisted revision inputs carry the bytes that
-	//     round wrote (the brief embeds the verdict bundle's content
-	//     reference).
-	//
-	// Both together mean spent — whether the repair it started is still in
-	// flight (the recovery consult observes it) or long settled; the next
-	// verdict only exists after the chain re-verified. Either fact alone
-	// is wrong: generation alone would spend a fresh verdict on any
-	// upstream revision of evaluate's scope (a check retry's closure
-	// bumps it without a repair round), the revision-input binding alone
-	// would spend a fresh identical verdict (two no-change rounds share
-	// one bundle reference). Before this binding, the latest file outcome
-	// — however stale — kept driving RequestRevision across reopens,
-	// re-asking the allowance and racing a live repair.
-	if generation, err := c.store.TaskGeneration(ctx, taskEvaluate); err == nil &&
-		generation > outcome.Generation && c.repairDriven(outcome.Feedback) {
-		return ComposeState{}, false
-	}
+	// One verdict drives at most its own round, by the kernel's own
+	// generation fact: latestOutcome reads the kernel-current generation,
+	// and this round's revision bumps evaluate with the whole dependent
+	// closure the moment it lands — a spent verdict therefore has no
+	// outcome at the moved generation (latestOutcome is nil), and the
+	// next verdict only exists after the chain re-verified. While the
+	// round's ask or repair is still in flight, the guards below hold the
+	// entry.
 	if c.dispositionStands(taskDevelopment) {
 		return ComposeState{}, false
 	}

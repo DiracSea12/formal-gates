@@ -117,6 +117,14 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		if state, stop := c.abortedIfRefused(ctx); stop {
 			return state, true
 		}
+		// A standing park row whose transition has not run yet is work in
+		// hand: place its question (or re-arm its continuation) before
+		// stopping, so one waiting stop carries EVERY askable question —
+		// a parked result's disposal is never hidden behind a different
+		// pending ask.
+		if c.unplacedDisposition(ctx) {
+			return ComposeState{}, false
+		}
 		// A user question outranks an observation notice: the user can act
 		// on the question while the observed call keeps settling.
 		if len(pending) == 0 {
@@ -145,6 +153,15 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		_ = c.store.SetTerminal(ctx, statusAborted, "user declined at a decision boundary")
 		return ComposeState{Status: StatusAborted, Terminal: statusAborted}, true
 	case errors.Is(err, runner.ErrCallObserved), errors.Is(err, runner.ErrTakeoverRequired):
+		// An observed call stops the drive only when it is genuinely in
+		// flight. A parked observation — its stage's standing disposition
+		// holds it, a question to place or a continuation to re-arm —
+		// still has transitions to apply, so the loop advances and the
+		// next run surfaces the question (or runs the re-armed work)
+		// instead of reporting a wait nothing can move.
+		if c.unplacedDisposition(ctx) {
+			return ComposeState{}, false
+		}
 		return ComposeState{Status: StatusObserved}, true
 	case errors.Is(err, runner.ErrRevisionGranted):
 		// A repair round the user allowed but nobody completed yet: the
@@ -536,19 +553,24 @@ type heldNotice struct {
 
 // watchedDirs is the watcher's scan set: the live jobs of this process plus
 // the job directories of calls a takeover consultation kept under
-// observation — a recovered owner watches the predecessor's call too.
+// observation — a recovered owner watches the predecessor's call too. The
+// observed entries are pinned to the invocation the consultation judged:
+// the watcher follows that invocation's own newest turn, never a
+// "highest turn" guess across a task's every call (turn numbers order
+// turns within one invocation only, so an old call's turn-02 is not newer
+// than the current call's turn-01).
 func (c *Compose) watchedDirs() map[string]string {
 	dirs := map[string]string{}
 	for _, job := range c.snapshotLive() {
 		dirs[job.dir] = job.taskID
 	}
 	c.mu.Lock()
-	for task := range c.observed {
+	for task, invocation := range c.observed {
 		// observed is keyed by the logical TaskID; the job tree's directory
 		// is its pathSafe form (see the executors' jobDir), so the watcher
 		// must cross at the same point or a recovered "gate:x" call's held
 		// interactions are never found.
-		if turn := latestTurnDir(filepath.Join(c.dir, "jobs", pathSafe(task))); turn != "" {
+		if turn := latestTurnOf(filepath.Join(c.dir, "jobs", pathSafe(task), invocation)); turn != "" {
 			dirs[turn] = task
 		}
 	}
@@ -646,7 +668,11 @@ func latestTurnOf(base string) string {
 }
 
 // latestTurnDir picks the highest turn directory (numerically) under a
-// task's job tree, searching every invocation.
+// task's job tree, searching every invocation. Turn numbers order turns
+// within ONE invocation only, so this cross-invocation maximum is NOT a
+// "current call" selector — the recovery paths select the invocation
+// first (latestTurnOf); this listing is kept for diagnostics that want
+// the whole task's highest-numbered turn.
 func latestTurnDir(base string) string {
 	invocations, err := os.ReadDir(base)
 	if err != nil {

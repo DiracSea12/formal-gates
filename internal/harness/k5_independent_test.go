@@ -47,11 +47,7 @@ func independentBinding(t testReporter, cfg ComposeConfig, scripts composeScript
 		if (call.Role == "development" || call.Role == "repair") && !answer.NoWrite && !answer.Garbage {
 			answer.Writes = append(answer.Writes, peerFile{Path: filepath.Join(cfg.Dir, "workspaces", "development", "state.txt"), Body: "ok\n"})
 		}
-		identity := ""
-		if call.Attempt > 1 || call.Role == "repair" {
-			identity = "s-1"
-		}
-		return dshBindingFor(t, fixedPeerPath(t, dshScriptSteps(call.JobDir, answer, identity), filepath.Join(call.JobDir, "peer-echo.txt"))), nil
+		return dshBindingFor(t, fixedPeerPath(t, dshScriptSteps(call.JobDir, answer), filepath.Join(call.JobDir, "peer-echo.txt"))), nil
 	}
 }
 func independentOpen(t *testing.T, cfg ComposeConfig) *Compose {
@@ -164,13 +160,49 @@ func TestIndependentK5Owner(t *testing.T) {
 			os.WriteFile(filepath.Join(cfg.Dir, "repair-call-started"), []byte(call.JobDir), 0600)
 		}
 	})
-	if s.Mode == "held-gate" {
+	if s.Mode == "check-runtime" {
+		cfg.Spec.Checks[0].Argv = []string{"/bin/sh", "-c", "sleep 2; exit 127"}
+	}
+	if s.Mode == "gate-blocked" {
+		scripts[gateTaskID("complexity-gate")] = scriptedAnswer{Status: "BLOCKED", Summary: "temporary access problem", SleepSecs: 2}
+	}
+	if s.Mode == "product-garbage" {
+		scripts[taskProduct] = scriptedAnswer{Status: "PASS", Summary: "malformed output", Garbage: true, SleepSecs: 2}
+	}
+	if s.Mode == "product-fail" {
+		scripts[taskProduct] = scriptedAnswer{Status: "FAIL", Summary: "requirements need correction", Findings: scriptedFindings, SleepSecs: 2}
+	}
+	if s.Mode == "continue-gap" {
+		scripts["development#1"] = scriptedAnswer{Status: "CONTINUE", Summary: "continuing", NoWrite: true}
 		normal := cfg.Binding
 		cfg.Binding = func(call NativeCall) (map[string]any, error) {
-			if call.TaskID != gateTaskID("complexity-gate") {
+			if call.TaskID == taskDevelopment && call.Attempt == 2 {
+				os.WriteFile(filepath.Join(cfg.Dir, "continue-gap"), []byte(call.JobDir), 0600)
+				select {}
+			}
+			return normal(call)
+		}
+	}
+	if s.Mode == "held-after-retry" {
+		scripts["development#1"] = scriptedAnswer{Status: "CONTINUE", Summary: "continue", NoWrite: true}
+		scripts["development#2"] = scriptedAnswer{Status: "BLOCKED", Summary: "temporary access problem", NoWrite: true}
+	}
+	if s.Mode == "held-gate" || s.Mode == "held-after-retry" {
+		normal := cfg.Binding
+		ordinal := 0
+		cfg.Binding = func(call NativeCall) (map[string]any, error) {
+			target := gateTaskID("complexity-gate")
+			if s.Mode == "held-after-retry" {
+				target = taskDevelopment
+			}
+			if call.TaskID != target {
 				return normal(call)
 			}
-			steps := dshScriptSteps(call.JobDir, passAnswer(), "")
+			ordinal++
+			if s.Mode == "held-after-retry" && ordinal <= 2 {
+				return normal(call)
+			}
+			steps := dshScriptSteps(call.JobDir, passAnswer())
 			response := steps[2]
 			response.On = `"outcome":"selected"`
 			response.Send = `{"id":3,"result":{"stopReason":"end_turn"}}`
@@ -185,7 +217,7 @@ func TestIndependentK5Owner(t *testing.T) {
 	}
 	defer c.Close()
 	state := answerAllowing(t, c, context.Background(), nil)
-	if s.Mode == "held-gate" && state.Status == StatusWaitingInteraction {
+	if (s.Mode == "held-gate" || s.Mode == "held-after-retry") && state.Status == StatusWaitingInteraction {
 		select {}
 	}
 	os.WriteFile(filepath.Join(cfg.Dir, "owner-ended"), []byte(fmt.Sprintf("%+v", state)), 0600)

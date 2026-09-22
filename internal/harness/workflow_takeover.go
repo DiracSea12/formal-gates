@@ -13,20 +13,21 @@ package harness
 //  2. a session the host explicitly refused (SESSION_UNAVAILABLE) is the
 //     zero outcome: the kernel's restart request asks, nothing is voided
 //     or re-run behind the user's back;
-//  3. a turn that ended exit-0 with a framed answer the worker contract
-//     rejects is its own classification (R9): a runtime question —
-//     retry / restart-session / abort — opened here through OpenQuestion
-//     (consultations run inside a Run, where no revision is possible, and
-//     OpenQuestion takes no advance lock), with the call parked until the
-//     answer moves it;
-//  4. a verifiable terminal result is adopted under the original call
-//     identity through the SAME per-type admission chain the live
-//     executors use (adoptTurn: checks through settleCheckResult, gates
-//     through finishGate, workers through settleWorkerResult) — unless
-//     this stage's own flow must still judge it (a pre-review FAIL,
-//     unresolved development findings, a check that could not execute),
-//     which parks with its disposition instead, exactly as the live
-//     executor would;
+//  3. a verifiable receipt is settled under the original call identity
+//     through the SAME per-type admission chain the live executors use
+//     (adoptTurn: checks through settleCheckResult, gates through
+//     finishGate, workers through settleWorkerResult), and the chain's
+//     classification decides what recovery means: an admissible result is
+//     adopted, while a result the stage itself must still judge (a
+//     BLOCKED answer, a pre-review FAIL, a check that could not execute,
+//     an unfinished CONTINUE session) parks with its disposition exactly
+//     as the live executor parks it — the invocation stays under
+//     observation and the transitions between runs surface its question
+//     or re-arm its continuation;
+//  4. a turn that ended without an acceptable business answer (R9) parks
+//     the runtime disposition bound to the failed invocation and asks
+//     through it — retry / restart-session / abort, placed by the
+//     mid-flight seam or the route — never a disguised session failure;
 //  5. a supervisor still alive under its recorded identity is observed;
 //  6. anything else — no receipt, nothing alive, no session refusal — is
 //     the zero outcome too: whether the call ever executed cannot be
@@ -34,6 +35,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,7 +52,7 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 	// holds its question on the ask task, and its invocation is voided by
 	// the answer's revision — not by a restart decision.
 	if c.pendingQuestionOn(ctx, inv.TaskID) || c.pendingQuestionOn(ctx, askTask(inv.TaskID)) {
-		c.noteObservation(inv.TaskID, true)
+		c.noteObservation(inv.TaskID, inv.InvocationID)
 		return runner.TakeoverOutcome{Observe: true}, nil
 	}
 	// The consultation reads THE invocation's own turns: a task holds one
@@ -61,7 +63,7 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 		// A standing disposition with no call at all is a deliberate park
 		// that never reached the host: the retry revision owns it.
 		if c.dispositionStands(inv.TaskID) {
-			c.noteObservation(inv.TaskID, true)
+			c.noteObservation(inv.TaskID, inv.InvocationID)
 			return runner.TakeoverOutcome{Observe: true}, nil
 		}
 		// The invocation never spawned a supervised call — provably nothing
@@ -74,79 +76,106 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 		c.clearSessionRefusal(inv.TaskID)
 		return runner.TakeoverOutcome{}, nil
 	}
-	if outcome, ok := c.adoptTurn(inv, turn); ok {
-		c.noteObservation(inv.TaskID, false)
-		return outcome, nil
+	if outcome, verdict := c.adoptTurn(inv, turn); verdict != admissionNone {
+		if verdict == admissionAdopted {
+			c.clearObservation(inv.TaskID)
+			return outcome, nil
+		}
+		// admissionParked: the shared admission chain classified the
+		// result and landed its standing disposition — the invocation
+		// stays parked under observation, and the transitions between
+		// runs surface the question (or re-arm the continuation) exactly
+		// as the live executor's park would.
+		c.noteObservation(inv.TaskID, inv.InvocationID)
+		return runner.TakeoverOutcome{Observe: true}, nil
 	}
 	if c.contractRejected(inv, turn) {
 		// R9: a rejected answer is a runtime question of its own, never a
-		// disguised session failure.
-		if err := c.openRuntimeQuestion(ctx, inv.TaskID, turn); err == nil {
-			c.noteObservation(inv.TaskID, true)
+		// disguised session failure. The park row is bound to the failed
+		// invocation's own identity, so a different failure asks afresh
+		// and the same failure replayed reuses the same answer.
+		if c.openRuntimeQuestion(ctx, inv, turn) {
+			c.noteObservation(inv.TaskID, inv.InvocationID)
 			return runner.TakeoverOutcome{Observe: true}, nil
 		}
 	}
 	if supervisorAlive(turn) {
-		c.noteObservation(inv.TaskID, true)
+		c.noteObservation(inv.TaskID, inv.InvocationID)
 		return runner.TakeoverOutcome{Observe: true}, nil
 	}
-	c.noteObservation(inv.TaskID, false)
+	c.clearObservation(inv.TaskID)
 	return runner.TakeoverOutcome{}, nil
 }
 
-// openRuntimeQuestion opens the runtime disposition's question on the
-// stage's question task through the kernel's mid-flight seam. It is
-// idempotent: a standing pending question returns as-is. The body carries
-// the disposition id through the same encoding as placeQuestion, so the
-// ask-once read (askRecorded) recognizes this spelling too. The park row
-// lands FIRST — an owner dying between the two writes leaves the row the
-// route re-derives the ask from, never a question the route cannot see.
-func (c *Compose) openRuntimeQuestion(ctx context.Context, taskID, turnDir string) error {
+// openRuntimeQuestion parks the runtime disposition for one
+// contract-rejected turn and asks its question. The park lands through
+// the same park() every live park uses, stamped with the failed
+// invocation's own identity — generation and turn — so the disposition
+// id the question body carries is unique to THIS failure: replaying the
+// same failure reuses the answer, a different failure asks afresh. The
+// ask itself goes through the kernel's mid-flight seam (it takes no
+// advance lock, so the same run's settle reports the question) whenever
+// the ask task's current generation holds no answered row; the body is
+// the same spelling the route's placeQuestion derives, so askRecorded
+// recognizes either origin. When the seam refuses (an answered row
+// stands — a LATER failure of the same stage), the park row alone
+// returns and the route's placeQuestion revision asks afresh under a
+// fresh decision id.
+func (c *Compose) openRuntimeQuestion(ctx context.Context, inv runner.Invocation, turnDir string) bool {
 	reason := "the recorded answer failed the worker contract"
 	if body, err := readJSONFile(filepath.Join(turnDir, "native-error.json")); err == nil {
 		if text := textOf(getOf(body, "error")); text != "" {
 			reason = text
 		}
 	}
-	d := runner.Disposition{TaskID: taskID, Kind: "runtime", Reason: reason}
-	if err := c.store.SetDisposition(ctx, d); err != nil {
-		return err
+	if err := c.park(inv.TaskID, inv.Generation, turnNumberOf(turnDir), runner.Disposition{
+		Kind: "runtime", Reason: reason,
+	}); !errors.Is(err, errParked) {
+		return false // the park row itself could not land: not this fact's ask
 	}
-	// The same encoding boundary placeQuestion uses: question bodies cross
-	// as plain decoded values, never typed Go fields.
-	body, err := canonicalBody(questionBody(&d, dispositionIDOf(taskID, &d)))
+	d := c.readDisposition(inv.TaskID)
+	if d == nil {
+		return true // parked; the route asks from the row
+	}
+	body, err := canonicalBody(questionBody(d, dispositionIDOf(inv.TaskID, d)))
 	if err != nil {
-		return err
+		return true // parked; the route asks from the row
 	}
-	_, err = c.store.OpenQuestion(ctx, askTask(taskID), &runner.Confirmation{
-		Options: questionOptions(&d), Allow: questionAllow(&d),
+	_, _ = c.store.OpenQuestion(ctx, askTask(inv.TaskID), &runner.Confirmation{
+		Options: questionOptions(d), Allow: questionAllow(d),
 		Revision: c.spec.revision, Body: body,
 	})
-	return err
+	return true
 }
 
-// noteObservation records or clears one task's live-observation fact for
-// classify and the interaction watcher.
-func (c *Compose) noteObservation(taskID string, on bool) {
+// noteObservation records one task's live-observation fact, pinned to the
+// invocation the consultation judged: the watcher and the status display
+// derive the exact job from that identity (the newest turn OF THAT
+// invocation), never from a guess across a task's every call.
+func (c *Compose) noteObservation(taskID, invocationID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if on {
-		c.observed[taskID] = true
-	} else {
-		delete(c.observed, taskID)
-	}
+	c.observed[taskID] = invocationID
 }
 
-// liveObservations reports the tasks whose observed calls are still
-// unsettled (no exit receipt yet).
+// clearObservation drops one task's observation fact.
+func (c *Compose) clearObservation(taskID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.observed, taskID)
+}
+
+// liveObservations reports the tasks whose observed invocations are still
+// unsettled (no exit receipt yet), following each recorded invocation's
+// own newest turn.
 func (c *Compose) liveObservations() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []string
-	for task := range c.observed {
+	for task, invocation := range c.observed {
 		// The job tree stores the pathSafe form of the logical TaskID; the
 		// consult reads it through the same conversion.
-		turn := latestTurnDir(filepath.Join(c.dir, "jobs", pathSafe(task)))
+		turn := latestTurnOf(filepath.Join(c.dir, "jobs", pathSafe(task), invocation))
 		if turn == "" {
 			delete(c.observed, task)
 			continue
@@ -161,27 +190,51 @@ func (c *Compose) liveObservations() []string {
 	return out
 }
 
+// admission is what adopting one recovered receipt through the shared
+// per-type admission chain produced. The consultation tells the cases
+// apart because they mean different things to the scheduler: an admitted
+// result finishes the call under its original identity; a parked one is a
+// CLASSIFIED result whose standing disposition owns the next move (its
+// question, or its continuation); "none" is a genuinely unclassifiable
+// call — the only fact the kernel's restart ask is for.
+type admission int
+
+const (
+	admissionNone    admission = iota // no verifiable, classifiable result
+	admissionParked                   // classified; a standing disposition owns the next move
+	admissionAdopted                  // admitted under the original call identity
+)
+
+// admissionOf maps one settle-chain outcome to the consultation's verdict.
+func admissionOf(result runner.Result, err error) (runner.TakeoverOutcome, admission) {
+	switch {
+	case err == nil:
+		return runner.TakeoverOutcome{Adopt: true, Result: result}, admissionAdopted
+	case errors.Is(err, errParked):
+		return runner.TakeoverOutcome{}, admissionParked
+	default:
+		return runner.TakeoverOutcome{}, admissionNone
+	}
+}
+
 // adoptTurn settles one verifiable receipt under the original call
 // identity — the recovery half of the single admission chain. How the
 // receipt was obtained is the ONLY difference from the live executors:
 // they wait for the supervisor they started, recovery locates the turn a
-// crashed owner left behind. From here the per-type verification and
-// construction are the live ones, by explicit task-type branch: checks go
-// through the check executor's own receipt rules and settleCheckResult,
-// gate verdicts through finishGate, worker results through
-// settleWorkerResult — never a generic worker shape standing in for a
-// domain result. A receipt the stage itself must still judge (a blocked
-// answer, a pre-review FAIL, a check that could not execute) parks with
-// its disposition and reports no adoption: the standing question owns
-// the next move, exactly as it would live.
-func (c *Compose) adoptTurn(inv runner.Invocation, turnDir string) (runner.TakeoverOutcome, bool) {
+// crashed owner left behind. From here the per-type verification,
+// classification and construction are the live ones, by explicit
+// task-type branch: checks go through the check executor's own receipt
+// rules and settleCheckResult, gate verdicts through finishGate, worker
+// results through settleWorkerResult — never a generic worker shape
+// standing in for a domain result.
+func (c *Compose) adoptTurn(inv runner.Invocation, turnDir string) (runner.TakeoverOutcome, admission) {
 	receiptValue, err := readJSONFile(filepath.Join(turnDir, "exit.json"))
 	if err != nil {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	receipt, ok := receiptValue.(map[string]any)
 	if !ok {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	switch {
 	case strings.HasPrefix(inv.TaskID, "check:"):
@@ -199,53 +252,53 @@ func (c *Compose) adoptTurn(inv runner.Invocation, turnDir string) (runner.Takeo
 // candidate (verifyCandidateIntact), and the record lands through
 // settleCheckResult with the binding re-derived exactly as the live
 // executor derives it — a completed check is never read as a native
-// session question, because a check has no native session.
-func (c *Compose) adoptCheckTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, bool) {
+// session question, because a check has no native session. A receipt the
+// check itself must still judge (it could not execute) parks on the same
+// check-runtime disposition the live executor parks on.
+func (c *Compose) adoptCheckTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, admission) {
 	check, err := c.checkOf(inv.TaskID)
 	if err != nil {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	candidate := c.currentCandidate()
 	if candidate == "" {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
-	parkRuntime := func(err error) (runner.TakeoverOutcome, bool) {
+	parkRuntime := func(err error) (runner.TakeoverOutcome, admission) {
 		_ = c.park(inv.TaskID, inv.Generation, turnNumberOf(turnDir)-1, runner.Disposition{
 			Kind: "check-runtime", Reason: err.Error(),
 		})
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionParked
 	}
 	if err := checkReceiptRan(receipt); err != nil {
 		return parkRuntime(err)
 	}
 	workspace := turnWorkspace(turnDir)
 	if workspace == "" {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	if err := verifyCandidateIntact(workspace, candidate); err != nil {
 		return parkRuntime(err)
 	}
 	root, err := c.developmentWorkspace()
 	if err != nil {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	binding, err := scopeBinding(bindingInput{Root: root, Candidate: candidate, Revision: c.spec.revision, Check: check})
 	if err != nil {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
-	result, err := c.settleCheckResult(inv, check, binding, candidate, intOf(getOf(receipt, "exit_code")), receipt)
-	if err != nil {
-		return runner.TakeoverOutcome{}, false
-	}
-	return runner.TakeoverOutcome{Adopt: true, Result: result}, true
+	return admissionOf(c.settleCheckResult(inv, check, binding, candidate, intOf(getOf(receipt, "exit_code")), receipt))
 }
 
 // framedTurnOutput verifies one recovered native turn and frames its
 // answer: the receipt against its request, the answer under the worker
 // contract of the invocation's own brief, and the worker evidence record
 // built exactly as the live loop builds it (same series key, same turn
-// and job references). A CONTINUE answer is not a result — its next turn
-// never started, the owner died — and reports false.
+// and job references). What the output MEANS is not decided here: the
+// settle functions apply the same worker-outcome branches the live loops
+// apply, so a CONTINUE frames like any other answer and is classified by
+// the chain that receives it.
 func (c *Compose) framedTurnOutput(inv runner.Invocation, turnDir string, receipt map[string]any) (workerBrief, string, *workerOutput, bool) {
 	answer, err := settleNativeReceipt(turnDir, receipt)
 	if err != nil {
@@ -263,54 +316,44 @@ func (c *Compose) framedTurnOutput(inv runner.Invocation, turnDir string, receip
 		Series: series, Turn: turnNumberOf(turnDir), Job: jobRelOf(c.dir, turnDir),
 		Identity: turnIdentity(turnDir),
 	}
-	if textOf(workerOutcome(workerOutcomeInput{
-		Role: brief.Role, Status: worker.Status, NeedsRepair: output.NeedsRepair})["action"]) == "continue" {
-		return workerBrief{}, "", nil, false
-	}
 	return brief, series, output, true
 }
 
-// adoptGateTurn adopts one recovered gate verdict through finishGate —
-// the SAME entry the live gate loop admits through — so the outcome
-// carries its candidate binding and the seal can later prove the
-// same-candidate evidence. The read-only clone the verdict's own request
-// names must still hold the candidate, the proof the live loop demands
-// before admitting a verdict.
-func (c *Compose) adoptGateTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, bool) {
+// adoptGateTurn adopts one recovered gate turn through finishGate — the
+// SAME admission the live gate loop settles through — so a BLOCKED answer
+// parks on the same worker-blocked disposition the live loop parks on,
+// and an admitted verdict carries its candidate binding for the seal to
+// later prove the same-candidate evidence. The read-only clone the
+// verdict's own request names must still hold the candidate, the proof
+// the live loop demands before admitting a verdict.
+func (c *Compose) adoptGateTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, admission) {
 	_, _, output, ok := c.framedTurnOutput(inv, turnDir, receipt)
 	if !ok {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	candidate := c.currentCandidate()
 	if candidate == "" {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
 	if workspace := turnWorkspace(turnDir); workspace != "" {
 		if err := verifyCandidateIntact(workspace, candidate); err != nil {
-			return runner.TakeoverOutcome{}, false
+			return runner.TakeoverOutcome{}, admissionNone
 		}
 	}
-	result, err := c.finishGate(inv.TaskID, inv.Generation, candidate, output)
-	if err != nil {
-		return runner.TakeoverOutcome{}, false
-	}
-	return runner.TakeoverOutcome{Adopt: true, Result: result}, true
+	return admissionOf(c.finishGate(inv.TaskID, inv.Generation, candidate, output))
 }
 
 // adoptWorkerTurn adopts one recovered worker result through
 // settleWorkerResult — the SAME admission chain the live invoke loop uses
-// for both fresh answers and receipt replays. A result the stage itself
-// must still judge parks with its disposition and reports no adoption.
-func (c *Compose) adoptWorkerTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, bool) {
+// for fresh answers, receipt replays and recovered receipts alike. A
+// result the stage itself must still judge parks with its disposition;
+// an unfinished CONTINUE session parks to be re-armed.
+func (c *Compose) adoptWorkerTurn(inv runner.Invocation, turnDir string, receipt map[string]any) (runner.TakeoverOutcome, admission) {
 	brief, series, output, ok := c.framedTurnOutput(inv, turnDir, receipt)
 	if !ok {
-		return runner.TakeoverOutcome{}, false
+		return runner.TakeoverOutcome{}, admissionNone
 	}
-	result, err := c.settleWorkerResult(inv.TaskID, inv.Generation, series, brief, output)
-	if err != nil {
-		return runner.TakeoverOutcome{}, false // parked: the question owns the next move
-	}
-	return runner.TakeoverOutcome{Adopt: true, Result: result}, true
+	return admissionOf(c.settleWorkerResult(inv.TaskID, inv.Generation, series, brief, output))
 }
 
 // turnWorkspace is the workspace a completed turn's request names — where
@@ -323,20 +366,19 @@ func turnWorkspace(turnDir string) string {
 	return textOf(getOf(value, "cwd"))
 }
 
-// contractRejected reports a turn that exited 0 with a framed answer the
-// worker contract refuses — the R9 classification. The accepted validator
-// itself decides: any answer this stage's live executor would park on is a
-// runtime question here too.
+// contractRejected reports a turn that ended without an acceptable
+// business answer and without the host's session refusal — the R9
+// classification. The accepted validators decide, the same ones the live
+// executor parks a runtime disposition on: any turn whose receipt never
+// frames an answer, or whose framed answer the stage's worker contract
+// refuses, is a runtime question here too.
 func (c *Compose) contractRejected(inv runner.Invocation, turnDir string) bool {
 	receiptValue, err := readJSONFile(filepath.Join(turnDir, "exit.json"))
 	if err != nil {
 		return false
 	}
 	receipt, ok := receiptValue.(map[string]any)
-	if !ok || !valuesEqual(getOf(receipt, "exit_code"), 0) {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(turnDir, "answer.json")); err != nil {
+	if !ok {
 		return false
 	}
 	answer, err := settleNativeReceipt(turnDir, receipt)
