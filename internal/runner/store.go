@@ -60,16 +60,23 @@ const (
 // build that finds a newer version refuses the file instead of guessing
 // how to read it.  Version 2 added the task-definition input binding
 // (tasks.input_digest); version 3 added the decisions gate table with
-// its allow column; version 4 adds the user_requests and
+// its allow column; version 4 added the user_requests and
 // call_observations tables of the unified request model (revision.go,
-// takeover.go).  v4 was never accepted, so this build reshapes the v4
-// delta in place rather than adding a v5: databases stamped v4 by the
-// unaccepted build are development-only and out of scope, exactly like
-// the v3-stamped files the decisions note below already excludes.  Every
-// step is additive, so both accepted baselines — v2 and v3 — migrate
-// forward for real, never by refusal.  Version 1 databases are refused
-// outright below.
-const schemaVersion = 4
+// takeover.go); version 5 adds task_revisions (the revision input
+// bytes, written with the generation bump, revision.go),
+// task_sessions (the execution identities a granted restart clears,
+// decisions.go), task_dispositions (a parked stage's standing ask
+// fact, disposition.go) and the runs terminal columns (the run's
+// terminal status and stop reason, below).  Every step is additive, so
+// every accepted baseline — v2, v3 and v4 — migrates forward for real,
+// never by refusal; the reshape of the never-accepted v4 delta happened
+// while this build's version was still 4 and left no v4-stamped files
+// behind, and the v5 delta was likewise reshaped in place (dispositions
+// and the terminal columns joined it) while v5 was still unaccepted —
+// which is why that delta's newest pieces are written additively
+// idempotent, so any development-stage v5 shape steps forward cleanly.
+// Version 1 databases are refused outright below.
+const schemaVersion = 5
 
 // Store is the durable state of one run plus exclusive ownership of its
 // directory.  Open acquires ownership, Close releases it; between the two,
@@ -421,9 +428,86 @@ const callObservationsTable = `CREATE TABLE call_observations (
 	observed_at   TEXT NOT NULL
 )`
 
+// taskRevisionsTable is half of the v5 delta: one row per accepted
+// task revision, written in the SAME transaction as the generation bump
+// it rode (revision.go).  tasks.input_digest binds a task definition to
+// its input; the bytes themselves live here so a reopened owner can
+// re-send exactly the input the current generation is bound to — input
+// bytes are no longer external to the kernel for revisions.  Two
+// deliberate shape rules, both load-bearing for readers
+// (Store.RevisionInputs):
+//
+//   - only the revision's TARGET writes a row: dependents bumped by the
+//     invalidation closure keep their inputs and write none, so a row
+//     also answers "was this task itself ever revised";
+//   - creation inputs never appear: they are re-derived from the run's
+//     immutable creation binding, exactly as before v5.
+const taskRevisionsTable = `CREATE TABLE task_revisions (
+	run_id     TEXT NOT NULL,
+	task_id    TEXT NOT NULL,
+	generation INTEGER NOT NULL,
+	input      BLOB NOT NULL,
+	PRIMARY KEY (run_id, task_id, generation),
+	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
+)`
+
+// taskSessionsTable is the other half of the v5 delta: the execution
+// identity a task's next native call resumes — absent means a fresh
+// session.  One row per task, remembered when a worker turn settles
+// (Store.SetSession, called by the executor mid-Run, so these writes
+// take no advance lock) and cleared by a granted restart answer in the
+// SAME transaction as the grant (Store.answerRequest) — the single
+// authority for "which session this task resumes next", formerly a
+// JSON file the composition projected the kernel's restart grants
+// onto.
+const taskSessionsTable = `CREATE TABLE task_sessions (
+	run_id   TEXT NOT NULL,
+	task_id  TEXT NOT NULL,
+	identity TEXT NOT NULL,
+	PRIMARY KEY (run_id, task_id),
+	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
+)`
+
+// taskDispositionsTable is the v5 delta's control-state piece: one row
+// per task, the LATEST park fact standing for it (an upsert replaces a
+// consumed or superseded park) — the single authority for "this stage
+// is parked, and why", which decides the flow's next move between runs.
+// The row's (task, generation, attempt, kind) is exactly the identity
+// the placed question freezes into its body (the disposition id,
+// disposition.go), so row and question share one id with no second
+// record anywhere.  Written by the executors mid-Run (Store.SetDisposition,
+// no advance lock — the park precedes any ask), read by the transitions
+// (Store.Dispositions/Disposition), and cleared when the ask's answer
+// has been applied (Store.ClearDisposition).  Formerly a JSON file per
+// task under the run directory's dispositions tree.
+const taskDispositionsTable = `CREATE TABLE IF NOT EXISTS task_dispositions (
+	run_id     TEXT NOT NULL,
+	task_id    TEXT NOT NULL,
+	kind       TEXT NOT NULL,
+	generation INTEGER NOT NULL,
+	attempt    INTEGER NOT NULL,
+	reason     TEXT NOT NULL,
+	evidence   TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (run_id, task_id),
+	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
+)`
+
+// runsTerminalColumns is the v5 delta's run-level piece: the terminal
+// status the flow itself reached and why it stopped there, on the runs
+// row (terminal empty = the run never reached a terminal).  Written by
+// the seal and refusal paths through Store.SetTerminal, read by
+// Store.Terminal (the archive's settlement judgement and the terminal
+// judgment's record half).  ADD COLUMN has no IF NOT EXISTS form, so
+// migrate adds each column only when absent — the same in-place-reshape
+// idempotence taskDispositionsTable carries.
+var runsTerminalColumns = [][2]string{
+	{"terminal", "TEXT"},
+	{"stop_reason", "TEXT"},
+}
+
 // migrate applies forward-only schema versioning via PRAGMA user_version:
 // 0 means a fresh file (create the baseline plus every delta and stamp it),
-// 2 and 3 are accepted baselines (take the additive steps up to this
+// 2, 3 and 4 are accepted baselines (take the additive steps up to this
 // build's version — real migrations, never refusals), the current version
 // means nothing to do, version 1 is refused outright, and anything larger
 // means a newer runner wrote this database and must not be touched by this
@@ -437,7 +521,7 @@ func migrate(db *sql.DB) error {
 		return nil
 	}
 	switch version {
-	case 0, 2, 3:
+	case 0, 2, 3, 4:
 		tx, err := db.Begin()
 		if err != nil {
 			return err
@@ -456,11 +540,37 @@ func migrate(db *sql.DB) error {
 				return err
 			}
 		}
-		if _, err := tx.Exec(userRequestsTable); err != nil {
-			return err
+		if version < 4 {
+			if _, err := tx.Exec(userRequestsTable); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(callObservationsTable); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.Exec(callObservationsTable); err != nil {
-			return err
+		if version < 5 {
+			if _, err := tx.Exec(taskRevisionsTable); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(taskSessionsTable); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(taskDispositionsTable); err != nil {
+				return err
+			}
+			for _, column := range runsTerminalColumns {
+				has, err := txHasColumn(tx, "runs", column[0])
+				if err != nil {
+					return err
+				}
+				if has {
+					continue // an in-place v5 reshape already carried it
+				}
+				if _, err := tx.Exec(fmt.Sprintf(
+					"ALTER TABLE runs ADD COLUMN %s %s", column[0], column[1])); err != nil {
+					return err
+				}
+			}
 		}
 		// user_version is a transactional header write: a crash
 		// mid-migration leaves the file at its previous version again.
@@ -477,6 +587,67 @@ func migrate(db *sql.DB) error {
 	default:
 		return fmt.Errorf("schema version %d is newer than supported version %d", version, schemaVersion)
 	}
+}
+
+// txHasColumn reports whether table already carries column, inside an
+// open migration transaction.  table comes only from this package's
+// constants.  ADD COLUMN has no IF NOT EXISTS spelling, so the v5
+// terminal columns go through this guard — an unaccepted-delta reshape
+// may already have left them on the file.
+func txHasColumn(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// ---- the run's terminal fact (the v5 delta's runs columns) -------------------
+//
+// What the flow itself concluded — the terminal status it reached and why
+// it stopped there.  Two operations, one owner per transition: the seal
+// and refusal paths write both columns at once (Store.SetTerminal, one
+// short transaction; the reason is diagnostic, so the seal paths record
+// none), and the archive's settlement judgement plus the terminal
+// judgment's record half read them back (Store.Terminal) — never from a
+// file a crash could strand between the judgment and its record.
+
+// SetTerminal records the run's terminal status and the reason it stopped
+// there, in one short transaction on the runs row.  An empty stopReason
+// records none (the seal completions have no stop reason — only the
+// user-refusal paths do).  Deliberately no advance lock: the judgment
+// that produces a terminal happens between runs or at drain, never
+// mid-advance.
+func (s *Store) SetTerminal(ctx context.Context, terminal, stopReason string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE runs SET terminal=?, stop_reason=? WHERE run_id=?",
+		terminal, stopReason, s.runID)
+	return err
+}
+
+// Terminal reads the run's terminal status and stop reason; an empty
+// terminal means the run never reached one.
+func (s *Store) Terminal(ctx context.Context) (terminal, stopReason string, err error) {
+	var terminalV, reasonV sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		"SELECT terminal, stop_reason FROM runs WHERE run_id=?",
+		s.runID).Scan(&terminalV, &reasonV)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return terminalV.String, reasonV.String, err
 }
 
 // readRunID returns the single run this directory holds, or "" for a fresh

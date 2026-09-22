@@ -5,16 +5,16 @@ package harness
 // turns:
 //
 //   - the series identity is the digest of {role, brief, revision} — a
-//     re-executed generation (a crash between the revision and the ledger,
-//     a double-bumped retry) replays its receipts instead of re-spending a
-//     host call;
+//     re-executed generation (a double-bumped retry, an owner dying
+//     between the revision and its outcome) replays its receipts instead
+//     of re-spending a host call;
 //   - within one invocation, a CONTINUE answer continues the same session
 //     under the next turn number: no task, input or call record changes;
 //   - a BLOCKED answer, an answer the worker contract rejects, or a host
 //     that refused the session leaves no receipt: the invocation parks, a
-//     disposition note lands in dispositions/, and the transitions between
-//     runs turn the note into a question (workflow_route.go) — the run
-//     never silently retries or re-spends.
+//     disposition row lands in the kernel (task_dispositions), and the
+//     transitions between runs turn the row into a question
+//     (workflow_route.go) — the run never silently retries or re-spends.
 //
 // The materials every role reads: the bound requirement and its own
 // task.json; technical review receives the product
@@ -84,23 +84,6 @@ type outcomeRecord struct {
 	Terminal   string        `json:"terminal_ref,omitempty"`
 }
 
-// disposition is a parked stage's open business question: what failed, the
-// evidence reference, and why the flow cannot proceed on its own. Written
-// before the executor returns without a receipt; consumed by the ask
-// transitions; one per task (the latest fact wins).
-type disposition struct {
-	Task string `json:"task"`
-	Kind string `json:"kind"`
-	// Generation separates one retry round's park from the next: the
-	// question marker keys on it, so a re-parked round asks afresh instead
-	// of replaying the previous round's answer.
-	Generation int64    `json:"generation"`
-	Reason     string   `json:"reason"`
-	Evidence   string   `json:"evidence,omitempty"`
-	Attempt    int      `json:"attempt"`
-	Reasons    []string `json:"reasons,omitempty"`
-}
-
 // outcomePath is the outcome record's location for one (task, generation).
 func outcomePath(dir, taskID string, generation int64) string {
 	return filepath.Join(dir, "outcomes", pathSafe(taskID), fmt.Sprintf("%d.json", generation))
@@ -111,7 +94,10 @@ func (c *Compose) writeOutcome(record outcomeRecord) error {
 	return writeAtomicJSON(outcomePath(c.dir, record.Task, record.Generation), record)
 }
 
-// readOutcome loads one generation's outcome, or nil when it never landed.
+// readOutcome loads one generation's outcome payload, or nil when it
+// never landed or cannot be decoded — a missing payload is a missing
+// fact, reported by the caller that needed it, never papered over with
+// another generation's file.
 func (c *Compose) readOutcome(taskID string, generation int64) *outcomeRecord {
 	body, err := os.ReadFile(outcomePath(c.dir, taskID, generation))
 	if err != nil {
@@ -124,7 +110,10 @@ func (c *Compose) readOutcome(taskID string, generation int64) *outcomeRecord {
 	return &record
 }
 
-// outcomeGenerations lists the generations with outcome records, ascending.
+// outcomeGenerations lists the generations with outcome payload files,
+// ascending — a HISTORY enumeration only (the repair-round count, the
+// previous candidate); which outcome is currently effective is a kernel
+// fact (latestOutcome), never decided by this listing.
 func (c *Compose) outcomeGenerations(taskID string) []int64 {
 	entries, err := os.ReadDir(filepath.Join(c.dir, "outcomes", pathSafe(taskID)))
 	if err != nil {
@@ -144,42 +133,36 @@ func (c *Compose) outcomeGenerations(taskID string) []int64 {
 	return gens
 }
 
-// latestOutcome is the newest generation's outcome, or nil.
+// latestOutcome is the task's currently effective outcome — a KERNEL
+// fact naming the generation, the file only carrying it:
+//
+//   - a parked stage's live fact is the outcome its park froze: the
+//     standing disposition row names that generation. The question the
+//     route places about that outcome revises an ask task, and the
+//     invalidation closure that placement bumps through moves the
+//     parked task's generation WITHOUT producing a new outcome — the
+//     park, not the moved generation, is what stays live until the
+//     answer clears it. The route-guard is the one park that freezes
+//     no outcome (an inert marker, cleared lazily once the task moved
+//     past it), so it pins nothing and the current generation reads;
+//   - every other task's effective outcome sits at its kernel-current
+//     generation: the admitted invocation's (tasks.result_invocation_id
+//     names a call of exactly that generation) or the pending
+//     invocation's that just wrote one.
+//
+// No payload at the named generation means no current outcome — nil,
+// never a fallback to an older generation's file.
 func (c *Compose) latestOutcome(taskID string) *outcomeRecord {
-	gens := c.outcomeGenerations(taskID)
-	if len(gens) == 0 {
+	generation := int64(0)
+	if d := c.readDisposition(taskID); d != nil && d.Kind != "route-guard" {
+		generation = d.Generation
+	} else if current, err := c.store.TaskGeneration(context.Background(), taskID); err == nil {
+		generation = current
+	}
+	if generation == 0 {
 		return nil
 	}
-	return c.readOutcome(taskID, gens[len(gens)-1])
-}
-
-// dispositionPath is a task's open-disposition note.
-func dispositionPath(dir, taskID string) string {
-	return filepath.Join(dir, "dispositions", pathSafe(taskID)+".json")
-}
-
-// writeDisposition lands (or overwrites) one task's disposition note.
-func (c *Compose) writeDisposition(d disposition) error {
-	return writeAtomicJSON(dispositionPath(c.dir, d.Task), d)
-}
-
-// readDisposition loads a task's disposition note, or nil.
-func (c *Compose) readDisposition(taskID string) *disposition {
-	body, err := os.ReadFile(dispositionPath(c.dir, taskID))
-	if err != nil {
-		return nil
-	}
-	var d disposition
-	if json.Unmarshal(body, &d) != nil {
-		return nil
-	}
-	return &d
-}
-
-// clearDisposition removes a task's disposition note (its question was
-// placed; the note has served its purpose).
-func (c *Compose) clearDisposition(taskID string) {
-	_ = os.Remove(dispositionPath(c.dir, taskID))
+	return c.readOutcome(taskID, generation)
 }
 
 // event emits one composition event to events.jsonl — evidence for the
@@ -365,25 +348,19 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 		attempt++
 		key := c.turnKey(series, attempt)
 		jobDir := filepath.Join(c.dir, "jobs", pathSafe(taskID), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
-		// Receipt replay: a re-entered generation (crash between the
-		// kernel's revision and its ledger entry, a doubled retry bump)
-		// continues from the recorded turn instead of re-spending the host.
+		// Receipt replay: a re-entered generation (a doubled retry bump, an
+		// owner dying between the revision and its outcome) continues from
+		// the recorded turn instead of re-spending the host — and settles
+		// through the same admission chain as a fresh answer.
 		if output, ok := c.replayWorkerTurn(taskID, inv.Generation, series, attempt); ok {
-			if parked := c.parkOnResult(taskID, inv.Generation, series, brief, output); parked != nil {
-				return runner.Result{}, parked
-			}
-			if err := c.writeOutcome(outcomeRecord{
-				Task: taskID, Generation: inv.Generation, Action: "accepted",
-				Worker: &output.Result, Output: output,
-			}); err != nil {
-				return runner.Result{}, err
-			}
-			return resultOf(output)
+			return c.settleWorkerResult(taskID, inv.Generation, series, brief, output)
 		}
 		c.event("worker-start", map[string]any{"role": brief.Role, "task": taskID, "operation": key, "attempt": attempt})
-		if err := os.MkdirAll(jobDir, 0o755); err != nil {
-			return runner.Result{}, err
-		}
+		// The turn directory appears with its request (writeNativeRequest
+		// creates it), never during the material preparation: recovery
+		// judges a turn by its files, and a directory holding nothing is a
+		// call that cannot be classified — an owner dying mid-preparation
+		// must leave no phantom turn behind.
 		materials, err := c.writeMaterials(jobDir, key, brief, workspace, attempt > 1, initialFeedback)
 		if err != nil {
 			return runner.Result{}, err
@@ -425,47 +402,74 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 			"role": brief.Role, "task": taskID, "operation": key, "status": worker.Status,
 		})
 		// The worker-outcome judgement drives the loop, in a fixed branch
-		// order: CONTINUE continues the session, BLOCKED asks, and
-		// unresolved development findings ask; everything else admits.
+		// order: CONTINUE continues the session; everything else settles
+		// through the one admission chain below.
 		action := textOf(workerOutcome(workerOutcomeInput{
 			Role: brief.Role, Status: worker.Status, NeedsRepair: output.NeedsRepair})["action"])
-		switch action {
-		case "continue":
+		if action == "continue" {
 			identity = source
 			initialFeedback = map[string]any{
 				"continuation":     continuationWrapper(taskID, inv.Generation, output, c.spec.revision),
 				"initial_feedback": decodedFeedback(brief.Feedback),
 			}
 			continue
-		case "blocked":
-			return runner.Result{}, c.parkWithResult(taskID, inv.Generation, attempt, series, output, disposition{
-				Task: taskID, Kind: "worker-blocked", Reason: worker.Summary,
-				Evidence: turnEvidenceRef(taskID, inv.Generation, series, attempt),
-			})
-		case "unresolved-findings":
-			return runner.Result{}, c.parkWithResult(taskID, inv.Generation, attempt, series, output, disposition{
-				Task: taskID, Kind: "development-findings", Generation: inv.Generation,
-				Reason:   "Unresolved development findings cannot be discarded",
-				Evidence: turnEvidenceRef(taskID, inv.Generation, series, attempt),
-			})
-		default:
-			// An acceptable result admits — unless this stage's own flow
-			// must still judge it: the pre-review and QA-review stages park
-			// on a needs-repair result (their retry question is the only
-			// way forward).
-			if parking := c.parkOnResult(taskID, inv.Generation, series, brief, output); parking != nil {
-				return runner.Result{}, parking
-			}
-			if err := c.writeOutcome(outcomeRecord{
-				Task: taskID, Generation: inv.Generation, Action: "accepted",
-				Worker: &output.Result, Output: output,
-			}); err != nil {
-				return runner.Result{}, err
-			}
-			c.rememberSession(taskID, source)
-			return resultOf(output)
 		}
+		return c.settleWorkerResult(taskID, inv.Generation, series, brief, output)
 	}
+}
+
+// settleWorkerResult is THE admission chain for one settled worker result:
+// the live invoke loop (a fresh answer and a receipt replay alike) and the
+// takeover consultation's adoption of a recovered receipt all end here, so
+// the same receipt lands the same domain facts whichever path found it.
+// BLOCKED and unresolved findings park with the recorded result; an
+// admissible result is judged by the stage's own rules (parkOnResult),
+// recorded, its session remembered, and returned.
+func (c *Compose) settleWorkerResult(taskID string, generation int64, series string, brief workerBrief, output *workerOutput) (runner.Result, error) {
+	switch textOf(workerOutcome(workerOutcomeInput{
+		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
+	case "blocked":
+		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, series, output, runner.Disposition{
+			Kind: "worker-blocked", Reason: output.Result.Summary,
+			Evidence: turnEvidenceRef(taskID, generation, series, output.Turn),
+		})
+	case "unresolved-findings":
+		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, series, output, runner.Disposition{
+			Kind:     "development-findings",
+			Reason:   "Unresolved development findings cannot be discarded",
+			Evidence: turnEvidenceRef(taskID, generation, series, output.Turn),
+		})
+	}
+	// An acceptable result admits — unless this stage's own flow must
+	// still judge it: the pre-review and QA-review stages park on a
+	// needs-repair result (their retry question is the only way forward).
+	if parking := c.parkOnResult(taskID, generation, series, brief, output); parking != nil {
+		return runner.Result{}, parking
+	}
+	if err := c.writeOutcome(outcomeRecord{
+		Task: taskID, Generation: generation, Action: "accepted",
+		Worker: &output.Result, Output: output,
+	}); err != nil {
+		return runner.Result{}, err
+	}
+	c.rememberSession(taskID, output.Identity)
+	return resultOf(output)
+}
+
+// briefOf is the worker brief a pending invocation runs with: the
+// invocation's own input bytes when the caller carries them, otherwise the
+// task's current bound brief (recovery consultations carry no input — a
+// still-pending invocation is always at its task's current generation, so
+// the bound brief is the bytes it ran with; verifySpecs binds the two).
+func (c *Compose) briefOf(inv runner.Invocation) workerBrief {
+	var brief workerBrief
+	if jsonUnmarshal(inv.Input, &brief) == nil && brief.Role != "" {
+		return brief
+	}
+	if jsonUnmarshal(c.lastBrief(inv.TaskID), &brief) != nil || brief.Role == "" {
+		brief.Role = c.roleOf(inv.TaskID)
+	}
+	return brief
 }
 
 // handoffSources names each downstream stage's upstream evidence:
@@ -635,14 +639,14 @@ func (c *Compose) parkOnResult(taskID string, generation int64, series string, b
 	}
 	switch taskID {
 	case taskProduct, taskTechnical:
-		return c.park(taskID, generation, output.Turn, disposition{
-			Task: taskID, Kind: "pre-review", Generation: generation,
+		return c.park(taskID, generation, output.Turn, runner.Disposition{
+			Kind:     "pre-review",
 			Reason:   "Mandatory findings remain. This immutable request cannot change in place; revise it in a new explicitly started run when needed.",
 			Evidence: turnEvidenceRef(taskID, generation, series, output.Turn),
 		})
 	case taskQAReview:
-		return c.park(taskID, generation, output.Turn, disposition{
-			Task: taskID, Kind: "qa-design", Generation: generation,
+		return c.park(taskID, generation, output.Turn, runner.Disposition{
+			Kind:     "qa-design",
 			Reason:   "Approved checks or coverage are insufficient. Final verification is not allowed.",
 			Evidence: turnEvidenceRef(taskID, generation, series, output.Turn),
 		})
@@ -650,14 +654,18 @@ func (c *Compose) parkOnResult(taskID string, generation int64, series string, b
 	return nil
 }
 
-// park writes the disposition note and returns the parking error: the
-// invocation keeps its pending row (the task stays unfinished, its
-// dependents blocked) and the transitions between runs turn the note into a
-// question.
-func (c *Compose) park(taskID string, generation int64, attempt int, d disposition) error {
-	d.Task = taskID
+// park lands the disposition row in the kernel and returns the parking
+// error: the invocation keeps its pending row (the task stays
+// unfinished, its dependents blocked) and the transitions between runs
+// turn the row into a question. TaskID, Generation and Attempt are
+// stamped here, in one place — the disposition id the question body
+// freezes is derived from exactly these, so a re-parked round (a later
+// generation or attempt of the same stage and kind) asks afresh.
+func (c *Compose) park(taskID string, generation int64, attempt int, d runner.Disposition) error {
+	d.TaskID = taskID
+	d.Generation = generation
 	d.Attempt = attempt
-	if err := c.writeDisposition(d); err != nil {
+	if err := c.store.SetDisposition(context.Background(), d); err != nil {
 		return err
 	}
 	return fmt.Errorf("compose: %s parked on %s: %s", taskID, d.Kind, d.Reason)
@@ -666,14 +674,14 @@ func (c *Compose) park(taskID string, generation int64, attempt int, d dispositi
 // parkRuntime parks on a runtime failure (the host refused, or the answer
 // failed the worker contract): a runtime question, never a silent retry.
 func (c *Compose) parkRuntime(taskID string, generation int64, attempt int, err error) error {
-	return c.park(taskID, generation, attempt, disposition{
-		Task: taskID, Kind: "runtime", Generation: generation, Reason: err.Error(),
+	return c.park(taskID, generation, attempt, runner.Disposition{
+		Kind: "runtime", Reason: err.Error(),
 	})
 }
 
 // parkWithResult records the worker result as a parked outcome, then
 // parks: the question and the retry brief derive from the record.
-func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, series string, output *workerOutput, d disposition) error {
+func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, series string, output *workerOutput, d runner.Disposition) error {
 	if err := c.writeOutcome(outcomeRecord{
 		Task: taskID, Generation: generation, Action: "parked",
 		Worker: &output.Result, Output: output,
@@ -684,17 +692,15 @@ func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, s
 }
 
 // rememberSession keeps the development session identity the repair round
-// resumes.
+// resumes — the kernel's task_sessions row, the same authority the
+// restart grant clears. A write failure is swallowed exactly as the old
+// file write's was: the cost of a lost identity is a fresh session on
+// the next call, never a failed settled turn.
 func (c *Compose) rememberSession(taskID, identity string) {
 	if taskID != taskDevelopment || identity == "" {
 		return
 	}
-	current := c.readRecord()
-	if current.Sessions[taskID] == identity {
-		return
-	}
-	current.Sessions[taskID] = identity
-	_ = c.writeRecord(current)
+	_ = c.store.SetSession(context.Background(), taskID, identity)
 }
 
 // errSessionRefused marks a turn the host refused on its persistent
@@ -754,9 +760,12 @@ func (c *Compose) nativeJobArgv(jobDir string) []string {
 	return []string{c.binary, "harness", "native", jobDir}
 }
 
-// relJobPath is a job dir relative to the run directory.
+// relJobPath is a job dir relative to the run directory. It uses the
+// pathSafe storage form — the same segment the executors create and
+// replayWorkerTurn reads back through c.dir — so the recorded evidence path
+// resolves for colon-carrying tasks too ("gate:x" lives at jobs/gate-x).
 func relJobPath(taskID, invocationID string, attempt int) string {
-	return filepath.ToSlash(filepath.Join("jobs", taskID, invocationID, fmt.Sprintf("turn-%02d", attempt)))
+	return filepath.ToSlash(filepath.Join("jobs", pathSafe(taskID), invocationID, fmt.Sprintf("turn-%02d", attempt)))
 }
 
 // ---- materials -------------------------------------------------------------

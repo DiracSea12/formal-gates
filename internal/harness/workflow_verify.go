@@ -131,8 +131,8 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 		})
 		switch action := textOf(retention["action"]); action {
 		case "fail":
-			return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, disposition{
-				Task: checkTaskID(check.ID), Kind: "check-runtime",
+			return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, runner.Disposition{
+				Kind:   "check-runtime",
 				Reason: fmt.Sprintf("check %s: retained evidence no longer verifies", check.ID),
 			})
 		case "run":
@@ -185,18 +185,25 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 		return runner.Result{}, err
 	}
 	if err := checkReceiptRan(receipt); err != nil {
-		return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, disposition{
-			Task: checkTaskID(check.ID), Kind: "check-runtime", Reasons: []string{err.Error()},
-			Reason: err.Error(),
+		return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, runner.Disposition{
+			Kind: "check-runtime", Reason: err.Error(),
 		})
 	}
 	if err := verifyCandidateIntact(workspace, candidate); err != nil {
-		return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, disposition{
-			Task: checkTaskID(check.ID), Kind: "check-runtime", Reasons: []string{err.Error()},
-			Reason: err.Error(),
+		return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, runner.Disposition{
+			Kind: "check-runtime", Reason: err.Error(),
 		})
 	}
 	exitCode := intOf(getOf(receipt, "exit_code"))
+	return c.settleCheckResult(inv, check, binding, candidate, exitCode, receipt)
+}
+
+// settleCheckResult is THE admission of one executed check: the domain
+// record (status, binding, candidate and the receipt's request digest as
+// evidence) and the kernel result. The live executor and the takeover
+// consultation's adoption of a recovered receipt both end here, so the
+// same receipt produces the same check facts whichever path found it.
+func (c *Compose) settleCheckResult(inv runner.Invocation, check Check, binding, candidate string, exitCode int, receipt map[string]any) (runner.Result, error) {
 	result := CheckResult{
 		ID: check.ID, Candidate: candidate, Binding: binding,
 		Status: "FAIL", ExitCode: exitCode, Evidence: requestDigestOf(receipt),
@@ -205,7 +212,7 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 		result.Status = "PASS"
 	}
 	record := outcomeRecord{
-		Task: checkTaskID(check.ID), Generation: inv.Generation, Action: "executed",
+		Task: inv.TaskID, Generation: inv.Generation, Action: "executed",
 		Check: &result, Candidate: candidate,
 	}
 	if err := c.writeOutcome(record); err != nil {
@@ -361,9 +368,11 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
 		}
 		jobDir := filepath.Join(c.dir, "jobs", pathSafe(gateTaskID(gate)), inv.InvocationID, fmt.Sprintf("turn-%02d", attempt))
-		if err := os.MkdirAll(jobDir, 0o755); err != nil {
-			return runner.Result{}, err
-		}
+		// The turn directory appears with its request (writeNativeRequest
+		// creates it), never during the preparation above: recovery judges
+		// a turn by its files, and a directory holding nothing means a
+		// call that cannot be classified — an owner dying mid-preparation
+		// must leave no such phantom turn.
 		key := c.turnKey(series, attempt)
 		materials, err := c.writeMaterials(jobDir, key, brief, workspace, false, nil)
 		if err != nil {
@@ -409,8 +418,8 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 			identity = output.Identity
 			continue
 		case "blocked":
-			return runner.Result{}, c.park(gateTaskID(gate), inv.Generation, attempt, disposition{
-				Task: gateTaskID(gate), Kind: "worker-blocked", Reason: worker.Summary,
+			return runner.Result{}, c.park(gateTaskID(gate), inv.Generation, attempt, runner.Disposition{
+				Kind: "worker-blocked", Reason: worker.Summary,
 				Evidence: turnEvidenceRef(gateTaskID(gate), inv.Generation, series, attempt),
 			})
 		default:
@@ -527,11 +536,11 @@ func (c *Compose) executeSeal(inv runner.Invocation) (runner.Result, error) {
 		// The route is exclusive — repair or seal, never both — but the
 		// static task graph dispatches seal the moment
 		// evaluate finishes, so the guard parks the invocation instead.
-		// The marker is inert to the transitions — the repair route's own
+		// The row is inert to the transitions — the repair route's own
 		// revision supersedes it — and exists so recovery never mistakes
 		// the parked seal for a dead call.
-		return runner.Result{}, c.park(taskSeal, inv.Generation, 0, disposition{
-			Task: taskSeal, Kind: "route-guard", Generation: inv.Generation,
+		return runner.Result{}, c.park(taskSeal, inv.Generation, 0, runner.Disposition{
+			Kind:   "route-guard",
 			Reason: "the verification route is repair, not seal",
 		})
 	}
@@ -583,9 +592,7 @@ func (c *Compose) executeSeal(inv runner.Invocation) (runner.Result, error) {
 	if err := writeAtomicBytes(filepath.Join(c.dir, "harness-result.json"), body); err != nil {
 		return runner.Result{}, err
 	}
-	current := c.readRecord()
-	current.Terminal = status
-	if err := c.writeRecord(current); err != nil {
+	if err := c.store.SetTerminal(context.Background(), status, ""); err != nil {
 		return runner.Result{}, err
 	}
 	record := outcomeRecord{
@@ -599,9 +606,12 @@ func (c *Compose) executeSeal(inv runner.Invocation) (runner.Result, error) {
 	return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
 }
 
-// terminalJudgment is the completeness check after a clean drain: the seal
-// stage must have certified AND the result record must exist on disk — the
-// R1/R2 rule that a FAIL chain can never report completion.
+// terminalJudgment is the completeness check after a clean drain: the
+// seal stage must have certified AND the result record must exist on
+// disk — the R1/R2 rule that a FAIL chain can never report completion.
+// The record half of the dual evidence lives in the kernel (runs.
+// terminal, written by executeSeal and re-asserted here); the file half
+// is harness-result.json.
 func (c *Compose) terminalJudgment() (ComposeState, bool) {
 	if _, err := os.Stat(filepath.Join(c.dir, "harness-result.json")); err != nil {
 		return ComposeState{Status: StatusFailed,
@@ -612,9 +622,7 @@ func (c *Compose) terminalJudgment() (ComposeState, bool) {
 		return ComposeState{Status: StatusFailed,
 			Err: fmt.Errorf("compose: the run drained without a seal record")}, true
 	}
-	current := c.readRecord()
-	current.Terminal = seal.Status
-	_ = c.writeRecord(current)
+	_ = c.store.SetTerminal(context.Background(), seal.Status, "")
 	return ComposeState{Status: StatusComplete, Terminal: seal.Status}, true
 }
 

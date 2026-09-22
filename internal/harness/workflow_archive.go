@@ -40,7 +40,11 @@ type ArchiveReport struct {
 // Archive physicalizes a terminal run. A non-terminal run is refused by
 // the settlement judgement; an existing destination is never overwritten.
 func (c *Compose) Archive(destination string) (ArchiveReport, error) {
-	status := c.readRecord().Terminal
+	terminal, _, err := c.store.Terminal(context.Background())
+	if err != nil {
+		return ArchiveReport{}, err
+	}
+	status := terminal
 	if status == "" {
 		if seal := c.latestOutcome(taskSeal); seal != nil && seal.Status != "" {
 			if _, err := os.Stat(filepath.Join(c.dir, "harness-result.json")); err == nil {

@@ -36,9 +36,7 @@ func (c *Compose) Drive(ctx context.Context) ComposeState {
 		idle := c.runDone == nil
 		c.runMu.Unlock()
 		if idle {
-			// Replay any answer the ledger holds ahead of the kernel, then
-			// apply the transition table.
-			c.replayLedgeredAnswers(ctx)
+			// Apply the transition table.
 			if state, stop := c.route(ctx); stop {
 				return state
 			}
@@ -116,7 +114,7 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 			return ComposeState{Status: StatusFailed, Err: perr}, true
 		}
 		// A premature gate wait must not mask the user's refusal.
-		if state, stop := c.abortedIfRefused(); stop {
+		if state, stop := c.abortedIfRefused(ctx); stop {
 			return state, true
 		}
 		// A user question outranks an observation notice: the user can act
@@ -130,10 +128,10 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		return ComposeState{Status: StatusWaitingDecision, Pending: pending}, true
 	case errors.Is(err, runner.ErrDecisionRefused), errors.Is(err, runner.ErrCallAborted):
 		// The kernel reports any non-allowing answer as refused; only the
-		// ledger's own test decides which refusal actually ends the run —
-		// restart-session continues (a replacement session, not consent to
-		// stop), and its revision moves the stage again.
-		if state, stop := c.abortedIfRefused(); stop {
+		// composition's own refusal test decides which refusal actually ends
+		// the run — restart-session continues (a replacement session, not
+		// consent to stop), and its revision moves the stage again.
+		if state, stop := c.abortedIfRefused(ctx); stop {
 			return state, true
 		}
 		if c.progressed() {
@@ -144,10 +142,7 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		if state, stop := c.terminalJudgment(); stop {
 			return state, true
 		}
-		current := c.readRecord()
-		current.Terminal = statusAborted
-		current.Stopped = "user declined at a decision boundary"
-		_ = c.writeRecord(current)
+		_ = c.store.SetTerminal(ctx, statusAborted, "user declined at a decision boundary")
 		return ComposeState{Status: StatusAborted, Terminal: statusAborted}, true
 	case errors.Is(err, runner.ErrCallObserved), errors.Is(err, runner.ErrTakeoverRequired):
 		return ComposeState{Status: StatusObserved}, true
@@ -167,7 +162,7 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		if c.progressed() {
 			return ComposeState{}, false
 		}
-		if state, stop := c.abortedIfRefused(); stop {
+		if state, stop := c.abortedIfRefused(ctx); stop {
 			return state, true
 		}
 		return ComposeState{Status: StatusFailed, Err: err}, true
@@ -286,19 +281,27 @@ func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (r
 	if c.pendingQuestionOn(ctx, question) {
 		return runner.Result{}, errPlanPending
 	}
-	if !c.askRecorded(question, dispositionID) {
+	if !c.askRecorded(ctx, question, dispositionID) {
 		product := c.latestOutcome(taskProduct)
 		technical := c.latestOutcome(taskTechnical)
 		if product == nil || technical == nil || product.Worker == nil || technical.Worker == nil {
 			return runner.Result{}, fmt.Errorf(
 				"compose: the plan approval dispatched before its review inputs stand")
 		}
+		// The evidence references must open where they claim to live. The
+		// standing reviews are materialized by writeOutcome as
+		// outcomes/<task>/<generation>.json, so the root is the outcomes
+		// directory and each reference is that record's own relative path.
+		// (A content digest pointed at artifacts/ named a file nothing ever
+		// writes — that tree only holds evaluate's feedback bundle — so the
+		// user could not read the material being approved.)
 		body, err := canonicalBody(map[string]any{
-			"product":   outcomeRef(product),
-			"technical": outcomeRef(technical),
-			"artifacts": c.dir + "/artifacts",
-			"checks":    c.spec.spec.Checks,
-			"reason":    "Approve the reviewed requirement/plan and exact check commands before development",
+			"product":     outcomeFileRef(product),
+			"technical":   outcomeFileRef(technical),
+			"artifacts":   filepath.Join(c.dir, "outcomes"),
+			"checks":      c.spec.spec.Checks,
+			"disposition": dispositionID,
+			"reason":      "Approve the reviewed requirement/plan and exact check commands before development",
 		})
 		if err != nil {
 			return runner.Result{}, err
@@ -309,14 +312,9 @@ func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (r
 		}); err != nil && err != runner.ErrQuestionAnswered {
 			return runner.Result{}, err
 		}
-		if err := appendLedger(filepath.Join(c.dir, "asks.jsonl"), askEntry{
-			Task: question, Disposition: dispositionID,
-		}); err != nil {
-			return runner.Result{}, err
-		}
 		return runner.Result{}, errPlanPending
 	}
-	switch c.answeredChoice(question, dispositionID) {
+	switch c.answeredChoice(ctx, question) {
 	case "approve":
 		if err := c.writeOutcome(outcomeRecord{
 			Task: taskPlan, Generation: inv.Generation, Action: "approved",
@@ -329,6 +327,16 @@ func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (r
 	default:
 		return runner.Result{}, errPlanPending
 	}
+}
+
+// outcomeFileRef addresses one outcome record as a path relative to the
+// outcomes root (writeOutcome's layout), so a question body can point the
+// user at a file that actually exists. The reference is built from the
+// record's own task and generation, which binds it to exactly the review
+// round it was taken from — a later round lands a different file and never
+// rewrites this one.
+func outcomeFileRef(outcome *outcomeRecord) string {
+	return fmt.Sprintf("%s/%d", pathSafe(outcome.Task), outcome.Generation)
 }
 
 // checkOf finds one check task's authorized check.
@@ -356,72 +364,15 @@ func (c *Compose) checkCounters(taskID string) (round, attempt int) {
 
 // ---- user answers ----------------------------------------------------------
 
-// Answer settles one question with the user's choice. The choice is ledged
-// ahead of the kernel's commit (a crash between them replays it exactly
-// once) and a refusing choice derives the run's ABORTED terminal even where
-// the kernel reports it only through run errors.
+// Answer settles one question with the user's choice: the kernel's own
+// Answer, the single write path for every question family (decision gates
+// and user requests alike — it refuses unknown ids, off-option choices
+// and stale bindings, and replays an already-settled one idempotently).
+// A refusing choice derives the run's ABORTED terminal from the kernel's
+// answered rows (abortedIfRefused), so no second record of the answer
+// exists anywhere: what the kernel row says is the whole fact.
 func (c *Compose) Answer(ctx context.Context, id, choice string) (runner.AnswerReceipt, error) {
-	if task, options, ok := c.questionOf(ctx, id); ok {
-		// The write-ahead ledger records only choices the question offers:
-		// the kernel refuses anything else, and a refused-by-contract
-		// answer is not the user declining anything.
-		offered := false
-		for _, option := range options {
-			if option == choice {
-				offered = true
-			}
-		}
-		if !offered {
-			return c.store.Answer(ctx, id, choice)
-		}
-		entry := answerEntry{DecisionID: id, Task: task, Choice: choice, Options: options}
-		if allow, known := allowingChoice(task, options); known {
-			entry.Allow = allow
-		}
-		// restart-session is an alternative continuation wherever it is
-		// offered — the runtime question's and the restart request's — so
-		// the refusing test reads it as a continuation, never a refusal.
-		if choice == "restart-session" && offersRestartSession(options) {
-			entry.Alternate = "restart-session"
-		}
-		if err := appendLedger(filepath.Join(c.dir, "answers.jsonl"), entry); err != nil {
-			return runner.AnswerReceipt{}, err
-		}
-	}
 	return c.store.Answer(ctx, id, choice)
-}
-
-// questionOf maps a pending question id to its task and its own choices.
-func (c *Compose) questionOf(ctx context.Context, id string) (string, []string, bool) {
-	pending, err := c.store.PendingDecisions(ctx)
-	if err != nil {
-		return "", nil, false
-	}
-	for _, question := range pending {
-		if question.DecisionID == id {
-			return question.TaskID, question.Options, true
-		}
-	}
-	return "", nil, false
-}
-
-// replayLedgeredAnswers completes any answer the ledger holds that the
-// kernel has not yet consumed (the write-ahead replay).
-func (c *Compose) replayLedgeredAnswers(ctx context.Context) {
-	pending, err := c.store.PendingDecisions(ctx)
-	if err != nil {
-		return
-	}
-	standing := map[string]bool{}
-	for _, question := range pending {
-		standing[question.DecisionID] = true
-	}
-	for _, entry := range c.readAnswers() {
-		if standing[entry.DecisionID] {
-			_, _ = c.store.Answer(ctx, entry.DecisionID, entry.Choice)
-			delete(standing, entry.DecisionID)
-		}
-	}
 }
 
 // PendingDecisions lists the run's unanswered questions in the kernel's
@@ -593,7 +544,11 @@ func (c *Compose) watchedDirs() map[string]string {
 	}
 	c.mu.Lock()
 	for task := range c.observed {
-		if turn := latestTurnDir(filepath.Join(c.dir, "jobs", task)); turn != "" {
+		// observed is keyed by the logical TaskID; the job tree's directory
+		// is its pathSafe form (see the executors' jobDir), so the watcher
+		// must cross at the same point or a recovered "gate:x" call's held
+		// interactions are never found.
+		if turn := latestTurnDir(filepath.Join(c.dir, "jobs", pathSafe(task))); turn != "" {
 			dirs[turn] = task
 		}
 	}
@@ -668,8 +623,6 @@ func (c *Compose) heldInteraction(notice heldNotice) (HeldInteraction, bool) {
 	return HeldInteraction{}, false
 }
 
-// latestTurnDir picks the highest turn directory (numerically) under a
-// task's job tree.
 // latestTurnOf picks one invocation directory's highest turn.
 func latestTurnOf(base string) string {
 	turns, err := os.ReadDir(base)
@@ -692,6 +645,8 @@ func latestTurnOf(base string) string {
 	return best
 }
 
+// latestTurnDir picks the highest turn directory (numerically) under a
+// task's job tree, searching every invocation.
 func latestTurnDir(base string) string {
 	invocations, err := os.ReadDir(base)
 	if err != nil {

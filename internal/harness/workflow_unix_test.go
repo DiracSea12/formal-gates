@@ -234,6 +234,7 @@ func openWorkflow(t *testing.T, runID string, scripts composeScripts, repairLimi
 	dir := t.TempDir()
 	devWorkspace := filepath.Join(dir, "workspaces", "development")
 	calls := map[string]int{}
+	var c *Compose
 	c, err := ComposeHarnessV1(ComposeConfig{
 		Dir:   dir,
 		RunID: runID,
@@ -261,10 +262,18 @@ func openWorkflow(t *testing.T, runID string, scripts composeScripts, repairLimi
 				})
 			}
 			identity := ""
-			// The repair round resumes the remembered development session,
-			// and a continuation turn resumes the session it opened.
-			if call.Attempt > 1 || call.Role == "repair" {
+			// A continuation turn resumes the session it opened; a repair
+			// round resumes exactly what the harness asks it to resume —
+			// read from the same kernel row the executor reads (Binding
+			// only runs during Drive, after the composition exists), so a
+			// replacement call that opens a fresh session (after an
+			// explicit restart) is answered with a fresh session, never a
+			// resume the harness did not request.
+			if call.Attempt > 1 {
 				identity = "s-1"
+			}
+			if call.Role == "repair" {
+				identity = c.session(taskDevelopment)
 			}
 			return dshBindingFor(t, fixedPeerPath(t, dshScriptSteps(call.JobDir, answer, identity),
 				filepath.Join(call.JobDir, "peer-echo.txt"))), nil

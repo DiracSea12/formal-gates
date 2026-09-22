@@ -166,6 +166,20 @@ func reviseOneTask(ctx context.Context, tx *sql.Tx, runID, targetID, taskID stri
 			   SET generation=?, state=?, result_invocation_id=NULL, input_digest=?
 			 WHERE run_id=? AND task_id=?`,
 			old+1, taskWaitingDeps, inputDigest(spec.Input), runID, taskID)
+		if err == nil {
+			// The byte carrier behind the rebind above: the input the new
+			// generation is bound to persists in the same transaction as
+			// the bump (task_revisions, store.go), so a reopened owner
+			// re-sends exactly these bytes instead of re-deriving them
+			// from a second write that a crash could strand.  Dependents
+			// keep their inputs and write no row — that asymmetry is what
+			// lets readers tell "this task was itself revised" from "an
+			// upstream closure bumped it".
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO task_revisions (run_id, task_id, generation, input)
+				VALUES (?,?,?,?)`,
+				runID, taskID, old+1, spec.Input)
+		}
 	} else {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE tasks
@@ -306,10 +320,10 @@ var ErrAllowanceDrift = errors.New("runner: repair allowance drifts: increases g
 var ErrRevisionGrantStale = errors.New("runner: the granted revision no longer matches the task's current generation; the old authorization must not act on the new scope")
 
 // ErrRevisionGranted: the drained loop found a revision the user allowed
-// but nobody executed yet.  The grant executes nothing by itself —
-// input bytes are §7-external — so the caller completes it by re-sending
-// the revised input through RequestRevision, and only then may the run
-// reach a terminal state.  Store.OpenRequests surfaces the request's
+// but nobody executed yet.  The grant executes nothing by itself — the
+// revised input reaches execution only through the completion call, so
+// the caller re-sends it through RequestRevision, and only then may the
+// run reach a terminal state.  Store.OpenRequests surfaces the request's
 // identity to a recovering owner.
 var ErrRevisionGranted = errors.New("runner: a granted revision awaits its completion call (re-send the revised input through RequestRevision)")
 
@@ -324,6 +338,62 @@ var ErrRevisionGranted = errors.New("runner: a granted revision awaits its compl
 // null allowance takes the spec's repair limit; raising the allowance is
 // a flow decision made through a user grant).
 type RepairPolicy func(round, allowance int) bool
+
+// TaskGeneration is the kernel's authoritative read of one task's current
+// local generation — the counter every revision of the task's scope bumps
+// (its own revision, or an upstream's dependent closure carrying it).
+// Readers use it to decide whether a durable fact recorded at an older
+// generation still describes the CURRENT scope: a fact from a superseded
+// generation is history and must not drive new transitions, however
+// fresh the file that carries it looks.
+func (s *Store) TaskGeneration(ctx context.Context, taskID string) (int64, error) {
+	var generation int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("runner: no task %q in run %q", taskID, s.runID)
+	}
+	return generation, err
+}
+
+// RevisionInput is one persisted task-revision row (task_revisions,
+// store.go): the input bytes a revision bound, at the generation the
+// bump gave the task.
+type RevisionInput struct {
+	TaskID     string
+	Generation int64
+	Input      []byte
+}
+
+// RevisionInputs lists this run's persisted revision inputs, ordered by
+// (task, generation) — the byte carrier behind tasks.input_digest.  The
+// LAST row of a task names the bytes its current generation is bound
+// to: a dependent bumped by an upstream closure keeps its input and
+// writes no row, so its earlier row still holds the live bytes.  Only
+// revision targets ever appear (creation inputs are re-derived from the
+// run's creation binding), so a task's rows also answer "was this task
+// itself revised".
+func (s *Store) RevisionInputs(ctx context.Context) ([]RevisionInput, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT task_id, generation, input
+		  FROM task_revisions
+		 WHERE run_id=?
+		 ORDER BY task_id, generation`, s.runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RevisionInput
+	for rows.Next() {
+		var row RevisionInput
+		if err := rows.Scan(&row.TaskID, &row.Generation, &row.Input); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
 
 // RequestRevision is the executable control chain over ReviseTask: one
 // business revision of taskID, gated by the repair allowance.
@@ -341,14 +411,14 @@ type RepairPolicy func(round, allowance int) bool
 //     ErrRevisionPending (one open inquiry per task; requestActiveSQL
 //     decides activity, so a dead request never holds the entry);
 //   - a task holding an ACTIVE granted request treats this call as its
-//     completion: the revision (ReviseTask's transaction body) and the
-//     request's move to executed land in one transaction, the new input
-//     travelling in this call because input bytes are never persisted
-//     (§7) — the grant executes nothing by itself.  A granted request
-//     whose binding an upstream revision broke is dead history in ANY
-//     task state — it blocks no new request, raises no allowance below
-//     and authorizes nothing — so the call falls straight through to
-//     that allowance verdict;
+//     completion: the revision (ReviseTask's transaction body, input
+//     bytes included — task_revisions) and the request's move to
+//     executed land in one transaction.  The grant executes nothing by
+//     itself; the revised input travels in this completion call.  A
+//     granted request whose binding an upstream revision broke is dead
+//     history in ANY task state — it blocks no new request, raises no
+//     allowance below and authorizes nothing — so the call falls
+//     straight through to that allowance verdict;
 //   - otherwise policy(used, bound+grants) decides.  used is the count
 //     of executed revision rounds, 0-based, so initial=1 permits the
 //     first round and asks on the second (the accepted boundary);

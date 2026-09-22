@@ -303,6 +303,106 @@ func (s *Store) PendingDecisions(ctx context.Context) ([]DecisionView, error) {
 	return out, rows.Err()
 }
 
+// TaskQuestion is one task's standing question: the decisions row at the
+// task's CURRENT generation, pending or answered. The body is the
+// question as asked — the row's frozen canonical body, which the asker
+// embeds its own binding marker in (the composition stamps a disposition
+// id there, so "was THIS disposition asked" is read off the question
+// itself, not a second file).
+type TaskQuestion struct {
+	DecisionID string
+	TaskID     string
+	// Answered reports the settled state; Choice is the stored answer and
+	// is empty while the question still stands.
+	Answered bool
+	Choice   string
+	Body     string
+}
+
+// TaskQuestion reads one task's standing question. found=false when the
+// task's current generation holds no decisions row — never gated, or
+// only stale older-generation rows a revision already invalidated (the
+// same generation binding PendingDecisions and the dispatch gate read;
+// history answers nothing). Request-side questions (user_requests) are
+// NOT visible here: they never park a task behind its own gate, and the
+// request surfaces are OpenRequests/Answer.
+func (s *Store) TaskQuestion(ctx context.Context, taskID string) (TaskQuestion, bool, error) {
+	var (
+		question TaskQuestion
+		state    string
+		answer   sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT d.decision_id, d.task_id, d.state, d.answer, d.body
+		  FROM decisions d
+		  JOIN tasks t
+		    ON t.run_id = d.run_id AND t.task_id = d.task_id
+		   AND t.generation = d.generation
+		 WHERE d.run_id=? AND d.task_id=?`,
+		s.runID, taskID).
+		Scan(&question.DecisionID, &question.TaskID, &state, &answer, &question.Body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TaskQuestion{}, false, nil
+	}
+	if err != nil {
+		return TaskQuestion{}, false, err
+	}
+	question.Answered = state == decisionAnswered
+	question.Choice = answer.String
+	return question, true, nil
+}
+
+// AnsweredQuestion is one settled question with the facts a refusal test
+// reads: the task it was asked of, the chosen answer, and the choice
+// that would have allowed it.
+type AnsweredQuestion struct {
+	TaskID string
+	Choice string
+	Allow  string
+}
+
+// AnsweredQuestions lists this run's settled questions whose binding is
+// still whole — answered decision gates and refused user requests, both
+// at their task's current generation (the binding every other reader
+// composes; a question a revision invalidated is history whose answer
+// authorizes nothing). Granted and executed requests never appear: their
+// choice was the allowing one, or no question was asked at all, so they
+// are not refusal facts. Which non-allowing choice actually ends a run
+// stays the caller's vocabulary — the kernel hosts no refusal rule of
+// its own beyond the stored allow.
+func (s *Store) AnsweredQuestions(ctx context.Context) ([]AnsweredQuestion, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT task_id, choice, allow FROM (
+			SELECT d.task_id AS task_id, d.answer AS choice, d.allow AS allow
+			  FROM decisions d
+			 WHERE d.run_id=? AND d.state=?
+			   AND EXISTS (SELECT 1 FROM tasks t
+			               WHERE t.run_id=d.run_id AND t.task_id=d.task_id
+			                 AND t.generation=d.generation)
+			UNION ALL
+			SELECT r.task_id, r.answer, r.allow
+			  FROM user_requests r
+			 WHERE r.run_id=? AND r.state=? AND r.answer IS NOT NULL
+			   AND EXISTS (SELECT 1 FROM tasks t
+			               WHERE t.run_id=r.run_id AND t.task_id=r.task_id
+			                 AND t.generation=r.target_generation)
+		) ORDER BY task_id`,
+		s.runID, decisionAnswered, s.runID, reqRefused)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AnsweredQuestion
+	for rows.Next() {
+		var q AnsweredQuestion
+		if err := rows.Scan(&q.TaskID, &q.Choice, &q.Allow); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 // Answer settles one question with a user's choice — a decision gate or
 // a user request, one set of §6.1 rules — inside a single short
 // transaction and in a fixed order.  The user_requests lifecycle is
@@ -554,6 +654,19 @@ func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string
 		next, choice, now, now, id, reqPending); err != nil {
 		return AnswerReceipt{}, err
 	}
+	// A granted restart takes effect HERE, in this same transaction: the
+	// refused session's identity must not survive the grant that replaces
+	// it (task_sessions, store.go) — the task's next call opens a fresh
+	// session, and no later projection can race a recovered owner past
+	// this clear.  A replayed grant (step ③) skipped this branch with the
+	// row already cleared atomically, so it needs no repeat.
+	if kind == kindRestart && next == reqGranted {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM task_sessions WHERE run_id=? AND task_id=?",
+			s.runID, taskID); err != nil {
+			return AnswerReceipt{}, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO events (run_id, kind, payload_json) VALUES (?,?,?)",
 		s.runID, eventKindRequestAnswered, eventJSON); err != nil {
@@ -567,4 +680,53 @@ func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string
 		return AnswerReceipt{}, err
 	}
 	return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
+}
+
+// ---- task sessions (task_sessions, the v5 delta) ----------------------------
+//
+// The execution identity a task's next native call resumes.  Three small
+// operations, one owner per transition: the executor remembers a settled
+// turn's identity (SetSession), a granted restart clears it inside the
+// grant's own transaction (answerRequest above), and readers re-derive
+// the current identity from the row on every pass (Session) — never from
+// a file a crash could strand between the answer and its effect.
+
+// SetSession remembers one task's execution identity, the session its
+// next native call resumes.  Deliberately no advance lock: executors
+// call it from inside a Run (execution happens outside any
+// transaction), and the write is a per-task fact, not an advance-scope
+// transition — SQLite serializes it with every other short write here.
+// An empty identity is not a fact worth remembering; callers use
+// ClearSession for that.
+func (s *Store) SetSession(ctx context.Context, taskID, identity string) error {
+	if identity == "" {
+		return s.ClearSession(ctx, taskID)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_sessions (run_id, task_id, identity) VALUES (?,?,?)
+		ON CONFLICT (run_id, task_id) DO UPDATE SET identity=excluded.identity`,
+		s.runID, taskID, identity)
+	return err
+}
+
+// ClearSession drops one task's remembered identity (a restart takes
+// effect): the task's next call opens a fresh session.  Idempotent —
+// clearing an already-clear task is the state asked for.
+func (s *Store) ClearSession(ctx context.Context, taskID string) error {
+	_, err := s.db.ExecContext(ctx,
+		"DELETE FROM task_sessions WHERE run_id=? AND task_id=?", s.runID, taskID)
+	return err
+}
+
+// Session reads one task's remembered identity; "" means the next call
+// opens a fresh session.
+func (s *Store) Session(ctx context.Context, taskID string) (string, error) {
+	var identity string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT identity FROM task_sessions WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&identity)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return identity, err
 }

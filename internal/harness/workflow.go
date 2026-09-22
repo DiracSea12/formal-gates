@@ -12,31 +12,43 @@ package harness
 //	  → checks (one per authorized check) ∥ gate reviews (one per gate)
 //	  → evaluate → (repair round back to candidate) | seal → terminal
 //
+// Where that flow lives, one file per concern:
+//
+//   - workflow.go (this file) — the shape above as kernel tasks, the
+//     caller's configuration, and the creation binding a reopen must match;
+//   - workflow_drive.go — Drive: run the kernel, apply the transitions,
+//     classify each stop;
+//   - workflow_worker.go, workflow_verify.go — the executors for the
+//     worker stages and for the checks, gates, evaluate and seal;
+//   - workflow_route.go — the transitions between runs, the conditional
+//     edges of the diagram above;
+//   - workflow_takeover.go — reopening a run a previous owner left with a
+//     call in flight: adopt its verifiable results, never redo them;
+//   - workflow_archive.go — the terminal run's physical ZIP.
+//
 // Division of state, one owner per fact:
 //
 //   - the kernel (internal/runner) owns tasks, dependency edges, call
 //     generations, questions and their answers, repair-allowance requests,
-//     restart requests and takeover facts;
+//     restart requests, takeover facts, the revision input bytes
+//     (task_revisions), the role session identities (task_sessions), the
+//     standing park rows (task_dispositions) and the run's terminal
+//     status with its stop reason (the runs row);
 //   - the run directory owns the materials: requirement.md, the worker
-//     outcome records (outcomes/), content-addressed artifacts, supervised
-//     job directories, and three small append-only ledgers described below;
+//     outcome payloads (outcomes/ — which generation is effective is a
+//     kernel fact), content-addressed artifacts and supervised job
+//     directories;
 //   - this composition owns only the transitions between kernel runs.
 //
-// The ledgers (all append-only, all written AFTER the kernel fact they
-// describe, so the kernel stays the authority and a crash between the two
-// costs at most an idempotent replay):
-//
-//	revisions.jsonl  one {task, brief} per accepted task revision — the
-//	                 byte carrier the kernel does not persist (§7); the last
-//	                 entry per task is the brief its current generation is
-//	                 bound to, re-verified by every Run's digest check;
-//	asks.jsonl       one {task, generation, disposition} per question the
-//	                 flow placed on a question task, so a transition never
-//	                 asks twice about the same disposition;
-//	answers.jsonl    the user's choices, written ahead of the kernel's
-//     Answer commit so a crash between them replays the intent exactly
-//     once, and so a refused choice (which the kernel only reports while
-//     its rows stay unreadable) still derives the run's ABORTED terminal.
+// Questions and answers used to live here as two append-only shadow
+// ledgers mirroring the kernel's decisions rows; both moved into the
+// kernel — the question's own row carries its disposition binding in the
+// body, and the answer lives on the row alone — so a control fact has
+// exactly one authority, with no write-ahead window left to diverge.
+// Revision inputs, session identities, the park rows and the terminal
+// record moved the same way (the kernel's v5 schema), each fact in the
+// same transaction as — or the kernel twin of — the transition that
+// produced it.
 
 import (
 	"context"
@@ -169,49 +181,6 @@ type runBinding struct {
 	RepairLimit       int      `json:"repair_limit"`
 	SpecRevision      string   `json:"spec_revision"`
 	Binary            string   `json:"binary"`
-}
-
-// record is the small mutable business state the flow cannot re-derive:
-// the role session identities (a restart clears one; nothing else moves
-// them) and the last terminal the flow itself reached. Everything else —
-// rounds, candidates, routes, evidence references — is derived from the
-// outcome trail on demand.
-type record struct {
-	Sessions map[string]string `json:"sessions"`
-	Terminal string            `json:"terminal,omitempty"`
-	Stopped  string            `json:"stop_reason,omitempty"`
-}
-
-// revisionEntry is one accepted task revision: the brief bytes the kernel
-// bound (it persists only their digest, §7), so a reopened owner can re-send
-// exactly what the run declared.
-type revisionEntry struct {
-	Task  string          `json:"task"`
-	Brief json.RawMessage `json:"brief"`
-	Why   string          `json:"why"`
-}
-
-// askEntry marks one placed question: the question task, the generation its
-// gate landed at, and the disposition id it covers — the idempotence of
-// "ask once per disposition".
-type askEntry struct {
-	Task        string `json:"task"`
-	Generation  int64  `json:"generation"`
-	Disposition string `json:"disposition"`
-}
-
-// answerEntry is one user choice, written ahead of the kernel's Answer
-// commit (a write-ahead of intent: a crash between the two replays it) and
-// read back to derive refusals the kernel reports only through run errors.
-type answerEntry struct {
-	DecisionID string `json:"decision_id"`
-	Task       string `json:"task"`
-	Choice     string `json:"choice"`
-	Allow      string `json:"allow,omitempty"`
-	Alternate  string `json:"alternate,omitempty"`
-	// Options records the question's own choices, so the refusing test can
-	// tell a restart request from a stage gate by shape, not by task name.
-	Options []string `json:"options,omitempty"`
 }
 
 // Compose drives one harness-v1 run over the kernel. Drive advances it
@@ -457,9 +426,6 @@ func (c *Compose) adoptOrCreate() error {
 	if err := writeAtomicBytes(filepath.Join(c.dir, "requirement.md"), []byte(c.cfg.Spec.Requirement)); err != nil {
 		return err
 	}
-	if err := writeAtomicJSON(filepath.Join(c.dir, "record.json"), record{Sessions: map[string]string{}}); err != nil {
-		return err
-	}
 	return writeAtomicJSON(filepath.Join(c.dir, "binding.json"), c.binding)
 }
 
@@ -636,9 +602,6 @@ func askTask(taskID string) string { return taskID + askSuffix }
 // colon, which a Windows path cannot).
 func pathSafe(taskID string) string { return strings.ReplaceAll(taskID, ":", "-") }
 
-// stageTaskOf names the stage a question task belongs to.
-func stageTaskOf(questionTask string) string { return strings.TrimSuffix(questionTask, askSuffix) }
-
 // isQuestionTask reports whether taskID is one of the ask tasks.
 func (c *Compose) isQuestionTask(taskID string) bool {
 	if !strings.HasSuffix(taskID, askSuffix) {
@@ -694,21 +657,21 @@ func (c *Compose) roleOf(taskID string) string {
 }
 
 // specSet produces the spec list for one Run: every task's creation brief,
-// with the last accepted revision entry replacing it. Entries are written
-// only after the kernel accepted the revision, so the list always names the
-// bytes the run's digests are bound to.
+// with the kernel's last persisted revision input replacing it. The rows
+// land in the same transaction as the revision's generation bump, so the
+// list always names the bytes the run's digests are bound to.
 func (c *Compose) specSet() ([]runner.TaskSpec, error) {
 	specs, err := c.creationSpecs()
 	if err != nil {
 		return nil, err
 	}
-	last := map[string]json.RawMessage{}
-	for _, entry := range c.readRevisions() {
-		last[entry.Task] = entry.Brief
+	last := map[string][]byte{}
+	for _, row := range c.kernelRevisionInputs() {
+		last[row.TaskID] = row.Input
 	}
 	for i := range specs {
 		if brief, ok := last[specs[i].TaskID]; ok {
-			specs[i].Input = []byte(brief)
+			specs[i].Input = brief
 		}
 	}
 	return specs, nil
@@ -731,67 +694,28 @@ func canonicalBody(value any) ([]byte, error) {
 	return CanonicalJSON(plain)
 }
 
-// ---- ledger plumbing -------------------------------------------------------
-
-// appendLedger appends one canonical JSON line to a ledger file.
-func appendLedger(path string, value any) error {
-	body, err := canonicalBody(value)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(body, '\n')); err != nil {
-		return err
-	}
-	return f.Sync()
-}
-
-// readLedger decodes every line of a ledger; a missing file is empty.
-func readLedger[T any](path string) ([]T, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []T
-	for _, line := range strings.Split(string(body), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var entry T
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			return nil, fmt.Errorf("compose: %s is unreadable: %w", filepath.Base(path), err)
-		}
-		out = append(out, entry)
-	}
-	return out, nil
-}
-
-// readRevisions loads the revision ledger.
-func (c *Compose) readRevisions() []revisionEntry {
-	entries, err := readLedger[revisionEntry](filepath.Join(c.dir, "revisions.jsonl"))
+// kernelRevisionInputs is the kernel read behind every revision-brief
+// question: the persisted input bytes of every accepted task revision
+// (runner's task_revisions), ordered by task then generation. A read
+// error yields nil; the failure then surfaces through the kernel's own
+// digest check (a wrong brief is refused, never silently re-bound).
+func (c *Compose) kernelRevisionInputs() []runner.RevisionInput {
+	rows, err := c.store.RevisionInputs(context.Background())
 	if err != nil {
 		return nil
 	}
-	return entries
+	return rows
 }
 
-// lastBrief returns the brief a task's current generation is bound to (its
-// creation brief, or its last revision entry's).
+// lastBrief returns the brief a task's current generation is bound to:
+// its last persisted revision input, else the creation brief. A
+// dependent an upstream revision bumped keeps its input and wrote no
+// row, so its last row still names the live bytes.
 func (c *Compose) lastBrief(taskID string) []byte {
-	entries := c.readRevisions()
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Task == taskID {
-			return []byte(entries[i].Brief)
+	rows := c.kernelRevisionInputs()
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].TaskID == taskID {
+			return rows[i].Input
 		}
 	}
 	brief, err := c.initialBrief(taskID)
@@ -801,81 +725,45 @@ func (c *Compose) lastBrief(taskID string) []byte {
 	return brief
 }
 
-// revise records one accepted revision: kernel first (ReviseTask), ledger
-// second. A crash between the two costs one idempotent replay — the
-// transition re-derives the same brief and revises again, and the worker
-// receipt replay makes the extra generation free.
-func (c *Compose) revise(ctx context.Context, taskID string, brief []byte, why string) error {
-	spec := runner.TaskSpec{TaskID: taskID, Input: brief}
-	if err := c.store.ReviseTask(ctx, taskID, spec); err != nil {
-		return err
-	}
-	return appendLedger(filepath.Join(c.dir, "revisions.jsonl"), revisionEntry{
-		Task: taskID, Brief: json.RawMessage(brief), Why: why,
-	})
-}
-
-// askRecorded reports the ask marker covering one disposition.
-func (c *Compose) askRecorded(questionTask, disposition string) bool {
-	for _, entry := range c.readAsks() {
-		if entry.Task == questionTask && entry.Disposition == disposition {
+// taskRevised reports whether a task was ever the TARGET of a revision:
+// only targets write task_revisions rows (an invalidation-closure bump
+// writes none), so this is the kernel-sourced fact the plan re-arm's
+// idempotence check reads.
+func (c *Compose) taskRevised(taskID string) bool {
+	for _, row := range c.kernelRevisionInputs() {
+		if row.TaskID == taskID {
 			return true
 		}
 	}
 	return false
 }
 
-// readAsks loads the placed-question ledger.
-func (c *Compose) readAsks() []askEntry {
-	entries, err := readLedger[askEntry](filepath.Join(c.dir, "asks.jsonl"))
+// revise records one accepted revision in the kernel alone: the input
+// bytes persist with the generation bump in one transaction, so a
+// reopened owner re-sends exactly what the current generation is bound
+// to. There is no second write a crash could strand — a mid-revision
+// crash loses nothing and the next pass re-derives the same intent.
+func (c *Compose) revise(ctx context.Context, taskID string, brief []byte) error {
+	return c.store.ReviseTask(ctx, taskID, runner.TaskSpec{TaskID: taskID, Input: brief})
+}
+
+// session returns the remembered identity of one stage's session — the
+// kernel's task_sessions row, re-read from the database on every call so
+// a recovered owner derives it from the same authority the restart grant
+// cleared. Empty means a fresh session.
+func (c *Compose) session(taskID string) string {
+	identity, err := c.store.Session(context.Background(), taskID)
 	if err != nil {
-		return nil
+		return ""
 	}
-	return entries
+	return identity
 }
 
-// readAnswers loads the user-choice ledger.
-func (c *Compose) readAnswers() []answerEntry {
-	entries, err := readLedger[answerEntry](filepath.Join(c.dir, "answers.jsonl"))
-	if err != nil {
-		return nil
-	}
-	return entries
-}
-
-// readRecord loads the mutable business record; a missing file is an empty
-// one (the run never wrote a session or a terminal).
-func (c *Compose) readRecord() record {
-	var current record
-	body, err := os.ReadFile(filepath.Join(c.dir, "record.json"))
-	if err != nil {
-		return record{Sessions: map[string]string{}}
-	}
-	if json.Unmarshal(body, &current) != nil {
-		return record{Sessions: map[string]string{}}
-	}
-	if current.Sessions == nil {
-		current.Sessions = map[string]string{}
-	}
-	return current
-}
-
-// writeRecord lands the record atomically.
-func (c *Compose) writeRecord(current record) error {
-	return writeAtomicJSON(filepath.Join(c.dir, "record.json"), current)
-}
-
-// session returns the remembered identity of one stage's session.
-func (c *Compose) session(taskID string) string { return c.readRecord().Sessions[taskID] }
-
-// clearSession drops one stage's session identity (a restart answer).
+// clearSession drops one stage's session identity (a restart answer):
+// a direct application of the answered fact — idempotent, so a repeated
+// clear is harmless.
 func (c *Compose) clearSession(taskID string) {
-	current := c.readRecord()
-	if current.Sessions[taskID] == "" {
-		return
-	}
-	delete(current.Sessions, taskID)
-	_ = c.writeRecord(current)
+	_ = c.store.ClearSession(context.Background(), taskID)
 }
 
 // bytesEqual is bytes.Equal for the two brief spellings.

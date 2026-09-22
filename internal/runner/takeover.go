@@ -227,8 +227,10 @@ func (r *Runner) takeoverPending(ctx context.Context) error {
 	}
 	var invs []Invocation
 	for rows.Next() {
-		// Input never rides along: it is not persisted (§7) and the
-		// consultation judges identity, not payload.
+		// Input never rides along: the consultation judges identity, not
+		// payload — a task's bound input stays recoverable from its
+		// task_revisions rows (revision.go) when a replacement
+		// registration needs it.
 		var inv Invocation
 		if err := rows.Scan(&inv.InvocationID, &inv.TaskID, &inv.Generation, &inv.InputDigest); err != nil {
 			rows.Close()
