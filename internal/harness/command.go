@@ -22,7 +22,7 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 		return Supervise(args[1])
 	}
 	if len(args) > 0 && args[0] == "native" {
-		// One native job, one process (the port of native_entry.py's shape).
+		// One native job, one process.
 		// The entry's own argument check mirrors supervise's: exit 2 with a
 		// note on stderr and no native-error.json.
 		if len(args) < 2 {
@@ -32,11 +32,11 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 		return RunNative(args[1], errout)
 	}
 	if len(args) > 0 && args[0] == "native-respond" {
-		// G2d: answer one held native interaction from the user's own shell.
+		// Answer one held native interaction from the user's own shell.
 		return NativeRespond(args[1:], errout)
 	}
 	if len(args) > 0 && args[0] == "native-show" {
-		// G2d: read-only listing of a job's held native interactions.
+		// Read-only listing of a job's held native interactions.
 		return NativeShow(args[1:], out, errout)
 	}
 	exe, e := os.Executable()

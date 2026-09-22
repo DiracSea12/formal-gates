@@ -1,7 +1,6 @@
 package harness
 
-// The ZCode app-server adapter, the port of
-// formal_gates_harness/native_zcode.py. Only the ZCode protocol lives here;
+// The ZCode app-server adapter. Only the ZCode protocol lives here;
 // process handling, the request/reply loop, bindings and evidence come from
 // native_transport. No graph imports, workflow callbacks, global configuration
 // writes or model substitution. Only read-only roles narrow native tools.
@@ -22,7 +21,7 @@ package harness
 // abandons the turn when none comes back, so respond answers that one
 // interaction from the same provisioning index -- see zcodeRequestAuth().
 //
-// Serialization is value-level (the G2b v2 ruling, no CPython emulation):
+// Serialization is value-level, with no CPython emulation:
 // prompt schemas and embedded error bodies are rendered with the canonical
 // encoder (prompt objects present additionalProperties last; see
 // schemaForPrompt), and the ZCODE_*/RuntimeBlocked:/SessionUnavailable:
@@ -126,7 +125,7 @@ const zcodeResultFrameError = "RuntimeBlocked: NATIVE_RESULT:"
 
 // zcodeTurnBudget is the reference implementation's total bound on one turn's
 // wait: 900 seconds of host-processing time from the send acknowledgement to
-// the terminal event, paused while a user decision is held (G2d). A variable
+// the terminal event, paused while a user decision is held. A variable
 // only so the bounded-wait tests can shorten it.
 var zcodeTurnBudget = 900 * time.Second
 
@@ -352,7 +351,7 @@ type zcodeClient struct {
 }
 
 // zcodePermissionMethod and zcodeUserInputMethod are the two client-directed
-// requests this transport holds for a user decision (G2d): the tool-call
+// requests this transport holds for a user decision: the tool-call
 // permission gate and the structured user input (AskUserQuestion, plan-mode
 // approval). Neither is ever a process approval.
 const zcodePermissionMethod = "interaction/requestPermission"
@@ -564,7 +563,7 @@ func zcodeInteractionObserved(hold *nativePendingHold, message map[string]any) b
 // a 60-second total budget (the turn itself is waited out by execute's receive
 // loop, never by an unbounded request), and the plain {id, method, params}
 // shape with the base framing defaults. The two user-decision interactions are
-// held (G2d); the machine-answerable ones stay in respond.
+// held; the machine-answerable ones stay in respond.
 func newZcodeClient(launch map[string]any, workspace, directory string, environment map[string]string) (*zcodeClient, error) {
 	executableValue, err := mustEntry(launch, "executable")
 	if err != nil {
@@ -602,7 +601,7 @@ func (z *zcodeClient) request(method string, params map[string]any) (any, error)
 // machine-answerable interactions. The two user decisions
 // (interaction/requestPermission, interaction/requestUserInput) never reach
 // here - the transport's interaction specs hold them for a user decision
-// (G2d) - and every other method keeps the default -32601 refusal.
+// - and every other method keeps the default -32601 refusal.
 func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 	switch method {
 	case "session/requestRuntimePreferences":
@@ -1200,12 +1199,11 @@ func zcodeDeliverAccountProviders(client *zcodeClient, catalogue string, wanted 
 // every value is confirmed from the host's own report before it is recorded.
 // Nothing is persisted to the workspace's last-used selection.
 //
-// A change is only asked of a host that advertises models at all: on the
-// 2026-09-19 host a snapshot whose available list is empty means an empty
+// A change is only asked of a host that advertises models at all: a
+// snapshot whose available list is empty means an empty
 // provider registry, where session/setModel cannot apply any reference and
-// answers with its own opaque "Provider Registry 中不存在 Model" error
-// (probed; the failing G2c run jobs hit exactly that state after their
-// account overlay had not been delivered). The refusal is this transport's
+// answers with its own opaque "Provider Registry 中不存在 Model" error.
+// The refusal is this transport's
 // own instead, and the frame is never fired. Registered bounded difference:
 // the frozen reference still sends the frame and reports the host's error.
 func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort, directory, workspace string) (map[string]any, error) {
@@ -1498,8 +1496,8 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// An optional permission_mode names the mode a NEW non-read-only session
 	// is switched to before its first turn. Absent, the driver switches
 	// nothing: the session runs in the host's own default mode, and the
-	// approvals that mode can raise are answered through the G2d interaction
-	// hold, not by forcing a permissive mode (the pre-G2d workaround). The
+	// approvals that mode can raise are answered through the interaction
+	// hold, not by forcing a permissive mode. The
 	// name is not validated here: the host's own setMode rejects modes it does
 	// not know. Resumed and read-only sessions never apply it.
 	wantedMode, _ := getOrOf(request, "permission_mode", "").(string)
@@ -1705,7 +1703,7 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// deadline. A silent host ends it through the receive timeout, whose text
 	// states the session is not assumed lost.
 	//
-	// While a native interaction is held (G2d) the budget pauses: the deadline
+	// While a native interaction is held the budget pauses: the deadline
 	// is a remaining-budget, not a wall-clock moment, so the time the user
 	// takes to decide does not consume the turn. A silent host during a hold is
 	// therefore not a failure either - the loop keeps waiting for the answer.

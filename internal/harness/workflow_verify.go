@@ -74,8 +74,9 @@ func (c *Compose) executeCandidate(inv runner.Invocation) (runner.Result, error)
 // repairRounds counts the completed business repair rounds: the kernel's
 // executed revision requests of development (user_requests) — the same
 // rows the allowance verdict counts. A parked repair result, an ordinary
-// retry and a continuation's re-arm revise through bare ReviseTask and
-// land no request row, so none of them is a business round here.
+// retry and a continuation's re-arm resolve through the kernel's
+// disposition transition and land no request row, so none of them is a
+// business round here.
 func (c *Compose) repairRounds() int {
 	rounds, err := c.store.RevisionRounds(context.Background(), taskDevelopment)
 	if err != nil {
@@ -639,7 +640,7 @@ func (c *Compose) executeSeal(inv runner.Invocation) (runner.Result, error) {
 
 // terminalJudgment is the completeness check after a clean drain: the
 // seal stage must have certified AND the result record must exist on
-// disk — the R1/R2 rule that a FAIL chain can never report completion.
+// disk — the rule that a FAIL chain can never report completion.
 // The record half of the dual evidence lives in the kernel (runs.
 // terminal, written by executeSeal and re-asserted here); the file half
 // is harness-result.json.

@@ -137,14 +137,12 @@ func (c *Compose) outcomeGenerations(taskID string) []int64 {
 // fact naming the generation, the file only carrying it:
 //
 //   - a parked stage's live fact is the outcome its park froze: the
-//     standing disposition row names that generation. The question the
-//     route places about that outcome revises an ask task, and the
-//     invalidation closure that placement bumps through moves the
-//     parked task's generation WITHOUT producing a new outcome — the
-//     park, not the moved generation, is what stays live until the
-//     answer clears it. The route-guard is the one park that freezes
-//     no outcome (an inert marker, cleared lazily once the task moved
-//     past it), so it pins nothing and the current generation reads;
+//     standing disposition row names that generation, and the park —
+//     not the task's later movements — is what stays live until the
+//     answer's resolve clears it. The route-guard is the one park that
+//     freezes no outcome (an inert marker, cleared lazily once the task
+//     moved past it), so it pins nothing and the current generation
+//     reads;
 //   - every other task's effective outcome sits at its kernel-current
 //     generation: the admitted invocation's (tasks.result_invocation_id
 //     names a call of exactly that generation) or the pending
@@ -684,16 +682,20 @@ var errParked = errors.New("compose: parked on a standing disposition")
 // park lands the disposition row in the kernel and returns the parking
 // error (wrapping errParked): the invocation keeps its pending row (the
 // task stays unfinished, its dependents blocked) and the transitions
-// between runs turn the row into a question. TaskID, Generation and
-// Attempt are stamped here, in one place — the disposition id the
-// question body freezes is derived from exactly these, so a re-parked
-// round (a later generation or attempt of the same stage and kind) asks
-// afresh.
+// between runs turn the row into its question. TaskID, Generation and
+// Attempt are stamped here, in one place. A standing row that already
+// holds its question parks the same way — the kernel refuses the
+// overwrite, and the standing row (asked or answered) owns the next
+// move exactly as a fresh park does, so a recovered owner re-deriving
+// the same classification observes instead of replacing it.
 func (c *Compose) park(taskID string, generation int64, attempt int, d runner.Disposition) error {
 	d.TaskID = taskID
 	d.Generation = generation
 	d.Attempt = attempt
 	if err := c.store.SetDisposition(context.Background(), d); err != nil {
+		if errors.Is(err, runner.ErrDispositionAsked) {
+			return fmt.Errorf("compose: %s stands asked on %s: %s: %w", taskID, d.Kind, d.Reason, errParked)
+		}
 		return err
 	}
 	return fmt.Errorf("compose: %s parked on %s: %s: %w", taskID, d.Kind, d.Reason, errParked)
@@ -739,14 +741,13 @@ func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, s
 }
 
 // rememberSession records the identity one classified worker result
-// reported — THE single update point of the session rule (rule table row
-// 1): a stage's next call resumes the most recent result's identity,
+// reported — THE single update point of the session rule: a stage's
+// next call resumes the most recent result's identity,
 // whatever the classification was, for every worker and gate task alike.
 // The kernel's task_sessions row is the authority the restart grant
 // clears and every execution re-reads (session). A write failure is
-// swallowed exactly as the old file write's was: the cost of a lost
-// identity is a fresh session on the next call, never a failed settled
-// turn.
+// swallowed: the cost of a lost identity is a fresh session on the next
+// call, never a failed settled turn.
 func (c *Compose) rememberSession(taskID, identity string) {
 	if identity == "" {
 		return

@@ -2,8 +2,8 @@
 
 package harness
 
-// K5 acceptance — the four scenario families over the full composition, all
-// deterministic, all real: a real formal-gates binary supervising real
+// Full-composition acceptance — the four scenario families over the whole
+// composition, all deterministic, all real: a real formal-gates binary supervising real
 // native job processes over a scripted fake host (the adapter tests' own
 // helper-process peer, re-used — no second fake), a real Git project with
 // really executed approved checks, real SQLite state, and real process
@@ -38,8 +38,8 @@ type scriptedAnswer struct {
 	// SessionUnavailable turns the session open step into the host's
 	// explicit persistent-identity refusal (-32004).
 	SessionUnavailable bool `json:"session_unavailable,omitempty"`
-	// Garbage makes the framed answer fail the worker contract (R9's
-	// contract-rejected classification).
+	// Garbage makes the framed answer fail the worker contract
+	// (contract-rejected classification).
 	Garbage bool `json:"garbage,omitempty"`
 	// Writes are absolute-path files the peer drops when its turn fires.
 	Writes []peerFile `json:"writes,omitempty"`
@@ -418,7 +418,7 @@ func TestWorkflowGreenChainSealsAndArchives(t *testing.T) {
 	if first.Status != StatusWaitingDecision || len(first.Pending) != 1 || first.Pending[0].TaskID != taskRequirement {
 		t.Fatalf("first stop = %+v, want the requirement gate", first)
 	}
-	// The question carries the creation facts (R3).
+	// The question carries the creation facts.
 	var body map[string]any
 	if err := json.Unmarshal([]byte(first.Pending[0].Body), &body); err != nil {
 		t.Fatalf("requirement body: %v", err)
@@ -441,7 +441,7 @@ func TestWorkflowGreenChainSealsAndArchives(t *testing.T) {
 	if textOf(body["product"]) == "" || textOf(body["technical"]) == "" || len(listOf(body["checks"])) != 1 {
 		t.Fatalf("plan body = %v", body)
 	}
-	// The product review reached the technical review as evidence (R2).
+	// The product review reached the technical review as evidence.
 	baseline := filepath.Join(c.dir, "workspaces", "baseline")
 	if findTaskJSON(t, baseline, "prior-product-review") == nil {
 		_ = filepath.WalkDir(filepath.Join(c.dir), func(path string, entry os.DirEntry, err error) error {
@@ -458,7 +458,7 @@ func TestWorkflowGreenChainSealsAndArchives(t *testing.T) {
 		t.Fatalf("final stop = %+v (err %v)", final, final.Err)
 	}
 	// Development received the technical plan; QA review received the
-	// design (R2).
+	// design.
 	development := filepath.Join(c.dir, "workspaces", "development")
 	if findTaskJSON(t, development, "reviewed-technical-plan") == nil {
 		t.Fatal("development never received the technical plan evidence")
@@ -500,7 +500,7 @@ func TestWorkflowGreenChainSealsAndArchives(t *testing.T) {
 	if !found {
 		t.Fatal("the gate review never received comparison materials")
 	}
-	// The physical archive exists and verifies (R8).
+	// The physical archive exists and verifies.
 	destination := filepath.Join(t.TempDir(), "wf-green.zip")
 	report, err := c.Archive(destination)
 	if err != nil {
@@ -567,7 +567,7 @@ func verifyArchiveFile(t *testing.T, path string) {
 
 // TestWorkflowPreReviewFailAskRetryAbort: a failing product review asks
 // its retry question; abort ends the run ABORTED, and a reopen derives the
-// same terminal from the persisted facts (R1, R5).
+// same terminal from the persisted facts.
 func TestWorkflowPreReviewFailAskRetryAbort(t *testing.T) {
 	scripts := composeScripts{taskProduct: {Status: "FAIL", Summary: "scope is incoherent", Findings: scriptedFindings}}
 	c := openWorkflow(t, "wf-prereview", scripts, 1)
@@ -598,7 +598,7 @@ func TestWorkflowPreReviewFailAskRetryAbort(t *testing.T) {
 	if after.Status != StatusAborted || after.Terminal != statusAborted {
 		t.Fatalf("stop after abort = %+v", after)
 	}
-	// The persisted facts alone reproduce the terminal (R5).
+	// The persisted facts alone reproduce the terminal.
 	dir := c.dir
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
@@ -636,7 +636,7 @@ func TestWorkflowPreReviewRetryThenPass(t *testing.T) {
 	if _, err := c.Answer(ctx, state.Pending[0].DecisionID, "retry"); err != nil {
 		t.Fatal(err)
 	}
-	// The retry brief carried the prior findings (R2: evidence feedback).
+	// The retry brief carried the prior findings (evidence feedback).
 	final := answerAllowing(t, c, ctx, nil)
 	if final.Status != StatusComplete {
 		t.Fatalf("final = %+v (err %v)", final, final.Err)
@@ -813,8 +813,8 @@ func TestWorkflowRepairRoundDrivesNewCandidate(t *testing.T) {
 	if second == nil || second.Output == nil || second.Output.Role != "repair" {
 		t.Fatalf("the repair round = %+v", second)
 	}
-	// The repair brief carried the failed verification (R4: derived from
-	// the persistent bundle, at the round's own moment).
+	// The repair brief carried the failed verification (derived from the
+	// persistent bundle, at the round's own moment).
 	development := filepath.Join(c.dir, "workspaces", "development")
 	if findTaskJSON(t, development, "failed-verification") == nil {
 		t.Fatal("the repair round never received the failed-verification bundle")
@@ -946,7 +946,7 @@ func TestWorkflowSessionRefusalAsksRestart(t *testing.T) {
 }
 
 // TestWorkflowContractRejectedIsARuntimeQuestion: an exit-0 answer the
-// worker contract rejects becomes a runtime question of its own (R9) —
+// worker contract rejects becomes a runtime question of its own —
 // retry / restart-session / abort — never a disguised session failure, and
 // the retry re-runs the stage.
 func TestWorkflowContractRejectedIsARuntimeQuestion(t *testing.T) {
@@ -983,8 +983,8 @@ func TestWorkflowContractRejectedIsARuntimeQuestion(t *testing.T) {
 // TestWorkflowCrashTakeoverClassifications: the takeover consultation (the
 // recovery seam) classifies a pending invocation from its job directory's
 // facts — a live supervisor under its recorded identity is observed, a
-// settled answer the worker contract rejects becomes the runtime question
-// (R9), and a turn with no evidence at all is the zero fact whose kernel
+// settled answer the worker contract rejects becomes the runtime question,
+// and a turn with no evidence at all is the zero fact whose kernel
 // restart request asks. The consultation is exercised directly over real
 // fabricated job directories, plus one reopened-owner integration: the
 // runtime question survives the owner change.
@@ -1061,7 +1061,7 @@ func TestWorkflowCrashTakeoverClassifications(t *testing.T) {
 	t.Run("reopened-owner-surfaces-the-runtime-question", func(t *testing.T) {
 		// The product review parks on an answer the contract rejects; the
 		// owner closes with the question standing, and the reopened owner
-		// surfaces the same runtime question (R9: never a session failure).
+		// surfaces the same runtime question (never a session failure).
 		c := openWorkflow(t, "wf-crash", composeScripts{
 			taskProduct + "#1": {Garbage: true, Status: "PASS", Summary: "unparseable"},
 		}, 1)
@@ -1292,7 +1292,7 @@ func TestWorkflowArchiveRefusesNonTerminal(t *testing.T) {
 }
 
 // TestWorkflowReopenBindingRefused: a reopened run with a changed binding
-// is refused by name (R7).
+// is refused by name.
 func TestWorkflowReopenBindingRefused(t *testing.T) {
 	c := openWorkflow(t, "wf-binding", composeScripts{}, 1)
 	if state := c.Drive(context.Background()); state.Status != StatusWaitingDecision {

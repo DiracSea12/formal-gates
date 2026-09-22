@@ -2,8 +2,8 @@
 
 package harness
 
-// Live acceptance (plan §13.2: "K5 及发布门再使用真实宿主验收") — the
-// composition's one real-host pass. Skipped unless
+// Live acceptance — the composition's one real-host pass over the release
+// gate. Skipped unless
 // FORMAL_GATES_LIVE_ACCEPTANCE=1, because every worker turn is a real host
 // call with real spend: the gate exists so no ordinary test run ever spends
 // one. The chain routes the product review through the real DSH binding and

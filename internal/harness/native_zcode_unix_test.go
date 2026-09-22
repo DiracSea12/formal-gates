@@ -561,8 +561,8 @@ func TestZcodeExecuteSelection(t *testing.T) {
 	}
 	// An empty advertised list is an empty provider registry on the 2026-09-19
 	// host: setModel cannot apply anything there, so the change is refused
-	// before the frame is fired (probed; the failing G2c run jobs hit this
-	// state after their account overlay had not been delivered).
+	// before the frame is fired (probed: a real failing run job reaches this
+	// state after its account overlay was not delivered).
 	nothingAdvertisedSettings := `{"model": {"current": {"providerId": "p1", "modelId": "m0"}, "available": []}, ` +
 		`"thoughtLevel": {"current": "low"}, "mode": {"current": "default"}}`
 	nothingAdvertisedSteps := func(string) []peerStep {
@@ -794,7 +794,8 @@ func TestZcodeExecuteResumeUnavailable(t *testing.T) {
 	}
 }
 
-// TestZcodeExecuteInteractionHeldAndInvalidated pins the G2d boundary: the
+// TestZcodeExecuteInteractionHeldAndInvalidated pins the held-interaction
+// boundary: the
 // reverse permission request is held pending (no reply frame ever), survives
 // the whole sequence, and is invalidated when the transport closes - the
 // probe report and the run still complete, because a user decision waiting is

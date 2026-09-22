@@ -11,7 +11,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// testDefinition 构造覆盖全部六变体的测试定义（批 1 定义形态的最小复用）：
+// testDefinition 构造覆盖全部六变体的测试定义（定义形态的最小复用）：
 //
 //	boot.local ──→ work.agent ──→ gate.host ──┐
 //	    │────────→ work.ask  ──→ gate.durable ┴→ fin.report
@@ -423,7 +423,7 @@ func stepCopies(t *testing.T, cd *compiler.CompiledDefinition) []authoring.Step 
 	return out
 }
 
-// TestDecideRealWorkflowDefinition 在批 1c 的真实定义上冒烟：初始只剩
+// TestDecideRealWorkflowDefinition 在真实定义上冒烟：初始只剩
 // engine-internal frontier；entry 两步完成后 Ready 携 review.worker。
 func TestDecideRealWorkflowDefinition(t *testing.T) {
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())

@@ -1,6 +1,6 @@
 package harness
 
-// The G2d interaction CLI: `formal-gates harness native-respond` writes one
+// The held-interaction CLI: `formal-gates harness native-respond` writes one
 // user decision for a held native interaction, and `formal-gates harness
 // native-show` lists a job's held interactions read-only. Both work entirely
 // on the job's evidence directory: the running native job process polls the

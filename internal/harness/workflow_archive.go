@@ -1,6 +1,6 @@
 package harness
 
-// The physical archive (plan §10, R8): after a terminal judgment, the run
+// The physical archive: after a terminal judgment, the run
 // produces a real, verified ZIP outside the run directory — a consistent
 // SQLite backup (VACUUM INTO), every admitted member written under the
 // retention judgements' admission rules, and a post-write verification

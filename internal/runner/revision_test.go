@@ -1,14 +1,14 @@
 package runner
 
-// K4 acceptance tests for the §13.2 sample — 局部代次、返修额度、失效范围
-// 及调用接回: a failed task is repaired through Store.ReviseTask, the
-// unaffected branch keeps its finished result, the failure is never
-// overwritten by the later PASS, an old-generation result or answer never
-// touches the current generation, gates carry across generations, and a
-// crashed session's work is taken over by a revision.  The takeover
-// scenario re-executes this binary through TestMain (RUNNER_K4_SCENARIO)
-// and really exits at K1's after-intent injection point; everything else
-// runs in-process.
+// Acceptance tests for revision — 局部代次、返修额度、失效范围及调用接回:
+// a failed task is repaired through Store.ReviseTask, the unaffected
+// branch keeps its finished result, the failure is never overwritten by
+// the later PASS, an old-generation result or answer never touches the
+// current generation, gates carry across generations, and a crashed
+// session's work is taken over by a revision.  The takeover scenario
+// re-executes this binary through TestMain (RUNNER_REVISION_SCENARIO) and
+// really exits at the after-intent injection point; everything else runs
+// in-process.
 
 import (
 	"context"
@@ -25,17 +25,18 @@ import (
 )
 
 const (
-	envK4Scenario = "RUNNER_K4_SCENARIO"
-	envK4Dir      = "RUNNER_K4_DIR"
-	k4RunID       = "k4-takeover"
+	envRevisionScenario = "RUNNER_REVISION_SCENARIO"
+	envRevisionDir      = "RUNNER_REVISION_DIR"
+	revisionRunID       = "revision-takeover"
 )
 
-// K4 child exit codes: 96 is the on-purpose exit right after the second
-// task's intent registered (K1 injection point ①); 97+ mark wiring bugs
-// in the child itself.  Codes stay clear of the 70–95 range K1–K3 use.
+// Revision-child exit codes: 96 is the on-purpose exit right after the
+// second task's intent registered (after-intent injection point ①); 97+
+// mark wiring bugs in the child itself.  Codes stay clear of the 70–95
+// range the crash, gated and parallel children use.
 const (
-	exitK4AfterIntent = 96
-	exitK4Wiring      = 97
+	exitRevisionAfterIntent = 96
+	exitRevisionWiring      = 97
 )
 
 // taskGeneration returns the task's current generation.
@@ -80,55 +81,55 @@ func decisionRowAtGeneration(t *testing.T, st *Store, taskID string, generation 
 	return
 }
 
-// k4Child drives the takeover sample in RUNNER_K4_DIR: two INDEPENDENT
+// revisionChild drives the takeover sample in RUNNER_REVISION_DIR: two INDEPENDENT
 // tasks, a and b.  Sequential dispatch runs a to a committed admission
 // (the finished partial work), then b's generation-1 intent registers —
-// and the process really exits at K1's after-intent point: an invalidated
+// and the process really exits at the after-intent point: an invalidated
 // session whose in-flight intent will never settle, plus retained work
 // the parent must keep.
-func k4Child() {
-	dir := os.Getenv(envK4Dir)
+func revisionChild() {
+	dir := os.Getenv(envRevisionDir)
 	if dir == "" {
-		fmt.Fprintln(os.Stderr, "child: missing", envK4Dir)
-		os.Exit(exitK4Wiring)
+		fmt.Fprintln(os.Stderr, "child: missing", envRevisionDir)
+		os.Exit(exitRevisionWiring)
 	}
 	st, err := Open(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "child open:", err)
-		os.Exit(exitK4Wiring)
+		os.Exit(exitRevisionWiring)
 	}
 	specs := []TaskSpec{
 		{TaskID: "a", Name: "task-a", Input: []byte("input-a")},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 	}
-	if err := st.CreateRun(context.Background(), k4RunID, specs); err != nil {
+	if err := st.CreateRun(context.Background(), revisionRunID, specs); err != nil {
 		fmt.Fprintln(os.Stderr, "child create:", err)
-		os.Exit(exitK4Wiring)
+		os.Exit(exitRevisionWiring)
 	}
 	r := NewRunner(st, markerExecutor(dir))
 	registrations := 0
-	// K1 injection point ①, on the SECOND registration (b's): a's
+	// After-intent injection point ①, on the SECOND registration (b's): a's
 	// registration passed through and its admission already committed.
 	r.hooks.afterRegisterIntent = func() {
 		registrations++
 		if registrations == 2 {
-			os.Exit(exitK4AfterIntent)
+			os.Exit(exitRevisionAfterIntent)
 		}
 	}
 	if err := r.Run(context.Background(), specs); err != nil {
 		fmt.Fprintln(os.Stderr, "child run:", err)
-		os.Exit(exitK4Wiring)
+		os.Exit(exitRevisionWiring)
 	}
 	fmt.Fprintln(os.Stderr, "child: run completed without exiting at the injection point")
-	os.Exit(exitK4Wiring)
+	os.Exit(exitRevisionWiring)
 }
 
-// §13.2 K4 sample 1 — 失败项返修、无影响项保留: a fails without a receipt,
+// Revision sample 1 — 失败项返修、无影响项保留: a fails without a receipt,
 // independent b succeeds, c joins both.  Revising a's input re-runs exactly
 // a and its dependent c at the new generation; b's finished result is
 // retained untouched; a's failed generation-1 invocation row survives as
 // superseded history — the later PASS never overwrites the failure.
-func TestK4FailureRepairKeepsUnaffectedWork(t *testing.T) {
+func TestFailureRepairKeepsUnaffectedWork(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -136,7 +137,7 @@ func TestK4FailureRepairKeepsUnaffectedWork(t *testing.T) {
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 		{TaskID: "c", Name: "task-c", DependsOn: []string{"a", "b"}, Input: []byte("input-c")},
 	}
-	st := mustCreate(t, dir, "k4-repair", specs)
+	st := mustCreate(t, dir, "revision-repair", specs)
 	failA := true
 	base := markerExecutor(dir)
 	exec := func(ctx context.Context, inv Invocation) (Result, error) {
@@ -214,7 +215,7 @@ func TestK4FailureRepairKeepsUnaffectedWork(t *testing.T) {
 	}
 
 	// b: zero re-execution — marker, admitted rows and effective result
-	// all unchanged by the revision of its sibling branch (§117).
+	// all unchanged by the revision of its sibling branch.
 	if n := markerLines(t, dir, "b"); n != 1 {
 		t.Errorf("task b executed %d times, want still 1 (unaffected work retained)", n)
 	}
@@ -276,15 +277,15 @@ func TestK4FailureRepairKeepsUnaffectedWork(t *testing.T) {
 	}
 }
 
-// §4.2/§9.2 — a late OLD-generation result never overrides the current
+// A late OLD-generation result never overrides the current
 // generation's: the admission identity tuple carries the generation, so
 // the revision-superseded row records it and the effective result stays
 // with the new generation's call.
-func TestK4LateOldGenerationResultIsRecordedNotEffective(t *testing.T) {
+func TestLateOldGenerationResultIsRecordedNotEffective(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("input")}}
-	st := mustCreate(t, dir, "k4-late", specs)
+	st := mustCreate(t, dir, "revision-late", specs)
 	r := NewRunner(st, recordingExecutor(nil, nil))
 
 	// A generation-1 intent is registered and never settled — the state
@@ -345,19 +346,19 @@ func TestK4LateOldGenerationResultIsRecordedNotEffective(t *testing.T) {
 	}
 }
 
-// §13.2 K4 sample 3 — 失效会话与部分工作接手: a real child process admits
+// Revision sample 3 — 失效会话与部分工作接手: a real child process admits
 // the independent task a, registers task b's generation-1 intent and dies
-// at K1's after-intent point.  The parent takes over through a revision of
+// at the after-intent point.  The parent takes over through a revision of
 // b: the dead session's intent is void (superseded, row kept), b executes
 // exactly once at the new generation, and a's finished result is retained.
-func TestK4CrashedSessionTakenOverByRevision(t *testing.T) {
+func TestCrashedSessionTakenOverByRevision(t *testing.T) {
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), envK4Scenario+"=1", envK4Dir+"="+dir)
+	cmd.Env = append(os.Environ(), envRevisionScenario+"=1", envRevisionDir+"="+dir)
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitK4AfterIntent {
-		t.Fatalf("child exit = %v (want code %d); output:\n%s", err, exitK4AfterIntent, out)
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitRevisionAfterIntent {
+		t.Fatalf("child exit = %v (want code %d); output:\n%s", err, exitRevisionAfterIntent, out)
 	}
 	ctx := context.Background()
 	st, err := Open(dir)
@@ -365,8 +366,8 @@ func TestK4CrashedSessionTakenOverByRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if st.runID != k4RunID {
-		t.Fatalf("reopened run id = %q, want %q", st.runID, k4RunID)
+	if st.runID != revisionRunID {
+		t.Fatalf("reopened run id = %q, want %q", st.runID, revisionRunID)
 	}
 	// The durable state the child left: a admitted exactly once; b holding
 	// one generation-1 pending intent that will never settle.
@@ -440,13 +441,13 @@ func TestK4CrashedSessionTakenOverByRevision(t *testing.T) {
 	}
 }
 
-// §6.1 — gates carry across generations: a revision copies the latest
+// Gates carry across generations: a revision copies the latest
 // gate's frozen definition to the new generation, pending again; the old
 // request is refused as stale, answered or not; only the new gate's
 // answer authorizes the new generation's work — for the revised task and
 // for its gated dependent alike.  A task that was never gated stays
 // ungated.
-func TestK4GatesCarryAcrossGenerations(t *testing.T) {
+func TestGatesCarryAcrossGenerations(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	gate := func(body string) *Confirmation {
@@ -462,7 +463,7 @@ func TestK4GatesCarryAcrossGenerations(t *testing.T) {
 		{TaskID: "d", Name: "task-d", DependsOn: []string{"a"}, Input: []byte("input-d"), Confirm: gate("approve d?")},
 		{TaskID: "u", Name: "task-u", Input: []byte("input-u")},
 	}
-	st := mustCreate(t, dir, "k4-gates", specs)
+	st := mustCreate(t, dir, "revision-gates", specs)
 	r := NewRunner(st, markerExecutor(dir))
 
 	// Generation 1: both gates answered, everything completes once.
@@ -592,7 +593,7 @@ func TestK4GatesCarryAcrossGenerations(t *testing.T) {
 // must not hold settle in a permanent wait once the current gate settled
 // — decisionStatus counts only rows at the task's current generation,
 // matching the ready query's predicate.
-func TestK4OldGenerationPendingGateDoesNotMisreportSettle(t *testing.T) {
+func TestOldGenerationPendingGateDoesNotMisreportSettle(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -607,7 +608,7 @@ func TestK4OldGenerationPendingGateDoesNotMisreportSettle(t *testing.T) {
 		},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 	}
-	st := mustCreate(t, dir, "k4-oldgate", specs)
+	st := mustCreate(t, dir, "revision-oldgate", specs)
 	r := NewRunner(st, markerExecutor(dir))
 	revised := []TaskSpec{
 		{TaskID: "a", Name: "task-a", Input: []byte("input-a2")},
@@ -702,13 +703,13 @@ func TestK4OldGenerationPendingGateDoesNotMisreportSettle(t *testing.T) {
 // a named refusal for an unknown task, zero residue for a malformed
 // confirmation, and the verifySpecs refusal for the OLD input after the
 // revision took effect.
-func TestK4ReviseTaskBoundaries(t *testing.T) {
+func TestReviseTaskBoundaries(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("refused while a Run is in flight", func(t *testing.T) {
 		dir := t.TempDir()
 		specs := []TaskSpec{{TaskID: "a", Name: "A"}}
-		st := mustCreate(t, dir, "k4-adv", specs)
+		st := mustCreate(t, dir, "revision-adv", specs)
 		started := make(chan struct{})
 		release := make(chan struct{})
 		exec := func(_ context.Context, inv Invocation) (Result, error) {
@@ -746,9 +747,9 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 
 	t.Run("unknown task is a named refusal", func(t *testing.T) {
 		dir := t.TempDir()
-		st := mustCreate(t, dir, "k4-ghost", []TaskSpec{{TaskID: "a", Name: "A"}})
+		st := mustCreate(t, dir, "revision-ghost", []TaskSpec{{TaskID: "a", Name: "A"}})
 		err := st.ReviseTask(ctx, "ghost", TaskSpec{TaskID: "ghost", Input: []byte("x")})
-		if err == nil || !strings.Contains(err.Error(), `no task "ghost"`) || !strings.Contains(err.Error(), "k4-ghost") {
+		if err == nil || !strings.Contains(err.Error(), `no task "ghost"`) || !strings.Contains(err.Error(), "revision-ghost") {
 			t.Fatalf("unknown task err = %v, want a refusal naming the task and the run", err)
 		}
 		if n := len(loadEvents(t, st)); n != 0 {
@@ -761,7 +762,7 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 
 	t.Run("malformed confirmation leaves zero residue", func(t *testing.T) {
 		dir := t.TempDir()
-		st := mustCreate(t, dir, "k4-malformed", []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("in")}})
+		st := mustCreate(t, dir, "revision-malformed", []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("in")}})
 		spec := TaskSpec{
 			TaskID: "a", Input: []byte("in2"),
 			Confirm: &Confirmation{Options: []string{"approve"}, Allow: "maybe"},
@@ -784,7 +785,7 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 	t.Run("old input after the revision is refused by name", func(t *testing.T) {
 		dir := t.TempDir()
 		original := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("in-1")}}
-		st := mustCreate(t, dir, "k4-oldinput", original)
+		st := mustCreate(t, dir, "revision-oldinput", original)
 		if err := st.ReviseTask(ctx, "a",
 			TaskSpec{TaskID: "a", Input: []byte("in-2")}); err != nil {
 			t.Fatal(err)
@@ -814,7 +815,7 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 	})
 }
 
-// TestV5RevisionInputsPersistWithTheBump: the byte carrier behind
+// TestRevisionInputsPersistWithTheBump: the byte carrier behind
 // tasks.input_digest.  ReviseTask persists the TARGET's input in the same
 // transaction as its bump; a dependent the invalidation closure bumped
 // writes no row (its input did not change — that asymmetry is what lets
@@ -822,7 +823,7 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 // direct approval persists through the same reviseScope; and a reopened
 // owner re-sends exactly the persisted bytes, which the run's digest
 // binding accepts.
-func TestV5RevisionInputsPersistWithTheBump(t *testing.T) {
+func TestRevisionInputsPersistWithTheBump(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -902,13 +903,13 @@ func TestV5RevisionInputsPersistWithTheBump(t *testing.T) {
 	}
 }
 
-// TestV5StepsV4Forward: an accepted v4 file — user_requests and
+// TestStepsV4Forward: an accepted v4 file — user_requests and
 // call_observations but neither v5 table — opens forward additively at
 // v5: the version stamps, every v4 fact survives, and both v5
 // capabilities work on the stepped database.  (A pre-v5 revision's bytes
 // are simply absent, exactly as they were in v4: the digest binding, not
 // a compatibility read, decides what a stepped run accepts.)
-func TestV5StepsV4Forward(t *testing.T) {
+func TestStepsV4Forward(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("in-a-1")}}

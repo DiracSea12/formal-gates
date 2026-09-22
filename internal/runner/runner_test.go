@@ -562,8 +562,8 @@ func TestSpecInputChangesAreRefusedThroughoutLifecycle(t *testing.T) {
 
 	t.Run("schema v1 database is refused", func(t *testing.T) {
 		dir := t.TempDir()
-		// Seed a file that claims version 1 — the shape K1's first
-		// draft wrote, before task input binding existed.
+		// Seed a file that claims version 1 — the shape written before
+		// task input binding existed.
 		db, err := sql.Open("sqlite", filepath.Join(dir, "run.db"))
 		if err != nil {
 			t.Fatal(err)

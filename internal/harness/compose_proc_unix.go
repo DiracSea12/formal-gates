@@ -7,7 +7,7 @@ package harness
 // tree (supervisor, native job, host) exactly the way Store.cancel_jobs
 // does, and a recorded supervisor PID is re-identified by its creation time
 // read back from the platform's own process table (ps lstart), because a
-// bare integer proves nothing after pid reuse (§8.1).
+// bare integer proves nothing after pid reuse.
 
 import (
 	"os/exec"

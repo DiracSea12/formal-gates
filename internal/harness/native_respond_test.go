@@ -1,6 +1,6 @@
 package harness
 
-// The G2d interaction CLI: native-respond's validation ladder (pending 现存、
+// The interaction CLI: native-respond's validation ladder (pending 现存、
 // 选项合法、一票防重) and native-show's read-only listing. Pure filesystem:
 // no host process is involved.
 

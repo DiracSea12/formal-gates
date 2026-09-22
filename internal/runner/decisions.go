@@ -1,10 +1,10 @@
 package runner
 
-// K2 — exact process confirmations and durable waiting (plan §6.1, §7):
-// the decisions table gates a task behind a persisted user decision,
-// materialized by CreateRun and settled by Store.Answer.  The
-// persistence contract is documented on Confirmation,
-// materializeDecisions and the gate read of dispatchableTasks (runner.go).
+// Exact process confirmations and durable waiting: the decisions table
+// gates a task behind a persisted user decision, materialized by
+// CreateRun and settled by Store.Answer.  The persistence contract is
+// documented on Confirmation, materializeDecisions and the gate read of
+// dispatchableTasks (runner.go).
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Answer-side sentinels.  Each corresponds to one §6.1 refusal class;
+// Answer-side sentinels.  Each corresponds to one refusal class;
 // together with ErrWaitingDecision they let callers tell every refusal
 // apart without string matching.  They govern BOTH request families —
 // decisions gates and user_requests rows — with one set of rules.
@@ -54,14 +54,14 @@ var (
 	// longer equals its task's current one, a user request whose
 	// target_generation the task has left, or an unresolved restart
 	// whose invocation is no longer pending.  A revision invalidated
-	// the request (§6.1), and the old answer authorizes nothing of the
+	// the request, and the old answer authorizes nothing of the
 	// new generation's work.  A pending question elsewhere never
 	// substitutes for the addressed one.  Contrast ErrRunFinished (the
 	// run itself refuses everything) and ErrDecisionConflict (this
 	// request exists but was answered otherwise).
 	ErrDecisionStale = errors.New("runner: unknown decision id in this run")
 	// ErrDecisionConflict: the decision exists and was already answered
-	// with a different choice (§6.1 "same id, different answer"); the
+	// with a different choice ("same id, different answer"); the
 	// stored answer stands.  Contrast ErrDecisionStale (no such
 	// request) and ErrRunFinished (the run itself is terminal).
 	ErrDecisionConflict = errors.New("runner: decision already answered with a different choice")
@@ -78,7 +78,7 @@ const (
 )
 
 // Event kinds for the two decision transitions; each is appended in the
-// same transaction as the transition it describes (§7 events).
+// same transaction as the transition it describes (the events journal).
 const (
 	eventKindDecisionCreated  = "decision_created"
 	eventKindDecisionAnswered = "decision_answered"
@@ -101,7 +101,7 @@ type Confirmation struct {
 	// would deadlock the gate forever.
 	Options []string
 	// Allow is the one option that authorizes executing the gated task
-	// (§6.1 "whether execution is allowed").  Must be non-empty and one
+	// "whether execution is allowed".  Must be non-empty and one
 	// of Options.  Any other answered choice leaves the gate closed for
 	// good — see ErrDecisionRefused.  It is stored as a plain choice,
 	// not a hard-coded English word, because the vocabulary belongs to
@@ -122,7 +122,7 @@ type DecisionView struct {
 
 // AnswerReceipt is the acceptance record of one answer.  Replaying the
 // same choice on the same decision returns this exact receipt again
-// (§6.1) with no new transition or event.
+// with no new transition or event.
 type AnswerReceipt struct {
 	DecisionID string
 	Choice     string
@@ -176,7 +176,7 @@ func validateConfirmationBody(taskID string, c *Confirmation) error {
 // row plus its decision_created event, inside the run's CREATION
 // transaction — the gate exists exactly when the run does, so "this task
 // needs a user decision" survives even an owner that dies before the
-// first Run (§13.2).  generation matches the generation CreateRun gives
+// first Run.  generation matches the generation CreateRun gives
 // the task itself (1); a revision-bumped task gets its own new gate from
 // ReviseTask (revision.go).  Called only from CreateRun; Answer and the
 // run loop never write gates.
@@ -238,7 +238,7 @@ func insertDecision(ctx context.Context, tx *sql.Tx, runID, taskID string, gener
 // CURRENT generation: a revision leaves old-generation rows behind as
 // history, and a stale row must neither hold the drained loop in a
 // permanent wait nor refuse a revised run.  This is the pure task-gate
-// read (K2/K3 semantics); the request-side waits live in
+// read; the request-side waits live in
 // Store.requestStatus (revision.go).  The drained run loop reports these
 // as its reason for stopping (settle in runner.go); reading the durable
 // rows rather than this Run's visit history keeps the answer identical
@@ -404,7 +404,7 @@ func (s *Store) AnsweredQuestions(ctx context.Context) ([]AnsweredQuestion, erro
 }
 
 // Answer settles one question with a user's choice — a decision gate or
-// a user request, one set of §6.1 rules — inside a single short
+// a user request, one set of rules — inside a single short
 // transaction and in a fixed order.  The user_requests lifecycle is
 // documented in full on the table (store.go — the single authoritative
 // statement); the steps below cover only what Answer itself does.
@@ -423,7 +423,7 @@ func (s *Store) AnsweredQuestions(ctx context.Context) ([]AnsweredQuestion, erro
 //     request whose target_generation the task has left (a restart also
 //     goes stale once its invocation is no longer pending while the
 //     request is unresolved) — a revision invalidated the request
-//     (§6.1), so the old row, pending or answered, authorizes nothing
+//     so the old row, pending or answered, authorizes nothing
 //     of the new generation's work;
 //  3. an already-answered row replays exactly: the same choice returns
 //     the original receipt with zero new transitions and events, a
@@ -489,7 +489,7 @@ func (s *Store) Answer(ctx context.Context, id, choice string) (AnswerReceipt, e
 		return AnswerReceipt{}, err
 	}
 	// ② The gate must still belong to the task's current generation: a
-	// revision (§6.1) invalidated anything older, answered or not.
+	// revision invalidated anything older, answered or not.
 	var current int64
 	if err := tx.QueryRowContext(ctx,
 		"SELECT generation FROM tasks WHERE run_id=? AND task_id=?",

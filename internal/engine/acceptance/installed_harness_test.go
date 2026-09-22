@@ -63,9 +63,9 @@ func decodeHarnessReport(t *testing.T, output []byte) installedHarnessReport {
 	return report
 }
 
-// TestAcceptanceInstalledProtocolHarness proves the phase-2 test-only entry
-// is runnable from independently built binaries and that its writes remain in
-// the project state namespace across a real process restart.
+// TestAcceptanceInstalledProtocolHarness proves the test-only protocol
+// entry is runnable from independently built binaries and that its writes
+// remain in the project state namespace across a real process restart.
 func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 	root, err := filepath.Abs(repoRoot(t))
 	if err != nil {

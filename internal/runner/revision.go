@@ -1,19 +1,19 @@
 package runner
 
-// K4 — local generations and revision scoping (plan §4.2, §9.2, §13.2):
-// Store.ReviseTask is the explicit primitive for an input or business-scope
-// change to one task.  It bumps the task's local generation, invalidates
-// exactly the task plus its transitive dependents (§117: one branch's
-// repair never invalidates sibling branches; a join must hold the current
-// results of all its required inputs), and leaves every older row in place
-// as history (§4.2: original invocation records are never overwritten — a
-// late old-generation result is recorded on its superseded row only).
+// Local generations and revision scoping: Store.ReviseTask is the
+// explicit primitive for an input or business-scope change to one task.
+// It bumps the task's local generation, invalidates exactly the task
+// plus its transitive dependents (one branch's repair never invalidates
+// sibling branches; a join must hold the current results of all its
+// required inputs), and leaves every older row in place as history
+// (original invocation records are never overwritten — a late
+// old-generation result is recorded on its superseded row only).
 //
-// The K4 rework builds the repair-allowance control chain over the
-// primitive as one family of user_requests (store.go): Store.RequestRevision
-// (below) turns "ask at the allowance, wait durably, execute only what the
-// answer granted" into API, with the initial allowance durably bound on
-// the request rows and every count derived from them.
+// The repair-allowance control chain over the primitive is one family
+// of user_requests (store.go): Store.RequestRevision (below) turns
+// "ask at the allowance, wait durably, execute only what the answer
+// granted" into API, with the initial allowance durably bound on the
+// request rows and every count derived from them.
 
 import (
 	"context"
@@ -35,10 +35,10 @@ type taskRevisedEvent struct {
 	NewGeneration int64  `json:"new_generation"`
 }
 
-// ReviseTask revises one task's input or business scope (§4.2 Generation)
-// between two Runs.  The invalidation scope is the task plus its transitive
+// ReviseTask revises one task's input or business scope between two
+// Runs.  The invalidation scope is the task plus its transitive
 // dependents — nothing else: sibling branches keep their finished results
-// and generations (§117), and a join task's new generation waits, through
+// and generations, and a join task's new generation waits, through
 // the ordinary dependency gate, until every upstream current-generation
 // result exists.  In one transaction, every task of that scope:
 //
@@ -51,7 +51,7 @@ type taskRevisedEvent struct {
 //     and a task_revised event lands with the bump;
 //   - rebinds tasks.input_digest to spec.Input for the TARGET task only —
 //     dependents keep their inputs, their business scope changed;
-//   - carries its gate to the new generation (§6.1 binds each request to
+//   - carries its gate to the new generation (each request is bound to
 //     the local generation, so an old answer authorizes nothing): the
 //     target uses spec.Confirm when declared, every other task copies the
 //     frozen definition of its latest-generation decisions row; with
@@ -191,7 +191,7 @@ func reviseOneTask(ctx context.Context, tx *sql.Tx, runID, targetID, taskID stri
 		return err
 	}
 	// Old-generation intents are void — in flight or without receipt,
-	// their rows stay for the late-result path (§4.2).
+	// their rows stay for the late-result path.
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE invocations SET state=? WHERE run_id=? AND task_id=? AND generation=? AND state=?",
 		invSuperseded, runID, taskID, old, invPending); err != nil {
@@ -280,9 +280,9 @@ const requestActiveSQL = `r.state IN ('` + reqPending + `','` + reqGranted + `')
 	            WHERE i.invocation_id = r.invocation_id AND i.state = '` + invPending + `'))`
 
 // Event kinds for the request transitions that carry one; each is
-// appended in the same transaction as the transition it describes (§7
-// events).  Direct approval is born executed and transitions nothing, so
-// it writes no event.
+// appended in the same transaction as the transition it describes (the
+// events journal).  Direct approval is born executed and transitions
+// nothing, so it writes no event.
 const (
 	eventKindRequestCreated  = "request_created"
 	eventKindRequestAnswered = "request_answered"
@@ -328,15 +328,14 @@ var ErrRevisionGrantStale = errors.New("runner: the granted revision no longer m
 var ErrRevisionGranted = errors.New("runner: a granted revision awaits its completion call (re-send the revised input through RequestRevision)")
 
 // RepairPolicy is the narrow domain seam of the repair allowance: given
-// the business rounds this task has ALREADY consumed (used, 0-based — the
-// same completed-rounds number the accepted graph.py repair() hands its
-// repair-allowance) and the effective allowance (the bound initial plus
-// every user grant so far), it reports whether the user must be asked
-// (true) or the revision may be approved directly (false).  The kernel
-// hosts no allowance rule of its own — K5 wires
-// domain.repairAllowance's semantics here (round >= allowance asks; a
-// null allowance takes the spec's repair limit; raising the allowance is
-// a flow decision made through a user grant).
+// the business rounds this task has ALREADY consumed (used, 0-based)
+// and the effective allowance (the bound initial plus every user grant
+// so far), it reports whether the user must be asked (true) or the
+// revision may be approved directly (false).  The kernel hosts no
+// allowance rule of its own — the composition wires the domain's
+// repairAllowance semantics here (round >= allowance asks; a null
+// allowance takes the spec's repair limit; raising the allowance is a
+// flow decision made through a user grant).
 type RepairPolicy func(round, allowance int) bool
 
 // TaskGeneration is the kernel's authoritative read of one task's current

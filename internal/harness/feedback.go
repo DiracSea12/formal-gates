@@ -6,9 +6,9 @@ import (
 )
 
 // taskInputInput is the payload for the task-input bridge operation. The
-// wrapper shape and the canonical digest move here (M2); the Python side keeps
-// file I/O and the callers. The pre-migration Python computed digest(feedback)
-// for the sha256 field, which is CanonicalDigest here.
+// wrapper shape and the canonical digest live here; the Python side keeps
+// file I/O and the callers. The wrapper's sha256 field is the canonical
+// digest of the feedback value (CanonicalDigest).
 type taskInputInput struct {
 	Role      string          `json:"role"`
 	Revision  string          `json:"revision"`
@@ -31,13 +31,13 @@ type evidenceFeedbackInput struct {
 }
 
 // planTaskInput builds the task.json content: the harness-v1 envelope with the
-// untrusted-feedback wrapper. It computes the canonical digest itself (the
-// pre-migration Python called digest(feedback)) and never merges any field of
+// untrusted-feedback wrapper. It computes the canonical digest itself and
+// never merges any field of
 // feedback into the top-level role/revision/base/candidate/checks/control.
 //
 // feedback and checks are decoded with number fidelity (decodeValue uses
 // UseNumber) so an integer literal stays an integer and the produced canonical
-// bytes match the pre-migration digest(feedback) byte for byte. A missing or
+// bytes match the Python side's digest(feedback) byte for byte. A missing or
 // null feedback yields feedback: null (not an omitted key, not an empty object).
 func planTaskInput(q taskInputInput) (map[string]any, error) {
 	var feedback any
@@ -91,11 +91,11 @@ func planTaskInput(q taskInputInput) (map[string]any, error) {
 
 // planEvidenceFeedback builds the evidence-data wrapper, or returns a typed
 // refusal when the evidence is bound to a different requirement. The binding
-// check mirrors the pre-migration Python exactly: the default is the run's
+// rule: the default is the run's
 // revision, so evidence that omits "revision" passes, and evidence whose
 // "revision" differs from the run's revision is refused with HarnessError
-// wording. The refusal travels inside the value (C4 pattern) so Python's
-// refuse() can raise the same exception family the reference raised.
+// wording. The refusal travels inside the value so Python's
+// refuse() can raise the HarnessError family.
 func planEvidenceFeedback(q evidenceFeedbackInput) (map[string]any, error) {
 	var evidence any
 	if len(q.Evidence) > 0 && string(q.Evidence) != "null" {

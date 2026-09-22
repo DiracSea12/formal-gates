@@ -111,8 +111,15 @@ func TestQAOnlyRerunReopensQAAndGatesFromSealedRun(t *testing.T) {
 	source.Actions["product-review"] = ActionResult{Status: "PASS"}
 	source.Actions["start-readiness"] = ActionResult{Status: "PASS"}
 	source.Actions["development-worker"] = ActionResult{Status: developmentComplete}
-	source.QACasesByMode = map[string][]QACase{"blackbox": {{ID: "CASE-001", Mode: "blackbox", Description: "start works", Procedure: "start and drive", Oracle: "complete", ReviewStatus: "PASS"}}}
-	source.QAExecutionByMode = map[string]QAExecutionResult{"blackbox": {Status: "PASS", Snapshot: base, Cases: []QAResultRecord{{CaseID: "CASE-001", Mode: "blackbox", Outcome: "PASS", Procedure: "start and drive", Observation: "complete", OracleResult: "PASS"}}}}
+	source.QACasesByMode = map[string][]QACase{
+		"blackbox": {{ID: "CASE-001", Mode: "blackbox", Description: "start works", Procedure: "start and drive", Oracle: "complete", ReviewStatus: "PASS"}},
+		"whitebox": {{ID: "CASE-002", Mode: "whitebox", Description: "sealed invariant", Procedure: "run the bound test", Oracle: "invariant enforced", Test: "sealed_whitebox_test.go::TestSealedInvariant", ReviewStatus: "PASS"}},
+	}
+	// 白盒测试引用不存在于当前树：身份来源必须是源记录的 Test 字段本身。
+	source.QAExecutionByMode = map[string]QAExecutionResult{
+		"blackbox": {Status: "PASS", Snapshot: base, Cases: []QAResultRecord{{CaseID: "CASE-001", Mode: "blackbox", Outcome: "PASS", Procedure: "start and drive", Observation: "complete", OracleResult: "PASS"}}},
+		"whitebox": {Status: "PASS", Snapshot: base, Cases: []QAResultRecord{{CaseID: "CASE-002", Mode: "whitebox", Outcome: "PASS", Procedure: "run the bound test", Observation: "invariant enforced", OracleResult: "PASS", Test: "sealed_whitebox_test.go::TestSealedInvariant"}}},
+	}
 	source.QAReviewByMode = map[string]ActionResult{"blackbox": {Status: "PASS"}}
 	source.QADesignByMode = map[string]ActionResult{"blackbox": {Status: "PASS"}}
 	if err := SaveRunSummary(root, source); err != nil {
@@ -135,7 +142,7 @@ func TestQAOnlyRerunReopensQAAndGatesFromSealedRun(t *testing.T) {
 		},
 		VCS:              "git",
 		FromSealedRun:    source.RunID,
-		FromSealedReason: "user requested Stage 3 QA/gate rerun only",
+		FromSealedReason: "user requested QA/gate rerun only",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,11 +159,41 @@ func TestQAOnlyRerunReopensQAAndGatesFromSealedRun(t *testing.T) {
 	if len(run.QACasesByMode["blackbox"]) != 1 || run.QACasesByMode["blackbox"][0].ReviewStatus != "PASS" {
 		t.Fatalf("approved blackbox case was not reused: %+v", run.QACasesByMode)
 	}
+	if len(run.QACasesByMode["whitebox"]) != 1 || run.QACasesByMode["whitebox"][0].Test != "sealed_whitebox_test.go::TestSealedInvariant" {
+		t.Fatalf("whitebox case did not inherit its test reference from the source record: %+v", run.QACasesByMode["whitebox"])
+	}
 	if run.QAExecutionByMode["blackbox"].Snapshot != source.CurrentSnapshot || run.QAExecutionByMode["blackbox"].Status != "PASS" {
 		t.Fatalf("prior QA execution was not preserved as rerun source: %+v", run.QAExecutionByMode)
 	}
 	if run.Gates["quality"].Status != "PENDING" {
 		t.Fatalf("gate result was incorrectly carried into the final-candidate rerun: %+v", run.Gates["quality"])
+	}
+}
+
+func TestQAOnlyRerunRefusesWhiteboxRecordWithoutTestReference(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	source := mustStart(t, root, pkg, "sealed-no-test-ref")
+	source.Status = "SEALED"
+	source.RequirementConfirmed = true
+	source.Slicing = &Slicing{Decision: "no-split"}
+	source.RouteMode = "full"
+	source.SelectedGates = []string{"quality"}
+	source.QACasesByMode = map[string][]QACase{
+		"blackbox": {{ID: "CASE-008", Mode: "blackbox", Description: "start works", Procedure: "start and drive", Oracle: "complete", ReviewStatus: "PASS"}},
+	}
+	source.QAExecutionByMode = map[string]QAExecutionResult{
+		"blackbox": {Status: "PASS", Snapshot: gitHead(t, root), Cases: []QAResultRecord{{CaseID: "CASE-008", Mode: "blackbox", Outcome: "PASS", Procedure: "start and drive", Observation: "complete", OracleResult: "PASS"}}},
+		"whitebox": {Status: "PASS", Snapshot: gitHead(t, root), Cases: []QAResultRecord{{CaseID: "CASE-009", Mode: "whitebox", Outcome: "PASS", Procedure: "legacy record predating the self-contained reference", Observation: "invariant enforced", OracleResult: "PASS"}}},
+	}
+	if err := SaveRunSummary(root, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeBlackboxCases(root, source); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "qa-only-rerun-no-ref", Flow: formalFlow, RequirementSource: "requirements.md", VCS: "git", FromSealedRun: source.RunID})
+	if err == nil || !strings.Contains(err.Error(), "source whitebox case CASE-009 record carries no test reference") {
+		t.Fatalf("whitebox record without a self-contained test reference was not refused: %v", err)
 	}
 }
 
@@ -1218,8 +1255,8 @@ func TestOldRunStateWithoutPromptHashesLoadsCompatible(t *testing.T) {
 	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	// 模拟旧状态：无 promptHashes（运行期哈希记录出现之前的格式）。规定旧状态文件
-	// （无 stateIntegrity 字段）跳过完整性校验，故一并去掉该字段，使旧状态以"无校验字段"的
+	// 旧格式状态文件支持：无 promptHashes 的形态。规定旧状态文件（无
+	// stateIntegrity 字段）跳过完整性校验，故一并去掉该字段，使旧状态以"无校验字段"的
 	// 合法旧形态加载，而不是被当作"CLI 写入后被手工改写"拒绝。
 	delete(decoded, "promptHashes")
 	delete(decoded, "stateIntegrity")
@@ -4165,7 +4202,7 @@ func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
 
 // 片 1 CLI 行为修复的直接层测试（validate 层）。
 
-// Fix 2：无 hooks 环境 record-action 被生命周期校验拒绝时给可行动提示。
+// 无 hooks 环境 record-action 被生命周期校验拒绝时给可行动提示。
 func TestRecordActionLifecycleRejectionGivesActionableHint(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "lifecycle-hint"))
@@ -4179,7 +4216,7 @@ func TestRecordActionLifecycleRejectionGivesActionableHint(t *testing.T) {
 	}
 }
 
-// Fix 3：settle-findings 同一 finding 同时 confirm+dismiss 被拒。
+// settle-findings 同一 finding 同时 confirm+dismiss 被拒。
 func TestSettledFindingsRejectsConfirmAndDismissOverlap(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "settle-overlap"))
@@ -4193,7 +4230,7 @@ func TestSettledFindingsRejectsConfirmAndDismissOverlap(t *testing.T) {
 	}
 }
 
-// Fix 4/8：缺 run-id 与不存在/已终止 run 给友好提示。
+// 缺 run-id 与不存在/已终止 run 给友好提示。
 func TestLoadRunStateFriendlyMissingRun(t *testing.T) {
 	root := t.TempDir()
 	if _, err := LoadRunState(root, ""); err == nil || !strings.Contains(err.Error(), "run id is required") {
@@ -4204,7 +4241,7 @@ func TestLoadRunStateFriendlyMissingRun(t *testing.T) {
 	}
 }
 
-// Fix 9：qa-execution-scope 非法 mode 明确报"非法 mode"。
+// qa-execution-scope 非法 mode 明确报"非法 mode"。
 func TestRecordExecutionScopeRejectsInvalidMode(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "scope-mode"), "custom", []string{blackboxQAID})
@@ -4213,7 +4250,7 @@ func TestRecordExecutionScopeRejectsInvalidMode(t *testing.T) {
 	}
 }
 
-// Fix 11：record-action status 严格大小写校验（拒绝 pass）。
+// record-action status 严格大小写校验（拒绝 pass）。
 func TestRecordActionStatusIsCaseSensitive(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := mustStart(t, root, pkg, "case-status")
@@ -4226,14 +4263,14 @@ func TestRecordActionStatusIsCaseSensitive(t *testing.T) {
 	}
 }
 
-// Fix 15：install 缺 source 明确报"source 必填"。
+// install 缺 source 明确报"source 必填"。
 func TestInstallRequiresSource(t *testing.T) {
 	if _, err := Install(InstallOptions{Host: "claude", Scope: "project", Project: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "source is required") {
 		t.Fatalf("install without source was not rejected clearly: %v", err)
 	}
 }
 
-// Fix 17：svn {U+XXXX} unicode 转义转成可读文字。
+// svn {U+XXXX} unicode 转义转成可读文字。
 func TestDecodeVCSMessageUnescapesUnicode(t *testing.T) {
 	in := `svn: svn: E155007: {U+201C}/tmp/repo{U+201D}{U+4E0D}{U+662F}{U+5DE5}{U+4F5C}{U+526F}{U+672C}`
 	out := decodeVCSMessage(in)

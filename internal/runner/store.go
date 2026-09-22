@@ -1,20 +1,13 @@
-// Package runner is the Go engine's single-owner kernel (plan §2.1, §4.1):
-// exactly one process owns one run directory and its SQLite state, computes
-// ready work from persisted facts, registers execution intents in short
+// Package runner is the engine's single-owner kernel: exactly one
+// process owns one run directory and its SQLite state, computes ready
+// work from persisted facts, registers execution intents in short
 // transactions, executes outside any transaction, and admits results in
-// another short transaction that also appends the run event.  This file owns
-// directory ownership and durable state; runner.go owns the loop.
-//
-// K1 added the single owner, task transactions, sequential execution and
-// result admission; K2 adds process confirmations (decisions.go); K3 adds
-// bounded parallel dispatch in the run loop (runner.go); K4 adds local
-// generations and revision scoping through Store.ReviseTask
-// (revision.go), and the K4 rework builds the unified request model over
-// it — user_requests (Store.RequestRevision's repair-allowance asks and
-// recovery's restart asks, settled by one Store.Answer) plus the
-// persisted call_observations that keep takeover facts alive across
-// owners (takeover.go).  Native
-// interactions arrive in later K units and are deliberately absent.
+// another short transaction that also appends the run event.  This file
+// owns directory ownership and durable state; runner.go owns the loop;
+// the request model lives in revision.go and takeover.go, the wait
+// state in disposition.go and the mid-flight questions in
+// openquestion.go.  Native host protocols are deliberately not a kernel
+// concept: an Executor decides what a task's call actually is.
 package runner
 
 import (
@@ -58,24 +51,18 @@ const (
 // schemaVersion is the schema this build writes.  PRAGMA user_version
 // carries it inside the database file; migration is forward-only, so a
 // build that finds a newer version refuses the file instead of guessing
-// how to read it.  Version 2 added the task-definition input binding
-// (tasks.input_digest); version 3 added the decisions gate table with
-// its allow column; version 4 added the user_requests and
-// call_observations tables of the unified request model (revision.go,
-// takeover.go); version 5 adds task_revisions (the revision input
-// bytes, written with the generation bump, revision.go),
+// how to read it.  Supported baselines: version 2 carries the
+// task-definition input binding (tasks.input_digest); version 3 the
+// decisions gate table with its allow column; version 4 the
+// user_requests and call_observations tables of the unified request
+// model (revision.go, takeover.go); version 5 task_revisions (the
+// revision input bytes, written with the generation bump, revision.go),
 // task_sessions (the execution identities a granted restart clears,
-// decisions.go), task_dispositions (a parked stage's standing ask
-// fact, disposition.go) and the runs terminal columns (the run's
-// terminal status and stop reason, below).  Every step is additive, so
-// every accepted baseline — v2, v3 and v4 — migrates forward for real,
-// never by refusal; the reshape of the never-accepted v4 delta happened
-// while this build's version was still 4 and left no v4-stamped files
-// behind, and the v5 delta was likewise reshaped in place (dispositions
-// and the terminal columns joined it) while v5 was still unaccepted —
-// which is why that delta's newest pieces are written additively
-// idempotent, so any development-stage v5 shape steps forward cleanly.
-// Version 1 databases are refused outright below.
+// decisions.go), task_dispositions (a parked stage's standing ask fact,
+// disposition.go) and the runs terminal columns (the run's terminal
+// status and stop reason, below).  Every step is additive, so every
+// older version migrates forward for real, never by refusal.  Version 1
+// databases are refused outright below.
 const schemaVersion = 5
 
 // Store is the durable state of one run plus exclusive ownership of its
@@ -222,8 +209,7 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 	return nil
 }
 
-// dsn mirrors the repository's established SQLite DSN (the go-engine
-// sqlprobe): WAL for crash-safe commits, foreign keys enforced per
+// dsn is the repository's SQLite DSN contract: WAL for crash-safe commits, foreign keys enforced per
 // connection, a busy timeout so WAL checkpoints never fail fast, and
 // immediate write transactions so a short writer never upgrades
 // mid-transaction into SQLITE_BUSY.  The path travels through url.URL so
@@ -242,11 +228,10 @@ func dsn(path string) string {
 		"&_txlock=immediate"
 }
 
-// schemaV2 is the accepted K1 baseline table set (plan §7), kept verbatim
-// because both the fresh-file and the v2→v3 migration paths build on it.
-// The v3 delta (decisions) is decisionsTable below; native_interactions
-// belongs to a later K unit.  Columns follow real read paths — nothing
-// speculative.
+// schemaV2 is the version-2 baseline table set, kept verbatim because
+// both the fresh-file and the v2→v3 migration paths build on it.  The
+// v3 delta (decisions) is decisionsTable below.  Columns follow real
+// read paths — nothing speculative.
 var schemaV2 = []string{
 	// One row per run.  schema_version records the version the run was
 	// created under; user_version is the file-level migration marker.
@@ -262,7 +247,7 @@ var schemaV2 = []string{
 	// Store.ReviseTask's new generation, revision.go).
 	// invocations.input_digest plays a different, per-call role below: it
 	// records what one specific call ran with and is part of the
-	// admission identity.  state is execution state (§4.2); "ready" is
+	// admission identity.  state is execution state; "ready" is
 	// computed from dependencies and never stored.  generation is the
 	// task's local revision counter, bumped only by Store.ReviseTask.
 	// result_invocation_id points at the one admitted invocation whose
@@ -288,7 +273,7 @@ var schemaV2 = []string{
 		FOREIGN KEY (run_id, task_id)    REFERENCES tasks (run_id, task_id),
 		FOREIGN KEY (run_id, depends_on) REFERENCES tasks (run_id, task_id)
 	)`,
-	// The call record (§4.2: original invocation records are never
+	// The call record (original invocation records are never
 	// overwritten).  input_digest here is the CALL-level digest — what
 	// this specific invocation ran with, re-verified at admission as
 	// part of the identity tuple — as opposed to the task-definition
@@ -311,7 +296,7 @@ var schemaV2 = []string{
 	// checks go through the primary key.
 	`CREATE INDEX idx_invocations_run_state ON invocations (run_id, state)`,
 	// The append-only run journal.  Admission events land here in the
-	// same transaction as the admission itself (§4.1).  seq is the
+	// same transaction as the admission itself.  seq is the
 	// autoassigned primary key — never reused, because events are never
 	// deleted or rewritten.
 	`CREATE TABLE events (
@@ -322,8 +307,8 @@ var schemaV2 = []string{
 	)`,
 }
 
-// decisionsTable is the entire v3 delta: the process-confirmation gate of
-// plan §6.1/§7 — one row per (run, task, generation), created pending by
+// decisionsTable is the entire v3 delta: the process-confirmation gate
+// — one row per (run, task, generation), created pending by
 // CreateRun's materialization (decisions.go) and consumed once by
 // Store.Answer.  revision/body_digest/options_json/allow freeze the
 // question at creation: the row, not a later Run's Confirm fields, defines
@@ -331,9 +316,7 @@ var schemaV2 = []string{
 // NULL: an answered row always carries a comparable verdict, and a gate
 // without one could never open.  answer and answered_at stay NULL until
 // the single pending→answered transition, in the style of
-// invocations.result_json.  The allow column is part of the v3 delta
-// itself, not a v4 step (see schemaVersion); databases stamped v3 by
-// the unaccepted build are development-only and out of scope.
+// invocations.result_json.
 const decisionsTable = `CREATE TABLE decisions (
 	decision_id  TEXT PRIMARY KEY,
 	run_id       TEXT NOT NULL REFERENCES runs (run_id),
@@ -351,7 +334,7 @@ const decisionsTable = `CREATE TABLE decisions (
 	UNIQUE (run_id, task_id, generation)
 )`
 
-// userRequestsTable is the reshaped v4 delta: one row per user request,
+// userRequestsTable is the v4 request table: one row per user request,
 // both kinds sharing ONE lifecycle — this comment is its single
 // complete and authoritative statement; every other doc block that
 // touches requests (RequestRevision, Answer, the takeover seams)
@@ -413,9 +396,9 @@ const userRequestsTable = `CREATE TABLE user_requests (
 	resolved_at      TEXT
 )`
 
-// callObservationsTable is the v4 delta's persisted observation fact:
-// one row per invocation a takeover consultation judged still working
-// under its original supervisor (takeover.go).  The row is idempotent
+// callObservationsTable is the v4 observation fact table: one row per
+// invocation a takeover consultation judged still working under its
+// original supervisor (takeover.go).  The row is idempotent
 // (INSERT OR IGNORE) and never deleted: it outlives the invocation's
 // own settlement, and it is read only while that invocation is still
 // pending — an owner without a Takeover consult must not blindly
@@ -428,12 +411,12 @@ const callObservationsTable = `CREATE TABLE call_observations (
 	observed_at   TEXT NOT NULL
 )`
 
-// taskRevisionsTable is half of the v5 delta: one row per accepted
+// taskRevisionsTable is one of the v5 tables: one row per accepted
 // task revision, written in the SAME transaction as the generation bump
 // it rode (revision.go).  tasks.input_digest binds a task definition to
 // its input; the bytes themselves live here so a reopened owner can
 // re-send exactly the input the current generation is bound to — input
-// bytes are no longer external to the kernel for revisions.  Two
+// bytes are not external to the kernel for revisions.  Two
 // deliberate shape rules, both load-bearing for readers
 // (Store.RevisionInputs):
 //
@@ -441,7 +424,7 @@ const callObservationsTable = `CREATE TABLE call_observations (
 //     invalidation closure keep their inputs and write none, so a row
 //     also answers "was this task itself ever revised";
 //   - creation inputs never appear: they are re-derived from the run's
-//     immutable creation binding, exactly as before v5.
+//     immutable creation binding.
 const taskRevisionsTable = `CREATE TABLE task_revisions (
 	run_id     TEXT NOT NULL,
 	task_id    TEXT NOT NULL,
@@ -451,15 +434,13 @@ const taskRevisionsTable = `CREATE TABLE task_revisions (
 	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
 )`
 
-// taskSessionsTable is the other half of the v5 delta: the execution
-// identity a task's next native call resumes — absent means a fresh
-// session.  One row per task, remembered when a worker turn settles
+// taskSessionsTable is the v5 session table: the execution identity a
+// task's next native call resumes — absent means a fresh session.
+// One row per task, remembered when a worker turn settles
 // (Store.SetSession, called by the executor mid-Run, so these writes
 // take no advance lock) and cleared by a granted restart answer in the
 // SAME transaction as the grant (Store.answerRequest) — the single
-// authority for "which session this task resumes next", formerly a
-// JSON file the composition projected the kernel's restart grants
-// onto.
+// authority for "which session this task resumes next".
 const taskSessionsTable = `CREATE TABLE task_sessions (
 	run_id   TEXT NOT NULL,
 	task_id  TEXT NOT NULL,
@@ -468,18 +449,22 @@ const taskSessionsTable = `CREATE TABLE task_sessions (
 	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
 )`
 
-// taskDispositionsTable is the v5 delta's control-state piece: one row
-// per task, the LATEST park fact standing for it (an upsert replaces a
-// consumed or superseded park) — the single authority for "this stage
-// is parked, and why", which decides the flow's next move between runs.
-// The row's (task, generation, attempt, kind) is exactly the identity
-// the placed question freezes into its body (the disposition id,
-// disposition.go), so row and question share one id with no second
-// record anywhere.  Written by the executors mid-Run (Store.SetDisposition,
-// no advance lock — the park precedes any ask), read by the transitions
-// (Store.Dispositions/Disposition), and cleared when the ask's answer
-// has been applied (Store.ClearDisposition).  Formerly a JSON file per
-// task under the run directory's dispositions tree.
+// taskDispositionsTable is the v5 control-state table and the WAIT
+// STATE's single authority: one row per task answers, off its own
+// columns and its one structural link, everything a flow needs to decide
+// the next move — "this stage is parked" (the row exists), "why" (kind,
+// reason, evidence, at generation and attempt), "was the user asked"
+// (question_id, a foreign key into decisions), "what did the user
+// answer" (the linked row's answer column) and "the answer drives which
+// transition" (Store.ResolveDisposition revises the named target task
+// and clears the row in one transaction, so an applied answer and its
+// question never part ways).  The link replaces any body-text binding:
+// a question that belongs to a park exists exactly when the row carries
+// its id.  Written by the executors mid-Run (Store.SetDisposition, no
+// advance lock — the park precedes any ask), linked by Store.Ask, read
+// by the transitions (Store.Dispositions/Disposition/
+// DispositionQuestion), and cleared by Store.ResolveDisposition (or,
+// for a park that never asked, Store.ClearDisposition).
 const taskDispositionsTable = `CREATE TABLE IF NOT EXISTS task_dispositions (
 	run_id     TEXT NOT NULL,
 	task_id    TEXT NOT NULL,
@@ -488,18 +473,18 @@ const taskDispositionsTable = `CREATE TABLE IF NOT EXISTS task_dispositions (
 	attempt    INTEGER NOT NULL,
 	reason     TEXT NOT NULL,
 	evidence   TEXT NOT NULL DEFAULT '',
+	question_id TEXT REFERENCES decisions (decision_id),
 	PRIMARY KEY (run_id, task_id),
 	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
 )`
 
-// runsTerminalColumns is the v5 delta's run-level piece: the terminal
+// runsTerminalColumns is the v5 run-level addition: the terminal
 // status the flow itself reached and why it stopped there, on the runs
 // row (terminal empty = the run never reached a terminal).  Written by
 // the seal and refusal paths through Store.SetTerminal, read by
 // Store.Terminal (the archive's settlement judgement and the terminal
 // judgment's record half).  ADD COLUMN has no IF NOT EXISTS form, so
-// migrate adds each column only when absent — the same in-place-reshape
-// idempotence taskDispositionsTable carries.
+// migrate adds each column only when absent.
 var runsTerminalColumns = [][2]string{
 	{"terminal", "TEXT"},
 	{"stop_reason", "TEXT"},
@@ -507,7 +492,7 @@ var runsTerminalColumns = [][2]string{
 
 // migrate applies forward-only schema versioning via PRAGMA user_version:
 // 0 means a fresh file (create the baseline plus every delta and stamp it),
-// 2, 3 and 4 are accepted baselines (take the additive steps up to this
+// 2, 3 and 4 are older formats (take the additive steps up to this
 // build's version — real migrations, never refusals), the current version
 // means nothing to do, version 1 is refused outright, and anything larger
 // means a newer runner wrote this database and must not be touched by this
@@ -564,7 +549,7 @@ func migrate(db *sql.DB) error {
 					return err
 				}
 				if has {
-					continue // an in-place v5 reshape already carried it
+					continue // the column is already present
 				}
 				if _, err := tx.Exec(fmt.Sprintf(
 					"ALTER TABLE runs ADD COLUMN %s %s", column[0], column[1])); err != nil {
@@ -579,11 +564,10 @@ func migrate(db *sql.DB) error {
 		}
 		return tx.Commit()
 	case 1:
-		// Version 1 predates the task input binding.  K1 never
-		// shipped, so v1 files exist only in development, and the
-		// missing digests cannot be backfilled from anything the
-		// file knows — the honest move is to refuse and recreate.
-		return errors.New("schema version 1 predates task input binding; K1 development schema — recreate the run")
+		// Version 1 predates the task input binding: the missing digests
+		// cannot be backfilled from anything the file knows — the honest
+		// move is to refuse and recreate.
+		return errors.New("schema version 1 predates task input binding; unsupported development schema — recreate the run")
 	default:
 		return fmt.Errorf("schema version %d is newer than supported version %d", version, schemaVersion)
 	}
@@ -592,8 +576,8 @@ func migrate(db *sql.DB) error {
 // txHasColumn reports whether table already carries column, inside an
 // open migration transaction.  table comes only from this package's
 // constants.  ADD COLUMN has no IF NOT EXISTS spelling, so the v5
-// terminal columns go through this guard — an unaccepted-delta reshape
-// may already have left them on the file.
+// terminal columns go through this guard — the column may already be
+// present on the file.
 func txHasColumn(tx *sql.Tx, table, column string) (bool, error) {
 	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
@@ -614,7 +598,7 @@ func txHasColumn(tx *sql.Tx, table, column string) (bool, error) {
 	return false, rows.Err()
 }
 
-// ---- the run's terminal fact (the v5 delta's runs columns) -------------------
+// ---- the run's terminal fact (the v5 runs columns) ---------------------------
 //
 // What the flow itself concluded — the terminal status it reached and why
 // it stopped there.  Two operations, one owner per transition: the seal

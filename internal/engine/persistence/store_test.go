@@ -225,7 +225,7 @@ func TestSaveRejectsBadTransactions(t *testing.T) {
 
 // TestSaveNeverWritesOnUnsupportedEnvelope：磁盘信封缺失字段或值不精确
 // 时，Load 与 Save 都以 UNSUPPORTED_RUN_VERSION 拒绝，state.json 原字节
-// 保持不变（master-requirements §1：绝不写状态）。
+// 保持不变（绝不写状态）。
 func TestSaveNeverWritesOnUnsupportedEnvelope(t *testing.T) {
 	missing := []string{
 		"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionDigest", "packageDigest",

@@ -19,8 +19,8 @@ import (
 )
 
 // ackStore 是 IssueFromPlan 内部透传给 decision.SelectIssued 的落账回调：
-// actionID 派生（"act:" + 规范键形态，阶段 1 语义）由 SelectIssued 持有，
-// 真实持久化随本包的事务紧随其后原子完成。
+// actionID 派生（"act:" + 规范键形态）由 SelectIssued 持有，真实持久化
+// 随本包的事务紧随其后原子完成。
 type ackStore struct{}
 
 func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
@@ -45,8 +45,7 @@ type Engine struct {
 	collect func() (string, error)
 }
 
-// New 构造 Engine。collect 是外部事实指纹收集函数（draft §3.3 写事务的
-// 重验输入），nil 表示本引擎不依赖外部事实——空观察本身有确定指纹
+// New 构造 Engine。collect 是外部事实指纹收集函数，nil 表示本引擎不依赖外部事实——空观察本身有确定指纹
 // （decision 空 Observation 的 canonical digest），显式使用它而不是跳过
 // 校验，保持每次写入都走完整指纹纪律。
 func New(store *persistence.Store, cfg Config, collect func() (string, error)) (*Engine, error) {
@@ -102,7 +101,7 @@ func (e *Engine) load() (uint64, *State, error) {
 // Init 落盘初始权威状态（revision 1）。view 经 decision.NewState 构造
 // （版本与 phase 已校验）；provider 是本 run 绑定的宿主 provider 身份，
 // 非空必填——后续一切携带 provider 的事件/回执与之精确比对，不同即
-// PROVIDER_MISMATCH 硬拒绝、不降级 default（draft §9.1）。已存在状态时
+// PROVIDER_MISMATCH 硬拒绝、不降级 default。已存在状态时
 // 拒绝且零变化。
 func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
 	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil)
@@ -383,8 +382,7 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 	return e.Load()
 }
 
-// IssueFromPlan 落账一次 Ready 签发（draft §3.3「不再次签发已经 ISSUED
-// 的 SpawnRequest」的签发侧）：actionID 派生复用 decision.SelectIssued，
+// IssueFromPlan 落账一次 Ready 签发：actionID 派生复用 decision.SelectIssued，
 // 随后在同一事务里登记 expected 任务、当前 Attempt 与 pendingActions，
 // 任务视图经 decision.State.TransitionTask 推进 QUEUED→ISSUED（复用
 // runtime 任务状态机校验）。撞上已存在的 actionID 或任务已有当前
@@ -542,7 +540,7 @@ func (s *State) retainExpected(ready *decision.ReadyPayload) {
 	}
 }
 
-// Submit 是唯一的外部事件接纳入口（draft §3.4）。顺序固定：
+// Submit 是唯一的外部事件接纳入口。顺序固定：
 //
 //	事件 schema 校验 → 幂等台账检查（同 ID 同 digest 重放返回稳定
 //	acceptance、零状态变化；同 ID 异 digest 硬拒绝）→ 逐 kind 接纳
@@ -565,7 +563,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		return Acceptance{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
 	// 幂等台账优先于一切接纳校验：重放不得因 token 已轮换或任务已推进
-	// 而被误拒（draft §3.4：同 ID 同 digest 返回稳定 acceptance/status）。
+	// 而被误拒（同 ID 同 digest 返回稳定 acceptance/status）。
 	if record, seen := state.Events[string(ev.ID)]; seen {
 		if record.Digest != digest {
 			return Acceptance{}, &RejectedError{
@@ -605,7 +603,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
 	switch ev.Kind {
 	case KindRequestControl:
-		// 两阶段主动控制第一段（draft §2.3）：受限 REQUEST_* 只创建
+		// 两阶段主动控制第一段：受限 REQUEST_* 只创建
 		// pending Ask——request ID（即事件 ID）、控制类型与选项集落账，
 		// 不执行任何控制。同 requestID 的 Ask 已存在时拒绝（正常路径
 		// 不可能：创建即入台账，重放已在台账层短路）。
@@ -662,7 +660,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
 		// remains the immutable decision history and also rejects later submissions.
-		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（draft §2.2：
+		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（
 		// submit 接纳后立即继续 Decide/SelectIssued）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
@@ -714,7 +712,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		}, state, true, nil
 
 	case KindSpawnReceipt:
-		// SpawnReceipt 接纳（draft §9.1）：provider 与 run 绑定精确比对；
+		// SpawnReceipt 接纳：provider 与 run 绑定精确比对；
 		// 已有同 actionID 回执时按 payload digest 判定——逐字节重发幂等
 		// （不重复回执效果，新 event ID 仍占台账），字节不同硬拒绝。
 		// 首到回执在 pending action 存在时
@@ -841,7 +839,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 	case KindWorkerResult:
 		// typed result 接纳：provider 精确比对；已有同 actionID 结果按
 		// payload digest 判幂等/冲突。receipt 未到时暂存（不丢弃、不推进，
-		// draft §3.4 result-before-receipt）；receipt 已在则完成该 expected
+		// result-before-receipt）；receipt 已在则完成该 expected
 		// 项：任务沿合法边推进 TERMINAL、PASS 完成 step（frontier 推进）
 		// 并按容量补位签发。
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
@@ -943,7 +941,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		}, state, true, nil
 
 	case KindOperatorObservation:
-		// Operator typed observation 入账（draft §2.2：主代理核实事实、
+		// Operator typed observation 入账（主代理核实事实、
 		// 不替用户授权）：绑定来源对账项并保留提交时 revision。Subject 必
 		// 须指向引擎当前真实等待处置的对账对象——UNKNOWN spawn receipt、
 		// UNKNOWN HostAction receipt 或未清账 intent——否则 UNKNOWN_ACTION
@@ -979,7 +977,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		}, state, true, nil
 
 	case KindHostActionReceipt:
-		// HostAction 回执接纳（draft §9.1）：provider 精确比对；已清账的
+		// HostAction 回执接纳：provider 精确比对；已清账的
 		// 回执按 payload digest 幂等/冲突；回执必须与 pending intent 的
 		// operation 与参数 digest 精确一致；接纳即清账 intent。
 		if err := state.checkProvider(ev.HostAction.Provider); err != nil {
@@ -1080,7 +1078,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		}
 		delete(state.PendingHostActions, actionID)
 		// EXECUTED 回执清账即完成对应 HOST_ACTION frontier 步骤并补位签发
-		//（draft §2.2：submit 接纳后立即继续 Decide/SelectIssued）。
+		//（submit 接纳后立即继续 Decide/SelectIssued）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
 		}
@@ -1212,7 +1210,7 @@ func (s *State) terminalizeTask(key runtime.TaskKey) error {
 	return nil
 }
 
-// refill 按 draft §2.2「submit 接纳事件后立即继续 Decide/SelectIssued」：
+// refill 按 「submit 接纳事件后立即继续 Decide/SelectIssued」：
 // 对推进后的视图重新决策，Ready 计划经 SelectIssued 按容量裁剪后落账
 // （复用与 IssueFromPlan 完全相同的签发语义）。
 func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
@@ -1509,7 +1507,7 @@ func digestOfCanonical(v any) string {
 }
 
 // checkProvider 硬校验 provider 身份：与 run 绑定不同（含空）即拒绝，
-// 不降级 default（draft §9.1）。
+// 不降级 default。
 func (s *State) checkProvider(observed string) error {
 	if observed == "" || observed != s.RunProvider {
 		return &RejectedError{
@@ -1582,9 +1580,9 @@ func (s *State) hasCorrelatedLifecycleEvent(correlation, identity, event string)
 	return false
 }
 
-// Freshness 返回 request 当前 revision 下的 freshness token（draft §2.3
-// 「next/status 暴露带 freshness token 的 availableActions」的协议层种子；
-// 公开 status 面属阶段 3）。request 未知或已决时拒绝。
+// Freshness 返回 request 当前 revision 下的 freshness token（协议层种子，
+// 供 status 面暴露带 freshness token 的 availableActions）。request 未知
+// 或已决时拒绝。
 func (e *Engine) Freshness(request RequestID) (string, error) {
 	revision, state, err := e.load()
 	if err != nil {

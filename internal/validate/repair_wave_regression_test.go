@@ -6,7 +6,7 @@ import (
 )
 
 func TestRepairWaveSplitChildCannotClaimGuaranteeScopeBeforeRevisionRebinding(t *testing.T) {
-	state := whitebox35AFixR2GuaranteedState(t)
+	state := guaranteedRunState(t)
 	state.SplitMasterRunID = "retained-master"
 	state.Slicing = nil
 	state.RouteMode = "custom"

@@ -286,7 +286,7 @@ func TestCheckedInArtifactRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCheckedInArtifactIsFutureDefinition：衔接 internal/validate/future.go
+// TestCheckedInArtifactIsFutureDefinition：衔接 internal/validate/candidate.go
 // 的 LoadFutureDefinition——版本 bump 到 "2" 后，新制品解析路径（读
 // stateSchemaVersion/version 字段）仍然成立：作为新 future 候选被接受，
 // 不触发 "changed bytes without bump" 拒绝，且 digest 与同源常量一致。

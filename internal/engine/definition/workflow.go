@@ -19,9 +19,9 @@ import (
 	"formal-gates/internal/engine/compiler"
 )
 
-// Version 是 definition 版本信封。批次 1c 起内容从阶段 0 的纯版本信封扩展
-// 为完整拓扑（definitions/workflow.json），按"changed bytes 必须 bump"规则
-// 从 "1" 晋升 "2"。identity_gen.go 的 WorkflowDefinitionVersion 与其同源。
+// Version 是 definition 版本信封。内容为完整拓扑
+// （definitions/workflow.json），按"changed bytes 必须 bump"规则从 "1"
+// 晋升 "2"。identity_gen.go 的 WorkflowDefinitionVersion 与其同源。
 const Version authoring.DefinitionVersion = "2"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。

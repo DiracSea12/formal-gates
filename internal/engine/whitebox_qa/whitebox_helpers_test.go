@@ -1,7 +1,6 @@
-// Package whitebox_qa 承载阶段 1 决策内核的独立白盒结构测试：用例从已确认
-// 需求（master-requirements 范围 1–7、ADR-001 十条阶段落地验收）与本套测试
-// 自行构造的夹具出发，直接面向 internal/engine 各包的实现结构编写，不依赖
-// 交付中已有的任何测试。
+// Package whitebox_qa 承载决策内核的独立白盒结构测试：用例从已确认需求
+// 与本套测试自行构造的夹具出发，直接面向 internal/engine 各包的实现结构
+// 编写，不依赖其它任何测试。
 package whitebox_qa
 
 import (
@@ -562,53 +561,4 @@ func canonicalEncode(t *testing.T, v any) []byte {
 		t.Fatalf("canonical encode: %v", err)
 	}
 	return buf.Bytes()
-}
-
-// legacyRunJSON 构造 legacy run 状态文件内容（字段名与 runstate 布局一致）。
-func legacyRunJSON(runID, status string, actions, gates map[string]string, selectedGates ...string) string {
-	m := map[string]any{
-		"runId": runID, "flow": "no-split", "status": status,
-		"requirementSource": "req.md", "requirementRevision": "rev1",
-		"basePromptRevision": "bp1", "catalogRevision": "cat1",
-		"vcs": "git", "baseSnapshot": "b0", "currentSnapshot": "c1",
-		"selectedGates": selectedGates,
-	}
-	am := map[string]any{}
-	for k, v := range actions {
-		am[k] = map[string]string{"status": v}
-	}
-	gm := map[string]any{}
-	for k, v := range gates {
-		gm[k] = map[string]string{"status": v}
-	}
-	m["actions"] = am
-	m["gates"] = gm
-	b, err := json.Marshal(m)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
-}
-
-func allPassActions() map[string]string {
-	return map[string]string{
-		"requirements-clarification": "PASS",
-		"product-review":             "PASS",
-		"start-readiness":            "PASS",
-		"development-worker":         "PASS",
-	}
-}
-
-// writeLegacyRun 在 root/.gates/tmp/<runID>/state.json 写入 legacy 状态。
-func writeLegacyRun(t *testing.T, root, runID, stateJSON string) string {
-	t.Helper()
-	dir := filepath.Join(root, ".gates", "tmp", runID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(p, []byte(stateJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
 }

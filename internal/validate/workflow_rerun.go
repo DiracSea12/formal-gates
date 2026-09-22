@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"formal-gates/internal/lifecycle"
@@ -250,9 +249,10 @@ func reusableQACases(root string, source RunSummary) (map[string][]QACase, error
 		if seen[record.CaseID] {
 			return nil, fmt.Errorf("source QA inventory contains duplicate case %s", record.CaseID)
 		}
-		ref, err := findWhiteboxTestReference(root, record.Procedure)
-		if err != nil {
-			return nil, err
+		// 白盒身份来源就是源记录自包含的 Test 字段——记录缺引用即拒绝，
+		// 不从当前代码树反查（树会演进，封板记录才是权威事实）。
+		if strings.TrimSpace(record.Test) == "" {
+			return nil, fmt.Errorf("source whitebox case %s record carries no test reference", record.CaseID)
 		}
 		result["whitebox"] = append(result["whitebox"], QACase{
 			ID:           record.CaseID,
@@ -260,7 +260,7 @@ func reusableQACases(root string, source RunSummary) (map[string][]QACase, error
 			Description:  "inherited approved whitebox case " + record.CaseID + " from " + source.RunID,
 			Procedure:    record.Procedure,
 			Oracle:       "the referenced whitebox test passes and enforces the documented invariant",
-			Test:         ref,
+			Test:         record.Test,
 			ReviewStatus: "PASS",
 		})
 		seen[record.CaseID] = true
@@ -321,43 +321,4 @@ func parseBlackboxCaseLedger(path string) ([]QACase, error) {
 		}
 	}
 	return cases, nil
-}
-
-var whiteboxFunctionPattern = regexp.MustCompile(`Test[A-Za-z0-9_]+`)
-
-func findWhiteboxTestReference(root, procedure string) (string, error) {
-	matches := whiteboxFunctionPattern.FindStringSubmatch(procedure)
-	if len(matches) == 0 {
-		return "", fmt.Errorf("cannot recover whitebox test reference from procedure %q", procedure)
-	}
-	function := matches[0]
-	var reference string
-	err := filepath.WalkDir(lifecycle.CleanRoot(root), func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if reference != "" || entry.IsDir() || filepath.Ext(path) != ".go" {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(string(data), "func "+function+"(") {
-			return nil
-		}
-		rel, err := filepath.Rel(lifecycle.CleanRoot(root), path)
-		if err != nil {
-			return err
-		}
-		reference = filepath.ToSlash(rel) + "::" + function
-		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("cannot locate whitebox test %s: %w", function, err)
-	}
-	if reference == "" {
-		return "", fmt.Errorf("cannot locate whitebox test %s in the current tree", function)
-	}
-	return reference, nil
 }

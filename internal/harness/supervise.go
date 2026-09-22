@@ -16,7 +16,7 @@ import (
 
 // strerrorText mirrors CPython's os.strerror capitalisation. Go's
 // syscall.Errno.Error() lowercases the text ("no such file or directory"), so a
-// naive concatenation would break the pre-migration error text byte for byte.
+// naive concatenation would break the Python side's error text byte for byte.
 // The exact capitalisation is observed behaviour and is preserved here.
 var strerrorText = map[int]string{
 	2:  "No such file or directory",
@@ -44,12 +44,12 @@ var exceptionName = map[int]string{
 // has no PATH at all.
 const defpath = "/bin:/usr/bin"
 
-// Supervise takes execution ownership of one job directory. It is the Go
-// replacement for formal_gates_harness.job: it claims the owner lock, records its
+// Supervise takes execution ownership of one job directory. It claims
+// the owner lock, records its
 // own process identity, spawns the request's command with the merged
 // environment, captures stdout/stderr to disk with an fsync, honours SIGTERM
 // cancellation, and writes an exit receipt whose shape and proofs match the
-// pre-migration implementation exactly.
+// Python job runner exactly.
 //
 // Exit codes:
 //   - 0 once exit.json has been written, regardless of the child's outcome;

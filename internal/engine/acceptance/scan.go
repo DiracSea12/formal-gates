@@ -1,5 +1,5 @@
-// Package acceptance 承载阶段 1 批 3 的验收套件与收口段可复用的
-// MISSING_ENGINE_ADAPTER marker 扫描入口。
+// Package acceptance 承载验收套件与收口段可复用的 MISSING_ENGINE_ADAPTER
+// marker 扫描入口。
 //
 // 本包不含生产逻辑：ScanNoMissingEngineAdapter 是收口段（closure）对最终
 // 候选 definition 的机械检查入口；验收用例全部以 *_test.go 固化，可被

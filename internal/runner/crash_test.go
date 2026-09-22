@@ -1,6 +1,6 @@
 package runner
 
-// Crash-recovery tests for the §13.2 acceptance sample: two sequential
+// Crash-recovery tests for the acceptance sample: two sequential
 // tasks A→B; a child process owns the run and really exits (os.Exit —
 // never a panic) at one of four injection points; the parent reopens the
 // same directory and must finish the run with no missed execution and no
@@ -42,31 +42,30 @@ func TestMain(m *testing.M) {
 	if point := os.Getenv(envCrashPoint); point != "" {
 		crashChild(point) // never returns
 	}
-	// K2's decision scenarios use their own env and child (decisions_test.go);
-	// the K1 crash path above is untouched.
-	if scenario := os.Getenv(envK2Scenario); scenario != "" {
-		k2Child(scenario) // never returns
+	// The gated-decision scenarios use their own env and child
+	// (decisions_test.go); the crash path above is untouched.
+	if scenario := os.Getenv(envGatedScenario); scenario != "" {
+		gatedChild(scenario) // never returns
 	}
-	// K3's parallel crash scenario follows the same re-exec pattern with
-	// its own env (parallel_test.go); the branches above are untouched.
-	if os.Getenv(envK3Scenario) != "" {
-		k3Child() // never returns
+	// The parallel crash scenario follows the same re-exec pattern with its
+	// own env (parallel_test.go); the branches above are untouched.
+	if os.Getenv(envParallelScenario) != "" {
+		parallelChild() // never returns
 	}
-	// K4's revision-takeover scenario follows the same re-exec pattern
-	// with its own env (revision_test.go); the branches above are
-	// untouched.
-	if os.Getenv(envK4Scenario) != "" {
-		k4Child() // never returns
+	// The revision-takeover scenario follows the same re-exec pattern with
+	// its own env (revision_test.go); the branches above are untouched.
+	if os.Getenv(envRevisionScenario) != "" {
+		revisionChild() // never returns
 	}
-	// The K4 repair's takeover scenarios follow the same re-exec pattern
+	// The takeover scenarios follow the same re-exec pattern
 	// (takeover_test.go): a real supervisor subprocess, then an owner
 	// child that dies right after handing it the invocation; the
 	// branches above are untouched.
-	if os.Getenv(envK4SupervisorMode) != "" {
-		k4Supervisor(os.Getenv(envK4SupervisorMode)) // never returns
+	if os.Getenv(envSupervisorMode) != "" {
+		takeoverSupervisor(os.Getenv(envSupervisorMode)) // never returns
 	}
-	if os.Getenv(envK4TakeoverScenario) != "" {
-		k4TakeoverOwner(os.Getenv(envK4TakeoverScenario)) // never returns
+	if os.Getenv(envTakeoverScenario) != "" {
+		takeoverOwner(os.Getenv(envTakeoverScenario)) // never returns
 	}
 	os.Exit(m.Run())
 }
@@ -116,7 +115,7 @@ func crashChild(point string) {
 }
 
 // markerExecutor appends one line per execution to marker-<task> — the
-// externally observable side effect §13.2 asks for.  Line counts separate
+// externally observable side effect the acceptance sample asks for.  Line counts separate
 // "executed once" from "re-executed because the owner died without
 // receipt"; admission counts stay exactly one in every scenario.
 func markerExecutor(dir string) Executor {
@@ -171,7 +170,7 @@ func TestCrashRecoveryFourPoints(t *testing.T) {
 
 			// The child died holding the directory flock; Open
 			// succeeding now is the kernel having released it —
-			// exactly the ownership recovery K1 requires.
+			// exactly the ownership recovery the crash contract requires.
 			st, err := Open(dir)
 			if err != nil {
 				t.Fatal(err)

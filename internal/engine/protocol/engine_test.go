@@ -68,7 +68,7 @@ func mustStore(t *testing.T, dir string) *persistence.Store {
 	return store
 }
 
-// compiledWorkflow 编译 checked-in 定义（签发链路复用阶段 1 全套派生）。
+// compiledWorkflow 编译 checked-in 定义（签发链路复用全套派生）。
 func compiledWorkflow(t *testing.T) *compiler.CompiledDefinition {
 	t.Helper()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
@@ -418,7 +418,7 @@ func TestTaskProgressStaleAttempt(t *testing.T) {
 }
 
 // TestTaskProgressIllegalTransition：跳过 RUNNING 直报 VALIDATING、自环
-// 重复 RUNNING 都违反 runtime 任务状态机（复用阶段 1 迁移表）。
+// 重复 RUNNING 都违反 runtime 任务状态机（复用迁移表）。
 func TestTaskProgressIllegalTransition(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
@@ -454,8 +454,8 @@ func TestTaskProgressIllegalTransition(t *testing.T) {
 	}
 }
 
-// TestSubmitFingerprintIntegration：期望指纹与实际不符时由批 1a 持久层
-// 拒绝（写前拒绝、零状态变化）——协议层不绕过指纹纪律。
+// TestSubmitFingerprintIntegration：期望指纹与实际不符时由持久层拒绝
+// （写前拒绝、零状态变化）——协议层不绕过指纹纪律。
 func TestSubmitFingerprintIntegration(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)

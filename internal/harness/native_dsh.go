@@ -1,7 +1,7 @@
 package harness
 
-// The DSH ACP adapter (the port of formal_gates_harness/native_dsh.py, whose
-// verbatim copy lives in tests/reference_native_dsh.py for the differential),
+// The DSH ACP adapter (its verbatim Python reference lives in
+// tests/reference_native_dsh.py for the differential),
 // the provider dispatch behind `formal-gates harness native <dir>` and the
 // four native bridge operations. One native job is one process: read
 // native-request.json, run the ACP sequence, land every evidence file, print
@@ -131,7 +131,7 @@ func dshObservesDelivered(hold *nativePendingHold, message map[string]any) bool 
 // ends, so no request carries a total budget (bounded is false: the
 // supervisor-style total deadline discipline must not leak in), and a dead
 // reader is a transport error rather than a clean close. The permission
-// request is held for a user decision (G2d), never answered here.
+// request is held for a user decision, never answered here.
 func dshHooks() nativeHooks {
 	return nativeHooks{
 		transportPrefix: "DSH_TRANSPORT",
@@ -359,8 +359,8 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 	})
 }
 
-// dshReconcile recovers only a completed native turn rejected by the old
-// formatting parser (native_dsh.reconcile_completed_output). Original process
+// dshReconcile recovers only a completed native turn whose result framing
+// was refused. Original process
 // exit/error records remain unchanged; no host is started and no model is
 // called; the caller must still accept the recovered business result.
 func dshReconcile(directory string, process any) (map[string]any, error) {
@@ -637,8 +637,8 @@ func sameKeySet(object map[string]any, names []string) bool {
 
 // --- the narrow entry command --------------------------------------------------
 
-// RunNative is `formal-gates harness native <job-directory>` (the port of
-// native_entry.main): one native job, one process. It reads
+// RunNative is `formal-gates harness native <job-directory>`: one native
+// job, one process. It reads
 // native-request.json, dispatches by provider, prints the result JSON to
 // stdout as one canonical line, and on ANY execution error writes
 // native-error.json (canonical), echoes the same text to stderr and returns 1.

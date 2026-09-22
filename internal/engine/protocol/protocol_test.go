@@ -52,7 +52,7 @@ func richState(t *testing.T) *State {
 	state.Events["evt-0"] = EventRecord{Digest: "sha256:abc", Acceptance: Acceptance{
 		EventID: "evt-0", Kind: "REQUEST_CONTROL", Status: "ACCEPTED", Revision: 3, RequestID: "req-0",
 	}}
-	// 批 1c 台账：provider 绑定、回执/暂存结果/结果、Operator 观察、
+	// 台账：provider 绑定、回执/暂存结果/结果、Operator 观察、
 	// HostAction intent/回执、lifecycle buffer 与验证配对。
 	state.RunProvider = "fake-host"
 	state.SpawnReceipts[reviewAction] = SpawnReceipt{

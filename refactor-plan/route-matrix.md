@@ -84,8 +84,8 @@ epoch/generation）。
 | seal | legacy | stable driver legacy runtime（`validate.Seal`） | 当前 candidate + selected results + gate-P2 credentials + final guarantee FULL | 终态封板并写黑盒用例/summary；门审 P3 一次性 advisory；固定最终已验证身份，不在 Seal 中 squash | admission/identity、未完成结果、缺 P2 凭据或 guarantee final FULL | 否 | legacy | legacy | 计划内 | `review_convergence_test.go` P2/P3/final FULL；`TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash` |
 | drive | candidate engine（阶段 3 installed façade） | engine Controller/drive handler（唯一 engine writer） | engine 六字段 envelope；`definitionSource`/`definitionDigest`/package/installed identity 精确匹配 | `Observe → Decide → SelectIssued`；lightweight 自动终结并保留 terminal summary | `UNSUPPORTED_RUN_VERSION`、`REVISION_CONFLICT`、`BUSINESS_REJECT`、声明的 engine failure class | 否 | legacy | legacy | 计划内 | `TestPhase3ProtocolIntakeReceiptIsExactlyOnce`、`TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
 | submit | candidate engine（阶段 3 installed façade） | engine submit handler（唯一 engine writer） | engine 六字段 envelope + typed event/request/freshness 绑定 | 接纳 typed event 后继续确定性决策；同 ID 同 digest 幂等 | `UNSUPPORTED_RUN_VERSION`、`STALE_REQUEST`、`DIGEST_MISMATCH`、`INVALID_EVENT`、`REVISION_CONFLICT` | 否 | legacy | legacy | 计划内 | `TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite`；阶段 3 逐入口覆盖表为当前绑定 |
-| submit-result | 无（不提供第二事件写入口） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit-result` | 是（拒绝即无写入） | unsupported | unsupported | 计划未枚举 | `TestCLIWorkflowFutureRejectsSubmitAlias`；阶段 3 只允许 typed `workflow submit`，`submit-result` 是明确禁止的第二写通道；route-matrix 反向普查的 unsupported negative probe |
-| future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
+| submit-result | 无（不提供第二事件写入口） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit-result` | 是（拒绝即无写入） | unsupported | unsupported | 计划未枚举 | `TestCLIWorkflowCandidateRejectsSubmitAlias`；阶段 3 只允许 typed `workflow submit`，`submit-result` 是明确禁止的第二写通道；route-matrix 反向普查的 unsupported negative probe |
+| candidate | legacy（阶段 0 冻结的 versioned candidate surface 契约入口，非 workflow state writer） | candidate writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 candidate 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`candidate submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowCandidateRejectsSubmitAlias` |
 
 ## 阶段 3.5b → 4 迁移合同
 
@@ -161,7 +161,7 @@ guard-preview 当前只读输入并调用生产 guard.Calculate，schema/fixture
 | seal | legacy | 无 |
 | drive | unsupported | 无；公开 façade 属阶段 3 |
 | submit | unsupported | 内部 `protocol.Engine.Submit` 已交付，但公开命令仍不存在 |
-| future | legacy | 无；仍非 engine workflow writer |
+| candidate | legacy | 无；仍非 engine workflow writer |
 
 ## 阶段 2 隔离 engine / test-only 协议面（非公开 CLI）
 
@@ -228,11 +228,11 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
 
 - 阶段 0：公开 workflow 面全部为 `legacy`（stable driver 语义不变，`--split` 维持现状）；新增
   能力全部落在维护面 `install-bootstrap`（安装/registry 事务、bootstrap、journal 恢复、
-  future 契约常量）；`status`/`next`/`drive`/`submit` 显式 `unsupported`。唯一 workflow
+  candidate 契约常量）；`status`/`next`/`drive`/`submit` 显式 `unsupported`。唯一 workflow
   writer 仍是 stable legacy runtime；install/bootstrap 无 workflow writer。
 - 阶段 1：公开 workflow 面维持全部 `legacy`（CASE-018 候选 legacy 回归）；新增能力为只读
-  `Shadow/诊断`（engine decision/shadow 不经任何公开 CLI 入口写权威 state——Shadow harness
-  为候选安装内测试入口，`TestShadowReadOnlyObservesWithoutWriting`）；`future` envelope 跟随
+  `Shadow/诊断`（engine decision/shadow 不经任何公开 CLI 入口写权威 state；该只读诊断包
+  现已退役删除）；`candidate` envelope 跟随
   制品 bump 至 version "2"。不存在第二个状态写入权威。
 
 ## 阶段 2 绑定结论（§5.11 一句式）

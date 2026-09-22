@@ -8,7 +8,7 @@ import (
 )
 
 // Error 是 compiler 层的全部拒绝错误。Class 是机械失败分类
-// （master-requirements §5.8）：结构性拒绝（图不变量、compiled IR 二次
+// ：结构性拒绝（图不变量、compiled IR 二次
 // 防线、registry kind/runner 不匹配）为 INVARIANT_VIOLATION；仅"registry
 // ID 未注册"在正常 compile 下路由为 BLOCKED_BUG——MISSING_ENGINE_ADAPTER
 // 场景，正常 compile/drive 必须以 BLOCKED_BUG 拒绝并 diagnose（§5.4）。

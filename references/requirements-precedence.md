@@ -27,10 +27,10 @@ owned by `prompts/reviewer-base.md`.
 | orthogonal | P2 | `openspec/changes/runtime-review-guards/master-requirements.md` | Runtime-review scope outside this repair. |
 | orthogonal | P2 | `openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md` | Sliced-run and QA scope outside this repair. |
 | orthogonal | P2 | `openspec/changes/two-phase-pre-development-review/master-requirements.md` | Pre-development-review scope outside this repair. |
-| orthogonal | P2 | `P2-FIX-REQUIREMENT.md` | Root-level P2 historical/parallel defect scope; does not redefine stage-0 priority. |
-| orthogonal | P2 | `QA-INCREMENTAL-ISOLATION-REQUIREMENT.md` | Root-level QA isolation scope; stage-0 uses it only as a non-conflicting reference. |
-| superseded | P2 | `TRIGGER-MODEL-REQUIREMENT.md` | Retained for traceability; its intake yes/no wording is superseded by the current on-request trigger contract. |
-| superseded | P2 | `TRIGGER-MODEL-V2-REQUIREMENT.md` | Retained for traceability; its intake yes/no wording is superseded by the current on-request trigger contract. |
+| orthogonal | P2 | `P2-REPAIR-AND-COMMENT-CLEANUP-REQUIREMENT.md` | Root-level P2 historical/parallel defect scope; does not redefine stage-0 priority. |
+| orthogonal | P2 | `QA-WORKTREE-ISOLATION-AND-INCREMENTAL-REQUIREMENT.md` | Root-level QA isolation scope; stage-0 uses it only as a non-conflicting reference. |
+| superseded | P2 | `TRIGGER-MODEL-EXPLICIT-REQUEST-REQUIREMENT.md` | Retained for traceability; its intake yes/no wording is superseded by the current on-request trigger contract. |
+| superseded | P2 | `TRIGGER-MODEL-DEFAULT-REMINDER-REQUIREMENT.md` | Retained for traceability; its intake yes/no wording is superseded by the current on-request trigger contract. |
 | superseded | P3 | `openspec/changes/universal-modification-intake/master-requirements.md` | Retained for traceability; its universal-intake precedence and retired command surface are superseded by the current-authority rows. |
 | historical | P3 | `CHANGELOG.md` and archived gate results | Historical evidence only; never a source for new public semantics. |
 

@@ -1,4 +1,4 @@
-// Package facade exposes the phase-3 candidate engine surface.  It is kept
+// Package facade exposes the candidate engine surface.  It is kept
 // separate from the stable validate package so legacy workflow runs continue
 // to use their existing writer and state namespace.
 package facade
@@ -315,7 +315,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		DefinitionSource:          req.DefinitionSource, DefinitionDigest: req.DefinitionDigest,
 		PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity,
 	}
-	store, err := persistence.NewStoreWithIdentity(stateDir, persistence.Config{
+	store, err := persistence.NewStore(stateDir, persistence.Config{
 		PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource,
 		InstalledTargetIdentity: req.InstalledTargetIdentity,
 	})
@@ -384,7 +384,7 @@ func Open(root, runID string) (*Facade, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := persistence.NewStoreWithIdentity(stateDir, persistence.Config{PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource, InstalledTargetIdentity: req.InstalledTargetIdentity})
+	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource, InstalledTargetIdentity: req.InstalledTargetIdentity})
 	if err != nil {
 		return nil, err
 	}

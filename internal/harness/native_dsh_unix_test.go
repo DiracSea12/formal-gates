@@ -370,7 +370,8 @@ func TestDSHExecuteResumeUnavailable(t *testing.T) {
 	}
 }
 
-// TestDSHExecutePermissionDisconnectInvalidates pins the G2d boundary inside
+// TestDSHExecutePermissionDisconnectInvalidates pins the held-interaction
+// boundary inside
 // the sequence: the reverse session/request_permission is held pending (no
 // reply frame ever), and when the host closes its output the pending request
 // is invalidated before the transport error propagates - the old option ids

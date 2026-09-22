@@ -7,7 +7,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 )
 
-// FactSource 是外部事实的封闭来源枚举（final-implementation-draft §3.1：
+// FactSource 是外部事实的封闭来源枚举（
 // Observe 只读收集 VCS、文件、宿主、lifecycle、receipt 和容量事实）。
 // source binding 是事实可信度与对账的锚点；零值与其他字符串非法。
 type FactSource string

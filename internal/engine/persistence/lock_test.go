@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// lockStaleAge 与 coordination.AcquirePath 的陈旧阈值一致（10 分钟）：
+// 超过该时长未刷新的存活持有者锁可被抢占。
+const lockStaleAge = 10 * time.Minute
+
 // TestLockMutualExclusionSameDirectory：锁被持有期间，同一目录的第二个
 // 写者（独立 Store 实例）立即被 LockHeldError 拒绝；释放后可继续。
 func TestLockMutualExclusionSameDirectory(t *testing.T) {
@@ -135,7 +139,12 @@ func TestFreshLockIsNotStale(t *testing.T) {
 	if err := os.WriteFile(store.lockPath(), fmt.Appendf(nil, "pid=%d\n", os.Getpid()), 0o600); err != nil {
 		t.Fatalf("write lock: %v", err)
 	}
-	if lockIsStale(store.lockPath()) {
-		t.Fatal("fresh lock of live holder judged stale")
+	if _, err := store.acquireLock(); err == nil {
+		t.Fatal("fresh lock of live holder was preempted")
+	} else {
+		var held *LockHeldError
+		if !errors.As(err, &held) {
+			t.Fatalf("fresh-lock acquire error is %T, want *LockHeldError", err)
+		}
 	}
 }

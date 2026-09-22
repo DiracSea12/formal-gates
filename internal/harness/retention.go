@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// The eleven terminal-retention judgements below moved from retention.py (G3b).
-// Each one is a plain function over its payload: the caller (retention.py)
+// The eleven terminal-retention judgements below are plain functions
+// over their payloads: the caller (retention.py)
 // keeps every filesystem fact — locking, hashing, the SQLite backup, zip
 // reading and writing, process probing and the deletions — and ships ordered
 // projections, so Python never re-derives a condition after the call.
@@ -22,7 +22,7 @@ import (
 // inside the value ({ok:false, refusal:...}) and retention.py raises the
 // HarnessError family directly from its text. The one large payload that
 // remains is canonical(index) when the manifest is written, a single copy of
-// the index inside the capacity envelope the format has always had.
+// the index inside the format's capacity envelope.
 
 // retentionChunk bounds the entry count of one batched call
 // (archive-inventory, archive-verify, archive-stale). It keeps every request
@@ -39,7 +39,7 @@ var terminalStatuses = map[string]bool{
 }
 
 // skipNames are never archived and never pruned; the check runs before the
-// symlink judgement, exactly as in the pre-migration inventory walk.
+// symlink judgement, exactly as the Python inventory walk does.
 var skipNames = map[string]bool{
 	"runner.lock":            true,
 	"checkpoints.sqlite-wal": true,
@@ -234,7 +234,7 @@ type settledProcess struct {
 }
 
 // archiveSettled merges the terminal-set check with job settlement, keeping
-// the pre-migration order: the status string first, then each job (request
+// the Python side's order: the status string first, then each job (request
 // without exit), then each recorded process in ('process.json',
 // 'native-process.json') order. The liveness probe outcome travels in the
 // payload; os.kill itself stays in Python.
@@ -276,7 +276,7 @@ type archiveIndexPlanInput struct {
 // the files proofs, which the caller joins locally. The destination-exists
 // refusal is NOT judged here: archive_run checks it in Python right after the
 // terminal verdict, before any inventory or backup work, exactly where the
-// pre-migration guard sat.
+// Python guard sits.
 func archiveIndexPlan(q archiveIndexPlanInput) (map[string]any, error) {
 	if _, err := decodeValue(q.Status); err != nil {
 		return nil, fmt.Errorf("archive-index-plan: malformed status: %w", err)
@@ -363,7 +363,7 @@ type archiveStaleEntry struct {
 }
 
 // archiveStale judges source drift in two segments. The facts segment keeps
-// the pre-migration rule order: new files first, then (unless missing entries
+// the Python side's rule order: new files first, then (unless missing entries
 // are allowed) set equality. The entries segment walks the live inventory in
 // the caller's current-iteration order and refuses on the first row whose
 // proof (or logical database hash) differs from the index expectation.
@@ -413,7 +413,7 @@ type archiveProjectionInput struct {
 
 // projectionMarkerInput carries the marker fields each phase needs; the
 // caller builds it with natural key accesses so a corrupt marker keeps the
-// pre-migration raw KeyError on the Python side.
+// raw KeyError on the Python side.
 type projectionMarkerInput struct {
 	ArchiveProof    *proofValue     `json:"archive_proof"`
 	RunID           *string         `json:"run_id"`
@@ -531,7 +531,7 @@ type pruneMarkerInput struct {
 
 // pruneMarker binds a re-entered prune to the archive the tombstone recorded.
 // It runs after the terminal verdict and before any staleness work, exactly
-// where the pre-migration `if marker and (...)` comparison sat; the caller
+// where the Python `if marker and (...)` comparison sits; the caller
 // invokes it only for a truthy marker.
 func pruneMarkerOp(q pruneMarkerInput) map[string]any {
 	if q.Archive != q.MarkerArchive || q.ArchiveProof != q.MarkerArchiveProof {
@@ -558,7 +558,7 @@ type prunePlanEntry struct {
 }
 
 // prunePlan builds the removal plan: everything not in KEEP, deepest path
-// first, ties by name. The report keys match the pre-migration preview; the
+// first, ties by name. The report keys match the Python side's preview; the
 // tombstone plan is attached only when no marker exists yet. The plan's
 // archive_proof is merged by the caller, which owns the hashing.
 func prunePlanOp(q prunePlanInput) (map[string]any, error) {

@@ -47,7 +47,7 @@ func TestRetainedMasterWaiverDoesNotRequireSliceGuaranteeSidecars(t *testing.T) 
 func TestRetainedMasterWaiverPreservesAvailableSliceEvidence(t *testing.T) {
 	root := t.TempDir()
 	owners := map[string]string{"AC-001": "slice-a", "AC-002": "slice-b", "AC-011": masterMergeOwner}
-	master := whitebox35AFixR2GuaranteedState(t)
+	master := guaranteedRunState(t)
 	master.RunID = "waived-master-partial-evidence"
 	master.RetainedOverall = true
 	master.RouteMode = "merge"
@@ -55,7 +55,7 @@ func TestRetainedMasterWaiverPreservesAvailableSliceEvidence(t *testing.T) {
 	master.RequirementGuarantee.Activation = guaranteeWaived
 	master.RequirementGuarantee.Reason = "user accepts the incomplete slice set"
 
-	slice := whitebox35AFixR2GuaranteedState(t)
+	slice := guaranteedRunState(t)
 	slice.RunID = "slice-a"
 	slice.SplitMasterRunID = master.RunID
 	slice.RouteMode = "custom"
@@ -64,7 +64,7 @@ func TestRetainedMasterWaiverPreservesAvailableSliceEvidence(t *testing.T) {
 	slice.RequirementGuarantee.ActivationSource = "INHERITED_FROM_MASTER:" + master.RunID
 	testCase := QACase{ID: "CASE-A", Mode: blackboxQAID, Description: "slice A completed behavior", Procedure: "run slice A public command", Oracle: "slice A behavior passes", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}
 	slice.QACasesByMode = map[string][]QACase{blackboxQAID: {testCase}}
-	whitebox35AFixR2ApproveMode(t, &slice, blackboxQAID)
+	approveQAMode(t, &slice, blackboxQAID)
 	slice.QAExecutionByMode = map[string]QAExecutionResult{blackboxQAID: {Status: "PASS", Snapshot: slice.CurrentSnapshot, Cases: []QAResultRecord{{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "executed slice A public command", Observation: "captured the documented slice A result", OracleResult: "captured result matched the approved slice A oracle", Origin: "executed"}}}}
 	if err := saveSliceGuaranteeRecord(root, slice); err != nil {
 		t.Fatal(err)

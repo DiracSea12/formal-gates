@@ -1,8 +1,8 @@
 package harness
 
-// K5 — the harness-v1 composition over the Go kernel. This file owns the
-// shape: the phase list as kernel tasks, the caller's configuration, and the
-// run-directory facts the flow derives everything else from.
+// The harness-v1 composition over the Go kernel. This file owns the
+// shape: the phase list as kernel tasks, the caller's configuration, and
+// the run-directory facts the flow derives everything else from.
 //
 // The business flow, as kernel tasks plus explicit transitions instead of
 // a generic engine:
@@ -12,16 +12,49 @@ package harness
 //	  → checks (one per authorized check) ∥ gate reviews (one per gate)
 //	  → evaluate → (repair round back to candidate) | seal → terminal
 //
+// The four questions a new reader asks, and where each answer lives:
+//
+//   - where the run stands: the kernel's task rows and their
+//     generations are the single authority — which stage finished, at
+//     which revision — and each stage's materials live as outcome
+//     records under outcomes/ (which generation is effective is a
+//     kernel fact, never a filename guess);
+//   - why it waits: every stop is a durable fact — a park row with its
+//     structurally linked question (task_dispositions), a host-held
+//     native interaction, or a call kept under observation — and Drive
+//     classifies the stop from those rows alone, never from memory;
+//   - why a result counts: admission binds a result to its task's
+//     generation and input digest inside the kernel's admission
+//     transaction, checks and gates judge the frozen candidate in their
+//     own throwaway clones, and the seal writes harness-result.json
+//     together with the kernel's terminal — the terminal judgment then
+//     re-proves both halves before reporting completion;
+//   - why a reopen does not redo work: the creation binding refuses a
+//     changed run, recovery adopts a verifiable receipt under its
+//     original call identity (workflow_takeover.go), a call whose
+//     supervisor still lives stays pending under observation, and a
+//     worker series replays its recorded turns instead of re-spending
+//     the host — only an unconstrained, receipt-less intent is
+//     superseded and re-registered.
+//
 // Where that flow lives, one file per concern:
 //
 //   - workflow.go (this file) — the shape above as kernel tasks, the
 //     caller's configuration, and the creation binding a reopen must match;
 //   - workflow_drive.go — Drive: run the kernel, apply the transitions,
 //     classify each stop;
-//   - workflow_worker.go, workflow_verify.go — the executors for the
-//     worker stages and for the checks, gates, evaluate and seal;
-//   - workflow_route.go — the transitions between runs, the conditional
-//     edges of the diagram above;
+//   - workflow_worker.go — the worker-stage executor: the supervised
+//     native turns of one invocation, the series identity that replays
+//     a re-executed generation, and the session rule;
+//   - workflow_verify.go — the executors for the checks, gates,
+//     candidate admission, evaluate and seal;
+//   - workflow_route.go — the transitions between runs, the
+//     conditional edges of the diagram above, in a fixed order:
+//     (1) any refused answer derives the ABORTED terminal; (2) each
+//     parked stage's wait-state row walks its park→ask→answer→resolve
+//     cycle; (3) evaluate's repair route drives one allowance-bounded
+//     repair round of development; (4) check briefs follow the business
+//     round and their own retry attempts;
 //   - workflow_takeover.go — reopening a run a previous owner left with a
 //     call in flight: adopt its verifiable results, never redo them;
 //   - workflow_archive.go — the terminal run's physical ZIP.
@@ -32,23 +65,20 @@ package harness
 //     generations, questions and their answers, repair-allowance requests,
 //     restart requests, takeover facts, the revision input bytes
 //     (task_revisions), the role session identities (task_sessions), the
-//     standing park rows (task_dispositions) and the run's terminal
-//     status with its stop reason (the runs row);
+//     wait state (task_dispositions: each parked stage's standing row,
+//     its structurally linked question and the transition the answer
+//     drove) and the run's terminal status with its stop reason (the
+//     runs row);
 //   - the run directory owns the materials: requirement.md, the worker
 //     outcome payloads (outcomes/ — which generation is effective is a
 //     kernel fact), content-addressed artifacts and supervised job
 //     directories;
 //   - this composition owns only the transitions between kernel runs.
 //
-// Questions and answers used to live here as two append-only shadow
-// ledgers mirroring the kernel's decisions rows; both moved into the
-// kernel — the question's own row carries its disposition binding in the
-// body, and the answer lives on the row alone — so a control fact has
-// exactly one authority, with no write-ahead window left to diverge.
-// Revision inputs, session identities, the park rows and the terminal
-// record moved the same way (the kernel's v5 schema), each fact in the
-// same transaction as — or the kernel twin of — the transition that
-// produced it.
+// Every control fact lives in exactly one of those places: a question
+// belongs to the park row that links it, an answer lives on the
+// question's own row, and each revision a parked stage's answer drove
+// lands in the kernel's transaction together with the row's removal.
 
 import (
 	"context"
@@ -67,12 +97,16 @@ import (
 	"formal-gates/internal/runner"
 )
 
-// Task ids of the fixed phase list. Ask tasks (":ask" suffix) hold the
-// mid-flow questions: a question task has no dependencies and a trivial
-// executor, so its gated state means exactly "an open question blocks
-// whatever depends on me", and every revision of it carries a fresh
-// question — the one kernel rule (a task's latest gate is re-frozen pending
-// by a later revision) therefore never resurrects an answered question here.
+// Task ids of the fixed phase list. Ask tasks ("<stage>:ask") are the
+// question lineage of a stage: a stage's mid-flight questions are
+// decisions rows on its ask task, a lineage separate from the business
+// task so the kernel's gate carry (a revision re-freezes a task's
+// latest gate pending at the new generation) can never resurrect or
+// shadow an answered question when the business task itself is revised.
+// An ask task takes no dependency edges and carries no execution
+// semantics — while one of its questions stands, the parked business
+// task's unsettled invocation holds the chain, and the kernel's
+// dispatch gate on the ask task holds the question itself.
 const (
 	taskRequirement = "requirement"
 	taskProduct     = "product-review"
@@ -168,8 +202,8 @@ type derivedSpec struct {
 	revision string
 }
 
-// binding is the creation-time fact a reopen must match (the R7 rule): the
-// run is one immutable request, and a different project, base, check set,
+// binding is the creation-time fact a reopen must match: the run is
+// one immutable request, and a different project, base, check set,
 // gate set, requirement or driver binary is a different run.
 type runBinding struct {
 	RunID             string   `json:"run_id"`
@@ -493,10 +527,11 @@ func (c *Compose) readBinding() (runBinding, error) {
 	return bound, nil
 }
 
-// creationSpecs builds the whole task set with its dependency edges. Ask
-// tasks have no dependencies (their question, not their execution, is the
-// point); business tasks name the ask tasks of the phase before them so an
-// open question holds the chain at its own stage boundary.
+// creationSpecs builds the whole task set with its dependency edges. The
+// business chain's edges name business tasks only: while a stage is
+// parked, its unsettled invocation keeps the task unfinished and holds
+// everything downstream through these edges alone. Question tasks are
+// appended last and depend on nothing.
 func (c *Compose) creationSpecs() ([]runner.TaskSpec, error) {
 	var specs []runner.TaskSpec
 	add := func(taskID, name string, deps []string, confirm *runner.Confirmation) error {
@@ -527,13 +562,13 @@ func (c *Compose) creationSpecs() ([]runner.TaskSpec, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := add(taskProduct, "product review", []string{taskRequirement, askTask(taskProduct)}, nil); err != nil {
+	if err := add(taskProduct, "product review", []string{taskRequirement}, nil); err != nil {
 		return nil, err
 	}
-	if err := add(taskTechnical, "technical review", []string{taskProduct, askTask(taskProduct), askTask(taskTechnical)}, nil); err != nil {
+	if err := add(taskTechnical, "technical review", []string{taskProduct}, nil); err != nil {
 		return nil, err
 	}
-	if err := add(taskPlan, "plan approval", []string{taskTechnical, askTask(taskTechnical)}, nil); err != nil {
+	if err := add(taskPlan, "plan approval", []string{taskTechnical}, nil); err != nil {
 		return nil, err
 	}
 	if err := add(taskDevelopment, "development", []string{taskPlan}, nil); err != nil {
@@ -542,27 +577,25 @@ func (c *Compose) creationSpecs() ([]runner.TaskSpec, error) {
 	if err := add(taskQADesign, "QA design", []string{taskPlan}, nil); err != nil {
 		return nil, err
 	}
-	if err := add(taskQAReview, "QA review", []string{taskQADesign, askTask(taskQADesign)}, nil); err != nil {
+	if err := add(taskQAReview, "QA review", []string{taskQADesign}, nil); err != nil {
 		return nil, err
 	}
-	verify := []string{taskDevelopment, askTask(taskDevelopment), taskQAReview, askTask(taskQADesign)}
+	verify := []string{taskDevelopment, taskQAReview}
 	if err := add(taskCandidate, "candidate admission and snapshot", verify, nil); err != nil {
 		return nil, err
 	}
 	var verifyAll []string
 	for _, check := range c.spec.spec.Checks {
-		id := checkTaskID(check.ID)
-		if err := add(id, "check "+check.ID, []string{taskCandidate}, nil); err != nil {
+		if err := add(checkTaskID(check.ID), "check "+check.ID, []string{taskCandidate}, nil); err != nil {
 			return nil, err
 		}
-		verifyAll = append(verifyAll, id, askTask(id))
+		verifyAll = append(verifyAll, checkTaskID(check.ID))
 	}
 	for _, gate := range c.spec.spec.Gates {
-		id := gateTaskID(gate)
-		if err := add(id, gate, []string{taskCandidate}, nil); err != nil {
+		if err := add(gateTaskID(gate), gate, []string{taskCandidate}, nil); err != nil {
 			return nil, err
 		}
-		verifyAll = append(verifyAll, id, askTask(id))
+		verifyAll = append(verifyAll, gateTaskID(gate))
 	}
 	sort.Strings(verifyAll)
 	if err := add(taskEvaluate, "evaluate route", append([]string{taskCandidate}, verifyAll...), nil); err != nil {

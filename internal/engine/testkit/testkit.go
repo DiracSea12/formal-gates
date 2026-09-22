@@ -1,4 +1,4 @@
-// Package testkit contains test-only adapters for the phase-2 engine protocol.
+// Package testkit contains test-only adapters for the engine protocol.
 // It deliberately has no public workflow or CLI write entry: callers must
 // construct an Engine and point it at an explicitly isolated state directory.
 package testkit
@@ -789,7 +789,7 @@ func NewProtocolFixtureWithDefinition(root string, compiled *compiler.CompiledDe
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
-	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: "sha256:testkit", FaultInjector: faults.PersistenceInjector()})
+	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: HarnessPackageDigest, FaultInjector: faults.PersistenceInjector()})
 	if err != nil {
 		return nil, err
 	}

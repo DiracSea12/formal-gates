@@ -1,13 +1,13 @@
 package harness
 
-// The shared mechanics every native host transport uses, the port of
-// formal_gates_harness/native_transport.py. A native transport is always the
+// The shared mechanics every native host transport uses. A native
+// transport is always the
 // same machine: spawn one host process, speak line-delimited JSON over its
 // stdio, keep a routing-only trace, answer the host's own client-directed
 // requests and write the same four evidence files. Only the launch arguments
-// and the protocol sequence belong to an adapter (native_dsh.go today, zcode
-// in G2c), supplied as plain hook functions on nativeHooks - the Go spelling
-// of the Python base class's overridable methods. No interface, no registry,
+// and the protocol sequence belong to an adapter (native_dsh.go,
+// native_zcode.go), supplied as plain hook functions on nativeHooks. No
+// interface, no registry,
 // no assembly injection: the adapter and the transport live in this one
 // package.
 //
@@ -521,8 +521,8 @@ func evidenceSource(directory, provider string, identity any, extra map[string]a
 	return receipt, nil
 }
 
-// reconcileCompletedOutput recovers only a completed native turn that the old
-// result parser rejected (native_transport.reconcile_completed_output). The
+// reconcileCompletedOutput recovers only a completed native turn whose
+// result framing was refused. The
 // original process record is never rewritten; the caller-supplied recover
 // re-observes the evidence.
 func reconcileCompletedOutput(directory string, process any, prefix string,
@@ -582,8 +582,9 @@ type nativeAnswerChoice struct {
 }
 
 // nativeInteractionSpec is one host's declaration of a client-directed request
-// this transport holds for a user decision instead of answering inline (the
-// G2d contract's "适配器各自只声明其权限方法名与回帧合同"). Every function is
+// this transport holds for a user decision instead of answering inline:
+// each adapter declares only its permission method names and reply-frame
+// contract. Every function is
 // pure: the spec never touches client state, so the shared mechanics can hold,
 // re-announce-track, validate and deliver on any transport.
 type nativeInteractionSpec struct {
@@ -638,7 +639,7 @@ type nativeHooks struct {
 	closedMessage  string
 	invalidMessage string
 	// The client-directed requests this transport holds for a user decision
-	// instead of answering inline (G2d).
+	// instead of answering inline.
 	interactions []nativeInteractionSpec
 	// observes reports whether one inbound non-request message is
 	// attributable to a delivered hold's continuation on this host - the fact
@@ -726,7 +727,7 @@ var nativeAnswerPollInterval = 200 * time.Millisecond
 var nativeConnectionGeneration int64
 
 // nativeClient is one host process and the JSON request/reply loop over its
-// stdio (the port of native_transport.Client).
+// stdio.
 type nativeClient struct {
 	hooks        nativeHooks
 	directory    string
@@ -1035,7 +1036,7 @@ func isLiveMethod(v any) bool {
 
 // answerReverse replies to a host request and records what was answered. A
 // method one of this transport's interaction specs claims is held for a user
-// decision instead (G2d): no frame leaves now, the pending record lands, and
+// decision instead: no frame leaves now, the pending record lands, and
 // the answer poller delivers the user's reply later under the original
 // request id. A respond hook error (a required user decision) propagates
 // without any reply; a nil reply is the base class's default refusal.
@@ -1075,7 +1076,7 @@ func (c *nativeClient) answerReverse(message map[string]any) error {
 	return nil
 }
 
-// --- held native interactions (G2d) ---------------------------------------------
+// --- held native interactions -------------------------------------------------
 
 // nativeSerializeID renders a request identity as the stable text the pending
 // record and the answer file share: a string id verbatim (ZCode's requestId

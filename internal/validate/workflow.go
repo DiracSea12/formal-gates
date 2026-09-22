@@ -26,7 +26,7 @@ type StartOptions struct {
 	// against the new current snapshot.
 	FromSealedRun    string
 	FromSealedReason string
-	// AdmissionRegistry and AdmissionRecordID explicitly select the stage-0
+	// AdmissionRegistry and AdmissionRecordID explicitly select the
 	// registry bridge. Empty values discover the shared user registry; only Go
 	// test executables retain the in-process legacy start path.
 	AdmissionRegistry string

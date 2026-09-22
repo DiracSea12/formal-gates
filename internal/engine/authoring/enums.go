@@ -3,7 +3,7 @@ package authoring
 // 封闭枚举。除注明外，零值一律非法：必填枚举缺失由 constructor 拒绝
 // （Go 无编译器穷举的 sum type，constructor error 是可达的最强拦截层）。
 
-// DecisionAuthority 是执行责任的第一维（master-requirements §5.3）：谁拥有
+// DecisionAuthority 是执行责任的第一维：谁拥有
 // 该步输出的判断权。由步骤变体派生物化，作者没有填写入口。
 type DecisionAuthority string
 

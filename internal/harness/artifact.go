@@ -9,21 +9,21 @@ import (
 )
 
 // artifactPlanInput is the payload for the artifact-plan bridge operation. The
-// content-addressing rule (ref = sha256(CanonicalJSON(value))) moves here (M3);
+// content-addressing rule (ref = sha256(CanonicalJSON(value))) lives here;
 // Python keeps the artifact path, the publish-once check and the atomic write.
 // The value is decoded with number fidelity (decodeValue / UseNumber) so an
 // integer literal stays an integer and the produced canonical bytes match the
-// pre-migration hashlib.sha256(canonical(value)) byte for byte.
+// Python side's hashlib.sha256(canonical(value)) byte for byte.
 type artifactPlanInput struct {
 	Value json.RawMessage `json:"value"`
 }
 
 // ArtifactPlan returns the canonical bytes for value and the content reference
 // (sha256 of those bytes, lower-case hex). It reuses CanonicalJSON exactly, so
-// the reference is identical to the pre-migration
+// the reference matches the Python side's
 // hashlib.sha256(canonical(value)).hexdigest(). A non-finite literal
-// (NaN/Infinity) cannot be decoded by decodeValue, so the failure surfaces as a
-// bridge error with the same message the pre-migration canonical call produced
+// (NaN/Infinity) cannot be decoded by decodeValue, so the failure surfaces as
+// a bridge error whose text the Python caller sees unchanged
 // ("invalid character 'N' looking for beginning of value").
 func ArtifactPlan(value any) (canonical []byte, ref string, err error) {
 	encoded, err := CanonicalJSON(value)
@@ -35,7 +35,7 @@ func ArtifactPlan(value any) (canonical []byte, ref string, err error) {
 }
 
 // VerifyArtifactReference enforces the reference FORMAT rule: a reference is
-// exactly 64 lower-case hex ASCII characters. It mirrors the pre-migration
+// exactly 64 lower-case hex ASCII characters. It matches the Python side's
 // `len(ref) != 64 or any(c not in "0123456789abcdef" for c in ref)` test.
 //
 // Equivalence with Python's code-point count: Go's len(ref) counts bytes, not
@@ -90,7 +90,7 @@ func VerifyArtifactBinding(ref string, body []byte) (bool, string) {
 //
 // The caller keeps its own read of the same path: that read is what produces the
 // value returned to the caller and the OS error classes (FileNotFoundError,
-// IsADirectoryError) the pre-migration store raised. This function therefore
+// IsADirectoryError) the Python store raises. This function therefore
 // reports an unreadable file as an integrity refusal — the reference is not
 // confirmed as bound to a readable body — instead of inventing an OS error class
 // of its own. The artifact directory is publish-once (Store.put never overwrites

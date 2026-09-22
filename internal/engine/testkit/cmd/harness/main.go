@@ -1,6 +1,6 @@
-// Command harness is the installed test-only phase-2 protocol driver. It stays
+// Command harness is the installed test-only protocol driver. It stays
 // outside cmd/formal-gates so workflow drive/submit cannot become public write
-// paths before their owning phase.
+// paths of the stable CLI.
 package main
 
 import (

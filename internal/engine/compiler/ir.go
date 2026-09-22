@@ -120,7 +120,7 @@ type CompiledStep struct {
 // CompiledDefinition 是编译输出。Steps 按 (nodeID, ordinal, id) 稳定排序：
 // 输出顺序是编译产物性质的函数，与输入 assembly 顺序无关。
 //
-// MissingEngineAdapter 是 diagnostic-only marker（master-requirements §5.4）：
+// MissingEngineAdapter 是 diagnostic-only marker：
 // 仅 CompileDiagnostic 可产出 true（registry 存在未注册 ID）。携带该 marker
 // 的定义不得进入 executable plan、不得签发 Ready/HostAction；正常 Compile
 // 从不签发它——未完整实现的定义以 BLOCKED_BUG 拒绝。

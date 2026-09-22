@@ -1,0 +1,151 @@
+package validate
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/facade"
+)
+
+const coexistenceManifest = `{"name":"formal-gates","hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
+
+func coexistenceWriteFile(t *testing.T, path, data string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func coexistenceSource(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	coexistenceWriteFile(t, filepath.Join(root, "SKILL.md"), "---\nname: formal-gates\ndescription: install coexistence fixture\n---\n"+hostInstructionsStartMarker+"\ncoexistence managed rule\n"+hostInstructionsEndMarker+"\n", 0o600)
+	coexistenceWriteFile(t, filepath.Join(root, "README.md"), "runtime fixture\n", 0o600)
+	coexistenceWriteFile(t, filepath.Join(root, "README_EN.md"), "runtime fixture\n", 0o600)
+	coexistenceWriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), coexistenceManifest, 0o600)
+	// 宽松 smoke 策略的进程内夹具标记（见 install_transaction.go
+	// runInstalledBinarySmokeWithPolicy）：安装现在会一路走到安装后 smoke，POSIX
+	// shebang 桩在 Windows 上会被 fork/exec 当作损坏的 PE 拒绝。
+	coexistenceWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "binary\n", 0o700)
+	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
+		coexistenceWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
+	}
+	return root
+}
+
+func coexistenceLegacyActiveState(t *testing.T, project, runID string) string {
+	t.Helper()
+	state := RunState{RunID: runID, Status: "ACTIVE"}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(project, ".gates", "tmp", runID, "state.json")
+	coexistenceWriteFile(t, path, string(data)+"\n", 0o600)
+	return path
+}
+
+func coexistenceCandidateActiveState(t *testing.T, project, runID string) string {
+	t.Helper()
+	receipt := facade.IntakeConfirmationReceipt{
+		Source:              facade.DefaultIntakeSource,
+		Authority:           facade.DefaultIntakeAuthority,
+		Transport:           facade.DefaultIntakeTransport,
+		RequirementSource:   "requirements.md",
+		RequirementRevision: "req-coexistence",
+		Artifacts:           []facade.IntakeArtifact{{Path: "requirements.md", Revision: "req-coexistence"}},
+		SolutionRevision:    "sol-coexistence",
+		SolutionDigest:      "sha256:sol-coexistence",
+	}
+	_, run, err := facade.Start(facade.StartOptions{
+		Root: project,
+		Request: facade.StartRequest{
+			RunID:                     runID,
+			Route:                     "lightweight",
+			DefinitionSource:          facade.DefaultDefinitionSource,
+			DefinitionDigest:          definition.WorkflowDefinitionDigest,
+			IntakeConfirmationReceipt: receipt,
+		},
+		Admission: &facade.Admission{PackageDigest: "sha256:coexistence-candidate", InstalledTargetIdentity: "coexistence-candidate-target"},
+	})
+	if err != nil {
+		t.Fatalf("create candidate fixture: %v", err)
+	}
+	if run.Status != "ACTIVE" {
+		t.Fatalf("candidate fixture status=%q, want ACTIVE", run.Status)
+	}
+	path := filepath.Join(project, filepath.FromSlash(facade.EngineNamespace), runID, "state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Content struct {
+			Phase string `json:"phase"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		t.Fatalf("decode candidate state: %v", err)
+	}
+	if probe.Content.Phase != "INTAKE_REGISTERED" {
+		t.Fatalf("candidate fixture content.phase=%q, want INTAKE_REGISTERED", probe.Content.Phase)
+	}
+	return path
+}
+
+// TestInstallAllowsActiveLegacyAndCandidateRuns verifies that an
+// install can replace the registered runtime while either state shape has an
+// active run, without rewriting that run. The candidate fixture is produced
+// through the façade so its nested content.phase is the real engine state
+// shape; the legacy fixture uses the documented ACTIVE RunState shape.
+func TestInstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
+	cases := []struct {
+		name       string
+		runID      string
+		makeActive func(*testing.T, string, string) string
+	}{
+		{name: "legacy-active", runID: "legacy-active", makeActive: coexistenceLegacyActiveState},
+		{name: "candidate-intake", runID: "candidate-intake", makeActive: coexistenceCandidateActiveState},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			project := t.TempDir()
+			statePath := testCase.makeActive(t, project, testCase.runID)
+			beforeState, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := coexistenceSource(t)
+			registry := filepath.Join(t.TempDir(), "registry.json")
+			launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+			report, err := Install(InstallOptions{
+				Source: source, Host: "claude", Scope: "project", Project: project,
+				RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
+			})
+			if err != nil {
+				t.Fatalf("install with active run %s failed: %v", testCase.runID, err)
+			}
+			if len(report.Targets) != 1 || report.Targets[0].Smoke != "PASS" {
+				t.Fatalf("install report=%#v", report)
+			}
+			afterState, readErr := os.ReadFile(statePath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(afterState) != string(beforeState) {
+				t.Fatal("install changed the active run state")
+			}
+			for _, path := range []string{registry, filepath.Join(project, ".claude", "skills", "formal-gates"), launcher} {
+				if _, statErr := os.Stat(path); statErr != nil {
+					t.Errorf("successful install did not create %s: %v", path, statErr)
+				}
+			}
+		})
+	}
+}

@@ -8,7 +8,7 @@ import (
 	"formal-gates/internal/engine/authoring"
 )
 
-// TaskKey 是动态任务的稳定键（master-requirements §5.10）：由 node/step/
+// TaskKey 是动态任务的稳定键：由 node/step/
 // scope 三段派生。node/step 绑定 definition 中的所属节点与步骤；scope
 // 区分同一步骤上的并行实例（child、case 等动态扇出），静态步骤为空串。
 // 键值即 String() 的规范形态，跨进程/持久化稳定。
@@ -95,9 +95,8 @@ func (k *TaskKey) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// TaskStatus 是单个动态任务的状态机（final-implementation-draft §3.1）。
-// 任务级结果是 TaskStatus 之外的数据（由后续批次的 typed result 承载），
-// 状态机本身只描述调度位置。
+// TaskStatus 是单个动态任务的状态机。任务级结果是 TaskStatus 之外的
+// 数据（由 typed result 承载），状态机本身只描述调度位置。
 type TaskStatus string
 
 const (

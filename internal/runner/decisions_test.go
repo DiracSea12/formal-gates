@@ -1,16 +1,15 @@
 package runner
 
-// K2 acceptance tests for the §13.2 decision sample: task a is gated
-// behind a confirmation (approve/reject, approve allows) and task b
-// depends on a.  The first three scenarios re-exec this binary through
-// TestMain (RUNNER_K2_SCENARIO) and really exit — one before the
-// decision is answered, one right after an allowing Answer committed but
-// before any successor ran, one right after a refusing Answer — the
-// parent then reopens and observes the run.  The remaining §6.1 refusal
-// classes (old ids, replays, terminal answers) and the unit behaviours
-// are covered by the in-process tests below.  The K1 crash machinery in
-// crash_test.go keeps its env, injection points and exit codes
-// untouched.
+// Acceptance tests for the gated-decision sample: task a is gated behind
+// a confirmation (approve/reject, approve allows) and task b depends on
+// a.  The first three scenarios re-exec this binary through TestMain
+// (RUNNER_GATED_SCENARIO) and really exit — one before the decision is
+// answered, one right after an allowing Answer committed but before any
+// successor ran, one right after a refusing Answer — the parent then
+// reopens and observes the run.  The remaining refusal classes (old ids,
+// replays, terminal answers) and the unit behaviours are covered by the
+// in-process tests below.  The crash machinery in crash_test.go keeps its
+// env, injection points and exit codes untouched.
 
 import (
 	"context"
@@ -26,22 +25,22 @@ import (
 )
 
 const (
-	envK2Scenario = "RUNNER_K2_SCENARIO"
-	envK2Dir      = "RUNNER_K2_DIR"
-	k2RunID       = "k2-sample"
+	envGatedScenario = "RUNNER_GATED_SCENARIO"
+	envGatedDir      = "RUNNER_GATED_DIR"
+	gatedRunID       = "gated-sample"
 )
 
-// K2 child exit codes: 90, 91 and 93 are the three on-purpose exits
+// Gated-child exit codes: 90, 91 and 93 are the three on-purpose exits
 // (waiting point, answered point, refused point); 92+ mark wiring bugs
 // in the child itself.
 const (
-	exitK2Waiting  = 90
-	exitK2Answered = 91
-	exitK2Wiring   = 92
-	exitK2Refused  = 93
+	exitGatedWaiting  = 90
+	exitGatedAnswered = 91
+	exitGatedWiring   = 92
+	exitGatedRefused  = 93
 )
 
-// gatedSpecs is the §13.2 K2 sample: a gated a (answering "approve"
+// gatedSpecs is the gated sample: a gated a (answering "approve"
 // allows execution), and b behind it.
 func gatedSpecs() []TaskSpec {
 	return []TaskSpec{
@@ -58,37 +57,37 @@ func gatedSpecs() []TaskSpec {
 	}
 }
 
-// k2Child drives the gated sample in RUNNER_K2_DIR.  All scenarios stop
+// gatedChild drives the gated sample in RUNNER_GATED_DIR.  All scenarios stop
 // at the same durable point — Run returned ErrWaitingDecision, so one
 // pending decision exists and nothing after a's gate has executed — and
 // differ only in what the child's Answer did to it: nothing (waiting),
 // consume it with the allowing choice (answered), or consume it with a
 // refusing one (refused).
-func k2Child(scenario string) {
-	dir := os.Getenv(envK2Dir)
+func gatedChild(scenario string) {
+	dir := os.Getenv(envGatedDir)
 	if dir == "" {
-		fmt.Fprintln(os.Stderr, "child: missing", envK2Dir)
-		os.Exit(exitK2Wiring)
+		fmt.Fprintln(os.Stderr, "child: missing", envGatedDir)
+		os.Exit(exitGatedWiring)
 	}
 	ctx := context.Background()
 	st, err := Open(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "child open:", err)
-		os.Exit(exitK2Wiring)
+		os.Exit(exitGatedWiring)
 	}
 	specs := gatedSpecs()
-	if err := st.CreateRun(ctx, k2RunID, specs); err != nil {
+	if err := st.CreateRun(ctx, gatedRunID, specs); err != nil {
 		fmt.Fprintln(os.Stderr, "child create:", err)
-		os.Exit(exitK2Wiring)
+		os.Exit(exitGatedWiring)
 	}
 	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, specs); !errors.Is(err, ErrWaitingDecision) {
 		fmt.Fprintln(os.Stderr, "child run:", err)
-		os.Exit(exitK2Wiring)
+		os.Exit(exitGatedWiring)
 	}
 	switch scenario {
 	case "waiting":
 		// Durable state: one pending decision, zero executions, exit.
-		os.Exit(exitK2Waiting)
+		os.Exit(exitGatedWaiting)
 	case "answered":
 		// The user approves; the successor deliberately does not start
 		// in this process — the parent must pick the work up from the
@@ -96,38 +95,38 @@ func k2Child(scenario string) {
 		pending, err := st.PendingDecisions(ctx)
 		if err != nil || len(pending) != 1 {
 			fmt.Fprintln(os.Stderr, "child pending:", err, len(pending))
-			os.Exit(exitK2Wiring)
+			os.Exit(exitGatedWiring)
 		}
 		if _, err := st.Answer(ctx, pending[0].DecisionID, "approve"); err != nil {
 			fmt.Fprintln(os.Stderr, "child answer:", err)
-			os.Exit(exitK2Wiring)
+			os.Exit(exitGatedWiring)
 		}
-		os.Exit(exitK2Answered)
+		os.Exit(exitGatedAnswered)
 	case "refused":
 		// The user answers with a choice that does NOT allow execution;
 		// the durable refusal is the point the parent must observe.
 		pending, err := st.PendingDecisions(ctx)
 		if err != nil || len(pending) != 1 {
 			fmt.Fprintln(os.Stderr, "child pending:", err, len(pending))
-			os.Exit(exitK2Wiring)
+			os.Exit(exitGatedWiring)
 		}
 		if _, err := st.Answer(ctx, pending[0].DecisionID, "reject"); err != nil {
 			fmt.Fprintln(os.Stderr, "child answer:", err)
-			os.Exit(exitK2Wiring)
+			os.Exit(exitGatedWiring)
 		}
-		os.Exit(exitK2Refused)
+		os.Exit(exitGatedRefused)
 	default:
 		fmt.Fprintln(os.Stderr, "child: unknown scenario:", scenario)
-		os.Exit(exitK2Wiring)
+		os.Exit(exitGatedWiring)
 	}
 }
 
-// runK2Child executes the re-exec'd child and asserts it exited with
+// runGatedChild executes the re-exec'd child and asserts it exited with
 // exactly wantExit.
-func runK2Child(t *testing.T, dir, scenario string, wantExit int) {
+func runGatedChild(t *testing.T, dir, scenario string, wantExit int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), envK2Scenario+"="+scenario, envK2Dir+"="+dir)
+	cmd.Env = append(os.Environ(), envGatedScenario+"="+scenario, envGatedDir+"="+dir)
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != wantExit {
@@ -203,12 +202,12 @@ func reachPendingGate(t *testing.T, st *Store) DecisionView {
 	return pending[0]
 }
 
-// §13.2 scenario 1 — exit while the decision is pending: the reopened
+// Scenario 1 — exit while the decision is pending: the reopened
 // owner sees exactly the spec's question, nothing has executed, and the
 // run only completes after a real answer.
-func TestK2ExitBeforeDecisionWaitsThenCompletes(t *testing.T) {
+func TestExitBeforeDecisionWaitsThenCompletes(t *testing.T) {
 	dir := t.TempDir()
-	runK2Child(t, dir, "waiting", exitK2Waiting)
+	runGatedChild(t, dir, "waiting", exitGatedWaiting)
 	ctx := context.Background()
 
 	st, err := Open(dir)
@@ -216,8 +215,8 @@ func TestK2ExitBeforeDecisionWaitsThenCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if st.runID != k2RunID {
-		t.Fatalf("reopened run id = %q, want %q", st.runID, k2RunID)
+	if st.runID != gatedRunID {
+		t.Fatalf("reopened run id = %q, want %q", st.runID, gatedRunID)
 	}
 	// Exactly one pending decision, carrying the spec's question verbatim.
 	pending, err := st.PendingDecisions(ctx)
@@ -289,12 +288,12 @@ func TestK2ExitBeforeDecisionWaitsThenCompletes(t *testing.T) {
 	}
 }
 
-// §13.2 scenario 2 — exit right after the answer committed: the reopened
+// Scenario 2 — exit right after the answer committed: the reopened
 // owner finds no open question, the gate is not asked again, and the
 // successor runs on the consumed decision alone.
-func TestK2ExitAfterDecisionRunsSuccessorWithoutReAsk(t *testing.T) {
+func TestExitAfterDecisionRunsSuccessorWithoutReAsk(t *testing.T) {
 	dir := t.TempDir()
-	runK2Child(t, dir, "answered", exitK2Answered)
+	runGatedChild(t, dir, "answered", exitGatedAnswered)
 	ctx := context.Background()
 
 	st, err := Open(dir)
@@ -344,12 +343,12 @@ func TestK2ExitAfterDecisionRunsSuccessorWithoutReAsk(t *testing.T) {
 	}
 }
 
-// §13.2 refusal sample — the child reaches the wait, answers "reject"
+// Refusal sample — the child reaches the wait, answers "reject"
 // and really exits; the reopened parent's Run is refused from the stored
 // answer alone: no re-ask, no execution, no invocation.
-func TestK2ExitAfterRefusalRefusesOnReopen(t *testing.T) {
+func TestExitAfterRefusalRefusesOnReopen(t *testing.T) {
 	dir := t.TempDir()
-	runK2Child(t, dir, "refused", exitK2Refused)
+	runGatedChild(t, dir, "refused", exitGatedRefused)
 	ctx := context.Background()
 
 	st, err := Open(dir)
@@ -378,12 +377,12 @@ func TestK2ExitAfterRefusalRefusesOnReopen(t *testing.T) {
 	}
 }
 
-// F1 — the confirmation requirement is persisted by CreateRun, so a
+// The confirmation requirement is persisted by CreateRun, so a
 // reopened owner that omits the Confirm field from its recovery specs
 // still meets the same gate: both when it reopens before any Run and
 // when it reopens from the waiting state.  Answering through the store
 // then completes the chain with the Confirm-free specs alone.
-func TestK2OmittedConfirmFieldStillGatesAfterReopen(t *testing.T) {
+func TestOmittedConfirmFieldStillGatesAfterReopen(t *testing.T) {
 	// Same task ids, dependencies and byte inputs as gatedSpecs, minus
 	// the Confirm declaration entirely.
 	plainSpecs := []TaskSpec{
@@ -460,13 +459,13 @@ func TestK2OmittedConfirmFieldStillGatesAfterReopen(t *testing.T) {
 	}
 }
 
-// F2 — a refusing answer denies execution as durably as an allowing one
+// A refusing answer denies execution as durably as an allowing one
 // grants it: across a close/reopen the same stored answer refuses again
 // and again, the gated task and its successor never execute, and the row
 // and events stay exactly as the refusal left them.  The approve path on
 // an identical fresh run completes normally, proving the choice — not
 // the mechanism — makes the difference.
-func TestK2RefusedDecisionSurvivesReopenAndBlocksExecution(t *testing.T) {
+func TestRefusedDecisionSurvivesReopenAndBlocksExecution(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-refuse", gatedSpecs())
@@ -527,10 +526,10 @@ func TestK2RefusedDecisionSurvivesReopenAndBlocksExecution(t *testing.T) {
 	}
 }
 
-// F3 — the three malformed gate declarations are refused before anything
+// The three malformed gate declarations are refused before anything
 // is written: no decisions row, no run row (a reopen finds no run), and
 // the corrected declaration then creates normally in the same directory.
-func TestK2MalformedConfirmationsRefusedBeforeAnyWrite(t *testing.T) {
+func TestMalformedConfirmationsRefusedBeforeAnyWrite(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name   string
@@ -585,9 +584,9 @@ func TestK2MalformedConfirmationsRefusedBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// §13.2 scenario 3 — old ids: a request that never existed, and a valid
+// Scenario 3 — old ids: a request that never existed, and a valid
 // id belonging to another run, are both stale; neither touches any row.
-func TestK2StaleDecisionIDsAreRefused(t *testing.T) {
+func TestStaleDecisionIDsAreRefused(t *testing.T) {
 	ctx := context.Background()
 	dirOne := t.TempDir()
 	stOne := mustCreate(t, dirOne, "r-one", gatedSpecs())
@@ -598,7 +597,7 @@ func TestK2StaleDecisionIDsAreRefused(t *testing.T) {
 		t.Fatalf("nonexistent id err = %v, want ErrDecisionStale", err)
 	}
 	// A real, currently-pending decision — of a different run.  Two
-	// parallel confirmations never substitute for each other (§6.1).
+	// parallel confirmations never substitute for each other.
 	dirTwo := t.TempDir()
 	stTwo := mustCreate(t, dirTwo, "r-two", gatedSpecs())
 	gateTwo := reachPendingGate(t, stTwo)
@@ -619,10 +618,10 @@ func TestK2StaleDecisionIDsAreRefused(t *testing.T) {
 	}
 }
 
-// §13.2 scenario 4 — replays: the same answer returns the original
+// Scenario 4 — replays: the same answer returns the original
 // receipt with zero side effects; a different answer on the same id is a
 // conflict and the stored answer stands.
-func TestK2AnswerReplayAndConflict(t *testing.T) {
+func TestAnswerReplayAndConflict(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-replay", gatedSpecs())
@@ -667,9 +666,9 @@ func TestK2AnswerReplayAndConflict(t *testing.T) {
 	}
 }
 
-// §13.2 scenario 5 — terminal answers: once every task is finished, even
+// Scenario 5 — terminal answers: once every task is finished, even
 // the idempotent replay of the accepted answer is refused.
-func TestK2TerminalRunRefusesAnyAnswer(t *testing.T) {
+func TestTerminalRunRefusesAnyAnswer(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-terminal", gatedSpecs())
@@ -700,7 +699,7 @@ func TestK2TerminalRunRefusesAnyAnswer(t *testing.T) {
 // Waiting is reported as waiting, never as a dependency cycle, and one
 // gate stays one row with one creation event however often Run reaches
 // it.
-func TestK2RunReportsWaitingNotCycleError(t *testing.T) {
+func TestRunReportsWaitingNotCycleError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-waiting", gatedSpecs())
@@ -727,7 +726,7 @@ func TestK2RunReportsWaitingNotCycleError(t *testing.T) {
 
 // A choice outside the offered options is refused descriptively and the
 // question stays pending.
-func TestK2ChoiceOutsideOptionsIsRefused(t *testing.T) {
+func TestChoiceOutsideOptionsIsRefused(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-choice", gatedSpecs())
@@ -756,7 +755,7 @@ func TestK2ChoiceOutsideOptionsIsRefused(t *testing.T) {
 // An executor failure after the gate was answered costs one retry, never a
 // second question: the answer stands and the re-run goes straight
 // through.
-func TestK2FailedExecutionDoesNotReAskDecision(t *testing.T) {
+func TestFailedExecutionDoesNotReAskDecision(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-retry", gatedSpecs())
@@ -811,7 +810,7 @@ func TestK2FailedExecutionDoesNotReAskDecision(t *testing.T) {
 }
 
 // Answered decisions are history and never surface as pending.
-func TestK2PendingDecisionsExcludeAnswered(t *testing.T) {
+func TestPendingDecisionsExcludeAnswered(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := mustCreate(t, dir, "r-list", gatedSpecs())
@@ -831,10 +830,10 @@ func TestK2PendingDecisionsExcludeAnswered(t *testing.T) {
 	}
 }
 
-// A v2 file (the accepted K1 baseline) is migrated forward, not refused:
+// A v2 file (an accepted baseline) is migrated forward, not refused:
 // every post-v2 delta table is added and the version stamped to this
-// build's, and every K1 fact survives untouched.
-func TestK2MigratesV2ToV3(t *testing.T) {
+// build's, and every baseline fact survives untouched.
+func TestMigratesV2ToV3(t *testing.T) {
 	dir := t.TempDir()
 	specs := []TaskSpec{
 		{TaskID: "a", Name: "A", Input: []byte("in-a")},
@@ -850,9 +849,9 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 	}
 
 	// Rewind the file to the v2 shape: drop the post-v2 delta tables and
-	// stamp the old version — exactly what a K1-accepted baseline looks
-	// like (the K4 rework's v4 delta included: user_requests and
-	// call_observations; the v5 delta: task_revisions and task_sessions).
+	// stamp the old version — exactly what an accepted baseline looks
+	// like (the v4 delta included: user_requests and call_observations;
+	// the v5 delta: task_revisions and task_sessions).
 	db, err := sql.Open("sqlite", filepath.Join(dir, dbFileName))
 	if err != nil {
 		t.Fatal(err)
@@ -879,7 +878,7 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reopen: the migration runs, and the K1 facts are all still there.
+	// Reopen: the migration runs, and the baseline facts are all still there.
 	st2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("reopen after v2 rewind: %v", err)
@@ -929,14 +928,14 @@ func countEvents(t *testing.T, st *Store, kind string) int {
 	return n
 }
 
-// TestK2QuestionReadsServeTheCompositionPins pins the two read-only
+// TestQuestionReadsServeTheCompositionPins pins the two read-only
 // exports the composition's ask/answer transitions read (the retired
 // answer/ask ledgers' replacement): TaskQuestion for "was this asked /
 // what was answered" on one task, AnsweredQuestions for the run's settled
 // refusal facts. Only what the calls themselves add is pinned here — the
 // surrounding rules (Answer's families, the generation binding) are the
 // suites above.
-func TestK2QuestionReadsServeTheCompositionPins(t *testing.T) {
+func TestQuestionReadsServeTheCompositionPins(t *testing.T) {
 	store, _ := openQuestionRun(t)
 	ctx := context.Background()
 	// No gate yet: nothing stands, nothing settled.

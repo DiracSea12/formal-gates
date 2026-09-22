@@ -287,72 +287,44 @@ func (c *Compose) execute(ctx context.Context, inv runner.Invocation) (runner.Re
 	}
 }
 
-// errPlanPending is the plan executor's interrupt: the invocation does not
-// complete while the approval stands unanswered. The kernel's settle order
-// turns it into the run's waiting state because the question itself is a
-// pending kernel decision.
-var errPlanPending = errors.New("compose: the plan approval is pending")
-
-// executePlanGate is the plan-approval gate as an executor: the question is
-// placed mid-run — through the kernel's one pre-authorized seam — exactly
-// when the task dispatches, which is exactly when its materials (both
-// standing reviews) exist, and the body carries their evidence references
-// and the exact approved check commands (R3). The task only completes on an
-// answered approval; routePlanAdvance re-arms it afterwards.
+// executePlanGate is the plan-approval stage: the task parks its
+// approval question as a wait-state row exactly when it dispatches —
+// which is exactly when its materials (both standing reviews) exist, so
+// the question never precedes its evidence. The route asks the
+// linked question; the approve answer resolves by re-arming this task,
+// and the re-run records the approval outcome — the re-arm's
+// idempotence fact is kernel-sourced: only the approval's resolve ever
+// revises the plan task, so a persisted revision input row for it means
+// the re-arm landed (with its bump, atomically).
 func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (runner.Result, error) {
 	if c.latestOutcome(taskPlan) != nil {
 		return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
 	}
-	question, dispositionID := planQuestion()
-	if c.pendingQuestionOn(ctx, question) {
-		return runner.Result{}, errPlanPending
+	if c.readDisposition(taskPlan) != nil {
+		// The row stands: its question is the route's to place and the
+		// user's to answer — this invocation stays unsettled until the
+		// approve answer's resolve supersedes it.
+		return runner.Result{}, fmt.Errorf("compose: the plan approval is pending: %w", errParked)
 	}
-	if !c.askRecorded(ctx, question, dispositionID) {
-		product := c.latestOutcome(taskProduct)
-		technical := c.latestOutcome(taskTechnical)
-		if product == nil || technical == nil || product.Worker == nil || technical.Worker == nil {
-			return runner.Result{}, fmt.Errorf(
-				"compose: the plan approval dispatched before its review inputs stand")
-		}
-		// The evidence references must open where they claim to live. The
-		// standing reviews are materialized by writeOutcome as
-		// outcomes/<task>/<generation>.json, so the root is the outcomes
-		// directory and each reference is that record's own relative path.
-		// (A content digest pointed at artifacts/ named a file nothing ever
-		// writes — that tree only holds evaluate's feedback bundle — so the
-		// user could not read the material being approved.)
-		body, err := canonicalBody(map[string]any{
-			"product":     outcomeFileRef(product),
-			"technical":   outcomeFileRef(technical),
-			"artifacts":   filepath.Join(c.dir, "outcomes"),
-			"checks":      c.spec.spec.Checks,
-			"disposition": dispositionID,
-			"reason":      "Approve the reviewed requirement/plan and exact check commands before development",
-		})
-		if err != nil {
-			return runner.Result{}, err
-		}
-		if _, err := c.store.OpenQuestion(ctx, question, &runner.Confirmation{
-			Options: []string{"approve", "abort"}, Allow: "approve",
-			Revision: c.spec.revision, Body: body,
-		}); err != nil && err != runner.ErrQuestionAnswered {
-			return runner.Result{}, err
-		}
-		return runner.Result{}, errPlanPending
-	}
-	switch c.answeredChoice(ctx, question) {
-	case "approve":
+	if c.taskRevised(taskPlan) {
+		// The approval resolved and re-armed this task: record it.
 		if err := c.writeOutcome(outcomeRecord{
 			Task: taskPlan, Generation: inv.Generation, Action: "approved",
 		}); err != nil {
 			return runner.Result{}, err
 		}
 		return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
-	case "abort":
-		return runner.Result{}, runner.ErrDecisionRefused
-	default:
-		return runner.Result{}, errPlanPending
 	}
+	product := c.latestOutcome(taskProduct)
+	technical := c.latestOutcome(taskTechnical)
+	if product == nil || technical == nil || product.Worker == nil || technical.Worker == nil {
+		return runner.Result{}, fmt.Errorf(
+			"compose: the plan approval dispatched before its review inputs stand")
+	}
+	return runner.Result{}, c.park(taskPlan, inv.Generation, 0, runner.Disposition{
+		Kind:   "plan",
+		Reason: "Approve the reviewed requirement/plan and exact check commands before development",
+	})
 }
 
 // outcomeFileRef addresses one outcome record as a path relative to the

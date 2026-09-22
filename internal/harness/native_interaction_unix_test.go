@@ -2,7 +2,7 @@
 
 package harness
 
-// The G2d held-interaction flows over the scripted fake hosts, covering the
+// The held-interaction flows over the scripted fake hosts, covering the
 // contract's 测试与门 column end to end: pending→答复→同 turn 继续出结果、
 // 拒绝选项、取消（按宿主协议的取消答复形状）、错误 request_id/非宿主选项
 // 被拒、断连失效、双请求竞态（答 A 不误 B）、zcode 预算暂停与答复后续算、

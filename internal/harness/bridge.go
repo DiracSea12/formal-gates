@@ -415,7 +415,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"ok": true}, nil
 	case "comparison-plan":
-		// Only the parse + representation rules move here (M1). Git invocation,
+		// Only the parse + representation rules live here. Git invocation,
 		// file I/O, tamper checks and proof collection stay in Python.
 		var q comparisonPlanInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -423,17 +423,16 @@ func dispatch(e envelope) (any, error) {
 		}
 		return planComparison(q)
 	case "task-input":
-		// The wrapper shape and the canonical digest move here (M2). file I/O
-		// and the callers stay in Python; the digest that used to be a separate
-		// digest() cross-process call is now computed in-line.
+		// The wrapper shape and the canonical digest live here. File I/O
+		// and the callers stay in Python; the digest is computed in-line.
 		var q taskInputInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
 		return planTaskInput(q)
 	case "evidence-feedback":
-		// The wrapper shape and the revision-binding judgement move here (M2).
-		// A refusal is a typed business outcome inside the value (C4 pattern):
+		// The wrapper shape and the revision-binding judgement live here.
+		// A refusal is a typed business outcome inside the value:
 		// Python's refuse() maps it back to the HarnessError family.
 		var q evidenceFeedbackInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -442,10 +441,11 @@ func dispatch(e envelope) (any, error) {
 		return planEvidenceFeedback(q)
 	case "artifact-plan":
 		// The content-addressing rule (ref = sha256(CanonicalJSON(value)))
-		// moves here (M3); Python keeps the artifact path, the publish-once
-		// check and the atomic write. The value is decoded with number fidelity
-		// so integer literals keep arbitrary precision and the produced
-		// canonical bytes match the pre-migration hashlib.sha256(canonical(value)).
+		// lives here; Python keeps the artifact path, the publish-once
+		// check and the atomic write. The value is decoded with number
+		// fidelity so integer literals keep arbitrary precision and the
+		// produced canonical bytes match the Python side's
+		// hashlib.sha256(canonical(value)) byte for byte.
 		var q artifactPlanInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
@@ -460,9 +460,9 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"canonical": string(canonical), "ref": ref}, nil
 	case "artifact-reference":
-		// The reference FORMAT rule moves here (M3). It is a typed business
-		// refusal inside the value (C4 pattern) so Python's refuse() can raise
-		// the same HarnessError the reference implementation raised. This call
+		// The reference FORMAT rule lives here. It is a typed business
+		// refusal inside the value so Python's refuse() can raise
+		// the HarnessError family. This call
 		// runs BEFORE any filesystem access so the format verdict is structural.
 		var q struct {
 			Ref string `json:"ref"`
@@ -476,20 +476,20 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"ok": true}, nil
 	case "artifact-binding":
-		// The integrity rule moves here (M3), over the RAW bytes of the file at
+		// The integrity rule lives here, over the RAW bytes of the file at
 		// path, which Go reads itself. It does NOT re-check the reference format
 		// — that is owned by artifact-reference — so the refusal ordering is
 		// structural.
 		//
 		// The path, not the body, crosses this boundary because the request
 		// envelope has one fixed input ceiling shared by every operation
-		// (Bridge): carrying the body here made READ capacity smaller than WRITE
-		// capacity by the transport's own expansion factor, so an artifact
-		// publication accepted could not be read back. A bounded request keeps
-		// read capacity above whatever publication accepts. A path that cannot
-		// be read is an integrity refusal, not a new error class: the caller has
-		// already read the same file for the returned value and for the OS error
-		// classes that read belongs to.
+		// (Bridge): carrying the body here would make READ capacity smaller
+		// than WRITE capacity by the transport's own expansion factor, so an
+		// artifact publication accepted could not be read back. A bounded
+		// request keeps read capacity above whatever publication accepts. A
+		// path that cannot be read is an integrity refusal, not a new error
+		// class: the caller has already read the same file for the returned
+		// value and for the OS error classes that read belongs to.
 		var q struct {
 			Ref  string `json:"ref"`
 			Path string `json:"path"`
@@ -503,7 +503,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"ok": true}, nil
 	case "native-capture", "native-verify-binding", "native-verify-source", "native-reconcile":
-		// The native lifecycle operations (G2b). Business refusals are typed
+		// The native lifecycle operations. Business refusals are typed
 		// outcomes inside the value (same convention as verify-files); a
 		// malformed payload or an unexpected error is a bridge failure. The
 		// binding, source and process arguments are raw JSON: their shape is
@@ -632,7 +632,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return map[string]any{"accepted": true, "result": result}, nil
 	case "evaluate-route":
-		// The repair-or-seal judgement moves here (G3a). Python selects the full
+		// The repair-or-seal judgement lives here. Python selects the full
 		// records by the returned ids/gate names and assembles the feedback
 		// artifact, so the blocking condition exists once, in NeedsRepair.
 		var q evaluateRouteInput
@@ -641,7 +641,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return evaluateRoute(q), nil
 	case "worker-outcome":
-		// The invoke_worker branch selection moves here (G3a); the loop
+		// The invoke_worker branch selection lives here; the loop
 		// mechanics (continuation, asks, attempt counters) stay in Python.
 		var q workerOutcomeInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -649,7 +649,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return workerOutcome(q), nil
 	case "check-retention":
-		// The incremental-check eligibility moves here (G3a) as two phases over
+		// The incremental-check eligibility lives here as two phases over
 		// one operation: without evidence_valid it judges eligibility, with it
 		// the retain/fail/rerun verdict. Python still owns verify_evidence so
 		// the original exception can be re-raised on the first attempt.
@@ -659,7 +659,7 @@ func dispatch(e envelope) (any, error) {
 		}
 		return checkRetention(q), nil
 	case "repair-allowance":
-		// The repair-limit boundary moves here (G3a). The increment after the
+		// The repair-limit boundary lives here. The increment after the
 		// user continues is a flow decision and stays in Python.
 		var q repairAllowanceInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -667,9 +667,9 @@ func dispatch(e envelope) (any, error) {
 		}
 		return repairAllowance(q), nil
 	case "candidate-admission":
-		// The candidate admission refusals move here (G3a). A refusal is a
-		// typed business outcome inside the value (C4 pattern) so Python's
-		// refuse() raises the same HarnessError the node raised.
+		// The candidate admission refusals live here. A refusal is a
+		// typed business outcome inside the value so Python's
+		// refuse() raises the HarnessError family.
 		var q candidateAdmissionInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
@@ -678,7 +678,7 @@ func dispatch(e envelope) (any, error) {
 	case "archive-inventory", "archive-destination", "archive-settled", "archive-index-plan",
 		"archive-verify", "archive-stale", "archive-projection",
 		"prune-admission", "prune-bind", "prune-marker", "prune-plan":
-		// The terminal-retention judgements move here (G3b). Locking, the
+		// The terminal-retention judgements live here. Locking, the
 		// SQLite backup, zip reading and writing, hashing, process probing and
 		// the deletions stay in Python; these ops own admission, ordering and
 		// the removal plan. Inventories and proofs cross in chunked batches or

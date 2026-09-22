@@ -73,8 +73,19 @@ func AcquirePath(path, description string) (func(), error) {
 				continue
 			}
 		}
-		return nil, fmt.Errorf("%s lock held: %s", description, path)
+		return nil, &LockHeldError{Operation: description, Path: path}
 	}
+}
+
+// LockHeldError 表示路径锁被存活持有者占用（不可抢占）。Operation 是
+// 申请方的用途描述（如 install/uninstall、registry、run start）。
+type LockHeldError struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+}
+
+func (e *LockHeldError) Error() string {
+	return fmt.Sprintf("%s lock is held: %s", e.Operation, e.Path)
 }
 
 func heartbeat(path, owner string, stop <-chan struct{}) {

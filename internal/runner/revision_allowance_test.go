@@ -1,6 +1,6 @@
 package runner
 
-// K4 rework acceptance tests, F1/F3/F6 — 返修额度控制链 over the unified
+// Revision-allowance acceptance tests — 返修额度控制链 over the unified
 // request model: Store.RequestRevision builds "allowance reached →
 // durable wait → exact answer → only the granted revision executes" over
 // ReviseTask, with every count derived from user_requests rows and the
@@ -43,15 +43,15 @@ func countRequests(t *testing.T, st *Store, taskID, state string) int {
 	return n
 }
 
-// §13.2 K4 rework, F1/F6 — the full allowance control chain on 0-based
-// rounds: initial=1 direct-approves round 0 and asks on round 1; the ask
+// The full allowance control chain on 0-based rounds: initial=1
+// direct-approves round 0 and asks on round 1; the ask
 // persists across Close/Open and is listed; a refusing answer refuses
 // the request with the task untouched (generation, zero invalidation,
 // original specs still run — and no ErrDecisionRefused: declining a
 // revision is not the run refusing); the allowing answer grants, the
 // completion call executes exactly the granted revision; round 2 asks
 // again against allowance 2 (initial 1 + one grant).
-func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
+func TestRequestRevisionAllowanceControlChain(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := Open(dir)
@@ -62,7 +62,7 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 		{TaskID: "a", Name: "task-a", Input: []byte("input-a")},
 		{TaskID: "d", Name: "task-d", DependsOn: []string{"a"}, Input: []byte("input-d")},
 	}
-	if err := st.CreateRun(ctx, "k4-allowance", specs); err != nil {
+	if err := st.CreateRun(ctx, "revision-allowance", specs); err != nil {
 		t.Fatal(err)
 	}
 	failA := true
@@ -195,7 +195,7 @@ func TestK4RequestRevisionAllowanceControlChain(t *testing.T) {
 	if n := countRequests(t, st, "a", reqGranted); n != 1 {
 		t.Fatalf("granted requests after the allow = %d, want 1", n)
 	}
-	// The grant executes nothing by itself (input bytes are §7-external);
+	// The grant executes nothing by itself (input bytes stay external);
 	// OpenRequests exposes the recoverable identity and the completion
 	// call supplies the input and lands both in one transaction.
 	open, err := st.OpenRequests(ctx)
@@ -248,11 +248,11 @@ func containsChoice(options []string, choice string) bool {
 // request is born executed with no answer and no question, the revision
 // lands bound to the creation-time generation, and a larger initial
 // (增额) reaches the same path.
-func TestK4RequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
+func TestRequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
-	st := mustCreate(t, dir, "k4-direct", specs)
+	st := mustCreate(t, dir, "revision-direct", specs)
 	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, specs); err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +310,11 @@ func TestK4RequestRevisionDirectApprovalBelowAllowance(t *testing.T) {
 // direct-approves under initial=1; only the second round asks.  An ask
 // is answerable even on an all-finished run: the open question is
 // unfinished business, not a terminal run.
-func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
+func TestFailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
-	st := mustCreate(t, dir, "k4-noround", specs)
+	st := mustCreate(t, dir, "revision-noround", specs)
 	fail := true
 	calls := 0
 	r := NewRunner(st, func(_ context.Context, inv Invocation) (Result, error) {
@@ -389,7 +389,7 @@ func TestK4FailureRetriesAndQueriesConsumeNoRepairRounds(t *testing.T) {
 // F3 regression — 修订后恰一个当前问题；当前任务完成后待答列表为空:
 // an invalidated old-generation question is history an answer can no
 // longer reach, so it must not be presented as askable.
-func TestK4PendingDecisionsListOnlyCurrentGeneration(t *testing.T) {
+func TestPendingDecisionsListOnlyCurrentGeneration(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -404,7 +404,7 @@ func TestK4PendingDecisionsListOnlyCurrentGeneration(t *testing.T) {
 		},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 	}
-	st := mustCreate(t, dir, "k4-f3list", specs)
+	st := mustCreate(t, dir, "revision-generation-list", specs)
 	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, specs); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("gated run err = %v, want ErrWaitingDecision", err)
 	}
@@ -456,7 +456,7 @@ func TestK4PendingDecisionsListOnlyCurrentGeneration(t *testing.T) {
 // its invalidated generation-1 predecessor is not, a live revision
 // request is listed alongside it, and a REFUSED request neither waits
 // nor refuses the run.
-func TestK4PendingDecisionsShowRevisionRequestAlongsideCurrentGate(t *testing.T) {
+func TestPendingDecisionsShowRevisionRequestAlongsideCurrentGate(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -471,7 +471,7 @@ func TestK4PendingDecisionsShowRevisionRequestAlongsideCurrentGate(t *testing.T)
 		},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 	}
-	st := mustCreate(t, dir, "k4-colist", specs)
+	st := mustCreate(t, dir, "revision-colist", specs)
 	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, specs); !errors.Is(err, ErrWaitingDecision) {
 		t.Fatalf("gated run err = %v, want ErrWaitingDecision", err)
 	}

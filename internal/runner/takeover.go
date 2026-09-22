@@ -1,11 +1,11 @@
 package runner
 
-// K4 rework — the narrow takeover seam (plan §8.2/§8.3): when a new owner
-// opens a run whose previous owner died with a call in flight, whether
-// that call is dead is a domain fact the kernel cannot derive from the
-// durable rows alone.  Runner.Takeover is the single consultation point;
-// nil — the default — applies K1's supersede per call, keeping every
-// invocation that carries a durable constraint (see recoverPending).
+// The narrow takeover seam: when a new owner opens a run whose previous
+// owner died with a call in flight, whether that call is dead is a
+// domain fact the kernel cannot derive from the durable rows alone.
+// Runner.Takeover is the single consultation point; nil — the default
+// — supersedes per call, keeping every invocation that carries a
+// durable constraint (see recoverPending).
 //
 // The consultation's facts are split from their authorization: an
 // Observe verdict is PERSISTED (call_observations, store.go) so the
@@ -78,10 +78,10 @@ type TakeoverOutcome struct {
 	Observe bool
 }
 
-// Takeover consults the fate of one pending invocation.  K5 implements it
-// over the accepted supervisor/adapter components; consultations run
-// outside any transaction (they may do I/O), one per pending invocation,
-// in deterministic (task, generation) order.
+// Takeover consults the fate of one pending invocation.  Consultations
+// run outside any transaction (they may do I/O), one per pending
+// invocation, in deterministic (task, generation) order; the composition
+// supplies the supervisor facts the verdict reads.
 type Takeover func(ctx context.Context, inv Invocation) (TakeoverOutcome, error)
 
 // recordObservation persists one Observe fact idempotently: the row is
@@ -304,7 +304,7 @@ func (r *Runner) createRestartRequest(ctx context.Context, inv Invocation) error
 
 // voidInvocation supersedes one dead session's pending invocation and
 // frees its task for re-registration, in one short transaction.  The row
-// is kept for the late-result path (§4.2).
+// is kept for the late-result path.
 func (r *Runner) voidInvocation(ctx context.Context, inv Invocation) error {
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -252,8 +252,9 @@ func runQuickE2ECanary(packageRoot string, catalog PromptCatalog) error {
 }
 
 // runQuickE2ECanaryAt accepts an installed target's exact admission binding.
-// Source-tree canaries leave workflowRoot empty and retain the legacy phase-0
-// path; installed-binary evidence must supply all three registry coordinates.
+// Source-tree canaries leave workflowRoot empty and take the default
+// admission path; installed-binary evidence must supply all three registry
+// coordinates.
 func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot, registry, recordID string) error {
 	root := strings.TrimSpace(workflowRoot)
 	removeRoot := false

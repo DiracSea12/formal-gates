@@ -1,7 +1,7 @@
 package runner
 
-// K4 rework acceptance tests, F2/F4/F5 — 调用接回 over real subprocesses
-// and real durable state: an owner child really exits (os.Exit) right
+// Takeover acceptance tests — 调用接回 over real subprocesses and real
+// durable state: an owner child really exits (os.Exit) right
 // after its executor spawns a supervisor subprocess that owns the
 // registered invocation — slowly writing its result, still sleeping, or
 // dying with partial progress only.  The parent reopens the same
@@ -10,7 +10,7 @@ package runner
 // (ErrCallObserved, the fact PERSISTED so a later nil-consult owner
 // gets ErrTakeoverRequired instead of a blind retry), while a dead
 // session is a FACT that asks through a restart request — only an
-// allowing answer replaces the execution identity (§8.2/§8.3).
+// allowing answer replaces the execution identity.
 // TestMain re-executes this binary for the children (crash_test.go's
 // appended branches); the takeover scenarios stay separate from revision
 // — no generation ever moves.
@@ -29,84 +29,84 @@ import (
 )
 
 const (
-	envK4TakeoverScenario = "RUNNER_K4_TAKEOVER"
-	envK4SupervisorMode   = "RUNNER_K4_SUPERVISOR"
-	envK4InvocationID     = "RUNNER_K4_INVOCATION"
-	k4TakeoverRunID       = "k4-takeover-f2"
+	envTakeoverScenario = "RUNNER_TAKEOVER"
+	envSupervisorMode   = "RUNNER_SUPERVISOR"
+	envInvocationID     = "RUNNER_INVOCATION"
+	takeoverRunID       = "takeover-f2"
 )
 
 // Takeover-child exit codes: 98 is the owner's on-purpose exit right
 // after spawning the supervisor; 99+ mark wiring bugs.  Codes stay clear
-// of the 70–97 range K1–K4 use.
+// of the 70–97 range the other re-exec children use.
 const (
-	exitK4TakeoverCrash  = 98
-	exitK4TakeoverWiring = 99
+	exitTakeoverCrash  = 98
+	exitTakeoverWiring = 99
 )
 
-// k4TakeoverOwner creates the single-task run in RUNNER_K4_DIR and drives
+// takeoverOwner creates the single-task run in RUNNER_REVISION_DIR and drives
 // it until the executor — instead of executing — hands the registered
 // invocation to a real supervisor subprocess and the owner really exits:
 // the durable state is one pending generation-1 intent and a running
 // task, with the supervisor working on outside this process.
-func k4TakeoverOwner(scenario string) {
-	dir := os.Getenv(envK4Dir)
+func takeoverOwner(scenario string) {
+	dir := os.Getenv(envRevisionDir)
 	if dir == "" {
-		fmt.Fprintln(os.Stderr, "owner: missing", envK4Dir)
-		os.Exit(exitK4TakeoverWiring)
+		fmt.Fprintln(os.Stderr, "owner: missing", envRevisionDir)
+		os.Exit(exitTakeoverWiring)
 	}
 	st, err := Open(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "owner open:", err)
-		os.Exit(exitK4TakeoverWiring)
+		os.Exit(exitTakeoverWiring)
 	}
 	specs := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
-	if err := st.CreateRun(context.Background(), k4TakeoverRunID, specs); err != nil {
+	if err := st.CreateRun(context.Background(), takeoverRunID, specs); err != nil {
 		fmt.Fprintln(os.Stderr, "owner create:", err)
-		os.Exit(exitK4TakeoverWiring)
+		os.Exit(exitTakeoverWiring)
 	}
 	r := NewRunner(st, func(_ context.Context, inv Invocation) (Result, error) {
 		cmd := exec.Command(os.Args[0])
 		cmd.Env = append(os.Environ(),
-			envK4SupervisorMode+"="+scenario,
-			envK4Dir+"="+dir,
-			envK4InvocationID+"="+inv.InvocationID)
+			envSupervisorMode+"="+scenario,
+			envRevisionDir+"="+dir,
+			envInvocationID+"="+inv.InvocationID)
 		if err := cmd.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "owner spawn:", err)
-			os.Exit(exitK4TakeoverWiring)
+			os.Exit(exitTakeoverWiring)
 		}
 		// The supervisor now owns the call; this owner is deliberately dead.
-		os.Exit(exitK4TakeoverCrash)
+		os.Exit(exitTakeoverCrash)
 		return Result{}, nil // unreachable
 	})
 	if err := r.Run(context.Background(), specs); err != nil {
 		fmt.Fprintln(os.Stderr, "owner run:", err)
-		os.Exit(exitK4TakeoverWiring)
+		os.Exit(exitTakeoverWiring)
 	}
 	fmt.Fprintln(os.Stderr, "owner: run completed without exiting at the handoff")
-	os.Exit(exitK4TakeoverWiring)
+	os.Exit(exitTakeoverWiring)
 }
 
-// k4Supervisor is the real out-of-process worker for one invocation id:
+// takeoverSupervisor is the real out-of-process worker for one invocation id:
 // write-result slowly writes the result artifact and the marker;
 // slow-result sleeps long enough that the parent's first advance observes
 // the call still in flight; die-partial writes a session-invalid marker
 // and partial progress, then dies without any result.
-func k4Supervisor(mode string) {
-	dir := os.Getenv(envK4Dir)
-	inv := os.Getenv(envK4InvocationID)
+func takeoverSupervisor(mode string) {
+	dir := os.Getenv(envRevisionDir)
+	inv := os.Getenv(envInvocationID)
 	if dir == "" || inv == "" {
 		fmt.Fprintln(os.Stderr, "supervisor: missing env")
-		os.Exit(exitK4TakeoverWiring)
+		os.Exit(exitTakeoverWiring)
 	}
 	writeResult := func() {
 		if err := os.WriteFile(filepath.Join(dir, "work-"+inv+".result"),
 			[]byte(`"supervised-a"`), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "supervisor write:", err)
-			os.Exit(exitK4TakeoverWiring)
+			os.Exit(exitTakeoverWiring)
 		}
 		if _, err := markerExecutor(dir)(context.Background(), Invocation{TaskID: "a"}); err != nil {
 			fmt.Fprintln(os.Stderr, "supervisor marker:", err)
-			os.Exit(exitK4TakeoverWiring)
+			os.Exit(exitTakeoverWiring)
 		}
 	}
 	switch mode {
@@ -119,15 +119,15 @@ func k4Supervisor(mode string) {
 	case "die-partial":
 		if err := os.WriteFile(filepath.Join(dir, "dead-"+inv), []byte("session-invalid"), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "supervisor write:", err)
-			os.Exit(exitK4TakeoverWiring)
+			os.Exit(exitTakeoverWiring)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "partial-"+inv), []byte("half-done"), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "supervisor write:", err)
-			os.Exit(exitK4TakeoverWiring)
+			os.Exit(exitTakeoverWiring)
 		}
 	default:
 		fmt.Fprintln(os.Stderr, "supervisor: unknown mode:", mode)
-		os.Exit(exitK4TakeoverWiring)
+		os.Exit(exitTakeoverWiring)
 	}
 	os.Exit(0)
 }
@@ -137,11 +137,11 @@ func k4Supervisor(mode string) {
 func runTakeoverOwner(t *testing.T, dir, scenario string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), envK4TakeoverScenario+"="+scenario, envK4Dir+"="+dir)
+	cmd.Env = append(os.Environ(), envTakeoverScenario+"="+scenario, envRevisionDir+"="+dir)
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitK4TakeoverCrash {
-		t.Fatalf("owner child exit = %v (want code %d); output:\n%s", err, exitK4TakeoverCrash, out)
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitTakeoverCrash {
+		t.Fatalf("owner child exit = %v (want code %d); output:\n%s", err, exitTakeoverCrash, out)
 	}
 }
 
@@ -194,7 +194,7 @@ func pendingInvocationID(t *testing.T, st *Store, taskID string) string {
 	return id
 }
 
-// fileTakeover mirrors the K5 supervisor judgement over the work
+// fileTakeover mirrors the supervisor judgement over the work
 // directory: a result artifact adopts the original call, a
 // session-invalid marker means dead, anything else is still in flight.
 func fileTakeover(dir string) Takeover {
@@ -221,7 +221,7 @@ func takeoverSpecs() []TaskSpec {
 
 // restartQuestion is the parent's Restart declaration for the
 // dead-session asks: restart-session allows the replacement, abort
-// refuses it (§8.2/§8.3).
+// refuses it.
 func restartQuestion() *Confirmation {
 	return &Confirmation{
 		Options:  []string{"restart-session", "abort"},
@@ -235,7 +235,7 @@ func restartQuestion() *Confirmation {
 // reopened parent adopts the original invocation — same id, same stored
 // result, marker exactly once, zero re-execution, task finished — and no
 // generation moves (plain takeover and revision stay separate).
-func TestK4TakeoverAdoptsExistingResultWithoutReExecution(t *testing.T) {
+func TestTakeoverAdoptsExistingResultWithoutReExecution(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	runTakeoverOwner(t, dir, "write-result")
@@ -246,8 +246,8 @@ func TestK4TakeoverAdoptsExistingResultWithoutReExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if st.runID != k4TakeoverRunID {
-		t.Fatalf("reopened run id = %q, want %q", st.runID, k4TakeoverRunID)
+	if st.runID != takeoverRunID {
+		t.Fatalf("reopened run id = %q, want %q", st.runID, takeoverRunID)
 	}
 	orig := pendingInvocationID(t, st, "a")
 	parentExecs := 0
@@ -289,7 +289,7 @@ func TestK4TakeoverAdoptsExistingResultWithoutReExecution(t *testing.T) {
 // advances: the pending invocation survives, no second executor starts
 // and settle reports ErrCallObserved; once the supervisor finishes, the
 // next advance adopts the original result.
-func TestK4TakeoverObservesOriginalCallStillInFlight(t *testing.T) {
+func TestTakeoverObservesOriginalCallStillInFlight(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	runTakeoverOwner(t, dir, "slow-result")
@@ -368,11 +368,11 @@ func TestK4TakeoverObservesOriginalCallStillInFlight(t *testing.T) {
 // replacement: recovery creates a pending restart request and waits.
 // Answering restart-session voids the dead call and re-runs under a NEW
 // invocation id — the retry carries the newest native identity and picks
-// the partial work up (§8.3); answering abort voids it, re-runs nothing
+// the partial work up; answering abort voids it, re-runs nothing
 // and the run reports ErrCallAborted, durably.
-func TestK4TakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
+func TestTakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
 	// partialExecutor picks the dead session's partial work up — the
-	// §8.3 carry the replacement must be able to perform.
+	// carry the replacement must be able to perform.
 	partialExecutor := func(dir string, execs *int) Executor {
 		return func(ctx context.Context, inv Invocation) (Result, error) {
 			*execs++
@@ -530,15 +530,14 @@ func TestK4TakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
 	})
 }
 
-// The nil-Takeover recovery, reversed out of its unsafe half (the K4
-// re-review's named test): with NO persisted observation the K1 blind
+// The nil-Takeover recovery: with NO persisted observation the blind
 // supersede is exactly what the accepted baselines do — the pending
 // invocation is superseded and the task re-executed; with a persisted
 // observation (a previous owner vouched for the call) a nil-consult
 // owner must supersede nothing, re-run nothing, and get
-// ErrTakeoverRequired (F4).
-func TestK4NilTakeoverSupersedesOnlyUnobservedCalls(t *testing.T) {
-	t.Run("nil consult, no observation: K1 blind supersede as before", func(t *testing.T) {
+// ErrTakeoverRequired.
+func TestNilTakeoverSupersedesOnlyUnobservedCalls(t *testing.T) {
+	t.Run("nil consult, no observation: blind supersede as before", func(t *testing.T) {
 		ctx := context.Background()
 		dir := t.TempDir()
 		runTakeoverOwner(t, dir, "slow-result") // never observed: the nil owner never consults
@@ -567,7 +566,7 @@ func TestK4NilTakeoverSupersedesOnlyUnobservedCalls(t *testing.T) {
 		ctx := context.Background()
 		dir := t.TempDir()
 		specs := []TaskSpec{{TaskID: "a", Name: "task-a", Input: []byte("input-a")}}
-		st := mustCreate(t, dir, "k4-nilobs", specs)
+		st := mustCreate(t, dir, "revision-nilobs", specs)
 		calls := 0
 		execute := func(context.Context, Invocation) (Result, error) {
 			calls++

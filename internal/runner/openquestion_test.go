@@ -3,7 +3,8 @@ package runner
 // OpenQuestion tests — the mid-flight question seam's own contract.  The
 // surrounding rules (Answer's replay/conflict/stale handling, the gate read
 // of dispatchableTasks, the revision invalidation) are already covered by the
-// K2/K4 suites; these cases pin only what the new call itself adds.
+// gated-decision and revision suites; these cases pin only what the call
+// itself adds.
 
 import (
 	"context"

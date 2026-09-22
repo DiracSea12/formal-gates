@@ -18,14 +18,14 @@ import (
 	"formal-gates/internal/validate"
 )
 
-func TestCLIWorkflowFutureRejectsSubmitAlias(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "future.json")
+func TestCLIWorkflowCandidateRejectsSubmitAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "candidate.json")
 	var stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "future", "submit", "--path", path}, IO{Stderr: &stderr}); code == 0 {
-		t.Fatalf("workflow future submit unexpectedly succeeded: stderr=%q", stderr.String())
+	if code := Run("formal-gates", []string{"workflow", "candidate", "submit", "--path", path}, IO{Stderr: &stderr}); code == 0 {
+		t.Fatalf("workflow candidate submit unexpectedly succeeded: stderr=%q", stderr.String())
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("rejected submit alias created future state: %v", err)
+		t.Fatalf("rejected submit alias created candidate state: %v", err)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestCLIWorkflowDiagnoseReportsCandidateEngineIdentity(t *testing.T) {
 	}
 }
 
-func TestCLIWorkflowFutureGenerateEmitsLegacyEnvelope(t *testing.T) {
+func TestCLIWorkflowCandidateGenerateEmitsFourFieldEnvelope(t *testing.T) {
 	root := t.TempDir()
 	definitionBytes, err := os.ReadFile(filepath.Join("..", "..", "definitions", "workflow.json"))
 	if err != nil {
@@ -82,13 +82,13 @@ func TestCLIWorkflowFutureGenerateEmitsLegacyEnvelope(t *testing.T) {
 	}
 	mustWriteCLI(t, filepath.Join(root, "definitions", "workflow.json"), string(definitionBytes))
 	var envelope validate.VersionEnvelope
-	encoded := []byte(runCLI(t, "workflow", "future", "generate", "--root", root))
+	encoded := []byte(runCLI(t, "workflow", "candidate", "generate", "--root", root))
 	if err := json.Unmarshal(encoded, &envelope); err != nil {
 		t.Fatal(err)
 	}
 	if envelope.Writer != "" || envelope.StateSchemaVersion == "" || envelope.WorkflowDefinitionVersion == "" ||
 		envelope.DefinitionSource == "" || envelope.DefinitionDigest == "" || envelope.PackageDigest != "" {
-		t.Fatalf("future envelope is incomplete: %+v", envelope)
+		t.Fatalf("candidate envelope is incomplete: %+v", envelope)
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &fields); err != nil {
@@ -96,15 +96,15 @@ func TestCLIWorkflowFutureGenerateEmitsLegacyEnvelope(t *testing.T) {
 	}
 	for _, key := range []string{"stateSchemaVersion", "workflowDefinitionVersion", "definitionSource", "definitionDigest"} {
 		if _, ok := fields[key]; !ok {
-			t.Fatalf("legacy future envelope omitted %s: %s", key, encoded)
+			t.Fatalf("candidate envelope omitted %s: %s", key, encoded)
 		}
 	}
 	if len(fields) != 4 {
-		t.Fatalf("legacy future envelope has unexpected fields: %v", fields)
+		t.Fatalf("candidate envelope has unexpected fields: %v", fields)
 	}
 }
 
-func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
+func TestCLIWorkflowCandidateDigestSourceAndWriteBarrier(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate CLI test source")
@@ -128,7 +128,7 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 		t.Fatalf("diagnose supported digest %q differs from install/package receipt %q", diagnose.Supported.PackageDigest, receipt.Digest)
 	}
 	envelopePath := filepath.Join(fixture, "envelope.json")
-	runCLI(t, "workflow", "future", "generate", "--root", root, "--output", envelopePath)
+	runCLI(t, "workflow", "candidate", "generate", "--root", root, "--output", envelopePath)
 	envelopeBytes, err := os.ReadFile(envelopePath)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 		mustWriteCLI(t, candidatePath, string(encoded)+"\n")
 		target := filepath.Join(fixture, fmt.Sprintf("target-%d.json", index))
 		var stderr bytes.Buffer
-		if code := Run("formal-gates", []string{"workflow", "future", "write", "--root", root, "--path", target, "--envelope", candidatePath}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), validate.UnsupportedRunVersionCode) {
+		if code := Run("formal-gates", []string{"workflow", "candidate", "write", "--root", root, "--path", target, "--envelope", candidatePath}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), validate.UnsupportedRunVersionCode) {
 			t.Fatalf("tampered write %d was accepted: code=%d err=%s", index, code, stderr.String())
 		}
 		if info, statErr := os.Stat(target); statErr == nil && info.Size() != 0 {
@@ -164,7 +164,7 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 		}
 	}
 	control := filepath.Join(fixture, "control.json")
-	runCLI(t, "workflow", "future", "write", "--root", root, "--path", control, "--envelope", envelopePath)
+	runCLI(t, "workflow", "candidate", "write", "--root", root, "--path", control, "--envelope", envelopePath)
 	if info, err := os.Stat(control); err != nil || info.Size() == 0 {
 		t.Fatalf("control write did not persist a target: info=%v err=%v", info, err)
 	}
@@ -177,7 +177,7 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(stateFields) != 4 {
-		t.Fatalf("future state has non-legacy fields: %v", stateFields)
+		t.Fatalf("candidate state has unexpected fields: %v", stateFields)
 	}
 }
 
@@ -872,7 +872,7 @@ func TestCLIStateOnlyWorkflowCommandsRejectPackageRoot(t *testing.T) {
 	}
 }
 
-// Fix 4：show 对已终止/不存在的 run 给友好提示（而非裸 open state.json）。
+// show 对已终止/不存在的 run 给友好提示（而非裸 open state.json）。
 func TestCLIShowMissingRunFriendly(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "show", "--root", t.TempDir(), "--run-id", "never-existed"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "was not found or is already terminated") {
@@ -900,7 +900,7 @@ func TestCLIShowFallsBackToTerminalRunSummary(t *testing.T) {
 	}
 }
 
-// Fix 5：workflow 无子命令紧跟 flags 时提示子命令必填。
+// workflow 无子命令紧跟 flags 时提示子命令必填。
 func TestCLIWorkflowFlagsWithoutSubcommandHintsRequired(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "--root", "."}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "workflow subcommand is required") {
@@ -908,7 +908,7 @@ func TestCLIWorkflowFlagsWithoutSubcommandHintsRequired(t *testing.T) {
 	}
 }
 
-// Fix 7a：authorize-repair --qa-scope blackbox=（空决策）给明确错误。
+// authorize-repair --qa-scope blackbox=（空决策）给明确错误。
 func TestCLIAuthorizeRepairRejectsEmptyScopeDecision(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "authorize-repair", "--qa-scope", "blackbox="}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a decision value") {
@@ -916,7 +916,7 @@ func TestCLIAuthorizeRepairRejectsEmptyScopeDecision(t *testing.T) {
 	}
 }
 
-// Fix 8：缺 run-id 时友好提示（不裸报 state.json.lock）。
+// 缺 run-id 时友好提示（不裸报 state.json.lock）。
 func TestCLIShowMissingRunIDFriendly(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "show", "--root", t.TempDir()}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "run id is required") {
@@ -924,7 +924,7 @@ func TestCLIShowMissingRunIDFriendly(t *testing.T) {
 	}
 }
 
-// Fix 10：gate run 位置参数在 flags 前时提示 flag 前置。
+// gate run 位置参数在 flags 前时提示 flag 前置。
 func TestCLIGateRunFlagsAfterIDsHintsFlagFirst(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"gate", "run", "quality", "--scope", "s"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "flags must precede") {
@@ -932,7 +932,7 @@ func TestCLIGateRunFlagsAfterIDsHintsFlagFirst(t *testing.T) {
 	}
 }
 
-// Fix 12：hook decide --provider 非 codex 等非法值报错。
+// hook decide --provider 非 codex 等非法值报错。
 func TestCLIHookDecideRejectsInvalidProvider(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"hook", "decide", "--provider", "banana"}, IO{Stdin: strings.NewReader(`{"command":"x"}`), Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "unsupported hook provider") {
@@ -940,7 +940,7 @@ func TestCLIHookDecideRejectsInvalidProvider(t *testing.T) {
 	}
 }
 
-// Fix 13：canary portable --format 非 text/json 报错。
+// canary portable --format 非 text/json 报错。
 func TestCLICanaryPortableRejectsInvalidFormat(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"canary", "portable", "--format", "xml", "--root", t.TempDir()}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "must be text or json") {
@@ -948,7 +948,7 @@ func TestCLICanaryPortableRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
-// Fix 14：canary codex-hook-probe 成功时输出载荷文件路径/字节数。
+// canary codex-hook-probe 成功时输出载荷文件路径/字节数。
 func TestCLICodexHookProbePrintsPayloadInfo(t *testing.T) {
 	var stdout bytes.Buffer
 	code := Run("formal-gates", []string{"canary", "codex-hook-probe", "--payload-dir", t.TempDir()}, IO{Stdin: strings.NewReader(`{"event":"PreToolUse","tool_name":"x"}`), Stdout: &stdout})
@@ -960,7 +960,7 @@ func TestCLICodexHookProbePrintsPayloadInfo(t *testing.T) {
 	}
 }
 
-// Fix 18：hook decide 空 stdin 给友好错误。
+// hook decide 空 stdin 给友好错误。
 func TestCLIHookDecideEmptyStdinFriendly(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"hook", "decide"}, IO{Stdin: strings.NewReader(""), Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a JSON decision payload") {
@@ -968,7 +968,7 @@ func TestCLIHookDecideEmptyStdinFriendly(t *testing.T) {
 	}
 }
 
-// Fix 18：--version 给出可用提示而非 unknown command。
+// --version 给出可用提示而非 unknown command。
 func TestCLIVersionFlagPrintsVersionHint(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := Run("formal-gates", []string{"--version"}, IO{Stdout: &stdout}); code != 0 || !strings.Contains(stdout.String(), "development build") {

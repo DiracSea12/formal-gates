@@ -1,7 +1,7 @@
 package harness
 
-// The takeover consultation (the kernel's narrow recovery seam, wired the
-// K5 way): when an owner opens a run a previous owner left with a call in
+// The takeover consultation (the kernel's narrow recovery seam): when
+// an owner opens a run a previous owner left with a call in
 // flight, the call's fate is judged from its job directory's verifiable
 // facts, in this order:
 //
@@ -24,10 +24,10 @@ package harness
 //     as the live executor parks it — the invocation stays under
 //     observation and the transitions between runs surface its question
 //     or re-arm its continuation;
-//  4. a turn that ended without an acceptable business answer (R9) parks
+//  4. a turn that ended without an acceptable business answer parks
 //     the runtime disposition bound to the failed invocation and asks
-//     through it — retry / restart-session / abort, placed by the
-//     mid-flight seam or the route — never a disguised session failure;
+//     its linked question — retry / restart-session / abort — never a
+//     disguised session failure;
 //  5. a supervisor still alive under its recorded identity is observed;
 //  6. anything else — no receipt, nothing alive, no session refusal — is
 //     the zero outcome too: whether the call ever executed cannot be
@@ -90,7 +90,7 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 		return runner.TakeoverOutcome{Observe: true}, nil
 	}
 	if c.contractRejected(inv, turn) {
-		// R9: a rejected answer is a runtime question of its own, never a
+		// A rejected answer is a runtime question of its own, never a
 		// disguised session failure. The park row is bound to the failed
 		// invocation's own identity, so a different failure asks afresh
 		// and the same failure replayed reuses the same answer.
@@ -110,17 +110,13 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 // openRuntimeQuestion parks the runtime disposition for one
 // contract-rejected turn and asks its question. The park lands through
 // the same park() every live park uses, stamped with the failed
-// invocation's own identity — generation and turn — so the disposition
-// id the question body carries is unique to THIS failure: replaying the
-// same failure reuses the answer, a different failure asks afresh. The
-// ask itself goes through the kernel's mid-flight seam (it takes no
-// advance lock, so the same run's settle reports the question) whenever
-// the ask task's current generation holds no answered row; the body is
-// the same spelling the route's placeQuestion derives, so askRecorded
-// recognizes either origin. When the seam refuses (an answered row
-// stands — a LATER failure of the same stage), the park row alone
-// returns and the route's placeQuestion revision asks afresh under a
-// fresh decision id.
+// invocation's own identity — generation and turn. The ask goes through
+// the kernel's one disposition-bound Ask: it creates the pending
+// question on the stage's ask task and links it to the standing row in
+// the same transaction, so the consultation's ask and a later route
+// pass re-deriving it are the same ask (the idempotent link returns the
+// same decision id). An ask that fails to land still leaves the parked
+// row standing: the route's next pass performs it.
 func (c *Compose) openRuntimeQuestion(ctx context.Context, inv runner.Invocation, turnDir string) bool {
 	reason := "the recorded answer failed the worker contract"
 	if body, err := readJSONFile(filepath.Join(turnDir, "native-error.json")); err == nil {
@@ -137,11 +133,11 @@ func (c *Compose) openRuntimeQuestion(ctx context.Context, inv runner.Invocation
 	if d == nil {
 		return true // parked; the route asks from the row
 	}
-	body, err := canonicalBody(questionBody(d, dispositionIDOf(inv.TaskID, d)))
+	body, err := canonicalBody(questionBody(d))
 	if err != nil {
 		return true // parked; the route asks from the row
 	}
-	_, _ = c.store.OpenQuestion(ctx, askTask(inv.TaskID), &runner.Confirmation{
+	_, _ = c.store.Ask(ctx, inv.TaskID, askTask(inv.TaskID), &runner.Confirmation{
 		Options: questionOptions(d), Allow: questionAllow(d),
 		Revision: c.spec.revision, Body: body,
 	})
@@ -367,8 +363,8 @@ func turnWorkspace(turnDir string) string {
 }
 
 // contractRejected reports a turn that ended without an acceptable
-// business answer and without the host's session refusal — the R9
-// classification. The accepted validators decide, the same ones the live
+// business answer and without the host's session refusal. The accepted
+// validators decide, the same ones the live
 // executor parks a runtime disposition on: any turn whose receipt never
 // frames an answer, or whose framed answer the stage's worker contract
 // refuses, is a runtime question here too.

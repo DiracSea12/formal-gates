@@ -160,9 +160,9 @@ func currentProvider() (string, error) {
 	if isProjectDshInstall(path) {
 		return ProviderDefault, nil
 	}
-	// The stage-0 launcher is deliberately one fixed user-level path for every
-	// host.  Host-specific directory names are therefore no longer available as
-	// an identity signal.  Resolve the provider from the same shared registry
+	// The launcher is deliberately one fixed user-level path for every host.
+	// Host-specific directory names are therefore not available as an identity
+	// signal.  Resolve the provider from the same shared registry
 	// that admitted the target, scoped to the current project/root and launcher;
 	// this is read-only observation and does not create a second registry truth.
 	if provider, ambiguous := providerFromRegistryDetailed(path); ambiguous {

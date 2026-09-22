@@ -150,12 +150,12 @@ func rewindToV(t *testing.T, dir string, version int) {
 	}
 }
 
-// TestV5ControlStateMigration steps every accepted baseline — a fresh
+// TestControlStateMigration steps every accepted baseline — a fresh
 // file (0) and rewound v2, v3 and v4 files — forward to this build's v5:
 // the version stamps, and the delta's control-state pieces (the park
 // rows and the runs terminal columns) work on every stepped database,
 // with the v5 byte-carrier and session facts intact alongside them.
-func TestV5ControlStateMigration(t *testing.T) {
+func TestControlStateMigration(t *testing.T) {
 	ctx := context.Background()
 	for _, version := range []int{0, 2, 3, 4} {
 		name := map[int]string{0: "fresh", 2: "v2", 3: "v3", 4: "v4"}[version]

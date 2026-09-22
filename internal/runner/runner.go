@@ -12,18 +12,16 @@ import (
 )
 
 // Executor runs one invocation of a task and returns its business result
-// (execution state lives in the store, §4.2 — the two are separate).  A
+// (execution state lives in the store — the two are separate).  A
 // non-nil error means "no receipt": the invocation stays pending and the
 // task is left to the next Run, which supersedes it with a fresh
 // invocation instead of trusting a result that never arrived; sibling
-// tasks are not interrupted.  The §4.3 domain workflow interface
-// is deliberately not defined yet — K1 drives everything through this
-// function type; later units will shape the interface from real need.
+// tasks are not interrupted.
 type Executor func(ctx context.Context, inv Invocation) (Result, error)
 
 // TaskSpec declares one task at run creation: identity, display name,
 // dependency edges and the input bytes the executor will receive.  Inputs
-// are not persisted (§7: no payloads in the database); their sha256 is —
+// are not persisted (no payloads in the database); their sha256 is —
 // CreateRun binds it on the task row and every Run verifies its specs
 // against that binding before touching anything, so a restarted owner
 // cannot drift from the created run.
@@ -32,8 +30,8 @@ type TaskSpec struct {
 	Name      string
 	DependsOn []string
 	Input     []byte
-	// Confirm declares this task gated behind a persisted user decision
-	// (§6.1).  It is a creation-time declaration, persisted with the run:
+	// Confirm declares this task gated behind a persisted user decision.
+	// It is a creation-time declaration, persisted with the run:
 	// CreateRun validates it and materializes the pending decision row
 	// and its decision_created event in the run's creation transaction.
 	// Run never reads this field — the gate and its answer are consulted
@@ -46,7 +44,7 @@ type TaskSpec struct {
 
 // Invocation is a registered execution intent.  The tuple
 // (InvocationID, TaskID, Generation, InputDigest) is the call identity that
-// admission re-verifies before accepting any result (§4.2); Input rides
+// admission re-verifies before accepting any result; Input rides
 // along for the executor only.
 type Invocation struct {
 	InvocationID string
@@ -56,8 +54,8 @@ type Invocation struct {
 	Input        []byte
 }
 
-// Result is the admitted business outcome of one invocation.  K1 results
-// are small and live inline in the invocations row as JSON (§7); artifacts
+// Result is the admitted business outcome of one invocation.  Results
+// are small and live inline in the invocations row as JSON; artifacts
 // and large bodies never travel through here.
 type Result struct {
 	Payload json.RawMessage `json:"payload"`
@@ -74,9 +72,9 @@ var (
 	ErrInvocationMismatch = errors.New("runner: invocation identity check failed")
 )
 
-// Persisted task states (§4.2).  "Ready" is computed from dependencies and
-// never stored; waiting_interaction/canceled/unknown belong to later units
-// and are not invented here.
+// Persisted task states.  "Ready" is computed from dependencies and
+// never stored; waiting_interaction/canceled/unknown are not kernel
+// states.
 const (
 	taskWaitingDeps = "waiting_deps"
 	taskRunning     = "running"
@@ -91,12 +89,12 @@ const (
 	invSuperseded = "superseded"
 )
 
-// eventKindAdmitted is the only K1 event kind; it is appended in the same
-// transaction as the admission it describes.
+// eventKindAdmitted is appended in the same transaction as the admission
+// it describes.
 const eventKindAdmitted = "invocation_admitted"
 
 // crashHooks exists solely for crash_test.go: it lets the test process
-// os.Exit at the four §13.2 injection points (after intent registration,
+// os.Exit at the four crash-injection points (after intent registration,
 // after the result is obtained, before the admission commit, after it).
 // Every field is nil outside those tests.
 type crashHooks struct {
@@ -135,18 +133,18 @@ type Runner struct {
 	// while its original supervisor lives (a fact persisted to
 	// call_observations), or return the zero outcome — the dead-session
 	// fact — which asks for a replacement through a restart request
-	// instead of authorizing one.  nil — the default — applies K1's
-	// supersede per call: an invocation carrying a durable constraint
-	// (an ACTIVE restart request about it, or a persisted observation)
-	// is kept and the run reports the wait; every unconstrained intent
-	// is superseded and its task re-registered exactly as in K1.  K5
-	// wires the accepted supervisor/adapter components here; the kernel
-	// defines only this narrow seam (takeover.go).
+	// instead of authorizing one.  nil — the default — supersedes per
+	// call: an invocation carrying a durable constraint (an ACTIVE
+	// restart request about it, or a persisted observation) is kept and
+	// the run reports the wait; every unconstrained intent is
+	// superseded and its task re-registered.  The kernel defines only
+	// this narrow seam (takeover.go); the composition supplies the
+	// supervisor facts the verdict reads.
 	Takeover Takeover
 	// Restart is the question asked when a takeover consultation
 	// reports a dead or invalidated session (the zero TakeoverOutcome):
 	// typically Options ["restart-session","abort"] with Allow
-	// "restart-session" (§8.2/§8.3).  It is frozen on the pending
+	// "restart-session".  It is frozen on the pending
 	// restart request the fact creates; only an allowing answer lets
 	// recovery void the dead call and re-run under a fresh invocation
 	// id, an aborting one voids it and blocks the task for good.  nil
@@ -154,10 +152,10 @@ type Runner struct {
 	// ErrRestartUnavailable — the kernel never treats the fact alone as
 	// authorization to replace.
 	Restart *Confirmation
-	// Parallelism is the local bounded concurrency of §4.1: how many
-	// ready tasks may execute at once.  The zero value — anything ≤ 1 —
-	// runs one task at a time, the K1 behaviour; no distributed lease or
-	// leader election is involved.
+	// Parallelism is the local bounded concurrency: how many ready
+	// tasks may execute at once.  The zero value — anything ≤ 1 —
+	// runs one task at a time; no distributed lease or leader
+	// election is involved.
 	Parallelism int
 }
 
@@ -166,24 +164,25 @@ func NewRunner(store *Store, exec Executor) *Runner {
 	return &Runner{store: store, exec: exec}
 }
 
-// Run drives the single-owner loop (§4.1) until no work remains: compute
+// Run drives the single-owner loop until no work remains: compute
 // the ready set from persisted facts, dispatch up to Parallelism tasks at
-// once, and run each through the §4.1 path — register the intent in a
+// once, and run each through the same path — register the intent in a
 // short transaction, execute outside any transaction, then admit the
 // result in a short transaction that also appends the event.  Every
 // completion frees its slot and triggers a fresh ready-set computation,
-// so a join starts as soon as all its inputs are finished (§3.1) and one
+// so a join starts as soon as all its inputs are finished and one
 // admission never waits for its batch.  specs must cover the run's tasks
 // with the inputs the run was created under; a changed input or a
 // missing spec for ready work fails the run instead of executing blind.
-// Gates no longer interrupt the loop while independent work remains:
+// Gates do not interrupt the loop while independent work remains:
 // once everything dispatchable has drained, settle reports an executor
 // failure, a still-pending question (ErrWaitingDecision), a granted-
 // but-unexecuted revision (ErrRevisionGranted), a refused one
 // (ErrDecisionRefused), an aborted restart (ErrCallAborted) or — with a
 // takeover consult — a call still pending under observation
 // (ErrCallObserved) in that order — see dispatchableTasks for the gate's
-// read semantics.
+// read semantics.  The wait is reported only after no independent work is
+// left.
 func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	if r.store.runID == "" {
 		return errors.New("runner: no run created in this directory")
@@ -220,9 +219,9 @@ func (r *Runner) Run(ctx context.Context, specs []TaskSpec) error {
 	// on the worker goroutine, so between dispatch and that commit a
 	// refill query would hand the same task back — the map closes that
 	// window.  An admitted task is finished in the store and never comes
-	// back; the map's remaining job is in-flight and no-receipt work,
-	// which keep their K1 semantics: the unsettled intent is superseded
-	// by the NEXT Run, never retried inside this one.
+	// back; the map's remaining job is in-flight and no-receipt work:
+	// the unsettled intent is superseded by the NEXT Run, never retried
+	// inside this one.
 	attempted := map[string]bool{}
 	var execErrs []error
 	var fatal error
@@ -285,7 +284,7 @@ type workerResult struct {
 // facts — a still-pending invocation under a configured consult
 // (ErrCallObserved) or a persisted observation without one
 // (ErrTakeoverRequired), then the unfinished-but-nothing-ready
-// stagnation check, otherwise nil.  §4.1: the wait is reported only
+// stagnation check, otherwise nil.  The wait is reported only
 // after no independent work is left.
 func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 	if len(execErrs) > 0 {
@@ -337,12 +336,12 @@ func (r *Runner) settle(ctx context.Context, execErrs []error) error {
 // tasks, minus anything already dispatched this Run (attempted; see Run
 // for why the durable state alone cannot express that).  The rows
 // arrive already gate-open, so the remaining Go-side filter is spec
-// coverage.  A missing spec stays the K1 refusal, with one narrowed
-// surface: it now fires only for tasks that reached the dispatch window,
-// so a gate-blocked task — not dispatchable until its gate answers — no
-// longer triggers it.  Waiting or refused gates are skipped, not errors
+// coverage.  A missing spec is the refusal, with one narrow
+// surface: it fires only for tasks that reached the dispatch window,
+// so a gate-blocked task — not dispatchable until its gate answers —
+// never triggers it.  Waiting or refused gates are skipped, not errors
 // — their durable rows are what settle reports once the run has drained
-// (§4.1: one task's wait never blocks independent branches).
+// (one task's wait never blocks independent branches).
 func (r *Runner) readyBatch(ctx context.Context, byTask map[string]TaskSpec, attempted map[string]bool, want int) ([]taskRow, error) {
 	batch, err := r.dispatchableTasks(ctx, want)
 	if err != nil {
@@ -361,7 +360,7 @@ func (r *Runner) readyBatch(ctx context.Context, byTask map[string]TaskSpec, att
 	return out, nil
 }
 
-// runTask is one dispatched task's whole §4.1 path on its own goroutine:
+// runTask is one dispatched task's whole execution path on its own goroutine:
 // register the execution intent in a short transaction, run the executor
 // outside any transaction, then admit the result in a short transaction.
 // An executor failure is reported as noReceipt: the intent stays pending
@@ -373,7 +372,7 @@ func (r *Runner) runTask(ctx context.Context, t taskRow, input []byte) workerRes
 		return workerResult{err: err}
 	}
 	if r.hooks.afterRegisterIntent != nil {
-		r.hooks.afterRegisterIntent() // §13.2 point ①
+		r.hooks.afterRegisterIntent()
 	}
 	res, execErr := r.exec(ctx, inv)
 	if execErr != nil {
@@ -384,7 +383,7 @@ func (r *Runner) runTask(ctx context.Context, t taskRow, input []byte) workerRes
 		}
 	}
 	if r.hooks.afterResult != nil {
-		r.hooks.afterResult() // §13.2 point ②
+		r.hooks.afterResult()
 	}
 	if err := r.admit(ctx, inv, res); err != nil {
 		return workerResult{err: err}
@@ -425,20 +424,19 @@ func (r *Runner) verifySpecs(ctx context.Context, specs []TaskSpec) error {
 //     takeover.go) — a granted one voids its dead call and frees the
 //     task for this Run's replacement, a refused one voids it and
 //     leaves the task durably out of the ready set;
-//  2. with Takeover nil — every K1–K4 default — the K1 supersede runs
-//     per call, not as one blind batch: a pending invocation an ACTIVE
-//     restart request is about, or a persisted call_observations row
-//     marks in flight by a previous owner, is kept untouched with its
-//     task running (settle reports ErrWaitingDecision /
-//     ErrTakeoverRequired), while every unconstrained intent is
-//     superseded and its task reset exactly as in K1;
+//  2. with Takeover nil — the default — the supersede runs per call, not
+//     as one blind batch: a pending invocation an ACTIVE restart request
+//     is about, or a persisted call_observations row marks in flight by a
+//     previous owner, is kept untouched with its task running (settle
+//     reports ErrWaitingDecision / ErrTakeoverRequired), while every
+//     unconstrained intent is superseded and its task reset;
 //  3. with a consult, each remaining pending invocation is judged
 //     outside any transaction (takeoverPending, takeover.go): Adopt,
 //     Observe (the fact persisted), or the dead-session fact that
 //     creates a restart request.
 //
 // Recovery touches only current tasks and unsettled invocations; it
-// never replays the event history (§7).
+// never replays the event history.
 func (r *Runner) recoverPending(ctx context.Context) error {
 	if err := r.settleRestartRequests(ctx); err != nil {
 		return err
@@ -477,15 +475,15 @@ func (r *Runner) recoverPending(ctx context.Context) error {
 
 // dispatchableTasks returns up to want unfinished tasks that may start
 // now, in task_id order — the ready set the loop dispatches from, asked
-// of the store in one query.  Readiness is computed from persisted facts
-// (§4.1), never stored; the deterministic order keeps dispatch
+// of the store in one query.  Readiness is computed from persisted facts,
+// never stored; the deterministic order keeps dispatch
 // reproducible.  Beyond "dependencies all finished", two predicates.
 //
 // The state predicate, t.state = waiting_deps: a task this Run
 // dispatched that has reached its intent is running in the store
 // (registerIntent moved it there — in flight or ended without a
 // receipt), and an admitted task is finished; both stay out until the
-// NEXT Run's recoverPending resets the unsettled one, preserving the K1
+// NEXT Run's recoverPending resets the unsettled one, preserving the
 // rule that an unsettled intent is superseded, never retried inside
 // this one.  The dispatch-to-register window before that commit is
 // closed by Run's attempted map, which marks synchronously at dispatch.
@@ -557,9 +555,8 @@ func (r *Runner) dispatchableTasks(ctx context.Context, want int) ([]taskRow, er
 }
 
 // nextReady returns the lowest-task_id task that may start now, or nil
-// when nothing can — the sequential kernel's selector, kept for the K1/K2
-// tests that drive it directly; the run loop works on whole batches
-// (readyBatch).
+// when nothing can — the one-task selector the sequential tests drive
+// directly; the run loop works on whole batches (readyBatch).
 func (r *Runner) nextReady(ctx context.Context) (*taskRow, error) {
 	ts, err := r.dispatchableTasks(ctx, 1)
 	if err != nil || len(ts) == 0 {
@@ -625,7 +622,7 @@ func (r *Runner) registerIntent(ctx context.Context, t *taskRow, input []byte) (
 	return inv, nil
 }
 
-// admit settles one invocation in a single short transaction (§4.1, §4.2).
+// admit settles one invocation in a single short transaction.
 // The identity tuple — call id, task, generation and input digest — is
 // re-verified inside the transaction before anything is written:
 //
@@ -694,13 +691,13 @@ func (r *Runner) admit(ctx context.Context, inv Invocation, res Result) error {
 			return err
 		}
 		if r.hooks.beforeAdmitCommit != nil {
-			r.hooks.beforeAdmitCommit() // §13.2 point ③
+			r.hooks.beforeAdmitCommit()
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
 		if r.hooks.afterAdmit != nil {
-			r.hooks.afterAdmit() // §13.2 point ④
+			r.hooks.afterAdmit()
 		}
 		return nil
 	}

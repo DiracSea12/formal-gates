@@ -260,8 +260,8 @@ func requireQAExecutionTransition(state RunState, target string) error {
 		return err
 	}
 	if state.RequirementGuarantee != nil {
-		// A frozen case-set fixes the stage-3.5b rule: intermediate repairs use
-		// AFFECTED even under an active guarantee.  Seal still requires the
+		// A frozen case-set enforces the intermediate-repair rule: intermediate
+		// repairs use AFFECTED even under an active guarantee.  Seal still requires the
 		// production guarantee report's final FULL execution on the candidate.
 		if scope, ok := state.ExecutionScopes[target]; ok && scope.Decision == "AFFECTED" {
 			if caseSet := state.QACaseSets[target]; caseSet.Status != caseSetFrozen || state.PreRepairSnapshot == "" {

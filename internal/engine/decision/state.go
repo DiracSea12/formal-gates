@@ -1,5 +1,4 @@
-// Package decision 是确定性三段式决策核心（阶段 1 批 2b，
-// master-requirements §5.1、final-implementation-draft §3.1）：
+// Package decision 是确定性三段式决策核心：
 //
 //	Observe(state, collectors)      只读收集带 source binding 的外部事实
 //	Decide(state, obs, definition)  纯函数，产出字节级稳定的 canonical Plan
@@ -22,8 +21,8 @@ import (
 )
 
 // State 是决策内核的 state 投影视图：run-level phase、已完成步骤与动态
-// 任务状态。权威持久化投影（state.json 及其版本信封、revision/CAS）属
-// 阶段 2；本结构只承载 Decide/Observe 所需的最小决策输入。Tasks 中缺省
+// 任务状态。权威持久化投影（state.json 及其版本信封、revision/CAS）由
+// 持久化层承载；本结构只承载 Decide/Observe 所需的最小决策输入。Tasks 中缺省
 // 的键按 QUEUED 解释（依赖满足、尚未签发）。
 type State struct {
 	DefinitionVersion authoring.DefinitionVersion            `json:"definitionVersion"`
@@ -52,7 +51,7 @@ func (s *State) TaskStatusOf(key runtime.TaskKey) runtime.TaskStatus {
 }
 
 // CompleteStep 登记一个步骤完成，是运行时边界的接口校验
-// （master-requirements §5.7：运行时只允许当前 eligible frontier，拒绝
+// （运行时只允许当前 eligible frontier，拒绝
 // 乱序、遗漏和重复 step）。四类拒绝：
 //   - 版本绑定不符（state 与 definition 的版本信封不一致）；
 //   - 遗漏/未知：完成一个不在 definition 中的步骤；
@@ -144,7 +143,7 @@ type stateTaskWire struct {
 
 // CanonicalBytes 返回 State 的 canonical 字节（形态与 encoder 制品一致；
 // 空集编码为 []，不用 null）。这是 StateDigest 的输入，不是权威
-// state.json 投影——后者属阶段 2。
+// state.json 投影——后者由持久化层承载。
 func (s *State) CanonicalBytes() ([]byte, error) {
 	w := stateWire{
 		DefinitionVersion: string(s.DefinitionVersion),

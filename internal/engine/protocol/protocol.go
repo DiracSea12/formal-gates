@@ -1,13 +1,11 @@
-// Package protocol 是 engine 的提交协议内核（阶段 2 批 1b：
-// orchestration-pipeline-engine-phase-2/master-requirements.md §3
-// 「提交协议」，final-implementation-draft §2.2/§2.3/§3.3/§3.4）。
+// Package protocol 是 engine 的提交协议内核。
 //
-// 在批 1a 持久化基座（internal/engine/persistence）之上交付五件能力：
+// 在持久化基座（internal/engine/persistence）之上提供五件能力：
 //
 //   - 状态模型：engine 权威状态投影落账 expected 任务清单
 //     （runtime.TaskKey）、每 TaskKey 的当前 Attempt（标识 + 签发绑定）、
 //     pendingActions[actionID]（已签发 intent 参数）、pending Ask、已提交
-//     决定与事件台账。决策视图直接内嵌 decision.State 复用阶段 1 的
+//     决定与事件台账。决策视图直接内嵌 decision.State 复用其
 //     CompleteStep/TransitionTask 派生与校验，不造平行概念。
 //   - typed request/event/action：封闭 kind 集合 + constructor（参照
 //     authoring 形态，非法形态不可构造）；提交路径逐事件校验未知 kind、
@@ -23,11 +21,10 @@
 //     与选项集落账），用户以 request ID + 当前 freshness token submit 决定；
 //     封闭 kind 集合中不存在自由 USER_* 直写。
 //
-// 本批边界：SpawnReceipt/worker result/Ask/Operator/HostAction receipt/
-// lifecycle event 的统一接纳与失败分类路由是阶段 2 后续批次（master-
-// requirements §4/§5）；reset/abort 等控制决定的执行语义属阶段 4——本批
-// 只落账决定，不执行控制。全部写入经 persistence 的四段协议落盘（信封/
-// 摘要/CAS/指纹），不改公开 CLI 面。
+// 边界：SpawnReceipt/worker result/Ask/Operator/HostAction receipt/
+// lifecycle event 的统一接纳与失败分类路由不在本包内核内；reset/abort
+// 等控制决定只落账、不执行控制。全部写入经 persistence 的四段协议落盘
+// （信封/摘要/CAS/指纹），不改公开 CLI 面。
 package protocol
 
 import (
@@ -80,7 +77,7 @@ const (
 	// CodeNotInitialized：run 状态尚不存在。
 	CodeNotInitialized = "NOT_INITIALIZED"
 	// CodeProviderMismatch：事件/回执的 provider 身份与 run 绑定不同
-	// （含空 provider）——硬拒绝，不降级 default（draft §9.1）。
+	// （含空 provider）——硬拒绝，不降级 default。
 	CodeProviderMismatch = "PROVIDER_MISMATCH"
 	// CodeUnknownAction：回执/结果引用的 actionID 不存在（从未签发或
 	// 已完结收回）。
@@ -125,8 +122,7 @@ type PlanIdentity struct {
 	ObservationDigest string `json:"observationDigest"`
 }
 
-// Attempt 是一个 TaskKey 的当前执行实例（draft §3.3「task/dispatch/
-// Attempt 与 source bindings」的本批形态）。签发参数整体复用
+// Attempt 是一个 TaskKey 的当前执行实例。签发参数整体复用
 // decision.IssuedAction（actionID + 任务薄指针），ID 由签发时的落盘
 // revision 确定性派生（"att:<task>:<revision>"）：revision 单调，同一
 // 任务的重签发天然得到新实例标识，不含随机数与时间。任务调度位置
@@ -147,7 +143,7 @@ type Attempt struct {
 	RetryExhausted bool `json:"retryExhausted,omitempty"`
 }
 
-// PendingAction 是 pendingActions[actionID] 的落账形态（draft §3.3）：
+// PendingAction 是 pendingActions[actionID] 的落账形态：
 // 已签发 intent 的参数。与 Attempt 同源同生（一次 Issue 同时落两处索引），
 // 任务到 TERMINAL 时一并移除。
 type PendingAction struct {
@@ -157,7 +153,7 @@ type PendingAction struct {
 	AttemptID string          `json:"attemptId"`
 }
 
-// PendingAsk 是受限 REQUEST_* 事件创建的待决 Ask（draft §2.3）：request
+// PendingAsk 是受限 REQUEST_* 事件创建的待决 Ask：request
 // ID、控制类型与选项集落账。freshness token 不静态存储——它确定性绑定
 // (当前 revision, requestID)，随 Freshness/Submit 即时求值，因此任何
 // 后续提交都自然使旧 token 失效。决定后仍保留 PendingAsks 条目并置
@@ -187,7 +183,7 @@ type EventRecord struct {
 	Acceptance Acceptance `json:"acceptance"`
 }
 
-// SpawnReceipt 是落账的 SpawnReceipt（draft §9.1 公共字段）。Digest 是
+// SpawnReceipt 是落账的 SpawnReceipt。Digest 是
 // 回执 canonical 字节的摘要：同 actionID 的逐字节重发按它判幂等，字节
 // 不同即 RECEIPT_CONFLICT 硬拒绝。
 type SpawnReceipt struct {
@@ -360,8 +356,8 @@ type LifecycleVerification struct {
 	Revision    uint64 `json:"revision"`
 }
 
-// State 是 engine 权威状态投影（批 1b/1c 形态）。内嵌 decision.State 复用
-// 阶段 1 决策视图的全部派生与校验；协议台账是其上的增量。TaskKey owns
+// State 是 engine 权威状态投影。内嵌 decision.State 复用决策视图的全部
+// 派生与校验；协议台账是其上的增量。TaskKey owns
 // its text codec, and encoding/json deterministically orders map keys, so the
 // persistent representation stays on the domain model without a parallel
 // wire projection.
@@ -384,8 +380,7 @@ type State struct {
 	Events                    map[string]EventRecord      `json:"events"`
 
 	// RunProvider 是 run 绑定的宿主 provider 身份（Init 落账）：一切携带
-	// provider 的事件/回执与之精确比对，不同或为空即硬拒绝（draft §9.1
-	// 不降级 default）。
+	// provider 的事件/回执与之精确比对，不同或为空即硬拒绝。
 	RunProvider string `json:"runProvider"`
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`

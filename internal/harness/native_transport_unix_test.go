@@ -418,7 +418,7 @@ func TestTransportReverseRequestDefaultReply(t *testing.T) {
 	}
 }
 
-// TestTransportRequestPermissionIsHeld pins the G2d hold boundary at the
+// TestTransportRequestPermissionIsHeld pins the reverse permission hold at the
 // transport: the reverse permission request sends no frame and fails nothing,
 // the pending record lands with the host's original options, and the
 // interactions log gains the request's pending entry. A re-announced request

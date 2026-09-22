@@ -1,12 +1,11 @@
-// Package runtime 承载决策内核的运行期纯数据模型（阶段 1 批 2a）：
-// run-level phase 迁移表、动态任务的稳定键与状态机、开发批次（batch）的
-// 分组/依赖信息与完成状态派生。
+// Package runtime 承载决策内核的运行期纯数据模型：run-level phase 迁移
+// 表、动态任务的稳定键与状态机、开发批次（batch）的分组/依赖信息与完成
+// 状态派生。
 //
 // 本包只含数据与静态表，不做 I/O、不持可变全局状态：state 投影与
-// Observe/Decide/SelectIssued 属 internal/engine/decision（批 2b），真实
-// 外部事实收集器与可靠写协议属后续批次。Go 静态迁移表是唯一流程权威
-// （master-requirements §5.1）；迁移表只管理 run-level phase，动态任务由
-// TaskKey/TaskTransitionTable 管理（§5.10）。
+// Observe/Decide/SelectIssued 属 internal/engine/decision，真实外部事实
+// 收集器与可靠写协议不在此处。Go 静态迁移表是唯一流程权威；迁移表只
+// 管理 run-level phase，动态任务由 TaskKey/TaskTransitionTable 管理。
 package runtime
 
 import (

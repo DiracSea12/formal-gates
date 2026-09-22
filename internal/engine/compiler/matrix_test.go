@@ -11,7 +11,7 @@ import (
 )
 
 // 本文件覆盖八类非法定义拒绝的 compiler 层（enforcement matrix，
-// final-implementation-draft §3.2）与 MISSING_ENGINE_ADAPTER 双路由：
+// ）与 MISSING_ENGINE_ADAPTER 双路由：
 //
 // | 非法定义                     | compiler 层拦截                          |
 // | 不可达/循环                  | 图校验主责（graph_test.go）             |

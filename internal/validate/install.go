@@ -2270,9 +2270,9 @@ func isLegacyCodexGateCommand(command string, target installTarget) bool {
 		return false
 	}
 	want := normalizeHookCommand(command)
-	// Stage 0 explicitly migrates the former target/bin hook to the fixed
-	// launcher. Recognizing that one exact old owned shape is cleanup for the
-	// migration, not a second supported writer or fallback launcher.
+	// Install migrates the former target/bin hook to the fixed launcher.
+	// Recognizing that one exact old owned shape is cleanup for the migration,
+	// not a second supported writer or fallback launcher.
 	return want == normalizeHookCommand(nativeInstallCommand(targetLauncherPath(target), "hook", "decide")) ||
 		want == normalizeHookCommand(nativeInstallCommand(filepath.Join(target.targetPath, "bin", nativeBinaryName()), "hook", "decide"))
 }

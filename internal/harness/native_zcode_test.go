@@ -746,7 +746,7 @@ func TestZcodeRespondTable(t *testing.T) {
 	}
 
 	// The two user decisions never reach respond any more: the transport's
-	// interaction specs hold them (G2d), so respond has no branch for them
+	// interaction specs hold them, so respond has no branch for them
 	// and answers nothing.
 	for _, method := range []string{"interaction/requestPermission", "interaction/requestUserInput"} {
 		if reply, err := z.respond(method, map[string]any{}); err != nil || reply != nil {

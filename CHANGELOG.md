@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is judged unusable; and `workflow requirement` rebinding is refused while an
   in-flight review dispatch (claimed, result not yet recorded via
   record-action/record-gate) has an unrecorded result.
-- runWorkflow 拆为子命令表驱动 runner，flag 类型族收敛为泛型模板（片2 item 6/7，本次补齐交付）。
+- runWorkflow 拆为子命令表驱动 runner，flag 类型族收敛为泛型模板。
 
 - Incorporate gate P2 review findings: the parallel reminder shares one
   emission point (`emitParallelReminder`) across the workflow commands and the
@@ -287,7 +287,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Portable `formal-gates-validate` Go CLI for cross-platform package and artifact validation
-- Phase 2B host canary results for Claude / Codex / Cursor
+- Host canary results for Claude / Codex / Cursor
 - Darwin (macOS) strict test prompts
 - `requirements-clarification-gate` with `DRAFT_BLOCKED` enforcement
 - `complexity-gate` for scope creep and over-engineering prevention
@@ -308,7 +308,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bind gate reviews to dispatch prompts
 
 ### Fixed
-- Formal gates hook and workflow regressions in Phase 2B
+- Formal gates hook and workflow regressions
 - Document write gate for OpenSpec proposal phase
 
 ---

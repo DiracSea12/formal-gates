@@ -1,12 +1,12 @@
 package runner
 
-// K3 acceptance tests for the §13.2 sample — parallel, join and retained
-// success results: a failing or waiting task must not stop independent
-// branches, two confirmations may be answered in any order, and a join
-// only ever runs on complete inputs (§3.1).  The crash scenario re-executes
-// this binary through TestMain (RUNNER_K3_SCENARIO) and really exits
-// mid-run, like the K1/K2 children; everything else runs in-process with
-// real concurrency guards under -race.
+// Acceptance tests for parallel, join and retained success results: a
+// failing or waiting task must not stop independent branches, two
+// confirmations may be answered in any order, and a join only ever runs
+// on complete inputs.  The crash scenario re-executes this binary through
+// TestMain (RUNNER_PARALLEL_SCENARIO) and really exits mid-run, like the
+// other re-exec children; everything else runs in-process with real
+// concurrency guards under -race.
 
 import (
 	"context"
@@ -23,20 +23,20 @@ import (
 )
 
 const (
-	envK3Scenario = "RUNNER_K3_SCENARIO"
-	envK3Dir      = "RUNNER_K3_DIR"
-	k3RunID       = "k3-crash"
+	envParallelScenario = "RUNNER_PARALLEL_SCENARIO"
+	envParallelDir      = "RUNNER_PARALLEL_DIR"
+	parallelRunID       = "parallel-crash"
 )
 
-// K3 child exit codes: 94 is the on-purpose exit right after the first
-// admission committed; 95+ mark wiring bugs in the child itself.
+// Parallel-child exit codes: 94 is the on-purpose exit right after the
+// first admission committed; 95+ mark wiring bugs in the child itself.
 const (
-	exitK3Crash  = 94
-	exitK3Wiring = 95
+	exitParallelCrash  = 94
+	exitParallelWiring = 95
 )
 
-// k3Specs is the crash sample's shape: independent a and b, c joining both.
-func k3Specs() []TaskSpec {
+// parallelSpecs is the crash sample's shape: independent a and b, c joining both.
+func parallelSpecs() []TaskSpec {
 	return []TaskSpec{
 		{TaskID: "a", Name: "task-a", Input: []byte("input-a")},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
@@ -44,26 +44,26 @@ func k3Specs() []TaskSpec {
 	}
 }
 
-// k3Child drives the crash sample in RUNNER_K3_DIR: a finishes fast, b's
+// parallelChild drives the crash sample in RUNNER_PARALLEL_DIR: a finishes fast, b's
 // executor blocks forever without side effects, c joins both.  The
 // afterAdmit hook exits right after the FIRST admission (a's) commits, so
 // the process dies while b is in flight — registered or not, both timings
 // are possible and the parent must recover from either.
-func k3Child() {
-	dir := os.Getenv(envK3Dir)
+func parallelChild() {
+	dir := os.Getenv(envParallelDir)
 	if dir == "" {
-		fmt.Fprintln(os.Stderr, "child: missing", envK3Dir)
-		os.Exit(exitK3Wiring)
+		fmt.Fprintln(os.Stderr, "child: missing", envParallelDir)
+		os.Exit(exitParallelWiring)
 	}
 	st, err := Open(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "child open:", err)
-		os.Exit(exitK3Wiring)
+		os.Exit(exitParallelWiring)
 	}
-	specs := k3Specs()
-	if err := st.CreateRun(context.Background(), k3RunID, specs); err != nil {
+	specs := parallelSpecs()
+	if err := st.CreateRun(context.Background(), parallelRunID, specs); err != nil {
 		fmt.Fprintln(os.Stderr, "child create:", err)
-		os.Exit(exitK3Wiring)
+		os.Exit(exitParallelWiring)
 	}
 	base := markerExecutor(dir)
 	r := NewRunner(st, func(ctx context.Context, inv Invocation) (Result, error) {
@@ -73,25 +73,25 @@ func k3Child() {
 		return base(ctx, inv)
 	})
 	r.Parallelism = 2
-	r.hooks.afterAdmit = func() { os.Exit(exitK3Crash) }
+	r.hooks.afterAdmit = func() { os.Exit(exitParallelCrash) }
 	err = r.Run(context.Background(), specs)
 	fmt.Fprintln(os.Stderr, "child run returned:", err)
-	os.Exit(exitK3Wiring) // unreachable in a correct child: b never settles
+	os.Exit(exitParallelWiring) // unreachable in a correct child: b never settles
 }
 
-// §13.2 sample 1 — a fails, independent b succeeds, c joins both: the run
+// Sample 1 — a fails, independent b succeeds, c joins both: the run
 // reports the failure but b's admission is durable; after a restart with a
 // healthy executor, b is not re-executed (its success is retained), a is
 // retried, and the join runs exactly once on the now-complete inputs.
-func TestK3FailureDoesNotBlockIndependentTasks(t *testing.T) {
+func TestFailureDoesNotBlockIndependentTasks(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	specs := k3Specs()
+	specs := parallelSpecs()
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateRun(ctx, "k3-fail", specs); err != nil {
+	if err := st.CreateRun(ctx, "parallel-fail", specs); err != nil {
 		t.Fatal(err)
 	}
 	failA := true
@@ -122,8 +122,8 @@ func TestK3FailureDoesNotBlockIndependentTasks(t *testing.T) {
 	if n := markerLines(t, dir, "b"); n != 1 {
 		t.Errorf("task b executed %d times, want 1", n)
 	}
-	// The failed task keeps K1 semantics: one unsettled intent, nothing
-	// admitted.
+	// The failed task keeps the crash contract: one unsettled intent,
+	// nothing admitted.
 	if n := countInvocations(t, st, "a", invPending); n != 1 {
 		t.Errorf("task a pending intents = %d, want 1", n)
 	}
@@ -177,10 +177,10 @@ func TestK3FailureDoesNotBlockIndependentTasks(t *testing.T) {
 	}
 }
 
-// §13.2 sample 1, waiting side — the formal reversal of K2's disclosed
+// Waiting side of the gated sample — the formal reversal of the disclosed
 // boundary: a gated task's pending decision does not block the independent
 // b; the wait is reported only after b has run and been admitted.
-func TestK3WaitingDoesNotBlockIndependentTasks(t *testing.T) {
+func TestWaitingDoesNotBlockIndependentTasks(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -195,7 +195,7 @@ func TestK3WaitingDoesNotBlockIndependentTasks(t *testing.T) {
 		},
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b")},
 	}
-	st := mustCreate(t, dir, "k3-wait", specs)
+	st := mustCreate(t, dir, "parallel-wait", specs)
 	var calls []string
 	r := NewRunner(st, recordingExecutor(&calls, nil))
 	if err := r.Run(ctx, specs); !errors.Is(err, ErrWaitingDecision) {
@@ -232,11 +232,11 @@ func TestK3WaitingDoesNotBlockIndependentTasks(t *testing.T) {
 	}
 }
 
-// §13.2 sample 2 — two confirmations answered out of order: with both
+// Sample 2 — two confirmations answered out of order: with both
 // gates pending nothing executes; answering b alone completes b while the
 // run keeps waiting for a; answering a afterwards lets the join run
 // exactly once on both results.
-func TestK3DecisionsAnsweredOutOfOrder(t *testing.T) {
+func TestDecisionsAnsweredOutOfOrder(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	gate := func() *Confirmation {
@@ -252,7 +252,7 @@ func TestK3DecisionsAnsweredOutOfOrder(t *testing.T) {
 		{TaskID: "b", Name: "task-b", Input: []byte("input-b"), Confirm: gate()},
 		{TaskID: "c", Name: "task-c", DependsOn: []string{"a", "b"}, Input: []byte("input-c")},
 	}
-	st := mustCreate(t, dir, "k3-order", specs)
+	st := mustCreate(t, dir, "parallel-order", specs)
 	var calls []string
 	r := NewRunner(st, recordingExecutor(&calls, nil))
 	if err := r.Run(ctx, specs); !errors.Is(err, ErrWaitingDecision) {
@@ -306,14 +306,14 @@ func TestK3DecisionsAnsweredOutOfOrder(t *testing.T) {
 	}
 }
 
-// §2 — one admission never waits for its batch: with parallelism 2, a's
+// One admission never waits for its batch: with parallelism 2, a's
 // executor blocks while b finishes; b is admitted and durable while a is
 // still in flight, and the join runs exactly once after both complete.
-func TestK3AdmissionDoesNotWaitForTheBatch(t *testing.T) {
+func TestAdmissionDoesNotWaitForTheBatch(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	specs := k3Specs()
-	st := mustCreate(t, dir, "k3-batch", specs)
+	specs := parallelSpecs()
+	st := mustCreate(t, dir, "parallel-batch", specs)
 	releaseA := make(chan struct{})
 	aStarted := make(chan struct{})
 	bAdmitted := make(chan struct{})
@@ -365,10 +365,10 @@ func TestK3AdmissionDoesNotWaitForTheBatch(t *testing.T) {
 	}
 }
 
-// §4.1 — the local bound is real: with Parallelism 2 two executors are
+// The local bound is real: with Parallelism 2 two executors are
 // inside at once (they rendezvous); with the zero value — and anything
 // below one — a re-entrancy guard proves they never overlap.
-func TestK3ParallelismIsBounded(t *testing.T) {
+func TestParallelismIsBounded(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("parallelism two overlaps", func(t *testing.T) {
@@ -377,7 +377,7 @@ func TestK3ParallelismIsBounded(t *testing.T) {
 			{TaskID: "a", Name: "A"},
 			{TaskID: "b", Name: "B"},
 		}
-		st := mustCreate(t, dir, "k3-par2", specs)
+		st := mustCreate(t, dir, "parallel-par2", specs)
 		entered := make(chan struct{}, 2)
 		release := make(chan struct{})
 		exec := func(_ context.Context, inv Invocation) (Result, error) {
@@ -420,7 +420,7 @@ func TestK3ParallelismIsBounded(t *testing.T) {
 				{TaskID: "a", Name: "A"},
 				{TaskID: "b", Name: "B"},
 			}
-			st := mustCreate(t, dir, "k3-seq", specs)
+			st := mustCreate(t, dir, "parallel-seq", specs)
 			var inflight atomic.Int32
 			var overlapped atomic.Bool
 			exec := func(_ context.Context, inv Invocation) (Result, error) {
@@ -448,20 +448,20 @@ func TestK3ParallelismIsBounded(t *testing.T) {
 	}
 }
 
-// §13.2 crash sample, parallel form — the child dies (real os.Exit) right
+// Crash sample, parallel form — the child dies (real os.Exit) right
 // after the first admission commits while a sibling task is in flight;
 // the reopened owner recovers with no missed execution and no double
 // admission.  At the crash point b was either registered-but-unsettled or
 // not yet registered — nothing asserts which; both must land on the same
 // outcome.
-func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
+func TestCrashDuringParallelRunRecovers(t *testing.T) {
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), envK3Scenario+"=1", envK3Dir+"="+dir)
+	cmd.Env = append(os.Environ(), envParallelScenario+"=1", envParallelDir+"="+dir)
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitK3Crash {
-		t.Fatalf("child exit = %v (want code %d); output:\n%s", err, exitK3Crash, out)
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitParallelCrash {
+		t.Fatalf("child exit = %v (want code %d); output:\n%s", err, exitParallelCrash, out)
 	}
 	ctx := context.Background()
 	st, err := Open(dir)
@@ -469,8 +469,8 @@ func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if st.runID != k3RunID {
-		t.Fatalf("reopened run id = %q, want %q", st.runID, k3RunID)
+	if st.runID != parallelRunID {
+		t.Fatalf("reopened run id = %q, want %q", st.runID, parallelRunID)
 	}
 	// The crash point is durable: a admitted exactly once, a's side
 	// effect on disk; b's state is the two-timings case and asserted
@@ -482,7 +482,7 @@ func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
 		t.Fatalf("task a executed %d times before recovery, want 1", n)
 	}
 
-	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, k3Specs()); err != nil {
+	if err := NewRunner(st, markerExecutor(dir)).Run(ctx, parallelSpecs()); err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range []string{"a", "b", "c"} {
@@ -524,7 +524,7 @@ func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
 	}
 }
 
-// The K3 review's P3 performance guard: the ready query asks the store
+// The ready-query performance guard: the ready query asks the store
 // for exactly the free slots' worth of dispatchable work in one LIMITed
 // scan, instead of re-reading every remaining ready task and re-checking
 // its gate on each completion.  Under the old loop, 1,000 ungated
@@ -545,7 +545,7 @@ func TestK3CrashDuringParallelRunRecovers(t *testing.T) {
 // driver slows far past any honest clock; raceBuild) the test asserts
 // correctness alone: Run completes and every task is admitted exactly
 // once.
-func TestK3ScaleThousandIndependentTasks(t *testing.T) {
+func TestScaleThousandIndependentTasks(t *testing.T) {
 	ctx := context.Background()
 	run := func(n int) time.Duration {
 		dir := t.TempDir()
@@ -556,7 +556,7 @@ func TestK3ScaleThousandIndependentTasks(t *testing.T) {
 				Name:   "bulk",
 			})
 		}
-		st := mustCreate(t, dir, "k3-scale", specs)
+		st := mustCreate(t, dir, "parallel-scale", specs)
 		start := time.Now()
 		if err := NewRunner(st, recordingExecutor(nil, nil)).Run(ctx, specs); err != nil {
 			t.Fatal(err)

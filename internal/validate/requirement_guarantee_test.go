@@ -590,7 +590,7 @@ func TestRequirementGuaranteeFullRouteUsesUnionAcrossQAModes(t *testing.T) {
 }
 
 func TestRequirementGuaranteeReviewRequiresOnlyTheModeRepresentedProjection(t *testing.T) {
-	state := whitebox35AFixR2GuaranteedState(t)
+	state := guaranteedRunState(t)
 	cases := []QACase{{
 		ID:                 "CASE-ONLY-ONE-AC",
 		Mode:               whiteboxQAID,

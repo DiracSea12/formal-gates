@@ -210,7 +210,7 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}, Admission: &Admission{RegistryPath: registry, PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: 2, Lease: "lease-2", Token: "token-2"}})
 	unlock()
-	if err == nil || !strings.Contains(err.Error(), "admission lock held") {
+	if err == nil || !strings.Contains(err.Error(), "admission lock is held") {
 		t.Fatalf("start under admission lock error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, EngineNamespace, "admission-lock")); !os.IsNotExist(statErr) {

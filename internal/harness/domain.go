@@ -1,7 +1,7 @@
 package harness
 
-// The five domain judgements below moved from the LangGraph nodes (G3a). Each
-// one is a plain function over its payload: the caller passes checks/gates in
+// The five domain judgements below are plain functions over their
+// payloads: the caller passes checks/gates in
 // spec order and the returned ids and gate names keep that order, so Python
 // only dispatches on the answer and never re-derives a condition. No judgement
 // here validates its inputs — they are projections of records Go already
@@ -141,8 +141,8 @@ type candidateAdmissionInput struct {
 }
 
 // candidateAdmission refuses to snapshot a candidate out of unresolved
-// records. The refusal is a typed business outcome inside the value (C4
-// pattern) so Python's refuse() raises the same HarnessError the node raised;
+// records. The refusal is a typed business outcome inside the value
+// so Python's refuse() raises the HarnessError family;
 // development is checked first, so its wording wins when both refuse.
 func candidateAdmission(q candidateAdmissionInput) map[string]any {
 	if q.DevelopmentNeedsRepair {
