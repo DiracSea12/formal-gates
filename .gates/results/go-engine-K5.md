@@ -276,3 +276,47 @@ graph.py 恢复重放走同一业务函数——R1/R4/R5 的正确归因是"Go �
 开独立返工"；深夜段全绿树上做结构重组风险大于收益，结构问题如出现单独再派）——四问核验通过，
 仅补头注文件地图。存量 bug 修复两处（代次戳、双问）无既有测试依赖旧形态（grep 佐证）。测试助手
 同源化（账本读→内核读）三处，断言强度不减反增（内核读覆盖任意世代）。
+
+## 三轮评审返修（完整业务过程收敛，2026-09-22）
+
+**三轮评审（`/private/tmp/k5-review3/review.md`，候选 `464a68f`）：FAIL，3 P1＋2 P2**——上轮探针全部
+确认通过、账本回库被认可为实质改善；新发现集中在**恢复时的非成功结果、多次调用身份、多次问询**：
+R1 不同失败共用 `@0:0:runtime` 问题身份→旧 retry 答复自动批准新调用（P1）；R2 恢复的门审 BLOCKED
+直调 finishGate（只写结果不分类）→被 evaluate 当业务返修自动修代码（P1）；R3 观察器只记 task、
+latestTurnDir 跨 invocation 取最大 turn→旧调用 turn-02 压过当前调用 turn-01，权限请求无法呈现
+（P1）；R4 已知 FAIL/exit-127/已完成 CONTINUE 全被折叠成"会话丢失"（P2）；R5 不变量助手把内容
+摘要当判断身份，同内容两判断合法返修被误报（P2）。评审架构判断：**共用结果写入函数≠共用完整
+业务处理过程**——非成功→用户决定的转换仍在 live/consult/route 三处分别解释。
+
+### 修复（两代理并行：核心收敛＋判据修正，均主代理亲验）
+
+- **完整分类进三入口**：settleWorkerResult/finishGate/settleCheckResult 各自补全
+  continue（parkContinue：记会话身份＋park "continue"，route 自动再武装续做）/
+  blocked（parkWithResult→retry/abort，R2 的同一待处置分支）/
+  unresolved-findings/verdict（防篡改后接纳）。live 循环、**收据重放**（旧重放路径会把
+  BLOCKED/CONTINUE 当判决接纳——一并修复）、takeover adoptTurn 三路全部经此；admission 三值
+  （adopted/parked/none）把业务含义传回 consult：接纳＝Adopt 原身份、等待处置＝Observe＋standing
+  disposition（route 放置问题）、继续＝Observe＋continue park、真正未知＝零值问询——四种区别
+  贯穿（R2/R4）。
+- **R1 身份合同**：失败唯一身份＝(task, invocation generation, turn/attempt, kind)，park/openRuntimeQuestion
+  单点盖章，问询正文携带；同一失败重放复用同一答复，不同失败换代次发新问题（实证两次恢复的问题
+  分别 `product-review@1:1:runtime`/`@3:1:runtime`，无新答复时不再自动第三次调用）。
+- **R3 身份贯穿**：observed 改 task→invocationID 钉定（consult 本就知道），watchedDirs/liveObservations
+  只跟随该 invocation 的最新 turn；latestTurnDir 退出生产路径（跨 invocation 最大 turn 不可作
+  "当前调用"选择器）；Cancel 保留全树扫描＋身份核验。
+- **R5 判据修正**：k5EvaluateSingleDriverFindings 改按判断代次计——每 ref 的消费修订行数 ≤ 发布过
+  该 ref 的判断数（鸽笼：行超判断必有判断双消费；同内容多判断各走各轮合法），与产品消费绑定同构。
+- **P3 落实**：删除 routeRepair 恒死的 `generation>outcome.Generation && repairDriven(ref)` 防重分支
+  及 repairDriven（latestOutcome 读内核当前代次后该分支不可达；消费绑定即代次事实本身）；全扫
+  "SAME/idempotent"夸大注释改到行为满足（adoptGateTurn/openRuntimeQuestion/placeQuestion）。
+- **偏离披露**：①测试夹具假 host 改为同时应答 session/new 与 session/resume（恢复续做在新
+  invocation 的 attempt-1 上合法 resume 记住的会话，旧假设会挂起恢复调用；评审探针期望零改动）；
+  ②check-runtime 场景同时呈现 check 处置问题＋一个从未启动调用的零值 restart 询问（内核 K4 设计
+  行为，探针断言均满足）；③contractRejected 扩为"任何收据未能框出可接纳业务答复"（与 live
+  parkTurnFailure 对齐）；④续做再武装走 revision（内核无恢复 pending invocation 的接续缝，业务
+  身份经 task_sessions 保留，实证续做调用 resume 原会话走到 HARNESS_COMPLETE）。
+
+### 验证
+
+TestReview3 全绿（5 测试类，期望零改动）；四族回归全绿；harness 全包 317s 绿＋race 绿；runner
+race 绿；vet/gofmt 干净；全仓零 FAIL；windows 交叉编译 OK。模型调用 0。
