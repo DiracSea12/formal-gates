@@ -13,11 +13,14 @@ package harness
 //   - 单活写入者（R1）：同一开发工作区至多一个活动写入调用。写入者只有
 //     development 任务（development 与 repair 都是它的世代）；检查在各自
 //     一次性克隆里跑、门审只读，因此不算这个工作区的写入者。
-//   - evaluate 单驱动（R1；判据按三轮评审 R5 修正）：每个 evaluate 判断
-//     （按代次，outcomes/evaluate/<gen>.json 一判断）至多驱动一轮返修——
-//     内核 task_revisions 里引用某反馈包的修订输入数 ≤ 发布该反馈包的
-//     判断数。反馈 ref 只是内容摘要（同发现＋同候选 ⇒ 同 ref），负责内容
-//     绑定，不是判断身份：不同判断共享内容合法，同一判断驱动两次违例。
+//   - evaluate 单驱动（R1；判据按四轮评审 R5 修正）：每个 evaluate 判断
+//     （按代次，outcomes/evaluate/<gen>.json 一判断）至多驱动一轮业务返修
+//     ——业务返修的唯一权威事实是内核 user_requests 的业务 revision 行
+//     （RequestRevision 落的：直批行 state=executed、问询行经答案结算）。
+//     消费计数只数这些行绑定的修订输入：普通 retry/continue 的再武装走裸
+//     ReviseTask、不落 user_requests，天然排除。反馈 ref 只是内容摘要（同
+//     发现＋同候选 ⇒ 同 ref），负责内容绑定，不是判断身份：不同判断共享
+//     内容合法，同一判断驱动两次违例。
 //   - COMPLETE 零未结算（R1）：终态 HARNESS_COMPLETE 时，jobs/ 下不存在
 //     “收据缺失（无 exit.json）且进程身份存在（有 process.json）”的目录。
 //   - 结果绑候选（R5）：seal 引用的每个 check/gate 结果都绑定同一个最终
@@ -244,18 +247,30 @@ func k5EvaluateVerdicts(runDir string) []k5EvaluateVerdict {
 	return verdicts
 }
 
-// k5RevisionInputs reads the kernel's persisted revision inputs from a
-// run directory's database (read-only, no ownership taken) — the
-// post-mortem spelling of Store.RevisionInputs, the same rows a live
-// owner reads. 任何读失败如实报错：单驱动不变量的证据源不可读本身
-// 就是要报告的事实。
-func k5RevisionInputs(runDir string) ([]runner.RevisionInput, error) {
+// k5BusinessRevisionInputs reads one run's BUSINESS revision rounds: the
+// task_revisions rows that rode a RequestRevision execution — joined, in
+// the kernel's own storage, to the executed user_requests row whose grant
+// wrote them (the request's target generation + 1 is the generation the
+// revision bumped the task to; reviseScope writes both in one
+// transaction). Ordinary re-arms (a blocked retry, a continuation) revise
+// through bare ReviseTask and land no request row, so they never appear
+// here: this is the consumed-side spelling of the same fact
+// Store.RevisionRounds counts. 任何读失败如实报错：单驱动不变量的证据
+// 源不可读本身就是要报告的事实。
+func k5BusinessRevisionInputs(runDir string) ([]runner.RevisionInput, error) {
 	db, err := sql.Open("sqlite", databaseURI(filepath.Join(runDir, "run.db")))
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query("SELECT task_id, generation, input FROM task_revisions ORDER BY task_id, generation")
+	rows, err := db.Query(`
+		SELECT t.task_id, t.generation, t.input
+		  FROM task_revisions t
+		  JOIN user_requests r
+		    ON r.run_id = t.run_id AND r.task_id = t.task_id
+		   AND r.kind = 'revision' AND r.state = 'executed'
+		   AND t.generation = r.target_generation + 1
+		 ORDER BY t.task_id, t.generation`)
 	if err != nil {
 		return nil, err
 	}
@@ -272,40 +287,41 @@ func k5RevisionInputs(runDir string) ([]runner.RevisionInput, error) {
 }
 
 // k5EvaluateSingleDriverFindings checks evaluate 单驱动 by verdict
-// identity, not content identity: 每个 evaluate 判断（一个代次）至多驱动
-// 一轮返修。ref 只把判断绑定到消费了它的修订行——返修 brief 逐字内嵌
-// wrapper 的 source.artifact，所以按 ref 字符串匹配；不按任务或用途过滤
-// （任何引用该反馈包的修订都算消费它），与账本时代同强或更强。
+// identity over business repair facts: 每个 evaluate 判断（一个代次）至多
+// 驱动一轮业务返修。业务返修＝内核 user_requests 业务 revision 行绑定的
+// 修订输入（k5BusinessRevisionInputs——返修 brief 逐字内嵌 wrapper 的
+// source.artifact，所以按 ref 字符串匹配）；普通 retry/continue 的再武装
+// 不落 user_requests，不计入。ref 只把判断绑定到消费了它的修订行。
 //
-// 判据：对每个 ref，引用它的修订输入行数 ≤ 发布过该 ref 的判断数（按
+// 判据：对每个 ref，绑定它的业务修订行数 ≤ 发布过该 ref 的判断数（按
 // 代次计，一个代次载荷一判断）。为什么这是“一项判断只消费一次”而“同
-// 内容多判断合法”：修订行和判断都随轮次单调前移——每轮返修把开发任务
-// 的修订序列和 evaluate 的代次一起推一格——所以第 i 条引用行只可能由
-// 第 i 个或更早的同 ref 判断驱动；行数一旦超过判断数，必有某个判断驱动
-// 了第二轮（一项判断被消费两次），必报。行数不超过判断数时，每条行都
-// 能配到一个单独的判断，两个判断共享同一个 ref 各走各的一轮，合法——
-// 判断身份（代次）与内容身份（ref）分开，内容相等绝不合并两个判断。
-// 证据行与修订落库在同一事务，内核读不到本身就是要报告的事实。
+// 内容多判断合法”：业务修订行和判断都随轮次单调前移——每轮业务返修把
+// 开发任务的请求序列和 evaluate 的代次一起推一格——所以第 i 条业务行只
+// 可能由第 i 个或更早的同 ref 判断驱动；行数一旦超过判断数，必有某个
+// 判断驱动了第二轮（一项判断被消费两次），必报。行数不超过判断数时，
+// 每条行业务行都能配到一个单独的判断，两个判断共享同一个 ref 各走各的
+// 一轮，合法——判断身份（代次）与内容身份（ref）分开，内容相等绝不合并
+// 两个判断。业务行与请求落库在同一事务，内核读不到本身就是要报告的事实。
 func k5EvaluateSingleDriverFindings(runDir string) []string {
 	verdicts := k5EvaluateVerdicts(runDir)
 	if len(verdicts) == 0 {
 		return nil
 	}
-	rows, err := k5RevisionInputs(runDir)
+	rows, err := k5BusinessRevisionInputs(runDir)
 	if err != nil {
-		return []string{"run.db task_revisions is unreadable: " + err.Error()}
+		return []string{"run.db business revision rows are unreadable: " + err.Error()}
 	}
 	issuers := map[string][]int64{} // ref → 发布过它的判断代次（升序）
 	for _, verdict := range verdicts {
 		issuers[verdict.Ref] = append(issuers[verdict.Ref], verdict.Generation)
 	}
-	evidence := map[string][]string{} // ref → 引用了它的修订输入行（按行序）
+	evidence := map[string][]string{} // ref → 绑定了它的业务修订行（按行序）
 	for i, row := range rows {
 		brief := string(row.Input)
 		for ref := range issuers {
 			if strings.Contains(brief, ref) {
 				evidence[ref] = append(evidence[ref], fmt.Sprintf(
-					"  run.db task_revisions row %d: task=%s generation=%d binds artifacts/%s.json",
+					"  run.db business revision row %d: task=%s generation=%d binds artifacts/%s.json",
 					i+1, row.TaskID, row.Generation, ref))
 			}
 		}
@@ -319,14 +335,14 @@ func k5EvaluateSingleDriverFindings(runDir string) []string {
 	for _, ref := range refs {
 		consumed, issued := len(evidence[ref]), len(issuers[ref])
 		if consumed <= issued {
-			continue // 每条引用行都配得到各自的判断：一轮一判断，合法
+			continue // 每条业务行都配得到各自的判断：一轮一判断，合法
 		}
 		generations := make([]string, 0, len(issuers[ref]))
 		for _, gen := range issuers[ref] {
 			generations = append(generations, fmt.Sprintf("%d", gen))
 		}
 		findings = append(findings, fmt.Sprintf(
-			"artifacts/%s.json was bound by %d revision intents but only %d evaluate verdict(s) (generation(s) %s) issued it — one verdict drove more than its single round:\n%s",
+			"artifacts/%s.json was bound by %d business revision rounds but only %d evaluate verdict(s) (generation(s) %s) issued it — one verdict drove more than its single round:\n%s",
 			ref, consumed, issued, strings.Join(generations, ","), strings.Join(evidence[ref], "\n")))
 	}
 	return findings
@@ -510,44 +526,124 @@ func k5RestartTaskFindings(runDir, task string, answeredAt time.Time) []string {
 	return nil
 }
 
-// k5RestartAnsweredFindings derives 重建换身份 from the kernel's settled
-// questions alone: every task the user ever answered restart-session — a
-// runtime question's decisions row or a granted restart request — gets the
-// (a) check. The rows are read across ALL generations (any answer ever
-// settled, stale or current), the same totality the retired answer ledger
-// had; the full check with the time anchor stays k5RestartTaskFindings.
+// k5RestartAnsweredFindings derives 重建换身份 from the kernel's own
+// event order (events.seq — no wall clocks): for every task the user ever
+// answered restart-session,
+//
+//   - the grant's REPLACEMENT — an invocation admitted after the answer
+//     with no task_revised event for the task in between (a revision
+//     separates its invocation from the grant: a blocked retry or a
+//     continuation re-arm legitimately resumes the recorded identity) —
+//     must have opened FRESH: its first turn's native request carries no
+//     identity;
+//   - a task with no admitted invocation after the answer has had no new
+//     result, so the grant's row clear is its last session fact and a
+//     standing task_sessions row is the refused identity surviving.
+//
+// A result admitted after the answer legitimately records its own
+// identity (the session rule's single update point), so the bare row
+// check never runs against one. The strong per-call form with the
+// caller's exact time anchor stays k5RestartTaskFindings.
 func k5RestartAnsweredFindings(runDir string) []string {
 	db, err := sql.Open("sqlite", databaseURI(filepath.Join(runDir, "run.db")))
 	if err != nil {
 		return nil
 	}
 	defer db.Close()
-	rows, err := db.Query(`
-		SELECT task_id FROM decisions WHERE state='answered' AND answer='restart-session'
-		UNION
-		SELECT task_id FROM user_requests WHERE answer='restart-session'`)
+	type invocationFact struct {
+		id  string
+		seq int64
+	}
+	answerSeq := map[string]int64{}    // task → its last restart answer's event seq
+	revisedSeq := map[string][]int64{} // task → its task_revised event seqs
+	admitted := map[string][]invocationFact{}
+	rows, err := db.Query(`SELECT seq, kind, payload_json FROM events ORDER BY seq`)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	seen := map[string]bool{}
-	var tasks []string
 	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
+		var seq int64
+		var kind, payload string
+		if err := rows.Scan(&seq, &kind, &payload); err != nil {
 			return nil
 		}
-		task := strings.TrimSuffix(taskID, askSuffix)
-		if !seen[task] {
-			seen[task] = true
-			tasks = append(tasks, task)
+		switch kind {
+		case "decision_answered", "request_answered":
+			var fact struct {
+				TaskID string `json:"task_id"`
+				Choice string `json:"choice"`
+			}
+			if json.Unmarshal([]byte(payload), &fact) != nil || fact.Choice != "restart-session" {
+				continue
+			}
+			answerSeq[strings.TrimSuffix(fact.TaskID, askSuffix)] = seq
+		case "task_revised":
+			var fact struct {
+				TaskID string `json:"task_id"`
+			}
+			if json.Unmarshal([]byte(payload), &fact) != nil {
+				continue
+			}
+			task := strings.TrimSuffix(fact.TaskID, askSuffix)
+			revisedSeq[task] = append(revisedSeq[task], seq)
+		case "invocation_admitted":
+			var fact struct {
+				InvocationID string `json:"invocation_id"`
+				TaskID       string `json:"task_id"`
+			}
+			if json.Unmarshal([]byte(payload), &fact) != nil {
+				continue
+			}
+			task := strings.TrimSuffix(fact.TaskID, askSuffix)
+			admitted[task] = append(admitted[task], invocationFact{id: fact.InvocationID, seq: seq})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+	var tasks []string
+	for task := range answerSeq {
+		tasks = append(tasks, task)
+	}
+	sort.Strings(tasks)
+	separated := func(task string, from, to int64) bool {
+		for _, seq := range revisedSeq[task] {
+			if seq > from && seq < to {
+				return true
+			}
+		}
+		return false
 	}
 	var findings []string
 	for _, task := range tasks {
+		answer := answerSeq[task]
+		replaced := false
+		for _, invocation := range admitted[task] {
+			if invocation.seq <= answer || separated(task, answer, invocation.seq) {
+				continue
+			}
+			replaced = true
+			first := filepath.Join(runDir, "jobs", pathSafe(task), invocation.id, "turn-01", "native-request.json")
+			value, err := readJSONFile(first)
+			if err != nil {
+				continue // no request survived: nothing to judge here
+			}
+			if identity := textOf(getOf(value, "identity")); identity != "" {
+				findings = append(findings, fmt.Sprintf(
+					"  %s: the restart replacement (%s) resumed the refused identity %q",
+					first, invocation.id, identity))
+			}
+		}
+		if replaced {
+			continue
+		}
 		findings = append(findings, k5RestartTaskFindings(runDir, task, time.Time{})...)
 	}
-	return findings
+	if len(findings) > 0 {
+		return append([]string{"restart-session answers did not produce fresh replacement identities:"}, findings...)
+	}
+	return nil
 }
 
 // assertK5Invariants runs the full invariant set over one terminal observation
@@ -582,23 +678,21 @@ type k5Trajectory struct {
 	RepairRounds int
 }
 
-// k5SnapshotTrajectory reads a run directory's trajectory facts.
+// k5SnapshotTrajectory reads a run directory's trajectory facts. The
+// repair-round count is the business fact — development's executed
+// user_requests revision rows (k5BusinessRevisionInputs, the same rows
+// Store.RevisionRounds reads) — never a count of result files: a parked
+// repair result is not a completed round.
 func k5SnapshotTrajectory(runDir string, state ComposeState) k5Trajectory {
 	traj := k5Trajectory{Status: state.Status, Terminal: state.Terminal, Turns: map[string]int{}}
 	for _, fact := range k5ScanTurns(runDir) {
 		traj.Turns[fact.Task]++
 	}
-	for _, path := range func() []string {
-		paths, _ := filepath.Glob(filepath.Join(runDir, "outcomes", pathSafe(taskDevelopment), "*.json"))
-		return paths
-	}() {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var record outcomeRecord
-		if json.Unmarshal(body, &record) == nil && record.Output != nil && record.Output.Role == "repair" {
-			traj.RepairRounds++
+	if rows, err := k5BusinessRevisionInputs(runDir); err == nil {
+		for _, row := range rows {
+			if row.TaskID == taskDevelopment {
+				traj.RepairRounds++
+			}
 		}
 	}
 	return traj
@@ -958,9 +1052,11 @@ func TestInvariantK5HelperFabricatedFacts(t *testing.T) {
 	if findings := k5SingleActiveWriterFindings(dir); len(findings) != 0 {
 		t.Errorf("one live writer plus one pid-reuse-shaped turn must satisfy the invariant: %v", findings)
 	}
-	// 同一 evaluate 判断驱动两轮返修 → 违例；只驱动一轮 → 通过。判断身份
-	// 是代次（一个代次载荷一判断），ref 只做内容绑定。伪造走内核自己的
-	// 写路径（ReviseTask），与真实运行落下的 task_revisions 行同源。
+	// 同一 evaluate 判断驱动两轮业务返修 → 违例；只驱动一轮 → 通过。判断身份
+	// 是代次（一个代次载荷一判断），ref 只做内容绑定。伪造走内核自己的业务
+	// 写路径（RequestRevision 直批），与真实运行落下的 user_requests＋
+	// task_revisions 行同源；普通裸 ReviseTask 的再武装不落请求行，不算业务
+	// 返修——这正是四轮评审 R5 要求的边界。
 	ref := strings.Repeat("ab", 32)
 	if err := os.MkdirAll(filepath.Join(dir, "outcomes", "evaluate"), 0o755); err != nil {
 		t.Fatal(err)
@@ -981,21 +1077,24 @@ func TestInvariantK5HelperFabricatedFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	brief := fmt.Sprintf(`{"stage":"development","role":"repair","feedback":{"source":{"artifact":%q}}}`, ref)
-	if err := kernel.ReviseTask(kctx, taskDevelopment, runner.TaskSpec{TaskID: taskDevelopment, Input: []byte(brief)}); err != nil {
+	approve := func(round, allowance int) bool { return false } // direct approval below the allowance
+	if err := kernel.RequestRevision(kctx, taskDevelopment,
+		runner.TaskSpec{TaskID: taskDevelopment, Input: []byte(brief)}, nil, approve, 1); err != nil {
 		t.Fatal(err)
 	}
 	if findings := k5EvaluateSingleDriverFindings(dir); len(findings) != 0 {
-		t.Errorf("one repair round driven by one feedback bundle must pass: %v", findings)
+		t.Errorf("one business repair round driven by one feedback bundle must pass: %v", findings)
 	}
-	if err := kernel.ReviseTask(kctx, taskDevelopment, runner.TaskSpec{TaskID: taskDevelopment, Input: []byte(brief)}); err != nil {
+	if err := kernel.RequestRevision(kctx, taskDevelopment,
+		runner.TaskSpec{TaskID: taskDevelopment, Input: []byte(brief)}, nil, approve, 1); err != nil {
 		t.Fatal(err)
 	}
 	if findings := k5EvaluateSingleDriverFindings(dir); len(findings) == 0 {
-		t.Errorf("the same feedback bundle driving a second repair round was not reported")
+		t.Errorf("the same feedback bundle driving a second business repair round was not reported")
 	} else {
 		t.Logf("evaluate-driver findings:\n%s", strings.Join(findings, "\n"))
 	}
-	// 同内容、不同判断：第二个判断（代次 2）发布同一个 ref，两条修订行各
+	// 同内容、不同判断：第二个判断（代次 2）发布同一个 ref，两条业务行各
 	// 归一个判断 → 必须通过。这是判据的正面分支——判断身份是代次，内容
 	// 相同不合并两个判断（三轮评审 R5 的合法场景）。
 	if err := writeAtomicJSON(filepath.Join(dir, "outcomes", "evaluate", "2.json"),
@@ -1004,6 +1103,16 @@ func TestInvariantK5HelperFabricatedFacts(t *testing.T) {
 	}
 	if findings := k5EvaluateSingleDriverFindings(dir); len(findings) != 0 {
 		t.Errorf("two distinct verdicts sharing one feedback ref must each drive their own round: %v", findings)
+	}
+	// 普通再武装不是业务返修：一条裸 ReviseTask 行绑定了同一个 ref（一个
+	// blocked retry 或 continuation 的再武装就是这条形状），不落请求行、不
+	// 计消费——把它计成第二轮就是四轮评审 R5 的误报。
+	if err := kernel.ReviseTask(kctx, taskDevelopment,
+		runner.TaskSpec{TaskID: taskDevelopment, Input: []byte(brief)}); err != nil {
+		t.Fatal(err)
+	}
+	if findings := k5EvaluateSingleDriverFindings(dir); len(findings) != 0 {
+		t.Errorf("an ordinary bare re-arm binding the same ref is not a business repair round: %v", findings)
 	}
 	// 封存候选与检查/门审结果不一致 → 违例；一致 → 通过。
 	if err := os.MkdirAll(filepath.Join(dir, "outcomes", "check-state"), 0o755); err != nil {
