@@ -8,12 +8,8 @@ import (
 )
 
 // dirLock is an exclusive advisory flock on the run directory's lock file,
-// held for the owner's whole lifetime.  flock is chosen over the pid/token
-// heartbeat lock in internal/coordination on purpose: that lock is a
-// cross-namespace product contract with staleness rules of its own, while
-// the kernel needs pure single-run exclusivity that the OS releases
-// automatically when the owning process dies — no heartbeat, no stale-lock
-// recovery.
+// held for the owner's whole lifetime. The kernel releases it automatically
+// when the owning process dies — no heartbeat, no stale-lock recovery.
 type dirLock struct {
 	f *os.File
 }

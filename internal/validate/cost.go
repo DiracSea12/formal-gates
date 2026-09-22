@@ -49,8 +49,9 @@ func backfillDispatchCost(root string, state *RunState, dispatch PreparedDispatc
 	cost.Record(state.Cost, dispatch.ID, entry)
 }
 
-// This uses the existing crash-reclaimable coordination lock, not a second
-// cost store. Always take it before terminal state/admission locks.
+// This uses the shared coordination kernel file lock, not a second cost
+// store; a holder that dies has its lock released by the kernel. Always take
+// it before terminal state/admission locks.
 func lockOwnerCost(root string) (func(), error) {
 	return coordination.AcquirePath(filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp", "owner-cost.lock"), "owner cost")
 }

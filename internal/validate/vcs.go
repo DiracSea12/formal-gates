@@ -168,7 +168,15 @@ func excludeRuntimeUntrackedGitStatus(status string) string {
 func isRuntimeGitStatusPath(path string) bool {
 	path = strings.Trim(path, `"`)
 	path = strings.ReplaceAll(path, `\`, "/")
-	for _, dir := range []string{".gates/tmp/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/"} {
+	// git 在 normal 未跟踪模式下会把没有任何已跟踪文件的目录折叠成一条
+	// "?? .gates/"。.gates 内只有 formal-gates 的运行期产物（tmp 运行状
+	// 态、run-locks 锁文件、results、engine 状态），折叠条目同样按运行
+	// 期输出豁免；宿主一旦跟踪了 .gates 内文件，git 不再折叠，其余未跟
+	// 踪文件仍照常拦截。
+	if path == ".gates" || path == ".gates/" {
+		return true
+	}
+	for _, dir := range []string{".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/"} {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true
 		}

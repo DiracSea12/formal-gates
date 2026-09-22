@@ -58,7 +58,7 @@ func startFixture(t *testing.T) (string, string) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	writeTestFile(t, filepath.Join(root, "design.md"), "design\n")
-	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
+	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/run-locks/\n")
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks"})
 }

@@ -191,8 +191,14 @@ func TestPhase2WhiteboxEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T
 			if err != nil {
 				t.Fatalf("read invalid state directory: %v", err)
 			}
-			if len(entries) != 1 || entries[0].Name() != "state.json" {
-				t.Fatalf("invalid envelope left protocol artifacts: %v", entries)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			sort.Strings(names)
+			// 被拒路径不落协议字节；目录里只有 state.json 与持久的锁工件。
+			if !reflect.DeepEqual(names, []string{"state.json", "write.lock"}) {
+				t.Fatalf("invalid envelope left protocol artifacts: %v", names)
 			}
 		})
 	}
@@ -262,8 +268,13 @@ func TestPhase2WhiteboxEveryDurableCrashWindowConverges(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read recovered directory: %v", err)
 			}
-			if len(entries) != 1 || entries[0].Name() != "state.json" {
-				t.Fatalf("recovery left protocol artifacts: %v", entries)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			sort.Strings(names)
+			if !reflect.DeepEqual(names, qaP2StateArtifacts) {
+				t.Fatalf("recovery left protocol artifacts: %v", names)
 			}
 		})
 	}
@@ -448,8 +459,18 @@ func TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot(t *testing.T)
 		t.Fatalf("Snapshot after engine: %v", err)
 	}
 	changes := (&testkit.FakeVCS{Root: project.Root}).Diff(before, after)
-	if len(changes) != 1 || changes[0].Path != "engine-state/state.json" {
-		t.Fatalf("isolated engine changes = %+v", changes)
+	// 引擎只允许改动隔离根内的状态与锁工件：state.json 必须写入，
+	// write.lock 是持久的目录互斥工件（每次持锁刷新诊断内容）。
+	allowed := map[string]bool{"engine-state/state.json": true, "engine-state/write.lock": true}
+	changedPaths := map[string]bool{}
+	for _, change := range changes {
+		if !allowed[change.Path] {
+			t.Fatalf("isolated engine changes = %+v", changes)
+		}
+		changedPaths[change.Path] = true
+	}
+	if !changedPaths["engine-state/state.json"] {
+		t.Fatalf("engine state was not written inside the isolation root: %+v", changes)
 	}
 	for _, dir := range []string{
 		project.HostConfig,
@@ -513,7 +534,7 @@ func TestPhase2WhiteboxCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 		names = append(names, entry.Name())
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"state.json"}) {
+	if !reflect.DeepEqual(names, qaP2StateArtifacts) {
 		t.Fatalf("revision conflict left protocol artifacts: %v", names)
 	}
 }
@@ -592,12 +613,8 @@ func TestPhase2WhiteboxRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 	if snapshot.Revision != 1 || !reflect.DeepEqual(content, map[string]string{"value": "baseline"}) {
 		t.Fatalf("foreign staged envelope replaced committed state: revision=%d content=%v", snapshot.Revision, content)
 	}
-	entries, err = os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read recovered state directory: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "state.json" {
-		t.Fatalf("residual recovery did not clean protocol artifacts: %v", entries)
+	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+		t.Fatalf("residual recovery did not clean protocol artifacts: %v", names)
 	}
 }
 
@@ -1011,12 +1028,8 @@ func TestPhase2WhiteboxIntegrityMismatchFencesEveryStateOperation(t *testing.T) 
 	if !reflect.DeepEqual(after, corrupt) {
 		t.Fatal("integrity failure path rewrote authoritative state")
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read state directory: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "state.json" {
-		t.Fatalf("integrity failure left protocol artifacts: %v", entries)
+	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+		t.Fatalf("integrity failure left protocol artifacts: %v", names)
 	}
 }
 
@@ -1062,8 +1075,14 @@ func TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites(t
 	if err != nil {
 		t.Fatalf("read state directory after pre-write rejection: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "state.json" {
-		t.Fatalf("pre-write fingerprint rejection left protocol artifacts: %v", entries)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	// 被拒路径不落协议字节；目录里只有 state.json 与持久的锁工件。
+	if !reflect.DeepEqual(names, []string{"state.json", "write.lock"}) {
+		t.Fatalf("pre-write fingerprint rejection left protocol artifacts: %v", names)
 	}
 
 	afterCalls := 0
@@ -1097,12 +1116,8 @@ func TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites(t
 	if snapshot.Revision != 2 || content["value"] != "candidate" {
 		t.Fatalf("post-write state = revision %d content %v", snapshot.Revision, content)
 	}
-	entries, err = os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read state directory: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "state.json" {
-		t.Fatalf("post-write fingerprint path left protocol artifacts: %v", entries)
+	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+		t.Fatalf("post-write fingerprint path left protocol artifacts: %v", names)
 	}
 }
 

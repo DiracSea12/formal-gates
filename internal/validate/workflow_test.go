@@ -3069,7 +3069,9 @@ func workflowFixture(t *testing.T) (string, string) {
 	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。.gates/results 是 seal
 	// 运行期产物（物化用例 / 封板 ledger），在测试里不提交，忽略它以免缺陷 4 落地后
 	// 快照就绪脏检查（检测未跟踪文件）把上一次 seal 的产物误判为未提交变更。
-	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results\n")
+	// .gates/run-locks 是持久的跨进程锁文件（内核文件锁永不删除），同样是运行期
+	// 状态，不是交付物。
+	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/run-locks/\n.gates/results\n")
 	// 白盒设计者交付的结构测试代码不在 baseline 里：它由白盒设计者在开发后主工作区
 	// 编写、host 提交后经白盒测试代码推进路径进入快照（见 whiteboxDeliveredTestCode
 	// 与测试 TestWhiteboxQADesignsAndReviewsAfterDevelopment /

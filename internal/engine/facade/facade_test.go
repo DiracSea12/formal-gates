@@ -53,10 +53,12 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("terminal drive retained active state: %v", err)
 	}
-	for _, name := range []string{"state.json.intent", "write.lock"} {
-		if _, err := os.Stat(filepath.Join(stateDir, name)); !os.IsNotExist(err) {
-			t.Fatalf("terminal drive retained protocol file %s: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(stateDir, "state.json.intent")); !os.IsNotExist(err) {
+		t.Fatalf("terminal drive retained protocol file state.json.intent: %v", err)
+	}
+	// write.lock 是持久的锁工件（内核文件锁，永不删除），保留是预期。
+	if _, err := os.Stat(filepath.Join(stateDir, "write.lock")); err != nil {
+		t.Fatalf("terminal drive lost the persistent lock file: %v", err)
 	}
 	if temps, err := filepath.Glob(filepath.Join(stateDir, ".state.json.*.tmp")); err != nil {
 		t.Fatal(err)

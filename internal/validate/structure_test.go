@@ -80,7 +80,7 @@ func TestWhiteboxVerifyReadyRejectsTrackedRuntimeModification(t *testing.T) {
 }
 
 func TestWhiteboxIsRuntimeGitStatusPath(t *testing.T) {
-	for _, path := range []string{".gates/tmp", ".gates/tmp/run-1/state.json", ".gates/qa-isolation/run-1/", ".gates/slices/run-1/", ".gates/results/old-run.json"} {
+	for _, path := range []string{".gates", ".gates/", ".gates/tmp", ".gates/tmp/run-1/state.json", ".gates/run-locks", ".gates/run-locks/run-1.lock", ".gates/qa-isolation/run-1/", ".gates/slices/run-1/", ".gates/results/old-run.json"} {
 		if !isRuntimeGitStatusPath(path) {
 			t.Fatalf("runtime path %q not recognized as a reserved runtime directory", path)
 		}

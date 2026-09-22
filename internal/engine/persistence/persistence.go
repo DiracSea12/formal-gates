@@ -13,8 +13,9 @@
 //     对账：补做提交、确认已提交或判定残留。
 //   - 完整性摘要：contentDigest 对状态内容计算，读取与写入路径都与
 //     信封一起校验，篡改可检测。
-//   - 文件锁：状态目录级独占写锁（O_CREATE|O_EXCL 锁文件），同目录
-//     并发写互斥；持有者崩溃后按陈旧判定可抢占。
+//   - 文件锁：状态目录级独占写锁，委托 internal/coordination 的内核
+//     文件锁（flock/LockFile）：同目录并发写跨进程互斥，持有者崩溃由
+//     内核自动释放，遗留锁文件不阻塞后续写入。
 //   - revision/CAS：每次写入携带期望 revision，锁内重读不匹配即冲突
 //     拒绝。
 //   - external fingerprint 重验：写入前后各校验一次外部事实指纹；写前
@@ -29,8 +30,7 @@
 //   - stateSchemaVersion 复用 encoder 的引擎侧常量 "1"，语义对齐
 //     internal/validate 的冻结常量 CurrentStateSchemaVersion，
 //     由测试钉死相等；
-//   - 本包不导入 internal/validate：engine 包不得反向依赖
-//     （与 shadow 包相同的结构性约束）。
+//   - 本包不导入 internal/validate：engine 包不得反向依赖。
 //
 // Windows 平台分叉维持延期：execute 段的原子 rename 收敛在
 // Store.executeCommit 单点，未来平台分层只需替换该调用。

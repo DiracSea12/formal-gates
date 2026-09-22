@@ -795,15 +795,11 @@ func TestInstallLockSerializesInstallAndUninstall(t *testing.T) {
 		t.Fatalf("lock does not identify its owner: %q", data)
 	}
 	unlock()
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("unlock did not remove the lock: %v", err)
-	}
+	// 释放即关闭描述符：锁文件持久保留（内核文件锁永不删除），能否被
+	// 第二个进程获取才是释放语义。
 	childOutput = e2eRunInstallLockChild(t, target, "free")
 	if !strings.Contains(childOutput, "free-acquired") {
 		t.Fatalf("lock could not be acquired by a second process after release: %s", childOutput)
-	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("free child did not release the lock file: %v", err)
 	}
 }
 

@@ -709,9 +709,9 @@ func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error
 		}
 		return nil
 	}
-	// 安装后 smoke 挂起会把整个安装事务拖住，直到锁的 ModTime 陈旧阈值把
-	// 仍在存活的持锁者误判抢占。给 smoke 一个明确超时，让挂起以确定性失败
-	// 进入既有回滚路径，而不是依赖陈旧阈值兜底。
+	// 安装后 smoke 挂起会把整个安装事务（连同其持有的锁）无限期拖住。
+	// 给 smoke 一个明确超时，让挂起以确定性失败进入既有回滚路径，而不
+	// 是让事务悬置。
 	ctx, cancel := context.WithTimeout(context.Background(), installedBinarySmokeTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, path, "--version")
@@ -733,8 +733,8 @@ func acquireInstallLock(target string) (func(), error) {
 	return acquireExclusiveLock(installLockPath(target), "install/uninstall")
 }
 
-// acquireExclusiveLock 复用 coordination.AcquirePath 的崩溃可回收文件锁
-// （pid/token 持有者、持锁心跳、失联可抢占），安装/registry 事务与大包
+// acquireExclusiveLock 复用 coordination.AcquirePath 的跨进程内核文件
+// 锁（互斥由内核裁决、持有者死亡自动释放），安装/registry 事务与大包
 // copy + smoke 级别的慢事务共享同一实现。
 func acquireExclusiveLock(path, description string) (func(), error) {
 	return coordination.AcquirePath(path, description)

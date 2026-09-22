@@ -26,8 +26,7 @@ import (
 
 // ErrRunBusy is returned by Open when the directory is already owned.  The
 // underlying flock is released by the kernel when the owning process dies,
-// so unlike the pid/token heartbeat lock in internal/coordination there is
-// no staleness to interpret and no heartbeat to miss.
+// so there is no staleness to interpret and no heartbeat to miss.
 var ErrRunBusy = errors.New("runner: run directory already owned by another owner")
 
 // ErrAdvancing is returned by Run when another Run on the same Store is

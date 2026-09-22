@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// lockStaleAge 与 coordination.AcquirePath 的陈旧阈值一致（10 分钟）：
-// 超过该时长未刷新的存活持有者锁可被抢占。
-const lockStaleAge = 10 * time.Minute
-
 // TestLockMutualExclusionSameDirectory：锁被持有期间，同一目录的第二个
 // 写者（独立 Store 实例）立即被 LockHeldError 拒绝；释放后可继续。
 func TestLockMutualExclusionSameDirectory(t *testing.T) {
@@ -66,85 +62,39 @@ func TestLockMutualExclusionSameDirectory(t *testing.T) {
 	}
 }
 
-// TestLockStaleByAge：持有进程存活但锁文件超过阈值未刷新，视为失联可
-// 抢占（崩溃后持有者不再刷新的场景由此覆盖）。
-func TestLockStaleByAge(t *testing.T) {
+// TestLockLeftoverFileNeverBlocks：持有者异常终止后遗留的锁文件（无论
+// 内容是什么、无论多久未更新）不阻塞下一个写者——互斥由内核在各自打
+// 开的描述符上裁决，锁文件内容只是诊断记录。真实持有者的阻塞与死亡
+// 释放在跨进程 Save 互斥测试中覆盖。
+func TestLockLeftoverFileNeverBlocks(t *testing.T) {
 	store := newTestStore(t)
 	if err := os.MkdirAll(store.dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	stale := time.Now().Add(-lockStaleAge - time.Minute)
-	if err := os.WriteFile(store.lockPath(), fmt.Appendf(nil, "pid=%d\n", os.Getpid()), 0o600); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-	if err := os.Chtimes(store.lockPath(), stale, stale); err != nil {
-		t.Fatalf("age lock: %v", err)
-	}
-	unlock, err := store.acquireLock()
-	if err != nil {
-		t.Fatalf("acquire aged lock: %v", err)
-	}
-	unlock()
-}
-
-// TestLockStaleByGarbage：锁内容不可解析（半个字节、非 pid 格式）视为
-// 崩溃残留，可抢占。
-func TestLockStaleByGarbage(t *testing.T) {
-	store := newTestStore(t)
-	if err := os.MkdirAll(store.dir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	for _, content := range []string{"", "garbage", "pid=abc", "pid=-1", "pid=1 pid=2"} {
-		if err := os.WriteFile(store.lockPath(), []byte(content), 0o600); err != nil {
-			t.Fatalf("write lock: %v", err)
-		}
-		unlock, err := store.acquireLock()
-		if err != nil {
-			t.Fatalf("acquire over garbage lock %q: %v", content, err)
-		}
-		unlock()
-	}
-}
-
-// TestLockStaleByDeadProcess：持有进程已退出（真实死亡进程），锁可抢占。
-func TestLockStaleByDeadProcess(t *testing.T) {
 	cmd := exec.Command("/bin/sleep", "0")
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot spawn child process: %v", err)
 	}
-	pid := cmd.Process.Pid
+	deadPID := cmd.Process.Pid
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("wait child: %v", err)
 	}
-	store := newTestStore(t)
-	if err := os.MkdirAll(store.dir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(store.lockPath(), fmt.Appendf(nil, "pid=%d\n", pid), 0o600); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-	unlock, err := store.acquireLock()
-	if err != nil {
-		t.Fatalf("acquire dead-holder lock: %v", err)
-	}
-	unlock()
-}
-
-// TestFreshLockIsNotStale：当前进程持有、ModTime 新鲜的锁不可抢占。
-func TestFreshLockIsNotStale(t *testing.T) {
-	store := newTestStore(t)
-	if err := os.MkdirAll(store.dir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(store.lockPath(), fmt.Appendf(nil, "pid=%d\n", os.Getpid()), 0o600); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-	if _, err := store.acquireLock(); err == nil {
-		t.Fatal("fresh lock of live holder was preempted")
-	} else {
-		var held *LockHeldError
-		if !errors.As(err, &held) {
-			t.Fatalf("fresh-lock acquire error is %T, want *LockHeldError", err)
+	aged := time.Now().Add(-time.Hour)
+	for _, content := range []string{
+		"", "garbage", "pid=abc", "pid=-1",
+		fmt.Sprintf("pid=%d\n", deadPID),     // 已终止的持有者
+		fmt.Sprintf("pid=%d\n", os.Getpid()), // 形似存活持有者的内容
+	} {
+		if err := os.WriteFile(store.lockPath(), []byte(content), 0o600); err != nil {
+			t.Fatalf("write lock: %v", err)
 		}
+		if err := os.Chtimes(store.lockPath(), aged, aged); err != nil {
+			t.Fatalf("age lock: %v", err)
+		}
+		unlock, err := store.acquireLock()
+		if err != nil {
+			t.Fatalf("leftover lock %q blocked acquisition: %v", content, err)
+		}
+		unlock()
 	}
 }

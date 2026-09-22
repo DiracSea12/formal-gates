@@ -412,6 +412,10 @@ func qaP2LiveLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey,
 	}
 }
 
+// qaP2StateArtifacts 是状态目录的期望常驻集合：state.json 之外，
+// write.lock 是持久的目录互斥工件（内核文件锁永不删除）。
+var qaP2StateArtifacts = []string{"state.json", "write.lock"}
+
 func qaP2ArtifactNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -502,7 +506,7 @@ func TestQAPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *te
 			if err != nil {
 				t.Fatalf("read state after rejection: %v", err)
 			}
-			if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+			if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 				t.Fatalf("rejected envelope changed bytes or artifacts: names=%v", qaP2ArtifactNames(t, dir))
 			}
 		})
@@ -565,7 +569,7 @@ func TestQAPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
 			if snapshot.Revision != tc.revision || content["value"] != tc.value {
 				t.Fatalf("recovered snapshot = revision %d content=%v", snapshot.Revision, content)
 			}
-			if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+			if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 				t.Fatalf("recovery artifacts = %v", qaP2ArtifactNames(t, dir))
 			}
 		})
@@ -714,8 +718,18 @@ func TestQAPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *tes
 		t.Fatalf("Snapshot after: %v", err)
 	}
 	changes := (&testkit.FakeVCS{Root: project.Root}).Diff(before, after)
-	if len(changes) != 1 || changes[0].Path != "engine-state/state.json" {
-		t.Fatalf("isolated engine changes = %+v", changes)
+	// 引擎只允许改动隔离根内的状态与锁工件：state.json 必须写入，
+	// write.lock 是持久的目录互斥工件（每次持锁刷新诊断内容）。
+	allowed := map[string]bool{"engine-state/state.json": true, "engine-state/write.lock": true}
+	changed := map[string]bool{}
+	for _, change := range changes {
+		if !allowed[change.Path] {
+			t.Fatalf("isolated engine changes = %+v", changes)
+		}
+		changed[change.Path] = true
+	}
+	if !changed["engine-state/state.json"] {
+		t.Fatalf("engine state was not written inside the isolation root: %+v", changes)
 	}
 	for _, dir := range []string{project.HostConfig, project.State, project.Resources, project.StableState, project.StableRun} {
 		if names := qaP2ArtifactNames(t, dir); len(names) != 0 {
@@ -753,7 +767,7 @@ func TestQAPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing
 	if err != nil {
 		t.Fatalf("read state after conflict: %v", err)
 	}
-	if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+	if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 		t.Fatalf("CAS conflict changed bytes or artifacts: %v", qaP2ArtifactNames(t, dir))
 	}
 }
@@ -819,7 +833,7 @@ func TestQAPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testi
 	if snapshot.Revision != 1 || content["value"] != "baseline" {
 		t.Fatalf("foreign staged document replaced baseline: revision=%d content=%v", snapshot.Revision, content)
 	}
-	if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+	if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 		t.Fatalf("recovery left artifacts: %v", qaP2ArtifactNames(t, dir))
 	}
 }
@@ -1184,7 +1198,7 @@ func TestQAPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *test
 	if err != nil {
 		t.Fatalf("read corrupt state after operations: %v", err)
 	}
-	if !bytes.Equal(after, corrupt) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+	if !bytes.Equal(after, corrupt) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 		t.Fatalf("integrity fence changed bytes or artifacts: %v", qaP2ArtifactNames(t, dir))
 	}
 }
@@ -1216,7 +1230,7 @@ func TestQAPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedW
 	if err != nil {
 		t.Fatalf("read state after pre-write change: %v", err)
 	}
-	if !bytes.Equal(afterRejected, baseline) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+	if !bytes.Equal(afterRejected, baseline) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 		t.Fatalf("pre-write change modified state/artifacts: %v", qaP2ArtifactNames(t, dir))
 	}
 	afterCalls := 0
@@ -1243,7 +1257,7 @@ func TestQAPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedW
 	if err := json.Unmarshal(snapshot.Content, &content); err != nil {
 		t.Fatalf("decode candidate: %v", err)
 	}
-	if snapshot.Revision != 2 || content["value"] != "candidate" || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), []string{"state.json"}) {
+	if snapshot.Revision != 2 || content["value"] != "candidate" || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
 		t.Fatalf("post-write state = revision %d content=%v artifacts=%v", snapshot.Revision, content, qaP2ArtifactNames(t, dir))
 	}
 }

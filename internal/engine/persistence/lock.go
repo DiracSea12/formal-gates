@@ -26,9 +26,9 @@ func transactionLock(dir string) *sync.Mutex {
 // acquireLock 获取状态目录级独占写锁（同目录
 // 并发写互斥）。锁是目录级而非单个文件级：目录内 state/intent/temp
 // 的全部写入都在同一把锁下互斥。实现复用 coordination.AcquirePath
-// （崩溃可回收文件锁：持有者死亡或锁文件超过阈值未刷新即可抢占，
-// 持锁期间由心跳刷新）。engine 写事务是毫秒级小事务，心跳在事务
-// 生命周期内不会实际触发；返回释放函数，释放即删除锁文件。
+// （内核文件锁：互斥由内核在各次打开的描述符上裁决，持有者死亡即自
+// 动释放，锁文件持久存在）。engine 写事务是毫秒级小事务；返回释放
+// 函数，释放即关闭描述符。
 func (s *Store) acquireLock() (func(), error) {
 	unlock, err := coordination.AcquirePath(s.lockPath(), "engine state directory")
 	if err != nil {
