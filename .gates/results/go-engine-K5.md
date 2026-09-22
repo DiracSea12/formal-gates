@@ -320,3 +320,46 @@ latestTurnDir 跨 invocation 取最大 turn→旧调用 turn-02 压过当前调�
 
 TestReview3 全绿（5 测试类，期望零改动）；四族回归全绿；harness 全包 317s 绿＋race 绿；runner
 race 绿；vet/gofmt 干净；全仓零 FAIL；windows 交叉编译 OK。模型调用 0。
+
+## 四轮评审返修（边上下文贯穿，按参考规则表修复，2026-09-22）
+
+**四轮评审（`/private/tmp/k5-review4/review.md`，候选 `20183f9`）：FAIL，2 P1＋4 P2**——前三轮全部
+原场景确认通过；机主定调本轮方法论："节点和箭头对了，边上的上下文答错，流程仍然是错的；修复经常
+只覆盖眼前症状，没有把同一条业务规则贯穿到底"（实证：三轮 R4 的续做走 revision 恰造成本轮 R5 的
+不变量误报）。发现：R1（P1）BLOCKED→retry 静默新会话（四角色全中——rememberSession 只在 accepted
+后跑、gate 每次空身份起）；R6（P1）已完成 run 重开再执行检查（route 先于终态判定＋检查轮次惰性
+跨终态同步）；R2（P2）CONTINUE 恢复保会话丢 unfinished-work 反馈；R3（P2）门审比较材料生成了但
+task.json 无 comparison 字段；R4（P2）repairRounds 把停驻 repair 结果计为完成轮次；R5（P2）不变量
+把每个修订引用行当业务消费。
+
+### 修复方法：先产规则表（合同的脊柱），修复对规则不对探针
+
+从 graph.py invoke_worker（66-104）逐条抽出九行规则表（每条边携带什么上下文、什么只能一次），
+六发现各自映射到违反行。四个混用概念显式分离：**调用次数（turn）/任务代次（generation）/重试次数
+（attempt）/业务返修轮次**——业务轮次唯一权威＝内核 user_requests 业务 revision 行（RequestRevision
+落、state=executed；与内核额度 used 同一聚合，新增只读出口 Store.RevisionRounds）；普通 retry/continue
+走裸 ReviseTask 不落该表，天然可分。
+
+- **会话单一更新点**：settleWorkerResult/finishGate 顶部 rememberSession（分类之前，对齐 graph.py:85
+  无条件更新）；两类 retry 显式分界——新审查轮（pre-review/qa-design/gate 返修重审）显式清会话，
+  同一工作的 retry（worker-blocked/runtime/continue）不清（R1）。
+- **续做反馈单一组装**：continuationFeedback（unfinished-work 包装＋initial_feedback）live 循环与
+  恢复再武装共用；parkContinue 记 parked outcome 供重组装（R2）。
+- **终态边界**：Drive 顶部判 runs.terminal，先于任何 route/revise/launch；检查轮次同步
+  （advanceCheckRounds）移到返修落定时刻，routeCheckBriefs 只余无操作复查（R6）。
+- **门审材料接入**：comparison 目录＋逐文件 proof 写进 task.json（对齐参考 workers.py），重放一致性
+  由既有 saved-material 相等检查保证（R3）。
+- **业务轮次读点**：repairRounds→RevisionRounds；不变量消费计数改 k5BusinessRevisionInputs
+  （task_revisions JOIN executed user_requests），裸 ReviseTask 绑同 ref 不算业务行（反例入伪造测试）
+  （R4/R5）。
+- **P3**：finishGate/executeGate 的不可达 CONTINUE 分支删除（合同只许 development/repair CONTINUE）。
+- **夹具诚实性**（评审点名假宿主 new/resume 同回 s-1 掩盖 R1）：held-after-retry 补 resume 应答步；
+  两处树内测试改按**实际方法＋输入身份**断言；k5RestartAnsweredFindings 改走内核事件全序（events.seq
+  无墙钟）修掉对合法"重启后新结果记身份"的误报。
+
+### 验证（主代理亲跑）
+
+TestReview4 全绿（7 测试类含正控，期望零改动）；五族回归零回退（234.7s）；harness 全包 370.7s 绿；
+race（Review4/Review3/Independent）279.2s 绿；runner race 绿；vet/gofmt 干净；全仓零 FAIL。模型调用 0。
+零 schema 变更（全部复用 v5 既有表）。偏离四项如实（新轮次显式清会话是允许中的选择；不变量判据
+重写超 R5 字面系会话记录扩展的必然后果；两处函数内减量；未做真实宿主验收）。
