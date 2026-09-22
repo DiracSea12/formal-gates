@@ -71,14 +71,15 @@ func (c *Compose) executeCandidate(inv runner.Invocation) (runner.Result, error)
 	return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
 }
 
-// repairRounds counts the completed repair rounds: one per development
-// outcome whose brief carried the repair role. Derived, never stored.
+// repairRounds counts the completed business repair rounds: the kernel's
+// executed revision requests of development (user_requests) — the same
+// rows the allowance verdict counts. A parked repair result, an ordinary
+// retry and a continuation's re-arm revise through bare ReviseTask and
+// land no request row, so none of them is a business round here.
 func (c *Compose) repairRounds() int {
-	rounds := 0
-	for _, gen := range c.outcomeGenerations(taskDevelopment) {
-		if outcome := c.readOutcome(taskDevelopment, gen); outcome != nil && outcome.Output != nil && outcome.Output.Role == "repair" {
-			rounds++
-		}
+	rounds, err := c.store.RevisionRounds(context.Background(), taskDevelopment)
+	if err != nil {
+		return 0
 	}
 	return rounds
 }
@@ -359,7 +360,11 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 	if err != nil {
 		return runner.Result{}, err
 	}
-	identity := ""
+	// The gate resumes the identity its own most recent result reported —
+	// the same record every worker stage reads (rememberSession); a new
+	// repair round drops it (routeRepair) so the re-review is a fresh
+	// round, never a silent resume.
+	identity := c.session(gateTaskID(gate))
 	attempt := 0
 	series := c.seriesKey(gateTaskID(gate), inv.Generation, brief)
 	for {
@@ -378,7 +383,7 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 			// call that cannot be classified — an owner dying mid-preparation
 			// must leave no such phantom turn.
 			key := c.turnKey(series, attempt)
-			materials, err := c.writeMaterials(jobDir, key, brief, workspace, false, nil)
+			materials, err := c.writeMaterials(jobDir, key, brief, workspace, nil)
 			if err != nil {
 				return runner.Result{}, err
 			}
@@ -417,15 +422,14 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 			c.event("worker-complete", map[string]any{"role": gate, "task": gateTaskID(gate), "status": worker.Status})
 		}
 		// The worker-outcome judgement drives the loop — for a replayed
-		// receipt exactly as for a live answer: CONTINUE continues the
-		// session; everything else settles through finishGate, the one
-		// admission the recovery consult adopts through too.
+		// receipt exactly as for a live answer. The contract refuses a
+		// CONTINUE answer for every gate role (ValidateWorker), so no
+		// turn of this loop classifies as one: BLOCKED parks; a verdict
+		// settles through finishGate, the one admission the recovery
+		// consult adopts through too.
 		action := textOf(workerOutcome(workerOutcomeInput{
 			Role: gate, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
 		switch action {
-		case "continue":
-			identity = output.Identity
-			continue
 		case "blocked":
 			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
 		default:
@@ -442,19 +446,19 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 // finishGate is THE admission of one gate turn's output: the live gate
 // loop (a fresh answer and a receipt replay alike) and the takeover
 // consultation's adoption of a recovered receipt all end here, so the
-// same output lands the same gate facts whichever path found it. A
-// BLOCKED answer parks on the same worker-blocked disposition the live
-// loop parks on — run-condition trouble waits for the user's disposal and
-// is never a verdict evaluate can read as a business failure — and a
-// verdict is recorded and admitted with its candidate binding, so the
-// seal can later prove the same-candidate evidence.
+// same output lands the same gate facts whichever path found it. The
+// identity the result reported is remembered before the branches — the
+// session rule's single update point, whatever the classification
+// decides next. A BLOCKED answer parks on the same worker-blocked
+// disposition the live loop parks on — run-condition trouble waits for
+// the user's disposal and is never a verdict evaluate can read as a
+// business failure — and a verdict is recorded and admitted with its
+// candidate binding, so the seal can later prove the same-candidate
+// evidence.
 func (c *Compose) finishGate(taskID string, generation int64, candidate string, output *workerOutput) (runner.Result, error) {
+	c.rememberSession(taskID, output.Identity)
 	switch textOf(workerOutcome(workerOutcomeInput{
 		Role: output.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
-	case "continue":
-		// Only recovery settles a CONTINUE here (the live loop keeps
-		// looping): the continuation parks to be re-armed on its session.
-		return runner.Result{}, c.parkContinue(taskID, generation, output)
 	case "blocked":
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, output.Series, output, runner.Disposition{
 			Kind:     "worker-blocked",

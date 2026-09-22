@@ -146,13 +146,14 @@ func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeSta
 	}
 	if d.Kind == "continue" {
 		// The live loop would simply start the next turn: recovery re-arms
-		// the stage on its current brief — the remembered session identity
-		// carries the work under the SAME session — and no question is
-		// asked. The row is spent once the task moved past the parked
-		// generation (a crash between the revision and this clear re-reads
-		// the moved generation and only cleans up).
+		// the stage on the SAME next-turn input the live loop builds — the
+		// unfinished-work feedback over the parked CONTINUE result (its
+		// recorded outcome), under the recorded session identity — and no
+		// question is asked. The row is spent once the task moved past the
+		// parked generation (a crash between the revision and this clear
+		// re-reads the moved generation and only cleans up).
 		if c.taskGeneration(task) <= d.Generation {
-			if err := c.revise(ctx, task, c.lastBrief(task)); err != nil {
+			if err := c.revise(ctx, task, c.continueReArmBrief(task, d.Generation)); err != nil {
 				return ComposeState{Status: StatusFailed, Err: err}, true
 			}
 		}
@@ -307,16 +308,29 @@ func (c *Compose) askRecorded(ctx context.Context, questionTask, disposition str
 
 // applyRetry revises the retried stage with the brief its retry needs —
 // derived, at this moment, from the durable facts the disposition names.
+// Two retry kinds, two session rules: a run-condition retry (blocked,
+// runtime, findings, continuation) re-runs the SAME work and its call
+// resumes the recorded identity; a business review FAIL starts an
+// independent new round, so the retried reviewer's recorded identity is
+// dropped and the round opens a fresh session — the two are never
+// conflated into one treatment.
 func (c *Compose) applyRetry(ctx context.Context, d *runner.Disposition, task string) error {
 	target := c.dispositionTarget(d, task)
 	switch d.Kind {
 	case "pre-review":
+		// A new review round: the failed result's session does not carry
+		// into it (the reference starts each round's invoke_worker fresh).
+		c.clearSession(target)
 		brief, err := c.retryBrief(target, "prior-review-findings")
 		if err != nil {
 			return err
 		}
 		return c.revise(ctx, target, brief)
 	case "qa-design":
+		// A new design-and-review round: both stages' recorded identities
+		// are spent with the round they judged.
+		c.clearSession(taskQADesign)
+		c.clearSession(taskQAReview)
 		brief, err := c.qaDesignRetryBrief()
 		if err != nil {
 			return err
@@ -341,6 +355,32 @@ func (c *Compose) applyRetry(ctx context.Context, d *runner.Disposition, task st
 	default:
 		return fmt.Errorf("compose: unknown disposition kind %q", d.Kind)
 	}
+}
+
+// continueReArmBrief is the re-armed stage's brief after a parked
+// CONTINUE: the same next-turn input the live loop would run — the
+// continuation feedback (continuationFeedback) over the parked result's
+// recorded outcome — on the brief the parked generation ran with. The
+// bytes persist with the revision, so a crash after the re-arm replays
+// exactly this input.
+func (c *Compose) continueReArmBrief(task string, generation int64) []byte {
+	briefBytes := c.lastBrief(task)
+	var brief workerBrief
+	if jsonUnmarshal(briefBytes, &brief) != nil || brief.Role == "" {
+		return briefBytes
+	}
+	outcome := c.readOutcome(task, generation)
+	if outcome == nil || outcome.Output == nil {
+		return briefBytes // no recorded CONTINUE fact: re-arm the bound brief unchanged
+	}
+	body, err := CanonicalJSON(map[string]any{
+		"stage": brief.Stage, "role": brief.Role, "revision": brief.Revision,
+		"feedback": continuationFeedback(task, generation, brief, outcome.Output, c.spec.revision),
+	})
+	if err != nil {
+		return briefBytes
+	}
+	return body
 }
 
 // retryBrief rebuilds a worker brief with the feedback wrapper of one
@@ -409,22 +449,23 @@ func unmarshalBrief(brief []byte, into any) error {
 // isWaiting recognizes the kernel's durable-ask return.
 func isWaiting(err error) bool { return err != nil && err == runner.ErrWaitingDecision }
 
-// routeCheckBriefs keeps every check brief at its current round: a new
-// repair round moves the round counter so a fresh attempt is counted from
-// zero — attempts are per round.
-func (c *Compose) routeCheckBriefs(ctx context.Context) (ComposeState, bool) {
+// advanceCheckRounds brings every check brief to the current business
+// round: a new repair round moves the round counter so a fresh attempt
+// is counted from zero — attempts are per round. It runs at the moment
+// the round lands (routeRepair), inside the active flow, so the briefs
+// never lag behind the round the rest of the run already committed to.
+func (c *Compose) advanceCheckRounds(ctx context.Context) error {
 	round := c.repairRounds()
 	for _, check := range c.spec.spec.Checks {
 		task := checkTaskID(check.ID)
 		if c.dispositionStands(task) {
 			continue
 		}
-		brief := c.lastBrief(task)
 		var current struct {
 			Round   int `json:"round"`
 			Attempt int `json:"attempt"`
 		}
-		if unmarshalBrief(brief, &current) != nil {
+		if unmarshalBrief(c.lastBrief(task), &current) != nil {
 			continue
 		}
 		if current.Round >= round {
@@ -434,12 +475,21 @@ func (c *Compose) routeCheckBriefs(ctx context.Context) (ComposeState, bool) {
 			"stage": task, "revision": c.spec.revision, "round": round, "attempt": 0,
 		})
 		if err != nil {
-			return ComposeState{Status: StatusFailed, Err: err}, true
+			return err
 		}
 		if err := c.revise(ctx, task, next); err != nil {
-			return ComposeState{Status: StatusFailed, Err: err}, true
+			return err
 		}
-		return ComposeState{}, false
+	}
+	return nil
+}
+
+// routeCheckBriefs keeps every check brief at its current round — the
+// route's own pass over the same rule advanceCheckRounds applies when the
+// round lands, a no-op re-check while the two stay in step.
+func (c *Compose) routeCheckBriefs(ctx context.Context) (ComposeState, bool) {
+	if err := c.advanceCheckRounds(ctx); err != nil {
+		return ComposeState{Status: StatusFailed, Err: err}, true
 	}
 	return ComposeState{}, false
 }
@@ -610,7 +660,18 @@ func (c *Compose) routeRepair(ctx context.Context) (ComposeState, bool) {
 	switch {
 	case err == nil:
 		// Direct approval (or the granted completion): the revision and
-		// its input bytes are bound in the kernel's transaction.
+		// its input bytes are bound in the kernel's transaction. The new
+		// round's synchronous effects land here, in the active flow: the
+		// gates re-review a new candidate — an independent review round
+		// opens fresh sessions — and every check brief moves to the round
+		// it will run in, so nothing is left for a later pass to catch up
+		// across a terminal.
+		for _, gate := range c.spec.spec.Gates {
+			c.clearSession(gateTaskID(gate))
+		}
+		if err := c.advanceCheckRounds(ctx); err != nil {
+			return ComposeState{Status: StatusFailed, Err: err}, true
+		}
 		return ComposeState{}, false
 	case isWaiting(err):
 		// The durable allowance ask: nothing is bound yet; the user's

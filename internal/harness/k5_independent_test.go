@@ -172,8 +172,14 @@ func TestIndependentK5Owner(t *testing.T) {
 	if s.Mode == "product-fail" {
 		scripts[taskProduct] = scriptedAnswer{Status: "FAIL", Summary: "requirements need correction", Findings: scriptedFindings, SleepSecs: 2}
 	}
-	if s.Mode == "continue-gap" {
-		scripts["development#1"] = scriptedAnswer{Status: "CONTINUE", Summary: "continuing", NoWrite: true}
+	if s.Mode == "repair-continue-gap" {
+		scripts["development#1"] = scriptedAnswer{Status: "PASS", Summary: "not fixed", NoWrite: true}
+		scripts["development#2"] = scriptedAnswer{Status: "CONTINUE", Summary: "continuing repair", NoWrite: true}
+	}
+	if s.Mode == "continue-gap" || s.Mode == "repair-continue-gap" {
+		if s.Mode == "continue-gap" {
+			scripts["development#1"] = scriptedAnswer{Status: "CONTINUE", Summary: "continuing", NoWrite: true}
+		}
 		normal := cfg.Binding
 		cfg.Binding = func(call NativeCall) (map[string]any, error) {
 			if call.TaskID == taskDevelopment && call.Attempt == 2 {
@@ -203,11 +209,16 @@ func TestIndependentK5Owner(t *testing.T) {
 				return normal(call)
 			}
 			steps := dshScriptSteps(call.JobDir, passAnswer())
+			openResume := steps[2]
 			response := steps[2]
 			response.On = `"outcome":"selected"`
 			response.Send = `{"id":3,"result":{"stopReason":"end_turn"}}`
 			hold := peerStep{On: `"method":"session/prompt"`, Send: `{"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"s-1","toolCall":{"toolCallId":"call-9"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}`}
-			steps = []peerStep{steps[0], steps[1], hold, response, steps[3]}
+			// Both session-open handlers stand: a same-work retry resumes
+			// its recorded identity (session/resume), a fresh round opens
+			// session/new — the scripted peer must answer whichever the
+			// call actually sends, or a legitimate resume hangs.
+			steps = []peerStep{steps[0], steps[1], openResume, hold, response, steps[3]}
 			return dshBindingFor(t, fixedPeerPath(t, steps, filepath.Join(call.JobDir, "peer-echo.txt"))), nil
 		}
 	}

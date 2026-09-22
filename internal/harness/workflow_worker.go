@@ -363,7 +363,7 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 			// judges a turn by its files, and a directory holding nothing is a
 			// call that cannot be classified — an owner dying mid-preparation
 			// must leave no phantom turn behind.
-			materials, err := c.writeMaterials(jobDir, key, brief, workspace, attempt > 1, initialFeedback)
+			materials, err := c.writeMaterials(jobDir, key, brief, workspace, initialFeedback)
 			if err != nil {
 				return runner.Result{}, err
 			}
@@ -411,10 +411,7 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 			Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
 		if action == "continue" {
 			identity = output.Identity
-			initialFeedback = map[string]any{
-				"continuation":     continuationWrapper(taskID, inv.Generation, output, c.spec.revision),
-				"initial_feedback": decodedFeedback(brief.Feedback),
-			}
+			initialFeedback = continuationFeedback(taskID, inv.Generation, brief, output, c.spec.revision)
 			continue
 		}
 		return c.settleWorkerResult(taskID, inv.Generation, series, brief, output)
@@ -425,11 +422,16 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 // the live invoke loop (a fresh answer and a receipt replay alike) and the
 // takeover consultation's adoption of a recovered receipt all end here, so
 // the same receipt lands the same domain facts whichever path found it.
-// CONTINUE (recovery only — the loops keep looping) parks the continuation
-// to be re-armed; BLOCKED and unresolved findings park with the recorded
-// result; an admissible result is judged by the stage's own rules
-// (parkOnResult), recorded, its session remembered, and returned.
+// The identity the result reported is remembered before the branches —
+// the session rule's single update point (graph.py's invoke_worker reads
+// it before classifying): whatever the classification decides next
+// (CONTINUE parks to be re-armed, BLOCKED and unresolved findings park
+// with the recorded result, a needs-repair result parks its stage's own
+// question), the stage's next call resumes THIS identity. Only an
+// explicit new round drops it: a review retry, a repair round's gate
+// re-review (both in the route), a granted restart (in the kernel).
 func (c *Compose) settleWorkerResult(taskID string, generation int64, series string, brief workerBrief, output *workerOutput) (runner.Result, error) {
+	c.rememberSession(taskID, output.Identity)
 	switch textOf(workerOutcome(workerOutcomeInput{
 		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
 	case "continue":
@@ -458,7 +460,6 @@ func (c *Compose) settleWorkerResult(taskID string, generation int64, series str
 	}); err != nil {
 		return runner.Result{}, err
 	}
-	c.rememberSession(taskID, output.Identity)
 	return resultOf(output)
 }
 
@@ -544,6 +545,19 @@ func decodedFeedback(raw json.RawMessage) any {
 		return nil
 	}
 	return value
+}
+
+// continuationFeedback is THE next-turn input after one CONTINUE result
+// (graph.py invoke_worker's continue branch): the unfinished-work
+// wrapper over that result paired with the brief's initial feedback.
+// The live loop's next turn and the recovery re-arm's revised brief both
+// build it here, so an interrupted continuation and an uninterrupted one
+// run with the same materials.
+func continuationFeedback(taskID string, generation int64, brief workerBrief, output *workerOutput, revision string) map[string]any {
+	return map[string]any{
+		"continuation":     continuationWrapper(taskID, generation, output, revision),
+		"initial_feedback": decodedFeedback(brief.Feedback),
+	}
 }
 
 // continuationWrapper is the unfinished-work evidence feedback for a
@@ -686,14 +700,18 @@ func (c *Compose) park(taskID string, generation int64, attempt int, d runner.Di
 }
 
 // parkContinue parks one CONTINUE answer that recovery found: the
-// answer's turn is done and its next turn never started. The unfinished
-// session is remembered so the re-armed stage resumes the SAME session,
-// and the "continue" park row drives the route's automatic re-arm —
-// unfinished work is continued under its own identity, never judged a
-// lost session.
+// answer's turn is done and its next turn never started. The result is
+// recorded as the generation's parked outcome — the fact the re-arm
+// rebuilds its continuation feedback from — and the "continue" park row
+// drives the route's automatic re-arm: unfinished work is continued
+// under its own recorded identity (the admission chain remembered it)
+// and its own unfinished-work feedback, never judged a lost session.
 func (c *Compose) parkContinue(taskID string, generation int64, output *workerOutput) error {
-	if output.Identity != "" {
-		_ = c.store.SetSession(context.Background(), taskID, output.Identity)
+	if err := c.writeOutcome(outcomeRecord{
+		Task: taskID, Generation: generation, Action: "parked",
+		Worker: &output.Result, Output: output,
+	}); err != nil {
+		return err
 	}
 	return c.park(taskID, generation, output.Turn, runner.Disposition{
 		Kind: "continue", Reason: output.Result.Summary,
@@ -720,13 +738,17 @@ func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, s
 	return c.park(taskID, generation, attempt, d)
 }
 
-// rememberSession keeps the development session identity the repair round
-// resumes — the kernel's task_sessions row, the same authority the
-// restart grant clears. A write failure is swallowed exactly as the old
-// file write's was: the cost of a lost identity is a fresh session on
-// the next call, never a failed settled turn.
+// rememberSession records the identity one classified worker result
+// reported — THE single update point of the session rule (rule table row
+// 1): a stage's next call resumes the most recent result's identity,
+// whatever the classification was, for every worker and gate task alike.
+// The kernel's task_sessions row is the authority the restart grant
+// clears and every execution re-reads (session). A write failure is
+// swallowed exactly as the old file write's was: the cost of a lost
+// identity is a fresh session on the next call, never a failed settled
+// turn.
 func (c *Compose) rememberSession(taskID, identity string) {
-	if taskID != taskDevelopment || identity == "" {
+	if identity == "" {
 		return
 	}
 	_ = c.store.SetSession(context.Background(), taskID, identity)
@@ -809,8 +831,8 @@ type workerMaterials struct {
 // writeMaterials lands the per-turn input materials the prompt reads: the
 // bound requirement, the task.json built by the accepted task-input
 // judgement, and — for the gate roles — the frozen base-to-candidate
-// comparison.
-func (c *Compose) writeMaterials(jobDir, key string, brief workerBrief, workspace string, continuation bool, feedback any) (workerMaterials, error) {
+// comparison, referenced from the task input itself.
+func (c *Compose) writeMaterials(jobDir, key string, brief workerBrief, workspace string, feedback any) (workerMaterials, error) {
 	materials := workerMaterials{directory: filepath.Join(workspace, ".formal-gates-input", key)}
 	if err := os.MkdirAll(materials.directory, 0o755); err != nil {
 		return workerMaterials{}, err
@@ -828,8 +850,26 @@ func (c *Compose) writeMaterials(jobDir, key string, brief workerBrief, workspac
 		return workerMaterials{}, err
 	}
 	var candidate string
+	var comparison map[string]any
 	if brief.Role == "complexity-gate" || brief.Role == "implementation-quality-gate" {
 		candidate = c.currentCandidate()
+		// The comparison materializes first so the task input can carry
+		// its reference: the prompt's "when task.json contains
+		// comparison" clause is dead letter without the field.
+		files, err := c.materializeComparison(workspace, materials.directory, c.spec.spec.Base, candidate)
+		if err != nil {
+			return workerMaterials{}, err
+		}
+		named := map[string]any{}
+		for _, proof := range files {
+			named[proof.Name] = proof.Expected
+		}
+		comparison = map[string]any{
+			"base": c.spec.spec.Base, "candidate": candidate,
+			"directory": filepath.Join(materials.directory, "comparison"),
+			"files":     named,
+		}
+		materials.inputFiles = files
 	}
 	taskValue, err := planTaskInput(taskInputInput{
 		Role: brief.Role, Revision: c.spec.revision, Base: c.spec.spec.Base,
@@ -839,6 +879,9 @@ func (c *Compose) writeMaterials(jobDir, key string, brief workerBrief, workspac
 		return workerMaterials{}, err
 	}
 	taskJSON := taskValue
+	if comparison != nil {
+		taskJSON["comparison"] = comparison
+	}
 	taskPath := filepath.Join(materials.directory, "task.json")
 	if saved, err := readJSONFile(taskPath); err == nil {
 		if !valuesEqual(saved, taskJSON) {
@@ -848,13 +891,6 @@ func (c *Compose) writeMaterials(jobDir, key string, brief workerBrief, workspac
 		return workerMaterials{}, err
 	}
 	materials.taskJSON = taskJSON
-	if candidate != "" {
-		files, err := c.materializeComparison(workspace, materials.directory, c.spec.spec.Base, candidate)
-		if err != nil {
-			return workerMaterials{}, err
-		}
-		materials.inputFiles = files
-	}
 	return materials, nil
 }
 

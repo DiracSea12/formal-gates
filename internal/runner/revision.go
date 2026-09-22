@@ -395,6 +395,21 @@ func (s *Store) RevisionInputs(ctx context.Context) ([]RevisionInput, error) {
 	return out, rows.Err()
 }
 
+// RevisionRounds counts one task's executed revision requests — the
+// business rounds RequestRevision's own allowance verdict counts (`used`
+// is the same aggregate over the same rows).  A direct approval is born
+// executed and an asked round lands executed when its grant's completion
+// call revises, so the count is settled exactly when the revision lands,
+// never by a later worker result: a parked or re-armed round drives no
+// number here.
+func (s *Store) RevisionRounds(ctx context.Context, taskID string) (int, error) {
+	var rounds int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM user_requests WHERE run_id=? AND task_id=? AND kind=? AND state=?",
+		s.runID, taskID, kindRevision, reqExecuted).Scan(&rounds)
+	return rounds, err
+}
+
 // RequestRevision is the executable control chain over ReviseTask: one
 // business revision of taskID, gated by the repair allowance.
 // exhaustion is the question asked when the allowance is reached;

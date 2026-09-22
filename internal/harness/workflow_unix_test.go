@@ -376,6 +376,30 @@ func turnDirs(t *testing.T, c *Compose, taskID string) []string {
 	return dirs
 }
 
+// requestedIdentity reads one turn's requested session identity from its
+// native-request.json — the fact the transport carried, not the identity
+// the fake host answers with (it returns s-1 for every open, so a fixture
+// that only looks at the answer cannot tell a resume from a replacement).
+func requestedIdentity(t *testing.T, turn string) string {
+	t.Helper()
+	value, err := readJSONFile(filepath.Join(turn, "native-request.json"))
+	if err != nil {
+		t.Fatalf("%s: %v", turn, err)
+	}
+	return textOf(getOf(value, "identity"))
+}
+
+// openedByResume reports the session-open method a turn's peer actually
+// saw, read back from its peer echo.
+func openedByResume(t *testing.T, turn string) bool {
+	t.Helper()
+	echo, err := os.ReadFile(filepath.Join(turn, "peer-echo.txt"))
+	if err != nil {
+		t.Fatalf("%s: %v", turn, err)
+	}
+	return strings.Contains(string(echo), `"method":"session/resume"`)
+}
+
 // ---- 正常: the full chain, green end to end --------------------------------
 
 // TestWorkflowGreenChainSealsAndArchives drives the whole flow: the
@@ -603,6 +627,12 @@ func TestWorkflowPreReviewRetryThenPass(t *testing.T) {
 	if state.Status != StatusWaitingDecision || state.Pending[0].TaskID != askTask(taskProduct) {
 		t.Fatalf("stop = %+v", state)
 	}
+	// The failed review's session does not carry into the new round. The
+	// anchor is the retry answer; every product call whose request landed
+	// after it is the new round, judged by the method the peer saw and
+	// the identity the request carried — not by the s-1 the fake host
+	// answers every open with.
+	retryAnswered := time.Now()
 	if _, err := c.Answer(ctx, state.Pending[0].DecisionID, "retry"); err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +646,22 @@ func TestWorkflowPreReviewRetryThenPass(t *testing.T) {
 	if task == nil {
 		t.Fatal("the retried review never received its prior findings")
 	}
-	if len(turnDirs(t, c, taskProduct)) < 2 {
+	retried := 0
+	for _, turn := range turnDirs(t, c, taskProduct) {
+		request := filepath.Join(turn, "native-request.json")
+		info, err := os.Stat(request)
+		if err != nil || !info.ModTime().After(retryAnswered) {
+			continue
+		}
+		retried++
+		if identity := requestedIdentity(t, turn); identity != "" {
+			t.Errorf("the retried review resumed the failed round's session %q", identity)
+		}
+		if openedByResume(t, turn) {
+			t.Error("the retried review opened by session/resume")
+		}
+	}
+	if retried == 0 {
 		t.Fatal("the product review did not re-run after its retry")
 	}
 }
@@ -862,6 +907,41 @@ func TestWorkflowSessionRefusalAsksRestart(t *testing.T) {
 	final := answerAllowing(t, c, ctx, nil)
 	if final.Status != StatusComplete {
 		t.Fatalf("final = %+v (err %v)", final, final.Err)
+	}
+	// Session honesty, by the transport's own facts: the refused call is
+	// the one whose peer saw the -32004 refusal — it must have OPENED by
+	// session/resume carrying the recorded identity (otherwise the
+	// scenario never tested a refused resume), and the replacement after
+	// the restart answer must have opened fresh.
+	restartAnswered := time.Now().Add(-time.Second) // the answer above precedes this read
+	for _, turn := range turnDirs(t, c, taskDevelopment) {
+		echo, err := os.ReadFile(filepath.Join(turn, "peer-echo.txt"))
+		if err != nil {
+			t.Fatalf("%s: %v", turn, err)
+		}
+		if !strings.Contains(string(echo), "-32004") {
+			continue
+		}
+		if identity := requestedIdentity(t, turn); identity != "s-1" {
+			t.Errorf("the refused repair call did not resume the recorded identity (requested %q)", identity)
+		}
+		if !openedByResume(t, turn) {
+			t.Error("the refused repair call opened a fresh session instead of resuming")
+		}
+	}
+	for _, turn := range turnDirs(t, c, taskDevelopment) {
+		request := filepath.Join(turn, "native-request.json")
+		info, err := os.Stat(request)
+		if err != nil || !info.ModTime().After(restartAnswered) {
+			continue
+		}
+		if echo, err := os.ReadFile(filepath.Join(turn, "peer-echo.txt")); err == nil &&
+			strings.Contains(string(echo), "-32004") {
+			continue // the refused call itself, not the replacement
+		}
+		if identity := requestedIdentity(t, turn); identity != "" {
+			t.Errorf("the replacement after restart-session resumed the refused identity %q", identity)
+		}
 	}
 }
 

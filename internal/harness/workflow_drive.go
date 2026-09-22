@@ -29,8 +29,17 @@ const composeMaxIterations = 96
 // Drive advances the run until a user input is needed or a terminal
 // judgment is reached. Transitions run before every kernel run, so an
 // answered question moves its stage forward before any consultation could
-// misread the parked call it left behind.
+// misread the parked call it left behind. A persisted terminal comes
+// before all of that: a completed or aborted run is a non-advancing
+// boundary — no route, revision or launch follows it, so reopening or
+// driving again returns the terminal it already holds.
 func (c *Compose) Drive(ctx context.Context) ComposeState {
+	if terminal, _, err := c.store.Terminal(ctx); err == nil && terminal != "" {
+		if terminal == statusAborted {
+			return ComposeState{Status: StatusAborted, Terminal: terminal}
+		}
+		return ComposeState{Status: StatusComplete, Terminal: terminal}
+	}
 	for iteration := 0; iteration < composeMaxIterations; iteration++ {
 		c.runMu.Lock()
 		idle := c.runDone == nil
