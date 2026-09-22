@@ -302,42 +302,46 @@ func questionAllow(d *runner.Disposition) string {
 // session — the two are never conflated into one treatment.
 func (c *Compose) applyRetry(ctx context.Context, d *runner.Disposition, task string) error {
 	target := c.dispositionTarget(d, task)
-	// resolveBrief adapts one brief builder's (bytes, error) pair into the
-	// parked task's resolve, so each case below reads as its own rule.
-	resolveBrief := func(parked, targetTask string) func([]byte, error) error {
-		return func(brief []byte, err error) error {
-			if err != nil {
-				return err
-			}
-			return c.store.ResolveDisposition(ctx, parked, targetTask, runner.TaskSpec{
-				TaskID: targetTask, Input: brief,
-			})
+	// resolveBrief lands one retry's resolve: fail on the brief builder's
+	// error, else hand its bytes to the parked task's resolve — so each
+	// case below reads as its own rule.
+	resolveBrief := func(parked, targetTask string, brief []byte, err error) error {
+		if err != nil {
+			return err
 		}
+		return c.store.ResolveDisposition(ctx, parked, targetTask, runner.TaskSpec{
+			TaskID: targetTask, Input: brief,
+		})
 	}
 	switch d.Kind {
 	case "pre-review":
 		// A new review round: the failed result's session does not carry
 		// into it (the reference starts each round's invoke_worker fresh).
 		c.clearSession(target)
-		return resolveBrief(task, target)(c.retryBrief(target, "prior-review-findings"))
+		brief, err := c.retryBrief(target, "prior-review-findings")
+		return resolveBrief(task, target, brief, err)
 	case "qa-design":
 		// A new design-and-review round: both stages' recorded identities
 		// are spent with the round they judged.
 		c.clearSession(taskQADesign)
 		c.clearSession(taskQAReview)
-		return resolveBrief(task, taskQADesign)(c.qaDesignRetryBrief())
+		brief, err := c.qaDesignRetryBrief()
+		return resolveBrief(task, taskQADesign, brief, err)
 	case "development-findings":
-		return resolveBrief(task, taskDevelopment)(c.retryBrief(taskDevelopment, "unresolved-findings"))
+		brief, err := c.retryBrief(taskDevelopment, "unresolved-findings")
+		return resolveBrief(task, taskDevelopment, brief, err)
 	case "worker-blocked", "runtime":
 		// The blocked and runtime retries re-run the stage on its current
 		// brief; a restart-session additionally dropped the session above.
-		return resolveBrief(task, target)(c.lastBrief(target), nil)
+		return resolveBrief(task, target, c.lastBrief(target), nil)
 	case "check-runtime":
-		return resolveBrief(task, target)(c.checkRetryBrief(target))
+		brief, err := c.checkRetryBrief(target)
+		return resolveBrief(task, target, brief, err)
 	case "plan":
 		// The approved plan re-arms the plan task on its creation brief;
 		// the re-run records the approval outcome.
-		return resolveBrief(task, taskPlan)(c.initialBrief(taskPlan))
+		brief, err := c.initialBrief(taskPlan)
+		return resolveBrief(task, taskPlan, brief, err)
 	default:
 		return fmt.Errorf("compose: unknown disposition kind %q", d.Kind)
 	}
@@ -418,18 +422,13 @@ func (c *Compose) checkRetryBrief(taskID string) ([]byte, error) {
 		Round   int `json:"round"`
 		Attempt int `json:"attempt"`
 	}
-	if err := unmarshalBrief(brief, &current); err != nil {
+	if err := jsonUnmarshal(brief, &current); err != nil {
 		return nil, err
 	}
 	return CanonicalJSON(map[string]any{
 		"stage": taskID, "revision": c.spec.revision,
 		"round": current.Round, "attempt": current.Attempt + 1,
 	})
-}
-
-// unmarshalBrief decodes a brief's JSON.
-func unmarshalBrief(brief []byte, into any) error {
-	return jsonUnmarshal(brief, into)
 }
 
 // isWaiting recognizes the kernel's durable-ask return.
@@ -451,7 +450,7 @@ func (c *Compose) advanceCheckRounds(ctx context.Context) error {
 			Round   int `json:"round"`
 			Attempt int `json:"attempt"`
 		}
-		if unmarshalBrief(c.lastBrief(task), &current) != nil {
+		if jsonUnmarshal(c.lastBrief(task), &current) != nil {
 			continue
 		}
 		if current.Round >= round {
@@ -640,7 +639,6 @@ func (c *Compose) repairBrief() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = body
 	wrapper, err := planEvidenceFeedback(evidenceFeedbackInput{
 		Ref:      ref,
 		Purpose:  "failed-verification",
