@@ -832,8 +832,8 @@ func TestK2PendingDecisionsExcludeAnswered(t *testing.T) {
 }
 
 // A v2 file (the accepted K1 baseline) is migrated forward, not refused:
-// the decisions table is rebuilt, the version stamped 3, and every K1
-// fact survives untouched.
+// every post-v2 delta table is added and the version stamped to this
+// build's, and every K1 fact survives untouched.
 func TestK2MigratesV2ToV3(t *testing.T) {
 	dir := t.TempDir()
 	specs := []TaskSpec{
@@ -852,7 +852,7 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 	// Rewind the file to the v2 shape: drop the post-v2 delta tables and
 	// stamp the old version — exactly what a K1-accepted baseline looks
 	// like (the K4 rework's v4 delta included: user_requests and
-	// call_observations).
+	// call_observations; the v5 delta: task_revisions and task_sessions).
 	db, err := sql.Open("sqlite", filepath.Join(dir, dbFileName))
 	if err != nil {
 		t.Fatal(err)
@@ -864,6 +864,12 @@ func TestK2MigratesV2ToV3(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("DROP TABLE call_observations"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DROP TABLE task_revisions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DROP TABLE task_sessions"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("PRAGMA user_version = 2"); err != nil {
@@ -921,4 +927,100 @@ func countEvents(t *testing.T, st *Store, kind string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// TestK2QuestionReadsServeTheCompositionPins pins the two read-only
+// exports the composition's ask/answer transitions read (the retired
+// answer/ask ledgers' replacement): TaskQuestion for "was this asked /
+// what was answered" on one task, AnsweredQuestions for the run's settled
+// refusal facts. Only what the calls themselves add is pinned here — the
+// surrounding rules (Answer's families, the generation binding) are the
+// suites above.
+func TestK2QuestionReadsServeTheCompositionPins(t *testing.T) {
+	store, _ := openQuestionRun(t)
+	ctx := context.Background()
+	// No gate yet: nothing stands, nothing settled.
+	if _, ok, err := store.TaskQuestion(ctx, "review"); err != nil || ok {
+		t.Fatalf("TaskQuestion before any gate: ok=%v err=%v", ok, err)
+	}
+	if settled, err := store.AnsweredQuestions(ctx); err != nil || len(settled) != 0 {
+		t.Fatalf("AnsweredQuestions before any answer: %v err=%v", settled, err)
+	}
+	// A standing gate reads pending: its frozen body is the ask record the
+	// composition's disposition binding matches against.
+	if _, err := store.OpenQuestion(ctx, "review", question()); err != nil {
+		t.Fatal(err)
+	}
+	standing, ok, err := store.TaskQuestion(ctx, "review")
+	if err != nil || !ok {
+		t.Fatalf("TaskQuestion pending gate: ok=%v err=%v", ok, err)
+	}
+	if standing.Answered || standing.Choice != "" || standing.TaskID != "review" ||
+		standing.Body != "Findings remain." || standing.DecisionID == "" {
+		t.Fatalf("pending question read = %+v", standing)
+	}
+	// A user request parks no task of its own and never appears as one
+	// task's standing question; refusing it lands in the settled read.
+	if err := store.RequestRevision(ctx, "work",
+		TaskSpec{TaskID: "work", Input: []byte(`{"v":2}`)},
+		&Confirmation{Options: []string{"continue", "abort"}, Allow: "continue"},
+		func(round, allowance int) bool { return true }, 1); err != nil && err != ErrWaitingDecision {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.TaskQuestion(ctx, "work"); err != nil || ok {
+		t.Fatalf("a request must not appear as a task question: ok=%v err=%v", ok, err)
+	}
+	pending, err := store.PendingDecisions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requestID string
+	for _, question := range pending {
+		if question.TaskID == "work" {
+			requestID = question.DecisionID
+		}
+	}
+	if requestID == "" {
+		t.Fatalf("pending = %+v, want the repair-allowance request", pending)
+	}
+	if _, err := store.Answer(ctx, requestID, "abort"); err != nil {
+		t.Fatal(err)
+	}
+	// Allowing the gate settles it with its own choice; both families now
+	// carry exactly the refusal facts the composition's test reads.
+	if _, err := store.Answer(ctx, standing.DecisionID, "retry"); err != nil {
+		t.Fatal(err)
+	}
+	answered, ok, err := store.TaskQuestion(ctx, "review")
+	if err != nil || !ok || !answered.Answered || answered.Choice != "retry" {
+		t.Fatalf("answered question read = %+v ok=%v err=%v", answered, ok, err)
+	}
+	settled, err := store.AnsweredQuestions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settled) != 2 ||
+		settled[0] != (AnsweredQuestion{TaskID: "review", Choice: "retry", Allow: "retry"}) ||
+		settled[1] != (AnsweredQuestion{TaskID: "work", Choice: "abort", Allow: "continue"}) {
+		t.Fatalf("settled = %+v", settled)
+	}
+	// A revision moves the task past its answered gate: the carried gate is
+	// pending again at the new generation and the old answer is history —
+	// invisible to both reads. (The revision also invalidates the refused
+	// request: "work" sits in the revision's dependent closure, its row
+	// loses the generation binding, and dead history decides nothing.)
+	if err := store.ReviseTask(ctx, "review", TaskSpec{TaskID: "review", Input: []byte(`{"v":2}`)}); err != nil {
+		t.Fatal(err)
+	}
+	carried, ok, err := store.TaskQuestion(ctx, "review")
+	if err != nil || !ok || carried.Answered {
+		t.Fatalf("carried gate = %+v ok=%v err=%v (want pending)", carried, ok, err)
+	}
+	settled, err = store.AnsweredQuestions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settled) != 0 {
+		t.Fatalf("settled after revision = %+v, want history to decide nothing", settled)
+	}
 }

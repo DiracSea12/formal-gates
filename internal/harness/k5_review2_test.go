@@ -139,9 +139,13 @@ func TestReviewK5RepairBrief(t *testing.T) {
 		t.Fatalf("feedback bundles not distinguished: A=%q B=%q", refA, refB)
 	}
 	var repairBriefs []string
-	for _, entry := range c.readRevisions() {
-		if entry.Task == taskDevelopment && entry.Why == "repair round" {
-			repairBriefs = append(repairBriefs, string(entry.Brief))
+	// The repair rounds' briefs, kernel-sourced: revision inputs of the
+	// development task carrying the repair role (the shape a repair
+	// round's brief always has — the filter the old ledger's "repair
+	// round" marker provided).
+	for _, row := range c.kernelRevisionInputs() {
+		if row.TaskID == taskDevelopment && strings.Contains(string(row.Input), `"role":"repair"`) {
+			repairBriefs = append(repairBriefs, string(row.Input))
 		}
 	}
 	if len(repairBriefs) < 2 {

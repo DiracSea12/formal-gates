@@ -439,8 +439,20 @@ func TestK4TakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
 		defer st.Close()
 		ctx := context.Background()
 		orig := pendingInvocationID(t, st, "a")
+		// The refused identity the grant must clear, in its own transaction:
+		// remembered now, empty the moment the grant lands (the v5
+		// single-authority chain — no projection step in between).
+		if err := st.SetSession(ctx, "a", "s-refused"); err != nil {
+			t.Fatal(err)
+		}
+		if identity, err := st.Session(ctx, "a"); err != nil || identity != "s-refused" {
+			t.Fatalf("remembered identity = %q (err %v), want s-refused before the answer", identity, err)
+		}
 		if _, err := st.Answer(ctx, askID, "restart-session"); err != nil {
 			t.Fatal(err)
+		}
+		if identity, err := st.Session(ctx, "a"); err != nil || identity != "" {
+			t.Errorf("identity after the restart grant = %q (err %v), want cleared with the grant itself", identity, err)
 		}
 		// Recovery settles the stored decision alone — no consult and no
 		// Restart declaration needed — and the replacement runs under a

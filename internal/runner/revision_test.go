@@ -12,11 +12,13 @@ package runner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -810,4 +812,178 @@ func TestK4ReviseTaskBoundaries(t *testing.T) {
 			t.Fatalf("executed %d times with the revised input, want 1", executed)
 		}
 	})
+}
+
+// TestV5RevisionInputsPersistWithTheBump: the byte carrier behind
+// tasks.input_digest.  ReviseTask persists the TARGET's input in the same
+// transaction as its bump; a dependent the invalidation closure bumped
+// writes no row (its input did not change — that asymmetry is what lets
+// readers tell "revised itself" from "bumped upstream"); RequestRevision's
+// direct approval persists through the same reviseScope; and a reopened
+// owner re-sends exactly the persisted bytes, which the run's digest
+// binding accepts.
+func TestV5RevisionInputsPersistWithTheBump(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	specs := []TaskSpec{
+		{TaskID: "a", Name: "A", Input: []byte("in-a-1")},
+		{TaskID: "b", Name: "B", DependsOn: []string{"a"}, Input: []byte("in-b-1")},
+	}
+	st := mustCreate(t, dir, "v5-rev-inputs", specs)
+
+	// A fresh run carries no revision inputs: creation inputs are
+	// re-derived from the run's binding, never stored.
+	if rows, err := st.RevisionInputs(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("fresh run revision inputs = %v (err %v), want none", rows, err)
+	}
+	if err := st.ReviseTask(ctx, "a", TaskSpec{TaskID: "a", Input: []byte("in-a-2")}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.RevisionInputs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].TaskID != "a" || rows[0].Generation != 2 || string(rows[0].Input) != "in-a-2" {
+		t.Fatalf("revision inputs after one revision = %+v, want exactly a@2 with its bytes", rows)
+	}
+	// The closure bumped the dependent without new bytes: no row for b,
+	// though its generation moved.
+	if gen, err := st.TaskGeneration(ctx, "b"); err != nil || gen != 2 {
+		t.Fatalf("dependent generation after the revision = %d (err %v), want bumped to 2", gen, err)
+	}
+	for _, row := range rows {
+		if row.TaskID == "b" {
+			t.Fatalf("dependent revision row = %+v, want none (closure bumps write no rows)", row)
+		}
+	}
+	// RequestRevision below the allowance approves directly: the revision
+	// and its input bytes land through the same write path.
+	ask := &Confirmation{
+		Options: []string{"continue", "abort"}, Allow: "continue",
+		Revision: "r1", Body: []byte("allowance reached"),
+	}
+	if err := st.RequestRevision(ctx, "b",
+		TaskSpec{TaskID: "b", Input: []byte("in-b-2")}, ask,
+		func(_, _ int) bool { return false }, 3); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = st.RevisionInputs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("revision inputs after the direct approval = %+v, want one row per revision target", rows)
+	}
+	last := rows[len(rows)-1]
+	if last.TaskID != "b" || last.Generation != 3 || string(last.Input) != "in-b-2" {
+		t.Fatalf("direct-approval row = %+v, want b@3 with its bytes", last)
+	}
+
+	// A reopened owner re-sends the persisted bytes and the digest binding
+	// accepts them — the whole point of the carrier.
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	rows, err = st2.RevisionInputs(ctx)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("reopened revision inputs = %v (err %v), want both rows", rows, err)
+	}
+	revised := []TaskSpec{
+		{TaskID: "a", Name: "A", Input: []byte("in-a-2")},
+		{TaskID: "b", Name: "B", DependsOn: []string{"a"}, Input: []byte("in-b-2")},
+	}
+	if err := NewRunner(st2, recordingExecutor(nil, nil)).Run(ctx, revised); err != nil {
+		t.Fatalf("run on the persisted revision inputs: %v", err)
+	}
+}
+
+// TestV5StepsV4Forward: an accepted v4 file — user_requests and
+// call_observations but neither v5 table — opens forward additively at
+// v5: the version stamps, every v4 fact survives, and both v5
+// capabilities work on the stepped database.  (A pre-v5 revision's bytes
+// are simply absent, exactly as they were in v4: the digest binding, not
+// a compatibility read, decides what a stepped run accepts.)
+func TestV5StepsV4Forward(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	specs := []TaskSpec{{TaskID: "a", Name: "A", Input: []byte("in-a-1")}}
+	st := mustCreate(t, dir, "v5-step", specs)
+	if err := st.ReviseTask(ctx, "a", TaskSpec{TaskID: "a", Input: []byte("in-a-2")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Rewind the file to the v4 shape: drop the v5 delta tables and stamp 4.
+	db, err := sql.Open("sqlite", filepath.Join(dir, dbFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"DROP TABLE task_revisions",
+		"DROP TABLE task_sessions",
+		"PRAGMA user_version = 4",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after the v4 rewind: %v", err)
+	}
+	defer st2.Close()
+	var version int
+	if err := st2.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version after the v4 step = %d, want %d", version, schemaVersion)
+	}
+	if st2.runID != "v5-step" {
+		t.Fatalf("run id after the step = %q, want v5-step", st2.runID)
+	}
+	// The v4 facts survive: the task, its bumped generation, and the
+	// revision inputs the v4 shape never had.
+	if gen, err := st2.TaskGeneration(ctx, "a"); err != nil || gen != 2 {
+		t.Fatalf("generation after the step = %d (err %v), want the v4 bump preserved", gen, err)
+	}
+	if rows, err := st2.RevisionInputs(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("revision inputs on the stepped file = %v (err %v), want none (v4 carried no bytes)", rows, err)
+	}
+	if identity, err := st2.Session(ctx, "a"); err != nil || identity != "" {
+		t.Fatalf("session on the stepped file = %q (err %v), want empty", identity, err)
+	}
+	// Both v5 capabilities work on the stepped database.
+	if err := st2.ReviseTask(ctx, "a", TaskSpec{TaskID: "a", Input: []byte("in-a-3")}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st2.RevisionInputs(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("post-step revision inputs = %v (err %v), want the new row", rows, err)
+	}
+	if rows[0].TaskID != "a" || rows[0].Generation != 3 || string(rows[0].Input) != "in-a-3" {
+		t.Fatalf("post-step row = %+v, want a@3 with its bytes", rows[0])
+	}
+	if err := st2.SetSession(ctx, "a", "s-1"); err != nil {
+		t.Fatal(err)
+	}
+	if identity, err := st2.Session(ctx, "a"); err != nil || identity != "s-1" {
+		t.Fatalf("session round-trip on the stepped file = %q (err %v), want s-1", identity, err)
+	}
+	if err := st2.ClearSession(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if identity, err := st2.Session(ctx, "a"); err != nil || identity != "" {
+		t.Fatalf("session after the clear = %q (err %v), want empty", identity, err)
+	}
 }
