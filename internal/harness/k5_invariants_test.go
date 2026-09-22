@@ -13,8 +13,11 @@ package harness
 //   - 单活写入者（R1）：同一开发工作区至多一个活动写入调用。写入者只有
 //     development 任务（development 与 repair 都是它的世代）；检查在各自
 //     一次性克隆里跑、门审只读，因此不算这个工作区的写入者。
-//   - evaluate 单驱动（R1）：每个 evaluate 失败反馈包（artifacts/<ref>.json）
-//     至多驱动一轮返修——内核 task_revisions 里引用同一 ref 的修订输入 ≤1。
+//   - evaluate 单驱动（R1；判据按三轮评审 R5 修正）：每个 evaluate 判断
+//     （按代次，outcomes/evaluate/<gen>.json 一判断）至多驱动一轮返修——
+//     内核 task_revisions 里引用某反馈包的修订输入数 ≤ 发布该反馈包的
+//     判断数。反馈 ref 只是内容摘要（同发现＋同候选 ⇒ 同 ref），负责内容
+//     绑定，不是判断身份：不同判断共享内容合法，同一判断驱动两次违例。
 //   - COMPLETE 零未结算（R1）：终态 HARNESS_COMPLETE 时，jobs/ 下不存在
 //     “收据缺失（无 exit.json）且进程身份存在（有 process.json）”的目录。
 //   - 结果绑候选（R5）：seal 引用的每个 check/gate 结果都绑定同一个最终
@@ -60,7 +63,7 @@ package harness
 // │ 重建后换执行身份（R4）                                │ 评审 TestIndependentK5FreshSessionAfterRestart       │ k5RestartTaskFindings（不变量助手）             │ 绿（R4 修复后）│
 // │ QA 设计/评审循环 qa_review 132–142                    │ TestWorkflowQADesignLoop、TestWorkflowQADesignFailReviewPassAsksDesignRetry │ —                     │ 绿          │
 // │ 开发未决发现拦截 98–104                               │ TestWorkflowDevelopmentFindingsAsk                   │ —                                              │ 绿          │
-// │ 返修循环 evaluate→repair→candidate 291–292           │ TestWorkflowRepairRoundDrivesNewCandidate、TestWorkflowRepairLimitAskContinueAndAbort、TestReviewK5GateRepair、TestReviewK5RepairBrief | …InterruptedRepairInFlight + evaluate 单驱动 | 中断版绿（R1 修复后由本测试确认）│
+// │ 返修循环 evaluate→repair→candidate 291–292           │ TestWorkflowRepairRoundDrivesNewCandidate、TestWorkflowRepairLimitAskContinueAndAbort、TestReviewK5GateRepair、TestReviewK5RepairBrief | …InterruptedRepairInFlight + evaluate 单驱动（判断按代次计，同内容多判断合法） | 中断版绿（R1 修复后由本测试确认）│
 // │ 崩溃接回 Store.job 288–324（收据轮询/UNKNOWN 不盲重） │ TestWorkflowCrashTakeoverClassifications             │ …InterruptedRepairInFlight / …InterruptedCheckReceipt | 检查侧绿，门审在途侧红│
 // │ 已完成检查/门审接回（R5：同候选接纳）                │ 评审 TestIndependentK5CompletedCheckCrash / CompletedGateCrash | …InterruptedCheckReceipt + 结果绑候选不变量 | 检查绿（R5A 修复后）；门审在途重跑仍红│
 // │ 恢复后的 Held 权限请求                                │ TestReviewK5RecoveredHeld、评审 RecoveredGatePermission | —                                              │ 绿          │
@@ -208,11 +211,24 @@ func k5SingleActiveWriterFindings(runDir string) []string {
 	return findings
 }
 
-// k5EvaluateRefs lists the feedback refs published by evaluate outcomes
-// (artifacts/<ref>.json), from outcomes/evaluate/<gen>.json.
-func k5EvaluateRefs(runDir string) []string {
+// k5EvaluateVerdict is one evaluate verdict's identity facts: the
+// generation it ran at and the feedback bundle ref it published.
+type k5EvaluateVerdict struct {
+	// Generation is 判断的代次身份——outcomes/evaluate/<gen>.json 的 gen。
+	Generation int64
+	// Ref is 反馈包的内容摘要（artifacts/<ref>.json），只做内容绑定。
+	Ref string
+}
+
+// k5EvaluateVerdicts reads every evaluate verdict from the outcome tree,
+// one per generation payload (outcomes/evaluate/<gen>.json), sorted by
+// generation. 判断的身份是代次，不是 ref：ref 是内容摘要——同样的失败
+// 发现加未变的候选哈希出同一个 ref，所以“两轮返修都没让发现变化”这条
+// 合法轨迹会由两个不同判断发布同一个 ref。一个代次恰有一个载荷文件，
+// 文件集就是判断的全集。
+func k5EvaluateVerdicts(runDir string) []k5EvaluateVerdict {
 	paths, _ := filepath.Glob(filepath.Join(runDir, "outcomes", "evaluate", "*.json"))
-	var refs []string
+	var verdicts []k5EvaluateVerdict
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
 		if err != nil {
@@ -222,10 +238,10 @@ func k5EvaluateRefs(runDir string) []string {
 		if json.Unmarshal(body, &record) != nil || record.Feedback == "" {
 			continue
 		}
-		refs = append(refs, record.Feedback)
+		verdicts = append(verdicts, k5EvaluateVerdict{Generation: record.Generation, Ref: record.Feedback})
 	}
-	sort.Strings(refs)
-	return refs
+	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].Generation < verdicts[j].Generation })
+	return verdicts
 }
 
 // k5RevisionInputs reads the kernel's persisted revision inputs from a
@@ -255,41 +271,63 @@ func k5RevisionInputs(runDir string) ([]runner.RevisionInput, error) {
 	return out, rows.Err()
 }
 
-// k5EvaluateSingleDriverFindings checks evaluate 单驱动：每个 evaluate 反馈包
-// 至多驱动一轮返修——内核 task_revisions 中输入引用同一 artifacts/<ref> 的
-// 修订 ≤1。返修 brief 的 feedback 包装器以 source.artifact 携带 ref，所以按
-// ref 字符串匹配；不按任务或用途过滤（任何引用该反馈包的修订都算消费
-// 它），与账本时代同强或更强——证据行与修订落库在同一事务，不再存在
-// “内核已修订、账本行缺失”的低报窗口。
+// k5EvaluateSingleDriverFindings checks evaluate 单驱动 by verdict
+// identity, not content identity: 每个 evaluate 判断（一个代次）至多驱动
+// 一轮返修。ref 只把判断绑定到消费了它的修订行——返修 brief 逐字内嵌
+// wrapper 的 source.artifact，所以按 ref 字符串匹配；不按任务或用途过滤
+// （任何引用该反馈包的修订都算消费它），与账本时代同强或更强。
+//
+// 判据：对每个 ref，引用它的修订输入行数 ≤ 发布过该 ref 的判断数（按
+// 代次计，一个代次载荷一判断）。为什么这是“一项判断只消费一次”而“同
+// 内容多判断合法”：修订行和判断都随轮次单调前移——每轮返修把开发任务
+// 的修订序列和 evaluate 的代次一起推一格——所以第 i 条引用行只可能由
+// 第 i 个或更早的同 ref 判断驱动；行数一旦超过判断数，必有某个判断驱动
+// 了第二轮（一项判断被消费两次），必报。行数不超过判断数时，每条行都
+// 能配到一个单独的判断，两个判断共享同一个 ref 各走各的一轮，合法——
+// 判断身份（代次）与内容身份（ref）分开，内容相等绝不合并两个判断。
+// 证据行与修订落库在同一事务，内核读不到本身就是要报告的事实。
 func k5EvaluateSingleDriverFindings(runDir string) []string {
-	refs := k5EvaluateRefs(runDir)
-	if len(refs) == 0 {
+	verdicts := k5EvaluateVerdicts(runDir)
+	if len(verdicts) == 0 {
 		return nil
 	}
 	rows, err := k5RevisionInputs(runDir)
 	if err != nil {
 		return []string{"run.db task_revisions is unreadable: " + err.Error()}
 	}
-	counts := map[string]int{}
-	evidence := map[string][]string{}
+	issuers := map[string][]int64{} // ref → 发布过它的判断代次（升序）
+	for _, verdict := range verdicts {
+		issuers[verdict.Ref] = append(issuers[verdict.Ref], verdict.Generation)
+	}
+	evidence := map[string][]string{} // ref → 引用了它的修订输入行（按行序）
 	for i, row := range rows {
 		brief := string(row.Input)
-		for _, ref := range refs {
+		for ref := range issuers {
 			if strings.Contains(brief, ref) {
-				counts[ref]++
 				evidence[ref] = append(evidence[ref], fmt.Sprintf(
 					"  run.db task_revisions row %d: task=%s generation=%d binds artifacts/%s.json",
 					i+1, row.TaskID, row.Generation, ref))
 			}
 		}
 	}
+	var refs []string
+	for ref := range issuers {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
 	var findings []string
 	for _, ref := range refs {
-		if counts[ref] > 1 {
-			findings = append(findings, fmt.Sprintf(
-				"artifacts/%s.json drove %d revision intents (at most 1 allowed):\n%s",
-				ref, counts[ref], strings.Join(evidence[ref], "\n")))
+		consumed, issued := len(evidence[ref]), len(issuers[ref])
+		if consumed <= issued {
+			continue // 每条引用行都配得到各自的判断：一轮一判断，合法
 		}
+		generations := make([]string, 0, len(issuers[ref]))
+		for _, gen := range issuers[ref] {
+			generations = append(generations, fmt.Sprintf("%d", gen))
+		}
+		findings = append(findings, fmt.Sprintf(
+			"artifacts/%s.json was bound by %d revision intents but only %d evaluate verdict(s) (generation(s) %s) issued it — one verdict drove more than its single round:\n%s",
+			ref, consumed, issued, strings.Join(generations, ","), strings.Join(evidence[ref], "\n")))
 	}
 	return findings
 }
@@ -920,9 +958,9 @@ func TestInvariantK5HelperFabricatedFacts(t *testing.T) {
 	if findings := k5SingleActiveWriterFindings(dir); len(findings) != 0 {
 		t.Errorf("one live writer plus one pid-reuse-shaped turn must satisfy the invariant: %v", findings)
 	}
-	// 同一 evaluate 反馈包驱动两轮返修 → 违例；只驱动一轮 → 通过。伪造走
-	// 内核自己的写路径（ReviseTask），与真实运行落下的 task_revisions 行
-	// 同源。
+	// 同一 evaluate 判断驱动两轮返修 → 违例；只驱动一轮 → 通过。判断身份
+	// 是代次（一个代次载荷一判断），ref 只做内容绑定。伪造走内核自己的
+	// 写路径（ReviseTask），与真实运行落下的 task_revisions 行同源。
 	ref := strings.Repeat("ab", 32)
 	if err := os.MkdirAll(filepath.Join(dir, "outcomes", "evaluate"), 0o755); err != nil {
 		t.Fatal(err)
@@ -956,6 +994,16 @@ func TestInvariantK5HelperFabricatedFacts(t *testing.T) {
 		t.Errorf("the same feedback bundle driving a second repair round was not reported")
 	} else {
 		t.Logf("evaluate-driver findings:\n%s", strings.Join(findings, "\n"))
+	}
+	// 同内容、不同判断：第二个判断（代次 2）发布同一个 ref，两条修订行各
+	// 归一个判断 → 必须通过。这是判据的正面分支——判断身份是代次，内容
+	// 相同不合并两个判断（三轮评审 R5 的合法场景）。
+	if err := writeAtomicJSON(filepath.Join(dir, "outcomes", "evaluate", "2.json"),
+		outcomeRecord{Task: taskEvaluate, Generation: 2, Route: "repair", Feedback: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if findings := k5EvaluateSingleDriverFindings(dir); len(findings) != 0 {
+		t.Errorf("two distinct verdicts sharing one feedback ref must each drive their own round: %v", findings)
 	}
 	// 封存候选与检查/门审结果不一致 → 违例；一致 → 通过。
 	if err := os.MkdirAll(filepath.Join(dir, "outcomes", "check-state"), 0o755); err != nil {
