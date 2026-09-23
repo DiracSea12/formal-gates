@@ -903,6 +903,7 @@ type invariantOwnerSpec struct {
 	RepairLimit                             int
 	CheckArgv                               []string
 	RepairSleepSecs                         float64
+	GateStartedPath, GateReleasePath        string
 }
 
 // TestInvariantOwnerSubprocess is the crash-boundary owner, started as a subprocess of
@@ -911,8 +912,8 @@ type invariantOwnerSpec struct {
 //
 //   - repair-in-flight: dev#1 不写实现、返修轮睡眠 RepairSleepSecs；binding
 //     在返修调用启动时把 job 目录写进 cfg.Dir/invariant-repair-started。
-//   - check-receipt: CheckArgv 自带 started/release 握手，供“检查在途时杀
-//     owner，随后检查收据落盘”边界同步。
+//   - check-receipt: CheckArgv 与门审 peer 都带 started/release 握手，供
+//     “两个并行验证调用在途时杀 owner，随后各自收据落盘”边界同步。
 func TestInvariantOwnerSubprocess(t *testing.T) {
 	file := os.Getenv("INVARIANT_OWNER_SPEC")
 	if file == "" {
@@ -930,6 +931,12 @@ func TestInvariantOwnerSubprocess(t *testing.T) {
 	if spec.Mode == "repair-in-flight" {
 		scripts["development#1"] = scriptedAnswer{Status: "PASS", Summary: "nothing written", NoWrite: true}
 		scripts["development#2"] = scriptedAnswer{Status: "PASS", Summary: "repair in flight", SleepSecs: spec.RepairSleepSecs}
+	}
+	if spec.Mode == "check-receipt" {
+		scripts[gateTaskID("complexity-gate")] = scriptedAnswer{
+			Status: "PASS", Summary: "green",
+			StartedPath: spec.GateStartedPath, ReleasePath: spec.GateReleasePath,
+		}
 	}
 	cfg := ComposeConfig{
 		Dir:    spec.Dir,
@@ -1222,29 +1229,46 @@ func TestUninterruptedCheckRunHoldsInvariants(t *testing.T) {
 // owner，同配置重开续跑到终态：已完成的检查/门审按其领域结果接回，
 // 不当普通 worker 处理。
 //
-// 边界同步点：检查脚本写 started 且监督者 process.json 落盘，脚本保持在
-// 途 → 杀 owner → 写 release → 等 exit.json（收据落盘）。此刻重开，接回
-// 应凭真实回执接纳已完成检查，且后继门审不可能在中断前偷跑。
+// 边界同步点：并行的检查和门审都写 started，且各自监督者 process.json
+// 落盘后保持在途 → 杀 owner → 分别写 release → 等两个 exit.json。此刻
+// 重开，接回应凭两份真实回执接纳原调用，而不是重跑任一验证任务。
 func TestInterruptedAfterCheckReceiptRecoversToSameTerminal(t *testing.T) {
 	syncDir := t.TempDir()
 	started := filepath.Join(syncDir, "started")
 	release := filepath.Join(syncDir, "release")
-	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	gateStarted := filepath.Join(syncDir, "gate-started")
+	gateRelease := filepath.Join(syncDir, "gate-release")
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		_ = os.WriteFile(gateRelease, nil, 0o600)
+	})
 	checkArgv := []string{"/bin/sh", "-c", `set -eu
 : > "$1"
 while [ ! -f "$2" ]; do sleep 0.05; done
 test "$(cat state.txt)" = ok`, "check-handshake", started, release}
-	// The control uses the identical check command with its release already
-	// present, then the interruption run removes both handshake files.
+	// The control uses identical check and gate scripts with releases already
+	// present, then the interruption run removes all handshake files.
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	controlCfg := invariantScenarioConfig(t, "inv-check-a-control", nil, checkArgv)
+	if err := os.WriteFile(gateRelease, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controlScripts := composeScripts{gateTaskID("complexity-gate"): {
+		Status: "PASS", Summary: "green", StartedPath: gateStarted, ReleasePath: gateRelease,
+	}}
+	controlCfg := invariantScenarioConfig(t, "inv-check-a-control", controlScripts, checkArgv)
 	controlTraj, _ := invariantRunControl(t, controlCfg, 1)
 	if err := os.Remove(started); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(release); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gateStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gateRelease); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1253,18 +1277,27 @@ test "$(cat state.txt)" = ok`, "check-handshake", started, release}
 		Dir: cfg.Dir, RunID: cfg.RunID, Binary: cfg.Binary,
 		Project: cfg.Spec.Project, Base: cfg.Spec.Base,
 		Mode: "check-receipt", RepairLimit: cfg.Spec.RepairLimit,
-		CheckArgv: checkArgv,
+		CheckArgv: checkArgv, GateStartedPath: gateStarted, GateReleasePath: gateRelease,
 	})
 	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json", 40*time.Second)
 	job := filepath.Dir(proc)
+	gateProc := waitForPattern(t, cfg.Dir, "jobs/gate-complexity-gate/*/turn-*/process.json", 40*time.Second)
+	gateJob := filepath.Dir(gateProc)
 	waitForPattern(t, syncDir, "started", 10*time.Second)
+	waitForPattern(t, syncDir, "gate-started", 10*time.Second)
+	t.Logf("reconnectable boundary: check=%s gate=%s", job, gateJob)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
+	defer signalTurn(t, gateJob)
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(gateRelease, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitForPattern(t, job, "exit.json", 10*time.Second)
+	waitForPattern(t, gateJob, "exit.json", 10*time.Second)
 
 	watch := startWriterWatch(cfg.Dir)
 	c := invariantOpen(t, cfg)

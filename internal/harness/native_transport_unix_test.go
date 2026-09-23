@@ -26,14 +26,16 @@ import (
 // the On substring. In Send, the token "@ID@" (bare, unquoted) is replaced by
 // the received frame's id, so one script answers whatever id the client used.
 type peerStep struct {
-	On        string     `json:"on,omitempty"`
-	Send      string     `json:"send,omitempty"`
-	Garbage   string     `json:"garbage,omitempty"`
-	Stderr    string     `json:"stderr,omitempty"`
-	SleepSecs float64    `json:"sleep,omitempty"`
-	Close     bool       `json:"close,omitempty"`
-	IgnoreEOF bool       `json:"ignore_eof,omitempty"`
-	Files     []peerFile `json:"files,omitempty"`
+	On          string     `json:"on,omitempty"`
+	Send        string     `json:"send,omitempty"`
+	Garbage     string     `json:"garbage,omitempty"`
+	Stderr      string     `json:"stderr,omitempty"`
+	SleepSecs   float64    `json:"sleep,omitempty"`
+	StartedPath string     `json:"started_path,omitempty"`
+	ReleasePath string     `json:"release_path,omitempty"`
+	Close       bool       `json:"close,omitempty"`
+	IgnoreEOF   bool       `json:"ignore_eof,omitempty"`
+	Files       []peerFile `json:"files,omitempty"`
 }
 
 // peerFile is a file the peer writes into the evidence directory when its step
@@ -114,6 +116,20 @@ func runScriptedPeer(scriptPath string) int {
 }
 
 func applyPeerStep(step peerStep, line string) {
+	if step.StartedPath != "" {
+		if err := os.WriteFile(step.StartedPath, nil, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "peer cannot write start marker %s: %v\n", step.StartedPath, err)
+		}
+	}
+	for step.ReleasePath != "" {
+		if _, err := os.Stat(step.ReleasePath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "peer cannot read release marker %s: %v\n", step.ReleasePath, err)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if step.SleepSecs > 0 {
 		time.Sleep(time.Duration(step.SleepSecs * float64(time.Second)))
 	}

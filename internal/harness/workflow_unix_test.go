@@ -35,6 +35,10 @@ type scriptedAnswer struct {
 	Summary   string    `json:"summary"`
 	Findings  []Finding `json:"findings,omitempty"`
 	SleepSecs float64   `json:"sleep_secs,omitempty"`
+	// StartedPath and ReleasePath synchronize a real peer at its prompt
+	// boundary without relying on elapsed time.
+	StartedPath string `json:"started_path,omitempty"`
+	ReleasePath string `json:"release_path,omitempty"`
 	// SessionUnavailable turns the session open step into the host's
 	// explicit persistent-identity refusal (-32004).
 	SessionUnavailable bool `json:"session_unavailable,omitempty"`
@@ -127,7 +131,9 @@ func dshScriptSteps(jobDir string, answer scriptedAnswer) []peerStep {
 		openResume = peerStep{On: openResume.On, Send: `{"id": "@ID@", "error": {"code": -32004, "message": "Session not found: s-1"}}`}
 	}
 	step := peerStep{
-		On: `"method":"session/prompt"`, SleepSecs: answer.SleepSecs, Send: `{"id": "@ID@", "result": {"stopReason": "end_turn"}}`,
+		On: `"method":"session/prompt"`, SleepSecs: answer.SleepSecs,
+		StartedPath: answer.StartedPath, ReleasePath: answer.ReleasePath,
+		Send: `{"id": "@ID@", "result": {"stopReason": "end_turn"}}`,
 		Files: []peerFile{
 			{Path: filepath.Join(jobDir, "native-source.json"),
 				Body: `{"sessionId": "s-1", "inputId": "in-1", "turn": 1, "transcriptPath": ""}`},
