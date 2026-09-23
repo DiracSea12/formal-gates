@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -35,11 +36,34 @@ const (
 	ControlReset    ControlKind = "RESET"
 	ControlAbort    ControlKind = "ABORT"
 	ControlRecovery ControlKind = "RECOVER_ATTEMPT"
+	// 四个开发前审查/拓扑/路线业务控制（总需求 §6.2、§7.3.5、§8.1.1）：
+	// Ask 创建方给出选项集，DECIDE 携带与控制一一对应的 typed Review
+	// 载荷分支（REVIEW_ROUND_GRANT 的 decline 选项除外）。
+	ControlReviewRoundGrant      ControlKind = "REVIEW_ROUND_GRANT"
+	ControlReviewFindingDecision ControlKind = "REVIEW_FINDING_DECISION"
+	ControlConfirmTopology       ControlKind = "CONFIRM_TOPOLOGY"
+	ControlSelectRoute           ControlKind = "SELECT_ROUTE"
 )
 
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
-	return k == ControlReset || k == ControlAbort || k == ControlRecovery
+	switch k {
+	case ControlReset, ControlAbort, ControlRecovery,
+		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute:
+		return true
+	}
+	return false
+}
+
+// reviewControl 报告控制是否属于四个审查类业务控制——它们的 DECIDE
+// 必须携 Review 载荷（REVIEW_ROUND_GRANT 的 decline 例外），其余控制的
+// DECIDE 携 Review 载荷一律 schema 拒绝。
+func reviewControl(k ControlKind) bool {
+	switch k {
+	case ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute:
+		return true
+	}
+	return false
 }
 
 // AskOption 是 pending Ask 落账的单个选项。
@@ -99,11 +123,13 @@ type RequestPayload struct {
 }
 
 // DecidePayload 是 DECIDE 的 payload：目标 request、freshness token 与
-// 选中选项（选项合法性对 pending Ask 的落账选项集校验，属接纳层）。
+// 选中选项（选项合法性对 pending Ask 的落账选项集校验，属接纳层）。审查
+// 类业务控制额外携带 typed Review 载荷（分支与控制一一对应）。
 type DecidePayload struct {
 	Request RequestID
 	Token   string
 	Choice  AskOptionID
+	Review  *ReviewDecisionPayload
 }
 
 // TaskPayload 是 TASK_PROGRESS 的 payload：目标任务、期望的当前
@@ -138,13 +164,71 @@ const (
 
 // WorkerResultPayload 是 WORKER_RESULT 的 payload：typed result 的最小
 // 形态——目标 action、worker 的 provider 身份、封闭 outcome 与结果字节
-// 的 payload digest。
+// 的 payload digest。Review 变体是审查派发的语义证据（参照
+// HostActionReceiptPayload 的变体指针先例）：只在 Outcome 为 PASS 的
+// 结果上携带，RUNTIME_ERROR/FAIL 的审查结果是普通失败结果、不建
+// candidate。
 type WorkerResultPayload struct {
 	ActionID      string
 	Provider      string
 	Outcome       string
 	PayloadDigest string
 	FailureClass  authoring.FailureClass
+	Review        *ReviewResultEvidence
+}
+
+// ReviewResultEvidence 是审查结果的完整语义证据：绑定动作、派发身份、
+// 需求 revision 与（越过自动上限时的）复审授权，以及 raw 结论与
+// Operator 八项核实记录。只有 PASS/FAIL 是可接纳的语义状态；身份与
+// 摘要由 review 内核在接纳时派生。
+type ReviewResultEvidence struct {
+	Action              review.Action               `json:"action"`
+	DispatchID          string                      `json:"dispatchId"`
+	RequirementRevision string                      `json:"requirementRevision"`
+	AuthorizationID     string                      `json:"authorizationId,omitempty"`
+	Status              string                      `json:"status"`
+	Message             string                      `json:"message,omitempty"`
+	Findings            []review.Finding            `json:"findings"`
+	Verification        review.OperatorVerification `json:"verification"`
+}
+
+// ReviewDecisionPayload 是审查类业务控制的 DECIDE typed 载荷：小 tagged
+// union，四个分支各一指针、与 ControlKind 一一对应，同时只允许一个分支
+// 非空（Validate 强制，控制↔分支配对由接纳层对 pending Ask 校验）。
+type ReviewDecisionPayload struct {
+	RoundGrant *RoundGrantDecision     `json:"roundGrant,omitempty"`
+	Correction *review.CorrectionInput `json:"correction,omitempty"`
+	Topology   *TopologyDecision       `json:"topology,omitempty"`
+	Route      *RouteDecision          `json:"route,omitempty"`
+}
+
+// RoundGrantDecision 为某审查动作授权恰好一轮额外语义轮（总需求
+// §6.3.6）：绑定该轮首个派发，授权不能预先累积或转给另一动作。
+type RoundGrantDecision struct {
+	Action     review.Action `json:"action"`
+	Reason     string        `json:"reason"`
+	DispatchID string        `json:"dispatchId"`
+}
+
+// TopologyDecision 是 CONFIRM_TOPOLOGY 的精确拓扑决定：no-split 必带
+// 理由 note；split 必带 SplitCount≥2、与之一致的 Slices 与并行度
+// （incremental-seal-plan §2.3：矩阵 start 行不声明拆分意向，绑定唯一
+// 发生在此处）。
+type TopologyDecision struct {
+	Decision   string   `json:"decision"`
+	Note       string   `json:"note,omitempty"`
+	SplitCount int      `json:"splitCount,omitempty"`
+	Slices     []string `json:"slices,omitempty"`
+	Parallel   string   `json:"parallel,omitempty"`
+}
+
+// RouteDecision 是 SELECT_ROUTE 的显式门列表决定：full 携带完整候选
+// 全集（Selected 必须为空），custom 携带非空真子集。门目录发现不在
+// 协议层——全集与子集都由 payload 显式给出，引擎只做集合约束校验。
+type RouteDecision struct {
+	Mode     string   `json:"mode"`
+	Gates    []string `json:"gates"`
+	Selected []string `json:"selected,omitempty"`
 }
 
 // worker result outcome 的封闭集合（runtime/task.go：结果分类不进入任务
@@ -236,6 +320,14 @@ func NewDecideEvent(id EventID, request RequestID, token string, choice AskOptio
 	return ev, ev.Validate()
 }
 
+// NewReviewDecideEvent 构造携带 typed Review 载荷的决定事件：审查类业务
+// 控制的 DECIDE 入口。载荷的 union 与分支形状在此校验；控制↔分支配对
+// 与账目变换由接纳层对 pending Ask 执行。
+func NewReviewDecideEvent(id EventID, request RequestID, token string, choice AskOptionID, payload ReviewDecisionPayload) (Event, error) {
+	ev := Event{ID: id, Kind: KindDecide, Decide: &DecidePayload{Request: request, Token: token, Choice: choice, Review: &payload}}
+	return ev, ev.Validate()
+}
+
 // NewTaskEvent 构造任务进度事件：任务键可解析、attempt 非空、进度状态
 // 属外部观察可报告的封闭子集（RUNNING/VALIDATING/TERMINAL；ISSUED 由
 // 签发落账产生，不接受外部报告）。
@@ -266,6 +358,16 @@ func NewSpawnReceiptWithFailureClass(id EventID, actionID, provider, correlation
 func NewWorkerResultEvent(id EventID, actionID, provider, outcome, payloadDigest string, class authoring.FailureClass) (Event, error) {
 	ev := Event{ID: id, Kind: KindWorkerResult, Result: &WorkerResultPayload{
 		ActionID: actionID, Provider: provider, Outcome: outcome, PayloadDigest: payloadDigest, FailureClass: class,
+	}}
+	return ev, ev.Validate()
+}
+
+// NewReviewWorkerResultEvent 构造携带审查证据的 worker result：outcome
+// 固定为 PASS（审查派发完成并产出语义证据；runtime 错误走普通失败结果，
+// 不建 candidate），payload digest 与 evidence 一并纳入 canonical 编码。
+func NewReviewWorkerResultEvent(id EventID, actionID, provider, payloadDigest string, evidence ReviewResultEvidence) (Event, error) {
+	ev := Event{ID: id, Kind: KindWorkerResult, Result: &WorkerResultPayload{
+		ActionID: actionID, Provider: provider, Outcome: OutcomePass, PayloadDigest: payloadDigest, Review: &evidence,
 	}}
 	return ev, ev.Validate()
 }
@@ -390,6 +492,11 @@ func (e Event) Validate() error {
 		if strings.TrimSpace(string(e.Decide.Choice)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide choice is empty"}
 		}
+		if e.Decide.Review != nil {
+			if err := validateReviewDecisionPayload(e.Decide.Review); err != nil {
+				return err
+			}
+		}
 	case KindTaskProgress:
 		if !e.Task.Task.Valid() {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("task progress key %q invalid", e.Task.Task.String())}
@@ -447,6 +554,11 @@ func (e Event) Validate() error {
 		}
 		if e.Result.Outcome != OutcomePass && !e.Result.FailureClass.Valid() {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "failed worker result requires an explicit failure class"}
+		}
+		if e.Result.Review != nil {
+			if err := validateReviewEvidence(e.Result.Review); err != nil {
+				return err
+			}
 		}
 	case KindOperatorObservation:
 		if strings.TrimSpace(e.Observation.Subject) == "" {
@@ -554,9 +666,10 @@ type requestWire struct {
 }
 
 type decideEventWire struct {
-	Request string      `json:"request"`
-	Token   string      `json:"token"`
-	Choice  AskOptionID `json:"choice"`
+	Request string                 `json:"request"`
+	Token   string                 `json:"token"`
+	Choice  AskOptionID            `json:"choice"`
+	Review  *ReviewDecisionPayload `json:"review,omitempty"`
 }
 
 type taskEventWire struct {
@@ -574,11 +687,12 @@ type spawnReceiptEventWire struct {
 }
 
 type workerResultEventWire struct {
-	ActionID      string `json:"actionId"`
-	Provider      string `json:"provider"`
-	Outcome       string `json:"outcome"`
-	PayloadDigest string `json:"payloadDigest"`
-	FailureClass  string `json:"failureClass,omitempty"`
+	ActionID      string                `json:"actionId"`
+	Provider      string                `json:"provider"`
+	Outcome       string                `json:"outcome"`
+	PayloadDigest string                `json:"payloadDigest"`
+	FailureClass  string                `json:"failureClass,omitempty"`
+	Review        *ReviewResultEvidence `json:"review,omitempty"`
 }
 
 type operatorObsWire struct {
@@ -626,7 +740,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Request = &requestWire{Control: string(e.Request.Control), Options: options}
 	}
 	if e.Decide != nil {
-		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice}
+		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review}
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}
@@ -641,7 +755,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Result = &workerResultEventWire{
 			ActionID: e.Result.ActionID, Provider: e.Result.Provider,
 			Outcome: e.Result.Outcome, PayloadDigest: e.Result.PayloadDigest,
-			FailureClass: string(e.Result.FailureClass),
+			FailureClass: string(e.Result.FailureClass), Review: e.Result.Review,
 		}
 	}
 	if e.Observation != nil {

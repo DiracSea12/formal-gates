@@ -23,6 +23,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -88,8 +89,67 @@ type Run struct {
 	IntakeReceipt             *IntakeReceipt             `json:"intakeReceipt,omitempty"`
 	Next                      decision.NextResult        `json:"next"`
 	AvailableActions          []string                   `json:"availableActions,omitempty"`
-	SummaryPath               string                     `json:"summaryPath,omitempty"`
-	Unverified                bool                       `json:"unverified,omitempty"`
+	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
+	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
+	Review      ReviewFace `json:"review"`
+	SummaryPath string     `json:"summaryPath,omitempty"`
+	Unverified  bool       `json:"unverified,omitempty"`
+}
+
+// ReviewActionFace 是单个审查动作的账本公开面：completed/base/extra(授
+// 权数)/effective(有效上限)/remaining、raw/adjudication/correction 计数与
+// effective 状态及来源、下一轮准入形态。
+type ReviewActionFace struct {
+	Action               string `json:"action"`
+	Completed            int    `json:"completed"`
+	BaseLimit            int    `json:"baseLimit"`
+	ExtraAuthorized      int    `json:"extraAuthorized"`
+	EffectiveLimit       int    `json:"effectiveLimit"`
+	Remaining            int    `json:"remaining"`
+	NextRoundRequirement string `json:"nextRoundRequirement"`
+	RawResults           int    `json:"rawResults"`
+	Adjudications        int    `json:"adjudications"`
+	Corrections          int    `json:"corrections"`
+	EffectiveStatus      string `json:"effectiveStatus"`
+	EffectiveSource      string `json:"effectiveSource"`
+}
+
+// ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定。
+type ReviewFace struct {
+	Actions       []ReviewActionFace        `json:"actions"`
+	Topology      *protocol.TopologyBinding `json:"topology,omitempty"`
+	RouteMode     string                    `json:"routeMode,omitempty"`
+	SelectedGates []string                  `json:"selectedGates,omitempty"`
+}
+
+// reviewFace 从权威 state 派生只读审查投影（纯函数）。
+func reviewFace(state *protocol.State) ReviewFace {
+	return ReviewFace{
+		Actions: []ReviewActionFace{
+			reviewActionFace(state.ReviewSeries.ProductReview),
+			reviewActionFace(state.ReviewSeries.StartReadiness),
+		},
+		Topology:      state.Topology,
+		RouteMode:     state.RouteMode,
+		SelectedGates: state.SelectedGates,
+	}
+}
+
+func reviewActionFace(series review.Series) ReviewActionFace {
+	return ReviewActionFace{
+		Action:               string(series.Action),
+		Completed:            series.Completed,
+		BaseLimit:            series.AutomaticLimit,
+		ExtraAuthorized:      series.ExtraAuthorized,
+		EffectiveLimit:       series.CurrentLimit,
+		Remaining:            series.RemainingCapacity,
+		NextRoundRequirement: series.NextRoundRequirement,
+		RawResults:           len(series.RawCandidates),
+		Adjudications:        len(series.Adjudications),
+		Corrections:          len(series.Corrections),
+		EffectiveStatus:      series.Effective.Status,
+		EffectiveSource:      series.Effective.Source,
+	}
 }
 
 // TerminalSummary is retained after the engine reaches Complete.  It is
@@ -574,7 +634,7 @@ func (f *Facade) project() (Run, error) {
 			return Run{}, intentErr
 		}
 	}
-	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
+	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, Review: reviewFace(snap.State), SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
 	if plan.Next.Kind == decision.KindAsk {

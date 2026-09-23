@@ -33,6 +33,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -99,6 +100,16 @@ const (
 	// CodePlanBindingMismatch：待签发 plan 不是当前 state、observation 与
 	// definition 确定性导出的 canonical plan。
 	CodePlanBindingMismatch = "PLAN_BINDING_MISMATCH"
+	// CodeReviewEvidenceRejected：WORKER_RESULT 携带的审查证据无法接纳
+	//（双审顺序越序、重复结果摘要、越过自动上限无授权或 Operator 核实
+	// 不全）——拒绝整个事件、零状态变化。
+	CodeReviewEvidenceRejected = "REVIEW_EVIDENCE_REJECTED"
+	// CodeReviewDecisionRejected：审查类业务控制的 DECIDE 无法执行（CAS
+	// 冲突、越序、拓扑重复绑定等账目约束）——零状态变化。
+	CodeReviewDecisionRejected = "REVIEW_DECISION_REJECTED"
+	// CodeStateIntegrityInvalid：加载/提交边界发现 state 与账本不一致
+	//（篡改的审查账本投影或越门的 run phase）。
+	CodeStateIntegrityInvalid = "STATE_INTEGRITY_INVALID"
 )
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
@@ -197,13 +208,15 @@ type SpawnReceipt struct {
 }
 
 // WorkerResult 是落账的 typed worker result（含 result-before-receipt
-// 暂存复用同一形态）。
+// 暂存复用同一形态）。Review 非空时是审查派发的语义证据：随结果接纳交
+// review 内核记账，并随回执字节一并参与幂等/冲突判定。
 type WorkerResult struct {
 	ActionID      string                 `json:"actionId"`
 	Provider      string                 `json:"provider"`
 	Outcome       string                 `json:"outcome"`
 	PayloadDigest string                 `json:"payloadDigest"`
 	FailureClass  authoring.FailureClass `json:"failureClass,omitempty"`
+	Review        *ReviewResultEvidence  `json:"review,omitempty"`
 	Digest        string                 `json:"digest"`
 }
 
@@ -412,6 +425,28 @@ type State struct {
 	ObsoleteResults   map[string]WorkerResult          `json:"obsoleteResults"`
 	RecoveryRecords   []RecoveryRecord                 `json:"recoveryRecords"`
 	ReconciledEffects map[string]ReconciledEffect      `json:"reconciledEffects"`
+	// ReviewSeries 是本 run 的开发前审查账本（product-review 与
+	// start-readiness 两条 series）：raw candidate 只作证据，effective
+	// status 由账本确定性投影。run phase 的推进条件从它重算。
+	ReviewSeries review.Set `json:"reviewSeries"`
+	// Topology 是 start-readiness PASS 后唯一绑定的拆分拓扑决定（总需求
+	// §8.1.1 绑定点：确认后不得重切）。nil 表示尚未确认。
+	Topology *TopologyBinding `json:"topology,omitempty"`
+	// RouteMode/SelectedGates 是拓扑绑定后的验证路线（full/custom）。
+	// lightweight 是 run 级路线、start 时已定，不经这两个字段。
+	RouteMode     string   `json:"routeMode,omitempty"`
+	SelectedGates []string `json:"selectedGates,omitempty"`
+}
+
+// TopologyBinding 是拓扑确认的持久形态：no-split 必有理由 note（建议不拆
+// 原因留痕）；split 必有 SplitCount≥2、与之一致的 Slices 与并行度。类型
+// 名避开 Slicing 一词，防止与审查动作 start-readiness 的下游影响表混淆。
+type TopologyBinding struct {
+	Decision   string   `json:"decision"`
+	Note       string   `json:"note,omitempty"`
+	SplitCount int      `json:"splitCount,omitempty"`
+	Slices     []string `json:"slices,omitempty"`
+	Parallel   string   `json:"parallel,omitempty"`
 }
 
 // IntakeArtifact is one canonical requirement/solution artifact binding.
@@ -554,5 +589,12 @@ func (s *State) normalizeCollections() {
 	}
 	if s.ReconciledEffects == nil {
 		s.ReconciledEffects = map[string]ReconciledEffect{}
+	}
+	// 审查账本缺字段补齐：本字段上线前的 run（如旧 lightweight run）解码
+	// 后两条 series 都没有动作绑定，补初始 NewSet 即向前兼容——它们不使用
+	// 审查面。只剩一条绑定的部分投影按篡改处理，交给加载/提交边界的
+	// review.Validate 拒绝。
+	if s.ReviewSeries.ProductReview.Action == "" && s.ReviewSeries.StartReadiness.Action == "" {
+		s.ReviewSeries = review.NewSet()
 	}
 }

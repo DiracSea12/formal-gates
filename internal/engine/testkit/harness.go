@@ -1841,7 +1841,7 @@ func runFullRecoveryFault(report *HarnessReport, fixture *ProtocolFixture, plan 
 		return err
 	}
 	if _, err := os.Stat(report.StatePath); os.IsNotExist(err) {
-		view, viewErr := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+		view, viewErr := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 		if viewErr != nil {
 			return viewErr
 		}
@@ -2109,7 +2109,7 @@ func runWaitUserActionScenario(report HarnessReport, options HarnessOptions, roo
 		return report, err
 	}
 	if _, statErr := os.Stat(report.StatePath); os.IsNotExist(statErr) {
-		view, viewErr := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+		view, viewErr := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 		if viewErr != nil {
 			return report, viewErr
 		}
@@ -2222,7 +2222,7 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 	if err != nil {
 		return report, err
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		return report, err
 	}

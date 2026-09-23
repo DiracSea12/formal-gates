@@ -45,3 +45,23 @@ Git provider＋canary＋route matrix。
   （引擎内确定性即可，持久化身份非宿主协议文本）。
 
 **R1a 轻装收口；下一单元 R1b（State 嫁接＋ControlKind 扩展＋phase 门控接线）。**
+
+## 第 42 轮（2026-09-23，R1b：审查内核嫁接协议层，轻装）
+
+范围与落实（主代理定合同含裁定先例，子代理实施；12 修改＋3 新增、+306/-53 行）：
+
+- `protocol.State` 增 `ReviewSeries review.Set`/`Topology *TopologyBinding`/`RouteMode`/`SelectedGates`；缺字段旧 run 补 NewSet 前向兼容、残缺投影按篡改拒。commit 前与 load 后同点接 `review.Validate`＋phase-账本一致性（新拒绝码 REVIEW_EVIDENCE_REJECTED/REVIEW_DECISION_REJECTED/STATE_INTEGRITY_INVALID）。
+- 事件变体（先例＝HostActionReceipt 的变体指针）：`WorkerResultPayload.Review *ReviewResultEvidence`（仅随 Outcome=PASS；RUNTIME_ERROR 是普通失败结果不建 candidate）；`DecidePayload.Review` 四分支 tagged union（RoundGrant/Correction/Topology/Route），Correction 分支直接复用 `review.CorrectionInput`（json 标签即持久化契约，不建平行 wire）。canonical/digest 纳入变体、`omitempty` 保既有事件字节不变。
+- ControlKind 封闭集扩四值：REVIEW_ROUND_GRANT（grant/decline 固定项）、REVIEW_FINDING_DECISION（option id=`<decision>[:<findingID>]` 一致性锚）、CONFIRM_TOPOLOGY、SELECT_ROUTE；UserAuthorized 恒真（DECIDE 即用户决定）、Source=`engine-decide:<requestID>`。RESET/ABORT/RECOVER_ATTEMPT 零改动。
+- 双审顺序守卫（start-readiness 证据前置 product-review effective PASS）、拓扑双条件＋不得重切、路线拓扑前置、custom 非空真子集按全集序归一。
+- phase 门控五边沿静态表放行（commit 同事务评估，条件不满足静默留置）；一致性校验用单调 residue（受理回执/当前 revision 完成轮/拓扑路线绑定）——第一版按当前 effective 重算被返修环证伪（合法新阻塞轮使 effective 回落而静态表无回退边），子代理如实报告并改 residue；已知残余：账本恰有未裁决 FAIL 轮时精细伪造更晚 phase 不可分辨（后续持久化 effective 轨迹可收紧；对抗性篡改属 P3 边界）。
+- façade `Run` 投影增审查面（分动作 completed/base/extra/effectiveLimit/remaining/nextRoundRequirement、三账计数、effective、拓扑/路线）；regular 路线解锁保留至后续刀。
+- testkit/whitebox_qa fixture 初始化 phase 改 INTAKE_REGISTERED（诚实初始化点：新不变量下空账本撑不起 DEVELOPMENT_PARALLEL，附原因注释，断言未动）。
+
+主代理独立复核：
+
+- 亲读 `protocol/review.go` 全文＋protocol.go/event.go/engine.go/review.go（CorrectionInput json 标签）全部 diff；fixture 改动逐处核对为机械初始化点变更。
+- 自建 oracle 探针（跑毕即删）：split 拓扑（两片＋并行度）＋乱序 custom 路线（归一到全集序断言）＋合法到达 DEVELOPMENT_PARALLEL 后磁盘抹账本（floor 回落）在 Load 拒——全过；中途一次 WAIT 失败系探针误用（readiness 动作由首结果接纳事务 refill 自动签发），反证同事务补位行为。
+- 亲验：build/vet/gofmt 干净；`./internal/engine/...` 16 包 ok（protocol 18.8s 含新序列/负控/篡改全套）；`./internal/cli`（83s）＋`./internal/validate`（390s）回归零失败；internal/harness 环境失败同裸树（第 41 轮已归因，不计回归）。模型调用 0。
+
+**R1（a＋b）轻装收口：开发前审查段（双审系列账本→拓扑→路线→phase 门控）在 engine 内权威化。下一单元 R2（REQ-015 裁决深度、无效结果有限重试、每快照唯一返修）。**

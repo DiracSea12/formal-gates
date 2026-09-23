@@ -253,22 +253,23 @@ type EffectiveStatus struct {
 
 // CorrectionInput 是纠正的精确绑定/CAS 契约：必须命中 (resultDigest,
 // findingID) 的当前最新决定，且 ExpectedEffectiveRevision 必须等于当前投影
-// 代数，否则整笔拒绝、零状态变化。
+// 代数，否则整笔拒绝、零状态变化。json 标签让协议层的决定事件直接携带
+// 本结构作为 typed payload，不另造一份平行 wire 形态。
 type CorrectionInput struct {
-	Action                    Action
-	DispatchID                string
-	ResultDigest              string
-	RequirementRevision       string
-	FindingID                 string
-	Decision                  string
-	Severity                  string
-	SeverityRationale         string
-	Invalidity                string
-	Supersedes                string
-	Reason                    string
-	Source                    string
-	UserAuthorized            bool
-	ExpectedEffectiveRevision int
+	Action                    Action `json:"action"`
+	DispatchID                string `json:"dispatchId"`
+	ResultDigest              string `json:"resultDigest"`
+	RequirementRevision       string `json:"requirementRevision"`
+	FindingID                 string `json:"findingId,omitempty"`
+	Decision                  string `json:"decision"`
+	Severity                  string `json:"severity,omitempty"`
+	SeverityRationale         string `json:"severityRationale,omitempty"`
+	Invalidity                string `json:"invalidity,omitempty"`
+	Supersedes                string `json:"supersedes,omitempty"`
+	Reason                    string `json:"reason"`
+	Source                    string `json:"source"`
+	UserAuthorized            bool   `json:"userAuthorized"`
+	ExpectedEffectiveRevision int    `json:"expectedEffectiveRevision"`
 }
 
 // Dispatch 是记录候选时所需的派发绑定事实：派发身份、它审查的需求

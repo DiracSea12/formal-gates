@@ -32,7 +32,7 @@ func TestQAPersistenceProtocolReconciledHostActionContinuesFrontier(t *testing.T
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestQAPersistenceProtocolBindsRepeatedAsksAndOperationsPerStep(t *testing.T
 	if err != nil {
 		t.Fatalf("NewProtocolFixtureWithDefinition: %v", err)
 	}
-	view, err := decision.NewState(compiled.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(compiled.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
@@ -343,7 +343,7 @@ func qaP2Engine(t *testing.T, collect func() (string, error)) *protocol.Engine {
 	if err != nil {
 		t.Fatalf("protocol.New: %v", err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}

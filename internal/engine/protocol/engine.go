@@ -95,6 +95,11 @@ func (e *Engine) load() (uint64, *State, error) {
 	if err := json.Unmarshal(snap.Content, &state); err != nil {
 		return 0, nil, fmt.Errorf("protocol: decode engine state: %w", err)
 	}
+	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的
+	// phase 在读取侧即可区分拒绝。
+	if err := verifyReviewIntegrity(&state); err != nil {
+		return 0, nil, err
+	}
 	return snap.Revision, &state, nil
 }
 
@@ -184,8 +189,16 @@ func equalIntakeArtifacts(a, b []IntakeArtifact) bool {
 }
 
 // commit 把变更后的状态经 persistence 四段协议原子提交（期望 revision
-// 即 CAS 值；指纹写入前后各重验一次）。
+// 即 CAS 值；指纹写入前后各重验一次）。提交前在同一事务内评估 run
+// phase 门控（条件可从持久账本重算）并做账本完整性校验——条件不满足
+// 时静默留置，账本/phase 与投影不一致则拒绝写入。
 func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, error) {
+	if err := state.advanceReviewPhases(); err != nil {
+		return 0, err
+	}
+	if err := verifyReviewIntegrity(state); err != nil {
+		return 0, err
+	}
 	res, err := e.store.Save(persistence.Transaction{
 		ExpectedRevision:    expectedRevision,
 		ExpectedFingerprint: expectedFingerprint,
@@ -651,6 +664,14 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 				Detail: fmt.Sprintf("choice %q not in options of request %q", ev.Decide.Choice, requestID),
 			}
 		}
+		// 审查类业务控制：选项合法后先校验 typed 载荷并执行账目变换
+		//（授权轮、纠正、拓扑、路线），再落决定。任一拒绝发生在 state
+		// 变更之前——零状态变化。
+		if reviewControl(ask.Control) || ev.Decide.Review != nil {
+			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
 		ask.Resolved = true
 		state.PendingAsks[requestID] = ask
 		state.Decisions[requestID] = RecordedDecision{
@@ -891,7 +912,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		record := WorkerResult{
 			ActionID: actionID, Provider: ev.Result.Provider,
 			Outcome: ev.Result.Outcome, PayloadDigest: ev.Result.PayloadDigest,
-			FailureClass: ev.Result.FailureClass, Digest: payloadDigest,
+			FailureClass: ev.Result.FailureClass, Review: ev.Result.Review, Digest: payloadDigest,
 		}
 		if receipt, receipted := state.SpawnReceipts[actionID]; !receipted || receipt.Status == SpawnStatusUnknown {
 			if staged, exists := state.StagedResults[actionID]; exists {
@@ -1169,6 +1190,13 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if plan.Action != RecoveryFail {
 			state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], record)
 			return nil, nil
+		}
+	}
+	// 审查证据与 worker 结果身份绑定后在同一事务内交 review 内核记账：
+	// RecordCandidate 的错误拒绝整个事件（调用方不提交，零状态变化）。
+	if record.Review != nil {
+		if err := e.recordReviewCandidate(state, record.Review); err != nil {
+			return nil, err
 		}
 	}
 	if err := state.terminalizeTask(key); err != nil {

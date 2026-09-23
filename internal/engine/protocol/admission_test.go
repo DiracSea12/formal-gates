@@ -56,7 +56,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("view: %v", err)
 	}

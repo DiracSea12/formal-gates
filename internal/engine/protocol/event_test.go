@@ -208,11 +208,15 @@ func TestFreshnessTokenDeterministic(t *testing.T) {
 	}
 }
 
-// TestControlKindClosedSet：控制类型封闭集合当前恰为 RESET/ABORT（业务
-// 业务控制经扩展点扩充枚举，此处钉死现状防漂移）。
+// TestControlKindClosedSet：控制类型封闭集合当前恰为 RESET/ABORT/
+// RECOVER_ATTEMPT 与四个审查类业务控制（业务控制经扩展点扩充枚举，
+// 此处钉死现状防漂移）。
 func TestControlKindClosedSet(t *testing.T) {
-	valid := []ControlKind{ControlReset, ControlAbort}
-	invalid := []ControlKind{"", "RESET ", "REQUIREMENT_CHANGE", "abort"}
+	valid := []ControlKind{
+		ControlReset, ControlAbort, ControlRecovery,
+		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
+	}
+	invalid := []ControlKind{"", "RESET ", "REQUIREMENT_CHANGE", "abort", "CONFIRM_TOPOLOGY ", "ROUTE"}
 	for _, k := range valid {
 		if !k.Valid() {
 			t.Fatalf("control %q should be valid", k)
@@ -223,7 +227,10 @@ func TestControlKindClosedSet(t *testing.T) {
 			t.Fatalf("control %q should be invalid", k)
 		}
 	}
-	if !reflect.DeepEqual(valid, []ControlKind{ControlReset, ControlAbort}) {
+	if !reflect.DeepEqual(valid, []ControlKind{
+		ControlReset, ControlAbort, ControlRecovery,
+		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
+	}) {
 		t.Fatal("closed set drifted")
 	}
 }

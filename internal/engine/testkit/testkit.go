@@ -826,7 +826,7 @@ func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
 	if f.Definition == nil {
 		return nil, fmt.Errorf("testkit: fixture definition is required")
 	}
-	view, err := decision.NewState(f.Definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(f.Definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		return nil, err
 	}

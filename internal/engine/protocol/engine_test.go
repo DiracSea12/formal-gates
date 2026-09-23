@@ -79,12 +79,13 @@ func compiledWorkflow(t *testing.T) *compiler.CompiledDefinition {
 }
 
 // preparedEngine 构造已初始化、entry 两步已完成的引擎，并返回 review
-// worker 的 Ready 计划（issue 测试的标准起点）。
+// worker 的 Ready 计划（issue 测试的标准起点）。phase 从 INTAKE_REGISTERED
+// 起步：提交边界的 phase-账本一致性校验会拒绝账本无法证明的更晚 phase。
 func preparedEngine(t *testing.T) (*Engine, string, *decision.Plan, *compiler.CompiledDefinition) {
 	t.Helper()
 	engine, dir := newTestEngine(t)
 	cd := compiledWorkflow(t)
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}

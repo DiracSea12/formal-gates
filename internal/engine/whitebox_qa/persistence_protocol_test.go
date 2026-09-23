@@ -68,7 +68,7 @@ func protocolEngine(t *testing.T, collect func() (string, error)) *protocol.Engi
 	if err != nil {
 		t.Fatalf("protocol.New: %v", err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
@@ -1512,7 +1512,7 @@ func protocolInitializeBindingFixture(t *testing.T) *testkit.ProtocolFixture {
 	if err != nil {
 		t.Fatalf("binding fixture: %v", err)
 	}
-	view, err := decision.NewState(compiled.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(compiled.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("binding state: %v", err)
 	}
@@ -1533,7 +1533,7 @@ func TestPhase2WhiteboxReconciledHostActionAdvancesFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
