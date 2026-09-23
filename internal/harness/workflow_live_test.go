@@ -13,9 +13,11 @@ package harness
 // The drive answers process confirmations with their allowing choice, allows
 // at most ONE extra repair round (any further allowance ask, and any restart
 // ask, aborts — the pass is bounded spend, not an open wallet), answers a
-// held host interaction with its first offered option, and asserts the run
-// reaches HARNESS_COMPLETE with a verified physical archive. Every turn,
-// provider and session identity the run spent is printed for the record.
+// runtime disposal's retry ask at most once (a second retry ask aborts too),
+// answers a held host interaction with its first offered option, and asserts
+// the run reaches HARNESS_COMPLETE with a verified physical archive. Every
+// turn, provider and session identity the run spent is printed for the
+// record.
 
 import (
 	"context"
@@ -101,6 +103,7 @@ func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	extraRounds := 0
+	retries := 0
 	for {
 		state := c.Drive(ctx)
 		switch state.Status {
@@ -109,8 +112,16 @@ func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 				choice := ""
 				for _, option := range question.Options {
 					switch option {
-					case "approve", "continue", "restart-session":
+					case "approve", "continue", "retry":
 						choice = option
+					case "restart-session":
+						// A runtime disposal offers retry ahead of
+						// restart-session, and retry is the allowing answer;
+						// restart-session stands in only for a lone restart
+						// ask, where the fold below still aborts it.
+						if choice == "" {
+							choice = option
+						}
 					}
 				}
 				switch choice {
@@ -121,6 +132,12 @@ func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 						choice = "abort" // bounded spend: one authorized extra round at most
 					} else {
 						extraRounds++
+					}
+				case "retry":
+					if retries > 0 {
+						choice = "abort" // bounded spend: one retry at most
+					} else {
+						retries++
 					}
 				case "restart-session":
 					choice = "abort" // bounded spend: no replacement sessions
@@ -156,12 +173,13 @@ func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 				t.Fatalf("archive: %v", err)
 			}
 			reportLiveSpend(t, dir)
-			t.Logf("live chain complete: terminal=%s archive=%s files=%d extra-rounds-allowed=%d",
-				state.Terminal, report.Status, report.FileCount, extraRounds)
+			t.Logf("live chain complete: terminal=%s archive=%s files=%d extra-rounds-allowed=%d retries-allowed=%d",
+				state.Terminal, report.Status, report.FileCount, extraRounds, retries)
 			return
 		default:
 			reportLiveSpend(t, dir)
-			t.Fatalf("live chain stopped: status=%s err=%v extra-rounds-allowed=%d", state.Status, state.Err, extraRounds)
+			t.Fatalf("live chain stopped: status=%s err=%v extra-rounds-allowed=%d retries-allowed=%d",
+				state.Status, state.Err, extraRounds, retries)
 		}
 	}
 }
