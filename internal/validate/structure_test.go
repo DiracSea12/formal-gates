@@ -37,8 +37,8 @@ func structureGitResolver(t *testing.T, outputs ...string) nativeVCSResolver {
 	return resolver
 }
 
-// 缺陷 4：快照脏检查改为 porcelain normal（检测未跟踪且未忽略文件），新增交付文件
-// 漏 git add 必须在快照前明确报错。
+// 缺陷 4：快照脏检查以 porcelain --untracked-files=all 逐路径检测未跟踪且未忽略文
+// 件，新增交付文件漏 git add 必须在快照前明确报错。
 
 func TestWhiteboxVerifyReadyRejectsUntrackedDeliveryFile(t *testing.T) {
 	resolver := structureGitResolver(t, "/repo", "?? delivery-new.txt")
@@ -85,9 +85,9 @@ func TestWhiteboxIsRuntimeGitStatusPath(t *testing.T) {
 			t.Fatalf("runtime path %q not recognized as a reserved runtime directory", path)
 		}
 	}
-	// 折叠条目 ".gates"/".gates/" 不再按路径无条件豁免：折叠只证明目录内无已跟踪
-	// 文件，豁免与否由仓库根下 .gates 一级子项的枚举决定（见 vcs_test.go 的
-	// TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent），路径层永远判非运行期。
+	// 折叠条目 ".gates"/".gates/" 在路径层永远判非运行期：状态以
+	// --untracked-files=all 获取，git 已把未跟踪文件逐路径展开（不存在折叠条目；
+	// 见 vcs_test.go 的 TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry）。
 	for _, path := range []string{"delivery-new.txt", ".gates", ".gates/", ".gates/other/run.json", "internal/code.go", ".gates/tmp-notes.md"} {
 		if isRuntimeGitStatusPath(path) {
 			t.Fatalf("non-runtime path %q misclassified as a reserved runtime directory", path)

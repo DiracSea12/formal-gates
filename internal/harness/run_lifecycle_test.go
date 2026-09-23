@@ -358,12 +358,13 @@ func TestOnlyTheRequirementGateIsAskableFirst(t *testing.T) {
 // park-row reads surface a failed store read as their own layer's failure
 // stop, never as a flattened "no row" — an unreadable row read as absent
 // could revise past a standing park (routeRepair's hold), re-ask a parked
-// stage, or move a check brief whose stage is parked. latestOutcome's
-// degraded read order is NOT under test here: it keeps its established
-// design (see its doc comment). The row-loop read inside unplacedDisposition
-// sits behind the Dispositions listing and is not reachable by a whole-store
-// failure alone; its error propagation is carried by the signature the
-// classify callers map to their failure stops.
+// stage, or move a check brief whose stage is parked. The Dispositions
+// listing sits under the same contract: an unreadable list is the error
+// itself (a row hidden by a failed listing could never have its question
+// placed), so unplacedDisposition reports it and classify's waiting and
+// observed branches map it to their existing failure stops.
+// latestOutcome's degraded read order is NOT under test here: it keeps its
+// established design (see its doc comment).
 func TestUnreadableParkRowFailsItsNecessaryReaders(t *testing.T) {
 	c := openWorkflow(t, "review-unreadable-park", composeScripts{}, 1)
 	ctx := context.Background()
@@ -379,6 +380,24 @@ func TestUnreadableParkRowFailsItsNecessaryReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The listing entry: the error is the listing's own, never an empty
+	// disposition set the callers would treat as "nothing pending".
+	if _, err := c.disposedTasks(); err == nil {
+		t.Fatal("disposedTasks flattened an unreadable listing into an empty set")
+	}
+	if placed, err := c.unplacedDisposition(ctx); err == nil || placed {
+		t.Fatalf("unplacedDisposition = (%v, %v), want the listing error", placed, err)
+	}
+	// classify's observed branch decides through the same listing: a failed
+	// read is its failure stop, never an observed call with no work derived.
+	if state, stop := c.classify(ctx, runner.ErrCallObserved); !stop || state.Status != StatusFailed || state.Err == nil {
+		t.Fatalf("classify(ErrCallObserved) = (%+v, %v), want a failed stop on an unreadable listing", state, stop)
+	}
+	// The waiting branch holds the same contract for its own necessary
+	// reads (the pending-decision read fails first on a closed store).
+	if state, stop := c.classify(ctx, runner.ErrWaitingDecision); !stop || state.Status != StatusFailed || state.Err == nil {
+		t.Fatalf("classify(ErrWaitingDecision) = (%+v, %v), want a failed stop on unreadable decision facts", state, stop)
+	}
 	// routeDisposition: the row is this transition's necessary fact.
 	if state, stop := c.routeDisposition(ctx, taskDevelopment); !stop || state.Status != StatusFailed || state.Err == nil {
 		t.Fatalf("routeDisposition = (%+v, %v), want a failed stop on an unreadable park row", state, stop)
@@ -387,10 +406,10 @@ func TestUnreadableParkRowFailsItsNecessaryReaders(t *testing.T) {
 	if _, err := c.dispositionStands(taskDevelopment); err == nil {
 		t.Fatal("dispositionStands flattened an unreadable park row into not-standing")
 	}
-	// The route layer surfaces it through the check-brief round pass, whose
-	// skip decision needs each check stage's row.
+	// The route layer surfaces the listing failure as its own stop — the
+	// row-loop and the check-brief round pass never even run.
 	if state, stop := c.route(ctx); !stop || state.Status != StatusFailed || state.Err == nil {
-		t.Fatalf("route = (%+v, %v), want a failed stop when a necessary park-row read fails", state, stop)
+		t.Fatalf("route = (%+v, %v), want a failed stop when the disposition listing fails", state, stop)
 	}
 	// executePlanGate: the executor cannot decide parked / record / ask anew
 	// without the row.

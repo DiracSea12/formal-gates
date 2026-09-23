@@ -2,7 +2,6 @@ package validate
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -27,7 +26,7 @@ func TestNativeVCSResolverCommandShapes(t *testing.T) {
 		identity string
 		want     [][]string
 	}{
-		{name: "git", identity: gitID, want: [][]string{{"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "--verify", gitID + "^{commit}"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "status", "--porcelain=v1"}}},
+		{name: "git", identity: gitID, want: [][]string{{"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "--verify", gitID + "^{commit}"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "status", "--porcelain=v1", "--untracked-files=all"}}},
 		{name: "svn", identity: "123", want: [][]string{{"svn", "info", "--show-item", "wc-root", "/repo"}, {"svnversion", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "info", "--show-item", "revision", "-r", "123", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "status", "--quiet", "/repo"}}},
 		{name: "p4", identity: "456", want: [][]string{{"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...#have"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "sync", "-n", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "opened", "..."}}},
 	} {
@@ -159,56 +158,98 @@ func TestNativeVCSResolverIgnoresUntrackedRuntimeDirectories(t *testing.T) {
 	}
 }
 
-// TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent verifies the folded
-// "?? .gates/" entry: git normal mode collapsing the whole untracked directory
-// only proves nothing inside is tracked, so the exemption must enumerate the
-// repo root's .gates first-level children — all reserved runtime directories
-// exempts the folded entry; any other child (or an unreadable .gates) keeps
-// the entry and the dirty check intercepts it.
-func TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent(t *testing.T) {
-	root := t.TempDir()
-	resolverFor := func(pending string) nativeVCSResolver {
-		resolver, err := resolverForVCS("git", &scriptedNativeRunner{outputs: []string{root, pending}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resolver
-	}
-
-	// Runtime-only children: the folded entry is exempted.
-	for _, dir := range []string{"tmp", "run-locks", "results"} {
-		if err := os.MkdirAll(filepath.Join(root, ".gates", dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := resolverFor("?? .gates/").VerifyReady(root); err != nil {
-		t.Fatalf("folded .gates/ holding only runtime children blocked a snapshot: %v", err)
-	}
-
-	// A non-runtime first-level child under the folded entry: not exempted.
-	if err := os.WriteFile(filepath.Join(root, ".gates", "delivery-note.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := resolverFor("?? .gates/").VerifyReady(root); err == nil ||
-		!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
-		t.Fatalf("folded .gates/ with a non-runtime child was exempted: %v", err)
-	}
-	// The same non-runtime child listed explicitly (git stops folding once it
-	// matters) is intercepted by the per-path rule as before.
-	if err := resolverFor("?? .gates/delivery-note.txt").VerifyReady(root); err == nil {
-		t.Fatalf("explicit non-runtime child under .gates was exempted: %v", err)
-	}
-
-	// An unreadable .gates fails closed: the folded entry stays and intercepts.
-	// (A missing .gates cannot coexist with a real "?? .gates/" line; the case
-	// pins the fail-closed direction of the enumeration itself.)
-	other := t.TempDir()
-	resolver, err := resolverForVCS("git", &scriptedNativeRunner{outputs: []string{other, "?? .gates/"}})
+// TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry verifies the
+// --untracked-files=all semantics: git itself expands every untracked and
+// non-ignored file into its own "?? <path>" line (folded directory entries no
+// longer exist), so the dirty check's exemption is a pure per-path judgment
+// against the runtime directory manifest — untracked runtime paths are
+// exempted, an untracked non-runtime file is intercepted, and no directory
+// content is ever re-enumerated or re-judged against git's ignore rules.
+func TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry(t *testing.T) {
+	// Untracked runtime paths, one path per line exactly as -uall lists them:
+	// exempted (the host has not pre-gitignored any of them).
+	runtimeOnly := &scriptedNativeRunner{outputs: []string{"/repo",
+		"?? .gates/tmp/run-1/state.json\n?? .gates/run-locks/run-1.lock\n?? .gates/qa-isolation/run-1/\n?? .gates/slices/run-1/\n?? .gates/results/old-run.json"}}
+	resolver, err := resolverForVCS("git", runtimeOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := resolver.VerifyReady(other); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
-		t.Fatalf("folded .gates/ over a missing directory was exempted: %v", err)
+	if err := resolver.VerifyReady("/repo"); err != nil {
+		t.Fatalf("untracked formal-gates runtime paths blocked a snapshot: %v", err)
+	}
+
+	// An untracked non-runtime file beside the runtime paths is still
+	// intercepted by the per-path rule.
+	mixed := &scriptedNativeRunner{outputs: []string{"/repo",
+		"?? .gates/tmp/run-1/state.json\n?? .gates/run-locks/run-1.lock\n?? delivery-new.txt"}}
+	resolver, err = resolverForVCS("git", mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err == nil ||
+		!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("untracked non-runtime file beside runtime paths was exempted: %v", err)
+	}
+
+	// A non-runtime path directly under .gates is not exempted either: the
+	// exemption never widens past the runtime manifest.
+	under := &scriptedNativeRunner{outputs: []string{"/repo", "?? .gates/delivery-note.txt"}}
+	resolver, err = resolverForVCS("git", under)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err == nil {
+		t.Fatalf("untracked non-runtime child under .gates was exempted: %v", err)
+	}
+}
+
+// TestSnapshotDirtyCheckFollowsGitIgnoreRules runs the snapshot readiness
+// check against a real git repository whose ignore policy covers part of
+// .gates: an ignored local note under .gates is not git-reported uncommitted
+// content and must not block a clean snapshot, while the runtime lock path
+// the host did NOT ignore is exempted per-path; an untracked non-runtime file
+// the host did not ignore is still intercepted.
+func TestSnapshotDirtyCheckFollowsGitIgnoreRules(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	// The host ignores the runtime tmp/results directories and a local note
+	// file, but NOT the persistent run-lock directory: VerifyReady explicitly
+	// supports runtime directories the host has not pre-ignored.
+	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results/\n.gates/local-note.md\n")
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "base\n")
+	commitAll(t, root, "base delivery and ignore policy")
+
+	runIDs := []string{"ignored-policy-runtime-only", "ignored-policy-with-note"}
+	for i, note := range []bool{false, true} {
+		name := "runtime_lock_only"
+		if note {
+			name = "runtime_lock_and_ignored_local_note"
+		}
+		t.Run(name, func(t *testing.T) {
+			if note {
+				writeTestFile(t, filepath.Join(root, ".gates", "local-note.md"), "local ignored notes\n")
+			}
+			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, runIDs[i]), "custom", []string{"quality"})
+			dispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+			writeTestFile(t, filepath.Join(root, "delivery.txt"), "new delivery\n")
+			commitAll(t, root, "new delivery")
+			// The framework's own persistent run lock under the NOT-ignored
+			// .gates/run-locks/ is the untracked runtime path in this tree.
+			if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err != nil {
+				t.Fatalf("ignored local note or unignored runtime lock blocked a clean snapshot: %v", err)
+			}
+		})
+	}
+
+	// An untracked, non-ignored delivery file beside the same runtime lock is
+	// still intercepted — the exemption never widens past the runtime manifest.
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "ignored-policy-intercept"), "custom", []string{"quality"})
+	dispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "another delivery\n")
+	commitAll(t, root, "another delivery")
+	writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err == nil ||
+		!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("untracked non-runtime file was accepted beside the runtime lock: %v", err)
 	}
 }
 

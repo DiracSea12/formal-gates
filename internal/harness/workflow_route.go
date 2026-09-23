@@ -33,7 +33,11 @@ func (c *Compose) route(ctx context.Context) (ComposeState, bool) {
 	// 2. The wait-state rows: each parked stage's question is placed, and
 	// each answered one drives its resolve — the plan approval (kind
 	// "plan") lives here with every other park kind.
-	for _, task := range c.disposedTasks() {
+	tasks, err := c.disposedTasks()
+	if err != nil {
+		return ComposeState{Status: StatusFailed, Err: err}, true
+	}
+	for _, task := range tasks {
 		state, stop := c.routeDisposition(ctx, task)
 		if stop {
 			return state, true
@@ -80,19 +84,21 @@ func (c *Compose) abortedIfRefused(ctx context.Context) (ComposeState, bool) {
 
 // disposedTasks lists the tasks with standing park rows, in the kernel's
 // stable task-id order. The row is the whole fact: its task_id IS the
-// logical TaskID, so nothing is guessed back from a storage spelling. An
-// unreadable list reads empty — an unreadable fact decides nothing, and the
-// transitions that must read a row surface its failure.
-func (c *Compose) disposedTasks() []string {
+// logical TaskID, so nothing is guessed back from a storage spelling. The
+// listing is the same necessary fact every row read below it is — an
+// unreadable list is an error the caller maps to its own failure, never an
+// empty set the callers would decide around (a row hidden by a failed
+// listing could never have its question placed or its resolve driven).
+func (c *Compose) disposedTasks() ([]string, error) {
 	rows, err := c.store.Dispositions(context.Background())
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var tasks []string
 	for _, row := range rows {
 		tasks = append(tasks, row.TaskID)
 	}
-	return tasks
+	return tasks, nil
 }
 
 // readDisposition loads a task's standing park row from the kernel: ok is
@@ -568,11 +574,16 @@ func (c *Compose) dispositionStands(task string) (bool, error) {
 // keeps advancing while one does, so a single waiting stop carries
 // every askable question (a parked result's disposal and a pending
 // restart ask surface together instead of one hiding the other). Inert
-// rows (route-guard) are no work. Each row is a necessary fact of the
-// report — an unreadable one is an error the caller maps to its own
-// failure, never a skipped row the stop would silently drop.
+// rows (route-guard) are no work. The listing and each row are necessary
+// facts of the report — an unreadable one is an error the caller maps
+// to its own failure, never an empty set or skipped row the stop would
+// silently drop.
 func (c *Compose) unplacedDisposition(ctx context.Context) (bool, error) {
-	for _, task := range c.disposedTasks() {
+	tasks, err := c.disposedTasks()
+	if err != nil {
+		return false, err
+	}
+	for _, task := range tasks {
 		d, stands, err := c.readDisposition(task)
 		if err != nil {
 			return false, err

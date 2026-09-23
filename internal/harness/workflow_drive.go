@@ -203,8 +203,15 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 // previous cycle's, so the drive loop cannot spin on an unchanging failure.
 func (c *Compose) progressed() bool {
 	parts := []string{}
-	for _, task := range c.disposedTasks() {
-		parts = append(parts, "d:"+task)
+	// The signature is a spin guard, not a decision: a listing the store
+	// cannot serve contributes nothing here — the same tolerance the
+	// pending-decision and request reads on this signature already carry —
+	// and the failure still stops the run through route/classify's necessary
+	// reads on the next cycle, never through this diagnostic.
+	if tasks, err := c.disposedTasks(); err == nil {
+		for _, task := range tasks {
+			parts = append(parts, "d:"+task)
+		}
 	}
 	if pending, err := c.store.PendingDecisions(context.Background()); err == nil {
 		for _, question := range pending {
