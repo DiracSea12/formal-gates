@@ -1022,6 +1022,29 @@ func TestWorkflowCrashTakeoverClassifications(t *testing.T) {
 			t.Fatalf("consult = %+v, want observed", outcome)
 		}
 	})
+	t.Run("completion-during-liveness-sample-is-adopted", func(t *testing.T) {
+		c := openWorkflow(t, "wf-crash", composeScripts{}, 1)
+		inv := invocationOf(taskProduct, "inv-completing")
+		turn := filepath.Join(c.dir, "jobs", pathSafe(taskProduct), inv.InvocationID, "turn-01")
+		if err := os.MkdirAll(turn, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sampled := false
+		outcome, err := c.consultWithLiveness(context.Background(), inv, func(turnDir string) bool {
+			sampled = true
+			if turnDir != turn {
+				t.Fatalf("liveness sampled %s, want %s", turnDir, turn)
+			}
+			makeFabricatedAnswer(t, c, turn, passAnswer())
+			return false
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sampled || !outcome.Adopt || outcome.Observe {
+			t.Fatalf("consult = %+v sampled=%v, want adopted completion", outcome, sampled)
+		}
+	})
 	t.Run("contract-rejected-is-a-runtime-question", func(t *testing.T) {
 		c := openWorkflow(t, "wf-crash", composeScripts{}, 1)
 		turn := filepath.Join(c.dir, "jobs", pathSafe(taskProduct), "inv-rejected", "turn-01")
@@ -1136,10 +1159,15 @@ func state0(c *Compose, ctx context.Context) runner.DecisionView {
 // framed answer fails the worker contract.
 func makeRejectedAnswer(t *testing.T, c *Compose, jobDir string) {
 	t.Helper()
+	makeFabricatedAnswer(t, c, jobDir,
+		scriptedAnswer{Garbage: true, Status: "PASS", Summary: "unparseable"})
+}
+
+func makeFabricatedAnswer(t *testing.T, c *Compose, jobDir string, answer scriptedAnswer) {
+	t.Helper()
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	answer := scriptedAnswer{Garbage: true, Status: "PASS", Summary: "unparseable"}
 	peer := fixedPeerPath(t, dshScriptSteps(jobDir, answer), filepath.Join(jobDir, "peer-echo.txt"))
 	binding := dshBindingFor(t, peer)
 	request := map[string]any{

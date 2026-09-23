@@ -47,6 +47,10 @@ import (
 
 // consult is Runner.Takeover for the composition.
 func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.TakeoverOutcome, error) {
+	return c.consultWithLiveness(ctx, inv, supervisorAlive)
+}
+
+func (c *Compose) consultWithLiveness(ctx context.Context, inv runner.Invocation, alive func(string) bool) (runner.TakeoverOutcome, error) {
 	// The pending-question check comes first: a stage this composition
 	// deliberately parked for an ask (a disposition retry, the plan gate)
 	// holds its question on the ask task, and its invocation is voided by
@@ -72,6 +76,11 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 		// ran. Still not a blind restart: the zero outcome asks.
 		return runner.TakeoverOutcome{}, nil
 	}
+	// Sample liveness before terminal evidence. A supervisor publishes its
+	// receipt before exiting: if it was alive here, a temporarily absent
+	// receipt means observe; if it was already dead, the reads below see the
+	// terminal evidence it published before exit.
+	turnWasAlive := alive(turn)
 	if refusedSession(turn) {
 		// The zero fact asks through the kernel's restart request; the
 		// marker that held the stage for this consultation ends here.
@@ -101,7 +110,7 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 			return runner.TakeoverOutcome{Observe: true}, nil
 		}
 	}
-	if supervisorAlive(turn) {
+	if turnWasAlive {
 		c.noteObservation(inv.TaskID, inv.InvocationID)
 		return runner.TakeoverOutcome{Observe: true}, nil
 	}
