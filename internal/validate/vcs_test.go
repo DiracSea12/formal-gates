@@ -203,6 +203,35 @@ func TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry(t *testing.T) {
 	}
 }
 
+// commitDeliveryPaths commits only the explicitly named delivery paths with
+// the same commit hygiene commitAll applies (no hooks, no signing). The shared
+// commitAll helper sweeps git add --all, which would also commit the
+// persistent run lock a live run has already created, emptying git status
+// before the readiness check and voiding the untracked-runtime-lock scenarios
+// below. Other consumers depend on that --all semantics, so this test commits
+// explicit paths instead of changing the shared helper.
+func commitDeliveryPaths(t *testing.T, root, message string, paths ...string) {
+	t.Helper()
+	runGit(t, root, append([]string{"add", "--"}, paths...)...)
+	runGit(t, root, "commit", "--no-verify", "--no-gpg-sign", "-m", message)
+}
+
+// requireRunLockUntracked asserts the precondition these scenarios exist to
+// exercise: right before the snapshot readiness check runs, git still reports
+// the framework's persistent run lock (never deleted, and not pre-ignored by
+// this host's .gitignore) as untracked content.
+func requireRunLockUntracked(t *testing.T, root, runID string) {
+	t.Helper()
+	lockPath := ".gates/run-locks/" + runID + ".lock"
+	status := runGit(t, root, "status", "--porcelain=v1", "--untracked-files=all")
+	for _, line := range strings.Split(status, "\n") {
+		if strings.TrimSpace(line) == "?? "+lockPath {
+			return
+		}
+	}
+	t.Fatalf("precondition failed: git does not report the runtime lock %s as untracked; git status:\n%s", lockPath, status)
+}
+
 // TestSnapshotDirtyCheckFollowsGitIgnoreRules runs the snapshot readiness
 // check against a real git repository whose ignore policy covers part of
 // .gates: an ignored local note under .gates is not git-reported uncommitted
@@ -210,46 +239,58 @@ func TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry(t *testing.T) {
 // the host did NOT ignore is exempted per-path; an untracked non-runtime file
 // the host did not ignore is still intercepted.
 func TestSnapshotDirtyCheckFollowsGitIgnoreRules(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	// The host ignores the runtime tmp/results directories and a local note
-	// file, but NOT the persistent run-lock directory: VerifyReady explicitly
-	// supports runtime directories the host has not pre-ignored.
-	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results/\n.gates/local-note.md\n")
-	writeTestFile(t, filepath.Join(root, "delivery.txt"), "base\n")
-	commitAll(t, root, "base delivery and ignore policy")
-
-	runIDs := []string{"ignored-policy-runtime-only", "ignored-policy-with-note"}
-	for i, note := range []bool{false, true} {
-		name := "runtime_lock_only"
-		if note {
-			name = "runtime_lock_and_ignored_local_note"
-		}
-		t.Run(name, func(t *testing.T) {
-			if note {
+	// Every sub-scenario runs in its own fresh repository, and each delivery
+	// commit names its paths explicitly: the untracked run lock Start created
+	// must survive as git-reported untracked content all the way into the
+	// readiness check, never get swept into a commit by git add --all.
+	scenarios := []struct {
+		name      string
+		runID     string
+		note      bool
+		intercept bool
+	}{
+		{name: "runtime_lock_only", runID: "ignored-policy-runtime-only"},
+		{name: "runtime_lock_and_ignored_local_note", runID: "ignored-policy-with-note", note: true},
+		{name: "runtime_lock_plus_untracked_delivery_intercept", runID: "ignored-policy-intercept", intercept: true},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			// The host ignores the runtime tmp/results directories and a
+			// local note file, but NOT the persistent run-lock directory:
+			// VerifyReady explicitly supports runtime directories the host
+			// has not pre-ignored.
+			writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results/\n.gates/local-note.md\n")
+			writeTestFile(t, filepath.Join(root, "delivery.txt"), "base\n")
+			commitDeliveryPaths(t, root, "base delivery and ignore policy", ".gitignore", "delivery.txt")
+			if scenario.note {
 				writeTestFile(t, filepath.Join(root, ".gates", "local-note.md"), "local ignored notes\n")
 			}
-			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, runIDs[i]), "custom", []string{"quality"})
+			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, scenario.runID), "custom", []string{"quality"})
 			dispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 			writeTestFile(t, filepath.Join(root, "delivery.txt"), "new delivery\n")
-			commitAll(t, root, "new delivery")
+			// Only the delivery file is committed; the run lock stays untracked.
+			commitDeliveryPaths(t, root, "new delivery", "delivery.txt")
+			requireRunLockUntracked(t, root, state.RunID)
+			// An untracked, non-ignored delivery file beside the same runtime
+			// lock is still intercepted — the exemption never widens past the
+			// runtime manifest.
+			if scenario.intercept {
+				writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
+				if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err == nil ||
+					!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
+					t.Fatalf("untracked non-runtime file was accepted beside the runtime lock: %v", err)
+				}
+				return
+			}
 			// The framework's own persistent run lock under the NOT-ignored
-			// .gates/run-locks/ is the untracked runtime path in this tree.
+			// .gates/run-locks/ is untracked runtime content, and the ignored
+			// local note (when present) is not git-reported content at all:
+			// neither may block a clean snapshot.
 			if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err != nil {
 				t.Fatalf("ignored local note or unignored runtime lock blocked a clean snapshot: %v", err)
 			}
 		})
-	}
-
-	// An untracked, non-ignored delivery file beside the same runtime lock is
-	// still intercepted — the exemption never widens past the runtime manifest.
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "ignored-policy-intercept"), "custom", []string{"quality"})
-	dispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
-	writeTestFile(t, filepath.Join(root, "delivery.txt"), "another delivery\n")
-	commitAll(t, root, "another delivery")
-	writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err == nil ||
-		!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
-		t.Fatalf("untracked non-runtime file was accepted beside the runtime lock: %v", err)
 	}
 }
 
