@@ -301,11 +301,20 @@ func TestDiagnoseRawReadOnlyFallback(t *testing.T) {
 }
 
 func TestPackageReceiptDeterminismAndIsolation(t *testing.T) {
+	// 夹具必须是真实 git 仓库：PackageReceipt 用 git ls-files --ignored 识
+	// 别被忽略的本地数据，只放一个文件的假 .git 目录会让 git 以退出码
+	// 128 失败。.gitignore 忽略 .gates/ 运行数据并忽略自身，收据清单因此
+	// 只剩两个被提交跟踪的包输入。
 	root := t.TempDir()
 	e2eWriteFile(t, filepath.Join(root, "z.txt"), "z\n", 0o600)
 	e2eWriteFile(t, filepath.Join(root, "nested", "a.txt"), "a\n", 0o640)
-	e2eWriteFile(t, filepath.Join(root, ".git", "ignored"), "mutable\n", 0o600)
+	e2eWriteFile(t, filepath.Join(root, ".gitignore"), ".gates/\n.gitignore\n", 0o600)
 	e2eWriteFile(t, filepath.Join(root, ".gates", "ignored"), "runtime\n", 0o600)
+	e2eRun(t, root, "git", "init")
+	e2eRun(t, root, "git", "config", "user.email", "formal-gates@example.invalid")
+	e2eRun(t, root, "git", "config", "user.name", "Formal Gates Test")
+	e2eRun(t, root, "git", "add", "z.txt", filepath.Join("nested", "a.txt"))
+	e2eRun(t, root, "git", "commit", "-m", "baseline")
 
 	first, err := PackageReceipt(root)
 	if err != nil {

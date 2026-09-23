@@ -71,7 +71,10 @@ func faultCopyPackage(t *testing.T, source, target string) {
 		if relative == "." {
 			return os.MkdirAll(target, 0o700)
 		}
-		if info.IsDir() && (relative == ".git" || relative == ".gates" || relative == "$tmp") {
+		// .git/.gates/.harness 是本地运行数据（生产 PackageReceipt 同样排
+		// 除），.harness 里有 venv 符号链接等执行器工件，都不是包输入；
+		// $tmp 是历史本地临时目录，同属运行期输出。
+		if info.IsDir() && (relative == ".git" || relative == ".gates" || relative == ".harness" || relative == "$tmp") {
 			return filepath.SkipDir
 		}
 		destination := filepath.Join(target, relative)
@@ -116,11 +119,14 @@ func faultInstallSource(t *testing.T) string {
 	return root
 }
 
+// faultAssertNoInstallResidue 验证故障回滚后没有安装残留。
+// .formal-gates-install.lock 例外：它是内核文件锁的持久工件（释放＝关
+// 闭描述符，锁文件永不删除），属于运行期输出而非事务状态，因此显式豁免
+// 该文件，改验“留下的确为普通锁文件，且事务已释放它”。
 func faultAssertNoInstallResidue(t *testing.T, registry, target string) {
 	t.Helper()
 	for _, pattern := range []string{
 		filepath.Join(filepath.Dir(registry), ".formal-gates-transaction-*"),
-		filepath.Join(filepath.Dir(registry), ".formal-gates-install.lock"),
 		filepath.Join(filepath.Dir(target), ".formal-gates-stage-*"),
 	} {
 		matches, err := filepath.Glob(pattern)
@@ -133,6 +139,14 @@ func faultAssertNoInstallResidue(t *testing.T, registry, target string) {
 	}
 	if _, err := os.Stat(installOuterJournalPath(registry)); !os.IsNotExist(err) {
 		t.Fatalf("install journal remains: %v", err)
+	}
+	if info, err := os.Lstat(installLockPath(registry)); err == nil && !info.Mode().IsRegular() {
+		t.Fatalf("install lock artifact is not a regular file: %s", installLockPath(registry))
+	}
+	if release, err := acquireInstallLock(registry); err != nil {
+		t.Fatalf("interrupted install did not release the install lock: %v", err)
+	} else {
+		release()
 	}
 }
 

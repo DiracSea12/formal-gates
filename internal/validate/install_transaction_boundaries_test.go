@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,11 +162,14 @@ func installPathWithin(parent, path string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
+// installAssertNoTransactionArtifacts 验证事务结束（提交或回滚）后没有
+// 残留。.formal-gates-install.lock 例外：它是内核文件锁的持久工件（释放
+// ＝关闭描述符，锁文件永不删除），属于运行期输出而非事务状态，因此显式
+// 豁免该文件，改验“留下的确为普通锁文件，且事务已释放它”。
 func installAssertNoTransactionArtifacts(t *testing.T, registry, target string) {
 	t.Helper()
 	for _, pattern := range []string{
 		filepath.Join(filepath.Dir(registry), ".formal-gates-transaction-*"),
-		filepath.Join(filepath.Dir(registry), ".formal-gates-install.lock"),
 		filepath.Join(filepath.Dir(target), ".formal-gates-stage-*"),
 	} {
 		matches, err := filepath.Glob(pattern)
@@ -178,6 +182,14 @@ func installAssertNoTransactionArtifacts(t *testing.T, registry, target string) 
 	}
 	if _, err := os.Stat(installOuterJournalPath(registry)); !os.IsNotExist(err) {
 		t.Fatalf("transaction journal remains: %v", err)
+	}
+	if info, err := os.Lstat(installLockPath(registry)); err == nil && !info.Mode().IsRegular() {
+		t.Fatalf("install lock artifact is not a regular file: %s", installLockPath(registry))
+	}
+	if release, err := acquireInstallLock(registry); err != nil {
+		t.Fatalf("finished transaction did not release the install lock: %v", err)
+	} else {
+		release()
 	}
 }
 
@@ -507,11 +519,49 @@ func TestAdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
 			if _, err := os.Stat(RunDir(root, runID)); !os.IsNotExist(err) {
 				t.Fatalf("rejected admission created a run directory: %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
-				t.Fatalf("rejected admission created a workflow namespace: %v", err)
+			// 判据是“无业务命名空间残留”，不是“.gates 不存在”：Start 在
+			// 准入校验前就持有内核 run 锁，.gates/run-locks/<run>.lock 是
+			// 运行期工件（内核文件锁永不删除），不是命名空间状态。逐项枚
+			// 举 .gates 下的残留，除该锁工件外的任何条目都说明被拒准入
+			// 写入了业务命名空间。
+			residue := installWorkflowNamespaceResidue(t, root)
+			for _, entry := range residue {
+				if entry != ".gates/run-locks" && entry != ".gates/run-locks/"+runID+".lock" {
+					t.Fatalf("rejected admission created a workflow namespace entry %q (residue: %v)", entry, residue)
+				}
 			}
 		})
 	}
+}
+
+// installWorkflowNamespaceResidue 枚举 root/.gates 下的全部条目（相对
+// root 的 slash 路径，含目录与文件，不含 .gates 自身）；.gates 不存在时
+// 返回空。
+func installWorkflowNamespaceResidue(t *testing.T, root string) []string {
+	t.Helper()
+	var residue []string
+	namespaceRoot := filepath.Join(root, ".gates")
+	err := filepath.WalkDir(namespaceRoot, func(path string, dirEntry fs.DirEntry, walkErr error) error {
+		if os.IsNotExist(walkErr) {
+			return nil
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == namespaceRoot {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		residue = append(residue, filepath.ToSlash(relative))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return residue
 }
 
 func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
@@ -636,8 +686,14 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 		t.Fatalf("uninstall did not use the shared lock: %v", err)
 	}
 	unlock()
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("released install lock remains: %v", err)
+	// 内核文件锁永不删除：释放判据是锁可被再次获取，而非锁文件消失。
+	if info, statErr := os.Lstat(lockPath); statErr == nil && !info.Mode().IsRegular() {
+		t.Fatalf("install lock artifact is not a regular file: %s", lockPath)
+	}
+	if relock, relockErr := acquireInstallLock(registry); relockErr != nil {
+		t.Fatalf("released install lock is still held: %v", relockErr)
+	} else {
+		relock()
 	}
 	if _, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}); err != nil {
 		t.Fatal(err)
@@ -665,8 +721,11 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 	if _, err := Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("completed uninstall left the shared lock: %v", err)
+	// 同上：完成的卸载事务释放共享锁，锁文件按内核锁语义持久保留。
+	if relock, relockErr := acquireInstallLock(registry); relockErr != nil {
+		t.Fatalf("completed uninstall left the shared lock held: %v", relockErr)
+	} else {
+		relock()
 	}
 }
 

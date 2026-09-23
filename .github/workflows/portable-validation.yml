@@ -87,11 +87,17 @@ jobs:
         env:
           GOFLAGS: -timeout=20m
         run: go test -tags=integration ./internal/validate
+      - name: Run Go qastructure tests
+        env:
+          GOFLAGS: -timeout=20m
+        run: go test -tags=qastructure ./internal/validate
       - name: Run go vet
         run: go vet ./...
       - name: Run Go race tests (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          GOFLAGS: -timeout=20m
         run: go test -race ./internal/validate ./internal/cli
       - name: Validate package (Windows)
         if: runner.os == 'Windows'
