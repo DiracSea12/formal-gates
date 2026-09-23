@@ -332,6 +332,28 @@ func MarkStale(set Set, source string) Set {
 	return set
 }
 
+// StaleSeries 在用户确认的需求修订重走范围内把单个动作的 series 刷为
+// PENDING：与 MarkStale 同形（来源、revision+1、投影清空、该动作的下游
+// 影响表打标），四本账与计轮不动。product-review 被重走时，start-readiness
+// 的 PASS 同失其上游前提——这不是把重走范围自动扩大到技术审的账本与轮次
+// （markUpstreamStale 只持结论 PENDING），其重审由既有授权/轮次机制承载。
+func StaleSeries(set Set, action Action, source string) Set {
+	series, err := set.seriesFor(action)
+	if err != nil {
+		return set
+	}
+	series.Effective.Status = statusPending
+	series.Effective.Source = source
+	series.Effective.Revision++
+	series.Effective.BlockingFindingIDs = []string{}
+	series.Effective.AdvisoryFindingIDs = []string{}
+	series.Effective.DownstreamImpact = downstreamImpact(action)
+	if action == ProductReview {
+		markUpstreamStale(&set, source)
+	}
+	return set
+}
+
 // markUpstreamStale 在 product-review 的纠正把此前 PASS 的结论变为阻塞时，
 // 把 start-readiness 的 effective 刷为 PENDING：其 PASS 依赖的上游结论已不
 // 成立。start-readiness 的证据账本与计轮保持不动。UpstreamVoid 随之置位：

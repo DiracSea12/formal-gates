@@ -123,12 +123,27 @@ type ReviewActionFace struct {
 	EffectiveSource      string            `json:"effectiveSource"`
 }
 
-// ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定。
+// RequirementChangeFace 是最近一次修订确认的公开面：确认后的 revision、
+// 用户声明的含义分类与来源、勾选的重走范围。只读投影，内容与授权事实
+// 以 state 的确认账本为唯一权威。
+type RequirementChangeFace struct {
+	Revision       string   `json:"revision"`
+	Classification string   `json:"classification"`
+	Scope          []string `json:"scope"`
+	Source         string   `json:"source"`
+}
+
+// ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定，以及当前
+// 权威需求 revision 与最近一次修订确认。
 type ReviewFace struct {
 	Actions       []ReviewActionFace        `json:"actions"`
 	Topology      *protocol.TopologyBinding `json:"topology,omitempty"`
 	RouteMode     string                    `json:"routeMode,omitempty"`
 	SelectedGates []string                  `json:"selectedGates,omitempty"`
+	// RequirementRevision 是当前权威需求 revision（确认账本末条）。
+	RequirementRevision string `json:"requirementRevision"`
+	// LastRequirementChange 是最近一次修订确认；从未修订时为空。
+	LastRequirementChange *RequirementChangeFace `json:"lastRequirementChange,omitempty"`
 }
 
 // reviewFace 从权威 state 派生只读审查投影（纯函数）。
@@ -138,10 +153,34 @@ func reviewFace(state *protocol.State) ReviewFace {
 			reviewActionFace(state.ReviewSeries.ProductReview),
 			reviewActionFace(state.ReviewSeries.StartReadiness),
 		},
-		Topology:      state.Topology,
-		RouteMode:     state.RouteMode,
-		SelectedGates: state.SelectedGates,
+		Topology:              state.Topology,
+		RouteMode:             state.RouteMode,
+		SelectedGates:         state.SelectedGates,
+		RequirementRevision:   state.RequirementRevision(),
+		LastRequirementChange: requirementChangeFace(state),
 	}
+}
+
+// requirementChangeFace 投影账本中最近一条非初始的确认事实；只有受理
+// 初始账目（或账本为空）时返回 nil。
+func requirementChangeFace(state *protocol.State) *RequirementChangeFace {
+	for index := len(state.RequirementRevisions) - 1; index >= 0; index-- {
+		entry := state.RequirementRevisions[index]
+		if entry.Classification == protocol.RequirementClassificationIntake {
+			return nil
+		}
+		scope := append([]string{}, entry.DecidedScope...)
+		if scope == nil {
+			scope = []string{}
+		}
+		return &RequirementChangeFace{
+			Revision:       entry.Revision,
+			Classification: entry.Classification,
+			Scope:          scope,
+			Source:         entry.Source,
+		}
+	}
+	return nil
 }
 
 func reviewActionFace(series review.Series) ReviewActionFace {

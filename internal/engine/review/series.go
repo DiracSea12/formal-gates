@@ -206,6 +206,47 @@ func LatestDecisionID(s Series, resultDigest, findingID string) string {
 	return latestID
 }
 
+// HasConfirmedBlocking 报告 series 是否存在"已确认阻塞"的 finding：有效
+// 裁决为 CONFIRM 或 RESEVERITIZE、且有效严重度 P0/P1。只统计与当前
+// effective 绑定同一需求 revision、未被整轮失效排除的证据——需求 revision
+// 前移后，旧 revision 下确认的阻塞不再拦新轮（§7.1.2 的新鲜复审义务由
+// 换 revision 解除）；未被裁决的 P0/P1 只阻塞 effective，不构成确认。
+func HasConfirmedBlocking(s Series) bool {
+	revision := s.Effective.RequirementRevision
+	for _, candidate := range s.RawCandidates {
+		if candidate.RequirementRevision != revision || resultExcluded(s, candidate.ResultDigest) {
+			continue
+		}
+		for _, finding := range candidate.Findings {
+			decision, severity, _ := EffectiveFindingDecision(s, candidate.ResultDigest, finding)
+			if (decision == decisionConfirm || decision == decisionReseveritize) && blockingSeverity(severity) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// FindingOwner 报告哪条 series 的有效（未被整轮失效排除）证据中存在给定
+// digest 的 finding。发现项驱动的需求修订用它把载荷里的 FindingDigest 绑
+// 定回真实账目；不存在的 finding 无法驱动修订。
+func FindingOwner(set Set, findingDigest string) (Action, bool) {
+	for _, action := range []Action{ProductReview, StartReadiness} {
+		series, _ := set.Series(action)
+		for _, candidate := range series.RawCandidates {
+			if resultExcluded(series, candidate.ResultDigest) {
+				continue
+			}
+			for _, finding := range candidate.Findings {
+				if finding.Digest == findingDigest {
+					return action, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 // candidateByDigest 按 result digest 查找候选。
 func candidateByDigest(s Series, digest string) (RawCandidate, bool) {
 	for _, candidate := range s.RawCandidates {

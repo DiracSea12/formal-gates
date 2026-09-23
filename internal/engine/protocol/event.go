@@ -43,13 +43,19 @@ const (
 	ControlReviewFindingDecision ControlKind = "REVIEW_FINDING_DECISION"
 	ControlConfirmTopology       ControlKind = "CONFIRM_TOPOLOGY"
 	ControlSelectRoute           ControlKind = "SELECT_ROUTE"
+	// ControlRequestRequirementChange 是用户需求变化控制（总需求 §6.3.2/
+	// §7.2）：Ask 期间进入修订屏障，DECIDE 携 typed Requirement 载荷登记
+	// 新确认 revision 并机械执行用户勾选的重走范围（或作为 decline 只结
+	// Ask、不登记）。
+	ControlRequestRequirementChange ControlKind = "REQUEST_REQUIREMENT_CHANGE"
 )
 
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
 	switch k {
 	case ControlReset, ControlAbort, ControlRecovery,
-		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute:
+		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
+		ControlRequestRequirementChange:
 		return true
 	}
 	return false
@@ -124,12 +130,15 @@ type RequestPayload struct {
 
 // DecidePayload 是 DECIDE 的 payload：目标 request、freshness token 与
 // 选中选项（选项合法性对 pending Ask 的落账选项集校验，属接纳层）。审查
-// 类业务控制额外携带 typed Review 载荷（分支与控制一一对应）。
+// 类业务控制额外携带 typed Review 载荷（分支与控制一一对应）；需求变化
+// 控制携带 typed Requirement 载荷（或作为 decline 两者皆空）。两个变体
+// 指针同时只允许一个非空。
 type DecidePayload struct {
-	Request RequestID
-	Token   string
-	Choice  AskOptionID
-	Review  *ReviewDecisionPayload
+	Request     RequestID
+	Token       string
+	Choice      AskOptionID
+	Review      *ReviewDecisionPayload
+	Requirement *RequirementDecisionPayload
 }
 
 // TaskPayload 是 TASK_PROGRESS 的 payload：目标任务、期望的当前
@@ -231,6 +240,26 @@ type RouteDecision struct {
 	Selected []string `json:"selected,omitempty"`
 }
 
+// RequirementDecisionPayload 是 REQUEST_REQUIREMENT_CHANGE 的 DECIDE
+// typed 载荷（总需求 §7.2.1）：BaseRevision 是 CAS 基线（必须等于当前
+// 权威 revision），CandidateRevision 是完整候选 revision 绑定，DeltaDigest
+// 是主代理生成之 review-delta 的指纹绑定（引擎不持有 base/diff 账本），
+// Source/Classification 由用户声明，四个 Redo 勾选框是用户逐项确认的重
+// 走范围。FindingDigest 把发现项驱动的修订绑回真实账目。
+type RequirementDecisionPayload struct {
+	BaseRevision       string `json:"baseRevision"`
+	CandidateRevision  string `json:"candidateRevision"`
+	DeltaDigest        string `json:"deltaDigest"`
+	Source             string `json:"source"`
+	Classification     string `json:"classification"`
+	RedoProductReview  bool   `json:"redoProductReview"`
+	RedoStartReadiness bool   `json:"redoStartReadiness"`
+	RedoTopology       bool   `json:"redoTopology"`
+	RedoRoute          bool   `json:"redoRoute"`
+	Reason             string `json:"reason"`
+	FindingDigest      string `json:"findingDigest,omitempty"`
+}
+
 // worker result outcome 的封闭集合（runtime/task.go：结果分类不进入任务
 // 状态机）。PASS 推进 frontier；FAIL/RUNTIME_ERROR 按显式 failure class
 // 路由，终态失败不会推进 frontier。
@@ -325,6 +354,14 @@ func NewDecideEvent(id EventID, request RequestID, token string, choice AskOptio
 // 与账目变换由接纳层对 pending Ask 执行。
 func NewReviewDecideEvent(id EventID, request RequestID, token string, choice AskOptionID, payload ReviewDecisionPayload) (Event, error) {
 	ev := Event{ID: id, Kind: KindDecide, Decide: &DecidePayload{Request: request, Token: token, Choice: choice, Review: &payload}}
+	return ev, ev.Validate()
+}
+
+// NewRequirementDecideEvent 构造携带 typed Requirement 载荷的决定事件：
+// REQUEST_REQUIREMENT_CHANGE 的 DECIDE 入口。载荷形状在此校验；CAS、
+// 分类规则与重走范围的账目变换由接纳层对 pending Ask 执行。
+func NewRequirementDecideEvent(id EventID, request RequestID, token string, choice AskOptionID, payload RequirementDecisionPayload) (Event, error) {
+	ev := Event{ID: id, Kind: KindDecide, Decide: &DecidePayload{Request: request, Token: token, Choice: choice, Requirement: &payload}}
 	return ev, ev.Validate()
 }
 
@@ -492,8 +529,16 @@ func (e Event) Validate() error {
 		if strings.TrimSpace(string(e.Decide.Choice)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide choice is empty"}
 		}
+		if e.Decide.Review != nil && e.Decide.Requirement != nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide payload must carry at most one typed variant (review or requirement)"}
+		}
 		if e.Decide.Review != nil {
 			if err := validateReviewDecisionPayload(e.Decide.Review); err != nil {
+				return err
+			}
+		}
+		if e.Decide.Requirement != nil {
+			if err := validateRequirementDecisionPayload(e.Decide.Requirement); err != nil {
 				return err
 			}
 		}
@@ -672,10 +717,11 @@ type requestWire struct {
 }
 
 type decideEventWire struct {
-	Request string                 `json:"request"`
-	Token   string                 `json:"token"`
-	Choice  AskOptionID            `json:"choice"`
-	Review  *ReviewDecisionPayload `json:"review,omitempty"`
+	Request     string                      `json:"request"`
+	Token       string                      `json:"token"`
+	Choice      AskOptionID                 `json:"choice"`
+	Review      *ReviewDecisionPayload      `json:"review,omitempty"`
+	Requirement *RequirementDecisionPayload `json:"requirement,omitempty"`
 }
 
 type taskEventWire struct {
@@ -746,7 +792,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Request = &requestWire{Control: string(e.Request.Control), Options: options}
 	}
 	if e.Decide != nil {
-		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review}
+		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}

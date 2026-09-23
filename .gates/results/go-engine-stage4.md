@@ -112,3 +112,21 @@ Git provider＋canary＋route matrix。
 教训入账（连续第三轮同型）：给账本加不变量时必须先枚举**所有合法到达路径**（本轮：多重整轮作废释放）；前置检查修一处时按"完整可接纳性"收口而不是逐错误类型打补丁。
 
 **R1 三审返修收口，待外部评审复核。**
+
+## 第 46 轮（2026-09-24，R2：需求变化的引擎权威化，轻装）
+
+范围重排（主代理裁定并记档）：主需求核实后，REQ-015 的 NEW/SAME_AS/DISMISSED 归并史、RETRY_EXHAUSTED、每快照唯一返修均为「开发后」验证 wave 机制（§9.3 :180-181、:225），输入依赖 QA/门结果——**移入 R3**；R2 改为机主七项需求中 3/4 的引擎强制（规格已就绪、直建于 R1 审查系列之上）。
+
+交付（单代理，review/protocol/facade 三包 8 改 3 增，未动 internal/validate）：
+
+- `State.RequirementRevisions []ConfirmedRevision` 权威 revision 账本（INTAKE 回填向前兼容；引擎不持 base/diff 账本，DeltaDigest 只是指纹绑定——§7.2.1）。
+- `REQUEST_REQUIREMENT_CHANGE` 控制＋typed 载荷（Base/Candidate/DeltaDigest/Source/Classification/四项 RedoScope/Reason/FindingDigest）：CAS 基线、来源↔分类强制（P1 源必 CHANGED 且必含所属 series 重走——§7.1.2 新鲜复审义务引擎强制；P2 源默认 PRESERVED 保留用户升级权——机主第 3 项；CHANGED 只机械执行勾选项，不勾不失效——机主第 4 项）。
+- Phase A 屏障：未决需求变化 Ask 冻结业务签发（`CHANGE_BARRIER_ACTIVE`；refill 静默扣发以免连带拒回执类事件）。
+- 内核增 `StaleSeries`（单 series stale＋product 级联 UpstreamVoid）、`HasConfirmedBlocking`（已确认阻塞查询）；`admitReviewEvidence` 落 §7.1.2 门槛：确认阻塞存在且证据绑当前 revision→拒，换 revision 自动放行，纠正路径不受限。
+- façade 投影：权威 revision＋最近修订确认。
+- **主代理复核发现死锁并返修**：只勾选重走 start-readiness（产品审续用，§7.2.4 carry）时，顺序守卫/双审门/phase 推进按"当前 revision 相等"判 PASS，续用结论绑旧 revision→死锁（主代理探针坐实，先于外部评审）。返修：结论有效性改 carry 感知（PASS 绑确认账本内任意 revision 即有效；F3 证据绑定不变），顺带解除 PRESERVED 后的同族死锁；四条新测试含伪造账本外 revision 与篡改 effective PASS 的负控。
+- 验证：engine 15 包＋cli 全绿、vet/gofmt 干净；主代理亲读 requirement.go/carry 判定 diff；探针翻绿后删。模型调用 0。
+
+已知残留（子代理如实披露）：Phase A 未覆盖 HostAction intent 签发（对应区段尚未接入引擎）；ConfirmedRevision 未落 FindingDigest（P1 scope 的加载期复验靠其余链约束）；USER_INITIATED+PRESERVED 可在存在未消 P0/P1 时登记（与 legacy NeedsReReview 值级同形，机主如需更严再加规则）。
+
+**R2 收口，待外部评审。R3＝QA 管线（3.5a 覆盖契约接入、case-set FROZEN、wave）＋开发后 REQ-015 件（finding/problem ID 归并史、RETRY_EXHAUSTED、每快照唯一返修）。**

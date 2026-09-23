@@ -168,47 +168,67 @@ func validateRouteDecision(route *RouteDecision) error {
 
 // ---- 审查证据接纳（WORKER_RESULT 同事务） ----
 
-// requirementRevision 返回需求 revision 的权威来源：受理确认回执的
-// RequirementRevision（本阶段内不变；需求变化控制属后续单元）。
-func (s *State) requirementRevision() string {
-	if s.IntakeConfirmationReceipt == nil {
-		return ""
+// confirmedRequirementRevision 报告给定需求 revision 是否属于确认账本
+// （账本为空时即受理回退值）——结论 carry 有效性的成员判定。
+func (s *State) confirmedRequirementRevision(revision string) bool {
+	for _, entry := range s.RequirementRevisions {
+		if entry.Revision == revision {
+			return true
+		}
 	}
-	return s.IntakeConfirmationReceipt.RequirementRevision
+	return len(s.RequirementRevisions) == 0 && revision != "" && revision == s.RequirementRevision()
 }
 
-// effectivePassAt 报告 series 的 effective 是否为 PASS 且绑定给定需求
-// revision——双审顺序与拓扑门控都以它为准。
-func effectivePassAt(series review.Series, revision string) bool {
-	return series.Effective.Status == reviewStatusPass && series.Effective.RequirementRevision == revision
+// effectivePass 报告 series 的 effective 结论是否为携带已确认 revision 的
+// PASS（carry 感知，§7.2.4 机主修订）：revision 只前进，每个新确认 revision
+// 要么勾选重走了该 series（stale 后非 PASS，或在新 revision 上重新 PASS），
+// 要么用户决定携原结论续用——因此 PASS 只要在确认账本内的 revision 上
+// 成立即有效。双审顺序守卫、双审门、拓扑双条件与 phase 推进都以它为准；
+// 勾选重走置 PENDING 或升阻塞自然关门。新轮证据的 F3 绑定不在此处——
+// 证据仍必须绑当前权威 revision。
+func (s *State) effectivePass(series review.Series) bool {
+	return series.Effective.Status == reviewStatusPass && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
 }
 
-// dualReviewPassAt 报告双 series 的 effective 是否都在给定需求 revision 下
-// PASS——进入开发的门（SELECT_ROUTE 接纳与 TOPOLOGY_AND_ROUTE 推进）以它
-// 为准：任一审查重新阻塞时门保持关闭。
-func (s *State) dualReviewPassAt(revision string) bool {
-	return effectivePassAt(s.ReviewSeries.ProductReview, revision) && effectivePassAt(s.ReviewSeries.StartReadiness, revision)
+// dualReviewPass 报告双 series 的 effective 结论是否都是携带已确认
+// revision 的 PASS——进入开发的门（SELECT_ROUTE 接纳与 TOPOLOGY_AND_ROUTE
+// 推进）以它为准：任一审查重新阻塞或被重走置 PENDING 时门保持关闭。
+func (s *State) dualReviewPass() bool {
+	return s.effectivePass(s.ReviewSeries.ProductReview) && s.effectivePass(s.ReviewSeries.StartReadiness)
 }
 
 // admitReviewEvidence 对一条审查证据执行完整可接纳性判定并返回记账后的
 // Set：受理 revision 绑定（stale 绑定的结果不计）、start-readiness 的双审
-// 顺序守卫（product-review 须同 revision effective PASS）、review 内核的
-// 记录变换（重复摘要、越限无授权、核实缺项、finding 形状）。非空错误即
-// CodeReviewEvidenceRejected 且零状态变化。暂存预检与回执配对后的权威
-// 接纳共用本函数（单一事实源）：预检丢弃返回值只取错误——内核变换不改
-// 写调用方输入（包契约并有回归测试），账本在暂存与回执之间可能变化，落
-// 账仍以配对时的接纳为准。
+// 顺序守卫（product-review 须携已确认 revision 的 effective PASS）、review
+// 内核的记录变换（重复摘要、越限无授权、核实缺项、finding 形状）。非空
+// 错误即 CodeReviewEvidenceRejected 且零状态变化。暂存预检与回执配对后
+// 的权威接纳共用本函数（单一事实源）：预检丢弃返回值只取错误——内核变换
+// 不改写调用方输入（包契约并有回归测试），账本在暂存与回执之间可能变化，
+// 落账仍以配对时的接纳为准。
 func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence) (review.Set, error) {
-	if evidence.RequirementRevision != s.requirementRevision() {
+	if evidence.RequirementRevision != s.RequirementRevision() {
 		return review.Set{}, &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, s.requirementRevision()),
+			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, s.RequirementRevision()),
 		}
 	}
-	if evidence.Action == review.StartReadiness && !effectivePassAt(s.ReviewSeries.ProductReview, s.requirementRevision()) {
+	// §7.1.2 门槛：series 上存在当前 revision 下确认的 P0/P1 阻塞 finding
+	// 时，同一 revision 不得再记新候选——对相同输入再采样一轮不能消除已
+	// 确认的需求缺陷，必须先换到经确认变更的新 revision（或经纠正路径
+	// dismiss/降级清除阻塞，该路径不受本门槛约束）。series 的 effective
+	// 尚绑在旧 revision 时门槛自然关闭，新 revision 的新鲜轮自动放行。
+	series, _ := s.ReviewSeries.Series(evidence.Action)
+	if series.Effective.RequirementRevision == evidence.RequirementRevision && review.HasConfirmedBlocking(series) {
 		return review.Set{}, &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("start-readiness evidence requires product-review effective PASS at requirement revision %q (current: %s)", s.requirementRevision(), s.ReviewSeries.ProductReview.Effective.Status),
+			Detail: fmt.Sprintf("confirmed blocking finding on %s requires a changed and reconfirmed requirement revision before a fresh round", evidence.Action),
+		}
+	}
+	if evidence.Action == review.StartReadiness && !s.effectivePass(s.ReviewSeries.ProductReview) {
+		return review.Set{}, &RejectedError{
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("start-readiness evidence requires a carried product-review PASS at a confirmed requirement revision (current: %s bound to %q)",
+				s.ReviewSeries.ProductReview.Effective.Status, s.ReviewSeries.ProductReview.Effective.RequirementRevision),
 		}
 	}
 	updated, _, err := review.RecordCandidate(s.ReviewSeries, s.RunID, evidence.Action,
@@ -308,7 +328,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		}
 		correction.UserAuthorized = true
 		correction.Source = "engine-decide:" + requestID
-		updated, err := review.ApplyCorrection(state.ReviewSeries, state.RunID, state.requirementRevision(), correction)
+		updated, err := review.ApplyCorrection(state.ReviewSeries, state.RunID, state.RequirementRevision(), correction)
 		if err != nil {
 			return reviewReject(err)
 		}
@@ -330,8 +350,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if state.Topology != nil {
 			return reviewReject(fmt.Errorf("topology is already bound and is the binding point; it is not re-cut (change goes through requirement change, reset, or abort)"))
 		}
-		if !effectivePassAt(state.ReviewSeries.StartReadiness, state.requirementRevision()) {
-			return reviewReject(fmt.Errorf("topology confirmation requires start-readiness effective PASS at requirement revision %q (current: %s)", state.requirementRevision(), state.ReviewSeries.StartReadiness.Effective.Status))
+		if !state.effectivePass(state.ReviewSeries.StartReadiness) {
+			return reviewReject(fmt.Errorf("topology confirmation requires a carried start-readiness PASS at a confirmed requirement revision (current: %s bound to %q)",
+				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		decision := payload.Topology
 		state.Topology = &TopologyBinding{
@@ -358,10 +379,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))
 		}
 		// 进入开发的双审门：拓扑确认后任一审查重新阻塞（纠正升 P1、级联
-		// 上游失效）时，路线选择保持关闭，直到双 series 重新 effective PASS。
-		if !state.dualReviewPassAt(state.requirementRevision()) {
-			return reviewReject(fmt.Errorf("route selection requires both pre-development reviews effective PASS at requirement revision %q (current: product %s, start-readiness %s)",
-				state.requirementRevision(), state.ReviewSeries.ProductReview.Effective.Status, state.ReviewSeries.StartReadiness.Effective.Status))
+		// 上游失效、重走置 PENDING）时，路线选择保持关闭，直到双 series
+		// 重新携已确认 revision 的 effective PASS。
+		if !state.dualReviewPass() {
+			return reviewReject(fmt.Errorf("route selection requires both pre-development reviews effective PASS carried at confirmed requirement revisions (current: product %s bound to %q, start-readiness %s bound to %q)",
+				state.ReviewSeries.ProductReview.Effective.Status, state.ReviewSeries.ProductReview.Effective.RequirementRevision,
+				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		route := payload.Route
 		state.RouteMode = route.Mode
@@ -400,10 +423,10 @@ func parseDecisionChoice(choice AskOptionID) (decision, findingID string, ok boo
 // ---- run phase 门控与账本一致性 ----
 
 // advanceReviewPhases 沿静态边表逐边推进 run phase：每个门的条件都能从
-// 持久账本重算（受理回执、双审 effective、拓扑/路线绑定）。在会改变审
-// 查账本/拓扑/路线的同一提交事务内调用；条件不满足时静默留置（这不是
-// 错误）。START_READINESS→TOPOLOGY_AND_ROUTE 与上一边同条件连续放行
-// （readiness 是确定性判定，无独立数据面）。
+// 持久账本重算（受理回执、携已确认 revision 的双审 effective、拓扑/路线
+// 绑定）。在会改变审查账本/拓扑/路线的同一提交事务内调用；条件不满足时
+// 静默留置（这不是错误）。START_READINESS→TOPOLOGY_AND_ROUTE 与上一边
+// 同条件连续放行（readiness 是确定性判定，无独立数据面）。
 func (s *State) advanceReviewPhases() error {
 	for {
 		var target runtime.RunPhase
@@ -413,21 +436,21 @@ func (s *State) advanceReviewPhases() error {
 				target = runtime.PhaseProductReview
 			}
 		case runtime.PhaseProductReview:
-			if effectivePassAt(s.ReviewSeries.ProductReview, s.requirementRevision()) {
+			if s.effectivePass(s.ReviewSeries.ProductReview) {
 				target = runtime.PhaseTechnicalReview
 			}
 		case runtime.PhaseTechnicalReview:
-			if effectivePassAt(s.ReviewSeries.StartReadiness, s.requirementRevision()) {
+			if s.effectivePass(s.ReviewSeries.StartReadiness) {
 				target = runtime.PhaseStartReadiness
 			}
 		case runtime.PhaseStartReadiness:
-			if effectivePassAt(s.ReviewSeries.StartReadiness, s.requirementRevision()) {
+			if s.effectivePass(s.ReviewSeries.StartReadiness) {
 				target = runtime.PhaseTopologyAndRoute
 			}
 		case runtime.PhaseTopologyAndRoute:
 			// 进入开发的双审门与 SELECT_ROUTE 接纳同条件：账本只能证明
-			// 双 series 当前 effective PASS 时才推进。
-			if s.Topology != nil && s.RouteMode != "" && s.dualReviewPassAt(s.requirementRevision()) {
+			// 双 series 携已确认 revision 的 effective PASS 时才推进。
+			if s.Topology != nil && s.RouteMode != "" && s.dualReviewPass() {
 				target = runtime.PhaseDevelopmentParallel
 			}
 		}
@@ -441,9 +464,10 @@ func (s *State) advanceReviewPhases() error {
 }
 
 // phaseLedgerFloor 重算账本能证明的最远主线 phase：每个门留下的 residue
-// 都是单调的持久事实（受理回执、当前需求 revision 下完成过的审查轮、
-// 拓扑/路线绑定）。effective 投影会随新的阻塞轮合法回落，但不会抹掉
-// "该阶段审查曾经完成"的事实，因此 residue 不以当前 effective 为准。
+// 都是单调的持久事实（受理回执、完成过的审查轮、拓扑/路线确认决定）。
+// effective 投影会随新的阻塞轮或需求修订重走合法回落，当前绑定会按用户
+// 勾选的重走范围解除，但不会抹掉"该阶段曾经走完"的事实，因此 residue
+// 不以当前 effective 或当前绑定为准。
 func (s *State) phaseLedgerFloor() int {
 	floor := 0
 	if s.IntakeReceipt != nil {
@@ -458,26 +482,38 @@ func (s *State) phaseLedgerFloor() int {
 		// 前置（双审顺序守卫）隐含接纳时 product-review 曾 effective PASS。
 		floor = 4
 	}
-	if s.Topology != nil && s.RouteMode != "" {
+	if s.topologyRouteConfirmed() {
 		floor = 5
 	}
 	return floor
 }
 
-// hasReviewRounds 报告 series 在当前需求 revision 下是否记录过审查候选
-// （审查轮发生过；轮次是否有效由账本完整性校验负责）。
+// hasReviewRounds 报告 series 是否记录过审查候选（审查轮发生过；轮次是否
+// 有效由账本完整性校验负责）。需求 revision 不参与判定：旧 revision 下的
+// 审查轮同样是"该阶段曾经完成"的持久事实，修订重走不会把它抹掉。
 func (s *State) hasReviewRounds(action review.Action) bool {
 	series, ok := s.ReviewSeries.Series(action)
 	if !ok {
 		return false
 	}
-	revision := s.requirementRevision()
-	for _, candidate := range series.RawCandidates {
-		if candidate.RequirementRevision == revision {
-			return true
+	return len(series.RawCandidates) > 0
+}
+
+// topologyRouteConfirmed 报告拓扑与路线是否都曾被用户确认过：决定台账
+// （Decisions）不可变且不因重走解除，因此它是比当前绑定更强的单调
+// residue——需求修订勾选重走拓扑/路线会清空当前绑定，但已进入过开发的
+// run phase 仍须被账本证明合法。
+func (s *State) topologyRouteConfirmed() bool {
+	var topology, route bool
+	for _, decision := range s.Decisions {
+		switch decision.Control {
+		case ControlConfirmTopology:
+			topology = true
+		case ControlSelectRoute:
+			route = true
 		}
 	}
-	return false
+	return topology && route
 }
 
 // phaseRank 给主线前置段排序；DEVELOPMENT_PARALLEL 之后的 phase 排在
@@ -521,11 +557,15 @@ func (s *State) verifyPhaseAgainstLedgers() error {
 	return nil
 }
 
-// verifyReviewIntegrity 在加载/提交边界重算审查账本的全部投影与身份链
-// 并校验 phase 一致性：篡改的账本或越门的 phase 在此可区分拒绝。
+// verifyReviewIntegrity 在加载/提交边界重算审查账本的全部投影与身份链、
+// 需求 revision 账本的结构链并校验 phase 一致性：篡改的账本或越门的
+// phase 在此可区分拒绝。
 func verifyReviewIntegrity(state *State) error {
 	if err := review.Validate(state.RunID, state.ReviewSeries); err != nil {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: fmt.Sprintf("review ledger: %v", err)}
+	}
+	if err := verifyRequirementLedger(state); err != nil {
+		return err
 	}
 	return state.verifyPhaseAgainstLedgers()
 }

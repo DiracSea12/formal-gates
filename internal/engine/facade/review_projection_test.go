@@ -75,6 +75,42 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 	}
 }
 
+// TestReviewFaceProjectsRequirementState：当前权威需求 revision 与最近一次
+// 修订确认（revision/classification/scope/来源）进入只读投影；只有受理
+// 初始账目（或账本为空）时不带最近修订。
+func TestReviewFaceProjectsRequirementState(t *testing.T) {
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	state := protocol.NewState(*view)
+	state.RunID = "run-requirement-face"
+	state.IntakeConfirmationReceipt = &protocol.IntakeConfirmationReceipt{RequirementRevision: "rev-1"}
+
+	// 只有回填的初始账目（或账本为空）时：投影带受理 revision、无最近修订。
+	seeded := reviewFace(state)
+	if seeded.RequirementRevision != "rev-1" || seeded.LastRequirementChange != nil {
+		t.Fatalf("intake-only face = %+v", seeded)
+	}
+
+	state.RequirementRevisions = append(state.RequirementRevisions,
+		protocol.ConfirmedRevision{Revision: "rev-1", Source: protocol.RequirementSourceIntake, Classification: protocol.RequirementClassificationIntake, StateRevision: 2},
+		protocol.ConfirmedRevision{
+			Revision: "rev-2", DeltaDigest: "sha256:delta", BaseRevision: "rev-1",
+			Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged,
+			DecidedScope: []string{"product-review", "topology"}, RequestID: "req-change-1", StateRevision: 5,
+		})
+	face := reviewFace(state)
+	if face.RequirementRevision != "rev-2" {
+		t.Fatalf("requirement revision = %q, want rev-2", face.RequirementRevision)
+	}
+	change := face.LastRequirementChange
+	if change == nil || change.Revision != "rev-2" || change.Classification != protocol.RequirementClassificationChanged ||
+		change.Source != protocol.RequirementSourceUserInitiated || len(change.Scope) != 2 || change.Scope[0] != "product-review" || change.Scope[1] != "topology" {
+		t.Fatalf("last change face = %+v", change)
+	}
+}
+
 // TestReviewFaceProjectsGrantProvenance：每条额外轮授权都以 id/reason/占用
 // 态投影——占用态随整轮失效回收而回落，未占用授权在位则如实可见。
 func TestReviewFaceProjectsGrantProvenance(t *testing.T) {

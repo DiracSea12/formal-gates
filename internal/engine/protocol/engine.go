@@ -408,6 +408,14 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	if state == nil {
 		return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
+	// 修订屏障（Phase A）：未决的需求变化 Ask 期间冻结新的业务任务签发，
+	// 以可区分错误拒绝直接签发调用；Drive 经此同步受阻。
+	if state.requirementChangePending() {
+		return nil, 0, &RejectedError{
+			Code:   CodeChangeBarrierActive,
+			Detail: "a requirement change ask is pending; new task issuance is frozen until it is decided",
+		}
+	}
 	identity, err := e.validatePlan(state, plan)
 	if err != nil {
 		return nil, 0, err
@@ -669,6 +677,14 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// 变更之前——零状态变化。
 		if reviewControl(ask.Control) || ev.Decide.Review != nil {
 			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
+		// 需求变化控制：同一两段形态，typed Requirement 载荷（或 decline）
+		// 在落决定前执行确认登记与重走范围变换；非该控制携此载荷一律
+		// schema 拒绝。
+		if ask.Control == ControlRequestRequirementChange || ev.Decide.Requirement != nil {
+			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -1251,8 +1267,13 @@ func (s *State) terminalizeTask(key runtime.TaskKey) error {
 
 // refill 按 「submit 接纳事件后立即继续 Decide/SelectIssued」：
 // 对推进后的视图重新决策，Ready 计划经 SelectIssued 按容量裁剪后落账
-// （复用与 IssueFromPlan 完全相同的签发语义）。
+// （复用与 IssueFromPlan 完全相同的签发语义）。修订屏障（Phase A）期间
+// 静默扣发：触发本函数的回执/结果/决定事件本身合法且必须接纳，被冻结的
+// 只是"从中继续签发新任务"这一步——屏障解除后的下一次提交会补进。
 func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if state.requirementChangePending() {
+		return nil, nil
+	}
 	plan, err := decision.Decide(&state.State, decision.Observation{}, e.cfg.Definition)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill decide: %w", err)

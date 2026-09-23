@@ -108,8 +108,15 @@ const (
 	// 冲突、越序、拓扑重复绑定等账目约束）——零状态变化。
 	CodeReviewDecisionRejected = "REVIEW_DECISION_REJECTED"
 	// CodeStateIntegrityInvalid：加载/提交边界发现 state 与账本不一致
-	//（篡改的审查账本投影或越门的 run phase）。
+	//（篡改的审查账本投影、伪造的需求 revision 账本或越门的 run phase）。
 	CodeStateIntegrityInvalid = "STATE_INTEGRITY_INVALID"
+	// CodeRequirementDecisionRejected：REQUEST_REQUIREMENT_CHANGE 的 DECIDE
+	// 无法执行（CAS 基线过期、发现项绑定缺失、P1 源缺重走范围等账目
+	// 约束）——零状态变化。
+	CodeRequirementDecisionRejected = "REQUIREMENT_DECISION_REJECTED"
+	// CodeChangeBarrierActive：存在未决的需求变化 Ask（修订屏障 Phase A），
+	// 新的业务任务签发被拒绝；既有 Ask、回执与结果类事件不受阻。
+	CodeChangeBarrierActive = "CHANGE_BARRIER_ACTIVE"
 )
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
@@ -429,6 +436,11 @@ type State struct {
 	// start-readiness 两条 series）：raw candidate 只作证据，effective
 	// status 由账本确定性投影。run phase 的推进条件从它重算。
 	ReviewSeries review.Set `json:"reviewSeries"`
+	// RequirementRevisions 是确认 revision 的权威账本：末条 Revision 即当
+	// 前权威需求 revision（一切 revision 比对都读它）。引擎只登记确认事实
+	// 与 DeltaDigest 指纹绑定，不持有 base/diff 内容账本（§7.2.1：内容归
+	// 主代理）。首条是受理落账回填的 INTAKE 初始账目。
+	RequirementRevisions []ConfirmedRevision `json:"requirementRevisions"`
 	// Topology 是 start-readiness PASS 后唯一绑定的拆分拓扑决定（总需求
 	// §8.1.1 绑定点：确认后不得重切）。nil 表示尚未确认。
 	Topology *TopologyBinding `json:"topology,omitempty"`
@@ -447,6 +459,23 @@ type TopologyBinding struct {
 	SplitCount int      `json:"splitCount,omitempty"`
 	Slices     []string `json:"slices,omitempty"`
 	Parallel   string   `json:"parallel,omitempty"`
+}
+
+// ConfirmedRevision 是需求 revision 权威账本的单条确认事实。Revision 是
+// 确认后的需求 revision；BaseRevision 是它所基于的上一确认 revision
+// （INTAKE 初始账目为空）；DeltaDigest 绑定主代理生成的 review-delta 指纹；
+// Source/Classification/DecidedScope 记录用户声明的来源、含义分类与勾选的
+// 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
+// 代数（单调，防篡改链的一环）。
+type ConfirmedRevision struct {
+	Revision       string   `json:"revision"`
+	DeltaDigest    string   `json:"deltaDigest,omitempty"`
+	BaseRevision   string   `json:"baseRevision,omitempty"`
+	Source         string   `json:"source"`
+	Classification string   `json:"classification"`
+	DecidedScope   []string `json:"decidedScope,omitempty"`
+	RequestID      string   `json:"requestId,omitempty"`
+	StateRevision  uint64   `json:"stateRevision"`
 }
 
 // IntakeArtifact is one canonical requirement/solution artifact binding.
@@ -596,5 +625,15 @@ func (s *State) normalizeCollections() {
 	// review.Validate 拒绝。
 	if s.ReviewSeries.ProductReview.Action == "" && s.ReviewSeries.StartReadiness.Action == "" {
 		s.ReviewSeries = review.NewSet()
+	}
+	// revision 账本为空而受理回执已落账时，回填单条 INTAKE 初始账目：账本
+	// 从此以末条承载权威 revision，受理值与回退值恒等，既有 run 向前兼容。
+	if len(s.RequirementRevisions) == 0 && s.IntakeReceipt != nil {
+		s.RequirementRevisions = []ConfirmedRevision{{
+			Revision:       s.IntakeReceipt.Confirmation.RequirementRevision,
+			Source:         RequirementSourceIntake,
+			Classification: RequirementClassificationIntake,
+			StateRevision:  s.IntakeReceipt.Revision,
+		}}
 	}
 }
