@@ -911,8 +911,8 @@ type invariantOwnerSpec struct {
 //
 //   - repair-in-flight: dev#1 不写实现、返修轮睡眠 RepairSleepSecs；binding
 //     在返修调用启动时把 job 目录写进 cfg.Dir/invariant-repair-started。
-//   - check-receipt: 默认脚本＋慢检查（CheckArgv 自带 sleep），供“收据落盘
-//     后”边界同步 jobs/check-state/*/turn-*/process.json。
+//   - check-receipt: CheckArgv 自带 started/release 握手，供“检查在途时杀
+//     owner，随后检查收据落盘”边界同步。
 func TestInvariantOwnerSubprocess(t *testing.T) {
 	file := os.Getenv("INVARIANT_OWNER_SPEC")
 	if file == "" {
@@ -1222,13 +1222,31 @@ func TestUninterruptedCheckRunHoldsInvariants(t *testing.T) {
 // owner，同配置重开续跑到终态：已完成的检查/门审按其领域结果接回，
 // 不当普通 worker 处理。
 //
-// 边界同步点：jobs/check-state/*/turn-*/process.json（检查监督者身份落
-// 盘）→ 杀 owner → 等 exit.json（收据落盘）。此刻重开，接回应凭真实回执
-// 接纳已完成检查；门审可能同刻在途或已结算，两种状态都必须被正确处置。
+// 边界同步点：检查脚本写 started 且监督者 process.json 落盘，脚本保持在
+// 途 → 杀 owner → 写 release → 等 exit.json（收据落盘）。此刻重开，接回
+// 应凭真实回执接纳已完成检查，且后继门审不可能在中断前偷跑。
 func TestInterruptedAfterCheckReceiptRecoversToSameTerminal(t *testing.T) {
-	checkArgv := []string{"/bin/sh", "-c", `sleep 2; test "$(cat state.txt)" = ok`}
+	syncDir := t.TempDir()
+	started := filepath.Join(syncDir, "started")
+	release := filepath.Join(syncDir, "release")
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	checkArgv := []string{"/bin/sh", "-c", `set -eu
+: > "$1"
+while [ ! -f "$2" ]; do sleep 0.05; done
+test "$(cat state.txt)" = ok`, "check-handshake", started, release}
+	// The control uses the identical check command with its release already
+	// present, then the interruption run removes both handshake files.
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	controlCfg := invariantScenarioConfig(t, "inv-check-a-control", nil, checkArgv)
 	controlTraj, _ := invariantRunControl(t, controlCfg, 1)
+	if err := os.Remove(started); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(release); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := invariantScenarioConfig(t, "inv-check-b", nil, checkArgv)
 	owner := startInvariantOwner(t, invariantOwnerSpec{
@@ -1239,9 +1257,13 @@ func TestInterruptedAfterCheckReceiptRecoversToSameTerminal(t *testing.T) {
 	})
 	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json", 40*time.Second)
 	job := filepath.Dir(proc)
+	waitForPattern(t, syncDir, "started", 10*time.Second)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitForPattern(t, job, "exit.json", 10*time.Second)
 
 	watch := startWriterWatch(cfg.Dir)
