@@ -183,10 +183,18 @@ func effectivePassAt(series review.Series, revision string) bool {
 	return series.Effective.Status == reviewStatusPass && series.Effective.RequirementRevision == revision
 }
 
-// recordReviewCandidate 把审查证据交内核记账。start-readiness 的候选仅当
-// product-review effective=PASS（同 revision）才可接纳——双审顺序守卫；
-// RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝整个事件。
+// recordReviewCandidate 把审查证据交内核记账。接纳前置是证据的需求
+// revision 与受理绑定一致——stale 绑定的结果不计；start-readiness 的候选
+// 仅当 product-review effective=PASS（同 revision）才可接纳——双审顺序
+// 守卫；RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝
+// 整个事件。
 func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence) error {
+	if evidence.RequirementRevision != state.requirementRevision() {
+		return &RejectedError{
+			Code:   CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, state.requirementRevision()),
+		}
+	}
 	if evidence.Action == review.StartReadiness && !effectivePassAt(state.ReviewSeries.ProductReview, state.requirementRevision()) {
 		return &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
@@ -235,7 +243,8 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		return ""
 	}()
 	// REVIEW_ROUND_GRANT 的 Ask 选项固定为 grant/decline：decline 不携
-	// payload（拒绝授权也是有效决定），其余审查控制的决定必携对应分支。
+	// payload（拒绝授权也是有效决定），grant 必携 roundGrant 分支，其余
+	// 审查控制的决定必携对应分支。
 	if ask.Control == ControlReviewRoundGrant {
 		if decide.Choice == AskOptionID(declineOption) {
 			if payload != nil {
@@ -246,6 +255,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if decide.Choice != AskOptionID(grantOption) {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("REVIEW_ROUND_GRANT choice %q invalid (closed set: grant, decline)", decide.Choice)}
 		}
+		if payload == nil || payload.RoundGrant == nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "granting a round grant requires the roundGrant decision branch"}
+		}
 	} else if branch == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s requires its review decision payload branch", ask.Control)}
 	}
@@ -255,9 +267,6 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 	switch ask.Control {
 	case ControlReviewRoundGrant:
 		grant := payload.RoundGrant
-		if branch != "roundGrant" {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "REVIEW_ROUND_GRANT takes the roundGrant branch"}
-		}
 		updated, err := review.AppendAuthorization(state.ReviewSeries, state.RunID, grant.Action, grant.Reason, grant.DispatchID)
 		if err != nil {
 			return reviewReject(err)
@@ -288,6 +297,15 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if branch != "topology" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "CONFIRM_TOPOLOGY takes the topology branch"}
 		}
+		// 选项锚定（与 REVIEW_FINDING_DECISION 的 parseDecisionChoice 同
+		// 理）：choice id 恰为 no-split/split 且与拓扑决定一致，否则所选项
+		// 与落盘载荷说的不是同一个决定。
+		if choice := string(decide.Choice); (choice != topologyNoSplit && choice != topologySplit) || choice != payload.Topology.Decision {
+			return &RejectedError{
+				Code:   CodeEventSchemaInvalid,
+				Detail: fmt.Sprintf("topology payload decision %q does not match the chosen option %q (closed set: no-split, split)", payload.Topology.Decision, decide.Choice),
+			}
+		}
 		if state.Topology != nil {
 			return reviewReject(fmt.Errorf("topology is already bound and is the binding point; it is not re-cut (change goes through requirement change, reset, or abort)"))
 		}
@@ -306,6 +324,14 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 	case ControlSelectRoute:
 		if branch != "route" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "SELECT_ROUTE takes the route branch"}
+		}
+		// 选项锚定：choice id 恰为 full/custom 且与路线决定一致（同
+		// CONFIRM_TOPOLOGY 的锚定理由）。
+		if choice := string(decide.Choice); (choice != routeModeFull && choice != routeModeCustom) || choice != payload.Route.Mode {
+			return &RejectedError{
+				Code:   CodeEventSchemaInvalid,
+				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: full, custom)", payload.Route.Mode, decide.Choice),
+			}
 		}
 		if state.Topology == nil {
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))

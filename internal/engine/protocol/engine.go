@@ -867,10 +867,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return Acceptance{}, nil, false, err
 		}
 		actionID := ev.Result.ActionID
+		// 结果身份与事件级 canonical 同一 wire 形态：审查证据是结果字节
+		// 的一部分，不参与即同外层摘要下换审查内容会被误判 DUPLICATE。
 		payloadDigest := digestOfCanonical(workerResultEventWire{
 			ActionID: ev.Result.ActionID, Provider: ev.Result.Provider,
 			Outcome: ev.Result.Outcome, PayloadDigest: ev.Result.PayloadDigest,
-			FailureClass: string(ev.Result.FailureClass),
+			FailureClass: string(ev.Result.FailureClass), Review: ev.Result.Review,
 		})
 		if existing, seen := state.Results[actionID]; seen {
 			if existing.Digest != payloadDigest {

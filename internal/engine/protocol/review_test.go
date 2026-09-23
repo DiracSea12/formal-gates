@@ -7,8 +7,10 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,6 +330,40 @@ func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 	}
 }
 
+// TestSplitTopologyAndCustomRouteBinding：choice 与载荷一致的 split 拓扑
+// 与 custom 路线各走通——split 落账完整拆分参数，custom 按候选全集顺序
+// 归一落账真子集，两者绑定后推进 DEVELOPMENT_PARALLEL。
+func TestSplitTopologyAndCustomRouteBinding(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+
+	askAndDecide(t, engine, ControlConfirmTopology, "req-topology-split", topologyOptions(), "split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "split", SplitCount: 2, Slices: []string{"lane-core", "lane-tooling"}, Parallel: "two lanes",
+	}})
+	snap := engine.LoadMustSucceed(t)
+	topology := snap.State.Topology
+	if topology == nil || topology.Decision != "split" || topology.SplitCount != 2 ||
+		len(topology.Slices) != 2 || topology.Slices[0] != "lane-core" || topology.Slices[1] != "lane-tooling" || topology.Parallel != "two lanes" {
+		t.Fatalf("split topology binding = %+v", topology)
+	}
+
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-custom", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"},
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != "custom" || len(snap.State.SelectedGates) != 2 ||
+		snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.release" {
+		t.Fatalf("custom route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	}
+	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase after custom route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	}
+}
+
 // TestReviewRepairLoopRoundExhaustionAndGrant：返修环 CONFIRM→仍 FAIL→
 // RESEVERITIZE 降 P3→PASS 推进；三轮耗尽后无授权拒绝、typed Ask 授权恰好
 // 一轮、第四轮记录占用授权。
@@ -516,6 +552,51 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 	})
 
+	t.Run("topology choice must anchor the payload decision", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+		split := &ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "split", SplitCount: 2, Slices: []string{"slice-a", "slice-b"}, Parallel: "two lanes",
+		}}
+		if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-topo-cross", topologyOptions(), "no-split", split); err == nil {
+			t.Fatal("no-split choice with a split payload accepted")
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("crossed topology code = %q", code)
+		}
+		// 选项集由 Ask 创建方给出：集合外的 choice id 即使与某个载荷字段
+		// 巧合，也不是合法拓扑决定。
+		deferDecision := &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "建议不拆"}}
+		if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-topo-foreign", []AskOption{{ID: "defer", Label: "推迟"}}, "defer", deferDecision); err == nil {
+			t.Fatal("foreign topology choice accepted")
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("foreign topology code = %q", code)
+		}
+	})
+
+	t.Run("route choice must anchor the payload mode", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+		askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "no-split", Note: "建议不拆",
+		}})
+		custom := &ReviewDecisionPayload{Route: &RouteDecision{
+			Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
+		}}
+		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-cross", routeOptions(), "full", custom); err == nil {
+			t.Fatal("full choice with a custom payload accepted")
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("crossed route code = %q", code)
+		}
+	})
+
 	t.Run("no-split without note is schema invalid", func(t *testing.T) {
 		if _, err := NewReviewDecideEvent("evt-no-note", "req-topology", "sha256:token", "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
 			Decision: "no-split",
@@ -566,6 +647,36 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 		if after := stateBytesOf(t, dir); string(before) != string(after) {
 			t.Fatal("rejected no-payload decide changed state bytes")
+		}
+	})
+
+	t.Run("grant choice without the roundGrant branch is rejected, not a panic", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		request, err := NewRequestEvent("req-grant-nopayload", ControlReviewRoundGrant, grantOptions()...)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if _, err := engine.Submit(request, fp); err != nil {
+			t.Fatalf("submit request: %v", err)
+		}
+		token, err := engine.Freshness("req-grant-nopayload")
+		if err != nil {
+			t.Fatalf("freshness: %v", err)
+		}
+		ev, err := NewDecideEvent("evt-grant-nopayload", "req-grant-nopayload", token, "grant")
+		if err != nil {
+			t.Fatalf("decide: %v", err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(ev, fp); err == nil {
+			t.Fatal("payload-less grant decide accepted")
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("no-payload grant code = %q", code)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("rejected no-payload grant changed state bytes")
 		}
 	})
 
@@ -711,17 +822,95 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 	})
 
-	t.Run("review evidence cannot ride a runtime-error outcome", func(t *testing.T) {
-		ev := Event{ID: "evt-runtime-review", Kind: KindWorkerResult, Result: &WorkerResultPayload{
-			ActionID: "act:x", Provider: testProvider, Outcome: OutcomeRuntimeError, PayloadDigest: "sha256:p",
-			FailureClass: "TRANSIENT_ENGINE", Review: &ReviewResultEvidence{
-				Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1", Status: "PASS",
-			},
-		}}
-		if err := ev.Validate(); err == nil {
-			t.Fatal("runtime-error review evidence accepted")
-		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
-			t.Fatalf("runtime-error review code = %q", code)
+	t.Run("review evidence with a stale requirement revision", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		product := issueReady(t, engine)[0]
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-stale-revision", product, "agent-stale-revision"), fp); err != nil {
+			t.Fatalf("spawn: %v", err)
+		}
+		stale := reviewEvidence(review.ProductReview, "dispatch-stale", "", "FAIL", "bound to an older requirement", []review.Finding{
+			{Severity: "P1", Message: "old revision finding"},
+		})
+		stale.RequirementRevision = "rev-0"
+		ev, err := NewReviewWorkerResultEvent("result-stale-revision", product, testProvider, "sha256:stale-revision", stale)
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(ev, fp); err == nil {
+			t.Fatal("stale requirement revision accepted")
+		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+			t.Fatalf("stale revision code = %q", code)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("rejected stale revision changed state bytes")
+		}
+	})
+
+	t.Run("review content participates in result identity", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		product := issueReady(t, engine)[0]
+		evidence := reviewEvidence(review.ProductReview, "dispatch-identity", "", "PASS", "first verdict", nil)
+		submitReviewResult(t, engine, "result-identity", product, evidence)
+		// 同字节重发（新 event ID）仍是 DUPLICATE——判重口径收窄不误伤
+		// 幂等重放。
+		identical, err := NewReviewWorkerResultEvent("result-identity-replay", product, testProvider, "sha256:payload-result-identity", evidence)
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		acceptance, err := engine.Submit(identical, fp)
+		if err != nil {
+			t.Fatalf("identical replay rejected: %v", err)
+		}
+		if acceptance.Status != "DUPLICATE" {
+			t.Fatalf("identical replay status = %q, want DUPLICATE", acceptance.Status)
+		}
+		// 同 action、同外层字段（provider/outcome/payload digest/failure
+		// class）、新 event ID、仅审查内容不同：这是另一个结果，必须
+		// 冲突拒绝而非误判 DUPLICATE。
+		altered := evidence
+		altered.Message = "second verdict"
+		replayed, err := NewReviewWorkerResultEvent("result-identity-alt", product, testProvider, "sha256:payload-result-identity", altered)
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(replayed, fp); err == nil {
+			t.Fatal("altered review content resubmission accepted")
+		} else if code := rejectionCode(t, err); code != CodeReceiptConflict {
+			t.Fatalf("altered review code = %q", code)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("rejected altered review replay changed state bytes")
+		}
+	})
+
+	t.Run("review evidence cannot ride a non-PASS outcome", func(t *testing.T) {
+		// 失败结果携合法 failure class：拒绝必须来自"审查证据只能随
+		// PASS 结果"这条约束本身，而不是别的字段先失败。
+		evidence := ReviewResultEvidence{
+			Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1", Status: "PASS",
+		}
+		for _, outcome := range []string{OutcomeRuntimeError, OutcomeFail} {
+			ev := Event{ID: EventID("evt-" + outcome + "-review"), Kind: KindWorkerResult, Result: &WorkerResultPayload{
+				ActionID: "act:x", Provider: testProvider, Outcome: outcome, PayloadDigest: "sha256:p",
+				FailureClass: authoring.FailureBlockedBug, Review: &evidence,
+			}}
+			err := ev.Validate()
+			if err == nil {
+				t.Fatalf("%s review evidence accepted", outcome)
+			}
+			if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+				t.Fatalf("%s review code = %q", outcome, code)
+			}
+			var rejected *RejectedError
+			if !errors.As(err, &rejected) || !strings.Contains(rejected.Detail, "PASS outcome") {
+				t.Fatalf("%s rejection does not point at the review/outcome constraint: %v", outcome, err)
+			}
 		}
 	})
 

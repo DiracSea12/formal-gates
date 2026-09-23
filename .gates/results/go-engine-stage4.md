@@ -79,3 +79,13 @@ Git provider＋canary＋route matrix。
 7. 提示词是否用上——**核实：在用**。`LoadPromptCatalog`（internal/validate/catalog.go）从磁盘读 prompts/reviewer-base.md＋actions/*.md＋gates/*.md，内容入 CatalogRevision 摘要；拼接骨架在代码里（设计如此）。故 1/2/5 直接改 .md 即生效。
 
 注：本次六处文档 edits 由主代理直接完成（需求案/提示词为内容物非实施代码）；引擎侧 3/4/5 的 enforcement 并入 R2/R3 合同，走"引擎固定流程＋typed Ask"，不留 AI 可绕过/遗忘的口子。
+
+## 第 43 轮（2026-09-23，R1 外部评审返修，轻装）
+
+外部评审对 `dedb3fa..28979c9`（R1a＋R1b）判 FAIL：3 P1＋2 P2。处置按红线走全链：
+
+- **先复现**：主代理逐项读码＋公开入口探针独立复现五项（choice↔payload 不一致落盘／RUNTIME_ERROR 携证据计轮推阶段／旧 revision 证据接纳并完成任务／判重摘要漏 Review 致换内容误判 DUPLICATE／grant 缺载荷 panic）——全部坐实，评审结论成立。
+- **派发返修**（单代理、改动面限定 protocol 包、修法裁定入合同）：F1 拓扑/路线选项锚定（choice id 恰为 no-split|split／full|custom 且与载荷一致）；F2 `Event.Validate` 强制 Review⇒Outcome=PASS（失败/崩溃的派发不是语义裁决；completeResult 记账点经 Validate 前置后仅 PASS 可达）＋修正假阳性负测（原用非法 failure class 因错误原因被拒）；F3 证据需求 revision 必须等于受理绑定，stale 拒绝；F4 结果身份摘要纳入 Review（与事件级 canonical 同一 wire）；F5 grant 缺分支的前置门（顺删 switch 内不可达检查）。新增负测六条＋split/custom 正向，全部公开入口。
+- **独立复核**：主代理五项复现探针重跑全部翻绿（两处探针口径修正系探针假设错——F2 修复正确落在 schema 层、F5 错误文案为"roundGrant decision branch"，均非残留缺陷）；亲读返修 diff 逐项核对；engine 15 包全绿、cli 回归通过。子代理自报负控（stash 修复后新测试逐项压制缺陷）。模型调用 0。
+
+**R1 返修收口，待外部评审复核。R2（含机主七项中 3/4 的引擎强制）仍待开工令。**

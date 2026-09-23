@@ -559,6 +559,12 @@ func (e Event) Validate() error {
 			if err := validateReviewEvidence(e.Result.Review); err != nil {
 				return err
 			}
+			// 审查证据是完整语义裁决，只能由成功完成的派发携带
+			// （NewReviewWorkerResultEvent 固定 OutcomePass）；崩溃或失败的
+			// 结果是普通失败结果，不产生语义候选。
+			if e.Result.Outcome != OutcomePass {
+				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("review evidence requires a PASS outcome (got %q): a failed or crashed dispatch is not a semantic review verdict", e.Result.Outcome)}
+			}
 		}
 	case KindOperatorObservation:
 		if strings.TrimSpace(e.Observation.Subject) == "" {
