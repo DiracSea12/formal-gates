@@ -113,14 +113,14 @@
 
 1. `USER_INITIATED_CHANGE`：仅此来源允许产品审/技术审使用影响集增量复审。
 2. `REVIEW_FINDING_FIX`：产品审或技术审确认的 P0/P1 导致的修订，必须由全新零上下文代理对对应阶段的完整最新文档进行新鲜复审；不得通过增量 carry 减免。产品修订影响技术前提时，产品复审 PASS 后再做新鲜技术审；技术修订改变产品语义时先回完整产品复审。
-3. 产品审/技术审确认的 P2/P3 仍逐项修订/修复，但不因严重度本身强制复审；若修订实际形成其他语义变化，再按其真实来源和影响进入相应复审。
+3. 产品审/技术审确认的 P2/P3 仍逐项修订/修复，但不因严重度本身强制复审；P2/P3 处置驱动的需求/方案修订默认 meaning-preserved——不清审、不重审、不消耗审查轮次。修订是否实际形成含义变化由用户在修订确认时经 typed Ask 声明；主代理与引擎不得把 P2/P3 修订自行升级为需求含义变化，也不得据此触发复审。经用户声明为 meaning-changed 的修订再按其真实来源和影响进入相应复审。
 
 ### 7.2 用户主动需求变化可发生于任意非终态时刻
 
 1. `REQUEST_REQUIREMENT_CHANGE` 在 Ask、Wait、Ready、Operator、产品/技术审、路线、开发、QA/门、修复、分片、主线合并和尚未提交完成的 Seal intent 中都必须可达；SEALED/ABORTED 后的新需求创建新 run。
 2. barrier 固定分两阶段。Phase A 在尚无新确认 revision/`ImpactSet` 时，立即撤销未完成 Seal intent，并停止新的权威 VCS/状态写入、候选 promotion 和业务任务签发；可安全隔离、不会提交权威副作用的在途计算可以继续到 terminal，但结果一律 quarantine，不能推进 workflow。此时没有任何任务可被猜成“已知不受影响”；暂时无 eligible task 不违反最大并行不变量。
-3. 用户先重新澄清并确认完整最新版需求/方案。只有确认后，Operator 才基于旧/新完整 revision 建立 changed items、transitive impacts、affected tasks/artifacts、carry reasons 的 `ImpactSet`；任何无法证明未受影响的任务、结果、candidate 或 receipt 一律归入 affected。
-4. Phase B 机械 terminate/stale 受影响或 unknown 的在途 Attempt 和结果；对明确未受影响项恢复/接纳 quarantine 结果并携原 revision、证据和理由 carry，随后立刻按新 eligible frontier 补满容量。旧 revision 结果可留证，但未获 carry receipt 不得推进。
+3. 用户先重新澄清并确认完整最新版需求/方案。只有确认后，Operator 才基于旧/新完整 revision 建立 changed items、transitive impacts、affected tasks/artifacts、carry reasons 的 `ImpactSet`；任何无法证明未受影响的任务、结果、candidate 或 receipt 一律归入 affected。`ImpactSet` 是给用户的保守建议，不是执行决定：哪些已走过的环节（含产品审/技术审、QA、门、开发与既有结果）需要重走、哪些结果续用，由用户在 typed Ask 中逐项确认或调整后由引擎机械执行；用户未决定前不得自动失效、自动重放或自动豁免任何已走过环节。
+4. Phase B 机械 terminate/stale 用户确认重走范围内的在途 Attempt 和结果；对用户确认续用的项恢复/接纳 quarantine 结果并携原 revision、证据和理由 carry，随后立刻按新 eligible frontier 补满容量。旧 revision 结果可留证，但未获 carry receipt 不得推进。
 5. 增量产品审/技术审读取完整最新文档作上下文，但只重新判断变化项、传递影响和 carry 是否仍成立；影响无法可靠圈定或跨共享语义时扩大到全量。
 6. QA 用例、路线、拆分拓扑、开发任务和验证结果按同一 ImpactSet 增量更新。开发中受影响 worker 用新 Attempt；开发后形成新快照，QA scope 按持久化 typed `ReviewScopeMode` 决定：黑盒/白盒 QA 用例或测试审查首次建立基线时为 `FULL`，其后仅对新增、修改或 ImpactSet 受影响项使用 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。该标记随 review/candidate/结果持久化，并保留未来开放给用户配置的类型能力。
 7. 用户需求变化本身不计 repair wave，也不清零已完成的 run 级 wave；被变化打断、未满足完整 expected set 的旧 revision wave 不计数。

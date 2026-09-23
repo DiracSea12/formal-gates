@@ -65,3 +65,17 @@ Git provider＋canary＋route matrix。
 - 亲验：build/vet/gofmt 干净；`./internal/engine/...` 16 包 ok（protocol 18.8s 含新序列/负控/篡改全套）；`./internal/cli`（83s）＋`./internal/validate`（390s）回归零失败；internal/harness 环境失败同裸树（第 41 轮已归因，不计回归）。模型调用 0。
 
 **R1（a＋b）轻装收口：开发前审查段（双审系列账本→拓扑→路线→phase 门控）在 engine 内权威化。下一单元 R2（REQ-015 裁决深度、无效结果有限重试、每快照唯一返修）。**
+
+## 机主七项 Regular 需求变更（2026-09-23，同日落实）
+
+机主令关闭宿主下放战线（其精神已随 go-engine 链落地，见记忆），并下达七项 Regular 需求。逐项处置：
+
+1. 产品审以需求合理性/方向为第一优先（措辞闭合默认 P3）——改 `prompts/actions/product-review.md`（审查顺序段重写＋已拍板例外条款收紧）。
+2. 代码质量门加性能/资源垃圾/可读性一等判据——改 `gates/implementation-quality-gate.md` 维度四（可观察的过度性能消耗与无节制缓存/临时文件/日志按影响定级可达 P1/P2；晦涩难懂不因"能跑通"豁免；假设性担忧仍 P3）。
+3. P2/P3 修完不得经"需求更改"升级触发重审——总需求 §7.1.3 修订：P2/P3 处置驱动修订默认 meaning-preserved（不清审/不重审/不耗轮次），含义变化只能由用户 typed Ask 声明；product-review.md 同步。**引擎侧 enforcement 归 R2**（修订分类 typed Ask＋stale 政策按用户声明走，堵 invalidateRequirementResults 的自动升级路径）。
+4. 需求变化后重走范围的决定权全在用户——总需求 §7.2.3/§7.2.4 修订：ImpactSet 降为保守建议，重走/续用逐项由用户 typed Ask 确认后引擎机械执行，未决定前不自动失效/重放/豁免。**引擎侧归 R2/R4**（requirement-change 控制流）。
+5. QA 非 happy path 充足覆盖——改 `prompts/actions/qa-design.md`（每验收点必须有失败/误用/边界类用例，正向-only＝覆盖缺失）＋`qa-review.md`（集合级判定：正向-only 阻塞）。引擎侧随 R3（QA 覆盖契约把非 happy path 纳入结构校验）。
+6. 三轮上限＋超限逐轮用户确认——**已有**：legacy `preDevelopmentReviewAutomaticLimit=3`＋逐轮 `--user-requested`；engine R1a/R1b 已落 `automaticRoundLimit=3`＋`REVIEW_ROUND_GRANT` typed Ask（每次恰好一轮）。无需改动。
+7. 提示词是否用上——**核实：在用**。`LoadPromptCatalog`（internal/validate/catalog.go）从磁盘读 prompts/reviewer-base.md＋actions/*.md＋gates/*.md，内容入 CatalogRevision 摘要；拼接骨架在代码里（设计如此）。故 1/2/5 直接改 .md 即生效。
+
+注：本次六处文档 edits 由主代理直接完成（需求案/提示词为内容物非实施代码）；引擎侧 3/4/5 的 enforcement 并入 R2/R3 合同，走"引擎固定流程＋typed Ask"，不留 AI 可绕过/遗忘的口子。
