@@ -620,3 +620,7 @@ G1–G3 迁移链此前已全部收口（G3b 机主裁定通过）；G4＝Go 内
 成**。真实宿主绿链（DSH＋ZCode、HARNESS_COMPLETE＋归档）为阶段 3"最小纵向 engine 闭环"退出条件的
 实证。**下一单元＝阶段 4「Git 非分片 regular 全流程」（incremental-seal-plan.md §3），开工前与机主
 对齐**（沿账本惯例）。残留不变：CI 待推送实证、Windows 无真机、无规模基准（round 39 账目为准）。
+
+## 2026-09-23 本地清理备注
+
+/tmp/formal-gates-live-k5 与 /tmp/formal-gates-live-k5b（第 37 轮真机验收证据目录）已整体迁至 .harness/validation/ 对应同名目录保存；/tmp 原件与各轮验证草稿副本（k5r5/k5r6/k5r8 系列）已删除。历史记录中引用的 /tmp 路径以 .harness/validation/ 为准。
