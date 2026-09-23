@@ -31,7 +31,7 @@ type (
 	// request/response schema）。
 	SchemaID string
 	// OperationID 标识定义中注册的 host adapter operation。它不是自由 shell
-	// 通道（master-requirements §5.12），因此与 HandlerID 等其余 registry ID
+	// 通道，因此与 HandlerID 等其余 registry ID
 	// 一样做成独立命名类型，防止跨槽位误用。
 	OperationID string
 	// AskKindID 标识封闭 registry 中的 human ask 类型（如 decision）。

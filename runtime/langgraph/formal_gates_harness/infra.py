@@ -23,15 +23,36 @@ class SessionUnavailable(RuntimeBlocked):
         self.identity, self.method, self.code = identity, method, code
 
 def canonical(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    """Canonical JSON bytes, produced by Go.
+
+    These bytes are the content-addressing format (artifact references,
+    operation ids, evidence digests), so the authority lives in
+    `internal/harness.CanonicalJSON`; this wrapper only carries the request and
+    converts the returned text back to bytes.
+    """
+    answered = driver_bridge().call('canonical', {'value': value})
+    text = answered.get('canonical')
+    if text is None:
+        raise HarnessError('Go bridge returned an unusable canonical answer')
+    return text.encode()
 def digest(value: Any) -> str:
-    return hashlib.sha256(canonical(value)).hexdigest()
-def atomic(path: Path, value: Any) -> None:
+    answered = driver_bridge().call('digest', {'value': value})
+    result = answered.get('digest')
+    if not result:
+        raise HarnessError('Go bridge returned an unusable digest answer')
+    return result
+def atomic_bytes(path: Path, body: bytes) -> None:
+    """Publish already-serialised bytes atomically.
+
+    Split out so a caller that has just produced the canonical bytes (a content
+    reference, for example) can write them without asking Go to encode the same
+    value a second time.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         with temp.open("xb") as f:
-            f.write(canonical(value)); f.flush(); os.fsync(f.fileno())
+            f.write(body); f.flush(); os.fsync(f.fileno())
         os.replace(temp, path)
         if os.name != "nt":
             fd = os.open(path.parent, os.O_RDONLY)
@@ -39,6 +60,8 @@ def atomic(path: Path, value: Any) -> None:
             finally: os.close(fd)
     finally:
         temp.unlink(missing_ok=True)
+def atomic(path: Path, value: Any) -> None:
+    atomic_bytes(path, canonical(value))
 def read(path: Path) -> Any:
     def unique(pairs):
         result = {}
@@ -48,29 +71,89 @@ def read(path: Path) -> Any:
         return result
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
 def file_proof(path: Path) -> dict:
-    try:
-        body = path.read_bytes()
-    except OSError as exc:
-        raise RuntimeBlocked(f'EVIDENCE_MISSING: {path}') from exc
-    return {'sha256': hashlib.sha256(body).hexdigest(), 'size': len(body)}
+    """Content proof of one evidence file, computed by Go.
+
+    The primitive lives in `internal/harness.FileProof`; this wrapper only
+    formats the path for the caller-visible refusal and translates the typed
+    refusal back into RuntimeBlocked. It holds no hashing rule of its own.
+    """
+    answered = driver_bridge().call('file-proof', {'path': str(path)})
+    if answered.get('ok'):
+        return answered['proof']
+    refusal = answered.get('refusal')
+    if not refusal:
+        raise HarnessError('Go bridge returned an unusable file-proof answer')
+    raise RuntimeBlocked(refusal)
 
 def git(root: Path, *args: str) -> str:
     p = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     if p.returncode: raise HarnessError(f"git {' '.join(args[:3])}: {p.stderr.strip()}")
     return p.stdout.strip()
 
+def _transport_bytes(envelope: Any) -> bytes:
+    """Serialize one bridge request.
+
+    This is a *transport* encoding only: compact and non-ASCII preserving, but
+    deliberately not the canonical format. The canonical format is a
+    content-addressing contract owned by Go, and duplicating it here would give
+    it a second implementation. It must not call `canonical` either, since that
+    would recurse through the very request being built.
+
+    ensure_ascii=False is kept so behaviour is unchanged: a lone surrogate still
+    fails loudly at this boundary instead of being silently substituted.
+    """
+    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+
+def refuse(answer: dict) -> None:
+    """Translate a Go verification refusal back into this module's exception.
+
+    The verification rules live in Go; which exception class a refusal maps to is
+    this module's contract, so the family travels with the refusal instead of
+    being guessed from the message text.
+    """
+    if answer.get('ok'):
+        return
+    refusal = answer.get('refusal') or 'verification refused without a reason'
+    if answer.get('kind') == 'binding':
+        raise HarnessError(refusal)
+    raise RuntimeBlocked(refusal)
+
 class Bridge:
     def __init__(self, binary: str):
         self.binary = str(Path(binary).resolve())
     def call(self, operation: str, payload: Any) -> Any:
         p = subprocess.run([self.binary, "harness", "bridge"],
-                           input=canonical({"operation": operation, "payload": payload}), capture_output=True)
+                           input=_transport_bytes({"operation": operation, "payload": payload}), capture_output=True)
         try: answer = json.loads(p.stdout)
         except (ValueError, UnicodeError) as exc:
             raise HarnessError(f"Go bridge did not return JSON: {p.stderr.decode(errors='replace')[-1000:]}") from exc
         if p.returncode or not answer.get("ok"):
             raise HarnessError(answer.get("message", "Go bridge rejected the operation"))
         return answer["value"]
+
+_DRIVER_BRIDGE = None
+def driver_bridge() -> Bridge:
+    """The single driver binary this process talks to.
+
+    Resolved here rather than by importing the CLI: this module is the base
+    layer, and reaching into `cli` for the path would drag in the graph, the
+    workers and LangGraph just to build a bridge object. Production exports the
+    binding; a direct import (a unit test, for example) falls back to the
+    location scripts/harness and the test fixtures already use, so there is
+    still exactly one lookup rule rather than a second mechanism.
+    """
+    global _DRIVER_BRIDGE
+    if _DRIVER_BRIDGE is None:
+        binary = os.environ.get('FORMAL_GATES_HARNESS_BINARY')
+        if not binary:
+            candidate = Path(__file__).resolve().parents[3] / '.harness' / 'bin' / 'formal-gates'
+            if not candidate.is_file():
+                raise HarnessError(
+                    'Go driver binary is not bound: set FORMAL_GATES_HARNESS_BINARY, '
+                    'or start through scripts/harness')
+            binary = str(candidate)
+        _DRIVER_BRIDGE = Bridge(binary)
+    return _DRIVER_BRIDGE
 
 @contextlib.contextmanager
 def run_lock(directory: Path):
@@ -96,40 +179,75 @@ class Store:
         self._event_lock = threading.Lock()
         self.directory.mkdir(parents=True, exist_ok=True)
     def put(self, value: Any) -> str:
-        body = canonical(value); ref = hashlib.sha256(body).hexdigest()
+        # The content-addressing rule (ref = sha256(CanonicalJSON(value))) moved
+        # to Go (M3); this adapter only carries the request and writes the bytes
+        # Go already produced. Re-deriving canonical here would encode the same
+        # value a second time, across a second process, so we keep Go's bytes.
+        answered = self.bridge.call('artifact-plan', {'value': value})
+        canonical_text = answered.get('canonical')
+        if canonical_text is None:
+            raise HarnessError('Go bridge returned an unusable artifact-plan answer')
+        ref = answered.get('ref')
+        if not ref:
+            raise HarnessError('Go bridge returned an unusable artifact-plan answer')
+        body = canonical_text.encode()
         path = self.directory / "artifacts" / f"{ref}.json"
-        if not path.exists(): atomic(path, value)
+        # Publish once: existing file (even a corrupt one) is never overwritten.
+        if not path.exists(): atomic_bytes(path, body)
         return ref
     def get(self, ref: str) -> Any:
-        if len(ref) != 64 or any(c not in "0123456789abcdef" for c in ref):
-            raise HarnessError("invalid artifact reference")
-        body = (self.directory / "artifacts" / f"{ref}.json").read_bytes()
-        if hashlib.sha256(body).hexdigest() != ref: raise HarnessError("artifact integrity mismatch")
+        # Two calls make the refusal ordering structural rather than argued: the
+        # format verdict (artifact-reference) runs before any filesystem access,
+        # and the integrity verdict (artifact-binding) only compares.
+        refuse(self.bridge.call('artifact-reference', {'ref': ref}))
+        path = self.directory / "artifacts" / f"{ref}.json"
+        # This is the caller's read: it produces the returned value and keeps the
+        # pre-migration OS error classes (FileNotFoundError, IsADirectoryError).
+        body = path.read_bytes()
+        # The integrity verdict hashes the file Go reads at that same path, so the
+        # request stays a fixed size instead of growing with the artifact. Sending
+        # the body here is what made read capacity smaller than write capacity:
+        # the transport's own expansion put a published, referenced artifact over
+        # the shared request ceiling on the way back in. The artifact directory is
+        # publish-once, so both reads see the same bytes.
+        refuse(self.bridge.call('artifact-binding', {'ref': ref, 'path': str(path)}))
         return json.loads(body)
     def verify_process(self, process: dict) -> None:
+        """Re-check one job's receipt against its request and its stream evidence.
+
+        This method keeps the two things that belong to the store: which job
+        directory a process record must live in, and reading the two JSON
+        documents. The receipt/request binding, the field comparison and the
+        proof checks are the evidence contract and live in
+        `internal/harness.VerifyProcess`.
+        """
         key = process.get('operation', '')
         directory = self.directory / 'jobs' / key
         if not key or Path(process.get('directory', '')).resolve() != directory.resolve():
             raise HarnessError('EVIDENCE_BINDING: job is outside this run')
         receipt = read(directory / 'exit.json')
         request = read(directory / 'request.json')
-        if receipt.get('request_digest') != digest(request):
-            raise HarnessError('EVIDENCE_BINDING: request digest differs')
-        for field in ('exit_code', 'error', 'request_digest', 'streams'):
-            if receipt.get(field) != process.get(field):
-                raise HarnessError(f'EVIDENCE_BINDING: process {field} differs')
-        proofs = receipt.get('streams', {})
-        if set(proofs) != {'stdout.log', 'stderr.log'}:
-            raise RuntimeBlocked('EVIDENCE_MISSING: stdout/stderr proofs absent')
-        for name, proof in proofs.items():
-            if file_proof(directory / name) != proof:
-                raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+        streams = receipt.get('streams')
+        proofs = streams if isinstance(streams, dict) else {}
+        refuse(self.bridge.call('verify-process', {
+            'directory': str(directory),
+            'process': process,
+            'receipt': receipt,
+            'request': request,
+            # Ordered: when several proofs are wrong the refusal must name the
+            # same one the reference implementation named.
+            'proofs': [{'name': name, 'expected': proof} for name, proof in proofs.items()],
+        }))
 
     def verify_evidence(self, ref: str) -> Any:
         value = self.get(ref)
-        for name, proof in value.get('input_files', {}).items():
-            if file_proof(Path(name)) != proof:
-                raise RuntimeBlocked(f'EVIDENCE_CHANGED: comparison input {name}')
+        input_files = value.get('input_files') or {}
+        if input_files:
+            refuse(self.bridge.call('verify-files', {
+                'files': [{'name': str(name), 'expected': proof}
+                          for name, proof in input_files.items()],
+                'label': 'comparison input ',
+            }))
         if 'process' in value:
             self.verify_process(value['process'])
         source = value.get('source', {})
@@ -179,7 +297,7 @@ class Store:
             atomic(intent, request)
             self.event("job-start", operation=key, kind=request["kind"])
             with (directory / "wrapper.stderr").open("ab") as err:
-                owner = subprocess.Popen([sys.executable, "-m", "formal_gates_harness.job", str(directory)],
+                owner = subprocess.Popen([self.bridge.binary, "harness", "supervise", str(directory)],
                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                                          start_new_session=True, close_fds=True)
         receipt = directory / "exit.json"

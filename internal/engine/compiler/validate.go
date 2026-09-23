@@ -152,7 +152,7 @@ func checkRetryValue(id authoring.StepID, r authoring.RetryPolicy) error {
 
 // checkInputsEqualDeps 强制四个可执行变体的 typed source bindings 集合与
 // 依赖集合精确相等（spike 拍板的机械不变量）：删除依赖必被拒，且与
-// submit 的 source bindings 校验同源（master-requirements §5.15）。
+// submit 的 source bindings 校验同源。
 // human/parallel 无共享 IO 段，不适用。
 func checkInputsEqualDeps(cs CompiledStep) error {
 	switch cs.Payload.(type) {

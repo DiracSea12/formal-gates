@@ -25,10 +25,10 @@ type (
 	AskOptionID string
 )
 
-// ControlKind 是受限 REQUEST_* 事件的封闭控制类型（draft §2.3）。RESET
-// 与 ABORT 的授权路径在 draft §10 已冻结（活动 run 的 reset/abort 必须
-// 由 Ask → submit 授权、不保留公开 cleanup 后门）；需求变化等业务控制
-// 随阶段 4 迁移扩充本枚举（封闭集合的既定扩展点）。
+// ControlKind 是受限 REQUEST_* 事件的封闭控制类型。RESET
+// 与 ABORT 的授权路径已冻结（活动 run 的 reset/abort 必须由 Ask →
+// submit 授权、不保留公开 cleanup 后门）；需求变化等业务控制经既有
+// 扩展点扩充本封闭集合。
 type ControlKind string
 
 const (
@@ -48,7 +48,7 @@ type AskOption struct {
 	Label string      `json:"label"`
 }
 
-// EventKind 是提交事件的封闭 kind 集合（draft §2.2/§2.3/§3.4/§9.1）。刻意
+// EventKind 是提交事件的封闭 kind 集合。刻意
 // 不存在任何自由 USER_* 直写 kind：用户决定只能走 REQUEST_* 创建
 // pending Ask → DECIDE 两阶段路径。
 type EventKind string
@@ -64,18 +64,18 @@ const (
 	// 观察（RUNNING/VALIDATING/TERMINAL）。
 	KindTaskProgress EventKind = "TASK_PROGRESS"
 	// KindSpawnReceipt：fake host 对一次签发的 SpawnReceipt（actionID/
-	// correlation/provider/status 公共字段，draft §9.1）。接纳后任务进入
+	// correlation/provider/status 公共字段，）。接纳后任务进入
 	// 声明签发态并落账 receipt。
 	KindSpawnReceipt EventKind = "SPAWN_RECEIPT"
 	// KindWorkerResult：worker 的 typed result（actionID/provider/outcome/
 	// payload digest）。receipt 未到时暂存（result-before-receipt），配对
 	// 后接纳并按容量补位签发。
 	KindWorkerResult EventKind = "WORKER_RESULT"
-	// KindOperatorObservation：主代理的 typed observation（draft §2.2
+	// KindOperatorObservation：主代理的 typed observation（
 	// Operator：核实事实、不替用户授权），入账并绑定来源对账项。
 	KindOperatorObservation EventKind = "OPERATOR_OBSERVATION"
 	// KindHostActionReceipt：宿主对 HostAction 的回执；接纳后 pending
-	// intent 清账（draft §9.1：先持久化 intent 再执行）。
+	// intent 清账（先持久化 intent 再执行）。
 	KindHostActionReceipt EventKind = "HOST_ACTION_RECEIPT"
 	// KindLifecycleEvent：宿主 lifecycle 事件（成对 start/stop）；只写
 	// observation buffer，不直接改 workflow state。
@@ -114,7 +114,7 @@ type TaskPayload struct {
 	Status  runtime.TaskStatus
 }
 
-// SpawnReceiptPayload 是 SPAWN_RECEIPT 的 payload：draft §9.1 的公共
+// SpawnReceiptPayload 是 SPAWN_RECEIPT 的 payload：的公共
 // receipt 字段子集（actionID/correlation/provider/status）。Correlation
 // 是宿主侧 agent 身份关联，lifecycle 配对按它认领。
 type SpawnReceiptPayload struct {
@@ -164,7 +164,7 @@ type OperatorObservationPayload struct {
 	Facts   []decision.Fact
 }
 
-// HostActionReceiptPayload 是 HOST_ACTION_RECEIPT 的 payload：draft §9.1
+// HostActionReceiptPayload 是 HOST_ACTION_RECEIPT 的 payload：
 // 公共 receipt 字段。Operation 必须与 pending intent 的声明精确一致，
 // PayloadDigest 必须等于 intent 参数的 canonical digest。
 type HostActionReceiptPayload struct {
@@ -693,8 +693,7 @@ type Acceptance struct {
 	RecoveryAction string   `json:"recoveryAction,omitempty"`
 }
 
-// freshnessToken 确定性求值 freshness token（draft §2.3 availableActions
-// freshness 的协议层形态）：token = sha256(canonical{revision, requestID})。
+// freshnessToken 确定性求值 freshness token：token = sha256(canonical{revision, requestID})。
 // 绑定当前 revision 意味着任何后续提交（新签发、新事件）都自然取代旧
 // token——旧的提交被 STALE_FRESHNESS 拒绝且零状态变化，新的须以
 // Freshness() 重新获取。

@@ -195,7 +195,7 @@ func TestAdmissionRejectsStaleInstalledDigest(t *testing.T) {
 func repairGitProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte("stage-0 requirement\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte("sample requirement\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{

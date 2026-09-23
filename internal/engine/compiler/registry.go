@@ -124,7 +124,7 @@ func (r *Registry) RegisterSchema(id authoring.SchemaID) error {
 }
 
 // RegisterOperation 注册定义可引用的 host adapter operation。它不是自由 shell
-// 通道（master-requirements §5.12）：只有注册过的 operation 才能被
+// 通道：只有注册过的 operation 才能被
 // HostActionStep 引用。
 func (r *Registry) RegisterOperation(id authoring.OperationID) error {
 	return r.register(string(id), entry{kind: KindOperation})

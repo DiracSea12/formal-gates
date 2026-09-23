@@ -14,6 +14,28 @@ import (
 	"formal-gates/internal/engine/definition"
 )
 
+// assertStateDirExact 断言状态目录的条目集合恰好等于 want。write.lock 是
+// 持久的目录互斥工件（内核文件锁永不删除），是否在档由调用方按各自场
+// 景显式列出。
+func assertStateDirExact(t *testing.T, dir string, want ...string) {
+	t.Helper()
+	names := map[string]bool{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, entry := range entries {
+		names[entry.Name()] = true
+	}
+	expected := map[string]bool{}
+	for _, name := range want {
+		expected[name] = true
+	}
+	if !reflect.DeepEqual(names, expected) {
+		t.Fatalf("state dir entries = %v, want exactly %v", names, want)
+	}
+}
+
 // newTestStore 在隔离临时目录构造 Store（不触碰真实用户路径）。
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -146,7 +168,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 
 	// 磁盘形态：五个信封字段 + revision + contentDigest 精确在档；协议
-	// 残留清除干净（目录里只剩 state.json）。
+	// 残留清除干净（目录里只剩 state.json 与持久的锁文件）。
 	raw, err := os.ReadFile(store.statePath())
 	if err != nil {
 		t.Fatalf("read state file: %v", err)
@@ -169,17 +191,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			t.Fatalf("state file %s = %v, want %v", field, got, want)
 		}
 	}
-	entries, err := os.ReadDir(store.dir)
-	if err != nil {
-		t.Fatalf("read dir: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != stateFileName {
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		t.Fatalf("state dir should only contain %s after commit, got %v", stateFileName, names)
-	}
+	assertStateDirExact(t, store.dir, stateFileName, lockFileName)
 }
 
 // TestLoadMissingState：全新目录读取返回 fs.ErrNotExist。
@@ -225,7 +237,7 @@ func TestSaveRejectsBadTransactions(t *testing.T) {
 
 // TestSaveNeverWritesOnUnsupportedEnvelope：磁盘信封缺失字段或值不精确
 // 时，Load 与 Save 都以 UNSUPPORTED_RUN_VERSION 拒绝，state.json 原字节
-// 保持不变（master-requirements §1：绝不写状态）。
+// 保持不变（绝不写状态）。
 func TestSaveNeverWritesOnUnsupportedEnvelope(t *testing.T) {
 	missing := []string{
 		"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionDigest", "packageDigest",
@@ -382,17 +394,8 @@ func TestFingerprintBeforeWriteRejects(t *testing.T) {
 	if changed.Phase != FingerprintPhaseBefore {
 		t.Fatalf("phase = %q, want %q", changed.Phase, FingerprintPhaseBefore)
 	}
-	entries, err := os.ReadDir(store.dir)
-	if err != nil {
-		t.Fatalf("read dir: %v", err)
-	}
-	if len(entries) != 0 {
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		t.Fatalf("rejected path left files: %v", names)
-	}
+	// 被拒路径不落协议字节；只有持久的锁文件留在目录里。
+	assertStateDirExact(t, store.dir, lockFileName)
 }
 
 // TestFingerprintAfterWriteCommitsAndReports：写后重验发现外部事实已变，
@@ -446,10 +449,8 @@ func TestFingerprintCollectErrorAbortsBeforeWrite(t *testing.T) {
 	if err == nil || errors.As(err, &changed) {
 		t.Fatalf("collect error mishandled: %v", err)
 	}
-	entries, _ := os.ReadDir(store.dir)
-	if len(entries) != 0 {
-		t.Fatalf("aborted path left files in state dir")
-	}
+	// 中止路径不写状态、不留协议字节；只有持久的锁文件留在目录里。
+	assertStateDirExact(t, store.dir, lockFileName)
 }
 
 // TestSaveAtomicReplaceLeavesNoPartialState：最终文件要么是旧 revision、

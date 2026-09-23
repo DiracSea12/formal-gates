@@ -63,9 +63,9 @@ func decodeHarnessReport(t *testing.T, output []byte) installedHarnessReport {
 	return report
 }
 
-// TestAcceptanceInstalledProtocolHarness proves the phase-2 test-only entry
-// is runnable from independently built binaries and that its writes remain in
-// the project state namespace across a real process restart.
+// TestAcceptanceInstalledProtocolHarness proves the test-only protocol
+// entry is runnable from independently built binaries and that its writes
+// remain in the project state namespace across a real process restart.
 func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 	root, err := filepath.Abs(repoRoot(t))
 	if err != nil {
@@ -115,7 +115,9 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 	if !reflect.DeepEqual(first.Summary, second.Summary) || !reflect.DeepEqual(first.Paths, second.Paths) {
 		t.Fatalf("restart changed durable report: first=%+v second=%+v", first, second)
 	}
-	if len(second.Paths) != 3 || second.Paths[0] != "engine-state/state.json" || second.Paths[1] != "workspace/.fake-vcs-operations.json" || !strings.HasPrefix(second.Paths[2], "workspace/fake-host/spawn/") {
+	// 持久化工件按序核对：state.json、持久的锁工件（write.lock，内核文
+	// 件锁永不删除）、workspace 副作用与 spawn 标记。
+	if len(second.Paths) != 4 || second.Paths[0] != "engine-state/state.json" || second.Paths[1] != "engine-state/write.lock" || second.Paths[2] != "workspace/.fake-vcs-operations.json" || !strings.HasPrefix(second.Paths[3], "workspace/fake-host/spawn/") {
 		t.Fatalf("harness paths = %v", second.Paths)
 	}
 
@@ -177,7 +179,9 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		t.Fatalf("final project snapshot: %v", err)
 	}
 	changes := (&testkit.FakeVCS{Root: project.Root}).Diff(before, final)
-	if len(changes) != 3 || changes[0].Path != "engine-state/state.json" || changes[1].Path != "workspace/.fake-vcs-operations.json" || !strings.HasPrefix(changes[2].Path, "workspace/fake-host/spawn/") {
+	// 引擎命名空间只产出持久化状态与锁工件；write.lock 是持久的目录互
+	// 斥工件（内核文件锁永不删除）。
+	if len(changes) != 4 || changes[0].Path != "engine-state/state.json" || changes[1].Path != "engine-state/write.lock" || changes[2].Path != "workspace/.fake-vcs-operations.json" || !strings.HasPrefix(changes[3].Path, "workspace/fake-host/spawn/") {
 		t.Fatalf("installed harness namespace diff = %+v", changes)
 	}
 	for _, stablePath := range []string{project.StableState, project.StableRun} {

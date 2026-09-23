@@ -14,8 +14,8 @@ type Admission struct {
 }
 
 // IssuedAction 是单个已签发动作：确定性 actionID + 任务薄指针。actionID
-// 不含随机数与当前时间——phase 1 由 TaskKey 决定性地派生
-// （"act:" + 规范键形态）；重试/Attempt 身份随阶段 2 的 Attempt 模型扩展。
+// 不含随机数与当前时间——由 TaskKey 决定性地派生（"act:" + 规范键形态）；
+// 重试/Attempt 身份由 Attempt 模型扩展。
 type IssuedAction struct {
 	ActionID string           `json:"actionId"`
 	Task     runtime.TaskKey  `json:"task"`
@@ -24,12 +24,12 @@ type IssuedAction struct {
 
 // IssuedSet 是一次签发的完整集合：容量 C、可签发 N 时恰好 min(C,N) 个，
 // 顺序与 Plan 固定顺序一致。主代理必须原样整批搬运，不得挑子集
-// （master-requirements §5.12、§8.2.3）。
+// 。
 type IssuedSet []IssuedAction
 
 // ActionStore 是签发持久化接口：SelectIssued 分配 actionID 后、返回前
-// 必须落账（阶段 2 接入 state.json 的 pendingActions 与 revision/CAS；
-// 本批实现方自行保证持久化语义）。
+// 必须落账（state.json 的 pendingActions 与 revision/CAS；实现方自行
+// 保证持久化语义）。
 type ActionStore interface {
 	PersistIssued(IssuedSet) error
 }

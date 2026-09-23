@@ -382,7 +382,7 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"resolve-wave-target":        runWorkflowResolveWaveTarget,
 	"snapshot":                   runWorkflowSnapshot,
 	"cleanup":                    runWorkflowCleanup,
-	"future":                     runWorkflowFuture,
+	"candidate":                  runWorkflowCandidate,
 	"carry":                      runCarry,
 	"authorize-repair":           runWorkflowAuthorizeRepair,
 	"repair-preview":             runWorkflowRepairPreview,
@@ -1029,16 +1029,16 @@ func runWorkflowClaimDispatch(args []string, streams IO) (int, error) {
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
-func runWorkflowFuture(args []string, streams IO) (int, error) {
+func runWorkflowCandidate(args []string, streams IO) (int, error) {
 	if len(args) == 0 || isHelpArg(args[0]) {
-		return 0, printFutureUsage(streams.Stdout, "formal-gates")
+		return 0, printCandidateUsage(streams.Stdout, "formal-gates")
 	}
 	action, args := args[0], args[1:]
 	switch action {
 	case "generate":
-		fs := newFlagSet("workflow future generate", streams)
+		fs := newFlagSet("workflow candidate generate", streams)
 		root := fs.String("root", ".", "package root")
-		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future envelopes do not bind package identity")
+		packageDigest := fs.String("package-digest", "", "accepted and ignored; candidate envelopes do not bind package identity")
 		output := fs.String("output", "", "optional envelope output path")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -1054,15 +1054,15 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 		}
 		return printValue(streams.Stdout, envelope, nil)
 	case "write":
-		name := "workflow future write"
+		name := "workflow candidate write"
 		fs := newFlagSet(name, streams)
 		root := fs.String("root", ".", "package root")
-		path := fs.String("path", "", "versioned future state output path")
+		path := fs.String("path", "", "versioned candidate state output path")
 		output := fs.String("output", "", "alias for --path")
 		envelopePath := fs.String("envelope", "", "validated envelope JSON path")
 		input := fs.String("input", "", "alias for --envelope")
-		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future states do not bind package identity")
-		payload := fs.String("payload", "", "JSON payload to place in the future state document")
+		packageDigest := fs.String("package-digest", "", "accepted and ignored; candidate states do not bind package identity")
+		payload := fs.String("payload", "", "JSON payload to place in the candidate state document")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -1090,25 +1090,25 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 		var value any
 		if strings.TrimSpace(*payload) != "" {
 			if err := json.Unmarshal([]byte(*payload), &value); err != nil {
-				return 1, fmt.Errorf("future payload JSON is invalid: %w", err)
+				return 1, fmt.Errorf("candidate payload JSON is invalid: %w", err)
 			}
 		}
 		err = validate.WriteFutureState(*root, target, envelope, value)
 		return printValue(streams.Stdout, envelope, err)
 	case "view":
-		fs := newFlagSet("workflow future view", streams)
+		fs := newFlagSet("workflow candidate view", streams)
 		root := fs.String("root", ".", "package root")
-		path := fs.String("path", "", "future state or envelope path")
+		path := fs.String("path", "", "candidate state or envelope path")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
 		if strings.TrimSpace(*path) == "" {
-			return 1, fmt.Errorf("workflow future view requires --path")
+			return 1, fmt.Errorf("workflow candidate view requires --path")
 		}
 		report, err := validate.DiagnoseFutureState(*root, *path)
 		return printValue(streams.Stdout, report, err)
 	default:
-		return 1, fmt.Errorf("unknown workflow future action: %s", action)
+		return 1, fmt.Errorf("unknown workflow candidate action: %s", action)
 	}
 }
 
@@ -2286,7 +2286,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|candidate|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -2301,11 +2301,11 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|candidate|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
-func printFutureUsage(w io.Writer, program string) error {
-	fmt.Fprintf(w, "Usage: %s workflow future <generate|write|view>\n\nGenerate, inspect, or write the versioned candidate envelope derived from definitions/workflow.json through its owning future writer.\n", program)
+func printCandidateUsage(w io.Writer, program string) error {
+	fmt.Fprintf(w, "Usage: %s workflow candidate <generate|write|view>\n\nGenerate, inspect, or write the versioned candidate envelope derived from definitions/workflow.json through its owning writer.\n", program)
 	return nil
 }
 

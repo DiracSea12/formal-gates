@@ -45,9 +45,13 @@ DSH 在只读会话中使用原生 `sandbox/mode` 事件，保留原生审批策
 完成证据绑定 ACP 返回的根会话、用户输入和轮次。子会话通知不得覆盖根角色证据。
 
 ZCode app-server 没有统一只读会话模式，因此只读角色使用原生 `toolAllowlist`，保留读取、
-搜索及网页读取工具，排除缺少只读保证的写入、任意命令和插件执行入口。开发与返修不传
-工具清单、MCP 覆盖或模式设置，恢复也不调用 `session/setMode`。
-宿主返回什么模式就保留什么模式；不试探 `auto` / `yolo`，也不因超时或权限询问改用免审批模式。
+搜索及网页读取工具，排除缺少只读保证的写入、任意命令和插件执行入口。开发与返修的
+创建/恢复参数同样不传工具清单、MCP 覆盖或模式字段；但无头会话无法继承运营方的交互
+上下文——app-server 把每个新会话硬默认为 `build`（变更前审批），没有改变该默认的宿主
+设置，无头客户端也无法应答审批。因此**新建**的开发/返修会话在首个 turn 之前经
+`session/setMode` 一次性声明运营方无人值守上下文的完全自动模式（`yolo`），从宿主回读
+确认，并记入 `tool-policy.json` 与 `native-source.json`；恢复的会话保持其既有模式。
+适配器绝不在权限询问、超时或失败之后改用免审批模式；只读会话与探针从不设置模式。
 `FORMAL_GATES_ZCODE_AUTO_MODE` 不属于支持的配置，不会覆盖宿主原有设置。
 模型身份仍绑定精确 provider/model；不会静默切换模型或修改全局模型选择。
 
@@ -57,6 +61,28 @@ ZCode app-server 没有统一只读会话模式，因此只读角色使用原生
 官方 MCP 认证没有可用桌面认证端口时返回 `official_auth_unavailable`；这不是认证成功，
 不会伪造认证头、借用其他工具的凭据或静默关闭插件。协议诊断只保存路由元数据；
 角色完成内容、原生事件和输入绑定继续使用既有证据文件。
+
+ZCode app-server 自身不持有 provider 注册表。账号 provider 配置由**启动它的一方**在
+provider/model 就绪后经 `provider/updateAccountConfig`（client → agent 方法）交付，因此启动方必须
+①把 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` **成对**命名
+（只给前者时宿主会重算它自己的 active 目录，启动方就无从得知 revision），②令
+`basedOnZCodeBuiltinRevision` **逐字**等于
+`zcode-builtin:<catalogue revision>:sha256(realpath(activeCatalogue))`——哈希取**解析后的路径**、
+不取内容；不相等时交付被静默丢弃，回执仍是 `received`，无法从应答推断。
+
+同一模式下每次模型请求前，宿主还会反向调用 `interaction/requestProviderRuntimeHeaders`
+（端口 `createProviderRuntimeHeadersPort` 的 `shouldRefreshBeforeModelRequest()` 恒为 true），
+应答必须是以 `headersApplied` 为判别键的严格联合。该项**不属于用户决定**，故不走上一段的阻塞边界：
+传输从宿主自己的开通索引（`~/.zcode/v2/credentials.json` 的**键名**）取该 provider 的凭据值，用宿主
+自己的密码（`sha256(固定回退串)`，aes-256-gcm，**不涉钥匙串、不需用户决定**）解密后应答；没有凭据的
+provider 报 `headersApplied: false` 而不编造。凭据值不写入任何证据文件，`Client.answer` 只记方法与状态。
+
+`tui`／`--prompt`／CLI `login` 走的是**另一套互斥**的账号来源（由 `skipUserConfig` 选中）：本进程自读
+凭据库、不需要 client，且拒绝宿主投递。它的开通判定要求凭据库同时存在
+`account-provider:<id>:identity` 与 `…:api-key` 两条记录，前者只有 standalone 的 `login` 会写。
+另：`--help`／`--version` 会**跳过** provider 运行时准备，拿它们当宿主健康探针会得到假阴性；
+CLI 没有 `zcode` 命令，只能以
+`node <ZCode.app>/Contents/Resources/glm/zcode.cjs <command>` 调用。
 
 `doctor` 不发送模型任务，仅检查当前原生接入。仅在 probe 中关闭自动标题生成，
 不会将该设置带入正常开发会话。连接成功不证明 MCP 认证、网络访问、子代理执行或
@@ -126,6 +152,11 @@ job 已存在但缺少真实退出回执时不会盲目重复启动。已完成�
 证据，不能把连接关闭、真实轮次失败或缺失内容洗成成功。模型结果必须通过 Go 结果合同；
 运行问题是 BLOCKED，不是 PASS。P0/P1 阻塞，P2 必须返修，P3 建议不自动升级为阻塞。
 返修额度耗尽由用户决定是否继续，不能自动授予完成资格。
+
+结果框架判定（最终消息里是否存在唯一、无歧义的结果对象）由 Go 的
+`internal/harness.FrameResult` 拥有，经 `frame-result` 桥接操作调用；`native_result.py`
+只做输入输出转换，并把 Go 的类型化拒绝逐字翻译回 `RuntimeBlocked`。拒绝原因属于可观测
+行为，两侧保持一致。
 
 首次检查点前中断可由原 `resume` 入口恢复；`show` 不为未启动 run 伪造检查点。
 终态不接受新答复；失败答复返回非零退出码。数据库、证据与运行时身份不匹配时保留原现场，

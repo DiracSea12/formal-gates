@@ -144,8 +144,8 @@
     "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking.",
     "Native ZCode installs the skill under .zcode/skills and configures the user-level .zcode/cli/config.json hook; project-scope ZCode installs the skill and AGENTS.md guidance only because current ZCode ignores project-level hooks.",
     "The native ZCode lifecycle path observes documented Agent/Task tool calls through PreToolUse, PostToolUse, and PostToolUseFailure, correlating tool_use_id (or its documented aliases); exact child-agent completion semantics remain unclaimed until a same-host canary verifies them.",
-    "Stage-0 native installation owns the immutable release copy, cross-process lock, one recovery journal, backup, stable launcher, host configuration, and registry commit; shell and PowerShell bootstrap entries only download, verify, stage the fixed launcher, and invoke that owner.",
-    "Stage-0 package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
+    "Native installation owns the immutable release copy, cross-process lock, one recovery journal, backup, stable launcher, host configuration, and registry commit; shell and PowerShell bootstrap entries only download, verify, stage the fixed launcher, and invoke that owner.",
+    "Package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
   "support_caveats": [
     "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode have bundled installer/hook target entries.",
@@ -154,8 +154,8 @@
     "A passing canary on one host does not prove another host. Do not claim Codex or DeepSeek Harness plugin distribution from this package."
   ],
   "release_trust": [
-    "Phase 1 CI is configured to produce CI artifacts and platform-specific SHA256 checksum files, and to upload them when a GitHub Release is published.",
-    "Phase 1 does not ship artifact attestation, npm provenance, signing, or equivalent third-party release-trust evidence.",
-    "Phase 2 must define and implement signing, provenance, or equivalent release-trust evidence before public release claims rely on those controls."
+    "CI is configured to produce CI artifacts and platform-specific SHA256 checksum files, and to upload them when a GitHub Release is published.",
+    "This package does not ship artifact attestation, npm provenance, signing, or equivalent third-party release-trust evidence.",
+    "Signing, provenance, or equivalent release-trust evidence must be defined and implemented before public release claims rely on those controls."
   ]
 }

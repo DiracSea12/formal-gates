@@ -12,7 +12,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// Kind 是 NextResult 的六值封闭 Kind（master-requirements §5.11）：同一
+// Kind 是 NextResult 的六值封闭 Kind：同一
 // canonical Plan 的 Kind 唯一，对应 payload 之外的 payload 必须为空。
 type Kind string
 
@@ -90,8 +90,8 @@ type OperatorPayload struct {
 	Facts []Fact `json:"facts"`
 }
 
-// CompletePayload 是 Complete 的 payload：无附加数据（终态摘要属阶段 2
-// 的 state envelope）。
+// CompletePayload 是 Complete 的 payload：无附加数据（终态摘要属
+// state envelope）。
 type CompletePayload struct{}
 
 // NextResult 是六类外部边界的 tagged union。除本 Kind 对应的一个 payload
@@ -155,7 +155,7 @@ type Plan struct {
 	Next              NextResult
 }
 
-// Decide 是纯函数决策（master-requirements §5.1/§5.11）：
+// Decide 是纯函数决策：
 //   - 版本绑定最后防线：state 的 definition 版本必须与定义精确一致；
 //   - 输入一致性：completed 集合必须是定义内步骤、无重复、依赖闭包
 //     完整（乱序/遗漏/重复的完成在 State.CompleteStep 拦截，此处对

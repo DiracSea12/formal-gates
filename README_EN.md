@@ -367,8 +367,7 @@ the same validated candidate without rewriting it. See the [QA operation example
 
 Codex metering deduplicates current request records and cumulative mirrors. The existing cost entry
 retains the rollout source and native model-task start/end and wall time, including tool waits.
-The stage comparison requires real metrics; see [metering](references/formal-flow.md#成本计量)
-and the [validation record](refactor-plan/stage-3-5c-validation.md).
+Real comparisons must include these metrics; see [metering](references/formal-flow.md#成本计量).
 
 ## Optional development-only harness
 

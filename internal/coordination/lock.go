@@ -1,22 +1,18 @@
-// Package coordination contains the small cross-runtime locks used by
-// workflow start and admission.  The lock files deliberately use the same
-// pid/token shape as the existing phase-0 and engine locks so all writers
-// agree on ownership and stale-lock recovery.
+// Package coordination holds this repository's path-lock primitive: an
+// exclusive cross-process lock adjudicated by the kernel on each opener's own
+// descriptor (flock on POSIX, a one-byte LockFile range on Windows). A holder
+// that dies has its lock released by the kernel, and a leftover lock file
+// never blocks a new acquirer. The lock file records the owning pid and token
+// as a diagnostic for humans only; it participates in no locking decision
+// and is never deleted.
 package coordination
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
-)
-
-const (
-	staleAge     = 10 * time.Minute
-	heartbeatAge = time.Minute
 )
 
 var sequence atomic.Uint64
@@ -29,90 +25,44 @@ func AcquireRun(root, runID string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("run %q already exists or is being started: %w", runID, err)
 	}
-	return func() {
-		unlock()
-		_ = os.Remove(filepath.Dir(path))
-		_ = os.Remove(filepath.Dir(filepath.Dir(path)))
-	}, nil
+	return unlock, nil
 }
 
-// AcquirePath acquires an exclusive, crash-reclaimable lock at path.
+// AcquirePath acquires an exclusive, cross-process lock at path and returns
+// the release function. Releasing closes the descriptor, which is what frees
+// the lock; a holder that exits without releasing is freed by the kernel, so
+// recovery needs no staleness rules and the lock file can stay forever.
 func AcquirePath(path, description string) (func(), error) {
 	path = filepath.Clean(path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	for {
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err == nil {
-			owner := fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))
-			if _, writeErr := file.WriteString(owner); writeErr != nil {
-				_ = file.Close()
-				_ = os.Remove(path)
-				return nil, writeErr
-			}
-			if closeErr := file.Close(); closeErr != nil {
-				_ = os.Remove(path)
-				return nil, closeErr
-			}
-			stop := make(chan struct{})
-			go heartbeat(path, owner, stop)
-			return func() {
-				close(stop)
-				data, readErr := os.ReadFile(path)
-				if readErr == nil && string(data) == owner {
-					_ = os.Remove(path)
-				}
-			}, nil
-		}
-		if !os.IsExist(err) {
-			return nil, err
-		}
-		if stale(path) {
-			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
-				continue
-			}
-		}
-		return nil, fmt.Errorf("%s lock held: %s", description, path)
-	}
-}
-
-func heartbeat(path, owner string, stop <-chan struct{}) {
-	ticker := time.NewTicker(heartbeatAge)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			data, err := os.ReadFile(path)
-			if err != nil || string(data) != owner {
-				return
-			}
-			_ = os.Chtimes(path, time.Now(), time.Now())
-		case <-stop:
-			return
-		}
-	}
-}
-
-func stale(path string) bool {
-	data, err := os.ReadFile(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	fields := strings.Fields(string(data))
-	if (len(fields) != 1 && len(fields) != 2) || !strings.HasPrefix(fields[0], "pid=") {
-		return true
+	if err := lockFile(f); err != nil {
+		_ = f.Close()
+		if isLockHeld(err) {
+			return nil, &LockHeldError{Operation: description, Path: path}
+		}
+		return nil, err
 	}
-	if len(fields) == 2 && !strings.HasPrefix(fields[1], "token=") {
-		return true
-	}
-	pid, err := strconv.Atoi(strings.TrimPrefix(fields[0], "pid="))
-	if err != nil || pid <= 0 {
-		return true
-	}
-	if !ProcessAlive(pid) {
-		return true
-	}
-	info, err := os.Stat(path)
-	return err != nil || time.Since(info.ModTime()) > staleAge
+	// 诊断记录：锁内容只标明当前持有者，便于人工排障；不参与任何判
+	// 定，写失败不影响持锁。
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))), 0)
+	return func() { _ = f.Close() }, nil
+}
+
+// LockHeldError 表示路径锁被其他持有者占用（不可抢占）。Operation 是
+// 申请方的用途描述（如 install/uninstall、registry、run start）。
+type LockHeldError struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+}
+
+func (e *LockHeldError) Error() string {
+	return fmt.Sprintf("%s lock is held: %s", e.Operation, e.Path)
 }

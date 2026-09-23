@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from formal_gates_harness.cli import make_demo, package_root, run_graph
-from formal_gates_harness.infra import Bridge, HarnessError, Store, read, run_lock
-from formal_gates_harness.native_dsh import observe
+from formal_gates_harness.infra import Bridge, HarnessError, Store, driver_bridge, read, run_lock
+from reference_native_dsh import observe
 
 class Boundaries(unittest.TestCase):
     def setUp(self):
@@ -22,8 +22,14 @@ class Boundaries(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
     def test_artifact_integrity(self):
+        # M3 premise change: put/get now go through the Go bridge, so this test
+        # (which previously proved artifact read/write needed NO bridge by
+        # passing Bridge('unused')) must use a real bridge. The assertions are
+        # kept verbatim: a stored artifact round-trips, and corrupting it yields
+        # an integrity refusal. Recorded as an intentional premise change, not a
+        # deletion, in the M3 record.
         with tempfile.TemporaryDirectory() as directory:
-            store=Store(Path(directory),{},Bridge('unused'))
+            store=Store(Path(directory),{},driver_bridge())
             ref=store.put({'result':'PASS'});self.assertEqual(store.get(ref),{'result':'PASS'})
             (Path(directory)/'artifacts'/f'{ref}.json').write_text('{}')
             with self.assertRaises(HarnessError):store.get(ref)
@@ -44,7 +50,7 @@ class Boundaries(unittest.TestCase):
             command="from pathlib import Path;import time; p=Path('count');p.write_text(str(int(p.read_text())+1) if p.exists() else '1');time.sleep(1.5)"
             request={'kind':'check','argv':[sys.executable,'-c',command],'cwd':str(root),'stdin':'','environment':{}}
             (root/'request-input.json').write_text(json.dumps(request))
-            code="from pathlib import Path;import json,sys;from formal_gates_harness.infra import Store,Bridge;root=Path(sys.argv[1]);s=Store(root,{},Bridge('unused'));print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
+            code="from pathlib import Path;import json,sys;from formal_gates_harness.infra import Store,driver_bridge;root=Path(sys.argv[1]);s=Store(root,{},driver_bridge());print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
             log=(root/'observer.log').open('wb')
             first=subprocess.Popen([sys.executable,'-c',code,str(root)],stdout=log,stderr=log)
             deadline=time.monotonic()+20

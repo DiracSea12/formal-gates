@@ -1,0 +1,340 @@
+{
+  "unit": "G2c",
+  "overall": "PASS",
+  "previous_accepted_baseline": "G2b",
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2c --previous-baseline G2b",
+  "attempt": ".harness/validation/acceptance/G2c/20260919T220257Z-77445",
+  "recorded_at": "2026-09-19T22:11:41.249512+00:00",
+  "candidate": {
+    "commit": "dfd3b7578f61b7e6230796f99824615e249adc11",
+    "branch": "codex/go-engine-v1",
+    "runtime_identity": "bc914748134e0833665f9e627befd5c3ebac7d58a4e734cf69dc81587c6bfd6c",
+    "driver_binary_sha256": "686aa72a3095643172304a32f2c27309fdf9889e8275665deb28801ec58508e1",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    }
+  },
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.368,
+      "commands": [],
+      "notes": [
+        "interpreter 3.13.15 at /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/venv/bin/python",
+        "41 pinned distributions all installed"
+      ],
+      "problems": []
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.528,
+      "commands": [
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "exit_code": 0,
+          "seconds": 0.527,
+          "stdout": "steps/go-vet/vet.stdout",
+          "stderr": "steps/go-vet/vet.stderr",
+          "exit": "steps/go-vet/vet.exit"
+        }
+      ],
+      "notes": [],
+      "problems": []
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "status": "PASS",
+      "seconds": 408.333,
+      "commands": [
+        {
+          "name": "go-test",
+          "argv": [
+            "go",
+            "test",
+            "-count=1",
+            "-timeout",
+            "60m",
+            "-json",
+            "./..."
+          ],
+          "exit_code": 0,
+          "seconds": 408.311,
+          "stdout": "steps/go-test-full/go-test.stdout",
+          "stderr": "steps/go-test-full/go-test.stderr",
+          "exit": "steps/go-test-full/go-test.exit",
+          "stall_budget_seconds": 240.0
+        }
+      ],
+      "notes": [
+        "allowed skip formal-gates/internal/validate:TestNormalizeHostPath - Windows-only path normalisation; skipped on darwin with an explicit reason",
+        "26 packages, 2190 test pass events, 408s wall"
+      ],
+      "problems": []
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.652,
+      "commands": [
+        {
+          "name": "build-cgo1",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T220257Z-77445/sqlprobe-cgo1",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.764,
+          "stdout": "steps/sqlite-probe/build-cgo1.stdout",
+          "stderr": "steps/sqlite-probe/build-cgo1.stderr",
+          "exit": "steps/sqlite-probe/build-cgo1.exit"
+        },
+        {
+          "name": "run-cgo1",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T220257Z-77445/sqlprobe-cgo1",
+            "-dir",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2c/20260919T220257Z-77445/steps/sqlite-probe/evidence/run-cgo1"
+          ],
+          "exit_code": 0,
+          "seconds": 0.539,
+          "stdout": "steps/sqlite-probe/run-cgo1.stdout",
+          "stderr": "steps/sqlite-probe/run-cgo1.stderr",
+          "exit": "steps/sqlite-probe/run-cgo1.exit"
+        },
+        {
+          "name": "build-cgo0",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T220257Z-77445/sqlprobe-cgo0",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.314,
+          "stdout": "steps/sqlite-probe/build-cgo0.stdout",
+          "stderr": "steps/sqlite-probe/build-cgo0.stderr",
+          "exit": "steps/sqlite-probe/build-cgo0.exit"
+        },
+        {
+          "name": "run-cgo0",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/tmp/sqlprobe-20260919T220257Z-77445/sqlprobe-cgo0",
+            "-dir",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2c/20260919T220257Z-77445/steps/sqlite-probe/evidence/run-cgo0"
+          ],
+          "exit_code": 0,
+          "seconds": 0.339,
+          "stdout": "steps/sqlite-probe/run-cgo0.stdout",
+          "stderr": "steps/sqlite-probe/run-cgo0.stderr",
+          "exit": "steps/sqlite-probe/run-cgo0.exit"
+        },
+        {
+          "name": "unit-test",
+          "argv": [
+            "go",
+            "test",
+            "-count=1",
+            "./scripts/go-engine/sqlprobe"
+          ],
+          "exit_code": 0,
+          "seconds": 0.678,
+          "stdout": "steps/sqlite-probe/unit-test.stdout",
+          "stderr": "steps/sqlite-probe/unit-test.stderr",
+          "exit": "steps/sqlite-probe/unit-test.exit"
+        }
+      ],
+      "notes": [
+        "CGO_ENABLED=1: probe binary 9573234 bytes, sha256 863e8f6be9051232... (build product, not retained; rebuild from the pinned commit with this CGO_ENABLED to reproduce)",
+        "CGO_ENABLED=1: sqlite 3.49.1, 8 checks all PASS",
+        "CGO_ENABLED=0: probe binary 9573234 bytes, sha256 d6a066cba1f6d066... (build product, not retained; rebuild from the pinned commit with this CGO_ENABLED to reproduce)",
+        "CGO_ENABLED=0: sqlite 3.49.1, 8 checks all PASS"
+      ],
+      "problems": []
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "status": "PASS",
+      "seconds": 92.679,
+      "commands": [
+        {
+          "name": "unittest",
+          "argv": [
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/venv/bin/python",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "runtime/langgraph/tests",
+            "-v"
+          ],
+          "exit_code": 0,
+          "seconds": 92.613,
+          "stdout": "steps/python-unittest/unittest.stdout",
+          "stderr": "steps/python-unittest/unittest.stderr",
+          "exit": "steps/python-unittest/unittest.exit"
+        }
+      ],
+      "notes": [
+        "Ran 283 tests"
+      ],
+      "problems": []
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "status": "PASS",
+      "seconds": 3.029,
+      "commands": [
+        {
+          "name": "demo",
+          "argv": [
+            "./scripts/harness",
+            "demo",
+            "--approve-sample"
+          ],
+          "exit_code": 0,
+          "seconds": 3.027,
+          "stdout": "steps/demo-fixture/demo.stdout",
+          "stderr": "steps/demo-fixture/demo.stderr",
+          "exit": "steps/demo-fixture/demo.exit"
+        }
+      ],
+      "notes": [
+        "run harness-20260920-061122-bbd3a383",
+        "status=DEMO_COMPLETE evidence_level=fixture"
+      ],
+      "problems": []
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.093,
+      "commands": [
+        {
+          "name": "doctor",
+          "argv": [
+            "./scripts/harness",
+            "doctor",
+            "--provider",
+            "dsh"
+          ],
+          "exit_code": 0,
+          "seconds": 2.092,
+          "stdout": "steps/doctor-dsh/doctor.stdout",
+          "stderr": "steps/doctor-dsh/doctor.stderr",
+          "exit": "steps/doctor-dsh/doctor.exit"
+        }
+      ],
+      "notes": [
+        "binding recorded for dsh; model_calls=0"
+      ],
+      "problems": []
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.061,
+      "commands": [
+        {
+          "name": "doctor",
+          "argv": [
+            "./scripts/harness",
+            "doctor",
+            "--provider",
+            "zcode"
+          ],
+          "exit_code": 0,
+          "seconds": 2.059,
+          "stdout": "steps/doctor-zcode/doctor.stdout",
+          "stderr": "steps/doctor-zcode/doctor.stderr",
+          "exit": "steps/doctor-zcode/doctor.exit"
+        }
+      ],
+      "notes": [
+        "binding recorded for zcode; model_calls=0"
+      ],
+      "problems": []
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.06,
+      "commands": [],
+      "notes": [],
+      "problems": []
+    }
+  ],
+  "budget": {
+    "note": "same acceptance budget regime as G2b v2"
+  },
+  "attestation": {
+    "independence": "Both dispatched sides re-verified by the main agent without trusting self-reports: tree scope + full restoration of the temporary git-view masking; gofmt/build/harness tests/dual-platform vet run by hand; reference copies verified verbatim (docstring+import diffs only); Python suite 281 tests re-run exit 0; setMode boundary, credential secrecy, bounded wait and dispatch routing spot-read; transport gap diffs reviewed for DSH zero-change; G2b frozen-version rollback smoke re-taken (DEMO_COMPLETE, 0 model calls). Post-drift fix re-verified: guard diff read, harness tests and the 283-test Python suite re-run by hand, probe evidence reviewed (object+options is the only accepted setModel shape; the three failing jobs carried no account overlay - transient credentials-store read - while all six shared one pinned binding).",
+    "dispatch": "All product/tool/test code written by dispatched subagents (A: Go adapter+tests+admission set; B: registry flip, Python retirement, zcode differential). Main agent authored the contract and these records.",
+    "summary_sha256": "d03ac74e88a67500a6789bd3da2012e77fa13ad8b785d4a2eb3d1991ee807e49",
+    "identity_sha256": "2ea13aa1c9959c79c29179725445a2794b88a47e20abd379bc5db82d8f7deb50",
+    "evidence_sha256": "9c68222679901b4b9068da03901254872cf800d8d5127a91b2f61c1a252ca27b",
+    "evidence_file_count": 61
+  },
+  "bookkeeping": [
+    ".gates/results/go-engine-G2c.json",
+    ".gates/results/go-engine-G2c.md",
+    ".gates/results/go-engine-G1a-index.md"
+  ],
+  "contract": "go-engine-G2c-contract.md (thin adapter over the shared transport; value-level equivalence per the de-emulation ruling)",
+  "bounded_differences": [
+    "prompt-embedded schema JSON canonical compact (value-equal), same registration as G2b v2",
+    "error-text embedded JSON (ZCODE_PROTOCOL refusal, ZCODE_ACCOUNT_CONFIG delivery refusal) canonical",
+    "native-events.jsonl lines canonical on the Go side; consumers parse by value",
+    "outbound frames canonical (standing G2b registration)",
+    "two shared-transport gaps filled minimally: launch environment overlay (zcode catalogue pinning) and notification dispatch for non-request inbound messages; DSH behavior unchanged (no environment, no notification hook)",
+    "reference-side asymmetries documented in the differential: reference request_auth cannot see the credential helper from tests (no-credential scenarios compared); credential delivery pinned by Go unit tests + a Go-side differential case",
+    "source proofs: native-events.jsonl sha256 proofs differ per side by serialization; three other proofs value-equal and the Go receipt verified through the verify-source bridge",
+    "runtime identity changes by design (production package loses native_zcode/native_transport/native_entry); prior zcode evidence (G2a) bound the retired Python path",
+    "host-protocol adaptation 2026-09-19 (setModel): frame shape unchanged (object + advertised options.reasoningLevel is the only shape the params schema accepts; probed at zero model calls); a snapshot with an empty available list is now refused with the transport's own not-advertised/no-fallback text before firing setModel, where the frozen reference still fires and reports the host error"
+  ],
+  "rollback_preservation": {
+    "status": "PASS",
+    "frozen_baseline": "G2b",
+    "frozen_candidate_commit": "3d769a09be87607d7a57479945b68c75bb95170d",
+    "entry": "git worktree add <tmp> 3d769a0 && ./scripts/harness setup && ./scripts/harness demo --approve-sample",
+    "evidence": ".harness/validation/g2c-rollback-g2b-20260919/summary.json",
+    "smoke": {
+      "status": "DEMO_COMPLETE",
+      "exit_code": 0,
+      "model_calls": 0,
+      "run": "harness-20260919-230430-b8d3df21"
+    }
+  },
+  "native_verification": {
+    "required": true,
+    "status": "NOT_RUN",
+    "provider": "zcode",
+    "note": "G2c is in UNITS_REQUIRING_NATIVE_VERIFICATION. First authorized run (2026-09-20, harness-20260920-051650-834b2890) did not complete: two roles PASSed, a technical-review retry PASSed after the model echoed a schema keyword (correct existing strict validation), then the development role hit the 2026-09-19 host update - its account overlay was not delivered (transient credentials-store read) leaving an empty provider registry where setModel only answers an opaque host error. Fixed in dfd3b75 (attributable refusal, frame shape verified by probe). The parked run stays WAITING_USER as evidence; a fresh authorized run on this candidate re-binds identity bc91474813....",
+    "blocker": "awaiting machine-owner authorization for real model calls",
+    "prior_attempt": "harness-20260920-051650-834b2890: 4 role executions consumed under the 2026-09-20 authorization; not terminal"
+  }
+}

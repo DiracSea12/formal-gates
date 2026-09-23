@@ -43,7 +43,7 @@ type intentRecord struct {
 	ContentDigest    string `json:"contentDigest"`
 }
 
-// Recover 对状态目录做崩溃对账（master-requirements §2：崩溃后重启可
+// Recover 对状态目录做崩溃对账（崩溃后重启可
 // 从 intent 对账并恢复或判定残留）。持锁执行，判定顺序：
 //
 //   - 当前状态文件无法通过信封/摘要校验 → 返回错误且不动任何协议

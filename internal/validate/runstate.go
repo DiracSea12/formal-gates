@@ -295,6 +295,10 @@ type QAResultRecord struct {
 	Procedure    string `json:"procedure"`
 	Observation  string `json:"observation"`
 	OracleResult string `json:"oracleResult"`
+	// Test 是白盒用例记录自包含携带的测试引用（与 QACase.Test 同格式
+	// "<文件路径>::<函数名>"）。封板摘要只落结果记录，后续 QA-only rerun 直接以
+	// 该字段为身份来源；黑盒与旧格式记录缺省为空。
+	Test string `json:"test,omitempty"`
 	// Origin 标记结果来源：经执行用例记 "executed"；AFFECTED 下未覆盖的已批准
 	// 用例记 "inherited"（继承上一轮 PASS）。旧状态缺省（空串）按 executed 处理。
 	Origin string `json:"origin,omitempty"`
@@ -626,8 +630,8 @@ func saveRunState(root string, state RunState, registryHeld bool) error {
 }
 
 // verifyLegacyStableLauncher preserves the legacy run-state shape without
-// preserving a candidate writer. Existing pre-stage-0 runs have no admission
-// fields, so a production mutation is allowed only from a fixed launcher that
+// preserving a candidate writer. Legacy runs carry no admission fields, so a
+// production mutation is allowed only from a fixed launcher that
 // an active shared-registry record names. Test executables retain in-process
 // legacy semantics.
 func verifyLegacyStableLauncher() error {

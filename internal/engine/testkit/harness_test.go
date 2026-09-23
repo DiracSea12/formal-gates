@@ -299,8 +299,10 @@ func TestHarnessReplaceAfterRecoveryPreservesFakeVCSCount(t *testing.T) {
 	if len(continued.Acceptances) != 1 || continued.SideEffects["fakeVCS.fault-replace-after"] != 1 {
 		t.Fatalf("continued report = %+v", continued)
 	}
+	// write.lock 是持久的目录互斥工件（内核文件锁永不删除），不属于协议
+	// 残留；.tmp 与 intent 才是必须清除的协议字节。
 	for _, path := range continued.Paths {
-		if filepath.Ext(path) == ".tmp" || path == "engine-state/state.json.intent" || path == "engine-state/write.lock" {
+		if filepath.Ext(path) == ".tmp" || path == "engine-state/state.json.intent" {
 			t.Fatalf("recovery left protocol artifact %q", path)
 		}
 	}
@@ -449,7 +451,7 @@ func TestHarnessNamedFaultCensus(t *testing.T) {
 				t.Fatalf("recover %s: %v", point, err)
 			}
 			for _, path := range recovered.Paths {
-				if filepath.Ext(path) == ".tmp" || path == "engine-state/state.json.intent" || path == "engine-state/write.lock" {
+				if filepath.Ext(path) == ".tmp" || path == "engine-state/state.json.intent" {
 					t.Fatalf("fault %s left artifact %q", point, path)
 				}
 			}

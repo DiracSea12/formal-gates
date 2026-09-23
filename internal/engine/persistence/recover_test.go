@@ -144,18 +144,9 @@ func TestRecoverRedoesInterruptedCommit(t *testing.T) {
 	if _, err := os.Stat(store.intentPath()); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("intent not cleared after redo: %v", err)
 	}
-	// 补做提交消费的是暂存文件本身，目录回到只剩 state.json。
-	entries, err := os.ReadDir(store.dir)
-	if err != nil {
-		t.Fatalf("read dir: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != stateFileName {
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		t.Fatalf("state dir after redo = %v, want [%s]", names, stateFileName)
-	}
+	// 补做提交消费的是暂存文件本身，目录回到只剩 state.json 与持久的
+	// 锁文件。
+	assertStateDirExact(t, store.dir, stateFileName, lockFileName)
 }
 
 // TestRecoverRedoesOnTopOfExistingState：已有 revision 1 的状态下，崩溃

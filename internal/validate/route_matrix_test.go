@@ -1,7 +1,6 @@
 package validate
 
-// route_matrix_test.go 是"交付义务反向普查"固化测试（阶段 0/1 交付义务补漏 run，
-// 2026-08-22）。它机械落实三条防线：
+// route_matrix_test.go 是"交付义务反向普查"固化测试。它机械落实三条防线：
 //
 //  1. refactor-plan/route-matrix.md（§2.3 双面矩阵）与 refactor-plan/stage-records.md
 //     （§5 七项阶段记录）结构完备、必需列齐备、绑定取值在 §5.11 词汇表内；
@@ -9,7 +8,7 @@ package validate
 //     测试同步失败，强制双向维护）；矩阵中超出枚举的行必须显式带"计划未枚举"标注；
 //  3. 实际公开面 ⊆ 矩阵：从 internal/cli/cli.go 的 workflowSubcommands 注册表与顶层
 //     命令 switch 源码解析派生实际入口清单，断言实现落地的每个入口都有矩阵行——
-//     "先覆盖后实现"（用户拍板 2026-08-22）。
+//     "先覆盖后实现"。
 //
 // 本测试只做结构断言，不复制矩阵的内容结论；行内容的真伪由矩阵内的证据指针溯源。
 
@@ -427,10 +426,11 @@ func TestRouteMatrixWorkflowFace(t *testing.T) {
 		// 出现在实际注册表中；反之实际注册的入口不得绑 unsupported。
 		isUnsupported := row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported"
 		if entry == "guard-preview" {
-			// This public calculator was added in 3.5b. Its stage 0/1 cells must
-			// preserve absence at those stages, while its current binding is read-only.
+			// guard-preview is a read-only public calculator outside the stage 0/1
+			// routes: its stage 0/1 cells must stay unsupported while its current
+			// binding is read-only.
 			if !isUnsupported || row[runtimeCol] != "3.5b engine 纯计算（`guard.Calculate`）" || row[writerCol] != "无（只读输入文件）" || row[readOnlyCol] != "是" {
-				t.Fatal("guard-preview must preserve historical absence and declare its current read-only 3.5b binding")
+				t.Fatal("guard-preview sits outside the stage 0/1 routes and must keep unsupported stage 0/1 cells while declaring its current read-only 3.5b binding")
 			}
 			isUnsupported = false
 		}
@@ -552,11 +552,8 @@ func TestStageRecordsContainSevenItemsPerStage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// QA 白盒结构测试（dispatch-c39ac70c0305fec7e7ce8641，2026-08-22）。
-//
-// 以下测试由 QA 白盒设计轮独立设计并交付，不从上文开发侧反向普查测试出发，
-// 而是从已确认需求（RQ-1 命令路由矩阵 / RQ-2 阶段记录汇编 / RQ-3 反向普查固化）
-// 与实现事实出发独立规定应覆盖的结构行为与边界：
+// QA 白盒结构测试。以下测试从已确认需求（RQ-1 命令路由矩阵 / RQ-2 阶段记录
+// 汇编 / RQ-3 反向普查固化）与实现事实出发规定应覆盖的结构行为与边界：
 //
 //   - 验收 2 的自证：人为删改矩阵/记录/计划枚举任一必需项时反向普查必须 FAIL；
 //   - RQ-1 的 start 行 --split legacy 事实与 cli.go 实现双向绑定；
@@ -699,7 +696,7 @@ func TestRouteMatrixReverseCensusFailsOnDeliveredArtifactMutations(t *testing.T)
 
 	t.Run("workflow face fails on an unmarked supplementary row", func(t *testing.T) {
 		qaWithMutatedRepoFile(t, "refactor-plan/route-matrix.md", func(content string) (string, bool) {
-			line, ok := qaFindTableRowLine(content, "| future |")
+			line, ok := qaFindTableRowLine(content, "| candidate |")
 			if !ok {
 				return "", false
 			}
@@ -859,38 +856,39 @@ func qaPhaseJSONCaseIDs(t *testing.T) map[string]bool {
 	return ids
 }
 
-// qaRepoTestIndex 遍历仓库全部 *_test.go（含带构建标签的测试文件），收集已声明
-// 的测试函数名与测试文件基名，作为引用解析的仓库侧索引。
+// deliveredTestRoots 是机器证据索引唯一认可的交付源码根。仓库交付的 Go 源码与
+// 测试只存在于 cmd/ 与 internal/；工作区内其他目录（本地验证副本、历史快照等）
+// 不是交付源码，其中的测试声明不得为现役机器证据背书。
+var deliveredTestRoots = []string{"cmd", "internal"}
+
+// qaRepoTestIndex 遍历交付源码根下的全部 *_test.go（含带构建标签的测试文件），
+// 收集已声明的测试函数名与测试文件基名，作为现役引用解析的仓库侧索引。
 func qaRepoTestIndex(t *testing.T) (funcs map[string]bool, basenames map[string]bool) {
 	t.Helper()
 	funcs, basenames = map[string]bool{}, map[string]bool{}
 	root := repoRootValidateTest(t)
 	declRe := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
+	for _, rel := range deliveredTestRoots {
+		err := filepath.WalkDir(filepath.Join(root, rel), func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(d.Name(), "_test.go") {
+				return nil
+			}
+			basenames[d.Name()] = true
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range declRe.FindAllStringSubmatch(string(data), -1) {
+				funcs[m[1]] = true
 			}
 			return nil
-		}
-		if !strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		basenames[d.Name()] = true
-		data, err := os.ReadFile(path)
+		})
 		if err != nil {
-			return err
+			t.Fatalf("walk delivered test files under %s: %v", rel, err)
 		}
-		for _, m := range declRe.FindAllStringSubmatch(string(data), -1) {
-			funcs[m[1]] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk repo test files: %v", err)
 	}
 	if len(funcs) == 0 || len(basenames) == 0 {
 		t.Fatal("repo test index is empty; the source-format assumption is stale")
@@ -899,10 +897,11 @@ func qaRepoTestIndex(t *testing.T) (funcs map[string]bool, basenames map[string]
 }
 
 // TestRouteMatrixMachineEvidenceCitationsResolveInRepo 落实 RQ-1 的 negative-tests
-// 证据口径与验收 3：矩阵与阶段记录引用的每条机器证据都必须在仓库中真实存在——
-// CASE-nnn 必须是封板 run JSON 的真实案例、测试函数必须由某个 *_test.go 声明、
-// *_test.go 文件引用必须真实存在；机器证据列不得既无可解析引用又无"证据缺口"
-// 标注（不得静默留空）。
+// 证据口径与验收 3：矩阵与阶段记录引用的每条机器证据都必须真实存在——CASE-nnn
+// 必须是封板 run JSON 的真实案例、现役测试函数必须由交付源码的某个 *_test.go 声明、
+// *_test.go 文件引用必须真实存在；带 `@<全哈希>` 后缀的历史测试证据不要求存在于
+// 当前源码，但必须由绑定提交的 *_test.go 真实声明。机器证据列不得既无可解析引用
+// 又无"证据缺口"标注（不得静默留空）。
 func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 	matrix := loadRepoFileForMatrixTest(t, "refactor-plan/route-matrix.md")
 	records := loadRepoFileForMatrixTest(t, "refactor-plan/stage-records.md")
@@ -917,6 +916,8 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 	caseRe := regexp.MustCompile(`CASE-\d+`)
 	testRe := regexp.MustCompile(`Test[A-Za-z0-9_]+`)
 	fileRe := regexp.MustCompile(`[A-Za-z0-9_]+_test\.go`)
+	// 历史绑定后缀必须紧跟测试名（`TestX@<全哈希>`），且哈希恰好 40 位。
+	commitRe := regexp.MustCompile(`^@([0-9a-f]{40})(?:$|[^0-9a-f])`)
 
 	for artifact, content := range docs {
 		for _, cited := range caseRe.FindAllString(content, -1) {
@@ -924,14 +925,19 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 				t.Errorf("%s cites %s which is not a case in any sealed phase JSON", artifact, cited)
 			}
 		}
-		for _, cited := range testRe.FindAllString(content, -1) {
+		for _, loc := range testRe.FindAllStringIndex(content, -1) {
+			cited := content[loc[0]:loc[1]]
+			if m := commitRe.FindStringSubmatch(content[loc[1]:]); m != nil {
+				qaAssertHistoricalTestCitation(t, artifact, cited, m[1])
+				continue
+			}
 			if !testFuncs[cited] {
-				t.Errorf("%s cites test %q which is not declared by any *_test.go in the repo", artifact, cited)
+				t.Errorf("%s cites test %q which is not declared by any *_test.go in the delivered source", artifact, cited)
 			}
 		}
 		for _, loc := range fileRe.FindAllStringIndex(content, -1) {
-			// "a/b_test.go" 形式的行内合写（如 round12/15 合写）是文档速记而非
-			// 文件引用，跳过；其余 *_test.go token 必须真实存在。
+			// "a/b_test.go" 形式的行内合写是文档速记而非文件引用，跳过；
+			// 其余 *_test.go token 必须真实存在。
 			if loc[0] > 0 && content[loc[0]-1] == '/' {
 				continue
 			}
@@ -951,6 +957,17 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 				t.Errorf("%s row %q: the 机器证据 cell has no resolvable citation and no 证据缺口 marker: %q", section, matrixRowEntry(row[0]), cell)
 			}
 		}
+	}
+}
+
+// qaAssertHistoricalTestCitation 校验历史证据绑定：被引用的测试必须由绑定提交
+// 树内的某个 *_test.go 真实声明（按全哈希 git 对象解析，不依赖当前工作区内容）。
+func qaAssertHistoricalTestCitation(t *testing.T, artifact, test, commit string) {
+	t.Helper()
+	cmd := exec.Command("git", "grep", "-F", "-l", "func "+test+"(", commit, "--", "*_test.go")
+	cmd.Dir = repoRootValidateTest(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%s cites historical test %s@%s which is not declared by any *_test.go at that commit: %v\n%s", artifact, test, commit, err, out)
 	}
 }
 
@@ -1283,7 +1300,7 @@ func qaConstString(t *testing.T, src, name string) string {
 // 与验收 3：阶段记录（与矩阵）引用的全部全哈希 git 对象真实存在；runId/SEALED/
 // currentSnapshot/baseSnapshot 与封板 JSON 一致并出现在对应阶段节；sealed commit
 // 的父提交声明与 git 历史一致、且等于 JSON baseSnapshot；黑盒用例交付物的行数
-// 声明与实际一致；阶段 0 契约常量与 phase0.go 一致、阶段 1 definition digest 与
+// 声明与实际一致；阶段 0 契约常量与 envelope.go 一致、阶段 1 definition digest 与
 // identity_gen.go 常量及 definitions/workflow.json 复算值一致。
 func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 	records := loadRepoFileForMatrixTest(t, "refactor-plan/stage-records.md")
@@ -1356,10 +1373,10 @@ func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 		}
 	}
 
-	phase0Src := loadRepoFileForMatrixTest(t, "internal/validate/phase0.go")
+	envelopeSrc := loadRepoFileForMatrixTest(t, "internal/validate/envelope.go")
 	stage0 := qaStageSection(t, records, "## 阶段 0")
-	frozenDigest := qaConstString(t, phase0Src, "CurrentWorkflowDefinitionDigest")
-	frozenVersion := qaConstString(t, phase0Src, "CurrentWorkflowDefinitionVersion")
+	frozenDigest := qaConstString(t, envelopeSrc, "CurrentWorkflowDefinitionDigest")
+	frozenVersion := qaConstString(t, envelopeSrc, "CurrentWorkflowDefinitionVersion")
 	for _, needle := range []string{frozenDigest, `CurrentWorkflowDefinitionVersion = "` + frozenVersion + `"`} {
 		if !strings.Contains(stage0, needle) {
 			t.Errorf("stage 0 section does not register the frozen contract constant %q", needle)

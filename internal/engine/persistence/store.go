@@ -22,16 +22,15 @@ const (
 )
 
 // Config 是 Store 的身份配置。PackageDigest 是 owning runtime 的安装
-// 身份摘要：本批（阶段 2 批 1a）只交付信封校验侧，其实际计算与安装
-// 绑定随阶段 3+ 安装事务交付（master-requirements §9），这里由调用方
-// 注入期望值并参与逐字段精确校验。
+// 身份摘要：本包只做信封校验，摘要的实际计算与安装绑定由安装事务
+// 交付，这里由调用方注入期望值并参与逐字段精确校验。
 type Config struct {
 	PackageDigest string
 	// DefinitionSource and InstalledTargetIdentity optionally bind a candidate
-	// run to the exact definition file and admitted installed target.  The
-	// phase-2 protocol leaves these empty for legacy test fixtures; candidate
-	// façades provide both so the loader can enforce the phase-3 six-field
-	// envelope without changing existing callers.
+	// run to the exact definition file and admitted installed target.
+	// Protocol fixtures leave these empty; candidate façades provide both so
+	// the loader can enforce the full six-field envelope without changing
+	// existing callers.
 	DefinitionSource        string
 	InstalledTargetIdentity string
 	FaultInjector           func(FaultPoint) error
@@ -45,8 +44,7 @@ type Snapshot struct {
 	Content       json.RawMessage
 }
 
-// Transaction 是一次写事务的输入（draft §3.3 的写事务形态在本包的
-// 落地）：读 state → Observe → Decide 之后，调用方带着读到的 revision
+// Transaction 是一次写事务的输入：读 state → Observe → Decide 之后，调用方带着读到的 revision
 // 与观察到的外部事实指纹进入 Save。
 type Transaction struct {
 	// ExpectedRevision 是调用方读 state 时看到的 revision；Save 在锁内
@@ -92,13 +90,6 @@ func NewStore(dir string, cfg Config) (*Store, error) {
 		return nil, err
 	}
 	return &Store{dir: abs, cfg: cfg}, nil
-}
-
-// NewStoreWithIdentity is the candidate convenience constructor.  It accepts
-// the phase-3 envelope identity in one call while retaining NewStore's
-// phase-2 package-only API for existing protocol fixtures.
-func NewStoreWithIdentity(dir string, cfg Config) (*Store, error) {
-	return NewStore(dir, cfg)
 }
 
 func (s *Store) statePath() string { return filepath.Join(s.dir, stateFileName) }
@@ -217,7 +208,7 @@ func (s *Store) readDocument() (*document, error) {
 	return &doc, nil
 }
 
-// Save 执行一次完整写事务（draft §3.3/§9.2 的持久化基座形态）：
+// Save 执行一次完整写事务：
 //
 //	加锁重读 → 信封/摘要校验 → revision CAS → 写前指纹重验 →
 //	persist intent → execute（原子 rename）→ observe/reconcile →
@@ -262,7 +253,7 @@ func (s *Store) Save(tx Transaction) (SaveResult, error) {
 		}
 	}
 
-	// 写前指纹重验：外部事实已变则直接拒绝（draft §3.3：外部事实变化
+	// 写前指纹重验：外部事实已变则直接拒绝（外部事实变化
 	// 释放锁重算，不依据过期 HEAD 或需求摘要推进）。
 	fingerprint, err := tx.CollectFingerprint()
 	if err != nil {

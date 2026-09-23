@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import sys
 import time
 from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, file_proof, read
 
@@ -117,7 +116,7 @@ class Workers:
                 if {k:v for k,v in original.items() if k!='identity'}!={k:v for k,v in native.items() if k!='identity'}:
                     raise HarnessError('native input changed for the same operation')
             else: atomic(path,native)
-            process=self.store.job(key,{'kind':'native','argv':[sys.executable,'-m','formal_gates_harness.native_entry',str(directory)],
+            process=self.store.job(key,{'kind':'native','argv':adapter.entry_argv(self.store.bridge.binary,str(directory)),
                 'cwd':str(workspace),'stdin':'','environment':{'LANGSMITH_TRACING':'false','LANGCHAIN_TRACING_V2':'false'}})
             identity=directory/'identity.json'
             if identity.exists(): atomic(identity_receipt,read(identity))

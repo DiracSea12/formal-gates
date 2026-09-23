@@ -1,13 +1,11 @@
-// Package persistence 是 engine 的持久化基座（阶段 2 批 1a：
-// orchestration-pipeline-engine-phase-2/master-requirements.md §1/§2、
-// final-implementation-draft §3.3/§9.2/§10）。
+// Package persistence 是 engine 的持久化基座。
 //
 // 本包只在调用方给定的隔离状态目录内读写，不触碰 legacy 状态文件、
-// 不改变任何公开 CLI 行为。交付六件基座能力：
+// 不改变任何公开 CLI 行为。基座能力：
 //
 //   - 版本信封：state 文档携带 writer/stateSchemaVersion/
-//     workflowDefinitionVersion/packageDigest 四字段信封，外加 draft §3.3
-//     要求与 packageDigest 双重绑定的 definitionDigest。读取侧严格校验：
+//     workflowDefinitionVersion/packageDigest 四字段信封，外加与
+//     packageDigest 双重绑定的 definitionDigest。读取侧严格校验：
 //     缺失或任一字段不精确匹配一律 UNSUPPORTED_RUN_VERSION 写前拒绝、
 //     绝不写状态。
 //   - 原子保存：persist intent → execute → observe/reconcile → commit
@@ -15,8 +13,9 @@
 //     对账：补做提交、确认已提交或判定残留。
 //   - 完整性摘要：contentDigest 对状态内容计算，读取与写入路径都与
 //     信封一起校验，篡改可检测。
-//   - 文件锁：状态目录级独占写锁（O_CREATE|O_EXCL 锁文件），同目录
-//     并发写互斥；持有者崩溃后按陈旧判定可抢占。
+//   - 文件锁：状态目录级独占写锁，委托 internal/coordination 的内核
+//     文件锁（flock/LockFile）：同目录并发写跨进程互斥，持有者崩溃由
+//     内核自动释放，遗留锁文件不阻塞后续写入。
 //   - revision/CAS：每次写入携带期望 revision，锁内重读不匹配即冲突
 //     拒绝。
 //   - external fingerprint 重验：写入前后各校验一次外部事实指纹；写前
@@ -29,12 +28,11 @@
 //     internal/engine/definition 的生成身份常量（identity_gen.go，与
 //     definitions/workflow.json 由同一生成动作产出）；
 //   - stateSchemaVersion 复用 encoder 的引擎侧常量 "1"，语义对齐
-//     internal/validate/phase0.go 的冻结常量 CurrentStateSchemaVersion，
+//     internal/validate 的冻结常量 CurrentStateSchemaVersion，
 //     由测试钉死相等；
-//   - 本包不导入 internal/validate：阶段 5 将删除 legacy 实现，engine
-//     包不得反向依赖（与 shadow 包相同的结构性约束）。
+//   - 本包不导入 internal/validate：engine 包不得反向依赖。
 //
-// Windows 平台分叉按阶段决策维持延期：execute 段的原子 rename 收敛在
+// Windows 平台分叉维持延期：execute 段的原子 rename 收敛在
 // Store.executeCommit 单点，未来平台分层只需替换该调用。
 package persistence
 
@@ -53,7 +51,8 @@ const (
 	// Writer 是版本信封 writer 字段的唯一合法值：state 只能由 engine 写入。
 	Writer = "engine"
 
-	// UnsupportedRunVersionCode 与 phase0 冻结错误码同值（测试钉死）：
+	// UnsupportedRunVersionCode 与 internal/validate 的冻结错误码同值
+	// （测试钉死）：
 	// 版本身份缺失或不精确匹配的统一拒绝码。
 	UnsupportedRunVersionCode = "UNSUPPORTED_RUN_VERSION"
 	// StateIntegrityCode 是完整性摘要不符（内容被篡改或损坏）的拒绝码。
@@ -118,11 +117,10 @@ func (e *CommitResponseLostError) Error() string {
 	return fmt.Sprintf("persistence: commit response lost after revision %d", e.Revision)
 }
 
-// Envelope 是 state 文档的版本信封。master-requirements §1 列举的四个
-// 身份字段之外，definitionDigest 是 draft §3.3 的双重绑定字段：
-// definitionDigest 绑定拓扑与语义身份（同源 definition 生成常量），
-// packageDigest 绑定 owning runtime 的实现字节（安装事务在阶段 3+
-// 计算并注入）。五个字段都在读取侧逐字段精确校验。
+// Envelope 是 state 文档的版本信封。四个身份字段之外，definitionDigest
+// 与 packageDigest 是双重绑定字段：definitionDigest 绑定拓扑与语义身份
+// （同源 definition 生成常量），packageDigest 绑定 owning runtime 的实现
+// 字节（由安装事务计算并注入）。五个字段都在读取侧逐字段精确校验。
 type Envelope struct {
 	Writer                    string `json:"writer"`
 	StateSchemaVersion        string `json:"stateSchemaVersion"`
@@ -167,8 +165,8 @@ func ValidateEnvelope(observed Envelope, packageDigest string) error {
 }
 
 // ValidateEnvelopeWithIdentity is the candidate-facing write barrier.  It
-// keeps the phase-2 package-only helper above intact while allowing a façade to
-// require the full phase-3 definition-source and installed-target identity.
+// keeps the package-only helper above intact while allowing a façade to
+// require the full definition-source and installed-target identity.
 func ValidateEnvelopeWithIdentity(observed Envelope, packageDigest, definitionSource, installedTargetIdentity string) error {
 	if strings.TrimSpace(packageDigest) == "" {
 		return fmt.Errorf("persistence: package digest is required")
@@ -213,7 +211,7 @@ func validateEnvelope(observed Envelope, cfg Config) error {
 }
 
 // UnsupportedRunVersionError 表示 state 版本身份缺失或不精确匹配
-// （draft §10）。携带该错误的读取/写入路径绝不写状态。
+// 。携带该错误的读取/写入路径绝不写状态。
 type UnsupportedRunVersionError struct {
 	Field    string
 	Expected string

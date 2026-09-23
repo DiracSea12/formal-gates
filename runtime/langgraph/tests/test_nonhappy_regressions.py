@@ -10,7 +10,7 @@ from langgraph.types import Command
 from formal_gates_harness.cli import run_graph, open_run
 from formal_gates_harness.graph import Flow, State
 from formal_gates_harness.workers import Workers
-from formal_gates_harness.native_dsh import decode_result
+from formal_gates_harness.native_result import decode_result
 from formal_gates_harness.handover import prepare_session_restart
 from formal_gates_harness.infra import atomic, read, run_lock, runtime_identity, HarnessError, RuntimeBlocked, digest
 

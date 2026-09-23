@@ -1064,7 +1064,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 				}
 				return fmt.Errorf("QA execution must cover all %d approved cases; QA result is missing for %s", len(required), testCase.ID)
 			}
-			recorded = append(recorded, QAResultRecord{Binding: qaExecutionBinding(*state, recordMode, testCase, options.Tool, options.Environment), CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult), Origin: "executed"})
+			recorded = append(recorded, QAResultRecord{Binding: qaExecutionBinding(*state, recordMode, testCase, options.Tool, options.Environment), CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult), Test: testCase.Test, Origin: "executed"})
 		}
 		if partial {
 			progress.Status, progress.Snapshot, progress.Cases = "PENDING", state.CurrentSnapshot, recorded
@@ -1097,7 +1097,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 				if testCase.ReviewStatus != "PASS" || covered[testCase.ID] {
 					continue
 				}
-				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "inherited", Observation: "inherited PASS from " + sc.BaseSnapshot, OracleResult: "inherited", Origin: "inherited"})
+				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "inherited", Observation: "inherited PASS from " + sc.BaseSnapshot, OracleResult: "inherited", Test: testCase.Test, Origin: "inherited"})
 			}
 		}
 		// 本派发 mode 的状态与发现项：该 mode 任一【经执行】用例 FAIL 即该 mode FAIL（

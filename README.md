@@ -364,5 +364,5 @@ Git 最终提交整理用 `workflow prepare-candidate --squash-message`，在最
 Seal 固化同一候选身份。可调用参数、fixture 和续跑示例见 [正式流程](references/formal-flow.md#qa-共同步骤批量与同次续跑)。
 
 Codex 用量支持当前请求记录与累计事件去重，现有 cost 条目保留 rollout 来源和模型任务起止/
-墙钟时间（含工具等待）。本阶段真实 Codex 对比必须补齐这些指标；操作与计时边界见
-[成本计量](references/formal-flow.md#成本计量)和[验证记录](refactor-plan/stage-3-5c-validation.md)。
+墙钟时间（含工具等待）。真实 Codex 对比必须补齐这些指标；操作与计时边界见
+[成本计量](references/formal-flow.md#成本计量)。

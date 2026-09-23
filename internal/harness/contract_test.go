@@ -198,6 +198,21 @@ func TestBridgeRejectsUnknownOperation(t *testing.T) {
 	}
 }
 
+// The shared input ceiling still exists. The artifact read path stopped
+// depending on it (it carries a path, not a body); it was not removed, because
+// an unbounded request envelope is a different defect from a mismatched one.
+func TestBridgeStillRejectsInputOverTheSharedCeiling(t *testing.T) {
+	oversized := `{"operation":"canonical","payload":{"value":"` +
+		strings.Repeat("x", 8*1024*1024) + `"}}`
+	var out bytes.Buffer
+	if code := Bridge(strings.NewReader(oversized), &out); code != 2 {
+		t.Fatalf("oversized request accepted: code=%d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "bridge input exceeds 8 MiB") {
+		t.Fatalf("wrong refusal: %s", out.String())
+	}
+}
+
 // Provider syntax is neutral. Installation descriptors remain available for display.
 func TestProviderIdentifiersAndInstallationCatalog(t *testing.T) {
 	for _, provider := range []string{"fixture", "dsh", "zcode", "new-runtime", "deepseek-harness", "z-code"} {

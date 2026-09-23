@@ -209,7 +209,7 @@ func TestFreshnessTokenDeterministic(t *testing.T) {
 }
 
 // TestControlKindClosedSet：控制类型封闭集合当前恰为 RESET/ABORT（业务
-// 控制随阶段 4 扩充枚举，此处钉死现状防漂移）。
+// 业务控制经扩展点扩充枚举，此处钉死现状防漂移）。
 func TestControlKindClosedSet(t *testing.T) {
 	valid := []ControlKind{ControlReset, ControlAbort}
 	invalid := []ControlKind{"", "RESET ", "REQUIREMENT_CHANGE", "abort"}

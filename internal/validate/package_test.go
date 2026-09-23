@@ -263,7 +263,7 @@ func copyPackageFixture(t *testing.T) string {
 // stubBinaryPayload 返回平台对应的桩二进制载荷。POSIX 用 25 字节 shebang 桩；
 // Windows 必须提供真实可执行的微型 PE——首次调用时从仓库源码构建一次
 // formal-gates CLI 并在进程内缓存复用。"binary\n" 占位标记只供宽松 smoke
-// 策略的小型进程内夹具使用（phase0_install.go runInstalledBinarySmokeWithPolicy），
+// 策略的小型进程内夹具使用（install_transaction.go runInstalledBinarySmokeWithPolicy），
 // 完整包校验走严格模式，不能用占位标记。
 func stubBinaryPayload(t *testing.T) []byte {
 	t.Helper()

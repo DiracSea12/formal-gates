@@ -123,12 +123,14 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 	var err error
 	switch r.name {
 	case "git":
-		// 默认 --untracked-files=normal：报告未跟踪且未忽略的文件，使「新增交付文件漏了
-		// git add」在快照前就暴露、而不是作为幽灵文件静默丢失。formal-gates 自身的
-		// 运行期目录（.gates/tmp、QA 隔离工作区等）在宿主仓库未必已写进 .gitignore，
-		// 因此只剔除这些保留目录的未跟踪输出，不把它们误判为未提交交付文件；其它未跟踪
+		// --untracked-files=all：让 git 自己把每个未跟踪且未忽略的文件逐路径列出
+		// （不存在折叠的目录条目），使「新增交付文件漏了 git add」在快照前就暴露、
+		// 而不是作为幽灵文件静默丢失。被 .gitignore 忽略的文件本来就不在 git 报告
+		// 的未提交内容里，不因目录枚举被重新当成交付。formal-gates 自身的运行期
+		// 目录（.gates/tmp、QA 隔离工作区等）在宿主仓库未必已写进 .gitignore，因此
+		// 只剔除这些保留目录的未跟踪输出，不把它们误判为未提交交付文件；其它未跟踪
 		// 文件仍照常拦截。
-		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1")
+		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1", "--untracked-files=all")
 		if err == nil {
 			pending = excludeRuntimeUntrackedGitStatus(pending)
 		}
@@ -149,26 +151,43 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 	return nil
 }
 
+// runtimeGitStatusDirs are formal-gates 的保留运行期目录（git status 路径形
+// 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先 gitignore 它
+// 们。清单在这里单源持有，逐路径豁免读这一份。
+var runtimeGitStatusDirs = []string{
+	".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
+}
+
 // excludeRuntimeUntrackedGitStatus removes porcelain "?? <path>" lines that sit
 // under formal-gates 的保留运行期目录。这些目录由 CLI 自身创建/维护，不是交付文件；
 // 宿主仓库未必预先 gitignore 它们。若这些路径被跟踪后出现修改（非 "?? " 行），仍照常
-// 作为未提交变更拦截——只豁免未跟踪的运行期产物。
+// 作为未提交变更拦截——只豁免未跟踪的运行期产物。状态以 --untracked-files=all 获取：
+// git 已把未跟踪且未忽略的文件逐路径展开（被忽略的文件不在其中），这里只做纯逐路径
+// 判定，不对仓库目录做任何二次枚举或忽略推断。
 func excludeRuntimeUntrackedGitStatus(status string) string {
 	lines := strings.Split(status, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.HasPrefix(line, "?? ") && isRuntimeGitStatusPath(strings.TrimSpace(line[3:])) {
-			continue
+		if strings.HasPrefix(line, "?? ") {
+			path := normalizeGitStatusPath(strings.TrimSpace(line[3:]))
+			if isRuntimeGitStatusPath(path) {
+				continue
+			}
 		}
 		kept = append(kept, line)
 	}
 	return strings.Join(kept, "\n")
 }
 
-func isRuntimeGitStatusPath(path string) bool {
+// normalizeGitStatusPath strips git porcelain's optional quoting and unifies
+// separators, so a path from "?? <path>" compares against the manifest.
+func normalizeGitStatusPath(path string) string {
 	path = strings.Trim(path, `"`)
-	path = strings.ReplaceAll(path, `\`, "/")
-	for _, dir := range []string{".gates/tmp/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/"} {
+	return strings.ReplaceAll(path, `\`, "/")
+}
+
+func isRuntimeGitStatusPath(path string) bool {
+	for _, dir := range runtimeGitStatusDirs {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true
 		}

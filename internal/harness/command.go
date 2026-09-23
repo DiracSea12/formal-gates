@@ -14,6 +14,31 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 	if len(args) > 0 && args[0] == "bridge" {
 		return Bridge(in, out)
 	}
+	if len(args) > 0 && args[0] == "supervise" {
+		if len(args) < 2 {
+			fmt.Fprintln(errout, "harness supervise requires a job directory")
+			return 2
+		}
+		return Supervise(args[1])
+	}
+	if len(args) > 0 && args[0] == "native" {
+		// One native job, one process.
+		// The entry's own argument check mirrors supervise's: exit 2 with a
+		// note on stderr and no native-error.json.
+		if len(args) < 2 {
+			fmt.Fprintln(errout, "harness native requires a job directory")
+			return 2
+		}
+		return RunNative(args[1], errout)
+	}
+	if len(args) > 0 && args[0] == "native-respond" {
+		// Answer one held native interaction from the user's own shell.
+		return NativeRespond(args[1:], errout)
+	}
+	if len(args) > 0 && args[0] == "native-show" {
+		// Read-only listing of a job's held native interactions.
+		return NativeShow(args[1:], out, errout)
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		fmt.Fprintln(errout, e)

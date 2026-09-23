@@ -11,7 +11,7 @@ import (
 
 // replaceCompletedFile 在 Windows 上用 ReplaceFileW 原子替换已存在的目标文件。
 // os.Rename 遇到"读者仍持有旧句柄"的目标文件会以 Access is denied 失败
-//（writeGenerated 的并发原子性测试在 Windows 上稳定触发）；ReplaceFileW
+// （writeGenerated 的并发原子性测试在 Windows 上稳定触发）；ReplaceFileW
 // 走 POSIX 语义替换，允许替换期间存在打开的读句柄。
 var replaceFileW = syscall.NewLazyDLL("kernel32.dll").NewProc("ReplaceFileW")
 

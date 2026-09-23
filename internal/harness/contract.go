@@ -205,6 +205,12 @@ func NeedsRepair(r WorkerResult) bool {
 }
 func StrictDecode(b []byte, dst any) error {
 	scan := json.NewDecoder(bytes.NewReader(b))
+	// The scanning pass only inspects object keys and delimiters, but it still
+	// has to consume every token. Without UseNumber a numeric token is decoded
+	// into a float64, so an integer literal outside float64's range fails here
+	// before the target type is ever considered - which would reject values the
+	// canonical encoder handles by design (arbitrary-precision integers).
+	scan.UseNumber()
 	var visit func() error
 	visit = func() error {
 		t, e := scan.Token()

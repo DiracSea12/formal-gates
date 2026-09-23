@@ -1,4 +1,4 @@
-// helpers_test.go 是验收套件（阶段 1 批 3）的共用夹具：仓库根定位、真实
+// helpers_test.go 是验收套件的共用夹具：仓库根定位、真实
 // 定义的编译/编码通道、封闭 registry 的可裁剪复刻，以及对 authoring 值类型
 // 变体的公共头读写工具。变异类用例需要按条目控制注册表与绕过 constructor
 // 改写步骤，definition/authoring 包不为测试提供这些入口，故在此复刻。

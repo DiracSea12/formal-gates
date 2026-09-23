@@ -1054,7 +1054,7 @@ func runHostAction(report *HarnessReport, fixture *ProtocolFixture, options Harn
 		return err
 	}
 	operation := valueOr(options.Operation, "op.fan.transport")
-	var params any = map[string]any{"target": "phase2", "retries": 1}
+	var params any = map[string]any{"target": "fixture", "retries": 1}
 	if strings.TrimSpace(options.Params) != "" {
 		if err := json.Unmarshal([]byte(options.Params), &params); err != nil {
 			return fmt.Errorf("testkit: --params must be valid JSON: %w", err)
@@ -1581,7 +1581,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			}
 			vcsCount = count
 		case decision.KindHostAction:
-			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "phase2", "retries": float64(1)})
+			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fixture", "retries": float64(1)})
 			if execErr != nil {
 				return execErr
 			}
@@ -1827,7 +1827,7 @@ func validateFullRecoveryPlan(fixture fullRecoveryFixture) error {
 		fixture.AdapterOperation != "op.fan.transport" || fixture.Fault.Point != string(persistence.FaultExecuteAfter) || !fixture.Fault.Once {
 		return fmt.Errorf("testkit: full recovery fixture does not match the registered plan")
 	}
-	if len(fixture.AdapterParams) != 2 || fixture.AdapterParams["target"] != "phase2" {
+	if len(fixture.AdapterParams) != 2 || fixture.AdapterParams["target"] != "fixture" {
 		return fmt.Errorf("testkit: full recovery fixture adapter params are invalid")
 	}
 	if retries, ok := fixture.AdapterParams["retries"].(float64); !ok || retries != 1 {
@@ -2006,7 +2006,7 @@ func prepareReceiptTemplate(report *HarnessReport, fixture *ProtocolFixture, kin
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "adapter":
 		intent, _, err = fixture.Engine.ExecuteHostActionWithCorrelation(
-			"op.fan.transport", map[string]any{"target": "phase2", "retries": float64(1)},
+			"op.fan.transport", map[string]any{"target": "fixture", "retries": float64(1)},
 			"host-action-correlation", fingerprint)
 		if err == nil {
 			digest := strings.TrimPrefix(encoder.Digest([]byte(intent.ActionID)), "sha256:")
@@ -2085,7 +2085,7 @@ func receiptTemplate(intent protocol.HostActionIntent, provider string) map[stri
 		template["operation"] = string(intent.Operation)
 		template["adapterOperation"] = string(intent.Adapter.Operation)
 		template["params"] = intent.Adapter.Params
-		template["adapterEvidence"] = map[string]any{"identity": "phase2", "observationDigest": "sha256:phase2"}
+		template["adapterEvidence"] = map[string]any{"identity": "fixture", "observationDigest": "sha256:fixture"}
 	case protocol.HostActionTerminateAgent:
 		template["operation"] = string(intent.Operation)
 		template["lifecycleEvidence"] = map[string]any{"identity": intent.Terminate.Identity, "event": protocol.LifecycleStop}

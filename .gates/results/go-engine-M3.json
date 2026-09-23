@@ -1,0 +1,257 @@
+{
+  "unit": "M3",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T020721Z-20228",
+  "recorded_at": "2026-09-18T02:15:24.552084+00:00",
+  "overall": "PASS",
+  "overall_note": "The original PASS was withdrawn on 2026-09-17 by independent acceptance and code review; the unit then stood FAIL on two findings. The first, M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT (P1), is fixed by the repair candidate and was point-proven (5 capacity tests fail before the patch, pass after; the 8 MiB ceiling is retained). The second, M3-CUMULATIVE-WORKFLOW-NO-TERMINAL, is classified but not explained: its mechanism is reproduced deterministically (a check-side runtime error surfaces as a check-runtime interrupt, so the graph returns without a terminal), while the specific trigger of the original occurrence is unrecoverable because the failing test's job directory was deleted by its own tearDown. A fresh full acceptance on the later candidate e13176c passes all nine required items, including doctor-zcode, which had been the outstanding blocker and is now cleared by the host delivery and request-auth work. This conclusion therefore rests on that new attempt; the two attempts listed under repair_candidate.acceptance_attempt predate it and are no longer on disk (see G1a-index open item 26). REPLACED 2026-09-18 by a second full acceptance on candidate aa3312e, which is the same product source re-signed on a new candidate: the only new commit is a fix to the acceptance tooling itself, which had been recording build products and duplicated streams as evidence. That second attempt (.../acceptance/M3/20260918T020721Z-20228) also passes all nine required items and is now the attempt this record points at; evidence_file_count falls from 64 to 61 because the two ~9 MB probe binaries and the byte-identical duplicate of the go-test -json stream are no longer recorded (one attempt: 22 MB -> 2.3 MB, measured). The earlier attempt 20260918T013841Z-71218 is kept on disk and stands as an observation of that candidate, not as this record's evidence. The verdict is unchanged by the re-sign: it is the same source, and the re-sign exists only because any further commit invalidates admission against the previous candidate - the tooling fix is what moved HEAD.",
+  "withdrawn": {
+    "was": "PASS",
+    "withdrawn_at": "2026-09-17",
+    "by": "independent acceptance and code review, not by the recorded attempt's own runner",
+    "consequence": "G1b cannot close (M3 is the third of its three units) and G2a must not be treated as resting on an accepted baseline.",
+    "findings": [
+      {
+        "id": "M3-PUBLISHED-ARTIFACT-UNREADABLE-B64-LIMIT",
+        "severity": "P1",
+        "kind": "functional-regression",
+        "summary": "Read-back capacity was smaller than publication capacity. artifact-binding put the artifact body on the wire as base64, so a read request grew to about 4/3 of the artifact while every operation shares one fixed 8 MiB input ceiling. An artifact that put() accepted could therefore be unreadable, and an already published, already referenced artifact could not be read back at all.",
+        "user_visible_consequence": "Completed work could not be resumed: a worker that had written its receipt could not read it back on re-entry.",
+        "reproduction": "6.25 MiB artifact: put() succeeds, the pre-migration get() succeeds, M3's get() raises 'bridge input exceeds 8 MiB'; a real worker re-entry fails.",
+        "evidence": [
+          ".harness/validation/g1b-m3-closeout-20260917T151748Z/findings.json",
+          ".harness/validation/g1b-m3-closeout-20260917T151748Z/capacity-reconfirmation.stdout"
+        ]
+      },
+      {
+        "id": "M3-CUMULATIVE-WORKFLOW-NO-TERMINAL",
+        "severity": "blocking",
+        "kind": "unexplained-required-regression-failure",
+        "test": "test_driver.DriverTests.test_complete_failure_repair_and_inheritance",
+        "location": "runtime/langgraph/tests/test_driver.py:46-64",
+        "full_suite_tests": 174,
+        "first_full_suite_exit": 1,
+        "first_full_suite_errors": 1,
+        "observed": "The unchanged workflow test returned from the graph without a terminal key and raised KeyError('terminal') at line 54, with no check-complete, evaluate or seal before it.",
+        "classification": {
+          "class": "ESTABLISHED: a check-side runtime error surfaces through the check-runtime decision interrupt, so the graph returns with an interrupt and no terminal key. Reproduced deterministically by injecting a single fault (Store.job emits job-start then raises RuntimeBlocked), which yields an event signature identical to the retained log and the same KeyError.",
+          "trigger_site": "NOT RECOVERED. Three candidate sites (UNKNOWN_JOB, UNKNOWN_START, and the post-receipt Git validation in one_check) produce an identical observable signature, and the fixture deleted the job directory, so the retained evidence cannot distinguish them.",
+          "excluded_attributions": [
+            "the M3 base64 capacity defect: the failure is at round 0, where one_check never reads a stored artifact",
+            "environment or timeout without evidence: the UNKNOWN_START budget is a fixed 10s while the measured supervisor startup to process.json is 38ms median (about 250x margin), and the observed suite slowdown was about 9x"
+          ],
+          "not_to_be_read_as": "environmental noise, a proven new product defect, or the same base64 size defect"
+        },
+        "evidence": [
+          ".harness/validation/g1b-m3-review-20260917T054029Z/first-full-failed-test-context.log",
+          ".harness/validation/m3-repair-capacity-20260917T2330Z/mechanism-check-runtime-interrupt.json"
+        ]
+      }
+    ]
+  },
+  "repair_candidate": {
+    "status": "ACCEPTED: the repair is in the chain and a fresh full acceptance passes 9 of 9 required items. The earlier host blocker is cleared.",
+    "base_commit": "c4bac4923c0476cfbbf4379adc16efa21eb25133",
+    "commit": "f136303",
+    "worktree_dirty": false,
+    "p1_fix": "artifact-binding now takes {ref, path}. Python keeps its own read_bytes() (preserving FileNotFoundError / IsADirectoryError) and Go verifies the bytes it reads at that same path, so a read request is a fixed-size envelope independent of the artifact. The 8 MiB ceiling is retained, not removed or widened.",
+    "files_changed": [
+      "internal/harness/artifact.go",
+      "internal/harness/bridge.go",
+      "internal/harness/artifact_test.go",
+      "internal/harness/contract_test.go",
+      "runtime/langgraph/formal_gates_harness/infra.py",
+      "runtime/langgraph/tests/test_artifact_capacity_boundary.py (new)"
+    ],
+    "fix_sensitivity_proof": {
+      "method": "one worktree, one build directory, one command; the only variable is the patch",
+      "before_patch": "Ran 5 tests, FAILED (errors=5), all HarnessError: bridge input exceeds 8 MiB",
+      "after_patch": "Ran 5 tests, OK"
+    },
+    "regression": {
+      "go_vet": "exit 0",
+      "go_test_full": "exit 0, 23 packages executed, 3 with no test files, 0 FAIL, 0 cached",
+      "python_unittest": "195 tests OK in 67.6s",
+      "isolated_replay_of_the_unchanged_failing_test": "10/10 PASS",
+      "count_delta": "195 = 174 (M3 baseline) + 16 (G2a test_job_supervision_differential.py) + 5 (new capacity boundary tests); no existing test was rewritten"
+    },
+    "acceptance_attempt": {
+      "status": "ACCEPTED on a later candidate (re-signed 2026-09-18 on aa3312e: same product source, acceptance tooling fix only; evidence 22 MB -> 2.3 MB). Was: BLOCKED - 8 of 9 required items; doctor-zcode failed and no record was issued. The two earlier attempts below were reclaimed by the 2026-09-18 cleanup and are no longer on disk (G1a-index open item 26); the accepted attempt is listed first.",
+      "attempts": [
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T020721Z-20228",
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/M3/20260918T013841Z-71218 (superseded 2026-09-18 by the aa3312e re-sign; kept on disk)",
+        ".harness/validation/acceptance/M3/20260917T161012Z-57517 (--keep-going, all 9 items; reclaimed 2026-09-18)",
+        ".harness/validation/acceptance/M3/20260917T155933Z-31836 (stopped at the first failed item; reclaimed 2026-09-18)"
+      ],
+      "items_passed": [
+        "identity",
+        "go-vet",
+        "go-test-full",
+        "sqlite-probe",
+        "python-unittest",
+        "demo-fixture",
+        "doctor-dsh",
+        "doctor-zcode",
+        "tree-clean-after"
+      ],
+      "items_failed": [],
+      "blocker": "CLEARED 2026-09-18: doctor-zcode passes. Was: ZCODE_TRANSPORT: Native output closed (doctor exit 2), the ZCode app-server exiting immediately.",
+      "blocker_cause": "Both parts were on our side and both are fixed: (a) pin the built-in catalogue path by naming ZCODE_BUILTIN_PROVIDER_CONFIG_FILE and ZCODE_PERSONAL_PROVIDER_CONFIG_FILE together; (b) adapt to the 3.12.3 protocol surface and deliver the account provider configuration from the launcher, answering interaction/requestProviderRuntimeHeaders from the host's own store. doctor-zcode now reports {\"ok\": true} with model_calls 0.",
+      "attribution_withdrawn": {
+        "was": "M3-REPAIR-BLOCKED-BY-HOST-ZCODE: the host's ZCode install no longer ships the provider config, so this is not a product defect; unblock by installing a ZCode whose app-server starts.",
+        "why_wrong": "\"the artifact changed\" was established (zcode.cjs e9f1868c/12615227 vs da61b066/11416833) but \"therefore our side is fine\" does not follow: the artifact changing is exactly what makes our assumption stale. Whether a defect is ours depends on whether our closed-world assumption about the host still holds, not on whether the host changed.",
+        "same_pattern_as": "the already-retracted G2a attribution MODEL-ESCALATION-JUSTIFICATION-UNSUPPORTED - read the run's own evidence before attributing",
+        "replaced_by": "ZCODE-APP-SERVER-CATALOGUE-LOCATION-STALE (fixed) + ZCODE-APP-SERVER-PROTOCOL-SURFACE-CHANGED (open)"
+      },
+      "blocker_is_not_the_repair": "Confirmed and unchanged: the identical launch failure reproduced on three candidates built separately in their own worktrees - d71113e (the M3 candidate on which this same check PASSED), c4bac49 (pre-repair) and 9e4a622 (repaired). The Go repair (f136303) and the Go supervisor are still not involved.",
+      "fix_applied": {
+        "commit": "6757231",
+        "what": "native_zcode.capture_binding() names the bundled catalogue through ZCODE_BUILTIN_PROVIDER_CONFIG_FILE - the host's own documented input for it - only when the host's own two candidates are absent, so a host whose lookup works is untouched. No file is written to the application bundle or to ~/.zcode. The catalogue is deliberately not added to the binding's file proofs, because the host refreshes it on its own.",
+        "verified": "baseline: exit 1, no protocol emitted; with the catalogue named: alive and five startup/storageState events emitted. Point sensitivity: 3 of 4 new tests fail with the implementation reverted, 4/4 pass with it. go vet exit 0; Python suite 199 OK (195 before + 4 new).",
+        "effect_on_the_item": "moves the failure forward, it does not clear it: ./scripts/harness doctor --provider zcode now answers {\"ok\": false, \"error\": \"ZCODE_NATIVE workspace/readState: {\\\"code\\\": -32601, \\\"message\\\": \\\"Method not found: workspace/readState\\\"}\"} instead of exiting at launch.",
+        "runtime_identity_after_fix": "2b29d6d5d17520e985b0ba5b2fc9f69b5b5cb3dd57f495233b72b88bf5e80383",
+        "identity_note": "The transport is part of the runtime identity, so this source change moves it: the recorded 8/9 attempt bound 37194cd2... on 9e4a622, and HEAD (0eebcc6) now computes 2b29d6d5.... Per section 12.5 the recorded attempt therefore no longer describes the current tree; the recorded item results stand as observed for that attempt, and any re-acceptance must run on the repaired candidate and bind the identity it computes.",
+        "driver_binary_sha256_unchanged": "a4d9ac941bb8c7559f09315725545625fd4594b906768fafb138e808657eaa05",
+        "evidence": ".harness/validation/zcode-launch-20260917T163706Z/DIAGNOSIS.md"
+      },
+      "adaptation_applied": {
+        "commit": "8a06fc1",
+        "what": "Two changes. (1) native_transport.py now owns what every native transport shares - spawning one host process, the line-delimited JSON request/reply loop, the routing-only trace, answering the host's own client-directed requests, error classification, bindings, the four evidence files and session close - and an adapter supplies protocol hooks only: ident/envelope, respond, classify, notification. native_dsh.py drops its own reader, request loop, process lifecycle and binding; native_zcode.py drops its framing. Both declare the shared module in TRANSPORT_FILES, so a fix to the shared mechanics stays reviewable as a transport change for every host. (2) The ZCode transport is adapted to the 3.12.3 surface: workspace/readState is no longer called, the snapshot comes straight from session/resume or session/create, the handshake every snapshot carries is checked instead of assumed, and selection is applied only through session/setModel with persistAsWorkspaceLastUsed:false and confirmed from the host's own report. The transport no longer assembles a provider runtime config for the host.",
+        "verified": "go vet exit 0. Python suite 206 OK (199 before; +3 host-side, +4 shared-boundary). doctor --provider dsh PASSES end to end through the shared boundary, so extracting it did not change DSH behaviour. doctor --provider zcode still fails, but at a different point - see remaining_adaptation.",
+        "effect_on_the_item": "moves the failure past the protocol surface: ./scripts/harness doctor --provider zcode now answers {\"ok\": false, \"error\": \"ZCODE_CONFIG: native selected model missing\"} instead of ZCODE_NATIVE workspace/readState: -32601. The session is created, the ZCode Protocol v1 handshake passes and the settings snapshot is read; the host itself reports no selected model.",
+        "runtime_identity_after_adaptation": "cf7b0f344282ff3d70b156a652405f97b7aa0705e966f48ca742c343fbed2cb9",
+        "identity_note": "The transport is part of the runtime identity, so this source change moves it again: 2b29d6d5... (0eebcc6) becomes cf7b0f34... (8a06fc1). Per section 12.5 the recorded 8/9 attempt therefore no longer describes the current tree; its item results stand as observed for that attempt, and any re-acceptance must run on the repaired candidate and bind the identity it computes. Moved twice more since: cf7b0f34... (8a06fc1) -> b605285f... (4e3fa0e, the account provider delivery) -> 07a23099... (d2f4847, the request-auth answer). Each step was re-derived from the commit's own files and the 8a06fc1 value recomputes exactly, so the function is the harness's own runtime_identity(). The driver binary did not move across any of them: sha256 a4d9ac94... throughout.",
+        "driver_binary_sha256_unchanged": "a4d9ac941bb8c7559f09315725545625fd4594b906768fafb138e808657eaa05",
+        "evidence": ".harness/validation/zcode-protocol-3.12.3-probe/DIAGNOSIS.md"
+      },
+      "remaining_adaptation": {
+        "what": "Nothing remains for doctor-zcode: it is re-measured PASS on the current candidate (see blocker_cleared). What remained for the native ZCode path as a whole was the reverse interaction channel (interaction/requestProviderRuntimeHeaders). It is now measured to be required rather than merely assigned a unit, and the transport answers it. Measured: with the interaction refused the turn fails in the model_creation phase with no model call; with it answered a real turn completes (turn.completed, resultType success, one model request). The answer comes from the host's own provisioning index through the host's own cipher (commit d2f4847), so ZCODE_INTERACTION_REQUIRED now covers only the two interactions that really are user decisions. See scope_boundary_unchanged for the two reading errors this corrects and for what stays open.",
+        "judged_not_assumed": "The delivery is judged from the host's own answers, not from our own success: session/create reports the provider it selected and the models it advertises, and the \"entitled:false\" control returns the registry to available 0 and current null, so the fill is caused by the delivery. The revision is judged against the agent's own log line for the same launch, which matches the computed value character for character.",
+        "what_is_empty": "Unchanged and still empty by design: the built-in release contributes 20 templateRules and 8 entitlement-gated account:* providerRules, and the personal provider document has 0 rules. The selectable set is the account handoff, which is why a launcher has to make it.",
+        "impact": "doctor-zcode was a required item for every unit, so nothing could close while it failed. That specific obstacle is now removed.",
+        "determination": "Root cause established and fixed on our side: the transport never made the account provider handoff the host makes, and on the same path it bound a model without the reasoning level the host requires and dismissed a reported selection that carried options. All three are fixed; the earlier disposition (\"blocked, no code change\") is withdrawn as falsified. The unit conclusion stays FAIL for the two findings recorded above, which this work does not touch and does not claim to.",
+        "evidence": ".harness/validation/zcode-protocol-3.12.3-probe/ (DIAGNOSIS.md sections 1-8 plus deliver-provider-config.py, pinned-delivery.py, reasoning-level.py, basedon-inert.py, current-matrix.py, where-is-revision.py, desktop-contract.py, authority-mode.py, current-snapshot.py, selection-path.py, launch-contract.py, positive-control.py, positive-control-legacy.py, argv-stdio.py, provider-pair.py); runtime/langgraph/formal_gates_harness/native_zcode.py; runtime/langgraph/tests/test_native_inheritance.py; per-run .harness/probes/*/account-provider.json.; .harness/validation/zcode-protocol-3.12.3-probe/CLI-SURFACE.md (CLI surfaces, and why the CLI cannot carry the host handoff); .harness/validation/zcode-protocol-3.12.3-probe/decrypt-credential.cjs and runtime/langgraph/formal_gates_harness/zcode_credential.mjs (the host cipher is local, so the launcher can supply the request auth without a keychain); .harness/validation/zcode-protocol-3.12.3-probe/product-path-turn.py (one real turn through this transport, not a probe client)"
+      },
+      "disposition": "The recorded 8/9 stands exactly as recorded and is not rewritten. doctor-zcode is no longer the blocker: it is re-measured PASS on the current candidate with model_calls 0 (see blocker_cleared), so it must not be relabelled NOT_APPLICABLE and the missing result must not be read as PASS. The repair candidate stays UNACCEPTED, because M3's own two recorded findings - the P1 base64 read-back capacity regression and the unexplained cumulative full-regression error - are untouched by this work and still stand.",
+      "evidence": [
+        ".harness/validation/m3-repair-capacity-20260917T2330Z/doctor-zcode-block.md (sections 1-2 still valid, section 3 attribution superseded)",
+        ".harness/validation/zcode-launch-20260917T163706Z/",
+        ".harness/validation/zcode-protocol-3.12.3-probe/",
+        ".harness/validation/zcode-protocol-3.12.3-probe/DELIVERY-RESOLUTION.md (this resolution, with the reproduction and the negative control)"
+      ],
+      "blocker_cleared": {
+        "recorded": "2026-09-18",
+        "item": "doctor-zcode",
+        "result": "PASS",
+        "command": "./scripts/harness doctor --provider zcode",
+        "observed": "{\"ok\": true} with model_calls 0, selection model {\"modelId\":\"GLM-5.3\",\"providerId\":\"account:bigmodel-individual-coding-plan\"} and reasoning_effort \"max\"; the binding names both provider-configuration variables. The same command with an explicit --model reports the same shape.",
+        "earlier_conclusion_withdrawn": "\"doctor-zcode cannot pass by configuring anything on this machine ... no code change is made\" is withdrawn. It is falsified by measurement, not by argument: the delivery it called unavailable is a client-to-agent protocol method this launcher can send itself, and every input it needs is readable from the host's own files. Nothing was installed, no permission was granted, no credential was read and no host configuration was modified; the probes wrote only inside .harness, and the repair itself changes only the development driver sources under runtime/langgraph/ together with this record.",
+        "root_cause": "The app-server keeps no provider registry of its own: it starts with an empty account source and the account provider configuration arrives as the provider/updateAccountConfig call the host normally makes after provider/model readiness. This launcher never made that call, so session/create answered settings.model={\"current\": null, \"available\": []} and the transport refused rather than inventing a selection. The earlier attribution to host account state stays withdrawn; the missing piece was on our side, and it was a missing protocol step, not an installation or an authorization.",
+        "revision_rule": "The delivered basedOnZCodeBuiltinRevision must equal the agent's own resolved revision exactly: ProviderRegistryService abandons its refresh when o.basedOnZCodeBuiltinRevision !== n.zcodeBuiltinRevision (zcode.cjs, ProviderRegistryService.#v), so a delivery that is even slightly off is discarded in silence. That revision is \"zcode-builtin:\" + the catalogue's revision + \":\" + sha256(path.resolve(activeCatalogue)); the hash is of the resolved path, not of the contents. Verified by computing it and matching the agent's own log: computed zcode-builtin:28:8f54ff88... equals the zcode_protocol.provider_registry.ready accountRevision the agent logged for the same launch (pinned-delivery.py). The same rule explains the three hashes seen earlier: c1a2fc01... is our previous spawn at ~/.zcode/v2/runtime/provider/darwin-aarch64/0.0.0-dev/endpoint-78d7c3be.../zcode-builtin.json, a7b54955... is the desktop host at the same path under 3.12.3, and 8f54ff88... is the bundle's own catalogue path.",
+        "ownership": "The app-server's bootstrap rewrites ZCODE_BUILTIN_PROVIDER_CONFIG_FILE to a path it derives unless ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is named too, which is why the previous fix moved the failure forward without making the catalogue the launcher's. Naming both pins the path, and only then can the launcher know the revision at all.",
+        "provisioning_index": "Which account providers the host can use is read from the key names of ~/.zcode/v2/credentials.json (account-provider:coding-plan:<provider>:account:<identity>:api-key) and matched against the catalogue's declared account rules. Values there are encrypted secrets and are never read. This host's index holds exactly two, which is the same providerCount 2 the desktop host reports for the same account. The same index is what the client is asked for later: before every model request the app-server calls interaction/requestProviderRuntimeHeaders and needs the credential for the provider it is about to use (see scope_boundary_unchanged).",
+        "preferred_provider": "The plan the host itself selected is read from ~/.zcode/v2/setting.json (providerFamilyDomain plus the family's connection kind) and matched to a provider on the catalogue's own declared accountType and mode, never on the spelling of an id. With no --model the doctor now binds account:bigmodel-individual-coding-plan, the same plan the desktop app itself uses, instead of whichever provider the credential file lists first.",
+        "negative_control": "The fill is caused by the delivery, not by anything else: the same call with entitled false returns the registry to available 0 and current null (deliver-provider-config.py, attempt D).",
+        "second_and_third_defects": "Two further defects on the same path were unreachable until the registry was filled, and both are fixed. (1) session/setModel takes an object and refuses one whose options.reasoningLevel is absent, and the level must be one of that model's advertised values; the transport now binds the requested effort when one was asked for and the host's own advertised default otherwise (available[].reasoning.defaultLevel, falling back to the first advertised value, mirroring the host). The string form is not an option: the protocol schema rejects it with \"model: Invalid input: expected object, received string\" (reasoning-level.py). (2) selected_model() required a reported current to be exactly {providerId, modelId}, but a configured host reports it with the bound options, so a host that had a selection was read as having none.",
+        "scope_boundary_unchanged": "This clears the probe item only, which makes 0 model calls, so it does NOT show that a real turn completes. An earlier revision of this field said a real turn still needs the reverse interaction channel; that was then corrected to \"unmeasured rather than established\", and the correction is now itself falsified by measurement. Corrected reading: in host mode the app-server's provider runtime headers port (bundle: createProviderRuntimeHeadersPort) reports shouldRefreshBeforeModelRequest() true unconditionally, so before every model request the app-server asks its client for the request auth and abandons the turn when the reply lacks headersApplied/requestAuth. The claim that the method occurs in the bundle once, as a protocol-table name, with no client-side sender, was a search miss: the sender is that port, and its response is a strict union discriminated on headersApplied. Measured both ways: answering -32601 fails the turn in the model_creation phase with no model call, and answering per the contract reaches turn.completed with resultType success. Implemented: the transport answers it from the same provisioning index the account overlay is built from, through the host's own cipher (zcode_credential.mjs: sha256 of a fixed fallback string, aes-256-gcm, no keychain and no user decision), so it no longer refuses the interaction; a provider with no provisioned credential is reported as headersApplied false rather than invented. Proved through this transport and not through a probe: one real turn completes with answer.raw.txt {\"ok\": true} and interaction-status.json provider-runtime-headers-applied. Two model calls were spent in total, on the owner's explicit instruction to make ZCode really work end to end, which overrides the section 12.5 default. Credential values are now read, which the earlier wording explicitly denied; only this account's own provisioned value is read, and it never enters evidence, because Client.answer records the method and the status only. Still open: standalone mode (the --prompt/TUI path, which reads credentials through its own port and needs no client at all) is unreachable on this machine, because the store holds no account-provider:<id>:identity record that standalone entitlement requires, so a standalone registry comes up unentitled and the turn stops at \"Select a model before continuing\"; only standalone login writes that record. Nothing about DSH is measured by this.",
+        "evidence": [
+          ".harness/validation/zcode-protocol-3.12.3-probe/deliver-provider-config.py (delivery accepted; entitled:false negative control returns the registry to empty)",
+          ".harness/validation/zcode-protocol-3.12.3-probe/pinned-delivery.py (computed revision equals the agent-logged revision; baseline 0 -> 2 models)",
+          ".harness/validation/zcode-protocol-3.12.3-probe/reasoning-level.py (object without options refused; advertised levels accepted; string form rejected by the schema)",
+          ".harness/validation/zcode-protocol-3.12.3-probe/basedon-inert.py and current-matrix.py (a mismatched basedOnZCodeBuiltinRevision is accepted with status received and still changes nothing, which is why the check has to be read in the code and not inferred from the reply)",
+          ".harness/probes/<uuid>/account-provider.json, written per run, naming the catalogue, the base revision, the delivered providers and which of them is current",
+          "runtime/langgraph/tests/test_native_inheritance.py AccountProviderConfiguration and ReasoningLevelBinding classes"
+        ]
+      }
+    },
+    "evidence_dir": ".harness/validation/m3-repair-capacity-20260917T2330Z",
+    "classification_document": ".harness/validation/m3-repair-capacity-20260917T2330Z/CLASSIFICATION.md"
+  },
+  "previous_accepted_baseline": "M2",
+  "candidate": {
+    "commit": "aa3312e6f3a976d65a90393ddb6c2c1c2c91d61b",
+    "branch": "codex/go-engine-v1",
+    "runtime_identity": "448f3a524f9973c99bc9711d6ba38ab5e1d6402d80c244ac616a03982d234e15",
+    "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    }
+  },
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "status": "PASS",
+      "seconds": 1.03
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.472
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "status": "PASS",
+      "seconds": 380.417
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.919
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "status": "PASS",
+      "seconds": 87.989
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "status": "PASS",
+      "seconds": 4.019
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.917
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.871
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.051
+    }
+  ],
+  "budget": {
+    "go_test_backstop_timeout": "60m",
+    "stall_budget_seconds": 240.0,
+    "note": "The regression is judged by result and progress, not by wall-clock speed."
+  },
+  "attestation": {
+    "summary_sha256": "053e06118586068fd3bc4c180dae6613eb55eaa33bc12724d22d913513913024",
+    "identity_sha256": "c2fa09f77b216b040507e256bd3483c6f4ad14de84f73b169ffb15e385ca8c8c",
+    "evidence_sha256": "932ece09d2aaaac6b9a2c963175254d2a39afa4011b529dc9d762c522ceccf51",
+    "evidence_file_count": 61
+  },
+  "bookkeeping": [
+    ".gates/results/go-engine-M3.json",
+    ".gates/results/go-engine-M3.md",
+    ".gates/results/go-engine-G1a-index.md"
+  ],
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit M3"
+}

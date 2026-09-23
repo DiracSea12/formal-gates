@@ -1,0 +1,162 @@
+{
+  "unit": "G2a",
+  "attempt": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-go-engine/.harness/validation/acceptance/G2a/20260919T030504Z-85326",
+  "recorded_at": "2026-09-19T03:13:17.286386+00:00",
+  "overall": "PASS",
+  "previous_accepted_baseline": "M3",
+  "candidate": {
+    "commit": "df33e9c73acdbcdf584f449bfdb299f39c2b087f",
+    "branch": "codex/go-engine-v1",
+    "runtime_identity": "017ea1db64a3ab0b8075c459b6430c574cf3341cc8a24681fa3093d42093dbec",
+    "driver_binary_sha256": "5bd9e2438443a0bc5e4a63c9dd9e7c10923ecfe5421b3249240131ffc11bdf51",
+    "files": {
+      "go.mod": "7d9e7bf736817b5dc75d1058f3c321b4d395f1c0bad8350a38010edc6e57a54d",
+      "go.sum": "e8646b9c00e7e0dcd80a15165567dff7fa358f35898797382b849d6ed3e21952",
+      "runtime/langgraph/requirements.lock": "30e152b649431d135d8fe8b33bd4299b2548cb2972568c9902003ff6c3ef4f81",
+      "runtime/langgraph/pyproject.toml": "86574bb4b4126cf2158001dda2a63111b7883d1a8e28edd0e1b8482201ab1874",
+      "prompts/reviewer-base.md": "fe183fffbce1ac4d8310ff76ea5c2fc24a7b66f6aa4a0fb00acd84d3891405fa",
+      "scripts/harness": "1c93b5abdcc8d61e3659ed7ecfefdf521aea2277134ca8eaf79cccfc801e3cc6"
+    }
+  },
+  "items": [
+    {
+      "id": "identity",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.405
+    },
+    {
+      "id": "go-vet",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.425
+    },
+    {
+      "id": "go-test-full",
+      "required": true,
+      "status": "PASS",
+      "seconds": 402.531
+    },
+    {
+      "id": "sqlite-probe",
+      "required": true,
+      "status": "PASS",
+      "seconds": 3.231
+    },
+    {
+      "id": "python-unittest",
+      "required": true,
+      "status": "PASS",
+      "seconds": 79.159
+    },
+    {
+      "id": "demo-fixture",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.84
+    },
+    {
+      "id": "doctor-dsh",
+      "required": true,
+      "status": "PASS",
+      "seconds": 1.821
+    },
+    {
+      "id": "doctor-zcode",
+      "required": true,
+      "status": "PASS",
+      "seconds": 2.455
+    },
+    {
+      "id": "tree-clean-after",
+      "required": true,
+      "status": "PASS",
+      "seconds": 0.037
+    }
+  ],
+  "budget": {
+    "go_test_backstop_timeout": "60m",
+    "stall_budget_seconds": 240.0,
+    "note": "The regression is judged by result and progress, not by wall-clock speed."
+  },
+  "attestation": {
+    "summary_sha256": "34cba31dd6162cbc0553ff8ea3e8b3068f5d34c3037defc2f314202b7b72b5c5",
+    "identity_sha256": "ced8d46ecbfec71911c0c2f3146c0098df2f5378c5e4dcd1b8884a003b361293",
+    "evidence_sha256": "c614abcd56aa4cc9b470ea3985195d26e4246f70ec031d7a4b93f11b2324df65",
+    "evidence_file_count": 61
+  },
+  "bookkeeping": [
+    ".gates/results/go-engine-G2a.json",
+    ".gates/results/go-engine-G2a.md",
+    ".gates/results/go-engine-G1a-index.md"
+  ],
+  "run_command": "python3 scripts/go-engine/acceptance.py --unit G2a",
+  "overall_note": "Sixth whole re-sign, completing the gate-mandated sequence after the final review round (g2a-final-windows-review-20260918T232706Z): G2a repair PASS and code review PASS; progression was held only by a pre-existing M2 Windows baseline defect (TestGuardPreviewBinary built its on-the-fly CLI without the .exe suffix; byte-identical back to dfa23e7, invisible to non-Windows validation). Fixed on 106343d, the M2 baseline re-verified PASS on that candidate (attempt 20260919T025611Z-60452, record re-signed), and this run re-took the cumulative G2a exit gate on the resulting candidate. Runtime identity unchanged (017ea1db); the fifth authorized native run re-binds; no new model calls.",
+  "native_verification": {
+    "required": true,
+    "status": "PASS",
+    "authorized": "2026-09-18, explicit user direction. Verbatim basis: \"这样吧，现在你是 Zcode 平台，那就做 Zcode 接入吧，Workbody 先不做了。你自己就是 Zcode 平台，那进入 Zcode 测试应该是零成本吧？\" and, after the Edit approval boundary was reported together with the finding that no host-side configuration lever exists: \"我们现在这个对话本身就已经是完全访问权限了，你还要我怎么做呢？\". The resulting contract: NEW dev/repair sessions declare the operator unattended mode once before the first turn; resumed sessions are never switched and record the mode the host reports; nothing is changed in reaction to prompts, timeouts or failures; read-only sessions and probes never set a mode. FINAL CONFIRMATION, verbatim, 2026-09-18: \"无头的这种没有办法让用户选择的可yolo，其余的先不吧\" — headless sessions with no path to a user decision may run yolo (the NEW dev/repair pre-turn declaration); nothing else: resumed sessions are never switched and record the mode the host reports, read-only sessions and probes never set a mode.",
+    "evidence_dir": ".harness/validation/zcode-native-fifth-20260918T081304",
+    "run": ".harness/runs/harness-20260918-161308-6e657186",
+    "report": "zcode-flow/report.json",
+    "command": ".harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider zcode --out <evidence_dir>/zcode-flow",
+    "provider": "zcode",
+    "host_version": "ZCode 3.12.3 desktop bundle (zcode.cjs app-server)",
+    "model": "account:bigmodel-individual-coding-plan / GLM-5.3",
+    "flow_status": "HARNESS_COMPLETE",
+    "roles_completed": 7,
+    "interrupts": 0,
+    "duration_s": 556.1,
+    "completion_linkage": "All seven jobs ran under the Go supervisor (store.job -> \"harness supervise\"): each job's process.json pid equals the native child's pgid, so the supervisor is the process-group leader, and every exit.json receipt records exit_code 0 with stream proofs. Per-role worker receipts verify against the store.",
+    "read_only_boundary": "Read-only roles' native events contain only Read/Glob/Grep calls; side-effect tools appear exclusively in the development job. The dev session's tool-policy.json records permission_mode from the host's own settings readback, not from a constant.",
+    "raw_evidence_gate": "Since 187d1e4 the named probe scripts/go-engine/native_evidence_probe.py walks what seal() itself verifies before certifying: every worker receipt AND every check/gate reference the terminal artifact depends on (spec-required ids compared), through Store.verify_evidence under the open_run binding, plus the terminal readback. Since e7fa6f4 the controls anchoring these refusals run on a generated disposable fixture (positive control first, then selective damage, finally removal) and the official run is asserted untouched (ADM-E19).",
+    "provider_choice": "The contract requires carrying the fixed native transport and names no host (\"承载固定的原生传输；不同时更换宿主协议\"). The zcode adapter changes in this chain are post-unit common prerequisites explicitly authorized by the user (d7a687c source-receipt persistence; 2d36375 mode declaration; 91255c6/fa44747/187d1e4/e7fa6f4 review fixes: honest mode evidence, deadline enforcement, clean-tree test build, admission native gate), in the precedent of 6757231/8a06fc1/4e3fa0e/d2f4847; the supervisor, the native-request.json shape, interaction delivery and verify_source are unchanged.",
+    "history": [
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "7/7 PASS, HARNESS_COMPLETE (candidate 2d363757); record later rejected by the independent review round for defects outside the native run itself",
+        "evidence": ".harness/validation/zcode-native-third-20260918T053817"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "BLOCKED at session start by the new strict readback: the real host confirms setMode through settings, its projection block was a stale snapshot; the fake-server fixtures mirrored the wrong shape",
+        "evidence": ".harness/validation/zcode-native-fourth-20260918T080409"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "7/7 PASS, HARNESS_COMPLETE on this candidate; this record binds this run",
+        "evidence": ".harness/validation/zcode-native-fifth-20260918T081304"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "binding unchanged; the second review round rejected the gate and the test compile, not the run; third re-sign re-binds this same run on fa44747 (runtime identity 017ea1db unchanged)",
+        "evidence": ".harness/validation/g2a-repair-review-20260918T091325Z"
+      },
+      {
+        "date": "2026-09-18",
+        "provider": "zcode",
+        "outcome": "binding unchanged through the third review round; fourth re-sign re-binds this same run on 187d1e4 (runtime identity 017ea1db unchanged)",
+        "evidence": ".harness/validation/g2a-raw-evidence-review-20260918T103345Z"
+      },
+      {
+        "date": "2026-09-19",
+        "provider": "zcode",
+        "outcome": "binding unchanged through the fourth review round; fifth re-sign re-binds this same run on e7fa6f4 (runtime identity 017ea1db unchanged)",
+        "evidence": "fourth review round (controls reliability)"
+      },
+      {
+        "date": "2026-09-19",
+        "provider": "zcode",
+        "outcome": "binding unchanged through the final review round and the M2 baseline re-verification; sixth re-sign re-binds this same run (runtime identity 017ea1db unchanged)",
+        "evidence": "final Windows review round; M2 re-verification record"
+      }
+    ],
+    "supervisor_half_proven": "Go unit case \"same request differing only in kind\" (the supervisor never reads kind) plus the seven supervised native jobs above with owner locks, receipts and stream proofs.",
+    "missing_for_acceptance": [],
+    "blocker": null
+  }
+}
