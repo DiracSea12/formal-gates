@@ -576,3 +576,28 @@ NecessaryReaders 关库注入）；latestOutcome **可替代保留**（停驻结
 **K5 冻结**。残留如实：CI 变更需推送后 Actions 实证（分支无远端）；Windows 仅编译＋语义映射、无真
 机；性能无规模基准（不声称无瓶颈）；admit 534 行/Install 496 行为阅读成本线索非缺陷（八审定
 位），后续按需小步理顺。
+
+## 九审与记录更正（round 39，2026-09-23）
+
+九审（/private/tmp/k5-quality-review3/review.md，冻结后复核 6f5374c）：**PASS、无 P0/P1**，但指出
+round 38 记录两处不实，现更正：①"三对象判定到位"应为"第三项（隐式错误契约）部分到位"（八审原
+话）；②"两遗留收口"应为"旧漏报已关，但 P2 修法（目录枚举）新增误拦截、P3 错误传播缺列举环"。
+
+本轮收敛（单代理，定向验证，未跑全量——机主效率指令）：
+- **P2 误拦截（净删除：vcs.go 13+/42−）**：git status 改 `--untracked-files=all` 让 Git 自行展开未
+  跟踪文件，折叠条目形态消失；gatesHoldsOnlyRuntimeChildren、折叠枚举分支、repoRoot 参数、os/
+  path/filepath import 全部删除；运行期过滤回归纯逐路径（单源清单）。新增真实 Git 用例
+  TestSnapshotDirtyCheckFollowsGitIgnoreRules（被忽略本地笔记放行＝P2 复现场景、未忽略非运行期文
+  件拦截、仅运行期锁放行）＋手写逐路径用例；旧枚举语义测试随实现删除（非弱化：三个拦截方向全部保
+  留锚定）。
+- **P3 列举环**：disposedTasks 改 ([]string, error)（"不可读清单是错误，绝不是空集合"）；列举失
+  败经 route/unplacedDisposition 传播，classify 两分支 StatusFailed 映射接通即生效；唯一容忍点
+  progressed（旋转守卫非决策读取，与同函数既有容忍同契）理由写在调用点；closed-store 测试扩展覆
+  盖列举失败路径（并更正其旧文档的不实陈述）。
+- 亲验：净删除 grep 证零残留、两新用例主代理亲跑绿（3.7s/0.4s）；代理定向验证＝validate 两批
+  （5.7s＋qastructure 0.9s）＋harness 定向 30.3s＋vet/gofmt/diff-check。
+
+**冻结后遗留的真实账目（以此为准）**：旧 P2 关闭＋新 P2 关闭＋P3 列举环关闭；latestOutcome 为注释
+收拢非行为修复（九审明示）；Windows 仍无真机；CI 待推送实证；无规模性能基准；admit 534 行/
+Install 496 行为阅读成本线索非缺陷。验证方法注记：本轮起小改动按改动面定向验证，全仓/race 仅限
+横切多包或架构级改动（机主 2026-09-23 指令）。
