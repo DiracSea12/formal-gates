@@ -513,3 +513,36 @@ validate 402.9s）＋coordination/persistence/runner race 绿＋windows/amd64 �
 
 **残留如实**：Windows 分支仅编译＋语义映射核对，无真机运行（评审边界同）；AGENTS.md 本轮出现机主
 授权的主代理并发编辑（start-readiness 判据绑定），代理正确未回退。
+
+### 真实验收与 CI 补差（round 37 续，2026-09-23，机主授权真实调用）
+
+**真实宿主绿链（机主逐次授权"真实的跑 zcode"）**：
+- 第一次：5 真实 turn（development/product-review[DSH]/qa-design/technical-review 全过且被接纳，
+  各阶段模型真实核验工作区/git 基线/检查覆盖）＋2 原生 permission 交互；qa-review turn-01 被拒——
+  模型输出重复 JSON 字段 findings，按参考 infra.read 语义拒绝（专测在案），产生正确运行时问询
+  （选项 retry/restart-session/abort、内核 allow=retry）——**引擎判定全对；死因在验收驱动器**：其
+  应答词表（approve/continue/restart-session）写于运行时问询分类存在之前，不认识 retry，按有界花费
+  折成 abort。七轮零真实调用使该缺口从未暴露。
+- 驱动器修复（子代理＋亲验）：词表加 retry、每运行至多一次重试预算（镜像 extraRounds）、
+  restart-session 仅在无更前放行词时选用（原扫描 last-match-wins，不加此守卫 restart-session 仍会
+  压过 retry）；有界花费语义不变。harness 全包 355.9s 绿。
+- 第二次：**PASS**——HARNESS_COMPLETE＋物理归档（ARCHIVED，275 文件），204.6s，7 真实 turn（含
+  qa-review 干净通过、complexity-gate 真实读 comparison.json/full.diff、seal×2），零额外返修零重试。
+  两次合计 12 真实 turn＋4 permission 交互＋2 确认，全部会话身份留存于运行目录。
+
+**CI 补差（对照 portable-validation.yml 逐行补跑本机缺项）与三处修复（子代理＋亲验）**：
+- `-tags=integration`：绿（380.3s）。`-race validate`：默认 10 分钟超时 panic；`-timeout 30m` 重跑
+  绿（920.5s）——纯工具超时；CI race 步本无 GOFLAGS 超时（潜在同款），已补 `-timeout=20m`。
+- `-tags=qastructure`：三组失败。定性：TestPackageReceiptDeterminismAndIsolation 为**存量死测试**
+  （二分证 15b537a 即败；夹具假 .git 遇真 git ls-files exit 128，自 430945a 引入 git 分支起从未成立；
+  CI 从不跑该标签）——修夹具为真实 git 仓库（.gitignore 自忽略沙盒实测），断言原强度；另两组＋
+  同根因全扫（installAssertNoTransactionArtifacts/faultAssertNoInstallResidue 家族 20+ 子测）为 flock
+  回归——持久锁工件 vs"零残留"断言，按"运行期工件"语义修：被拒准入断言改枚举式白名单（严格强于
+  原布尔）、故障矩阵残留 glob 豁免锁文件并**新增两条正向检查**（Lstat 良构＋acquireInstallLock
+  立即可获取＝事务真释放）。CI 增加 qastructure 步（镜像 integration 形态）。
+- 额外发现并修：TestStableHelpAndDocs… 的复制夹具跳过清单漏 .harness（本地 venv 符号链接致环境性
+  失败；生产 PackageReceipt 本就排除），补齐并注明对照。
+- **亲验假红教训（如实入账）**：我的干净副本配方漏建 bin/（admission 测试要求源树含已建 launcher，
+  CI 先建后测）→ 副本环境性 FAIL 一次；对照实验（开发目录同跑绿）＋bin 构建后副本 tagged
+  412.2s/untagged 348.4s 双绿。配方教训入记忆：交付等同副本＝排除历史副本＋预建 launcher。
+- 残留如实：CI 变更无法本地执行（分支无远端），需推送后由 Actions 实证；Windows 真机仍待机主门。
