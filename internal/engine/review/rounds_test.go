@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -171,13 +172,24 @@ func TestAppendAuthorizationRequiresReasonAndBindsFirstDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 用户每次只授权恰好一轮：存在未占用授权时不得预先累计下一轮。
+	if _, err := AppendAuthorization(set, runID, ProductReview, "operator asks again", "dispatch-2"); err == nil || !strings.Contains(err.Error(), "unconsumed extra-round authorization") {
+		t.Fatalf("accumulating an unconsumed authorization was accepted: %v", err)
+	}
+	series, _ := set.Series(ProductReview)
+	firstID := series.Authorizations[0].ID
+	set, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1", AuthorizationID: firstID}, Result{Status: "PASS"}, verifiedByOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 占用后可再授权下一轮：身份随序号区分、绑定各自的派发。
 	set, err = AppendAuthorization(set, runID, ProductReview, "operator asks for more evidence", "dispatch-2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	series, _ := set.Series(ProductReview)
+	series, _ = set.Series(ProductReview)
 	first, second := series.Authorizations[0], series.Authorizations[1]
-	if first.ID == second.ID || first.DispatchIDs[0] != "dispatch-1" || second.DispatchIDs[0] != "dispatch-2" {
+	if first.ID != firstID || first.ID == second.ID || first.DispatchIDs[0] != "dispatch-1" || second.DispatchIDs[0] != "dispatch-2" {
 		t.Fatalf("authorization identity or first binding is wrong: %#v", series.Authorizations)
 	}
 	if err := Validate(runID, set); err != nil {
@@ -248,6 +260,149 @@ func TestAuthorizationEndorsesAtMostOneValidResult(t *testing.T) {
 	if err := Validate(runID, set); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRemainingCapacityAdmitsOnlyWhatTheLedgerBacks：remaining 必须与准入
+// 规则一致——自动轮被整轮失效回收后，completed 回到自动上限内但授权仍被
+// 占用时，下一轮依旧需要新授权，remaining 不得显示还有免授权空位。期望值
+// 全部按账本事实独立写出，不经生产投影函数。
+func TestRemainingCapacityAdmitsOnlyWhatTheLedgerBacks(t *testing.T) {
+	runID := "run-remaining"
+	set := NewSet()
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 2 {
+		t.Fatalf("after one automatic round remaining = %d, want 2", series.RemainingCapacity)
+	}
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-2", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	set, third := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-3", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	// 三个自动轮完成、无授权：remaining 0，下一轮须用户决定。
+	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("exhausted automatic capacity = %+v", series)
+	}
+	var err error
+	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required", "dispatch-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 空槽授权可立即使用：remaining 1。
+	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 1 || series.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" {
+		t.Fatalf("granted capacity = %+v", series)
+	}
+	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
+	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 0 || series.Completed != 4 {
+		t.Fatalf("authorized round did not consume its slot: %+v", series)
+	}
+	// 关键态：失效一个自动轮（历史轮，不碰授权轮）——completed 3、授权仍
+	// 占用、无空槽：准入要求新授权，remaining 必须是 0 而不是 1。
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: third.DispatchID, ResultDigest: third.ResultDigest, RequirementRevision: third.RequirementRevision,
+		Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "the round was misrecorded", Source: "user", UserAuthorized: true,
+	})
+	series := mustSeries(t, set, ProductReview)
+	if series.Completed != 3 || series.CurrentLimit != 4 || series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("recycled automatic round inflated remaining: %+v", series)
+	}
+	// remaining=0 与准入互证：无新授权的第五轮必须被拒。
+	_, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-5", RequirementRevision: "rev-1"}, Result{Status: "PASS"}, verifiedByOperator())
+	if err == nil || !strings.Contains(err.Error(), "automatic round limit") {
+		t.Fatalf("a round without capacity or authorization was accepted: %v", err)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTransformsKeepTheCallerInputSetImmutable：四个账目变换都是值进值出——
+// 变换后输入 Set 逐字节不变且仍通过完整性校验（调用方输入账本不可被内核
+// 改写）。
+func TestTransformsKeepTheCallerInputSetImmutable(t *testing.T) {
+	runID := "run-immutable"
+	snapshot := func(t *testing.T, set Set) string {
+		t.Helper()
+		data, err := json.Marshal(set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	assertUntouched := func(t *testing.T, input Set, before string, transform string) {
+		t.Helper()
+		if after := snapshot(t, input); after != before {
+			t.Fatalf("%s mutated the caller input set", transform)
+		}
+		if err := Validate(runID, input); err != nil {
+			t.Fatalf("input set no longer validates after %s: %v", transform, err)
+		}
+	}
+
+	// 授权轮已被占用：再授权与 finding 级纠正都不得改写输入。
+	occupied := NewSet()
+	for round := 1; round <= 3; round++ {
+		occupied, _ = mustRecord(t, occupied, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	}
+	var err error
+	occupied, err = AppendAuthorization(occupied, runID, ProductReview, "fourth round required", "dispatch-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizationID := mustSeries(t, occupied, ProductReview).Authorizations[0].ID
+	occupied, fourth := mustRecord(t, occupied, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory concern"}}})
+
+	before := snapshot(t, occupied)
+	_, err = AppendAuthorization(occupied, runID, ProductReview, "fifth round required", "dispatch-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUntouched(t, occupied, before, "AppendAuthorization")
+
+	before = snapshot(t, occupied)
+	_, err = ApplyCorrection(occupied, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: fourth.DispatchID, ResultDigest: fourth.ResultDigest, RequirementRevision: fourth.RequirementRevision,
+		FindingID: fourth.Findings[0].ID, Decision: "CONFIRM", Reason: "user confirms the advisory", Source: "user", UserAuthorized: true,
+		ExpectedEffectiveRevision: mustSeries(t, occupied, ProductReview).Effective.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUntouched(t, occupied, before, "ApplyCorrection")
+
+	// 未占用授权上的派发重绑与授权候选记录：授权账本的元素写回不得落进
+	// 调用方的底层数组。
+	sparse := NewSet()
+	for round := 1; round <= 3; round++ {
+		sparse, _ = mustRecord(t, sparse, runID, StartReadiness, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	}
+	sparse, err = AppendAuthorization(sparse, runID, StartReadiness, "retry needs a fresh dispatch", "dispatch-4a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sparse, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before = snapshot(t, sparse)
+	_, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUntouched(t, sparse, before, "BindDispatch")
+
+	before = snapshot(t, sparse)
+	_, _, err = RecordCandidate(sparse, runID, StartReadiness, Dispatch{ID: "dispatch-4b", RequirementRevision: "rev-1", AuthorizationID: authorizationIDOf(sparse, StartReadiness)}, Result{Status: "PASS"}, verifiedByOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUntouched(t, sparse, before, "RecordCandidate")
+}
+
+func authorizationIDOf(set Set, action Action) string {
+	series, ok := set.Series(action)
+	if !ok || len(series.Authorizations) == 0 {
+		return ""
+	}
+	return series.Authorizations[0].ID
 }
 
 func TestDuplicateResultDigestIsRejected(t *testing.T) {

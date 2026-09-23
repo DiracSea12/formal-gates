@@ -402,6 +402,67 @@ func TestUpstreamBlockingStalesStartReadinessOneWay(t *testing.T) {
 	}
 }
 
+// TestUpstreamVoidHoldsPendingUntilANewRoundRebuildsIt：产品审纠正把
+// PASS 变阻塞后，start-readiness 的上游失效是持久事实——后续对该 series
+// 的 finding 级纠正与整轮失效都不得把 effective 复活为 PASS；只有记录
+// 新一轮 candidate 才清除失效并重建自身结论。
+func TestUpstreamVoidHoldsPendingUntilANewRoundRebuildsIt(t *testing.T) {
+	runID := "run-upstream-void"
+	set := NewSet()
+	set, product := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-product", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory defect"}}})
+	set, readiness := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	if series := mustSeries(t, set, StartReadiness); series.Effective.Status != "PASS" || series.UpstreamVoid {
+		t.Fatalf("advisory-only readiness must start effective PASS without void: %#v", series.Effective)
+	}
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: product.DispatchID, ResultDigest: product.ResultDigest, RequirementRevision: product.RequirementRevision,
+		FindingID: product.Findings[0].ID, Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the defect blocks the documented entry path",
+		Reason: "upgrade to blocking", Source: "user", UserAuthorized: true,
+	})
+	series := mustSeries(t, set, StartReadiness)
+	if series.Effective.Status != "PENDING" || !series.UpstreamVoid {
+		t.Fatalf("upstream correction did not void start-readiness: %#v", series.Effective)
+	}
+	voidedDigest := series.Effective.ResultDigest
+	impact := downstreamImpact(StartReadiness)
+
+	// finding 级纠正：重投影本会把驳回项变 PASS，失效事实必须压住它。
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: StartReadiness, DispatchID: readiness.DispatchID, ResultDigest: readiness.ResultDigest, RequirementRevision: readiness.RequirementRevision,
+		FindingID: readiness.Findings[0].ID, Decision: "DISMISS", Reason: "concern retracted under the void", Source: "user", UserAuthorized: true,
+	})
+	series = mustSeries(t, set, StartReadiness)
+	if series.Effective.Status != "PENDING" || series.UpstreamVoid != true || series.Effective.ResultDigest != voidedDigest {
+		t.Fatalf("finding correction revived the voided PASS: %#v", series.Effective)
+	}
+	if len(series.Effective.BlockingFindingIDs) != 0 || len(series.Effective.AdvisoryFindingIDs) != 0 || !slices.Equal(series.Effective.DownstreamImpact, impact) {
+		t.Fatalf("held effective retained projections or lost its impact table: %#v", series.Effective)
+	}
+
+	// 整轮失效：投影同样保持 PENDING，只推进代数。
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: StartReadiness, DispatchID: readiness.DispatchID, ResultDigest: readiness.ResultDigest, RequirementRevision: readiness.RequirementRevision,
+		Decision: "INVALIDATE_RESULT", Invalidity: "STALE", Reason: "the round predates the upstream correction", Source: "user", UserAuthorized: true,
+	})
+	series = mustSeries(t, set, StartReadiness)
+	if series.Effective.Status != "PENDING" || !series.UpstreamVoid || series.Completed != 0 {
+		t.Fatalf("whole-result invalidation mishandled the void: status=%s void=%v completed=%d", series.Effective.Status, series.UpstreamVoid, series.Completed)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+
+	// 新一轮 start-readiness：重建自身结论，失效清除、effective 复活。
+	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness-2", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	series = mustSeries(t, set, StartReadiness)
+	if series.UpstreamVoid || series.Effective.Status != "PASS" || series.Completed != 1 {
+		t.Fatalf("a fresh round must rebuild the series conclusion: void=%v %#v completed=%d", series.UpstreamVoid, series.Effective, series.Completed)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mustSeries(t *testing.T, set Set, action Action) Series {
 	t.Helper()
 	series, ok := set.Series(action)

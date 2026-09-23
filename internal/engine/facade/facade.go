@@ -96,22 +96,31 @@ type Run struct {
 	Unverified  bool       `json:"unverified,omitempty"`
 }
 
+// ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
+// 权是否已被有效候选占用）——show/status/next 的授权来源。
+type ReviewGrantFace struct {
+	ID       string `json:"id"`
+	Reason   string `json:"reason"`
+	Occupied bool   `json:"occupied"`
+}
+
 // ReviewActionFace 是单个审查动作的账本公开面：completed/base/extra(授
-// 权数)/effective(有效上限)/remaining、raw/adjudication/correction 计数与
-// effective 状态及来源、下一轮准入形态。
+// 权数)/effective(有效上限)/remaining、逐条授权来源（id/reason/占用态）、
+// raw/adjudication/correction 计数与 effective 状态及来源、下一轮准入形态。
 type ReviewActionFace struct {
-	Action               string `json:"action"`
-	Completed            int    `json:"completed"`
-	BaseLimit            int    `json:"baseLimit"`
-	ExtraAuthorized      int    `json:"extraAuthorized"`
-	EffectiveLimit       int    `json:"effectiveLimit"`
-	Remaining            int    `json:"remaining"`
-	NextRoundRequirement string `json:"nextRoundRequirement"`
-	RawResults           int    `json:"rawResults"`
-	Adjudications        int    `json:"adjudications"`
-	Corrections          int    `json:"corrections"`
-	EffectiveStatus      string `json:"effectiveStatus"`
-	EffectiveSource      string `json:"effectiveSource"`
+	Action               string            `json:"action"`
+	Completed            int               `json:"completed"`
+	BaseLimit            int               `json:"baseLimit"`
+	ExtraAuthorized      int               `json:"extraAuthorized"`
+	EffectiveLimit       int               `json:"effectiveLimit"`
+	Remaining            int               `json:"remaining"`
+	NextRoundRequirement string            `json:"nextRoundRequirement"`
+	Grants               []ReviewGrantFace `json:"grants"`
+	RawResults           int               `json:"rawResults"`
+	Adjudications        int               `json:"adjudications"`
+	Corrections          int               `json:"corrections"`
+	EffectiveStatus      string            `json:"effectiveStatus"`
+	EffectiveSource      string            `json:"effectiveSource"`
 }
 
 // ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定。
@@ -136,6 +145,15 @@ func reviewFace(state *protocol.State) ReviewFace {
 }
 
 func reviewActionFace(series review.Series) ReviewActionFace {
+	occupied := review.OccupiedAuthorizationIDs(series)
+	grants := make([]ReviewGrantFace, 0, len(series.Authorizations))
+	for _, authorization := range series.Authorizations {
+		grants = append(grants, ReviewGrantFace{
+			ID:       authorization.ID,
+			Reason:   authorization.Reason,
+			Occupied: occupied[authorization.ID],
+		})
+	}
 	return ReviewActionFace{
 		Action:               string(series.Action),
 		Completed:            series.Completed,
@@ -144,6 +162,7 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 		EffectiveLimit:       series.CurrentLimit,
 		Remaining:            series.RemainingCapacity,
 		NextRoundRequirement: series.NextRoundRequirement,
+		Grants:               grants,
 		RawResults:           len(series.RawCandidates),
 		Adjudications:        len(series.Adjudications),
 		Corrections:          len(series.Corrections),

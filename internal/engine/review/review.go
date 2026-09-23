@@ -3,6 +3,10 @@
 // adjudication 与 correction receipt 记录用户裁决，effective status 由账本
 // 确定性投影。所有变换值进值出、不做 I/O；身份与摘要由 canonical JSON 编码
 // 派生，防篡改校验重算全部投影与身份链。
+//
+// 所有权契约：变换入口（AppendAuthorization、BindDispatch、RecordCandidate、
+// ApplyCorrection）在改写任何账本切片前先把它克隆到本系列，返回的 Set 与
+// 调用方输入不共享可变底层数组——输入 Set 在变换后保持逐字节不变。
 package review
 
 import "fmt"
@@ -115,21 +119,26 @@ func newSeries(action Action) Series {
 // Corrections 与 Authorizations 投影出的缓存，每次接纳 candidate 或
 // correction 后由 refresh 重算；防篡改校验会强制它们与账本一致。
 type Series struct {
-	Action               Action               `json:"action"`
-	ActivationSource     string               `json:"activationSource"`
-	AutomaticLimit       int                  `json:"automaticLimit"`
-	Completed            int                  `json:"completed"`
-	CurrentLimit         int                  `json:"currentLimit"`
-	RemainingAutomatic   int                  `json:"remainingAutomatic"`
-	RemainingCapacity    int                  `json:"remainingCapacity"`
-	NextRoundRequirement string               `json:"nextRoundRequirement"`
-	ExtraAuthorized      int                  `json:"extraAuthorized"`
-	ExtraConsumed        int                  `json:"extraConsumed"`
-	Authorizations       []RoundAuthorization `json:"authorizations"`
-	RawCandidates        []RawCandidate       `json:"rawCandidates"`
-	Adjudications        []Adjudication       `json:"adjudications"`
-	Corrections          []CorrectionReceipt  `json:"corrections"`
-	Effective            EffectiveStatus      `json:"effectiveReviewStatus"`
+	Action               Action `json:"action"`
+	ActivationSource     string `json:"activationSource"`
+	AutomaticLimit       int    `json:"automaticLimit"`
+	Completed            int    `json:"completed"`
+	CurrentLimit         int    `json:"currentLimit"`
+	RemainingAutomatic   int    `json:"remainingAutomatic"`
+	RemainingCapacity    int    `json:"remainingCapacity"`
+	NextRoundRequirement string `json:"nextRoundRequirement"`
+	ExtraAuthorized      int    `json:"extraAuthorized"`
+	ExtraConsumed        int    `json:"extraConsumed"`
+	// UpstreamVoid 持久标记"本 series 的 PASS 建立其上的上游结论已不成立"
+	// （product-review 的纠正把 PASS 变阻塞时置位，仅 start-readiness 会被
+	// 置位）：置位期间任何重投影都把 effective 保持在 PENDING，直到新一轮
+	// candidate 重建本 series 自己的结论。
+	UpstreamVoid   bool                 `json:"upstreamVoid"`
+	Authorizations []RoundAuthorization `json:"authorizations"`
+	RawCandidates  []RawCandidate       `json:"rawCandidates"`
+	Adjudications  []Adjudication       `json:"adjudications"`
+	Corrections    []CorrectionReceipt  `json:"corrections"`
+	Effective      EffectiveStatus      `json:"effectiveReviewStatus"`
 }
 
 // RoundAuthorization 记录一次动作内、用户请求的额外语义轮授权。运行期重试

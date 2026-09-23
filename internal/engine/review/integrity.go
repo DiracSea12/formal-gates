@@ -212,9 +212,12 @@ func (s Series) validate(runID string, action Action) error {
 	if s.Completed != projectedCompleted {
 		return fail("completed=%d does not match the candidate projection %d", s.Completed, projectedCompleted)
 	}
+	if unoccupiedAuthorizations(s) > 1 {
+		return fail("series holds more than one unconsumed extra-round authorization")
+	}
 	currentLimit := s.AutomaticLimit + len(s.Authorizations)
 	remainingAutomatic := max(0, s.AutomaticLimit-s.Completed)
-	remainingCapacity := max(0, currentLimit-s.Completed)
+	remainingCapacity := remainingAutomatic + unoccupiedAuthorizations(s)
 	if s.CurrentLimit != currentLimit || s.RemainingAutomatic != remainingAutomatic || s.RemainingCapacity != remainingCapacity || s.ExtraAuthorized != len(s.Authorizations) || s.ExtraConsumed != occupiedExtraAuthorizations(s) {
 		return fail("capacity projection does not match candidates and authorizations")
 	}
@@ -244,6 +247,9 @@ func validateEffectiveProjection(action Action, s Series) error {
 	}
 	if effective.Source == "" || effective.Revision < 0 {
 		return fmt.Errorf("effective status source or revision is incomplete")
+	}
+	if s.UpstreamVoid && effective.Status != statusPending {
+		return fmt.Errorf("upstream void must hold the effective status at PENDING")
 	}
 	if effective.Status == statusPending {
 		if effective.ResultDigest != "" {

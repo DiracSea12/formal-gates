@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -172,6 +173,29 @@ func TestValidateRejectsEachTamperClass(t *testing.T) {
 			},
 			marker: "old/new values do not match",
 		},
+		{
+			name:   "upstream void claimed while effective stays PASS",
+			mutate: func(set *Set, _ string) { set.StartReadiness.UpstreamVoid = true },
+			marker: "upstream void",
+		},
+		{
+			name: "two unconsumed authorizations accumulated",
+			mutate: func(set *Set, runID string) {
+				series := &set.ProductReview
+				for ordinal, reason := range []string{"forged first grant", "forged second grant"} {
+					series.Authorizations = append(series.Authorizations, RoundAuthorization{
+						ID:                    "review-authorization-" + shortDigest(authorizationDigest(runID, ProductReview, reason, ordinal+1)),
+						Action:                ProductReview,
+						Source:                authorizationUserSource,
+						Reason:                reason,
+						DispatchIDs:           []string{fmt.Sprintf("dispatch-forged-%d", ordinal+1)},
+						RecordedResultDigests: []string{},
+					})
+				}
+				refresh(series)
+			},
+			marker: "more than one unconsumed extra-round authorization",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,9 +233,25 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 				series.ExtraConsumed != occupiedExtraAuthorizations(series) ||
 				series.CurrentLimit != series.AutomaticLimit+len(series.Authorizations) ||
 				series.RemainingAutomatic != max(0, series.AutomaticLimit-series.Completed) ||
-				series.RemainingCapacity != max(0, series.AutomaticLimit+len(series.Authorizations)-series.Completed) ||
 				series.NextRoundRequirement != nextRoundRequirement(series) {
 				t.Fatalf("%s cached capacity diverged from a full recomputation", action)
+			}
+			// remaining 的期望在测试内独立算出：自动剩余轮数 + 未占用授权数
+			//（与准入规则对齐），不调用生产投影函数。
+			occupied := map[string]bool{}
+			for _, candidate := range series.RawCandidates {
+				if candidate.AuthorizationID != "" && !resultExcluded(series, candidate.ResultDigest) {
+					occupied[candidate.AuthorizationID] = true
+				}
+			}
+			unoccupied := 0
+			for _, authorization := range series.Authorizations {
+				if !occupied[authorization.ID] {
+					unoccupied++
+				}
+			}
+			if want := max(0, series.AutomaticLimit-series.Completed) + unoccupied; series.RemainingCapacity != want {
+				t.Fatalf("%s remaining capacity = %d, want %d (automatic %d + unoccupied grants %d)", action, series.RemainingCapacity, want, max(0, series.AutomaticLimit-series.Completed), unoccupied)
 			}
 			if len(series.Effective.DownstreamImpact) != 0 && !slices.Equal(series.Effective.DownstreamImpact, downstreamImpact(action)) {
 				t.Fatalf("%s downstream marker is not the canonical table", action)

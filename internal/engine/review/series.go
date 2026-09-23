@@ -24,26 +24,40 @@ func completedRounds(s Series) int {
 	return count
 }
 
-// occupiedExtraAuthorizations 统计被有效（未排除）候选占用的不同授权数。
-func occupiedExtraAuthorizations(s Series) int {
+// OccupiedAuthorizationIDs 返回被有效（未被整轮失效排除）候选占用的授权
+// 身份集合——授权占用态的权威投影，审查公开面与容量投影共用。
+func OccupiedAuthorizationIDs(s Series) map[string]bool {
 	occupied := map[string]bool{}
 	for _, candidate := range s.RawCandidates {
 		if candidate.AuthorizationID != "" && !resultExcluded(s, candidate.ResultDigest) {
 			occupied[candidate.AuthorizationID] = true
 		}
 	}
-	return len(occupied)
+	return occupied
+}
+
+// occupiedExtraAuthorizations 统计被有效（未排除）候选占用的不同授权数。
+func occupiedExtraAuthorizations(s Series) int {
+	return len(OccupiedAuthorizationIDs(s))
+}
+
+// unoccupiedAuthorizations 统计未被有效候选占用的授权数：准入上可立即
+// 使用的空槽数。
+func unoccupiedAuthorizations(s Series) int {
+	occupied := OccupiedAuthorizationIDs(s)
+	count := 0
+	for _, authorization := range s.Authorizations {
+		if !occupied[authorization.ID] {
+			count++
+		}
+	}
+	return count
 }
 
 // availableAuthorization 返回第一个未被有效候选占用的授权下标；没有空槽时
 // 第二返回值为 false。
 func availableAuthorization(s Series) (int, bool) {
-	occupied := map[string]bool{}
-	for _, candidate := range s.RawCandidates {
-		if candidate.AuthorizationID != "" && !resultExcluded(s, candidate.ResultDigest) {
-			occupied[candidate.AuthorizationID] = true
-		}
-	}
+	occupied := OccupiedAuthorizationIDs(s)
 	for index, authorization := range s.Authorizations {
 		if !occupied[authorization.ID] {
 			return index, true
@@ -76,12 +90,15 @@ func nextRoundRequirement(s Series) string {
 }
 
 // refresh 依据四本账重算 Series 的全部缓存投影。任何接纳路径之后必须调用，
-// 使容量字段与账本保持一致。
+// 使容量字段与账本保持一致。RemainingCapacity 与准入规则精确对齐：下一轮
+// 可立即记录 iff completed<automaticLimit 或存在空槽授权，因此它等于
+// 自动剩余轮数加未占用授权数（CurrentLimit 语义不变＝AutomaticLimit+授权
+// 总数）。
 func refresh(s *Series) {
 	s.Completed = completedRounds(*s)
 	s.CurrentLimit = s.AutomaticLimit + len(s.Authorizations)
 	s.RemainingAutomatic = max(0, s.AutomaticLimit-s.Completed)
-	s.RemainingCapacity = max(0, s.CurrentLimit-s.Completed)
+	s.RemainingCapacity = max(0, s.AutomaticLimit-s.Completed) + unoccupiedAuthorizations(*s)
 	s.ExtraAuthorized = len(s.Authorizations)
 	s.ExtraConsumed = occupiedExtraAuthorizations(*s)
 	s.NextRoundRequirement = nextRoundRequirement(*s)

@@ -183,17 +183,34 @@ func effectivePassAt(series review.Series, revision string) bool {
 	return series.Effective.Status == reviewStatusPass && series.Effective.RequirementRevision == revision
 }
 
+// dualReviewPassAt 报告双 series 的 effective 是否都在给定需求 revision 下
+// PASS——进入开发的门（SELECT_ROUTE 接纳与 TOPOLOGY_AND_ROUTE 推进）以它
+// 为准：任一审查重新阻塞时门保持关闭。
+func (s *State) dualReviewPassAt(revision string) bool {
+	return effectivePassAt(s.ReviewSeries.ProductReview, revision) && effectivePassAt(s.ReviewSeries.StartReadiness, revision)
+}
+
+// rejectStaleReviewRevision 校验审查证据的需求 revision 与受理绑定一致：
+// stale 绑定的结果不计。staging 与完成两条接纳路径共用本判定（单一事实
+// 源）。
+func (s *State) rejectStaleReviewRevision(evidence *ReviewResultEvidence) error {
+	if evidence.RequirementRevision != s.requirementRevision() {
+		return &RejectedError{
+			Code:   CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, s.requirementRevision()),
+		}
+	}
+	return nil
+}
+
 // recordReviewCandidate 把审查证据交内核记账。接纳前置是证据的需求
 // revision 与受理绑定一致——stale 绑定的结果不计；start-readiness 的候选
 // 仅当 product-review effective=PASS（同 revision）才可接纳——双审顺序
 // 守卫；RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝
 // 整个事件。
 func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence) error {
-	if evidence.RequirementRevision != state.requirementRevision() {
-		return &RejectedError{
-			Code:   CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, state.requirementRevision()),
-		}
+	if err := state.rejectStaleReviewRevision(evidence); err != nil {
+		return err
 	}
 	if evidence.Action == review.StartReadiness && !effectivePassAt(state.ReviewSeries.ProductReview, state.requirementRevision()) {
 		return &RejectedError{
@@ -336,6 +353,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if state.Topology == nil {
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))
 		}
+		// 进入开发的双审门：拓扑确认后任一审查重新阻塞（纠正升 P1、级联
+		// 上游失效）时，路线选择保持关闭，直到双 series 重新 effective PASS。
+		if !state.dualReviewPassAt(state.requirementRevision()) {
+			return reviewReject(fmt.Errorf("route selection requires both pre-development reviews effective PASS at requirement revision %q (current: product %s, start-readiness %s)",
+				state.requirementRevision(), state.ReviewSeries.ProductReview.Effective.Status, state.ReviewSeries.StartReadiness.Effective.Status))
+		}
 		route := payload.Route
 		state.RouteMode = route.Mode
 		if route.Mode == routeModeFull {
@@ -398,7 +421,9 @@ func (s *State) advanceReviewPhases() error {
 				target = runtime.PhaseTopologyAndRoute
 			}
 		case runtime.PhaseTopologyAndRoute:
-			if s.Topology != nil && s.RouteMode != "" {
+			// 进入开发的双审门与 SELECT_ROUTE 接纳同条件：账本只能证明
+			// 双 series 当前 effective PASS 时才推进。
+			if s.Topology != nil && s.RouteMode != "" && s.dualReviewPassAt(s.requirementRevision()) {
 				target = runtime.PhaseDevelopmentParallel
 			}
 		}

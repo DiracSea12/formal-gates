@@ -89,3 +89,14 @@ Git provider＋canary＋route matrix。
 - **独立复核**：主代理五项复现探针重跑全部翻绿（两处探针口径修正系探针假设错——F2 修复正确落在 schema 层、F5 错误文案为"roundGrant decision branch"，均非残留缺陷）；亲读返修 diff 逐项核对；engine 15 包全绿、cli 回归通过。子代理自报负控（stash 修复后新测试逐项压制缺陷）。模型调用 0。
 
 **R1 返修收口，待外部评审复核。R2（含机主七项中 3/4 的引擎强制）仍待开工令。**
+
+## 第 44 轮（2026-09-23，R1 全量重审返修，轻装）
+
+外部评审全量重审（`dedb3fa..9fb7a7c`，27 文件）判 FAIL：2 P1＋5 P2。处置全链：
+
+- **先复现**：主代理七项公开入口/公开 API 探针全部坐实——①重阻塞后选路线仍接纳并进 DEVELOPMENT_PARALLEL；②确认技术审 P3 建议复活被级联 void 的 PASS；③未消费授权可累计（extraAuthorized=2）；④自动轮整轮失效回收后 remaining=1 与"须新授权"准入矛盾；⑤内核变换改写调用方输入账本（共享切片回写）；⑥旧 revision 结果先到 STAGED 毒化暂存堵死回执与正确结果；⑦投影缺授权来源（读码核实）。
+- **派发返修**（单代理，三包）：P1-1 SELECT_ROUTE 双 PASS 前置＋推进纵深；P1-2 内核持久 `UpstreamVoid`（markUpstreamStale 置位、重投影压回 PENDING、新候选清位，integrity 校验）；P2-3 未占用授权存在即拒再授权（integrity ≤1）；P2-4 RemainingCapacity=max(0, 自动上限-completed)+未占用授权数（与准入精确对齐，测试期望独立算术）；P2-5 四变换入口账本切片 clone-on-write＋包文档所有权契约；P2-6 staging 对携 Review 结果前置 revision 比对（共用单一事实源）；P2-7 ReviewGrantFace{ID,Reason,Occupied}。
+- **独立复核**：七探针重跑全绿（P1-1 一次"失败"系探针用了 fatal 助手而修复正确在接纳层拒绝，修探针口径后绿）；亲读内核 diff 逐点核对；engine 15 包全绿＋cli 回归通过＋vet/gofmt 干净。子代理自报逐项负控（禁用修复→测试红→恢复绿）。模型调用 0。
+- 评审方法教训入账：连续操作不变量（阻塞后门控、void 存活性）与切片所有权须在合同显式列为验收面；"用生产投影验证生产投影"检不出共同错误，期望须独立推导。
+
+**R1 二次返修收口，待外部评审复核。**

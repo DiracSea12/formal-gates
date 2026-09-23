@@ -75,6 +75,67 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 	}
 }
 
+// TestReviewFaceProjectsGrantProvenance：每条额外轮授权都以 id/reason/占用
+// 态投影——占用态随整轮失效回收而回落，未占用授权在位则如实可见。
+func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
+	runID := "run-grants"
+	verification := review.OperatorVerification{
+		Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
+		Evidence: "operator verified the dispatch",
+	}
+	set := review.NewSet()
+	for round := 1; round <= 3; round++ {
+		next, _, err := review.RecordCandidate(set, runID, review.ProductReview,
+			review.Dispatch{ID: "dispatch-" + string(rune('0'+round)), RequirementRevision: "rev-1"},
+			review.Result{Status: "PASS"}, verification)
+		if err != nil {
+			t.Fatalf("record round %d: %v", round, err)
+		}
+		set = next
+	}
+	var err error
+	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fourth round for the open concern", "dispatch-4")
+	if err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	series, _ := set.Series(review.ProductReview)
+	fourthGrantID := series.Authorizations[0].ID
+	next, _, err := review.RecordCandidate(set, runID, review.ProductReview,
+		review.Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: fourthGrantID},
+		review.Result{Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "advisory concern"}}}, verification)
+	if err != nil {
+		t.Fatalf("record fourth: %v", err)
+	}
+	set = next
+	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fifth round while the concern stays open", "dispatch-5")
+	if err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	state := protocol.NewState(*view)
+	state.RunID = runID
+	state.ReviewSeries = set
+
+	face := reviewFace(state)
+	grants := face.Actions[0].Grants
+	if len(grants) != 2 {
+		t.Fatalf("grants = %d, want the occupied and the fresh one", len(grants))
+	}
+	if grants[0].ID != fourthGrantID || grants[0].Reason != "fourth round for the open concern" || !grants[0].Occupied {
+		t.Fatalf("occupied grant face = %+v", grants[0])
+	}
+	if grants[1].ID == fourthGrantID || grants[1].Reason != "fifth round while the concern stays open" || grants[1].Occupied {
+		t.Fatalf("unoccupied grant face = %+v", grants[1])
+	}
+	if readiness := face.Actions[1]; len(readiness.Grants) != 0 {
+		t.Fatalf("readiness grants = %+v, want none", readiness.Grants)
+	}
+}
+
 // TestLightweightRunCarriesReviewFace：lightweight run 的 show/drive 投影
 // 带完整审查面（两条初始 series、无拓扑、无路线选择）。
 func TestLightweightRunCarriesReviewFace(t *testing.T) {

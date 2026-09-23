@@ -8,7 +8,8 @@ import (
 
 // AppendAuthorization 追加一条用户请求的额外语义轮授权，并把它绑定到首个
 // dispatch。授权身份由 (runID, action, reason, 序号) 派生；是否越过自动上限
-// 才允许授权，由调用方的工作流政策决定，本函数只做账目变换。
+// 才允许授权，由调用方的工作流政策决定，本函数只做账目变换。存在未占用的
+// 授权时拒绝——用户每次只授权恰好一轮，不得预先累计。
 func AppendAuthorization(set Set, runID string, action Action, reason, dispatchID string) (Set, error) {
 	if err := Validate(runID, set); err != nil {
 		return Set{}, err
@@ -24,6 +25,9 @@ func AppendAuthorization(set Set, runID string, action Action, reason, dispatchI
 	if strings.TrimSpace(dispatchID) == "" {
 		return Set{}, fmt.Errorf("review: %s extra round authorization requires a dispatch binding", action)
 	}
+	if _, ok := availableAuthorization(*series); ok {
+		return Set{}, fmt.Errorf("review: %s has an unconsumed extra-round authorization; consume the granted round before requesting another", action)
+	}
 	authorization := RoundAuthorization{
 		ID:                    "review-authorization-" + shortDigest(authorizationDigest(runID, action, reason, len(series.Authorizations)+1)),
 		Action:                action,
@@ -32,7 +36,7 @@ func AppendAuthorization(set Set, runID string, action Action, reason, dispatchI
 		DispatchIDs:           []string{dispatchID},
 		RecordedResultDigests: []string{},
 	}
-	series.Authorizations = append(series.Authorizations, authorization)
+	series.Authorizations = append(slices.Clone(series.Authorizations), authorization)
 	refresh(series)
 	return set, nil
 }
@@ -54,8 +58,9 @@ func BindDispatch(set Set, runID string, action Action, dispatchID string) (Set,
 	if !ok {
 		return Set{}, fmt.Errorf("review: %s has no unoccupied extra-round authorization for dispatch %s", action, dispatchID)
 	}
+	series.Authorizations = slices.Clone(series.Authorizations)
 	authorization := series.Authorizations[index]
-	authorization.DispatchIDs = appendUnique(authorization.DispatchIDs, dispatchID)
+	authorization.DispatchIDs = appendUnique(slices.Clone(authorization.DispatchIDs), dispatchID)
 	series.Authorizations[index] = authorization
 	refresh(series)
 	return set, nil
@@ -124,8 +129,9 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 				return Set{}, EffectiveStatus{}, fmt.Errorf("review: authorization %s already endorses a valid result", authorizationID)
 			}
 		}
+		series.Authorizations = slices.Clone(series.Authorizations)
 		authorization := series.Authorizations[index]
-		authorization.RecordedResultDigests = appendUnique(authorization.RecordedResultDigests, resultDigest)
+		authorization.RecordedResultDigests = appendUnique(slices.Clone(authorization.RecordedResultDigests), resultDigest)
 		series.Authorizations[index] = authorization
 	}
 	previousEffective := series.Effective
@@ -142,7 +148,9 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 		AuthorizationID:      authorizationID,
 		OperatorVerification: verification,
 	}
-	series.RawCandidates = append(series.RawCandidates, candidate)
+	series.RawCandidates = append(slices.Clone(series.RawCandidates), candidate)
+	// 新一轮审查重建本 series 自己的结论：上游失效标记随之清除。
+	series.UpstreamVoid = false
 	series.Effective = Effective(*series, candidate, series.Effective.Revision+1)
 	refresh(series)
 	carryDownstreamImpact(series, action, previousEffective)
@@ -186,6 +194,9 @@ func ApplyCorrection(set Set, runID, requirementRevision string, input Correctio
 	if !ok || candidate.DispatchID != input.DispatchID || candidate.RequirementRevision != input.RequirementRevision {
 		return Set{}, fmt.Errorf("review: correction binding does not match the recorded candidate")
 	}
+	// 决定账本切片先克隆到本系列再动笔（值进值出）。
+	series.Adjudications = slices.Clone(series.Adjudications)
+	series.Corrections = slices.Clone(series.Corrections)
 	previousStatus := series.Effective.Status
 	previousImpact := append([]string{}, series.Effective.DownstreamImpact...)
 	nextRevision := series.Effective.Revision + 1
@@ -296,7 +307,11 @@ func correctFinding(series *Series, runID, requirementRevision string, candidate
 		))
 	}
 	series.Effective = Effective(*series, candidate, nextRevision)
-	carryDownstreamImpact(series, input.Action, EffectiveStatus{Status: previousStatus, DownstreamImpact: previousImpact})
+	if series.UpstreamVoid {
+		holdUpstreamVoid(series)
+	} else {
+		carryDownstreamImpact(series, input.Action, EffectiveStatus{Status: previousStatus, DownstreamImpact: previousImpact})
+	}
 	refresh(series)
 	return nil
 }
@@ -319,15 +334,28 @@ func MarkStale(set Set, source string) Set {
 
 // markUpstreamStale 在 product-review 的纠正把此前 PASS 的结论变为阻塞时，
 // 把 start-readiness 的 effective 刷为 PENDING：其 PASS 依赖的上游结论已不
-// 成立。start-readiness 的证据账本与计轮保持不动。
+// 成立。start-readiness 的证据账本与计轮保持不动。UpstreamVoid 随之置位：
+// 在新一轮 start-readiness candidate 重建自身结论前，任何重投影都不得把
+// effective 复活为 PASS。
 func markUpstreamStale(set *Set, source string) {
 	series := &set.StartReadiness
+	series.UpstreamVoid = true
 	series.Effective.Status = statusPending
 	series.Effective.Source = "UPSTREAM_CORRECTION:" + source
 	series.Effective.Revision++
 	series.Effective.BlockingFindingIDs = []string{}
 	series.Effective.AdvisoryFindingIDs = []string{}
 	series.Effective.DownstreamImpact = downstreamImpact(StartReadiness)
+}
+
+// holdUpstreamVoid 把重投影后的 effective 压回上游失效形态：结论保持
+// PENDING、digest 保留指向证据、投影清空、下游影响保持该动作的表——
+// 重投影只推进 revision 与 source。
+func holdUpstreamVoid(series *Series) {
+	series.Effective.Status = statusPending
+	series.Effective.BlockingFindingIDs = []string{}
+	series.Effective.AdvisoryFindingIDs = []string{}
+	series.Effective.DownstreamImpact = downstreamImpact(series.Action)
 }
 
 // carryDownstreamImpact 延续 FAIL 态的下游证据标记：PASS→FAIL 打满该动作的

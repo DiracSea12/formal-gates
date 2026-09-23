@@ -927,6 +927,152 @@ func TestReviewGatingNegatives(t *testing.T) {
 	})
 }
 
+// TestRouteGateStaysClosedUntilBothReviewsRepass：双审 PASS、拓扑确认后，
+// 产品审纠正升 P1 重新阻塞——路线选择必须关闭（不得进入开发）；驳回升级
+// 项使产品审回 PASS 后，被级联失效的技术审仍持有 PENDING，门依旧关闭；
+// 只有新一轮 start-readiness 重建自身结论后，路线接纳才重新打开并推进
+// DEVELOPMENT_PARALLEL（门会重新打开，不是死锁）。
+func TestRouteGateStaysClosedUntilBothReviewsRepass(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
+	engine, dir := reviewEngine(t, cd, reg)
+
+	// 双审到位：产品审仅一条建议项（effective PASS），技术审 PASS。
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "FAIL", "advisory only", []review.Finding{
+		{Severity: "P2", Message: "advisory defect on the documented path"},
+	}))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+	secondReadiness := pendingActionID(t, engine)
+	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "no-split", Note: "建议不拆：模块边界清晰，单人可并行推进",
+	}})
+
+	// 产品审纠正升 P1：重新阻塞＋级联失效技术审。
+	snap := engine.LoadMustSucceed(t)
+	productSeries := snap.State.ReviewSeries.ProductReview
+	finding := productSeries.RawCandidates[0].Findings[0]
+	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + finding.ID), Label: "reseverity"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-upgrade", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the defect blocks the documented checkout path",
+		Reason: "user upgrades the advisory after re-tracing the impact", ExpectedEffectiveRevision: productSeries.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.Effective.Status != "FAIL" {
+		t.Fatalf("upgrade did not re-block product-review: %+v", snap.State.ReviewSeries.ProductReview.Effective)
+	}
+	voided := snap.State.ReviewSeries.StartReadiness
+	if voided.Effective.Status != "PENDING" || !voided.UpstreamVoid {
+		t.Fatalf("upgrade did not void start-readiness: %+v", voided.Effective)
+	}
+	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
+		t.Fatalf("phase = %s, want TOPOLOGY_AND_ROUTE (gate must stay closed)", snap.State.Phase)
+	}
+
+	// 重新阻塞期间选路线：可区分拒绝、零状态变化。
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-blocked", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality"},
+	}}); err == nil {
+		t.Fatal("route accepted while product-review is re-blocked")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("route-under-block code = %q", code)
+	} else if !strings.Contains(err.Error(), "both pre-development reviews") {
+		t.Fatalf("route-under-block rejection does not name the dual gate: %v", err)
+	}
+
+	// 驳回升级项：产品审回 PASS，但技术审的上游失效持续——门保持关闭。
+	snap = engine.LoadMustSucceed(t)
+	productSeries = snap.State.ReviewSeries.ProductReview
+	dismiss := AskOption{ID: AskOptionID("dismiss:" + finding.ID), Label: "dismiss"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		Decision: "DISMISS", Supersedes: productSeries.Adjudications[0].ID,
+		Reason: "user rejects the upgrade after re-verification", ExpectedEffectiveRevision: productSeries.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.Effective.Status != "PASS" {
+		t.Fatalf("dismiss did not restore product-review PASS: %+v", snap.State.ReviewSeries.ProductReview.Effective)
+	}
+	if downstream := snap.State.ReviewSeries.StartReadiness; downstream.Effective.Status != "PENDING" || !downstream.UpstreamVoid {
+		t.Fatalf("dismiss must not revive the voided start-readiness: %+v", downstream.Effective)
+	}
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-void", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality"},
+	}}); err == nil {
+		t.Fatal("route accepted while start-readiness stays void")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("route-under-void code = %q", code)
+	}
+
+	// 新一轮 start-readiness：顺序守卫此时放行（产品审已 PASS），候选重建
+	// 自身结论、失效清除，门重新打开。
+	submitReviewResult(t, engine, "result-readiness-2", secondReadiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-2", "", "PASS", "ready again", nil))
+	snap = engine.LoadMustSucceed(t)
+	if downstream := snap.State.ReviewSeries.StartReadiness; downstream.Effective.Status != "PASS" || downstream.UpstreamVoid || downstream.Completed != 2 {
+		t.Fatalf("a fresh readiness round must rebuild its conclusion: %+v void=%v", downstream.Effective, downstream.UpstreamVoid)
+	}
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL", snap.State.RouteMode, snap.State.Phase)
+	}
+}
+
+// TestStaleRevisionReviewResultIsRejectedBeforeStaging：回执未到时携审查
+// 证据的旧 revision 结果不得进入暂存——直接 CodeReviewEvidenceRejected 拒
+// 绝且零状态变化，正确 revision 的结果随后照常暂存并在回执到达后完成
+// 入账（暂存槽不被毒化）。
+func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+	product := issueReady(t, engine)[0]
+
+	stale := reviewEvidence(review.ProductReview, "dispatch-stale", "", "PASS", "bound to an older requirement", nil)
+	stale.RequirementRevision = "rev-0"
+	ev, err := NewReviewWorkerResultEvent("result-stale-first", product, testProvider, "sha256:stale-first", stale)
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(ev, fp); err == nil {
+		t.Fatal("stale-revision review result staged before its receipt")
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+		t.Fatalf("stale staging code = %q", code)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected stale staging changed state bytes")
+	}
+	if snap := engine.LoadMustSucceed(t); len(snap.State.StagedResults) != 0 {
+		t.Fatalf("stale review result poisoned staging: %+v", snap.State.StagedResults)
+	}
+
+	current := reviewEvidence(review.ProductReview, "dispatch-current", "", "PASS", "current verdict", nil)
+	evCurrent, err := NewReviewWorkerResultEvent("result-current", product, testProvider, "sha256:current", current)
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	acceptance, err := engine.Submit(evCurrent, fp)
+	if err != nil {
+		t.Fatalf("current result: %v", err)
+	}
+	if acceptance.Status != "STAGED" {
+		t.Fatalf("current result status = %q, want STAGED", acceptance.Status)
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-current", product, "agent-current"), fp); err != nil {
+		t.Fatalf("receipt: %v", err)
+	}
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.Completed != 1 || len(snap.State.StagedResults) != 0 {
+		t.Fatalf("paired current result did not reach the ledger: completed=%d staged=%d", snap.State.ReviewSeries.ProductReview.Completed, len(snap.State.StagedResults))
+	}
+}
+
 // askAndDecideRejecting 创建 Ask 后提交决定并返回其错误；零状态变化断言
 // 只围绕决定提交本身（Ask 落账是合法提交，不属于被拒部分）。
 func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) error {
