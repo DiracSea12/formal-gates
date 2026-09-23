@@ -12,14 +12,18 @@ import (
 	"time"
 )
 
+func repositoryRoot() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Dir(filepath.Dir(filepath.Dir(file))) // internal/harness -> repo root
+}
+
 // supervisorBinary returns the formal-gates driver, building it on the fly if the
 // prebuilt binary is missing. Tests spawn it as an independent process because the
 // supervisor's contract is process ownership, which an in-process call cannot
 // demonstrate (and SIGTERM cancellation must not disturb the test process).
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file))) // internal/harness -> repo root
+	root := repositoryRoot()
 	name := "formal-gates"
 	if runtime.GOOS == "windows" {
 		name = "formal-gates.exe"

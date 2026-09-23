@@ -204,7 +204,8 @@ func TestReadJSONFileSemantics(t *testing.T) {
 
 	absent := filepath.Join(directory, "absent.json")
 	_, err = readJSONFile(absent)
-	if err == nil || err.Error() != "open "+absent+": no such file or directory" {
+	pathErr, ok := err.(*os.PathError)
+	if !ok || pathErr.Op != "open" || pathErr.Path != absent || !os.IsNotExist(pathErr.Err) {
 		t.Fatalf("missing file: %v", err)
 	}
 

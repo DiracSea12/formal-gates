@@ -235,6 +235,10 @@ func sampleProject(t *testing.T) (project, base string) {
 func openWorkflow(t *testing.T, runID string, scripts composeScripts, repairLimit int) *Compose {
 	t.Helper()
 	project, base := sampleProject(t)
+	// The production launcher exports this before starting a native job. The
+	// test binary lives in a temporary build directory, so its ancestors cannot
+	// supply the repository runtime through executable discovery.
+	t.Setenv("FORMAL_GATES_HARNESS_ROOT", repositoryRoot())
 	bin := supervisorBinary(t)
 	dir := t.TempDir()
 	devWorkspace := filepath.Join(dir, "workspaces", "development")

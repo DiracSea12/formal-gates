@@ -36,10 +36,7 @@ func TestBridgeNativeCapture(t *testing.T) {
 	if err := os.Mkdir(bindir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fake := filepath.Join(bindir, "dsh")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := writeDSHLookupTarget(t, bindir)
 	t.Setenv("PATH", bindir)
 	answer, code := bridgeCall(t, "native-capture", `{"provider": "dsh"}`)
 	if code != 0 || answer["ok"] != true {
@@ -86,7 +83,7 @@ func TestBridgeNativeRefusalKinds(t *testing.T) {
 	}
 
 	answer, code = bridgeCall(t, "native-verify-source",
-		`{"provider": "ghost", "directory": "`+t.TempDir()+`", "source": {"provider": "dsh"}}`)
+		`{"provider": "ghost", "directory": `+jsonString(t, t.TempDir())+`, "source": {"provider": "dsh"}}`)
 	if code != 0 {
 		t.Fatalf("dispatch refusal must be exit 0, got %d (%v)", code, answer)
 	}

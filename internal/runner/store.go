@@ -230,7 +230,13 @@ func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) e
 // would escape the parentheses of the _pragma=... options and change how
 // modernc parses them.
 func dsn(path string) string {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	uriPath := filepath.ToSlash(path)
+	// A drive letter is a path segment, not a file-URI authority.
+	// The leading slash makes net/url emit file:///C:/... on Windows.
+	if volume := filepath.VolumeName(path); len(volume) == 2 && volume[1] == ':' {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	return u.String() +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=foreign_keys(1)" +

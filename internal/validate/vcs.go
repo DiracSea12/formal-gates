@@ -289,7 +289,11 @@ func squashGitRangeToBase(root, base, message string) error {
 	if _, err := (execNativeCommandRunner{}).Run(root, "git", "reset", "--soft", base); err != nil {
 		return fmt.Errorf("cannot squash: %w", err)
 	}
-	if _, err := (execNativeCommandRunner{}).Run(root, "git", "commit", "-m", message); err != nil {
+	if _, err := (execNativeCommandRunner{}).Run(root, "git",
+		"-c", "user.name=formal-gates",
+		"-c", "user.email=formal-gates@localhost",
+		"-c", "commit.gpgsign=false",
+		"commit", "-m", message); err != nil {
 		return fmt.Errorf("cannot squash: %w", err)
 	}
 	return nil

@@ -112,7 +112,7 @@ func faultInstallSource(t *testing.T) string {
 	faultWriteFile(t, filepath.Join(root, "README.md"), []byte("fault fixture runtime\n"), 0o600)
 	faultWriteFile(t, filepath.Join(root, "README_EN.md"), []byte("fault fixture runtime\n"), 0o600)
 	faultWriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), []byte(hostTargetTestManifest), 0o600)
-	faultWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), []byte("#!/bin/sh\nexit 0\n"), 0o700)
+	faultWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), stubBinaryPayload(t), 0o700)
 	for _, relative := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		faultWriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), []byte(relative+"\n"), 0o600)
 	}

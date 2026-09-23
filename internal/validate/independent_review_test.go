@@ -291,6 +291,10 @@ func TestIndependentWhiteboxSnapshotReuse(t *testing.T) {
 
 func TestIndependentPrepareCandidateIdentity(t *testing.T) {
 	root := t.TempDir()
+	globalConfig := filepath.Join(t.TempDir(), "empty.gitconfig")
+	independentWrite(t, globalConfig, "")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	independentGit(t, root, "init", "-q")
 	independentWrite(t, filepath.Join(root, ".gitignore"), ".gates/\nrequirement.md\n")
 	independentGit(t, root, "add", ".")
