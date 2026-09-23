@@ -905,6 +905,10 @@ func TestWorkflowSessionRefusalAsksRestart(t *testing.T) {
 			t.Fatalf("restart options = %v", state.Pending[0].Options)
 		}
 	}
+	turnsBeforeRestart := map[string]bool{}
+	for _, turn := range turnDirs(t, c, taskDevelopment) {
+		turnsBeforeRestart[turn] = true
+	}
 	if _, err := c.Answer(ctx, state.Pending[0].DecisionID, "restart-session"); err != nil {
 		t.Fatal(err)
 	}
@@ -917,7 +921,6 @@ func TestWorkflowSessionRefusalAsksRestart(t *testing.T) {
 	// session/resume carrying the recorded identity (otherwise the
 	// scenario never tested a refused resume), and the replacement after
 	// the restart answer must have opened fresh.
-	restartAnswered := time.Now().Add(-time.Second) // the answer above precedes this read
 	for _, turn := range turnDirs(t, c, taskDevelopment) {
 		echo, err := os.ReadFile(filepath.Join(turn, "peer-echo.txt"))
 		if err != nil {
@@ -933,19 +936,18 @@ func TestWorkflowSessionRefusalAsksRestart(t *testing.T) {
 			t.Error("the refused repair call opened a fresh session instead of resuming")
 		}
 	}
+	replacements := 0
 	for _, turn := range turnDirs(t, c, taskDevelopment) {
-		request := filepath.Join(turn, "native-request.json")
-		info, err := os.Stat(request)
-		if err != nil || !info.ModTime().After(restartAnswered) {
+		if turnsBeforeRestart[turn] {
 			continue
 		}
-		if echo, err := os.ReadFile(filepath.Join(turn, "peer-echo.txt")); err == nil &&
-			strings.Contains(string(echo), "-32004") {
-			continue // the refused call itself, not the replacement
-		}
+		replacements++
 		if identity := requestedIdentity(t, turn); identity != "" {
 			t.Errorf("the replacement after restart-session resumed the refused identity %q", identity)
 		}
+	}
+	if replacements == 0 {
+		t.Error("restart-session created no replacement development call")
 	}
 }
 

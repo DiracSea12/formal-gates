@@ -86,8 +86,13 @@ func Supervise(directory string) int {
 	fd.Close()
 
 	// Process identity is written BEFORE the child starts so Store.job's liveness
-	// probe (UNKNOWN_START guard, 10s window) can observe it.
-	procStarted := float64(time.Now().UnixNano()) / 1e9
+	// probe can observe it. Prefer the OS creation time: under load this process
+	// can first run seconds after creation, but takeover must still recognize it.
+	created := time.Now()
+	if processCreated, ok := processCreationTime(os.Getpid()); ok {
+		created = processCreated
+	}
+	procStarted := float64(created.UnixNano()) / 1e9
 	if err := writeAtomicJSON(filepath.Join(dir, "process.json"), map[string]any{
 		"pid":        os.Getpid(),
 		"started_at": procStarted,

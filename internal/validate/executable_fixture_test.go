@@ -15,12 +15,21 @@ func writeExecutableFixture(t *testing.T, path, program string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(t.TempDir(), "main.go")
+	buildDir := t.TempDir()
+	source := filepath.Join(buildDir, "main.go")
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command("go", "build", "-o", path, source)
+	built := filepath.Join(buildDir, filepath.Base(path))
+	build := exec.Command("go", "build", "-o", built, source)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build command fixture: %v\n%s", err, output)
+	}
+	body, err := os.ReadFile(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o700); err != nil {
+		t.Fatal(err)
 	}
 }

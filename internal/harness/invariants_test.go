@@ -1183,6 +1183,15 @@ func TestInterruptedRepairInFlightRecoversToSameTerminal(t *testing.T) {
 	defer signalTurn(t, job) // 测试结束后结算遗留的原返修监督者
 
 	// 崩溃边界上的事实：此刻恰好一个活动写入者（原返修）。
+	activeWriters := 0
+	for _, fact := range scanTurnFacts(cfg.Dir) {
+		if fact.Task == pathSafe(taskDevelopment) && fact.Active {
+			activeWriters++
+		}
+	}
+	if activeWriters != 1 {
+		t.Fatalf("crash boundary has %d active development writers, want exactly 1", activeWriters)
+	}
 	if findings := singleActiveWriterFindings(cfg.Dir); len(findings) != 0 {
 		t.Errorf("single-writer invariant broken at the crash boundary (only the original repair may be active):\n%s",
 			strings.Join(findings, "\n"))

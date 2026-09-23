@@ -17,6 +17,56 @@ import (
 	"time"
 )
 
+func TestSuperviseDelayedEntryKeepsProcessIdentity(t *testing.T) {
+	const jobEnv = "FORMAL_GATES_TEST_DELAYED_SUPERVISE_JOB"
+	if jobDir := os.Getenv(jobEnv); jobDir != "" {
+		time.Sleep(3100 * time.Millisecond)
+		if code := Supervise(jobDir); code != 0 {
+			t.Fatalf("Supervise exit = %d", code)
+		}
+		return
+	}
+
+	jobDir := t.TempDir()
+	release := filepath.Join(jobDir, "release")
+	writeRequest(t, jobDir, map[string]any{
+		"kind": "check", "argv": []string{"/bin/sh", "-c", `while [ ! -f "$1" ]; do sleep 0.05; done`, "sh", release},
+		"cwd": t.TempDir(), "stdin": "",
+	})
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(testBinary, "-test.run=^TestSuperviseDelayedEntryKeepsProcessIdentity$")
+	cmd.SysProcAttr = supervisorSysProcAttr()
+	cmd.Env = append(os.Environ(), jobEnv+"="+jobDir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = os.WriteFile(release, nil, 0o600)
+			terminateJob(&liveJob{cmd: cmd, pgid: jobProcessGroup(cmd)})
+			_ = cmd.Wait()
+		}
+	})
+
+	waitForFile(t, filepath.Join(jobDir, "process.json"))
+	if !supervisorAlive(jobDir) {
+		recorded, _ := readJSONFile(filepath.Join(jobDir, "process.json"))
+		created, ok := processCreationTime(cmd.Process.Pid)
+		t.Fatalf("delayed supervisor identity rejected: recorded=%v process_created=%v verifiable=%v", recorded, created, ok)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	waited = true
+}
+
 // TestSuperviseCancel pins SIGTERM cancellation: the receipt carries exit_code
 // 130 and the exact cancellation error, and the child is stopped.
 func TestSuperviseCancel(t *testing.T) {
