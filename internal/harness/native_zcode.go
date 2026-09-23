@@ -1466,33 +1466,78 @@ func encodeSchemaForPrompt(value any, out *strings.Builder) error {
 }
 
 // zcodeExecute runs ZCode's app-server sequence for one request
-// (native_zcode.execute).
-func zcodeExecute(request any, directory string, probe bool) (result map[string]any, err error) {
+// (native_zcode.execute): parse the request, establish the session, prepare
+// the turn, send it, wait it out, settle the evidence.
+func zcodeExecute(request any, directory string, probe bool) (map[string]any, error) {
 	directory = resolveNativePath(directory)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
+	req, err := zcodeParseRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	session, err := zcodeOpenSession(req, directory, probe)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	if probe {
+		return session.probeResult(req.binding)
+	}
+	if err := session.prepareTurn(req); err != nil {
+		return nil, err
+	}
+	if err := session.sendTurn(request); err != nil {
+		return nil, err
+	}
+	if err := session.awaitTurn(); err != nil {
+		return nil, err
+	}
+	return session.settleTurn()
+}
+
+// zcodeRequest is one execution's parsed request: the workspace, the binding
+// (captured now when the request carried none), the resume identity, the
+// wanted selection, the reasoning effort, the permission mode a new
+// non-read-only session is switched to, and the read-only flag. The prompt
+// and schema stay unparsed until sendTurn: their absence surfaces only there,
+// after the session evidence exists, as in the reference sequence.
+type zcodeRequest struct {
+	workspace  string
+	binding    map[string]any
+	previous   string
+	wanted     map[string]any
+	effort     string
+	wantedMode string
+	readOnly   bool
+}
+
+// zcodeParseRequest validates and resolves the request's own fields, in the
+// order the sequence reads them.
+func zcodeParseRequest(request any) (zcodeRequest, error) {
 	workspaceValue, err := mustEntry(request, "workspace")
 	if err != nil {
-		return nil, err
+		return zcodeRequest{}, err
 	}
-	workspace := resolveNativePath(textOf(workspaceValue))
+	var req zcodeRequest
+	req.workspace = resolveNativePath(textOf(workspaceValue))
 	// A binding with entries is used as captured; an absent or empty one means
 	// nothing was captured yet and the provider is bound now.
-	binding := objectOrEmpty(getOf(request, "binding"))
-	if len(binding) == 0 {
-		binding, err = zcodeCaptureBinding()
+	req.binding = objectOrEmpty(getOf(request, "binding"))
+	if len(req.binding) == 0 {
+		req.binding, err = zcodeCaptureBinding()
 		if err != nil {
-			return nil, err
+			return zcodeRequest{}, err
 		}
 	}
-	previous, _ := getOrOf(request, "identity", "").(string)
+	req.previous, _ = getOrOf(request, "identity", "").(string)
 	modelValue, _ := getOrOf(request, "model", "").(string)
-	wanted, err := zcodeReference(modelValue)
+	req.wanted, err = zcodeReference(modelValue)
 	if err != nil {
-		return nil, err
+		return zcodeRequest{}, err
 	}
-	effort, _ := getOrOf(request, "reasoning_effort", "").(string)
+	req.effort, _ = getOrOf(request, "reasoning_effort", "").(string)
 	// An optional permission_mode names the mode a NEW non-read-only session
 	// is switched to before its first turn. Absent, the driver switches
 	// nothing: the session runs in the host's own default mode, and the
@@ -1500,87 +1545,124 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// hold, not by forcing a permissive mode. The
 	// name is not validated here: the host's own setMode rejects modes it does
 	// not know. Resumed and read-only sessions never apply it.
-	wantedMode, _ := getOrOf(request, "permission_mode", "").(string)
+	req.wantedMode, _ = getOrOf(request, "permission_mode", "").(string)
 	readOnlyValue, err := mustEntry(request, "read_only")
 	if err != nil {
-		return nil, err
+		return zcodeRequest{}, err
 	}
 	readOnly, isBool := readOnlyValue.(bool)
 	if !isBool {
-		return nil, fmt.Errorf("read_only must be a boolean")
+		return zcodeRequest{}, fmt.Errorf("read_only must be a boolean")
 	}
-	location := map[string]any{"workspacePath": workspace, "workspaceKey": workspace}
+	req.readOnly = readOnly
+	return req, nil
+}
+
+// zcodeSession is one execution's established app-server session: the
+// connected client plus the identity, handshake protocol, creation snapshot
+// and confirmed selection the turn steps consume. attached tracks the
+// session's own lifetime: close() ends an attached session on the host
+// before the transport closes.
+type zcodeSession struct {
+	client     *zcodeClient
+	directory  string
+	inputID    string
+	identity   string
+	snapshot   any
+	protocol   map[string]any
+	configured map[string]any
+	attached   bool
+}
+
+// close is the deferred cleanup of every zcodeExecute path.
+func (s *zcodeSession) close() {
+	if s.attached {
+		closeNativeSession(s.client.client, s.identity)
+	}
+	s.client.client.close()
+}
+
+// zcodeOpenSession launches the app-server and establishes the session the
+// request names: the account provider overlay a launcher-started app-server
+// cannot start without, the create-or-resume call, the handshake, the
+// identity binding, the selection application and the read-only tool policy.
+// On failure the client this function launched is closed here — zcodeExecute
+// owns the cleanup only of a session it was handed.
+func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSession, error) {
+	location := map[string]any{"workspacePath": req.workspace, "workspaceKey": req.workspace}
 	// A new session is persisted immediately; a resume addresses the recorded
 	// one.
 	params := map[string]any{"workspace": location}
-	if previous != "" {
-		params["sessionId"] = previous
+	if req.previous != "" {
+		params["sessionId"] = req.previous
 	} else {
 		params["persistence"] = "immediate"
 	}
-	if readOnly {
+	if req.readOnly {
 		params["toolAllowlist"] = zcodeReadOnlyToolsValue()
 	}
-	if probe && previous == "" {
+	if probe && req.previous == "" {
 		params["titleGenerationEnabled"] = false
 	}
-	launch, err := mustEntry(binding, "launch")
+	launch, err := mustEntry(req.binding, "launch")
 	if err != nil {
 		return nil, err
 	}
-	client, err := newZcodeClient(objectOrEmpty(launch), workspace, directory, zcodeLaunchEnvironment(binding))
+	client, err := newZcodeClient(objectOrEmpty(launch), req.workspace, directory, zcodeLaunchEnvironment(req.binding))
 	if err != nil {
 		return nil, err
 	}
-	identity := ""
-	attached := false
+	s := &zcodeSession{client: client, directory: directory}
+	established := false
 	defer func() {
-		if attached {
-			closeNativeSession(client.client, identity)
+		if !established {
+			s.close()
 		}
-		client.client.close()
 	}()
 	// The app-server starts with an empty provider registry and only the side
 	// that launched it can fill it, so the account provider configuration goes
 	// first: a snapshot taken before it reports no current model at all.
-	catalogue := zcodePinnedCatalogue(binding)
+	catalogue := zcodePinnedCatalogue(req.binding)
 	if catalogue != "" {
-		if _, err := zcodeDeliverAccountProviders(client, catalogue, wanted, directory); err != nil {
+		if _, err := zcodeDeliverAccountProviders(client, catalogue, req.wanted, directory); err != nil {
 			return nil, err
 		}
 	}
 	method := "session/create"
-	if previous != "" {
+	if req.previous != "" {
 		method = "session/resume"
 	}
 	snapshot, err := client.request(method, params)
 	if err != nil {
 		return nil, err
 	}
+	s.snapshot = snapshot
 	protocol, err := zcodeHandshake(snapshot)
 	if err != nil {
 		return nil, err
 	}
+	s.protocol = protocol
 	sessionIdentity, _ := getOrOf(objectOrEmpty(getOf(snapshot, "session")), "sessionId", "").(string)
-	if sessionIdentity == "" || (previous != "" && sessionIdentity != previous) {
+	if sessionIdentity == "" || (req.previous != "" && sessionIdentity != req.previous) {
 		return nil, &blockedError{message: "ZCODE_BINDING: missing or changed identity"}
 	}
-	identity = sessionIdentity
-	client.identity = identity
-	attached = true
+	s.identity = sessionIdentity
+	client.identity = s.identity
+	s.attached = true
 	if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-		"identity":  identity,
+		"identity":  s.identity,
 		"provider":  "zcode",
-		"workspace": workspace,
+		"workspace": req.workspace,
 		"selection": zcodeSelection(snapshot),
 	}); err != nil {
 		return nil, err
 	}
-	configured, err := client.applySelection(snapshot, wanted, effort, directory, workspace)
+	configured, err := client.applySelection(snapshot, req.wanted, req.effort, directory, req.workspace)
 	if err != nil {
 		return nil, err
 	}
-	if readOnly {
+	s.configured = configured
+	if req.readOnly {
 		if err := writeAtomicJSON(filepath.Join(directory, "tool-policy.json"), map[string]any{
 			"read_only": true,
 			"allowed":   zcodeReadOnlyToolsValue(),
@@ -1588,129 +1670,147 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 			return nil, err
 		}
 	}
-	if probe {
-		if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
-			return nil, err
-		}
-		attached = false
-		mcpAuth := "not_verified"
-		for _, interaction := range client.client.interactions {
-			if textOf(getOf(objectOrEmpty(interaction), "status")) == "official_auth_unavailable" {
-				mcpAuth = "unavailable"
-				break
-			}
-		}
-		return map[string]any{
-			"provider":     "zcode",
-			"protocol":     protocol,
-			"selection":    configured,
-			"binding":      binding,
-			"model_calls":  0,
-			"interactions": client.client.interactions,
-			"native_tools": "not_verified",
-			"mcp_auth":     mcpAuth,
-		}, nil
+	established = true
+	return s, nil
+}
+
+// probeResult closes the fresh session and reports the probe answer: the
+// handshake protocol, the confirmed selection, the binding and the two
+// interaction facts a probe can verify.
+func (s *zcodeSession) probeResult(binding map[string]any) (map[string]any, error) {
+	if _, err := s.client.request("session/close", map[string]any{"sessionId": s.identity}); err != nil {
+		return nil, err
 	}
-	subscribed, err := client.request("session/subscribe", map[string]any{
-		"sessionId":       identity,
+	s.attached = false
+	mcpAuth := "not_verified"
+	for _, interaction := range s.client.client.interactions {
+		if textOf(getOf(objectOrEmpty(interaction), "status")) == "official_auth_unavailable" {
+			mcpAuth = "unavailable"
+			break
+		}
+	}
+	return map[string]any{
+		"provider":     "zcode",
+		"protocol":     s.protocol,
+		"selection":    s.configured,
+		"binding":      binding,
+		"model_calls":  0,
+		"interactions": s.client.client.interactions,
+		"native_tools": "not_verified",
+		"mcp_auth":     mcpAuth,
+	}, nil
+}
+
+// prepareTurn settles the turn's fixed preconditions: the event-stream
+// subscription, the permission mode and tool policy of a non-read-only
+// session, and the native source binding the turn's evidence is matched by.
+func (s *zcodeSession) prepareTurn(req zcodeRequest) error {
+	subscribed, err := s.client.request("session/subscribe", map[string]any{
+		"sessionId":       s.identity,
 		"deliveryKind":    "desktop-continuous",
 		"includeSnapshot": false,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if !valuesEqual(getOf(subscribed, "sessionId"), identity) {
-		return nil, &blockedError{message: "ZCODE_BINDING: subscription identity differs"}
+	if !valuesEqual(getOf(subscribed, "sessionId"), s.identity) {
+		return &blockedError{message: "ZCODE_BINDING: subscription identity differs"}
 	}
 	permissionMode := any("")
-	if !readOnly {
+	if !req.readOnly {
 		// Evidence states the mode the host itself reports, never a value this
 		// driver asked for: a session nothing switches records the mode its own
 		// snapshot carried (a resumed session, or a new one with no requested
 		// permission_mode); a session the request did switch records the host's
 		// setMode readback. A host that reports no mode is recorded as empty,
 		// never invented.
-		if previous != "" || wantedMode == "" {
+		if req.previous != "" || req.wantedMode == "" {
 			permissionMode = getOrOf(objectOrEmpty(getOf(objectOrEmpty(
-				getOf(snapshot, "settings")), "mode")), "current", "")
+				getOf(s.snapshot, "settings")), "mode")), "current", "")
 		} else {
-			changed, err := client.request("session/setMode", map[string]any{
-				"sessionId": identity,
-				"mode":      wantedMode,
+			changed, err := s.client.request("session/setMode", map[string]any{
+				"sessionId": s.identity,
+				"mode":      req.wantedMode,
 			})
 			if err != nil {
-				return nil, err
+				return err
 			}
 			// settings is the host's own confirmation; the projection block in
 			// this response can be a stale snapshot (observed with sessionId
 			// "unknown" and the pre-set mode on the real host).
 			permissionMode = getOrOf(objectOrEmpty(getOf(objectOrEmpty(
 				getOf(changed, "settings")), "mode")), "current", "")
-			if !valuesEqual(permissionMode, wantedMode) {
-				return nil, &blockedError{message: "ZCODE_CONFIG: permission mode was not applied"}
+			if !valuesEqual(permissionMode, req.wantedMode) {
+				return &blockedError{message: "ZCODE_CONFIG: permission mode was not applied"}
 			}
 		}
-		if err := writeAtomicJSON(filepath.Join(directory, "tool-policy.json"), map[string]any{
+		if err := writeAtomicJSON(filepath.Join(s.directory, "tool-policy.json"), map[string]any{
 			"read_only":       false,
 			"permission_mode": permissionMode,
 		}); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	inputID := "formal-gates-" + filepath.Base(directory)
-	turnBinding := map[string]any{"sessionId": identity, "inputId": inputID, "selection": configured}
-	if !readOnly {
+	s.inputID = "formal-gates-" + filepath.Base(s.directory)
+	turnBinding := map[string]any{"sessionId": s.identity, "inputId": s.inputID, "selection": s.configured}
+	if !req.readOnly {
 		turnBinding["permission_mode"] = permissionMode
 	}
-	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), turnBinding); err != nil {
-		return nil, err
-	}
+	return writeAtomicJSON(filepath.Join(s.directory, "native-source.json"), turnBinding)
+}
+
+// sendTurn builds the prompt and sends it as this turn's input.
+func (s *zcodeSession) sendTurn(request any) error {
 	promptValue, err := mustEntry(request, "prompt")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	promptText, isString := promptValue.(string)
 	if !isString {
-		return nil, fmt.Errorf("prompt must be a string")
+		return fmt.Errorf("prompt must be a string")
 	}
 	schemaValue, err := mustEntry(request, "schema")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// The schema is embedded through schemaForPrompt: the canonical form with
 	// the one presentation-order change (registered bounded difference:
 	// value-equal to the reference's default-separator rendering).
 	schema, err := schemaForPrompt(schemaValue)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	prompt := promptText + "\nReturn ONLY one JSON object matching this schema:\n" + string(schema)
-	ack, err := client.request("session/send", map[string]any{
-		"sessionId": identity,
-		"inputId":   inputID,
+	ack, err := s.client.request("session/send", map[string]any{
+		"sessionId": s.identity,
+		"inputId":   s.inputID,
 		"content":   prompt,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// The host's acknowledgement of the input: its own boolean, and true.
 	accepted, _ := getOf(ack, "accepted").(bool)
-	if !valuesEqual(getOf(ack, "sessionId"), identity) || !accepted {
-		return nil, &blockedError{message: "ZCODE_BINDING: input not accepted"}
+	if !valuesEqual(getOf(ack, "sessionId"), s.identity) || !accepted {
+		return &blockedError{message: "ZCODE_BINDING: input not accepted"}
 	}
-	// The bounded turn wait: events are consumed as they arrive, one receive at
-	// a time, and the loop ends only on this input's terminal event or on the
-	// deadline. A silent host ends it through the receive timeout, whose text
-	// states the session is not assumed lost.
-	//
-	// While a native interaction is held the budget pauses: the deadline
-	// is a remaining-budget, not a wall-clock moment, so the time the user
-	// takes to decide does not consume the turn. A silent host during a hold is
-	// therefore not a failure either - the loop keeps waiting for the answer.
-	// The paused time is folded back in whenever no hold is pending anymore,
-	// including in the receive-timeout branch below: a wait that expired after
-	// the answer's delivery was derived from the stale deadline and must not
-	// be read as the host going silent.
+	return nil
+}
+
+// awaitTurn waits the turn out. Events are consumed as they arrive, one
+// receive at a time, and the loop ends only on this input's terminal event or
+// on the deadline. A silent host ends it through the receive timeout, whose
+// text states the session is not assumed lost.
+//
+// While a native interaction is held the budget pauses: the deadline
+// is a remaining-budget, not a wall-clock moment, so the time the user
+// takes to decide does not consume the turn. A silent host during a hold is
+// therefore not a failure either - the loop keeps waiting for the answer.
+// The paused time is folded back in whenever no hold is pending anymore,
+// including in the receive-timeout branch below: a wait that expired after
+// the answer's delivery was derived from the stale deadline and must not
+// be read as the host going silent.
+func (s *zcodeSession) awaitTurn() error {
 	position := 0
 	terminal := false
 	deadline := time.Now().Add(zcodeTurnBudget)
@@ -1718,35 +1818,35 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 	// remainingBudget folds the paused hold time back into the deadline (once
 	// no hold is pending anymore) and reports what is left of the turn.
 	remainingBudget := func() time.Duration {
-		if !client.client.pendingHeld() && !pausedSince.IsZero() {
+		if !s.client.client.pendingHeld() && !pausedSince.IsZero() {
 			deadline = deadline.Add(time.Since(pausedSince))
 			pausedSince = time.Time{}
 		}
 		return time.Until(deadline)
 	}
 	for !terminal {
-		if client.client.pendingHeld() {
+		if s.client.client.pendingHeld() {
 			if pausedSince.IsZero() {
 				pausedSince = time.Now()
 			}
 		} else if remainingBudget() <= 0 {
 			break
 		}
-		for position < len(client.events) {
-			event := client.events[position]
+		for position < len(s.client.events) {
+			event := s.client.events[position]
 			// The evidence copy in native-events.jsonl is the durable record;
 			// this retained slot is released the moment the event is consumed.
-			client.events[position] = nil
+			s.client.events[position] = nil
 			position++
-			if !valuesEqual(getOf(event, "sessionId"), identity) {
-				return nil, &blockedError{message: "ZCODE_BINDING: event from another session"}
+			if !valuesEqual(getOf(event, "sessionId"), s.identity) {
+				return &blockedError{message: "ZCODE_BINDING: event from another session"}
 			}
 			eventType, err := mustEntry(event, "type")
 			if err != nil {
-				return nil, err
+				return err
 			}
 			payload := objectOrEmpty(getOrOf(event, "payload", map[string]any{}))
-			if valuesEqual(getOf(payload, "inputId"), inputID) &&
+			if valuesEqual(getOf(payload, "inputId"), s.inputID) &&
 				(valuesEqual(eventType, "turn.completed") || valuesEqual(eventType, "turn.failed")) {
 				terminal = true
 			}
@@ -1761,7 +1861,7 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 		// reset. Releasing the drained buffer before waiting keeps a long
 		// streaming turn retaining only the events that have arrived and
 		// not yet been read.
-		client.events = client.events[:0]
+		s.client.events = s.client.events[:0]
 		position = 0
 		wait := time.Until(deadline)
 		if wait > 120*time.Second {
@@ -1770,9 +1870,9 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 		if wait < time.Second {
 			wait = time.Second
 		}
-		if _, err := client.client.receive(&wait); err != nil {
+		if _, err := s.client.client.receive(&wait); err != nil {
 			if errors.Is(err, errNativeTimedOut) {
-				if client.client.pendingHeld() {
+				if s.client.client.pendingHeld() {
 					// The host waits for its user-directed request; so does
 					// this loop, without spending the turn budget.
 					continue
@@ -1783,25 +1883,32 @@ func zcodeExecute(request any, directory string, probe bool) (result map[string]
 				if remainingBudget() > 0 {
 					continue
 				}
-				return nil, &blockedError{
+				return &blockedError{
 					message: "ZCODE_NATIVE_TIMEOUT: no native message; session is not assumed lost"}
 			}
-			return nil, err
+			return err
 		}
 	}
 	if !terminal {
-		return nil, &blockedError{message: "ZCODE_TIMEOUT: turn incomplete; inspect the original invocation"}
+		return &blockedError{message: "ZCODE_TIMEOUT: turn incomplete; inspect the original invocation"}
 	}
-	if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
+	return nil
+}
+
+// settleTurn ends a completed turn: the session is closed on the host, the
+// committed events are materialized into the bound source receipt, and the
+// receipt is the execution's result.
+func (s *zcodeSession) settleTurn() (map[string]any, error) {
+	if _, err := s.client.request("session/close", map[string]any{"sessionId": s.identity}); err != nil {
 		return nil, err
 	}
-	attached = false
+	s.attached = false
 	// Finalize proofs only after native shutdown messages have been drained.
-	source, err := zcodeMaterializeSource(directory)
+	source, err := zcodeMaterializeSource(s.directory)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+	if err := writeAtomicJSON(filepath.Join(s.directory, "source.json"), source); err != nil {
 		return nil, err
 	}
 	return source, nil

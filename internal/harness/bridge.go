@@ -635,11 +635,15 @@ func dispatch(e envelope) (any, error) {
 		// The repair-or-seal judgement lives here. Python selects the full
 		// records by the returned ids/gate names and assembles the feedback
 		// artifact, so the blocking condition exists once, in NeedsRepair.
+		// The map is the operation's one wire projection of the typed verdict.
 		var q evaluateRouteInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return evaluateRoute(q), nil
+		verdict := evaluateRoute(q)
+		return map[string]any{
+			"failed_checks": verdict.FailedChecks, "blocking_gates": verdict.BlockingGates, "route": verdict.Route,
+		}, nil
 	case "worker-outcome":
 		// The invoke_worker branch selection lives here; the loop
 		// mechanics (continuation, asks, attempt counters) stay in Python.
@@ -647,17 +651,26 @@ func dispatch(e envelope) (any, error) {
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return workerOutcome(q), nil
+		return map[string]any{"action": workerOutcome(q)}, nil
 	case "check-retention":
 		// The incremental-check eligibility lives here as two phases over
 		// one operation: without evidence_valid it judges eligibility, with it
 		// the retain/fail/rerun verdict. Python still owns verify_evidence so
-		// the original exception can be re-raised on the first attempt.
+		// the original exception can be re-raised on the first attempt. The
+		// projection spells exactly the keys each branch defines.
 		var q checkRetentionInput
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return checkRetention(q), nil
+		verdict := checkRetention(q)
+		answer := map[string]any{"action": verdict.Action}
+		if verdict.Action == "retain" {
+			answer["inherited_from"] = verdict.InheritedFrom
+		}
+		if verdict.Reason != "" {
+			answer["reason"] = verdict.Reason
+		}
+		return answer, nil
 	case "repair-allowance":
 		// The repair-limit boundary lives here. The increment after the
 		// user continues is a flow decision and stays in Python.
@@ -665,7 +678,8 @@ func dispatch(e envelope) (any, error) {
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return repairAllowance(q), nil
+		verdict := repairAllowance(q)
+		return map[string]any{"allowance": verdict.Allowance, "ask_user": verdict.AskUser}, nil
 	case "candidate-admission":
 		// The candidate admission refusals live here. A refusal is a
 		// typed business outcome inside the value so Python's
@@ -674,7 +688,10 @@ func dispatch(e envelope) (any, error) {
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return candidateAdmission(q), nil
+		if verdict := candidateAdmission(q); !verdict.Admitted {
+			return map[string]any{"ok": false, "kind": verdict.Kind, "refusal": verdict.Refusal}, nil
+		}
+		return map[string]any{"ok": true}, nil
 	case "archive-inventory", "archive-destination", "archive-settled", "archive-index-plan",
 		"archive-verify", "archive-stale", "archive-projection",
 		"prune-admission", "prune-bind", "prune-marker", "prune-plan":

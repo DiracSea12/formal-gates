@@ -143,6 +143,17 @@ func (s *Store) Close() error {
 	return err
 }
 
+// HeldRunError is CreateRun's refusal when the directory already holds a
+// run: it carries the held run's id, so a caller that may adopt the run
+// reads the id from the error instead of its text.
+type HeldRunError struct {
+	RunID string
+}
+
+func (e *HeldRunError) Error() string {
+	return fmt.Sprintf("runner: directory already holds run %q", e.RunID)
+}
+
 // CreateRun persists the run definition in one transaction: the runs row,
 // one tasks row per spec (all starting waiting_deps at generation 1 —
 // Store.ReviseTask is the only writer that ever bumps a generation,
@@ -151,10 +162,10 @@ func (s *Store) Close() error {
 // (materializeDecisions) — the gate exists exactly when the run does, so
 // the requirement survives owners that never even ran once.  Malformed
 // gate declarations are refused before any write.  A directory holds
-// exactly one run; a second CreateRun is refused.
+// exactly one run; a second CreateRun is refused with a HeldRunError.
 func (s *Store) CreateRun(ctx context.Context, runID string, specs []TaskSpec) error {
 	if s.runID != "" {
-		return fmt.Errorf("runner: directory already holds run %q", s.runID)
+		return &HeldRunError{RunID: s.runID}
 	}
 	// Refuse before the write transaction: an empty id would insert a
 	// runs row the in-memory sentinel cannot represent, silently

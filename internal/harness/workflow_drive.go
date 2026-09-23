@@ -300,7 +300,10 @@ func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (r
 	if c.latestOutcome(taskPlan) != nil {
 		return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
 	}
-	if c.readDisposition(taskPlan) != nil {
+	// An unreadable park row reads as absent here (an unreadable fact
+	// decides nothing): only a row that provably stands parks the
+	// invocation.
+	if _, stands, err := c.readDisposition(taskPlan); err == nil && stands {
 		// The row stands: its question is the route's to place and the
 		// user's to answer — this invocation stays unsettled until the
 		// approve answer's resolve supersedes it.

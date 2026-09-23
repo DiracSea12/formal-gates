@@ -28,12 +28,11 @@ func (c *Compose) executeCandidate(inv runner.Invocation) (runner.Result, error)
 		return runner.Result{}, fmt.Errorf(
 			"compose: candidate admission is missing an upstream outcome (development=%v, qa-review=%v)", dev != nil, qa != nil)
 	}
-	verdict := candidateAdmission(candidateAdmissionInput{
+	if verdict := candidateAdmission(candidateAdmissionInput{
 		DevelopmentNeedsRepair: dev.Worker != nil && NeedsRepair(*dev.Worker),
 		QAReviewNeedsRepair:    qa.Worker != nil && NeedsRepair(*qa.Worker),
-	})
-	if verdict["ok"] != true {
-		return runner.Result{}, fmt.Errorf("compose: candidate admission refused: %s", textOf(verdict["refusal"]))
+	}); !verdict.Admitted {
+		return runner.Result{}, fmt.Errorf("compose: candidate admission refused: %s", verdict.Refusal)
 	}
 	round := c.repairRounds()
 	root, err := c.developmentWorkspace()
@@ -122,7 +121,7 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 	}
 	// Phase 1: is the previous record even eligible for re-verification?
 	retention := checkRetention(checkRetentionInput{Binding: binding, Old: oldSnapshot})
-	if textOf(retention["action"]) == "verify" {
+	if retention.Action == "verify" {
 		valid := c.verifyCheckEvidence(old) == nil
 		// Phase 2: the verdict over the evidence fact. The branch
 		// condition — fail on the first look, re-run after an explicit
@@ -131,7 +130,7 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 			Binding: binding, Old: oldSnapshot, Candidate: candidate,
 			Attempt: attempt, EvidenceValid: &valid,
 		})
-		switch action := textOf(retention["action"]); action {
+		switch retention.Action {
 		case "fail":
 			return runner.Result{}, c.park(checkTaskID(check.ID), inv.Generation, attempt, runner.Disposition{
 				Kind:   "check-runtime",
@@ -143,10 +142,10 @@ func (c *Compose) executeCheck(ctx context.Context, inv runner.Invocation, check
 			})
 		}
 	}
-	if textOf(retention["action"]) == "retain" {
+	if retention.Action == "retain" {
 		retained := *old
 		retained.Candidate = candidate
-		retained.InheritedFrom = textOf(retention["inherited_from"])
+		retained.InheritedFrom = retention.InheritedFrom
 		record := outcomeRecord{
 			Task: checkTaskID(check.ID), Generation: inv.Generation, Action: "retained",
 			Check: &retained, Retained: true, Candidate: candidate,
@@ -428,19 +427,15 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 		// turn of this loop classifies as one: BLOCKED parks; a verdict
 		// settles through finishGate, the one admission the recovery
 		// consult adopts through too.
-		action := textOf(workerOutcome(workerOutcomeInput{
-			Role: gate, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
-		switch action {
-		case "blocked":
-			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
-		default:
+		if workerOutcome(workerOutcomeInput{
+			Role: gate, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) != workerBlocked {
 			// A gate verdict — PASS or FAIL with findings — is a legitimate
 			// admitted result: the route judgement consumes it.
 			if err := verifyCandidateIntact(workspace, candidate); err != nil {
 				return runner.Result{}, fmt.Errorf("compose: read-only gate changed the candidate: %w", err)
 			}
-			return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
 		}
+		return c.finishGate(gateTaskID(gate), inv.Generation, candidate, output)
 	}
 }
 
@@ -458,9 +453,8 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 // evidence.
 func (c *Compose) finishGate(taskID string, generation int64, candidate string, output *workerOutput) (runner.Result, error) {
 	c.rememberSession(taskID, output.Identity)
-	switch textOf(workerOutcome(workerOutcomeInput{
-		Role: output.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
-	case "blocked":
+	if workerOutcome(workerOutcomeInput{
+		Role: output.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) == workerBlocked {
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, output.Series, output, runner.Disposition{
 			Kind:     "worker-blocked",
 			Reason:   output.Result.Summary,
@@ -501,21 +495,15 @@ func (c *Compose) executeEvaluate(inv runner.Invocation) (runner.Result, error) 
 		gates = append(gates, routeGate{Gate: gate, Result: *outcome.Worker})
 	}
 	verdict := evaluateRoute(evaluateRouteInput{Checks: checks, Gates: gates})
-	route := textOf(verdict["route"])
+	route := verdict.Route
 	record := outcomeRecord{Task: taskEvaluate, Generation: inv.Generation, Action: route, Route: route}
 	if route == "repair" {
-		// The route judgement builds its two id lists itself as []string
-		// (domain.go) — they are not decoded JSON, so listOf, whose domain is
-		// the decoded []any shape, would coerce them to empty and strip the
-		// repair bundle of its failed material. Assert the actual type.
-		failedIDs, _ := verdict["failed_checks"].([]string)
 		failed := map[string]bool{}
-		for _, id := range failedIDs {
+		for _, id := range verdict.FailedChecks {
 			failed[id] = true
 		}
-		blockingIDs, _ := verdict["blocking_gates"].([]string)
 		blocking := map[string]bool{}
-		for _, gate := range blockingIDs {
+		for _, gate := range verdict.BlockingGates {
 			blocking[gate] = true
 		}
 		var failedChecks []CheckResult

@@ -129,8 +129,11 @@ func (c *Compose) openRuntimeQuestion(ctx context.Context, inv runner.Invocation
 	}); !errors.Is(err, errParked) {
 		return false // the park row itself could not land: not this fact's ask
 	}
-	d := c.readDisposition(inv.TaskID)
-	if d == nil {
+	d, stands, readErr := c.readDisposition(inv.TaskID)
+	if readErr != nil || !stands {
+		// The park landed above; a row that cannot be read back is the
+		// route's to ask from on its own pass, exactly like the not-yet-
+		// asked row below.
 		return true // parked; the route asks from the row
 	}
 	body, err := canonicalBody(questionBody(d))

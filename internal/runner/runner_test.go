@@ -418,9 +418,10 @@ func TestSchemaConstraintsHold(t *testing.T) {
 	if err := st.CreateRun(ctx, "r", []TaskSpec{{TaskID: "a"}}); err != nil {
 		t.Fatal(err)
 	}
-	// A directory holds exactly one run.
-	if err := st.CreateRun(ctx, "other", []TaskSpec{{TaskID: "x"}}); err == nil || !strings.Contains(err.Error(), "already holds run") {
-		t.Fatalf("second CreateRun err = %v, want one-run-per-directory refusal", err)
+	// A directory holds exactly one run: the refusal names the held run.
+	var held *HeldRunError
+	if err := st.CreateRun(ctx, "other", []TaskSpec{{TaskID: "x"}}); !errors.As(err, &held) || held.RunID != "r" {
+		t.Fatalf("second CreateRun err = %v, want one-run-per-directory refusal holding run r", err)
 	}
 	// Direct writes respect the foreign keys too (constraint enforcement
 	// is on for every connection).

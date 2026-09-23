@@ -7,6 +7,10 @@ package harness
 // here validates its inputs — they are projections of records Go already
 // validated (validate-worker, one_check results) — and NeedsRepair stays the
 // single owner of the "gate result is not acceptable" condition.
+//
+// The judgements return typed Go values; bridge.go owns the one struct→map
+// projection each operation makes at the JSON boundary, under the wire field
+// names Python reads.
 
 // evaluateRouteInput summarizes the verification records for the route
 // judgement. Result reuses WorkerResult, so the blocking condition is exactly
@@ -24,10 +28,18 @@ type routeGate struct {
 	Result WorkerResult `json:"result"`
 }
 
+// routeVerdict is evaluateRoute's answer: the route plus the two projections
+// that name the failed material.
+type routeVerdict struct {
+	Route         string
+	FailedChecks  []string
+	BlockingGates []string
+}
+
 // evaluateRoute decides repair-or-seal: any check that is not PASS or any gate
 // result that NeedsRepair routes to repair. The id/gate-name projections let
 // Python pick the full records without shipping them back and forth.
-func evaluateRoute(q evaluateRouteInput) map[string]any {
+func evaluateRoute(q evaluateRouteInput) routeVerdict {
 	failed := []string{}
 	for _, c := range q.Checks {
 		if c.Status != "PASS" {
@@ -44,7 +56,7 @@ func evaluateRoute(q evaluateRouteInput) map[string]any {
 	if len(failed) > 0 || len(blocking) > 0 {
 		route = "repair"
 	}
-	return map[string]any{"failed_checks": failed, "blocking_gates": blocking, "route": route}
+	return routeVerdict{FailedChecks: failed, BlockingGates: blocking, Route: route}
 }
 
 // workerOutcomeInput is the payload for the worker-outcome judgement: what the
@@ -55,20 +67,29 @@ type workerOutcomeInput struct {
 	NeedsRepair bool   `json:"needs_repair"`
 }
 
+// workerAction is the invoke-loop branch a validated worker result drives.
+type workerAction string
+
+const (
+	workerAccept             workerAction = "accept"
+	workerContinue           workerAction = "continue"
+	workerBlocked            workerAction = "blocked"
+	workerUnresolvedFindings workerAction = "unresolved-findings"
+)
+
 // workerOutcome keeps the reference branch order. CONTINUE and BLOCKED are
 // status facts and win over the needs_repair retry, which exists only for
 // development/repair because their unresolved findings cannot be dropped.
-func workerOutcome(q workerOutcomeInput) map[string]any {
-	action := "accept"
+func workerOutcome(q workerOutcomeInput) workerAction {
 	switch {
 	case q.Status == "CONTINUE":
-		action = "continue"
+		return workerContinue
 	case q.Status == "BLOCKED":
-		action = "blocked"
+		return workerBlocked
 	case (q.Role == "development" || q.Role == "repair") && q.NeedsRepair:
-		action = "unresolved-findings"
+		return workerUnresolvedFindings
 	}
-	return map[string]any{"action": action}
+	return workerAccept
 }
 
 // checkRetentionInput serves both retention phases over one operation. Phase 1
@@ -89,29 +110,38 @@ type retentionOld struct {
 	Candidate string `json:"candidate"`
 }
 
+// retentionVerdict is checkRetention's answer: the action plus the two
+// branch-specific facts — InheritedFrom is set on retain (the previous
+// candidate when it moved), Reason on the rerun after invalid evidence.
+type retentionVerdict struct {
+	Action        string
+	InheritedFrom string
+	Reason        string
+}
+
 // checkRetention mirrors the incremental-check rule: a matching binding with a
 // settled PASS/FAIL outcome is worth re-verifying; evidence that still holds is
 // retained (recording the previous candidate when the candidate moved), invalid
 // evidence on the first attempt is the original failure, and only an explicit
 // retry reaches a new run.
-func checkRetention(q checkRetentionInput) map[string]any {
+func checkRetention(q checkRetentionInput) retentionVerdict {
 	if q.EvidenceValid == nil {
 		if q.Old != nil && q.Old.Binding == q.Binding && (q.Old.Status == "PASS" || q.Old.Status == "FAIL") {
-			return map[string]any{"action": "verify"}
+			return retentionVerdict{Action: "verify"}
 		}
-		return map[string]any{"action": "run"}
+		return retentionVerdict{Action: "run"}
 	}
 	if *q.EvidenceValid {
 		inherited := ""
 		if q.Old != nil && q.Old.Candidate != q.Candidate {
 			inherited = q.Old.Candidate
 		}
-		return map[string]any{"action": "retain", "inherited_from": inherited}
+		return retentionVerdict{Action: "retain", InheritedFrom: inherited}
 	}
 	if q.Attempt == 0 {
-		return map[string]any{"action": "fail"}
+		return retentionVerdict{Action: "fail"}
 	}
-	return map[string]any{"action": "run", "reason": "check-evidence-invalid"}
+	return retentionVerdict{Action: "run", Reason: "check-evidence-invalid"}
 }
 
 // repairAllowanceInput is the payload for the repair-limit judgement. A null
@@ -123,14 +153,21 @@ type repairAllowanceInput struct {
 	RepairLimit int  `json:"repair_limit"`
 }
 
+// allowanceVerdict is repairAllowance's answer: the effective allowance and
+// whether the round has reached it.
+type allowanceVerdict struct {
+	Allowance int
+	AskUser   bool
+}
+
 // repairAllowance reports the effective allowance and whether the round has
 // reached it. The boundary is >=: a round equal to the allowance already asks.
-func repairAllowance(q repairAllowanceInput) map[string]any {
+func repairAllowance(q repairAllowanceInput) allowanceVerdict {
 	allowance := q.RepairLimit
 	if q.Allowance != nil {
 		allowance = *q.Allowance
 	}
-	return map[string]any{"allowance": allowance, "ask_user": q.Round >= allowance}
+	return allowanceVerdict{Allowance: allowance, AskUser: q.Round >= allowance}
 }
 
 // candidateAdmissionInput carries the two needs_repair flags the candidate node
@@ -140,17 +177,24 @@ type candidateAdmissionInput struct {
 	QAReviewNeedsRepair    bool `json:"qa_review_needs_repair"`
 }
 
-// candidateAdmission refuses to snapshot a candidate out of unresolved
-// records. The refusal is a typed business outcome inside the value
-// so Python's refuse() raises the HarnessError family;
+// admissionVerdict is candidateAdmission's answer: admission, or the refusal
+// that names why. Kind and Refusal carry meaning only on a refusal
+// (Admitted false); the refusal is a typed business outcome inside the
+// value so Python's refuse() raises the HarnessError family;
 // development is checked first, so its wording wins when both refuse.
-func candidateAdmission(q candidateAdmissionInput) map[string]any {
+type admissionVerdict struct {
+	Admitted bool
+	Kind     string
+	Refusal  string
+}
+
+func candidateAdmission(q candidateAdmissionInput) admissionVerdict {
 	if q.DevelopmentNeedsRepair {
-		return map[string]any{"ok": false, "kind": "binding",
-			"refusal": "Unresolved development result cannot create a verification candidate"}
+		return admissionVerdict{Kind: "binding",
+			Refusal: "Unresolved development result cannot create a verification candidate"}
 	}
 	if q.QAReviewNeedsRepair {
-		return map[string]any{"ok": false, "kind": "binding", "refusal": "QA not approved"}
+		return admissionVerdict{Kind: "binding", Refusal: "QA not approved"}
 	}
-	return map[string]any{"ok": true}
+	return admissionVerdict{Admitted: true}
 }

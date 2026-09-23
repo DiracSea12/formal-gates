@@ -453,8 +453,8 @@ func (c *Compose) adoptOrCreate() error {
 		// The only tolerable failure here is a crash between the kernel's
 		// CreateRun and this file landing: the directory then holds exactly
 		// this run but no binding yet. Anything else is a real refusal.
-		held, ok := heldRunID(err)
-		if !ok || held != c.cfg.RunID {
+		var held *runner.HeldRunError
+		if !errors.As(err, &held) || held.RunID != c.cfg.RunID {
 			return err
 		}
 	}
@@ -462,27 +462,6 @@ func (c *Compose) adoptOrCreate() error {
 		return err
 	}
 	return writeAtomicJSON(filepath.Join(c.dir, "binding.json"), c.binding)
-}
-
-// heldRunID recognizes the kernel's "directory already holds run X"
-// refusal and returns X — the one place the composition reads a kernel
-// error's text, because no read API exposes the directory's run id.
-func heldRunID(err error) (string, bool) {
-	const marker = "already holds run "
-	text := err.Error()
-	at := strings.Index(text, marker)
-	if at < 0 {
-		return "", false
-	}
-	rest := text[at+len(marker):]
-	if len(rest) < 2 || rest[0] != '"' {
-		return "", false
-	}
-	end := strings.IndexByte(rest[1:], '"')
-	if end < 0 {
-		return "", false
-	}
-	return rest[1 : 1+end], true
 }
 
 // compareBindings is the reopen rule: every creation fact must match, and a

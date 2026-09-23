@@ -151,8 +151,12 @@ func (c *Compose) outcomeGenerations(taskID string) []int64 {
 // No payload at the named generation means no current outcome — nil,
 // never a fallback to an older generation's file.
 func (c *Compose) latestOutcome(taskID string) *outcomeRecord {
+	// A standing, readable park row (other than the inert route-guard) pins
+	// the generation its outcome must be read at; an unreadable or absent
+	// row leaves the task's own current generation to decide (an unreadable
+	// fact decides nothing).
 	generation := int64(0)
-	if d := c.readDisposition(taskID); d != nil && d.Kind != "route-guard" {
+	if d, stands, err := c.readDisposition(taskID); err == nil && stands && d.Kind != "route-guard" {
 		generation = d.Generation
 	} else if current, err := c.store.TaskGeneration(context.Background(), taskID); err == nil {
 		generation = current
@@ -405,9 +409,8 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 		// receipt exactly as for a live answer, in a fixed branch order:
 		// CONTINUE continues the session; everything else settles through
 		// the one admission chain.
-		action := textOf(workerOutcome(workerOutcomeInput{
-			Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"])
-		if action == "continue" {
+		if workerOutcome(workerOutcomeInput{
+			Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) == workerContinue {
 			identity = output.Identity
 			initialFeedback = continuationFeedback(taskID, inv.Generation, brief, output, c.spec.revision)
 			continue
@@ -430,16 +433,16 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 // re-review (both in the route), a granted restart (in the kernel).
 func (c *Compose) settleWorkerResult(taskID string, generation int64, series string, brief workerBrief, output *workerOutput) (runner.Result, error) {
 	c.rememberSession(taskID, output.Identity)
-	switch textOf(workerOutcome(workerOutcomeInput{
-		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair})["action"]) {
-	case "continue":
+	switch workerOutcome(workerOutcomeInput{
+		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) {
+	case workerContinue:
 		return runner.Result{}, c.parkContinue(taskID, generation, output)
-	case "blocked":
+	case workerBlocked:
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, series, output, runner.Disposition{
 			Kind: "worker-blocked", Reason: output.Result.Summary,
 			Evidence: turnEvidenceRef(taskID, generation, series, output.Turn),
 		})
-	case "unresolved-findings":
+	case workerUnresolvedFindings:
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, series, output, runner.Disposition{
 			Kind:     "development-findings",
 			Reason:   "Unresolved development findings cannot be discarded",

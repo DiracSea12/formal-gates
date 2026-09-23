@@ -69,6 +69,8 @@ func (c *Compose) abortedIfRefused(ctx context.Context) (ComposeState, bool) {
 	for _, answer := range answered {
 		if answer.Choice != answer.Allow && answer.Choice != "restart-session" {
 			reason := fmt.Sprintf("user declined at a decision boundary (%s chose %q)", answer.TaskID, answer.Choice)
+			// A write failure is tolerated: the answered question still
+			// stands, so the next route pass re-derives the same terminal.
 			_ = c.store.SetTerminal(ctx, statusAborted, reason)
 			return ComposeState{Status: StatusAborted, Terminal: statusAborted}, true
 		}
@@ -78,7 +80,9 @@ func (c *Compose) abortedIfRefused(ctx context.Context) (ComposeState, bool) {
 
 // disposedTasks lists the tasks with standing park rows, in the kernel's
 // stable task-id order. The row is the whole fact: its task_id IS the
-// logical TaskID, so nothing is guessed back from a storage spelling.
+// logical TaskID, so nothing is guessed back from a storage spelling. An
+// unreadable list reads empty — an unreadable fact decides nothing, and the
+// transitions that must read a row surface its failure.
 func (c *Compose) disposedTasks() []string {
 	rows, err := c.store.Dispositions(context.Background())
 	if err != nil {
@@ -91,19 +95,17 @@ func (c *Compose) disposedTasks() []string {
 	return tasks
 }
 
-// readDisposition loads a task's standing park row from the kernel, or
-// nil when none stands (or the read fails — an unreadable fact decides
-// nothing, the tolerance every kernel read here carries).
-func (c *Compose) readDisposition(taskID string) *runner.Disposition {
-	row, ok, err := c.store.Disposition(context.Background(), taskID)
-	if err != nil || !ok {
-		return nil
-	}
-	return &row
+// readDisposition loads a task's standing park row from the kernel: ok is
+// false when none stands, err when the read failed. The two are distinct
+// facts and every caller states its own handling of each.
+func (c *Compose) readDisposition(taskID string) (runner.Disposition, bool, error) {
+	return c.store.Disposition(context.Background(), taskID)
 }
 
 // clearDisposition removes a task's park row (its question's answer has
-// been applied; the row has served its purpose).
+// been applied; the row has served its purpose). A removal that fails is
+// tolerated and dropped: the transitions are idempotent, so the row left
+// standing costs one re-derivation of the same clear on the next pass.
 func (c *Compose) clearDisposition(taskID string) {
 	_ = c.store.ClearDisposition(context.Background(), taskID)
 }
@@ -117,8 +119,11 @@ func (c *Compose) clearDisposition(taskID string) {
 // brief when the question retried a different stage, as the QA loop
 // does; a restart-session additionally drops the stage's session).
 func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeState, bool) {
-	d := c.readDisposition(task)
-	if d == nil {
+	d, stands, readErr := c.readDisposition(task)
+	if readErr != nil {
+		return ComposeState{}, false // an unreadable fact decides nothing yet; the transitions that must read it surface the failure
+	}
+	if !stands {
 		return ComposeState{}, false // no row stands: the kernel row is the whole fact, nothing to clean up
 	}
 	if d.Kind == "route-guard" {
@@ -174,7 +179,10 @@ func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeSta
 }
 
 // standingQuestion reads one parked task's linked question from the
-// kernel: found=false when the park has not been asked yet.
+// kernel: found=false when the park has not been asked yet. An unreadable
+// question reads the same — the ask path re-derives the question from the
+// standing row, so the tolerance costs one re-derivation, never a skipped
+// decision.
 func (c *Compose) standingQuestion(ctx context.Context, task string) (runner.StandingQuestion, bool) {
 	question, found, err := c.store.DispositionQuestion(ctx, task)
 	if err != nil || !found {
@@ -189,7 +197,7 @@ func (c *Compose) standingQuestion(ctx context.Context, task string) (runner.Sta
 // fact. The plan kind's body carries the review evidence and the exact
 // approved check commands; every other kind shows its park's own
 // kind, reason and evidence.
-func (c *Compose) askDisposition(ctx context.Context, task, target string, d *runner.Disposition) error {
+func (c *Compose) askDisposition(ctx context.Context, task, target string, d runner.Disposition) error {
 	body, err := canonicalBody(questionBody(d))
 	if err != nil {
 		return err
@@ -210,7 +218,7 @@ func (c *Compose) askDisposition(ctx context.Context, task, target string, d *ru
 // dispositionTarget names the stage a disposition's retry revises: the QA
 // loop retries the DESIGN with the review's findings; a worker-blocked or
 // runtime retry re-runs the stage itself.
-func (c *Compose) dispositionTarget(d *runner.Disposition, task string) string {
+func (c *Compose) dispositionTarget(d runner.Disposition, task string) string {
 	if d.Kind == "qa-design" {
 		return taskQADesign
 	}
@@ -218,7 +226,10 @@ func (c *Compose) dispositionTarget(d *runner.Disposition, task string) string {
 }
 
 // pendingQuestionOn reports whether a task holds a pending (unanswered)
-// kernel question.
+// kernel question. An unreadable decisions list reports no pending
+// question — the same tolerance every kernel read here carries: an
+// unreadable fact decides nothing, and the transitions that must read the
+// question surface its failure.
 func (c *Compose) pendingQuestionOn(ctx context.Context, task string) bool {
 	pending, err := c.store.PendingDecisions(ctx)
 	if err != nil {
@@ -235,7 +246,7 @@ func (c *Compose) pendingQuestionOn(ctx context.Context, task string) bool {
 // questionBody is the question's displayed body: the kind, the reason
 // and the evidence reference the user needs to decide. The body is
 // display material only — the ask record is the row's structural link.
-func questionBody(d *runner.Disposition) map[string]any {
+func questionBody(d runner.Disposition) map[string]any {
 	body := map[string]any{
 		"kind":   d.Kind,
 		"reason": d.Reason,
@@ -270,7 +281,7 @@ func (c *Compose) planQuestionBody() ([]byte, error) {
 // questionOptions/Allow: every retry question allows retry; a runtime
 // question additionally offers restart-session; the plan approval
 // offers approve/abort and allows approve.
-func questionOptions(d *runner.Disposition) []string {
+func questionOptions(d runner.Disposition) []string {
 	switch d.Kind {
 	case "plan":
 		return []string{"approve", "abort"}
@@ -281,7 +292,7 @@ func questionOptions(d *runner.Disposition) []string {
 	}
 }
 
-func questionAllow(d *runner.Disposition) string {
+func questionAllow(d runner.Disposition) string {
 	if d.Kind == "plan" {
 		return "approve"
 	}
@@ -300,7 +311,7 @@ func questionAllow(d *runner.Disposition) string {
 // business review FAIL starts an independent new round, so the retried
 // reviewer's recorded identity is dropped and the round opens a fresh
 // session — the two are never conflated into one treatment.
-func (c *Compose) applyRetry(ctx context.Context, d *runner.Disposition, task string) error {
+func (c *Compose) applyRetry(ctx context.Context, d runner.Disposition, task string) error {
 	target := c.dispositionTarget(d, task)
 	// resolveBrief lands one retry's resolve: fail on the brief builder's
 	// error, else hand its bytes to the parked task's resolve — so each
@@ -492,12 +503,17 @@ func (c *Compose) sessionRefusalStands(taskID string) bool {
 }
 
 // clearSessionRefusal retires the marker (the restart ask owns the stage).
+// A removal that fails is tolerated: the marker's reader only stats the
+// file, so a marker left behind holds the same guard one more pass.
 func (c *Compose) clearSessionRefusal(taskID string) {
 	_ = os.Remove(filepath.Join(c.dir, "session-refused", pathSafe(taskID)+".json"))
 }
 
 // pendingRequestOn reports whether one task holds a pending — asked,
-// unanswered — kernel request.
+// unanswered — kernel request. An unreadable requests list reports none:
+// the kernel's own revision-pending refusal (RequestRevision) stops a
+// second request on the task, so the tolerance never grants a second
+// round.
 func (c *Compose) pendingRequestOn(ctx context.Context, taskID string) bool {
 	requests, err := c.store.OpenRequests(ctx)
 	if err != nil {
@@ -513,7 +529,10 @@ func (c *Compose) pendingRequestOn(ctx context.Context, taskID string) bool {
 
 // taskGeneration reads the task's current generation from the kernel —
 // authoritative for bumps from its own revisions AND from upstream
-// invalidation closures alike, which a revision-input count would miss.
+// invalidation closures alike, which a revision-input count would miss. An
+// unreadable generation reads zero, so the guards comparing it against the
+// parked generation take their not-moved branch (resolve or keep the row)
+// and no clear is derived from a guess.
 func (c *Compose) taskGeneration(taskID string) int64 {
 	generation, err := c.store.TaskGeneration(context.Background(), taskID)
 	if err != nil {
@@ -523,9 +542,15 @@ func (c *Compose) taskGeneration(taskID string) int64 {
 }
 
 // dispositionStands reports whether one task's disposition note still owns
-// its stage — an open question or an answer not yet applied.
+// its stage — an open question or an answer not yet applied. An unreadable
+// row reports not standing, the same tolerance every kernel read here
+// carries: an unreadable fact decides nothing.
 func (c *Compose) dispositionStands(task string) bool {
-	return c.readDisposition(task) != nil
+	_, stands, err := c.readDisposition(task)
+	if err != nil {
+		return false
+	}
+	return stands
 }
 
 // unplacedDisposition reports whether any standing park row still has
@@ -537,8 +562,11 @@ func (c *Compose) dispositionStands(task string) bool {
 // rows (route-guard) are no work.
 func (c *Compose) unplacedDisposition(ctx context.Context) bool {
 	for _, task := range c.disposedTasks() {
-		d := c.readDisposition(task)
-		if d == nil || d.Kind == "route-guard" {
+		d, stands, err := c.readDisposition(task)
+		if err != nil {
+			continue // an unreadable fact decides nothing yet; the transitions that must read it surface the failure
+		}
+		if !stands || d.Kind == "route-guard" {
 			continue
 		}
 		if d.Kind == "continue" {
@@ -594,10 +622,9 @@ func (c *Compose) routeRepair(ctx context.Context) (ComposeState, bool) {
 		Body:     []byte("Configured repair rounds reached; continue authorizes one more round. Feedback: " + outcome.Feedback),
 	}
 	policy := func(round, allowance int) bool {
-		verdict := repairAllowance(repairAllowanceInput{
+		return repairAllowance(repairAllowanceInput{
 			Round: round, Allowance: &allowance, RepairLimit: c.spec.spec.RepairLimit,
-		})
-		return verdict["ask_user"] == true
+		}).AskUser
 	}
 	err = c.store.RequestRevision(ctx, taskDevelopment,
 		runner.TaskSpec{TaskID: taskDevelopment, Input: brief}, ask, policy, c.spec.spec.RepairLimit)
