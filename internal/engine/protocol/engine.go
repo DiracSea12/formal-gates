@@ -917,12 +917,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			FailureClass: ev.Result.FailureClass, Review: ev.Result.Review, Digest: payloadDigest,
 		}
 		if receipt, receipted := state.SpawnReceipts[actionID]; !receipted || receipt.Status == SpawnStatusUnknown {
-			// 携审查证据的结果在暂存前先过与完成路径相同的 revision 比对：
-			// stale 绑定的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存
-			// 槽，把回执配对后的正确结果挤成冲突。非 Review 结果暂存语义
-			// 不变。
+			// 携审查证据的结果在暂存前先过与完成路径相同的完整可接纳性
+			// 预检（revision 绑定、双审顺序、证据结构与完整性）：不可接纳
+			// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
+			// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
 			if ev.Result.Review != nil {
-				if err := state.rejectStaleReviewRevision(ev.Result.Review); err != nil {
+				if _, err := state.admitReviewEvidence(ev.Result.Review); err != nil {
 					return Acceptance{}, nil, false, err
 				}
 			}

@@ -190,35 +190,28 @@ func (s *State) dualReviewPassAt(revision string) bool {
 	return effectivePassAt(s.ReviewSeries.ProductReview, revision) && effectivePassAt(s.ReviewSeries.StartReadiness, revision)
 }
 
-// rejectStaleReviewRevision 校验审查证据的需求 revision 与受理绑定一致：
-// stale 绑定的结果不计。staging 与完成两条接纳路径共用本判定（单一事实
-// 源）。
-func (s *State) rejectStaleReviewRevision(evidence *ReviewResultEvidence) error {
+// admitReviewEvidence 对一条审查证据执行完整可接纳性判定并返回记账后的
+// Set：受理 revision 绑定（stale 绑定的结果不计）、start-readiness 的双审
+// 顺序守卫（product-review 须同 revision effective PASS）、review 内核的
+// 记录变换（重复摘要、越限无授权、核实缺项、finding 形状）。非空错误即
+// CodeReviewEvidenceRejected 且零状态变化。暂存预检与回执配对后的权威
+// 接纳共用本函数（单一事实源）：预检丢弃返回值只取错误——内核变换不改
+// 写调用方输入（包契约并有回归测试），账本在暂存与回执之间可能变化，落
+// 账仍以配对时的接纳为准。
+func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence) (review.Set, error) {
 	if evidence.RequirementRevision != s.requirementRevision() {
-		return &RejectedError{
+		return review.Set{}, &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, s.requirementRevision()),
 		}
 	}
-	return nil
-}
-
-// recordReviewCandidate 把审查证据交内核记账。接纳前置是证据的需求
-// revision 与受理绑定一致——stale 绑定的结果不计；start-readiness 的候选
-// 仅当 product-review effective=PASS（同 revision）才可接纳——双审顺序
-// 守卫；RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝
-// 整个事件。
-func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence) error {
-	if err := state.rejectStaleReviewRevision(evidence); err != nil {
-		return err
-	}
-	if evidence.Action == review.StartReadiness && !effectivePassAt(state.ReviewSeries.ProductReview, state.requirementRevision()) {
-		return &RejectedError{
+	if evidence.Action == review.StartReadiness && !effectivePassAt(s.ReviewSeries.ProductReview, s.requirementRevision()) {
+		return review.Set{}, &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("start-readiness evidence requires product-review effective PASS at requirement revision %q (current: %s)", state.requirementRevision(), state.ReviewSeries.ProductReview.Effective.Status),
+			Detail: fmt.Sprintf("start-readiness evidence requires product-review effective PASS at requirement revision %q (current: %s)", s.requirementRevision(), s.ReviewSeries.ProductReview.Effective.Status),
 		}
 	}
-	updated, _, err := review.RecordCandidate(state.ReviewSeries, state.RunID, evidence.Action,
+	updated, _, err := review.RecordCandidate(s.ReviewSeries, s.RunID, evidence.Action,
 		review.Dispatch{
 			ID:                  evidence.DispatchID,
 			RequirementRevision: evidence.RequirementRevision,
@@ -227,7 +220,18 @@ func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvide
 		review.Result{Status: evidence.Status, Message: evidence.Message, Findings: evidence.Findings},
 		evidence.Verification)
 	if err != nil {
-		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+	}
+	return updated, nil
+}
+
+// recordReviewCandidate 把审查证据经完整可接纳性判定后记账落回 state。
+// RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝整个事
+// 件。
+func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence) error {
+	updated, err := state.admitReviewEvidence(evidence)
+	if err != nil {
+		return err
 	}
 	state.ReviewSeries = updated
 	return nil

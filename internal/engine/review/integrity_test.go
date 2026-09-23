@@ -2,7 +2,6 @@ package review
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -177,24 +176,6 @@ func TestValidateRejectsEachTamperClass(t *testing.T) {
 			name:   "upstream void claimed while effective stays PASS",
 			mutate: func(set *Set, _ string) { set.StartReadiness.UpstreamVoid = true },
 			marker: "upstream void",
-		},
-		{
-			name: "two unconsumed authorizations accumulated",
-			mutate: func(set *Set, runID string) {
-				series := &set.ProductReview
-				for ordinal, reason := range []string{"forged first grant", "forged second grant"} {
-					series.Authorizations = append(series.Authorizations, RoundAuthorization{
-						ID:                    "review-authorization-" + shortDigest(authorizationDigest(runID, ProductReview, reason, ordinal+1)),
-						Action:                ProductReview,
-						Source:                authorizationUserSource,
-						Reason:                reason,
-						DispatchIDs:           []string{fmt.Sprintf("dispatch-forged-%d", ordinal+1)},
-						RecordedResultDigests: []string{},
-					})
-				}
-				refresh(series)
-			},
-			marker: "more than one unconsumed extra-round authorization",
 		},
 	}
 	for _, tc := range cases {

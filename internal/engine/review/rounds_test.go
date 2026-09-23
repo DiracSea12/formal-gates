@@ -159,6 +159,54 @@ func TestCapacityAcrossAutomaticAndAuthorizedRounds(t *testing.T) {
 	}
 }
 
+// TestConcurrentlyFreedAuthorizationSlotsKeepTheLedgerValid：两条历史授权
+// 被整轮作废合法释放（三轮自动→逐次授权完成第四、五轮→作废第四、第五）
+// 是账本合法形态：防授权累计的闸门在新增授权入口（AppendAuthorization
+// 拒绝存在未占用授权时的再授权），不在账本级。两个空槽同时在场时校验通
+// 过、completed 回落、下一轮直接使用空槽授权。
+func TestConcurrentlyFreedAuthorizationSlotsKeepTheLedgerValid(t *testing.T) {
+	runID := "run-freed-slots"
+	set := NewSet()
+	for round := 1; round <= 3; round++ {
+		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	}
+	var err error
+	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required", "dispatch-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstGrant := mustSeries(t, set, ProductReview).Authorizations[0].ID
+	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: firstGrant}, Result{Status: "PASS"})
+	set, err = AppendAuthorization(set, runID, ProductReview, "fifth round required", "dispatch-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondGrant := mustSeries(t, set, ProductReview).Authorizations[1].ID
+	set, fifth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-5", RequirementRevision: "rev-1", AuthorizationID: secondGrant}, Result{Status: "PASS"})
+	if series := mustSeries(t, set, ProductReview); series.Completed != 5 || series.ExtraConsumed != 2 {
+		t.Fatalf("granted rounds did not consume their slots: %+v", series)
+	}
+	for _, candidate := range []RawCandidate{fourth, fifth} {
+		set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+			Action: ProductReview, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision,
+			Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "the round was misrecorded", Source: "user", UserAuthorized: true,
+		})
+	}
+	series := mustSeries(t, set, ProductReview)
+	if series.Completed != 3 || series.Effective.Status != "PENDING" {
+		t.Fatalf("invalidations did not roll back completion and effective: %+v", series)
+	}
+	if series.ExtraAuthorized != 2 || series.ExtraConsumed != 0 || series.RemainingCapacity != 2 || series.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" {
+		t.Fatalf("both freed grants must be empty slots: %+v", series)
+	}
+	if occupied := OccupiedAuthorizationIDs(series); occupied[firstGrant] || occupied[secondGrant] {
+		t.Fatalf("freed grants are still occupied: %v", occupied)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatalf("two concurrently freed grants are a legal ledger form: %v", err)
+	}
+}
+
 func TestAppendAuthorizationRequiresReasonAndBindsFirstDispatch(t *testing.T) {
 	runID := "run-authorize"
 	set := NewSet()

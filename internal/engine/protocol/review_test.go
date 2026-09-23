@@ -1073,6 +1073,76 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 	}
 }
 
+// TestInadmissibleReviewEvidenceIsRejectedBeforeStaging：回执未到时携不完
+// 整审查证据（Operator 核实缺项、finding 严重度 P9）的结果不得进入暂存
+// ——直接 CodeReviewEvidenceRejected 拒绝且零状态变化；回执照常接纳，正
+// 确结果随后照常完成入账（一次填写错误不污染暂存槽、不必换 attempt 即可
+// 恢复）。
+func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(evidence *ReviewResultEvidence)
+	}{
+		{"operator verification missing checks", func(evidence *ReviewResultEvidence) {
+			evidence.Verification = review.OperatorVerification{Checks: []string{"binding"}, Evidence: "partial"}
+		}},
+		{"finding severity outside P0-P3", func(evidence *ReviewResultEvidence) {
+			evidence.Findings = []review.Finding{{Severity: "P9", Message: "unclassified impact"}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+			engine, dir := reviewEngine(t, cd, reg)
+			fp := fingerprintOf(t, engine)
+			product := issueReady(t, engine)[0]
+
+			broken := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "inadmissible evidence", []review.Finding{
+				{Severity: "P1", Message: "core path broken"},
+			})
+			tc.corrupt(&broken)
+			ev, err := NewReviewWorkerResultEvent("result-inadmissible", product, testProvider, "sha256:inadmissible", broken)
+			if err != nil {
+				t.Fatalf("event: %v", err)
+			}
+			before := stateBytesOf(t, dir)
+			if _, err := engine.Submit(ev, fp); err == nil {
+				t.Fatal("inadmissible review result staged before its receipt")
+			} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+				t.Fatalf("inadmissible staging code = %q", code)
+			}
+			if after := stateBytesOf(t, dir); string(before) != string(after) {
+				t.Fatal("rejected inadmissible staging changed state bytes")
+			}
+			if snap := engine.LoadMustSucceed(t); len(snap.State.StagedResults) != 0 {
+				t.Fatalf("inadmissible review result poisoned staging: %+v", snap.State.StagedResults)
+			}
+
+			if _, err := engine.Submit(spawnReceipt(t, "spawn-pair", product, "agent-pair"), fp); err != nil {
+				t.Fatalf("receipt after a rejected staging: %v", err)
+			}
+			correct := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "admissible evidence", []review.Finding{
+				{Severity: "P1", Message: "core path broken"},
+			})
+			evCorrect, err := NewReviewWorkerResultEvent("result-correct", product, testProvider, "sha256:correct", correct)
+			if err != nil {
+				t.Fatalf("event: %v", err)
+			}
+			acceptance, err := engine.Submit(evCorrect, fp)
+			if err != nil {
+				t.Fatalf("correct result after a rejected staging: %v", err)
+			}
+			if acceptance.Status != "ACCEPTED" {
+				t.Fatalf("correct result status = %q, want ACCEPTED", acceptance.Status)
+			}
+			snap := engine.LoadMustSucceed(t)
+			if snap.State.ReviewSeries.ProductReview.Completed != 1 || len(snap.State.StagedResults) != 0 {
+				t.Fatalf("correct result did not reach the ledger: completed=%d staged=%d", snap.State.ReviewSeries.ProductReview.Completed, len(snap.State.StagedResults))
+			}
+		})
+	}
+}
+
 // askAndDecideRejecting 创建 Ask 后提交决定并返回其错误；零状态变化断言
 // 只围绕决定提交本身（Ask 落账是合法提交，不属于被拒部分）。
 func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) error {

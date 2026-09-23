@@ -212,9 +212,6 @@ func (s Series) validate(runID string, action Action) error {
 	if s.Completed != projectedCompleted {
 		return fail("completed=%d does not match the candidate projection %d", s.Completed, projectedCompleted)
 	}
-	if unoccupiedAuthorizations(s) > 1 {
-		return fail("series holds more than one unconsumed extra-round authorization")
-	}
 	currentLimit := s.AutomaticLimit + len(s.Authorizations)
 	remainingAutomatic := max(0, s.AutomaticLimit-s.Completed)
 	remainingCapacity := remainingAutomatic + unoccupiedAuthorizations(s)
