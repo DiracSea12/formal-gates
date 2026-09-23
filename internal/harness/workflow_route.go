@@ -121,7 +121,11 @@ func (c *Compose) clearDisposition(taskID string) {
 func (c *Compose) routeDisposition(ctx context.Context, task string) (ComposeState, bool) {
 	d, stands, readErr := c.readDisposition(task)
 	if readErr != nil {
-		return ComposeState{}, false // an unreadable fact decides nothing yet; the transitions that must read it surface the failure
+		// The row is this transition's necessary fact — every branch below
+		// (the ask, the continuation re-arm, the answer's resolve) is derived
+		// from it — so its read failure is this layer's failure stop, never
+		// a flattened "no row" the later transitions would route around.
+		return ComposeState{Status: StatusFailed, Err: readErr}, true
 	}
 	if !stands {
 		return ComposeState{}, false // no row stands: the kernel row is the whole fact, nothing to clean up
@@ -454,7 +458,11 @@ func (c *Compose) advanceCheckRounds(ctx context.Context) error {
 	round := c.repairRounds()
 	for _, check := range c.spec.spec.Checks {
 		task := checkTaskID(check.ID)
-		if c.dispositionStands(task) {
+		stands, err := c.dispositionStands(task)
+		if err != nil {
+			return err
+		}
+		if stands {
 			continue
 		}
 		var current struct {
@@ -542,15 +550,16 @@ func (c *Compose) taskGeneration(taskID string) int64 {
 }
 
 // dispositionStands reports whether one task's disposition note still owns
-// its stage — an open question or an answer not yet applied. An unreadable
-// row reports not standing, the same tolerance every kernel read here
-// carries: an unreadable fact decides nothing.
-func (c *Compose) dispositionStands(task string) bool {
+// its stage — an open question or an answer not yet applied. The row is the
+// fact every caller's decision turns on (skipping a check round, holding
+// the repair entry, keeping a recovered call parked), so an unreadable row
+// is an error the caller maps to its own failure, never "not standing".
+func (c *Compose) dispositionStands(task string) (bool, error) {
 	_, stands, err := c.readDisposition(task)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return stands
+	return stands, nil
 }
 
 // unplacedDisposition reports whether any standing park row still has
@@ -559,25 +568,27 @@ func (c *Compose) dispositionStands(task string) bool {
 // keeps advancing while one does, so a single waiting stop carries
 // every askable question (a parked result's disposal and a pending
 // restart ask surface together instead of one hiding the other). Inert
-// rows (route-guard) are no work.
-func (c *Compose) unplacedDisposition(ctx context.Context) bool {
+// rows (route-guard) are no work. Each row is a necessary fact of the
+// report — an unreadable one is an error the caller maps to its own
+// failure, never a skipped row the stop would silently drop.
+func (c *Compose) unplacedDisposition(ctx context.Context) (bool, error) {
 	for _, task := range c.disposedTasks() {
 		d, stands, err := c.readDisposition(task)
 		if err != nil {
-			continue // an unreadable fact decides nothing yet; the transitions that must read it surface the failure
+			return false, err
 		}
 		if !stands || d.Kind == "route-guard" {
 			continue
 		}
 		if d.Kind == "continue" {
-			return true
+			return true, nil
 		}
 		question, asked := c.standingQuestion(ctx, task)
 		if !asked || question.Answered {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // routeRepair drives the repair loop: evaluate's repair route, the
@@ -597,7 +608,9 @@ func (c *Compose) routeRepair(ctx context.Context) (ComposeState, bool) {
 	// next verdict only exists after the chain re-verified. While the
 	// round's ask or repair is still in flight, the guards below hold the
 	// entry.
-	if c.dispositionStands(taskDevelopment) {
+	if stands, err := c.dispositionStands(taskDevelopment); err != nil {
+		return ComposeState{Status: StatusFailed, Err: err}, true
+	} else if stands {
 		return ComposeState{}, false
 	}
 	// A standing ask is the user's to answer: re-entering the kernel's

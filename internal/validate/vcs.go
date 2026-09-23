@@ -3,7 +3,9 @@ package validate
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -130,7 +132,7 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 		// 文件仍照常拦截。
 		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1")
 		if err == nil {
-			pending = excludeRuntimeUntrackedGitStatus(pending)
+			pending = excludeRuntimeUntrackedGitStatus(root, pending)
 		}
 	case "svn":
 		pending, err = r.runner.Run(root, "svn", "status", "--quiet", root)
@@ -149,39 +151,77 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 	return nil
 }
 
+// runtimeGitStatusDirs are formal-gates 的保留运行期目录（git status 路径形
+// 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先 gitignore 它
+// 们。清单在这里单源持有——逐路径豁免与折叠条目的枚举豁免都读这一份。
+var runtimeGitStatusDirs = []string{
+	".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
+}
+
 // excludeRuntimeUntrackedGitStatus removes porcelain "?? <path>" lines that sit
 // under formal-gates 的保留运行期目录。这些目录由 CLI 自身创建/维护，不是交付文件；
 // 宿主仓库未必预先 gitignore 它们。若这些路径被跟踪后出现修改（非 "?? " 行），仍照常
 // 作为未提交变更拦截——只豁免未跟踪的运行期产物。
-func excludeRuntimeUntrackedGitStatus(status string) string {
+func excludeRuntimeUntrackedGitStatus(repoRoot, status string) string {
 	lines := strings.Split(status, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.HasPrefix(line, "?? ") && isRuntimeGitStatusPath(strings.TrimSpace(line[3:])) {
-			continue
+		if strings.HasPrefix(line, "?? ") {
+			path := normalizeGitStatusPath(strings.TrimSpace(line[3:]))
+			if isRuntimeGitStatusPath(path) {
+				continue
+			}
+			// git 的 normal 未跟踪模式会把整个未跟踪目录折叠成一条 "?? .gates/"。
+			// 折叠只证明「目录内没有任何已跟踪文件」，不证明「内容全是运行期产
+			// 物」——豁免必须实际枚举仓库根下 .gates 的一级子项证实：全部落在
+			// 保留清单内才豁免折叠条目；出现任何其他子项（或无法枚举）则保留该
+			// 条目照常拦截。宿主一旦跟踪了 .gates 内文件，git 不再折叠，其余未
+			// 跟踪文件仍照常拦截。
+			if (path == ".gates" || path == ".gates/") && gatesHoldsOnlyRuntimeChildren(repoRoot) {
+				continue
+			}
 		}
 		kept = append(kept, line)
 	}
 	return strings.Join(kept, "\n")
 }
 
-func isRuntimeGitStatusPath(path string) bool {
+// normalizeGitStatusPath strips git porcelain's optional quoting and unifies
+// separators, so a path from "?? <path>" compares against the manifest.
+func normalizeGitStatusPath(path string) string {
 	path = strings.Trim(path, `"`)
-	path = strings.ReplaceAll(path, `\`, "/")
-	// git 在 normal 未跟踪模式下会把没有任何已跟踪文件的目录折叠成一条
-	// "?? .gates/"。.gates 内只有 formal-gates 的运行期产物（tmp 运行状
-	// 态、run-locks 锁文件、results、engine 状态），折叠条目同样按运行
-	// 期输出豁免；宿主一旦跟踪了 .gates 内文件，git 不再折叠，其余未跟
-	// 踪文件仍照常拦截。
-	if path == ".gates" || path == ".gates/" {
-		return true
-	}
-	for _, dir := range []string{".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/"} {
+	return strings.ReplaceAll(path, `\`, "/")
+}
+
+func isRuntimeGitStatusPath(path string) bool {
+	for _, dir := range runtimeGitStatusDirs {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true
 		}
 	}
 	return false
+}
+
+// gatesHoldsOnlyRuntimeChildren reports whether every first-level child of
+// the repo root's .gates directory is a reserved runtime directory. An
+// unreadable .gates reports false: a folded "?? .gates/" entry then stays
+// and is intercepted, never exempted on a guess about content that could
+// not be enumerated.
+func gatesHoldsOnlyRuntimeChildren(repoRoot string) bool {
+	entries, err := os.ReadDir(filepath.Join(repoRoot, ".gates"))
+	if err != nil {
+		return false
+	}
+	runtime := make(map[string]bool, len(runtimeGitStatusDirs))
+	for _, dir := range runtimeGitStatusDirs {
+		runtime[strings.TrimSuffix(strings.TrimPrefix(dir, ".gates/"), "/")] = true
+	}
+	for _, entry := range entries {
+		if !runtime[entry.Name()] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r commandVCSResolver) Resolve(root string) (string, error) {

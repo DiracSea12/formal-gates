@@ -131,7 +131,9 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		// stopping, so one waiting stop carries EVERY askable question —
 		// a parked result's disposal is never hidden behind a different
 		// pending ask.
-		if c.unplacedDisposition(ctx) {
+		if placed, err := c.unplacedDisposition(ctx); err != nil {
+			return ComposeState{Status: StatusFailed, Err: err}, true
+		} else if placed {
 			return ComposeState{}, false
 		}
 		// A user question outranks an observation notice: the user can act
@@ -168,7 +170,9 @@ func (c *Compose) classify(ctx context.Context, err error) (ComposeState, bool) 
 		// still has transitions to apply, so the loop advances and the
 		// next run surfaces the question (or runs the re-armed work)
 		// instead of reporting a wait nothing can move.
-		if c.unplacedDisposition(ctx) {
+		if placed, err := c.unplacedDisposition(ctx); err != nil {
+			return ComposeState{Status: StatusFailed, Err: err}, true
+		} else if placed {
 			return ComposeState{}, false
 		}
 		return ComposeState{Status: StatusObserved}, true
@@ -300,10 +304,15 @@ func (c *Compose) executePlanGate(ctx context.Context, inv runner.Invocation) (r
 	if c.latestOutcome(taskPlan) != nil {
 		return resultOf(&workerOutput{Generation: inv.Generation, Revision: c.spec.revision})
 	}
-	// An unreadable park row reads as absent here (an unreadable fact
-	// decides nothing): only a row that provably stands parks the
-	// invocation.
-	if _, stands, err := c.readDisposition(taskPlan); err == nil && stands {
+	// The park row is the necessary fact of every branch below — stay
+	// parked, record the approval, ask anew — so an unreadable row is
+	// this executor's own failure, never an absent row the re-park path
+	// below would paper over.
+	_, stands, err := c.readDisposition(taskPlan)
+	if err != nil {
+		return runner.Result{}, fmt.Errorf("compose: the plan approval cannot read its park row: %w", err)
+	}
+	if stands {
 		// The row stands: its question is the route's to place and the
 		// user's to answer — this invocation stays unsettled until the
 		// approve answer's resolve supersedes it.

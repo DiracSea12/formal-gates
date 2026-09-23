@@ -2,6 +2,8 @@ package validate
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,6 +156,59 @@ func TestNativeVCSResolverIgnoresUntrackedRuntimeDirectories(t *testing.T) {
 	}
 	if err := resolver.VerifyReady("/repo"); err == nil {
 		t.Fatalf("tracked modification under a runtime directory was accepted: %v", err)
+	}
+}
+
+// TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent verifies the folded
+// "?? .gates/" entry: git normal mode collapsing the whole untracked directory
+// only proves nothing inside is tracked, so the exemption must enumerate the
+// repo root's .gates first-level children — all reserved runtime directories
+// exempts the folded entry; any other child (or an unreadable .gates) keeps
+// the entry and the dirty check intercepts it.
+func TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent(t *testing.T) {
+	root := t.TempDir()
+	resolverFor := func(pending string) nativeVCSResolver {
+		resolver, err := resolverForVCS("git", &scriptedNativeRunner{outputs: []string{root, pending}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolver
+	}
+
+	// Runtime-only children: the folded entry is exempted.
+	for _, dir := range []string{"tmp", "run-locks", "results"} {
+		if err := os.MkdirAll(filepath.Join(root, ".gates", dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := resolverFor("?? .gates/").VerifyReady(root); err != nil {
+		t.Fatalf("folded .gates/ holding only runtime children blocked a snapshot: %v", err)
+	}
+
+	// A non-runtime first-level child under the folded entry: not exempted.
+	if err := os.WriteFile(filepath.Join(root, ".gates", "delivery-note.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolverFor("?? .gates/").VerifyReady(root); err == nil ||
+		!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("folded .gates/ with a non-runtime child was exempted: %v", err)
+	}
+	// The same non-runtime child listed explicitly (git stops folding once it
+	// matters) is intercepted by the per-path rule as before.
+	if err := resolverFor("?? .gates/delivery-note.txt").VerifyReady(root); err == nil {
+		t.Fatalf("explicit non-runtime child under .gates was exempted: %v", err)
+	}
+
+	// An unreadable .gates fails closed: the folded entry stays and intercepts.
+	// (A missing .gates cannot coexist with a real "?? .gates/" line; the case
+	// pins the fail-closed direction of the enumeration itself.)
+	other := t.TempDir()
+	resolver, err := resolverForVCS("git", &scriptedNativeRunner{outputs: []string{other, "?? .gates/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady(other); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
+		t.Fatalf("folded .gates/ over a missing directory was exempted: %v", err)
 	}
 }
 

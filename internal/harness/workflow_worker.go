@@ -150,11 +150,21 @@ func (c *Compose) outcomeGenerations(taskID string) []int64 {
 //
 // No payload at the named generation means no current outcome — nil,
 // never a fallback to an older generation's file.
+//
+// The read order's degraded case is stated here once and nowhere else:
+// an UNREADABLE park row also takes the kernel-current generation
+// branch. That is the parked-result read order's own design, not a
+// flattened error: latestOutcome is a fact reader shared by many
+// callers and each of them owns its own nil decision as its
+// necessary-read failure (retryBrief's "no recorded outcome",
+// planQuestionBody's missing review inputs); the park row is a
+// NECESSARY control read only for the transitions and the plan
+// executor (routeDisposition, dispositionStands, unplacedDisposition,
+// executePlanGate), and those surface a row-read failure as their own
+// layer's failure instead of reading through it.
 func (c *Compose) latestOutcome(taskID string) *outcomeRecord {
-	// A standing, readable park row (other than the inert route-guard) pins
-	// the generation its outcome must be read at; an unreadable or absent
-	// row leaves the task's own current generation to decide (an unreadable
-	// fact decides nothing).
+	// The read order, including the unreadable-row degraded case, is the
+	// doc comment's — this branch only implements it.
 	generation := int64(0)
 	if d, stands, err := c.readDisposition(taskID); err == nil && stands && d.Kind != "route-guard" {
 		generation = d.Generation

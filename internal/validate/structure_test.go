@@ -80,12 +80,15 @@ func TestWhiteboxVerifyReadyRejectsTrackedRuntimeModification(t *testing.T) {
 }
 
 func TestWhiteboxIsRuntimeGitStatusPath(t *testing.T) {
-	for _, path := range []string{".gates", ".gates/", ".gates/tmp", ".gates/tmp/run-1/state.json", ".gates/run-locks", ".gates/run-locks/run-1.lock", ".gates/qa-isolation/run-1/", ".gates/slices/run-1/", ".gates/results/old-run.json"} {
+	for _, path := range []string{".gates/tmp", ".gates/tmp/run-1/state.json", ".gates/run-locks", ".gates/run-locks/run-1.lock", ".gates/qa-isolation/run-1/", ".gates/slices/run-1/", ".gates/results/old-run.json"} {
 		if !isRuntimeGitStatusPath(path) {
 			t.Fatalf("runtime path %q not recognized as a reserved runtime directory", path)
 		}
 	}
-	for _, path := range []string{"delivery-new.txt", ".gates/other/run.json", "internal/code.go", ".gates/tmp-notes.md"} {
+	// 折叠条目 ".gates"/".gates/" 不再按路径无条件豁免：折叠只证明目录内无已跟踪
+	// 文件，豁免与否由仓库根下 .gates 一级子项的枚举决定（见 vcs_test.go 的
+	// TestNativeVCSResolverFoldsGatesEntryByEnumeratedContent），路径层永远判非运行期。
+	for _, path := range []string{"delivery-new.txt", ".gates", ".gates/", ".gates/other/run.json", "internal/code.go", ".gates/tmp-notes.md"} {
 		if isRuntimeGitStatusPath(path) {
 			t.Fatalf("non-runtime path %q misclassified as a reserved runtime directory", path)
 		}

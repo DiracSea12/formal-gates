@@ -62,7 +62,9 @@ func (c *Compose) consult(ctx context.Context, inv runner.Invocation) (runner.Ta
 	if turn == "" {
 		// A standing disposition with no call at all is a deliberate park
 		// that never reached the host: the retry revision owns it.
-		if c.dispositionStands(inv.TaskID) {
+		if stands, err := c.dispositionStands(inv.TaskID); err != nil {
+			return runner.TakeoverOutcome{}, err
+		} else if stands {
 			c.noteObservation(inv.TaskID, inv.InvocationID)
 			return runner.TakeoverOutcome{Observe: true}, nil
 		}
