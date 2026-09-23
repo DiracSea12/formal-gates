@@ -601,3 +601,22 @@ round 38 记录两处不实，现更正：①"三对象判定到位"应为"第�
 收拢非行为修复（九审明示）；Windows 仍无真机；CI 待推送实证；无规模性能基准；admit 534 行/
 Install 496 行为阅读成本线索非缺陷。验证方法注记：本轮起小改动按改动面定向验证，全仓/race 仅限
 横切多包或架构级改动（机主 2026-09-23 指令）。
+
+## 十审与 G4 链终态（round 40，2026-09-23）
+
+十审（候选 `4cfe124`）：**PASS，0 P0/P1/P2，1 P3 测试建议**——上轮 P2 误拦截与 P3 列举缺口均经独立
+探针确认关闭。P3＝TestSnapshotDirtyCheckFollowsGitIgnoreRules 的 commitAll(git add --all) 把运行期
+锁一并提交，"未跟踪锁＋被忽略笔记"前置实际未成立。修复（单代理，仅测试文件 +72/−31）：三子场景各
+自独立仓库、只提交交付文件（局部助手 commitDeliveryPaths，共享 commitAll 不动）、AdvanceSnapshot 前
+requireRunLockUntracked 逐行断言锁仍被 git 报为未跟踪；**双向负控**：隔离副本换回 6f5374c 缺陷实现
+→ runtime_lock_and_ignored_local_note 子场景恰好 FAIL；候选实现 → 全 PASS。主代理亲跑重写后测试绿
+（3.2s）＋定向套件绿＋vet/gofmt 干净，未跑全量（定向）。
+
+### G4（Go 内核 K1–K5）链终态声明
+
+G1–G3 迁移链此前已全部收口（G3b 机主裁定通过）；G4＝Go 内核新形态，K1（单所有者/任务事务/顺序执
+行/结果接纳）→ K2（流程确认与持久等待）→ K3（并行、汇合、成功结果保留）→ K4（会话/收据/恢复边）
+→ K5（组合层：四轮评审返修＋架构收敛波＋真实验收＋质量收敛波，十审止）。**K1–K5 全链收口：G4 完
+成**。真实宿主绿链（DSH＋ZCode、HARNESS_COMPLETE＋归档）为阶段 3"最小纵向 engine 闭环"退出条件的
+实证。**下一单元＝阶段 4「Git 非分片 regular 全流程」（incremental-seal-plan.md §3），开工前与机主
+对齐**（沿账本惯例）。残留不变：CI 待推送实证、Windows 无真机、无规模基准（round 39 账目为准）。
