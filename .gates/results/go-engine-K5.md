@@ -546,3 +546,33 @@ validate 402.9s）＋coordination/persistence/runner race 绿＋windows/amd64 �
   CI 先建后测）→ 副本环境性 FAIL 一次；对照实验（开发目录同跑绿）＋bin 构建后副本 tagged
   412.2s/untagged 348.4s 双绿。配方教训入记忆：交付等同副本＝排除历史副本＋预建 launcher。
 - 残留如实：CI 变更无法本地执行（分支无远端），需推送后由 Actions 实证；Windows 真机仍待机主门。
+
+## 质量收敛波与冻结（round 38，2026-09-23）
+
+八审（质量复审，工作树补丁 SHA-256 748f1c83…）：**本轮 PASS**——三对象判定到位，未发现新增
+P0/P1；遗留 P2（vcs 折叠 `.gates/` 整体豁免过宽）与 P3（五处读失败控制流压平）。评审方法记取：
+125 组公开 bridge 输入以基线与当前二进制**逐字节**对照（覆盖五操作全分支），此后重大改动照此法。
+
+**质量波（提交 82f5414，12 文件）**：五个 domain 判断函数类型化（routeVerdict/retentionVerdict/
+allowanceVerdict/admissionVerdict/workerAction），JSON 投影只在 bridge dispatch 一处（消费面事实：
+graph.py 经 bridge 六 case 实际调用全部五操作、差分语料逐键比对——13/13 绿）；zcodeExecute 339→28
+行六步线性主干（parse→open→prepare→send→await→settle）＋zcodeRequest/zcodeSession 显式携带者，
+清理分建立失败与成功移交两路；CreateRun 返回类型化 HeldRunError，全仓最后一个内核错误文案解析点删
+除；readDisposition 三态＋六调用方显式政策。Python 全量双环境绿（开发树＋补 venv 的干净副本——副本
+配方补两条：预建 bin/formal-gates、补 .harness/venv，Python 测试把 HARNESS_ROOT 钉在仓库根）。
+
+**末笔（8 文件）**：P2——折叠条目豁免改为实际枚举（清单单源 runtimeGitStatusDirs；.gates 一级子项
+全部落清单内才豁免，任何其他子项或枚举失败 fail-closed 拦截；正控负控入树）。P3 判定表——
+routeDisposition/dispositionStands/unplacedDisposition/executePlanGate 四处**必要上抛**（各层既有失
+败形态：StatusFailed stop/executor error/Takeover error；新增正控 TestUnreadableParkRowFailsIts-
+NecessaryReaders 关库注入）；latestOutcome **可替代保留**（停驻结果降级读序为既定设计，权威注释收拢
+一处）。诚实边界：unplacedDisposition 行级读无黑盒注入通道（整库故障先命中列举读，列举读不在本次
+点名五处内未动），传播由签名与 classify 改写结构性保证，边界写入测试注释。
+
+**冻结电池（主代理亲跑，叠更干净副本）**：harness 411.4s、validate 419.4s（含 qastructure 452s 代
+理侧）、runner 4.6s、race 探针绿、windows/amd64 交叉编译过、vet/gofmt 干净。
+
+**冻结判定**：八审 PASS＋P2/P3 两遗留收口＋真实宿主绿链 PASS（round 37 续）＋退出准则兑现——
+**K5 冻结**。残留如实：CI 变更需推送后 Actions 实证（分支无远端）；Windows 仅编译＋语义映射、无真
+机；性能无规模基准（不声称无瓶颈）；admit 534 行/Install 496 行为阅读成本线索非缺陷（八审定
+位），后续按需小步理顺。
