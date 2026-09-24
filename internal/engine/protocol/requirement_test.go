@@ -2755,6 +2755,224 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 	}
 }
 
+// TestCarriedEvidenceBelowTheRedoFloorIsRejected：重走系列的 revision 下界
+// ＝最后一次覆盖它的重走决定（FreshFloor）——义务期只认绑当前权威 revision
+// 且签发不早于 floor 的新鲜轮（旧 revision 拒、pre-floor 派发拒）；义务清偿
+// 后 FreshFloor 留存，重走前的 terminal 僵尸旧 revision 迟到证据与新签发派
+// 发携旧 revision 的证据同样拒绝——已确认阻塞保持 effective、phase 不推
+// 进，全部拒绝零状态。
+func TestCarriedEvidenceBelowTheRedoFloorIsRejected(t *testing.T) {
+	cd, reg := productReviewDAGFixture(t,
+		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
+		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
+		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
+		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
+	)
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+	lanes := issueReady(t, engine)
+	laneA, laneB := lanes[0], lanes[1]
+
+	// lane.a 失败落定（不占轮）；lane.b 收 SPAWNED 回执后 terminal 化成为
+	// 僵尸——承诺凭回执计入、派发簿记已收回、签发代数保留。
+	submitSpawnReceipt(t, engine, "spawn-floor-a", laneA)
+	fail, err := NewWorkerResultEvent(EventID("result-floor-a-fail"), laneA, testProvider, OutcomeFail, "sha256:payload-floor-a-fail", authoring.FailureBusinessReject)
+	if err != nil {
+		t.Fatalf("failure event: %v", err)
+	}
+	if _, err := engine.Submit(fail, fp); err != nil {
+		t.Fatalf("lane.a failure settle: %v", err)
+	}
+	submitSpawnReceipt(t, engine, "spawn-floor-b", laneB)
+	terminalizeDispatchTask(t, engine, laneB)
+
+	// 确认重走产品审系列：pre-floor 在途派发按声明终止换新、空出的容量补
+	// 位——僵尸不在在途账上，保持计入。
+	askAndDecideRequirement(t, engine, "req-floor-redo", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-floor",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the product series is redone",
+	})
+	snap := engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if !series.FreshOwed || series.FreshFloor == 0 {
+		t.Fatalf("the redo must owe a fresh round at a positive floor: %+v", series)
+	}
+	if issued := snap.State.DispatchIssueRevisions[laneB]; issued >= series.FreshFloor {
+		t.Fatalf("the zombie must predate the redo floor: issued=%d floor=%d", issued, series.FreshFloor)
+	}
+	freshLane := pendingActionByStep(t, engine, "lane.d")
+	if freshLane == "" {
+		t.Fatal("the redo transaction must leave a fresh carrier for the product series")
+	}
+	if issued := snap.State.DispatchIssueRevisions[freshLane]; issued < series.FreshFloor {
+		t.Fatalf("the fresh carrier must be issued at or after the floor: issued=%d floor=%d", issued, series.FreshFloor)
+	}
+
+	// 义务期纪律不变：僵尸的旧 revision 证据与 pre-floor 派发的新 revision
+	// 证据都拒绝。
+	zombieCarried := reviewEvidence(review.ProductReview, laneB, "", "PASS", "pre-redo zombie pass", nil)
+	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev1", laneB, zombieCarried); err == nil {
+		t.Fatal("the pre-redo evidence must be rejected while the redo obligation holds")
+	}
+	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev2", laneB,
+		reviewEvidenceAt(review.ProductReview, laneB, "rev-2", "PASS", "fresh bound to a pre-floor dispatch", nil)); err == nil {
+		t.Fatal("evidence from a dispatch issued before the redo decision must be rejected while the obligation holds")
+	}
+
+	// 新鲜轮：携带者记一轮 FAIL（P1 finding）并经用户 CONFIRM 升为已确认
+	// 阻塞——义务清偿、effective=FAIL@rev-2、phase 保持。
+	submitSpawnReceipt(t, engine, "spawn-floor-fresh", freshLane)
+	freshFail, err := NewReviewWorkerResultEvent(EventID("result-floor-fresh-fail"), freshLane, testProvider, "sha256:payload-floor-fresh-fail",
+		reviewEvidenceAt(review.ProductReview, freshLane, "rev-2", "FAIL", "fresh round blocks", []review.Finding{
+			{Severity: "P1", Message: "the changed requirement is violated on the normal path"},
+		}))
+	if err != nil {
+		t.Fatalf("fresh round event: %v", err)
+	}
+	if _, err := engine.Submit(freshFail, fp); err != nil {
+		t.Fatalf("fresh round: %v", err)
+	}
+	snap = engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.FreshOwed || series.Effective.Status != "FAIL" || series.Effective.RequirementRevision != "rev-2" {
+		t.Fatalf("the fresh round must discharge the obligation and block: %+v", series.Effective)
+	}
+	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
+	candidate := series.RawCandidates[len(series.RawCandidates)-1]
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-floor-confirm", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-2",
+		ResultDigest: candidate.ResultDigest, FindingID: series.Effective.BlockingFindingIDs[0],
+		Decision: "CONFIRM", Reason: "the blocking finding is real", ExpectedEffectiveRevision: series.Effective.Revision,
+	}})
+	if !review.HasConfirmedBlocking(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview) {
+		t.Fatal("the finding must be confirmed blocking")
+	}
+	if phase := engine.LoadMustSucceed(t).State.Phase; phase != runtime.PhaseProductReview {
+		t.Fatalf("phase = %s, want PRODUCT_REVIEW while the fresh round blocks", phase)
+	}
+
+	// 义务清偿后的窗口：同一僵尸的同一旧 revision 证据拒绝（确认代数早于
+	// floor）——零状态、已确认阻塞保持、phase 不推进。
+	before := stateBytesOf(t, dir)
+	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-late", laneB, zombieCarried); err == nil {
+		t.Fatal("the post-discharge zombie evidence must be rejected below the redo floor")
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("the rejected zombie evidence changed state bytes")
+	}
+	// 同一僵尸改携新 revision 同样拒绝（pre-floor 派发：签发代数早于
+	// floor）。
+	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev2-late", laneB,
+		reviewEvidenceAt(review.ProductReview, laneB, "rev-2", "PASS", "fresh bound to a pre-floor dispatch", nil)); err == nil {
+		t.Fatal("evidence from a dispatch issued before the redo decision must stay rejected after the discharge")
+	}
+	// 重走后签发的派发（floor 代数）携旧 revision 也拒绝（确认代数早于
+	// floor）——回执未到，拒绝发生在暂存预检、零状态。
+	floorLane := pendingActionByStep(t, engine, "lane.c")
+	if floorLane == "" {
+		t.Fatal("the redo must leave a floor-issued carrier at lane.c")
+	}
+	newCarried, err := NewReviewWorkerResultEvent(EventID("result-floor-newcar-rev1"), floorLane, testProvider, "sha256:payload-floor-newcar-rev1",
+		reviewEvidence(review.ProductReview, floorLane, "", "PASS", "old revision on a floor-issued dispatch", nil))
+	if err != nil {
+		t.Fatalf("floor-issued carrier event: %v", err)
+	}
+	if _, err := engine.Submit(newCarried, fingerprintOf(t, engine)); err == nil {
+		t.Fatal("pre-redo revision evidence on a floor-issued dispatch must be rejected after the discharge")
+	}
+	snap = engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Completed != 1 || series.Effective.Status != "FAIL" || series.Effective.RequirementRevision != "rev-2" || !review.HasConfirmedBlocking(series) {
+		t.Fatalf("the confirmed blocking conclusion must hold: completed=%d %+v", series.Completed, series.Effective)
+	}
+	if phase := snap.State.Phase; phase != runtime.PhaseProductReview {
+		t.Fatalf("phase = %s, want PRODUCT_REVIEW (the confirmed blocking must gate the phase)", phase)
+	}
+	if _, admitted := snap.State.Results[laneB]; admitted {
+		t.Fatal("the zombie dispatch must not settle from rejected evidence")
+	}
+	if _, staged := snap.State.StagedResults[floorLane]; staged {
+		t.Fatal("the rejected evidence must not poison the staging slot")
+	}
+	assertSeriesCommitmentHeld(t, engine)
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}
+
+// TestCarriedEvidenceAtTheRedoFloorIsAdmitted：正控——重走系列清偿后，满足
+// revision 下界的证据照常经 carry 分支入账：floor 代数签发的派发携重走决
+// 定所确认 revision 的新一轮正常完成（completed 递增、effective 重投影
+// PASS、phase 推进）。
+func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
+	cd, reg := productReviewDAGFixture(t,
+		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
+		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
+	)
+	engine, _ := reviewEngine(t, cd, reg)
+	issueReady(t, engine)
+
+	// 重走产品审系列：两条 pre-floor 派发按声明终止，替换派发的签发代数
+	// ＝重走决定（floor）。
+	askAndDecideRequirement(t, engine, "req-atfloor-redo", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-atfloor",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the product series is redone",
+	})
+	snap := engine.LoadMustSucceed(t)
+	floor := snap.State.ReviewSeries.ProductReview.FreshFloor
+	carriers := []string{pendingActionByStep(t, engine, "lane.a"), pendingActionByStep(t, engine, "lane.b")}
+	for _, carrier := range carriers {
+		if carrier == "" || snap.State.DispatchIssueRevisions[carrier] < floor {
+			t.Fatalf("the replacement carriers must be issued at or after the floor: %v floor=%d", carriers, floor)
+		}
+	}
+
+	// 新鲜轮 FAIL@rev-2（P1 finding 未确认）清偿义务。
+	submitSpawnReceipt(t, engine, "spawn-atfloor-fresh", carriers[0])
+	freshFail, err := NewReviewWorkerResultEvent(EventID("result-atfloor-fresh-fail"), carriers[0], testProvider, "sha256:payload-atfloor-fresh-fail",
+		reviewEvidenceAt(review.ProductReview, carriers[0], "rev-2", "FAIL", "fresh round blocks", []review.Finding{
+			{Severity: "P1", Message: "the changed requirement is violated on the normal path"},
+		}))
+	if err != nil {
+		t.Fatalf("fresh round event: %v", err)
+	}
+	if _, err := engine.Submit(freshFail, fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("fresh round: %v", err)
+	}
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.FreshOwed || series.Effective.Status != "FAIL" {
+		t.Fatalf("the fresh round must discharge the obligation and block: %+v", series.Effective)
+	}
+
+	// 清偿后的 carry 新一轮：floor 派发携 rev-2 正常入账——effective 重投影
+	// PASS@rev-2、phase 推进 TECHNICAL_REVIEW。
+	submitSpawnReceipt(t, engine, "spawn-atfloor-second", carriers[1])
+	second, err := NewReviewWorkerResultEvent(EventID("result-atfloor-second"), carriers[1], testProvider, "sha256:payload-atfloor-second",
+		reviewEvidenceAt(review.ProductReview, carriers[1], "rev-2", "PASS", "second round at the floor", nil))
+	if err != nil {
+		t.Fatalf("second round event: %v", err)
+	}
+	if _, err := engine.Submit(second, fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("the floor-issued rev-2 round must be admitted after the discharge: %v", err)
+	}
+	snap = engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+		t.Fatalf("the floor round = completed %d %+v", series.Completed, series.Effective)
+	}
+	if phase := snap.State.Phase; phase != runtime.PhaseTechnicalReview {
+		t.Fatalf("phase = %s, want TECHNICAL_REVIEW after the floor round re-passes", phase)
+	}
+	assertSeriesCommitmentHeld(t, engine)
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}
+
 // TestBarrierHoldsTheReceiptPairingUntilTheDecision：屏障前暂存而屏障内收
 // 回执——回执是观察事实照常 ACCEPTED 落账，暂存保留、配对挂起（留痕），
 // 计轮为零；决定解除屏障的同一事务内补配对完成接纳。

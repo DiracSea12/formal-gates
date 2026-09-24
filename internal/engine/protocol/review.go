@@ -169,15 +169,24 @@ func validateRouteDecision(route *RouteDecision) error {
 
 // ---- 审查证据接纳（WORKER_RESULT 同事务） ----
 
-// confirmedRequirementRevision 报告给定需求 revision 是否属于确认账本
-// （账本为空时即受理回退值）——结论 carry 有效性的成员判定。
-func (s *State) confirmedRequirementRevision(revision string) bool {
+// confirmedRevisionGeneration 报告给定需求 revision 在确认账本内的确认
+// 代数（登记落账时的 state 代数）：属于账本返回其代数与 true，账本为空时
+// 受理回退值按代数零确认（与从未重走的 floor 同判，不收窄）。成员判定
+// （结论 carry 有效性）与重走系列的 revision 下界都读它。
+func (s *State) confirmedRevisionGeneration(revision string) (uint64, bool) {
 	for _, entry := range s.RequirementRevisions {
 		if entry.Revision == revision {
-			return true
+			return entry.StateRevision, true
 		}
 	}
-	return len(s.RequirementRevisions) == 0 && revision != "" && revision == s.RequirementRevision()
+	return 0, len(s.RequirementRevisions) == 0 && revision != "" && revision == s.RequirementRevision()
+}
+
+// confirmedRequirementRevision 报告给定需求 revision 是否属于确认账本
+// （账本为空时即受理回退值）。
+func (s *State) confirmedRequirementRevision(revision string) bool {
+	_, confirmed := s.confirmedRevisionGeneration(revision)
+	return confirmed
 }
 
 // effectivePass 报告 series 的 effective 结论是否为携带已确认 revision 的
@@ -208,7 +217,11 @@ func (s *State) dualReviewPass() bool {
 //	  且所在派发的签发代数不得早于该次决定的 fresh floor——pre-floor 派
 //	  发的证据一律拒绝（由接纳核心按声明终止并重签发）。
 //	其余（未勾选即续用）：绑任一已确认 revision 的证据按 carry 语义可纳
-//	  （用户不勾重走即 carry 授权，携原 revision 接纳）。
+//	  （用户不勾重走即 carry 授权，携原 revision 接纳）——但重走系列的
+//	  revision 下界＝最后一次覆盖它的重走决定：义务清偿后 FreshFloor 留
+//	  存（该系列被重走过的持久事实），确认代数或签发代数早于它的证据仍
+//	  拒（重走前的旧轮证据不得经 carry 翻回结论）；从未重走的系列无此
+//	  下界。
 //
 // 另受理 start-readiness 的双审顺序守卫（product-review 须携已确认
 // revision 的 effective PASS）、review 内核的记录变换（重复摘要、越限无
@@ -242,11 +255,21 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID str
 					evidence.Action, series.FreshFloor, issuedRevision),
 			}
 		}
-	} else if !s.confirmedRequirementRevision(evidence.RequirementRevision) {
+	} else if generation, confirmed := s.confirmedRevisionGeneration(evidence.RequirementRevision); !confirmed {
 		return review.Set{}, &RejectedError{
 			Code: CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("review evidence requirement revision %q is not a confirmed revision (current authoritative %q)",
 				evidence.RequirementRevision, s.RequirementRevision()),
+		}
+	} else if generation < series.FreshFloor || issuedRevision < series.FreshFloor {
+		// 重走系列的 revision 下界＝最后一次覆盖它的重走决定：revision 只前
+		// 进，每个新确认 revision 要么勾选重走了该 series，要么用户决定携
+		// 原结论续用——早于该决定的 revision 或派发都不再是合法的续用对象。
+		// floor 为零（从未重走）的系列两个比较恒假，carry 语义原样。
+		return review.Set{}, &RejectedError{
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("%s was redone by the requirement decision at state revision %d; carried evidence must bind a revision confirmed at or after it and come from a dispatch issued at or after it (revision confirmed at %d, dispatch issued at %d)",
+				evidence.Action, series.FreshFloor, generation, issuedRevision),
 		}
 	}
 	// §7.1.2 门槛：series 上存在当前 revision 下确认的 P0/P1 阻塞 finding

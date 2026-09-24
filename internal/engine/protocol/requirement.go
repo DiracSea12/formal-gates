@@ -174,8 +174,9 @@ const requirementChangeSourcePrefix = "requirement-change:"
 // seriesInRedoStale 报告 series 是否负有用户确认重走后的未清偿新鲜轮
 // 义务（FreshOwed——义务事实，不活在 effective 投影里，纠正不能解除）。
 // 该态下证据只认绑当前权威 revision 且派发不早于 series 的 fresh floor，
-// 新鲜轮完成接纳即清偿；未负有义务的 series 一律按 carry 语义接纳已确
-// 认 revision 的证据。
+// 新鲜轮完成接纳即清偿；不负义务的 series 按 carry 语义接纳已确认
+// revision 的证据，但重走过的系列（FreshFloor 留存）另受"revision 下界
+// ＝最后一次覆盖它的重走决定"约束（见 admitReviewEvidence）。
 func seriesInRedoStale(series review.Series) bool {
 	return series.FreshOwed
 }
