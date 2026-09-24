@@ -1754,6 +1754,7 @@ func TestInFlightReviewDispatchesCountAgainstSeriesCapacity(t *testing.T) {
 	if len(snap.State.PendingActions) != 0 {
 		t.Fatalf("the exhausted series must gate the successor: %+v", snap.State.PendingActions)
 	}
+	assertSeriesCommitmentHeld(t, engine)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
 		t.Fatalf("exhausted capacity = %+v", series)
 	}
@@ -1770,6 +1771,7 @@ func TestInFlightReviewDispatchesCountAgainstSeriesCapacity(t *testing.T) {
 	if !slices.Contains(snap.State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs, final) {
 		t.Fatalf("the granted slot must auto-bind the issued dispatch: %+v", snap.State.ReviewSeries.ProductReview.Authorizations[0])
 	}
+	assertSeriesCommitmentHeld(t, engine)
 }
 
 // pendingActionByStep 返回指定步骤当前 pending action 的 ID（在途派发多
@@ -1936,6 +1938,7 @@ func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) 
 	if !slices.Contains(series.Authorizations[1].DispatchIDs, sibling) {
 		t.Fatalf("the admitted dispatch must bind the slot free of in-flight carriers: %+v", series.Authorizations[1])
 	}
+	assertSeriesCommitmentHeld(t, engine)
 
 	// 在途承载者先入账（占 auth[0]）后，另一支携自己的 auth[1] 一次入账
 	//——不再有任何引用形态被三路皆拒。引用 auth[0] 或空授权的证据照旧拒
@@ -1972,6 +1975,7 @@ func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) 
 	if series.Completed != 5 || series.ExtraConsumed != 2 || len(snap.State.PendingActions) != 0 {
 		t.Fatalf("both rounds must settle on their own slots without a stranded dispatch: %+v %+v", series, snap.State.PendingActions)
 	}
+	assertSeriesCommitmentHeld(t, engine)
 }
 
 // TestQuarantinedAuthorizedRoundsReplayAfterBarrierLift：两条越限派发各绑

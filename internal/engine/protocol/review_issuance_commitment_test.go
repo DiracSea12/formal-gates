@@ -77,6 +77,7 @@ func driftToCapacityDip(t *testing.T, engine *Engine, tag string) (string, strin
 	if liveCarriersOn(t, engine, 0) != 1 {
 		t.Fatalf("the granted slot must carry exactly the one live dispatch: %+v", series.Authorizations[0])
 	}
+	assertSeriesCommitmentHeld(t, engine)
 	return overLimit, authID
 }
 
@@ -118,6 +119,7 @@ func TestDriftKeepsEveryAdmittedDispatchRecordableInEitherOrder(t *testing.T) {
 		if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
 			t.Fatalf("no dispatch may stay stranded: %+v", pending)
 		}
+		assertSeriesCommitmentHeld(t, engine)
 	})
 
 	t.Run("slot freed by an automatic record", func(t *testing.T) {
@@ -146,6 +148,7 @@ func TestDriftKeepsEveryAdmittedDispatchRecordableInEitherOrder(t *testing.T) {
 		if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
 			t.Fatalf("no dispatch may stay stranded: %+v", pending)
 		}
+		assertSeriesCommitmentHeld(t, engine)
 	})
 }
 
@@ -198,6 +201,7 @@ func TestSelfConsistentIssuanceSparesAuthorizationSlots(t *testing.T) {
 	if got := series.Authorizations[0].DispatchIDs; slices.Contains(got, fanA) || slices.Contains(got, fanB) {
 		t.Fatalf("self-consistent issuance must not bind the free slot: %+v", got)
 	}
+	assertSeriesCommitmentHeld(t, engine)
 
 	// 两条自洽派发都按自动容量落地：授权槽保持未消费（第四轮的记录已被
 	// 整轮作废排除，槽空出）。
@@ -218,6 +222,7 @@ func TestSelfConsistentIssuanceSparesAuthorizationSlots(t *testing.T) {
 	if series.Completed != 4 || series.ExtraConsumed != 1 {
 		t.Fatalf("final series = %+v", series)
 	}
+	assertSeriesCommitmentHeld(t, engine)
 }
 
 // TestReplacementInheritsItsBoundSlot：换新派发继承承载被换新旧派发的原槽
@@ -271,6 +276,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		if series.Completed != 4 || series.ExtraConsumed != 1 {
 			t.Fatalf("final series = %+v", series)
 		}
+		assertSeriesCommitmentHeld(t, engine)
 	})
 
 	t.Run("unbound dispatch stays unbound", func(t *testing.T) {

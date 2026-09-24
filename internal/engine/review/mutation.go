@@ -41,7 +41,7 @@ func AppendAuthorization(set Set, runID string, action Action, reason string) (S
 }
 
 // BindDispatch 把一个 dispatch 绑到第一条干净授权槽上（既无有效结果占用，
-// 也不承载任何在途派发——live 判定在途，由协议层以挂起派发账传入）；没有
+// 也不承载任何在途派发——"在途"＝未落定，判定谓词由协议层传入）；没有
 // 干净槽时拒绝。绑定是背书行为，只发生在需要背书的放行上（签发闸的背书
 // 形）；容量自洽的签出不绑槽，不消费用户的授权。
 func BindDispatch(set Set, runID string, action Action, dispatchID string, live func(dispatchID string) bool) (Set, error) {

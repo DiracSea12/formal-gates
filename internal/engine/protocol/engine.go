@@ -631,11 +631,32 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 	return 0
 }
 
-// liveDispatch 判定一条派发是否仍在途（PendingActions 成员）。授权绑定的
-// 选槽以它排除"空槽已承载在途派发"——见 review.BindDispatch。
+// liveDispatch 判定一条派发是否仍未落定——签发闸的在途计数与授权槽的
+// 干净判定共用的承诺谓词。在途集合＝未落定派发：
+//   - PendingActions 成员（任务未到终态）；或
+//   - 回执状态为 SPAWNED/ATTACHED（派发真实在途过），且结果未入账
+//     （Results 无该派发）、派发未退位（ObsoleteActions 无该派发）。
+//
+// 任务 terminal 化只收回簿记，不解除承诺：terminal 派发的迟到结果仍可经
+// 对账路径合法入账，承诺必须覆盖"结果仍可合法入账的每一条派发"。承诺解
+// 除仅随派发命运落定：结果入账（Results，含 terminal 对账与隔离重放的接
+// 纳）、换新退位（ObsoleteActions）、spawn 从未成功（回执非
+// SPAWNED/ATTACHED——FAILED 只进失败史，UNKNOWN 尚待对账）。被隔离重放
+// 拒绝的记录消化入迟到证据账（ObsoleteResults＋留痕），但派发本身不因此
+// 落定——新的合法结果仍可对账入账，直到某个结果真正落账或派发退位。
 func (s *State) liveDispatch(dispatchID string) bool {
-	_, pending := s.PendingActions[dispatchID]
-	return pending
+	if _, pending := s.PendingActions[dispatchID]; pending {
+		return true
+	}
+	receipt, receipted := s.SpawnReceipts[dispatchID]
+	if !receipted || (receipt.Status != SpawnStatusSpawned && receipt.Status != SpawnStatusAttached) {
+		return false
+	}
+	if _, recorded := s.Results[dispatchID]; recorded {
+		return false
+	}
+	_, retired := s.ObsoleteActions[dispatchID]
+	return !retired
 }
 
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
@@ -703,9 +724,11 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 //
 // 闭环不变量：任意时点，每条在途审查派发要么持有独占干净槽（入账必可背
 // 书），要么容量自洽（任何序下入账仍在容量内）——放行 ⇒ 可背书 ⇒ 可入账
-// 对任意兄弟入账序成立；一条派发与在途兄弟共享槽的形状不存在。在途派发
-// 数＝PendingActions 中同系列标记的活派发数，同批签出的派发按签出顺序逐
-// 个计入（同批的自洽形放行者同样计入并占位"未持槽在途"）。
+// 对任意兄弟入账序成立；一条派发与在途兄弟共享槽的形状不存在。在途集合
+// ＝未落定派发（liveDispatch）：除 PendingActions 成员外，簿记已随任务
+// 终态收回、回执仍在账且结果未入账的 terminal 派发同样计入（terminal 化
+// 不解除承诺），同批签出的派发按签出顺序逐个计入（同批的自洽形放行者同
+// 样计入并占位"未持槽在途"）。
 //
 // 被闸住的 action 不签发、不转移任务，保持 Expected（retainExpected 语
 // 义）；授权落账后的下一次收尾补位经本闸自然签发。无系列标记或标记不在
@@ -713,17 +736,32 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action) decision.IssuedSet {
 	inflight := map[review.Action]int{}
 	unslotted := map[review.Action]bool{}
-	for actionID, pending := range s.PendingActions {
-		if pending.ReviewSeries == "" {
-			continue
-		}
-		series, ok := s.ReviewSeries.Series(pending.ReviewSeries)
+	countLive := func(actionID string, mark review.Action) {
+		series, ok := s.ReviewSeries.Series(mark)
 		if !ok {
+			return
+		}
+		inflight[mark]++
+		if review.AuthorizationOfDispatch(series, actionID) == "" {
+			unslotted[mark] = true
+		}
+	}
+	for actionID, pending := range s.PendingActions {
+		if pending.ReviewSeries != "" {
+			countLive(actionID, pending.ReviewSeries)
+		}
+	}
+	// 簿记已收回的 terminal 派发：系列身份从回执固化的任务步骤推导（签发
+	// 标记与步骤标记同源——issueInto 以同一函数落标记）。
+	for actionID, receipt := range s.SpawnReceipts {
+		if _, pending := s.PendingActions[actionID]; pending {
 			continue
 		}
-		inflight[pending.ReviewSeries]++
-		if review.AuthorizationOfDispatch(series, actionID) == "" {
-			unslotted[pending.ReviewSeries] = true
+		if !s.liveDispatch(actionID) {
+			continue
+		}
+		if mark := reviewSeriesOf(receipt.Task.Step); mark != "" {
+			countLive(actionID, mark)
 		}
 	}
 	admitted := make(decision.IssuedSet, 0, len(issued))

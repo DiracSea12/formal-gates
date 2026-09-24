@@ -68,10 +68,10 @@ func availableAuthorization(s Series) (int, bool) {
 }
 
 // bindableAuthorization 返回第一个可承载背书绑定的授权下标；没有时第二
-// 返回值为 false。可承载的槽是干净槽：既无有效结果占用，也不承载任何在
-// 途派发（live 判定在途，由协议层以挂起派发账传入）。绑定只发生在需要背
-// 书的放行上（签发闸的背书形与换新继承），一条派发与在途兄弟共享槽的形
-// 状不存在——闭环论证见协议层签发闸的承诺注释。
+// 返回值为 false。可承载的槽是干净槽：既无有效结果占用，也不承载任何
+// 在途派发（"在途"＝未落定，判定谓词由协议层传入——见协议层 liveDispatch）。
+// 绑定只发生在需要背书的放行上（签发闸的背书形与换新继承），一条派发与
+// 在途兄弟共享槽的形状不存在——闭环论证见协议层签发闸的承诺注释。
 func bindableAuthorization(s Series, live func(dispatchID string) bool) (int, bool) {
 	occupied := OccupiedAuthorizationIDs(s)
 	for index, authorization := range s.Authorizations {
