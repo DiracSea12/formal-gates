@@ -227,10 +227,10 @@ func HasConfirmedBlocking(s Series) bool {
 	return false
 }
 
-// FindingOwner 报告哪条 series 的有效（未被整轮失效排除）证据中存在给定
-// digest 的 finding。发现项驱动的需求修订用它把载荷里的 FindingDigest 绑
-// 定回真实账目；不存在的 finding 无法驱动修订。
-func FindingOwner(set Set, findingDigest string) (Action, bool) {
+// FindingDecision 报告给定 digest 的 finding 的所属动作、有效裁决与有效
+// 严重度（仅在未被整轮失效排除的证据中查找）。发现项驱动的需求修订以它
+// 核对来源标签与真实裁决的一致性。
+func FindingDecision(set Set, findingDigest string) (action Action, decision, severity string, ok bool) {
 	for _, action := range []Action{ProductReview, StartReadiness} {
 		series, _ := set.Series(action)
 		for _, candidate := range series.RawCandidates {
@@ -239,12 +239,20 @@ func FindingOwner(set Set, findingDigest string) (Action, bool) {
 			}
 			for _, finding := range candidate.Findings {
 				if finding.Digest == findingDigest {
-					return action, true
+					decision, severity, _ = EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+					return action, decision, severity, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", "", "", false
+}
+
+// FindingOwner 报告哪条 series 的有效（未被整轮失效排除）证据中存在给定
+// digest 的 finding；不存在的 finding 无法驱动修订。
+func FindingOwner(set Set, findingDigest string) (Action, bool) {
+	action, _, _, ok := FindingDecision(set, findingDigest)
+	return action, ok
 }
 
 // candidateByDigest 按 result digest 查找候选。

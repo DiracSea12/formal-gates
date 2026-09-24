@@ -44,9 +44,9 @@ const (
 	ControlConfirmTopology       ControlKind = "CONFIRM_TOPOLOGY"
 	ControlSelectRoute           ControlKind = "SELECT_ROUTE"
 	// ControlRequestRequirementChange 是用户需求变化控制（总需求 §6.3.2/
-	// §7.2）：Ask 期间进入修订屏障，DECIDE 携 typed Requirement 载荷登记
-	// 新确认 revision 并机械执行用户勾选的重走范围（或作为 decline 只结
-	// Ask、不登记）。
+	// §7.2）：Ask 期间进入修订屏障，DECIDE 以封闭 choice id（proceed/
+	// abort）锚定——proceed 必携 typed Requirement 载荷登记新确认 revision
+	// 并机械执行用户勾选的重走范围，abort 不携载荷、不登记。
 	ControlRequestRequirementChange ControlKind = "REQUEST_REQUIREMENT_CHANGE"
 )
 

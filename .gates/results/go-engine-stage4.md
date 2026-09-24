@@ -130,3 +130,17 @@ Git provider＋canary＋route matrix。
 已知残留（子代理如实披露）：Phase A 未覆盖 HostAction intent 签发（对应区段尚未接入引擎）；ConfirmedRevision 未落 FindingDigest（P1 scope 的加载期复验靠其余链约束）；USER_INITIATED+PRESERVED 可在存在未消 P0/P1 时登记（与 legacy NeedsReReview 值级同形，机主如需更严再加规则）。
 
 **R2 收口，待外部评审。R3＝QA 管线（3.5a 覆盖契约接入、case-set FROZEN、wave）＋开发后 REQ-015 件（finding/problem ID 归并史、RETRY_EXHAUSTED、每快照唯一返修）。**
+
+## 第 47 轮（2026-09-24，R2 评审返修，轻装）
+
+外部评审对 R2（`74b6d4a`）判 FAIL：3 P1＋3 P2，全部主代理公开 API 探针复现坐实：
+
+- P1-1 abort＋载荷仍登记 revision → choice 锚定（proceed/abort 封闭；abort 禁载荷、proceed 必携；外来 id 拒）。
+- P1-2 只勾产品审重走却级联 void 技术审、被迫多耗一轮——**系第 46 轮派发合同的裁定错误**（StaleSeries 级联）→ 需求变化路径去级联，只刷勾选 series；纠正路径的 markUpstreamStale 保持（同 revision 上游推翻的依赖语义）；产品重过后携用技术审零新轮过门。
+- P1-3 屏障未隔离结果接纳与 HostAction intent → WORKER_RESULT（含暂存）屏障期拒绝（CHANGE_BARRIER_ACTIVE、零状态、原 ID 可重交）；persistHostAction 共享落账缝统一拒（覆盖 Resume/Terminate）；观察类事件不受阻。
+- P2-4 续用结论的 finding 无法纠正（stale 门按当前权威）→ 纠正实参改 series 当前 effective 绑定 revision＋账本 carry 门；精确绑定与 CAS 不变。
+- P2-5 来源分类未对照真实裁决（确认 P1 可贴 P2 标签登记 PRESERVED）→ 新增内核 `FindingDecision` 有效裁决查询；P1 源 ⇔ 已确认阻塞、P2 源 ⇔ 存在且非阻塞，不符拒；升级须走真实标签。
+- P2-6 revision 切换未清暂存（旧 rev 结果毒化迟到回执与新结果）→ CHANGED 同事务清除 redo scope 覆盖 series 的旧 revision 审查暂存并落 RecoveryRecord 留痕。
+- 保护错误语义的两条既有测试按新语义重写（屏障期计轮→quarantine；强制技术审→携用）。六探针翻绿；engine 15 包＋cli 全绿、vet/gofmt 干净。模型调用 0。
+
+**R2 返修收口，待外部评审复核。**

@@ -882,6 +882,15 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
+		// 修订屏障（Phase A，§7.2.2）：结果一律 quarantine——暂存与配对
+		// 完成都在屏障期间拒绝（可区分错误、零状态，事件不进台账，决定
+		// 后可原 ID 重交），防止旧 revision 结果经暂存槽毒化配对。
+		if state.requirementChangePending() {
+			return Acceptance{}, nil, false, &RejectedError{
+				Code:   CodeChangeBarrierActive,
+				Detail: fmt.Sprintf("worker result %q is quarantined while a requirement change ask is pending; resubmit after the decision", ev.Result.ActionID),
+			}
+		}
 		actionID := ev.Result.ActionID
 		// 结果身份与事件级 canonical 同一 wire 形态：审查证据是结果字节
 		// 的一部分，不参与即同外层摘要下换审查内容会被误判 DUPLICATE。
@@ -1418,6 +1427,15 @@ func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActio
 }
 
 func (e *Engine) persistHostAction(state *State, revision uint64, intent HostActionIntent, expectedFingerprint string) (HostActionIntent, uint64, error) {
+	// 修订屏障（Phase A，§7.2.2）：停止新的权威状态写入——HostAction
+	// intent 的落账（adapter 执行与 resume/terminate）在屏障期间拒绝，
+	// 决定后重试。观察类（Ask/回执/lifecycle/task-progress）不受阻。
+	if state.requirementChangePending() {
+		return HostActionIntent{}, 0, &RejectedError{
+			Code:   CodeChangeBarrierActive,
+			Detail: "host action intents are frozen while a requirement change ask is pending",
+		}
+	}
 	if _, exists := state.PendingHostActions[intent.ActionID]; exists {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("host action %q already exists", intent.ActionID)}
 	}

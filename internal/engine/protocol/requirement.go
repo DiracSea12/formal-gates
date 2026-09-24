@@ -36,6 +36,12 @@ const (
 	// RequirementClassificationChanged：含义变化——机械执行用户勾选的
 	// 重走项。
 	RequirementClassificationChanged = "CHANGED"
+
+	// requirement 决定 choice id 的封闭两值（与 REVIEW_ROUND_GRANT 的
+	// grant/decline 同理的固定项锚定）：abort 放弃变更（不得携载荷），
+	// proceed 确认变更包（必携 typed 载荷）。
+	requirementProceedOption = "proceed"
+	requirementAbortOption   = "abort"
 )
 
 // requirementScopeItems 是 DecidedScope 的封闭重走项集合（固定顺序，前两
@@ -129,21 +135,33 @@ func (s *State) requirementChangePending() bool {
 
 // ---- 决定的账目变换（DECIDE 接纳路径） ----
 
-// admitRequirementDecision 在选项合法后执行需求变化控制的账目变换。nil
-// 载荷是 decline：只解决 Ask（屏障随之解除），不登记任何 revision——受理
-// Ask 的选项集由请求方枚举（如 proceed/abort），引擎无从锚定具体选项 id，
-// typed 载荷才是登记修订的唯一权威。非 nil 载荷先过全部前置校验（任一拒
-// 绝零状态变化），再在同一事务内登记 ConfirmedRevision 并按分类机械执行
-// 用户勾选的重走项；未勾选的环节一律不动（§7.2.3：ImpactSet 是建议，用户
-// 逐项确认后引擎机械执行）。
+// admitRequirementDecision 在选项合法后执行需求变化控制的账目变换。
+// choice id 封闭为 proceed/abort（与 REVIEW_ROUND_GRANT 的 grant/decline
+// 同理的固定项锚定）：abort 不得携载荷——放弃即不登记；proceed 必携
+// typed 载荷。非空载荷先过全部前置校验（任一拒绝零状态变化），再在同一
+// 事务内登记 ConfirmedRevision、按分类机械执行用户勾选的重走项（未勾选
+// 的环节一律不动，§7.2.3：ImpactSet 是建议，用户逐项确认后引擎机械执
+// 行），并清空重走 series 上绑旧权威 revision 的暂存审查证据（防迟到回
+// 执把旧结果配对进账）。
 func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64) error {
 	if ask.Control != ControlRequestRequirementChange {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a requirement decision payload", ask.Control)}
 	}
-	payload := decide.Requirement
-	if payload == nil {
+	switch choice := string(decide.Choice); choice {
+	case requirementAbortOption:
+		if decide.Requirement != nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "aborting a requirement change cannot carry a decision payload"}
+		}
+		// 放弃：只解决 Ask（屏障随之解除），不登记任何 revision。
 		return nil
+	case requirementProceedOption:
+		if decide.Requirement == nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "proceeding with a requirement change requires the typed requirement payload"}
+		}
+	default:
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement change choice %q invalid (closed set: proceed, abort)", choice)}
 	}
+	payload := decide.Requirement
 	reject := func(detail string) error {
 		return &RejectedError{Code: CodeRequirementDecisionRejected, Detail: detail}
 	}
@@ -154,27 +172,43 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if payload.BaseRevision != current {
 		return reject(fmt.Sprintf("requirement decision base revision %q is not the current authoritative revision %q (conflict)", payload.BaseRevision, current))
 	}
-	// 分类规则（§7.1 的引擎强制）：
-	//   - REVIEW_FINDING_P1 必须 CHANGED 且重走范围必须包含 finding 所在
-	//     审查 series（确认 P0/P1 的新鲜复审义务，用户不可选 PRESERVED）。
-	//   - REVIEW_FINDING_P2 允许 PRESERVED（默认）或 CHANGED（用户升级权）。
-	//   - USER_INITIATED 两种分类皆可。
-	// 发现项驱动的修订必须绑回真实账目中存在的 finding。
+	// 来源↔分类↔真实裁决（§7.1 的引擎强制）：
+	//   - REVIEW_FINDING_P1 ⇔ finding 现为已确认阻塞（有效裁决 CONFIRM/
+	//     RESEVERITIZE 且有效严重度 P0/P1），且必须 CHANGED、重走范围包含
+	//     finding 所在 series——确认 P0/P1 的新鲜复审义务，用户不可选
+	//     PRESERVED。
+	//   - REVIEW_FINDING_P2 ⇔ finding 存在且非已确认阻塞（P2/P3 处置默认
+	//     meaning-preserved；用户升级为 CHANGED 走 P1 来源，标签必须真实）。
+	//   - USER_INITIATED 两种分类皆可，不绑 finding。
+	var owner review.Action
 	if payload.Source != RequirementSourceUserInitiated {
-		owner, found := review.FindingOwner(state.ReviewSeries, payload.FindingDigest)
+		action, decision, severity, found := review.FindingDecision(state.ReviewSeries, payload.FindingDigest)
 		if !found {
 			return reject(fmt.Sprintf("requirement decision binds finding digest %q that no recorded review evidence contains", payload.FindingDigest))
 		}
+		owner = action
+		confirmedBlocking := (decision == "CONFIRM" || decision == "RESEVERITIZE") && (severity == "P0" || severity == "P1")
 		if payload.Source == RequirementSourceReviewFindingP1 {
+			if !confirmedBlocking {
+				return reject(fmt.Sprintf("REVIEW_FINDING_P1 requires the finding to be a confirmed blocking finding (effective decision %q at severity %q)", decision, severity))
+			}
 			if payload.Classification != RequirementClassificationChanged {
 				return reject("a REVIEW_FINDING_P1 requirement decision must be classified CHANGED (a confirmed P0/P1 requires the fresh re-review)")
 			}
 			if (owner == review.ProductReview && !payload.RedoProductReview) || (owner == review.StartReadiness && !payload.RedoStartReadiness) {
 				return reject(fmt.Sprintf("a REVIEW_FINDING_P1 requirement decision must redo the owning review series %s", owner))
 			}
+		} else if confirmedBlocking {
+			return reject("REVIEW_FINDING_P2 cannot label a confirmed blocking finding; declare the REVIEW_FINDING_P1 source (the CHANGED upgrade stays available there)")
 		}
 	}
 	scope := make([]string, 0, len(requirementScopeItems))
+	redoSeries := func(action review.Action) bool {
+		if action == review.ProductReview {
+			return payload.RedoProductReview
+		}
+		return payload.RedoStartReadiness
+	}
 	if payload.Classification == RequirementClassificationChanged {
 		for _, item := range requirementScopeItems {
 			switch item {
@@ -209,15 +243,15 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		StateRevision:  nextRevision,
 	})
 	if payload.Classification != RequirementClassificationChanged {
-		// PRESERVED：审查 series、拓扑、路线全部不动——不清审、不重审、
-		// 不耗审查轮次（§7.1.3）。
+		// PRESERVED：审查 series、拓扑、路线、暂存全部不动——不清审、
+		// 不重审、不耗审查轮次（§7.1.3）。
 		return nil
 	}
 	// CHANGED：只机械执行勾选项。勾选的 series 调单 series stale 原语
-	//（product-review 的重走按依赖语义级联置 start-readiness 的
-	// UpstreamVoid——是结论失效，不是重走范围自动扩大）；勾选拓扑/路线
-	// 即解绑，重新确认走既有 CONFIRM_TOPOLOGY/SELECT_ROUTE 路径。phase
-	// 与推进门不变，由 advanceReviewPhases 的既有条件自然生效。
+	//（不跨 series 级联：未勾选即续用，其 PASS 由 carry 判定继续有效；
+	// 新一轮产品审 FAIL/阻塞时双审门自然关门）；勾选拓扑/路线即解绑，
+	// 重新确认走既有 CONFIRM_TOPOLOGY/SELECT_ROUTE 路径。phase 与推进门
+	// 不变，由 advanceReviewPhases 的既有条件自然生效。
 	source := "requirement-change:" + requestID
 	if payload.RedoProductReview {
 		state.ReviewSeries = review.StaleSeries(state.ReviewSeries, review.ProductReview, source)
@@ -231,6 +265,21 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if payload.RedoRoute {
 		state.RouteMode = ""
 		state.SelectedGates = nil
+	}
+	// 重走 series 上绑旧权威 revision 的暂存审查证据一并作废：否则迟到
+	// 回执会把旧 revision 结果配对进账（F3 拒绝回执提交）并挤占暂存槽
+	// 使新结果 RECEIPT_CONFLICT。未覆盖 series、绑当前 revision 的暂存与
+	// 非 Review 暂存不动；作废逐条落 RecoveryRecords 留痕。
+	for actionID, staged := range state.StagedResults {
+		if staged.Review == nil || staged.Review.RequirementRevision != payload.BaseRevision || !redoSeries(staged.Review.Action) {
+			continue
+		}
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			ActionID: actionID,
+			Detail:   fmt.Sprintf("staged %s evidence bound to requirement revision %q invalidated by the confirmed requirement change %s", staged.Review.Action, payload.BaseRevision, payload.CandidateRevision),
+			Revision: nextRevision,
+		})
+		delete(state.StagedResults, actionID)
 	}
 	return nil
 }

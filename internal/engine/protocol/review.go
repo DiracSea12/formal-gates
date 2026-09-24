@@ -326,9 +326,22 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				Detail: fmt.Sprintf("correction payload (decision %q, finding %q) does not match the chosen option %q", correction.Decision, correction.FindingID, decide.Choice),
 			}
 		}
+		// 纠正的 stale 门按 series 当前结论绑定的需求 revision 判定（不按
+		// 当前权威）：需求修订后续用的结论绑旧 revision，其 finding 的处置
+		// 纠正仍须可行。绑定 revision 必须经确认账本成员判定（carry 有效）
+		// ——账本外的结论不可作为纠正目标。候选==effective digest 的精确
+		// 绑定与 CAS 由内核不变。
+		targetSeries, seriesKnown := state.ReviewSeries.Series(correction.Action)
+		if !seriesKnown {
+			return reviewReject(fmt.Errorf("review: unknown pre-development review action %q", correction.Action))
+		}
+		boundRevision := targetSeries.Effective.RequirementRevision
+		if !state.confirmedRequirementRevision(boundRevision) {
+			return reviewReject(fmt.Errorf("correction target on %s is bound to requirement revision %q outside the confirmed ledger", correction.Action, boundRevision))
+		}
 		correction.UserAuthorized = true
 		correction.Source = "engine-decide:" + requestID
-		updated, err := review.ApplyCorrection(state.ReviewSeries, state.RunID, state.RequirementRevision(), correction)
+		updated, err := review.ApplyCorrection(state.ReviewSeries, state.RunID, boundRevision, correction)
 		if err != nil {
 			return reviewReject(err)
 		}
