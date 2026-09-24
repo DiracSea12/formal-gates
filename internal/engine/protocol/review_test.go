@@ -1646,10 +1646,15 @@ func TestReleasedAuthorizationSlotIsConsumedByTheNextIssuance(t *testing.T) {
 	}
 }
 
-// parallelReviewLanesFixture 构造同系列并行审查步定义：prep 后两条并行产
-// 品审步（review.lane.a、review.lane.b），lane.a 之后串行 review.followup.one
-// 与 review.followup.two——在途计数需要"同系列多条派发同时在途"的形态。
-func parallelReviewLanesFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+// dagStep 声明产品审 DAG 中的一个 agent 步：步名与显式依赖。
+type dagStep struct {
+	name string
+	deps []string
+}
+
+// productReviewDAGFixture 构造 prep 本地步后接显式依赖 DAG 的产品审
+// agent 步定义（步骤按声明序给定，签发序以引擎实际派发为准）。
+func productReviewDAGFixture(t *testing.T, steps ...dagStep) (*compiler.CompiledDefinition, *compiler.Registry) {
 	t.Helper()
 	reg := compiler.NewRegistry()
 	must := func(err error) {
@@ -1689,16 +1694,26 @@ func parallelReviewLanesFixture(t *testing.T) (*compiler.CompiledDefinition, *co
 	}
 	prep, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.test.prep"})
 	must(err)
-	steps := []authoring.Step{
-		prep,
-		reviewStep("review.lane.a", "prep.parse"),
-		reviewStep("review.lane.b", "prep.parse"),
-		reviewStep("review.followup.one", "review.lane.a"),
-		reviewStep("review.followup.two", "review.followup.one"),
+	definitionSteps := []authoring.Step{prep}
+	for _, step := range steps {
+		definitionSteps = append(definitionSteps, reviewStep(step.name, step.deps...))
 	}
-	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: steps}, reg)
+	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: definitionSteps}, reg)
 	must(err)
 	return cd, reg
+}
+
+// parallelReviewLanesFixture 构造同系列并行审查步定义：prep 后两条并行产
+// 品审步（review.lane.a、review.lane.b），lane.a 之后串行 review.followup.one
+// 与 review.followup.two——在途计数需要"同系列多条派发同时在途"的形态。
+func parallelReviewLanesFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	return productReviewDAGFixture(t,
+		dagStep{name: "review.lane.a", deps: []string{"prep.parse"}},
+		dagStep{name: "review.lane.b", deps: []string{"prep.parse"}},
+		dagStep{name: "review.followup.one", deps: []string{"review.lane.a"}},
+		dagStep{name: "review.followup.two", deps: []string{"review.followup.one"}},
+	)
 }
 
 // TestInFlightReviewDispatchesCountAgainstSeriesCapacity：签发闸按"已入账
@@ -1801,5 +1816,260 @@ func TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted(t *testing.T)
 	pending := snap.State.PendingActions[pendingActionID(t, engine)]
 	if pending.Step != "plain.worker" || pending.ReviewSeries != "" {
 		t.Fatalf("the issued successor must be the unmarked worker step: %+v", pending)
+	}
+}
+
+// grantSlotShapeFixture 构造"串行三轮 → 一对并行（round.four/round.five 挂
+// round.three）→ round.five 之后一对并行（round.six/round.seven）"的产品审
+// DAG：两条授权槽先后经整轮失效同时空出、槽上承载在途派发的形状需要两条
+// 并行对。
+func grantSlotShapeFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	return productReviewDAGFixture(t,
+		dagStep{name: "round.one", deps: []string{"prep.parse"}},
+		dagStep{name: "round.two", deps: []string{"round.one"}},
+		dagStep{name: "round.three", deps: []string{"round.two"}},
+		dagStep{name: "round.four", deps: []string{"round.three"}},
+		dagStep{name: "round.five", deps: []string{"round.three"}},
+		dagStep{name: "round.six", deps: []string{"round.five"}},
+		dagStep{name: "round.seven", deps: []string{"round.five"}},
+	)
+}
+
+// invalidateRoundOf 整轮作废绑定到 dispatchID 的候选。
+func invalidateRoundOf(t *testing.T, engine *Engine, requestID string, dispatchID string) {
+	t.Helper()
+	snap := engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	for _, candidate := range series.RawCandidates {
+		if candidate.DispatchID != dispatchID {
+			continue
+		}
+		choice := AskOption{ID: AskOptionID("INVALIDATE_RESULT"), Label: "invalidate"}
+		askAndDecide(t, engine, ControlReviewFindingDecision, requestID, []AskOption{choice}, choice.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+			Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision,
+			ResultDigest: candidate.ResultDigest,
+			Decision:     "INVALIDATE_RESULT", Invalidity: "INVALID",
+			Reason: "the round was misrecorded", ExpectedEffectiveRevision: series.Effective.Revision,
+		}})
+		return
+	}
+	t.Fatalf("no candidate bound to dispatch %s", dispatchID)
+}
+
+// TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots：两条授权槽
+// 先后占用又经整轮失效同时空出、其一承载在途未入账派发时，签发闸放行的
+// 第二条越限派发必须绑到独占的空槽——不是承载在途派发的那条。放行 ⇒ 可
+// 背书 ⇒ 可入账闭环：两条派发各自携各自槽的背书入账，互不挤占、无悬空。
+func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) {
+	cd, reg := grantSlotShapeFixture(t)
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+
+	// 三轮自动容量走满：four/five 并行对被闸。
+	action := issueReady(t, engine)[0]
+	for round := 1; round <= 3; round++ {
+		submitReviewResult(t, engine, "result-exclusive-"+string(rune('0'+round)), action, reviewEvidence(review.ProductReview, action, "", "PASS", "round "+string(rune('0'+round)), nil))
+		if round < 3 {
+			action = pendingActionID(t, engine)
+		}
+	}
+	if snap := engine.LoadMustSucceed(t); len(snap.State.PendingActions) != 0 {
+		t.Fatalf("the parallel pair must stay gated at exhausted capacity: %+v", snap.State.PendingActions)
+	}
+
+	// 授权一：补位签出并行对的一支并绑 auth[0]；入账（completed 4）。
+	askAndDecide(t, engine, ControlReviewRoundGrant, "req-exclusive-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "one more round on the first lane",
+	}})
+	first := pendingActionID(t, engine)
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	auth1 := series.Authorizations[0].ID
+	if !slices.Contains(series.Authorizations[0].DispatchIDs, first) {
+		t.Fatalf("the first granted dispatch must bind the first slot: %+v", series.Authorizations[0])
+	}
+	submitReviewResult(t, engine, "result-exclusive-4", first, reviewEvidence(review.ProductReview, first, auth1, "PASS", "granted round one", nil))
+
+	// 授权二：补位签出另一支并绑 auth[1]；入账（completed 5）——six/seven
+	// 并行对被闸。
+	askAndDecide(t, engine, ControlReviewRoundGrant, "req-exclusive-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "one more round on the second lane",
+	}})
+	second := pendingActionID(t, engine)
+	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	auth2 := series.Authorizations[1].ID
+	if !slices.Contains(series.Authorizations[1].DispatchIDs, second) {
+		t.Fatalf("the second granted dispatch must bind the second slot: %+v", series.Authorizations[1])
+	}
+	submitReviewResult(t, engine, "result-exclusive-5", second, reviewEvidence(review.ProductReview, second, auth2, "PASS", "granted round two", nil))
+	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 5 {
+		t.Fatalf("both granted rounds must be recorded: %+v", series)
+	}
+	if snap := engine.LoadMustSucceed(t); len(snap.State.PendingActions) != 0 {
+		t.Fatalf("the second parallel pair must stay gated: %+v", snap.State.PendingActions)
+	}
+
+	// 整轮作废第一支：completed 4、auth[0] 释放，补位签出 six/seven 对的一
+	// 支并绑回 auth[0]（在途未入账）。
+	invalidateRoundOf(t, engine, "req-exclusive-invalidate-1", first)
+	carrier := pendingActionID(t, engine)
+	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	if series.Completed != 4 || series.RemainingCapacity != 1 {
+		t.Fatalf("the invalidated round must release its slot: %+v", series)
+	}
+	if !slices.Contains(series.Authorizations[0].DispatchIDs, carrier) {
+		t.Fatalf("the refill dispatch must rebind the released slot: %+v", series.Authorizations[0])
+	}
+
+	// 整轮作废第二支：completed 3、两条授权槽同时空出（auth[0] 只承载在途
+	// 派发）、在途 1 → 闸按 RemainingCapacity=2 放行并行对的另一支。它必须
+	// 绑 auth[1]（auth[0] 承载在途），不得与在途派发共享槽。
+	invalidateRoundOf(t, engine, "req-exclusive-invalidate-2", second)
+	sibling := pendingActionByStep(t, engine, "round.six")
+	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	if series.Completed != 3 || series.RemainingCapacity != 2 {
+		t.Fatalf("both invalidated rounds must free their slots: %+v", series)
+	}
+	if slices.Contains(series.Authorizations[0].DispatchIDs, sibling) {
+		t.Fatalf("the admitted dispatch must not share the slot carrying the in-flight dispatch: %+v", series.Authorizations[0])
+	}
+	if !slices.Contains(series.Authorizations[1].DispatchIDs, sibling) {
+		t.Fatalf("the admitted dispatch must bind the slot free of in-flight carriers: %+v", series.Authorizations[1])
+	}
+
+	// 在途承载者先入账（占 auth[0]）后，另一支携自己的 auth[1] 一次入账
+	//——不再有任何引用形态被三路皆拒。引用 auth[0] 或空授权的证据照旧拒
+	// 绝且零状态变化。
+	submitReviewResult(t, engine, "result-exclusive-6", carrier, reviewEvidence(review.ProductReview, carrier, auth1, "PASS", "rebound round", nil))
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-exclusive-7", sibling, "agent-exclusive-7"), fp); err != nil {
+		t.Fatalf("spawn sibling: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	for _, authRef := range []string{auth1, ""} {
+		ev, err := NewReviewWorkerResultEvent(EventID("result-exclusive-7-"+authRef), sibling, testProvider, "sha256:exclusive-"+authRef, reviewEvidence(review.ProductReview, sibling, authRef, "PASS", "misbound round", nil))
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		if _, err := engine.Submit(ev, fp); err == nil {
+			t.Fatalf("evidence referencing authorization %q was accepted for the exclusively bound dispatch", authRef)
+		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+			t.Fatalf("misbound evidence code = %q", code)
+		}
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected misbound evidence changed state bytes")
+	}
+	// 携自己的 auth[1]：一次入账，两槽各背书一轮、无悬空派发。
+	endorsed, err := NewReviewWorkerResultEvent("result-exclusive-7", sibling, testProvider, "sha256:payload-exclusive-7", reviewEvidence(review.ProductReview, sibling, auth2, "PASS", "round on its exclusive slot", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(endorsed, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("the exclusively bound round = %v %+v", err, acceptance)
+	}
+	snap := engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Completed != 5 || series.ExtraConsumed != 2 || len(snap.State.PendingActions) != 0 {
+		t.Fatalf("both rounds must settle on their own slots without a stranded dispatch: %+v %+v", series, snap.State.PendingActions)
+	}
+}
+
+// TestQuarantinedAuthorizedRoundsReplayAfterBarrierLift：两条越限派发各绑
+// 独占授权槽（其一承载在途时另一支不共享槽）后，结果在需求屏障期入隔离
+// 账；屏障解除的重放按 eventID 序逐条走同一接纳核心——无论哪条先重放，
+// 两条都各自入账，不出现"先重放者占槽、后重放者证据被永久作废"。
+func TestQuarantinedAuthorizedRoundsReplayAfterBarrierLift(t *testing.T) {
+	for name, order := range map[string]struct{ first, second string }{
+		"replays-six-first":   {"round.six", "round.seven"},
+		"replays-seven-first": {"round.seven", "round.six"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cd, reg := grantSlotShapeFixture(t)
+			engine, _ := reviewEngine(t, cd, reg)
+			fp := fingerprintOf(t, engine)
+
+			// 走满三轮、两次授权入账、两轮整轮作废——six/seven 各绑独占槽。
+			action := issueReady(t, engine)[0]
+			for round := 1; round <= 3; round++ {
+				submitReviewResult(t, engine, "result-quarantine-"+string(rune('0'+round)), action, reviewEvidence(review.ProductReview, action, "", "PASS", "round "+string(rune('0'+round)), nil))
+				if round < 3 {
+					action = pendingActionID(t, engine)
+				}
+			}
+			askAndDecide(t, engine, ControlReviewRoundGrant, "req-quarantine-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+				Action: review.ProductReview, Reason: "one more round on the first lane",
+			}})
+			first := pendingActionID(t, engine)
+			auth1 := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].ID
+			submitReviewResult(t, engine, "result-quarantine-4", first, reviewEvidence(review.ProductReview, first, auth1, "PASS", "granted round one", nil))
+			askAndDecide(t, engine, ControlReviewRoundGrant, "req-quarantine-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+				Action: review.ProductReview, Reason: "one more round on the second lane",
+			}})
+			second := pendingActionID(t, engine)
+			auth2 := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[1].ID
+			submitReviewResult(t, engine, "result-quarantine-5", second, reviewEvidence(review.ProductReview, second, auth2, "PASS", "granted round two", nil))
+			invalidateRoundOf(t, engine, "req-quarantine-invalidate-1", first)
+			carrier := pendingActionID(t, engine)
+			invalidateRoundOf(t, engine, "req-quarantine-invalidate-2", second)
+			sibling := pendingActionByStep(t, engine, "round.six")
+			series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+			if slices.Contains(series.Authorizations[0].DispatchIDs, sibling) || !slices.Contains(series.Authorizations[1].DispatchIDs, sibling) {
+				t.Fatalf("the sibling must bind the slot free of in-flight carriers: %+v", series.Authorizations)
+			}
+
+			// 屏障期：两条派发各携自己的授权提交结果，均入隔离账。
+			carrierAuth := map[string]string{"round.six": auth2, "round.seven": auth1}
+			if got := engine.LoadMustSucceed(t).State.PendingActions[carrier].Step; got != "round.seven" {
+				t.Fatalf("in-flight carrier = %s, want round.seven", got)
+			}
+			for _, actionID := range []string{carrier, sibling} {
+				if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-quarantine-"+actionID), actionID, "agent-"+actionID), fp); err != nil {
+					t.Fatalf("spawn %s: %v", actionID, err)
+				}
+			}
+			request, err := NewRequirementRequestEvent("req-quarantine-ask", requirementPackageOf(nil), requirementOptions()...)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			if _, err := engine.Submit(request, fp); err != nil {
+				t.Fatalf("ask: %v", err)
+			}
+			ordinal := map[string]string{"round.six": "a", "round.seven": "b"}
+			if order.first == "round.seven" {
+				ordinal["round.six"], ordinal["round.seven"] = "b", "a"
+			}
+			for _, step := range []string{order.first, order.second} {
+				actionID := sibling
+				auth := carrierAuth[step]
+				if step == "round.seven" {
+					actionID = carrier
+				}
+				ev, err := NewReviewWorkerResultEvent(EventID("result-quarantine-"+ordinal[step]), actionID, testProvider, "sha256:quarantine-"+step, reviewEvidence(review.ProductReview, actionID, auth, "PASS", "quarantined "+step, nil))
+				if err != nil {
+					t.Fatalf("event: %v", err)
+				}
+				acceptance, err := engine.Submit(ev, fp)
+				if err != nil {
+					t.Fatalf("quarantine %s: %v", step, err)
+				}
+				if acceptance.Status != "QUARANTINED" {
+					t.Fatalf("%s status = %q", step, acceptance.Status)
+				}
+			}
+
+			// 解除（放弃变更）：重放两条都入账，无作废、无暂存残留。
+			askAndDecideRequirement(t, engine, "req-quarantine-ask", "abort", nil)
+			snap := engine.LoadMustSucceed(t)
+			series = snap.State.ReviewSeries.ProductReview
+			if series.Completed != 5 || series.ExtraConsumed != 2 {
+				t.Fatalf("both quarantined rounds must replay onto their own slots: %+v", series)
+			}
+			if len(snap.State.ObsoleteResults) != 0 || len(snap.State.QuarantinedResults) != 0 {
+				t.Fatalf("no replayed result may be obsoleted or stay quarantined: %+v %+v", snap.State.ObsoleteResults, snap.State.QuarantinedResults)
+			}
+			if len(snap.State.PendingActions) != 0 {
+				t.Fatalf("both dispatches must settle: %+v", snap.State.PendingActions)
+			}
+		})
 	}
 }

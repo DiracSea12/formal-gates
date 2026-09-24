@@ -27,7 +27,7 @@ func richLedger(t *testing.T) (Set, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-s2")
+	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-s2", noDispatchInFlight)
 	authorizationID := mustSeries(t, set, StartReadiness).Authorizations[0].ID
 	set, readinessSecond := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s2", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
 	set = mustApply(t, set, runID, "rev-2", CorrectionInput{
@@ -278,7 +278,7 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRecomputed(t, set)
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-p3")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-p3", noDispatchInFlight)
 	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
 	set, extra := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p3", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "extra-round blocker"}}})
 	assertRecomputed(t, set)

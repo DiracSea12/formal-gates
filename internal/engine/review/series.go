@@ -55,11 +55,37 @@ func unoccupiedAuthorizations(s Series) int {
 }
 
 // availableAuthorization 返回第一个未被有效候选占用的授权下标；没有空槽时
-// 第二返回值为 false。
+// 第二返回值为 false。它承载准入语义（授权是否还有未消费轮、下一轮形态
+// 投影），与绑定的选槽语义区分。
 func availableAuthorization(s Series) (int, bool) {
 	occupied := OccupiedAuthorizationIDs(s)
 	for index, authorization := range s.Authorizations {
 		if !occupied[authorization.ID] {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+// bindableAuthorization 返回第一个可承载新派发绑定的授权下标；没有时第二
+// 返回值为 false。选槽按派发是否需要背书分两形：
+//   - 越限派发（Completed 已达 AutomaticLimit——与入账侧"结果必须携授权"
+//     同判）必须绑到独占槽：既无有效结果占用，也不承载任何在途派发（live
+//     判定在途，由协议层以挂起派发账传入）。闭环论证：若全部空槽都在途
+//     承载，空槽数不超过在途派发数，而签发闸放行越限派发的条件是
+//     RemainingCapacity（越限时恰为空槽数）大于在途派发数，两者矛盾——
+//     因此被闸放行的越限派发必有独占槽；找不到独占槽只剩未经闸的调用
+//     这一种形状。
+//   - 自动容量内的派发沿用首空槽绑定（与 availableAuthorization 同规）：
+//     多条派发共用同一授权时，至多一条在入账时消费该槽，其余按自动容量
+//     入账；闸的在途计数已保证容量容纳其余在途派发。
+func bindableAuthorization(s Series, live func(dispatchID string) bool) (int, bool) {
+	if s.Completed < s.AutomaticLimit {
+		return availableAuthorization(s)
+	}
+	occupied := OccupiedAuthorizationIDs(s)
+	for index, authorization := range s.Authorizations {
+		if !occupied[authorization.ID] && !slices.ContainsFunc(authorization.DispatchIDs, live) {
 			return index, true
 		}
 	}

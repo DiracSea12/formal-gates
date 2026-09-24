@@ -631,6 +631,13 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 	return 0
 }
 
+// liveDispatch 判定一条派发是否仍在途（PendingActions 成员）。授权绑定的
+// 选槽以它排除"空槽已承载在途派发"——见 review.BindDispatch。
+func (s *State) liveDispatch(dispatchID string) bool {
+	_, pending := s.PendingActions[dispatchID]
+	return pending
+}
+
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
 // 补位共用）：先经审查系列容量闸过滤，再对幸存集做重复 action/已有当前
 // Attempt/非法 QUEUED→ISSUED 转移校验，一律拒绝；Attempt ID 以落盘
@@ -676,11 +683,11 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
 		}
-		// 系列存在未被有效结果占用的授权（新授权或整轮失效释放的槽）时，
-		// 新派发自动绑上——授权槽由签发与自然重试路径消费，无需调用方手
-		// 工再绑。
+		// 系列存在可承载本派发的授权（新授权或整轮失效释放的槽；越限派发
+		// 要求槽不承载其他在途派发）时，新派发自动绑上——授权槽由签发与
+		// 自然重试路径消费，无需调用方手工再绑。
 		if mark := reviewSeriesOf(action.Step); mark != "" {
-			s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, mark, action.ActionID)
+			s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, mark, action.ActionID, s.liveDispatch)
 		}
 	}
 	return issued, nil

@@ -40,9 +40,11 @@ func AppendAuthorization(set Set, runID string, action Action, reason string) (S
 	return set, nil
 }
 
-// BindDispatch 把一个 dispatch 追加到第一条未被有效结果占用的授权上（运行
-// 期重试共用同一授权）；没有空槽授权时拒绝。
-func BindDispatch(set Set, runID string, action Action, dispatchID string) (Set, error) {
+// BindDispatch 把一个 dispatch 追加到第一条可承载它的授权上；没有可承载
+// 槽时拒绝。选槽规则见 bindableAuthorization：越限派发要求独占槽（不承载
+// 任何在途派发）；自动容量内的派发沿用首空槽绑定，运行期重试共用同一授
+// 权。live 判定一条派发是否在途，由协议层以挂起派发账传入（本包不可见）。
+func BindDispatch(set Set, runID string, action Action, dispatchID string, live func(dispatchID string) bool) (Set, error) {
 	if err := Validate(runID, set); err != nil {
 		return Set{}, err
 	}
@@ -53,7 +55,7 @@ func BindDispatch(set Set, runID string, action Action, dispatchID string) (Set,
 	if strings.TrimSpace(dispatchID) == "" {
 		return Set{}, fmt.Errorf("review: dispatch binding for %s requires a dispatch id", action)
 	}
-	index, ok := availableAuthorization(*series)
+	index, ok := bindableAuthorization(*series, live)
 	if !ok {
 		return Set{}, fmt.Errorf("review: %s has no unoccupied extra-round authorization for dispatch %s", action, dispatchID)
 	}
@@ -65,19 +67,20 @@ func BindDispatch(set Set, runID string, action Action, dispatchID string) (Set,
 	return set, nil
 }
 
-// BindDispatchToUnoccupied 把派发绑到 series 第一条未被有效结果占用的授
-// 权上：授权先于派发存在（grant 不绑派发），签发点（新派发/重签发）以此
-// 自动消费空槽——包括新落账的授权与整轮失效释放的槽。没有空槽授权时是
-// 无操作（自动容量内的普通签发）。
-func BindDispatchToUnoccupied(set Set, runID string, action Action, dispatchID string) Set {
+// BindDispatchToUnoccupied 把派发绑到 series 第一条可承载它的授权上：授权
+// 先于派发存在（grant 不绑派发），签发点（新派发/重签发）以此自动消费空
+// 槽——包括新落账的授权与整轮失效释放的槽；越限派发只绑不承载在途派发
+// 的独占槽。没有可承载槽时是无操作（自动容量内的普通签发无需背书；越限
+// 派发经签发闸放行时必有独占槽，见 bindableAuthorization 的闭环论证）。
+func BindDispatchToUnoccupied(set Set, runID string, action Action, dispatchID string, live func(dispatchID string) bool) Set {
 	series, err := set.seriesFor(action)
 	if err != nil {
 		return set
 	}
-	if _, ok := availableAuthorization(*series); !ok {
+	if _, ok := bindableAuthorization(*series, live); !ok {
 		return set
 	}
-	updated, err := BindDispatch(set, runID, action, dispatchID)
+	updated, err := BindDispatch(set, runID, action, dispatchID, live)
 	if err != nil {
 		return set
 	}

@@ -15,6 +15,10 @@ func verifiedByOperator() OperatorVerification {
 	}
 }
 
+// noDispatchInFlight 是绑定选槽的"在途判定"：本包测试不构造挂起派发账，
+// 恒为不在途。需要区分在途承载的测试就地给出自己的判定。
+func noDispatchInFlight(string) bool { return false }
+
 func mustRecord(t *testing.T, set Set, runID string, action Action, dispatch Dispatch, result Result) (Set, RawCandidate) {
 	t.Helper()
 	next, _, err := RecordCandidate(set, runID, action, dispatch, result, verifiedByOperator())
@@ -138,7 +142,7 @@ func TestCapacityAcrossAutomaticAndAuthorizedRounds(t *testing.T) {
 		t.Fatalf("authorization did not extend capacity: %#v", series)
 	}
 	// 授权先于派发存在：签发点把派发自动绑上（空账授权的 issuance 绑定）。
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4", noDispatchInFlight)
 	_, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-other", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"}, verifiedByOperator())
 	if err == nil || !strings.Contains(err.Error(), "not bound to a valid review authorization") {
 		t.Fatalf("result with an unbound dispatch was accepted: %v", err)
@@ -177,14 +181,14 @@ func TestConcurrentlyFreedAuthorizationSlotsKeepTheLedgerValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4", noDispatchInFlight)
 	firstGrant := mustSeries(t, set, ProductReview).Authorizations[0].ID
 	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: firstGrant}, Result{Status: "PASS"})
 	set, err = AppendAuthorization(set, runID, ProductReview, "fifth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5", noDispatchInFlight)
 	secondGrant := mustSeries(t, set, ProductReview).Authorizations[1].ID
 	set, fifth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-5", RequirementRevision: "rev-1", AuthorizationID: secondGrant}, Result{Status: "PASS"})
 	if series := mustSeries(t, set, ProductReview); series.Completed != 5 || series.ExtraConsumed != 2 {
@@ -232,7 +236,7 @@ func TestAppendAuthorizationGrantsOneRoundPrecedingItsDispatch(t *testing.T) {
 		t.Fatalf("accumulating an unconsumed authorization was accepted: %v", err)
 	}
 	// 授权的派发绑定发生在签发点：首个派发自动绑上。
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-1")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-1", noDispatchInFlight)
 	series, _ := set.Series(ProductReview)
 	firstID := series.Authorizations[0].ID
 	set, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1", AuthorizationID: firstID}, Result{Status: "PASS"}, verifiedByOperator())
@@ -244,7 +248,7 @@ func TestAppendAuthorizationGrantsOneRoundPrecedingItsDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-2")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-2", noDispatchInFlight)
 	series, _ = set.Series(ProductReview)
 	first, second := series.Authorizations[0], series.Authorizations[1]
 	if first.ID != firstID || first.ID == second.ID || first.DispatchIDs[0] != "dispatch-1" || second.DispatchIDs[0] != "dispatch-2" {
@@ -266,8 +270,8 @@ func TestBindDispatchAttachesToFirstUnoccupiedAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-4a")
-	set, err = BindDispatch(set, runID, StartReadiness, "dispatch-4b")
+	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-4a", noDispatchInFlight)
+	set, err = BindDispatch(set, runID, StartReadiness, "dispatch-4b", noDispatchInFlight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,8 +281,104 @@ func TestBindDispatchAttachesToFirstUnoccupiedAuthorization(t *testing.T) {
 		t.Fatalf("retry dispatch was not bound to the same authorization: %#v", authorization)
 	}
 	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-4b", RequirementRevision: "rev-1", AuthorizationID: authorization.ID}, Result{Status: "PASS"})
-	if _, err := BindDispatch(set, runID, StartReadiness, "dispatch-5"); err == nil || !strings.Contains(err.Error(), "no unoccupied") {
+	if _, err := BindDispatch(set, runID, StartReadiness, "dispatch-5", noDispatchInFlight); err == nil || !strings.Contains(err.Error(), "no unoccupied") {
 		t.Fatalf("binding to an occupied authorization was accepted: %v", err)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOverLimitBindingSkipsSlotsCarryingInFlightDispatches：两条授权槽同时
+// 空出（两轮整轮失效）、其一已承载在途未入账派发时，越限（completed 已达
+// 自动上限，入账必须携授权背书）的新派发必须绑到不承载在途派发的空槽——
+// 两条派发各得独占槽、各自可入账，闭环"放行 ⇒ 可背书 ⇒ 可入账"。全部空
+// 槽都在途承载时绑定拒绝：该形状经签发闸不可达（闸不在空槽数不超过在途
+// 数时放行越限派发），只有未经闸的直接调用可触达。
+func TestOverLimitBindingSkipsSlotsCarryingInFlightDispatches(t *testing.T) {
+	runID := "run-exclusive-bind"
+	set := NewSet()
+	for round := 1; round <= 3; round++ {
+		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	}
+	var err error
+	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4", noDispatchInFlight)
+	first := mustSeries(t, set, ProductReview).Authorizations[0].ID
+	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: first}, Result{Status: "PASS"})
+	set, err = AppendAuthorization(set, runID, ProductReview, "fifth round")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5", noDispatchInFlight)
+	second := mustSeries(t, set, ProductReview).Authorizations[1].ID
+	set, fifth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-5", RequirementRevision: "rev-1", AuthorizationID: second}, Result{Status: "PASS"})
+	// 两轮整轮失效：completed 回到 3、两条授权槽同时空出。
+	for _, candidate := range []RawCandidate{fourth, fifth} {
+		set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+			Action: ProductReview, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision,
+			Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "the round was misrecorded", Source: "user", UserAuthorized: true,
+		})
+	}
+	// 第一条越限派发绑回首空槽（无在途承载）；它仍在途时，第二条越限派发
+	// 必须跳过该槽、绑到另一条空槽。
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-6a", noDispatchInFlight)
+	live := func(dispatchID string) bool { return dispatchID == "dispatch-6a" }
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-6b", live)
+	series := mustSeries(t, set, ProductReview)
+	if firstOnSlot := series.Authorizations[0].DispatchIDs; firstOnSlot[len(firstOnSlot)-1] != "dispatch-6a" || slices.Contains(firstOnSlot, "dispatch-6b") {
+		t.Fatalf("the in-flight carrier keeps its exclusive slot: %#v", series.Authorizations[0].DispatchIDs)
+	}
+	if !slices.Contains(series.Authorizations[1].DispatchIDs, "dispatch-6b") {
+		t.Fatalf("the second over-limit dispatch must bind the other free slot: %#v", series.Authorizations[1].DispatchIDs)
+	}
+	// 各自入账：两条派发分别携各自槽背书，互不挤占。
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-6a", RequirementRevision: "rev-1", AuthorizationID: first}, Result{Status: "PASS"})
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-6b", RequirementRevision: "rev-1", AuthorizationID: second}, Result{Status: "PASS"})
+	series = mustSeries(t, set, ProductReview)
+	if series.Completed != 5 || series.ExtraConsumed != 2 {
+		t.Fatalf("both exclusive slots must endorse their own round: %+v", series)
+	}
+	// 全部空槽都在途承载：无可独占槽，越限绑定拒绝（签发闸下不可达形状的
+	// 负控）。
+	_, err = BindDispatch(set, runID, ProductReview, "dispatch-7", func(string) bool { return true })
+	if err == nil || !strings.Contains(err.Error(), "no unoccupied") {
+		t.Fatalf("binding over a fully in-flight-carried slot set was accepted: %v", err)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWithinCapacityBindingSharesTheFirstFreeSlot：自动容量内的派发沿用首
+// 空槽绑定（运行期重试共用同一授权）——即使该槽已承载在途派发。共用是
+// 良性的：至多一条共用派发在入账时消费该槽，其余按自动容量入账。
+func TestWithinCapacityBindingSharesTheFirstFreeSlot(t *testing.T) {
+	runID := "run-shared-bind"
+	set := NewSet()
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	var err error
+	set, err = AppendAuthorization(set, runID, ProductReview, "parallel round needs a slot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-2a", noDispatchInFlight)
+	// dispatch-2a 在途：容量内的 dispatch-2b 仍绑首空槽（共用）。
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-2b", func(dispatchID string) bool { return dispatchID == "dispatch-2a" })
+	series := mustSeries(t, set, ProductReview)
+	authorization := series.Authorizations[0]
+	if !slices.Contains(authorization.DispatchIDs, "dispatch-2a") || !slices.Contains(authorization.DispatchIDs, "dispatch-2b") {
+		t.Fatalf("a within-capacity dispatch must share the first free slot: %#v", authorization.DispatchIDs)
+	}
+	// 共用槽的闭环：一条按自动容量入账（不消费槽），另一条携槽入账。
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-2b", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-2a", RequirementRevision: "rev-1", AuthorizationID: authorization.ID}, Result{Status: "PASS"})
+	series = mustSeries(t, set, ProductReview)
+	if series.Completed != 3 || series.ExtraConsumed != 1 {
+		t.Fatalf("one sharer must consume the automatic capacity and the other the slot: %+v", series)
 	}
 	if err := Validate(runID, set); err != nil {
 		t.Fatal(err)
@@ -298,12 +398,12 @@ func TestBindDispatchToUnoccupiedConsumesReleasedSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4", noDispatchInFlight)
 	series, _ := set.Series(ProductReview)
 	authorizationID := series.Authorizations[0].ID
 	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
 	// 占用中的授权：签发点再绑定是无操作。
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5", noDispatchInFlight)
 	series, _ = set.Series(ProductReview)
 	if got := series.Authorizations[0].DispatchIDs; len(got) != 1 {
 		t.Fatalf("an occupied authorization must not rebind: %#v", got)
@@ -314,7 +414,7 @@ func TestBindDispatchToUnoccupiedConsumesReleasedSlots(t *testing.T) {
 		Decision: "INVALIDATE_RESULT", Invalidity: "INVALID",
 		Reason: "wrong document binding", Source: "user", UserAuthorized: true,
 	})
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5", noDispatchInFlight)
 	series, _ = set.Series(ProductReview)
 	if got := series.Authorizations[0].DispatchIDs; len(got) != 2 || got[1] != "dispatch-5" {
 		t.Fatalf("the released slot was not consumed at issuance: %#v", got)
@@ -335,8 +435,8 @@ func TestAuthorizationEndorsesAtMostOneValidResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-a")
-	set, err = BindDispatch(set, runID, ProductReview, "dispatch-b")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-a", noDispatchInFlight)
+	set, err = BindDispatch(set, runID, ProductReview, "dispatch-b", noDispatchInFlight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +488,7 @@ func TestRemainingCapacityAdmitsOnlyWhatTheLedgerBacks(t *testing.T) {
 		t.Fatalf("granted capacity = %+v", series)
 	}
 	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4", noDispatchInFlight)
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
 	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 0 || series.Completed != 4 {
 		t.Fatalf("authorized round did not consume its slot: %+v", series)
@@ -446,7 +546,7 @@ func TestTransformsKeepTheCallerInputSetImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	occupied = BindDispatchToUnoccupied(occupied, runID, ProductReview, "dispatch-4")
+	occupied = BindDispatchToUnoccupied(occupied, runID, ProductReview, "dispatch-4", noDispatchInFlight)
 	authorizationID := mustSeries(t, occupied, ProductReview).Authorizations[0].ID
 	occupied, fourth := mustRecord(t, occupied, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory concern"}}})
 
@@ -478,14 +578,14 @@ func TestTransformsKeepTheCallerInputSetImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sparse = BindDispatchToUnoccupied(sparse, runID, StartReadiness, "dispatch-4a")
-	sparse, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4b")
+	sparse = BindDispatchToUnoccupied(sparse, runID, StartReadiness, "dispatch-4a", noDispatchInFlight)
+	sparse, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4b", noDispatchInFlight)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	before = snapshot(t, sparse)
-	_, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4c")
+	_, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4c", noDispatchInFlight)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -217,10 +217,11 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 		// 系列身份是步骤的签发时事实，重签发随步继承。
 		ReviewSeries: pending.ReviewSeries,
 	}
-	// 系列存在未被有效结果占用的授权（整轮失效释放的槽）时，重签发派发
-	// 自动绑上（与 issueInto 同一条签发语义）。
+	// 系列存在可承载本派发的授权（整轮失效释放的槽；越限派发要求槽不承
+	// 载其他在途派发——被替换的旧派发已退位不在途，原槽仍可绑回）时，重
+	// 签发派发自动绑上（与 issueInto 同一条签发语义）。
 	if pending.ReviewSeries != "" {
-		s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, pending.ReviewSeries, actionID)
+		s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, pending.ReviewSeries, actionID, s.liveDispatch)
 	}
 	return attempt, nil
 }
