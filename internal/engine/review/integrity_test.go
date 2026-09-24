@@ -23,10 +23,11 @@ func richLedger(t *testing.T) (Set, string) {
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p2", RequirementRevision: "rev-2"}, Result{Status: "PASS", Findings: []Finding{{Severity: "P3", Message: "advisory only"}}})
 	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s1", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
 	var err error
-	set, err = AppendAuthorization(set, runID, StartReadiness, "operator wants one more readiness review", "dispatch-s2")
+	set, err = AppendAuthorization(set, runID, StartReadiness, "operator wants one more readiness review")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-s2")
 	authorizationID := mustSeries(t, set, StartReadiness).Authorizations[0].ID
 	set, readinessSecond := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s2", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
 	set = mustApply(t, set, runID, "rev-2", CorrectionInput{
@@ -272,11 +273,12 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p2", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
 	assertRecomputed(t, set)
 	var err error
-	set, err = AppendAuthorization(set, runID, ProductReview, "one more round needed", "dispatch-p3")
+	set, err = AppendAuthorization(set, runID, ProductReview, "one more round needed")
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRecomputed(t, set)
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-p3")
 	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
 	set, extra := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p3", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "extra-round blocker"}}})
 	assertRecomputed(t, set)

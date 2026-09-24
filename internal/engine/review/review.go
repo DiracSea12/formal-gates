@@ -153,8 +153,10 @@ type Series struct {
 	Effective      EffectiveStatus      `json:"effectiveReviewStatus"`
 }
 
-// RoundAuthorization 记录一次动作内、用户请求的额外语义轮授权。运行期重试
-// 可以把多个 dispatch 绑到同一授权上，但至多一个未被整轮失效的结果占用它。
+// RoundAuthorization 记录一次动作内、用户请求的额外语义轮授权。授权先于
+// 派发存在：创建时不绑定任何派发，首个派发在签发点自动绑上；运行期重试
+// 可以把多个 dispatch 绑到同一授权上，但至多一个未被整轮失效的结果占用
+// 它。
 type RoundAuthorization struct {
 	ID                    string   `json:"id"`
 	Action                Action   `json:"action"`

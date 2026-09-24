@@ -537,7 +537,8 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
 	state.retainExpected(plan.Next.Ready)
-	if err := state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf); err != nil {
+	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	if err != nil {
 		return nil, 0, err
 	}
 	commitRevision, err := e.commit(state, revision, expectedFingerprint)
@@ -631,19 +632,22 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 }
 
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
-// 补位共用）：重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移一律
-// 拒绝；Attempt ID 以落盘 revision 确定性派生。Expected 由调用方先登记
-// 完整 eligible Ready frontier，因此这里只补齐缺失的已签发任务。
-func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) error {
+// 补位共用）：先经审查系列容量闸过滤，再对幸存集做重复 action/已有当前
+// Attempt/非法 QUEUED→ISSUED 转移校验，一律拒绝；Attempt ID 以落盘
+// revision 确定性派生。Expected 由调用方先登记完整 eligible Ready
+// frontier，因此这里只补齐缺失的已签发任务。返回实际签出的子集（被闸住
+// 的 action 不在其中，保持 Expected）。
+func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) (decision.IssuedSet, error) {
+	issued = s.admitReviewIssuance(issued, reviewSeriesOf)
 	for _, action := range issued {
 		if _, exists := s.PendingActions[action.ActionID]; exists {
-			return &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("action %q already issued", action.ActionID)}
+			return nil, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("action %q already issued", action.ActionID)}
 		}
 		if _, exists := s.Attempts[action.Task]; exists {
-			return &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("task %s already has a current attempt", action.Task.String())}
+			return nil, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("task %s already has a current attempt", action.Task.String())}
 		}
 		if err := s.TransitionTask(action.Task, runtime.TaskIssued); err != nil {
-			return &RejectedError{Code: CodeIllegalTransition, Detail: fmt.Sprintf("issue %s: %v", action.Task.String(), err)}
+			return nil, &RejectedError{Code: CodeIllegalTransition, Detail: fmt.Sprintf("issue %s: %v", action.Task.String(), err)}
 		}
 	}
 	for _, action := range issued {
@@ -672,13 +676,41 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
 		}
-		// 系列存在未被有效结果占用的授权（整轮失效释放的槽）时，新派发自
-		// 动绑上——释放的授权槽由自然重试路径消费，无需调用方手工再绑。
+		// 系列存在未被有效结果占用的授权（新授权或整轮失效释放的槽）时，
+		// 新派发自动绑上——授权槽由签发与自然重试路径消费，无需调用方手
+		// 工再绑。
 		if mark := reviewSeriesOf(action.Step); mark != "" {
 			s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, mark, action.ActionID)
 		}
 	}
-	return nil
+	return issued, nil
+}
+
+// admitReviewIssuance 是审查系列容量闸：对 ReviewSeries 标记非空的新签发
+// 派发，仅当系列容量（RemainingCapacity＝自动剩余轮数＋未占用授权数，
+// refresh 的权威投影）大于该系列在途派发数时签出——超出自动额度又没有
+// 可用授权的审查派发不得签发。在途派发数＝PendingActions 中同系列标记
+// 的活派发数，同批签出的派发按签出顺序逐个计入。被闸住的 action 不签
+// 发、不转移任务，保持 Expected（retainExpected 语义）；授权落账后的下
+// 一次收尾补位经本闸自然签发。无系列标记（非审查派发）不受闸。
+func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action) decision.IssuedSet {
+	inflight := map[review.Action]int{}
+	for _, pending := range s.PendingActions {
+		if pending.ReviewSeries != "" {
+			inflight[pending.ReviewSeries]++
+		}
+	}
+	admitted := make(decision.IssuedSet, 0, len(issued))
+	for _, action := range issued {
+		if mark := reviewSeriesOf(action.Step); mark != "" {
+			if series, ok := s.ReviewSeries.Series(mark); ok && series.RemainingCapacity <= inflight[mark] {
+				continue
+			}
+			inflight[mark]++
+		}
+		admitted = append(admitted, action)
+	}
+	return admitted
 }
 
 // retainExpected keeps the complete Ready frontier in the durable task ledger,
@@ -1730,7 +1762,8 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
-	if err := state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf); err != nil {
+	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	if err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(issued))

@@ -38,7 +38,9 @@ func (s Series) validate(runID string, action Action) error {
 	}
 	authorizationByID := map[string]bool{}
 	for index, authorization := range s.Authorizations {
-		if authorization.Action != action || authorization.Source != authorizationUserSource || strings.TrimSpace(authorization.Reason) == "" || len(authorization.DispatchIDs) == 0 || authorization.RecordedResultDigests == nil {
+		// 授权先于派发存在：DispatchIDs 允许为空（grant 已落账、签发点尚未
+		// 绑上首个派发的窗口）；已绑定的派发身份必须非空且不重复。
+		if authorization.Action != action || authorization.Source != authorizationUserSource || strings.TrimSpace(authorization.Reason) == "" || authorization.DispatchIDs == nil || authorization.RecordedResultDigests == nil {
 			return fail("authorization %d has an incomplete binding, source, or reason", index+1)
 		}
 		expectedID := "review-authorization-" + shortDigest(authorizationDigest(runID, action, authorization.Reason, index+1))

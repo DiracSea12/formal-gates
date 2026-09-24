@@ -129,11 +129,25 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 		}
 		set = next
 	}
-	var err error
-	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fourth round for the open concern", "dispatch-4")
+	// 三轮自动容量耗尽、未授权：façade 面如实可见 Remaining=0 与"需要用
+	// 户"（签发闸扣发期间用户看到的就是这个面）。
+	exhaustedView, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	exhaustedState := protocol.NewState(*exhaustedView)
+	exhaustedState.RunID = runID
+	exhaustedState.ReviewSeries = set
+	exhausted := reviewFace(exhaustedState).Actions[0]
+	if exhausted.Remaining != 0 || exhausted.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("exhausted capacity face = %+v", exhausted)
+	}
+
+	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fourth round for the open concern")
 	if err != nil {
 		t.Fatalf("grant: %v", err)
 	}
+	set = review.BindDispatchToUnoccupied(set, runID, review.ProductReview, "dispatch-4")
 	series, _ := set.Series(review.ProductReview)
 	fourthGrantID := series.Authorizations[0].ID
 	next, _, err := review.RecordCandidate(set, runID, review.ProductReview,
@@ -143,10 +157,11 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 		t.Fatalf("record fourth: %v", err)
 	}
 	set = next
-	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fifth round while the concern stays open", "dispatch-5")
+	set, err = review.AppendAuthorization(set, runID, review.ProductReview, "fifth round while the concern stays open")
 	if err != nil {
 		t.Fatalf("grant: %v", err)
 	}
+	set = review.BindDispatchToUnoccupied(set, runID, review.ProductReview, "dispatch-5")
 
 	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {

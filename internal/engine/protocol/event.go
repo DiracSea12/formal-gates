@@ -216,11 +216,11 @@ type ReviewDecisionPayload struct {
 }
 
 // RoundGrantDecision 为某审查动作授权恰好一轮额外语义轮（总需求
-// §6.3.6）：绑定该轮首个派发，授权不能预先累积或转给另一动作。
+// §6.3.6）：授权先于派发存在，只绑定动作与理由；授权不能预先累积或转给
+// 另一动作，空槽由签发点自动绑上首个派发。
 type RoundGrantDecision struct {
-	Action     review.Action `json:"action"`
-	Reason     string        `json:"reason"`
-	DispatchID string        `json:"dispatchId"`
+	Action review.Action `json:"action"`
+	Reason string        `json:"reason"`
 }
 
 // TopologyDecision 是 CONFIRM_TOPOLOGY 的精确拓扑决定：no-split 必带

@@ -74,8 +74,8 @@ func validateReviewDecisionPayload(payload *ReviewDecisionPayload) error {
 		if !validReviewAction(grant.Action) {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("round grant action %q is not a pre-development review action", grant.Action)}
 		}
-		if strings.TrimSpace(grant.Reason) == "" || strings.TrimSpace(grant.DispatchID) == "" {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "round grant requires a non-empty reason and dispatch binding"}
+		if strings.TrimSpace(grant.Reason) == "" {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "round grant requires a non-empty reason"}
 		}
 	case payload.Topology != nil:
 		if err := validateTopologyDecision(payload.Topology); err != nil {
@@ -366,7 +366,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 			return reviewReject(fmt.Errorf("review: %s automatic round capacity is not exhausted yet (completed %d of %d); a grant is premature",
 				grant.Action, target.Completed, target.AutomaticLimit))
 		}
-		updated, err := review.AppendAuthorization(state.ReviewSeries, state.RunID, grant.Action, grant.Reason, grant.DispatchID)
+		updated, err := review.AppendAuthorization(state.ReviewSeries, state.RunID, grant.Action, grant.Reason)
 		if err != nil {
 			return reviewReject(err)
 		}

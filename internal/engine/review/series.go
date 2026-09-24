@@ -93,7 +93,9 @@ func nextRoundRequirement(s Series) string {
 // 使容量字段与账本保持一致。RemainingCapacity 与准入规则精确对齐：下一轮
 // 可立即记录 iff completed<automaticLimit 或存在空槽授权，因此它等于
 // 自动剩余轮数加未占用授权数（CurrentLimit 语义不变＝AutomaticLimit+授权
-// 总数）。
+// 总数）。它有三个消费点共用同一投影：入账判定（越限结果必须携空槽授
+// 权）、签发闸（新审查派发仅当 RemainingCapacity 大于该系列在途派发数时
+// 可签——未授权的越限派发根本不签出）与审查公开面。
 func refresh(s *Series) {
 	s.Completed = completedRounds(*s)
 	s.CurrentLimit = s.AutomaticLimit + len(s.Authorizations)

@@ -6,11 +6,13 @@ import (
 	"strings"
 )
 
-// AppendAuthorization 追加一条用户请求的额外语义轮授权，并把它绑定到首个
-// dispatch。授权身份由 (runID, action, reason, 序号) 派生；是否越过自动上限
-// 才允许授权，由调用方的工作流政策决定，本函数只做账目变换。存在未占用的
-// 授权时拒绝——用户每次只授权恰好一轮，不得预先累计。
-func AppendAuthorization(set Set, runID string, action Action, reason, dispatchID string) (Set, error) {
+// AppendAuthorization 追加一条用户请求的额外语义轮授权。授权先于派发存
+// 在：创建时只落理由与身份（DispatchIDs 为空账），签发点把首个派发自动
+// 绑上（BindDispatchToUnoccupied）。授权身份由 (runID, action, reason,
+// 序号) 派生；是否越过自动上限才允许授权，由调用方的工作流政策决定，本
+// 函数只做账目变换。存在未占用的授权时拒绝——用户每次只授权恰好一轮，
+// 不得预先累计。
+func AppendAuthorization(set Set, runID string, action Action, reason string) (Set, error) {
 	if err := Validate(runID, set); err != nil {
 		return Set{}, err
 	}
@@ -22,9 +24,6 @@ func AppendAuthorization(set Set, runID string, action Action, reason, dispatchI
 	if reason == "" {
 		return Set{}, fmt.Errorf("review: %s extra round authorization requires a non-empty reason", action)
 	}
-	if strings.TrimSpace(dispatchID) == "" {
-		return Set{}, fmt.Errorf("review: %s extra round authorization requires a dispatch binding", action)
-	}
 	if _, ok := availableAuthorization(*series); ok {
 		return Set{}, fmt.Errorf("review: %s has an unconsumed extra-round authorization; consume the granted round before requesting another", action)
 	}
@@ -33,7 +32,7 @@ func AppendAuthorization(set Set, runID string, action Action, reason, dispatchI
 		Action:                action,
 		Source:                authorizationUserSource,
 		Reason:                reason,
-		DispatchIDs:           []string{dispatchID},
+		DispatchIDs:           []string{},
 		RecordedResultDigests: []string{},
 	}
 	series.Authorizations = append(slices.Clone(series.Authorizations), authorization)
@@ -67,8 +66,9 @@ func BindDispatch(set Set, runID string, action Action, dispatchID string) (Set,
 }
 
 // BindDispatchToUnoccupied 把派发绑到 series 第一条未被有效结果占用的授
-// 权上：签发点（新派发/重签发）以此自动消费整轮失效后释放的授权槽。没
-// 有空槽授权时是无操作（自动容量内的普通签发）。
+// 权上：授权先于派发存在（grant 不绑派发），签发点（新派发/重签发）以此
+// 自动消费空槽——包括新落账的授权与整轮失效释放的槽。没有空槽授权时是
+// 无操作（自动容量内的普通签发）。
 func BindDispatchToUnoccupied(set Set, runID string, action Action, dispatchID string) Set {
 	series, err := set.seriesFor(action)
 	if err != nil {

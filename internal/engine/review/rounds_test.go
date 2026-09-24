@@ -128,7 +128,7 @@ func TestCapacityAcrossAutomaticAndAuthorizedRounds(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "automatic round limit") {
 		t.Fatalf("fourth round without authorization was accepted: %v", err)
 	}
-	set, err = AppendAuthorization(set, runID, ProductReview, "operator asks for a fourth semantic round", "dispatch-4")
+	set, err = AppendAuthorization(set, runID, ProductReview, "operator asks for a fourth semantic round")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +137,8 @@ func TestCapacityAcrossAutomaticAndAuthorizedRounds(t *testing.T) {
 	if !strings.HasPrefix(authorizationID, "review-authorization-") || series.CurrentLimit != 4 || series.ExtraAuthorized != 1 || series.RemainingCapacity != 1 || series.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" {
 		t.Fatalf("authorization did not extend capacity: %#v", series)
 	}
+	// 授权先于派发存在：签发点把派发自动绑上（空账授权的 issuance 绑定）。
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
 	_, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-other", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"}, verifiedByOperator())
 	if err == nil || !strings.Contains(err.Error(), "not bound to a valid review authorization") {
 		t.Fatalf("result with an unbound dispatch was accepted: %v", err)
@@ -171,16 +173,18 @@ func TestConcurrentlyFreedAuthorizationSlotsKeepTheLedgerValid(t *testing.T) {
 		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
 	var err error
-	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required", "dispatch-4")
+	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
 	firstGrant := mustSeries(t, set, ProductReview).Authorizations[0].ID
 	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: firstGrant}, Result{Status: "PASS"})
-	set, err = AppendAuthorization(set, runID, ProductReview, "fifth round required", "dispatch-5")
+	set, err = AppendAuthorization(set, runID, ProductReview, "fifth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
 	secondGrant := mustSeries(t, set, ProductReview).Authorizations[1].ID
 	set, fifth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-5", RequirementRevision: "rev-1", AuthorizationID: secondGrant}, Result{Status: "PASS"})
 	if series := mustSeries(t, set, ProductReview); series.Completed != 5 || series.ExtraConsumed != 2 {
@@ -207,23 +211,28 @@ func TestConcurrentlyFreedAuthorizationSlotsKeepTheLedgerValid(t *testing.T) {
 	}
 }
 
-func TestAppendAuthorizationRequiresReasonAndBindsFirstDispatch(t *testing.T) {
+// TestAppendAuthorizationGrantsOneRoundPrecedingItsDispatch：授权先于派发
+// 存在——理由必填、创建时不含派发绑定；存在未占用授权时不得预先累计下一
+// 轮；占用后可再授权下一轮，身份随序号区分、各自的派发由签发点绑定。
+func TestAppendAuthorizationGrantsOneRoundPrecedingItsDispatch(t *testing.T) {
 	runID := "run-authorize"
 	set := NewSet()
-	if _, err := AppendAuthorization(set, runID, ProductReview, "   ", "dispatch-1"); err == nil || !strings.Contains(err.Error(), "non-empty reason") {
+	if _, err := AppendAuthorization(set, runID, ProductReview, "   "); err == nil || !strings.Contains(err.Error(), "non-empty reason") {
 		t.Fatalf("blank reason was accepted: %v", err)
 	}
-	if _, err := AppendAuthorization(set, runID, ProductReview, "reason", "  "); err == nil || !strings.Contains(err.Error(), "dispatch binding") {
-		t.Fatalf("blank dispatch was accepted: %v", err)
-	}
-	set, err := AppendAuthorization(set, runID, ProductReview, "operator asks for more evidence", "dispatch-1")
+	set, err := AppendAuthorization(set, runID, ProductReview, "operator asks for more evidence")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if series, _ := set.Series(ProductReview); len(series.Authorizations[0].DispatchIDs) != 0 {
+		t.Fatalf("a fresh grant must not bind a dispatch: %#v", series.Authorizations[0])
+	}
 	// 用户每次只授权恰好一轮：存在未占用授权时不得预先累计下一轮。
-	if _, err := AppendAuthorization(set, runID, ProductReview, "operator asks again", "dispatch-2"); err == nil || !strings.Contains(err.Error(), "unconsumed extra-round authorization") {
+	if _, err := AppendAuthorization(set, runID, ProductReview, "operator asks again"); err == nil || !strings.Contains(err.Error(), "unconsumed extra-round authorization") {
 		t.Fatalf("accumulating an unconsumed authorization was accepted: %v", err)
 	}
+	// 授权的派发绑定发生在签发点：首个派发自动绑上。
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-1")
 	series, _ := set.Series(ProductReview)
 	firstID := series.Authorizations[0].ID
 	set, _, err = RecordCandidate(set, runID, ProductReview, Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1", AuthorizationID: firstID}, Result{Status: "PASS"}, verifiedByOperator())
@@ -231,14 +240,15 @@ func TestAppendAuthorizationRequiresReasonAndBindsFirstDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 占用后可再授权下一轮：身份随序号区分、绑定各自的派发。
-	set, err = AppendAuthorization(set, runID, ProductReview, "operator asks for more evidence", "dispatch-2")
+	set, err = AppendAuthorization(set, runID, ProductReview, "operator asks for more evidence")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-2")
 	series, _ = set.Series(ProductReview)
 	first, second := series.Authorizations[0], series.Authorizations[1]
 	if first.ID != firstID || first.ID == second.ID || first.DispatchIDs[0] != "dispatch-1" || second.DispatchIDs[0] != "dispatch-2" {
-		t.Fatalf("authorization identity or first binding is wrong: %#v", series.Authorizations)
+		t.Fatalf("authorization identity or issuance binding is wrong: %#v", series.Authorizations)
 	}
 	if err := Validate(runID, set); err != nil {
 		t.Fatal(err)
@@ -252,10 +262,11 @@ func TestBindDispatchAttachesToFirstUnoccupiedAuthorization(t *testing.T) {
 		set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
 	var err error
-	set, err = AppendAuthorization(set, runID, StartReadiness, "runtime retry needs a new dispatch", "dispatch-4a")
+	set, err = AppendAuthorization(set, runID, StartReadiness, "runtime retry needs a new dispatch")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-4a")
 	set, err = BindDispatch(set, runID, StartReadiness, "dispatch-4b")
 	if err != nil {
 		t.Fatal(err)
@@ -283,10 +294,11 @@ func TestBindDispatchToUnoccupiedConsumesReleasedSlots(t *testing.T) {
 	for round := 1; round <= 3; round++ {
 		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
-	set, err := AppendAuthorization(set, runID, ProductReview, "one extra round", "dispatch-4")
+	set, err := AppendAuthorization(set, runID, ProductReview, "one extra round")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
 	series, _ := set.Series(ProductReview)
 	authorizationID := series.Authorizations[0].ID
 	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
@@ -319,10 +331,11 @@ func TestAuthorizationEndorsesAtMostOneValidResult(t *testing.T) {
 		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
 	var err error
-	set, err = AppendAuthorization(set, runID, ProductReview, "one extra round", "dispatch-a")
+	set, err = AppendAuthorization(set, runID, ProductReview, "one extra round")
 	if err != nil {
 		t.Fatal(err)
 	}
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-a")
 	set, err = BindDispatch(set, runID, ProductReview, "dispatch-b")
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +379,7 @@ func TestRemainingCapacityAdmitsOnlyWhatTheLedgerBacks(t *testing.T) {
 		t.Fatalf("exhausted automatic capacity = %+v", series)
 	}
 	var err error
-	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required", "dispatch-4")
+	set, err = AppendAuthorization(set, runID, ProductReview, "fourth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,6 +388,7 @@ func TestRemainingCapacityAdmitsOnlyWhatTheLedgerBacks(t *testing.T) {
 		t.Fatalf("granted capacity = %+v", series)
 	}
 	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-4")
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
 	if series := mustSeries(t, set, ProductReview); series.RemainingCapacity != 0 || series.Completed != 4 {
 		t.Fatalf("authorized round did not consume its slot: %+v", series)
@@ -428,15 +442,16 @@ func TestTransformsKeepTheCallerInputSetImmutable(t *testing.T) {
 		occupied, _ = mustRecord(t, occupied, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
 	var err error
-	occupied, err = AppendAuthorization(occupied, runID, ProductReview, "fourth round required", "dispatch-4")
+	occupied, err = AppendAuthorization(occupied, runID, ProductReview, "fourth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
+	occupied = BindDispatchToUnoccupied(occupied, runID, ProductReview, "dispatch-4")
 	authorizationID := mustSeries(t, occupied, ProductReview).Authorizations[0].ID
 	occupied, fourth := mustRecord(t, occupied, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory concern"}}})
 
 	before := snapshot(t, occupied)
-	_, err = AppendAuthorization(occupied, runID, ProductReview, "fifth round required", "dispatch-5")
+	_, err = AppendAuthorization(occupied, runID, ProductReview, "fifth round required")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,10 +474,11 @@ func TestTransformsKeepTheCallerInputSetImmutable(t *testing.T) {
 	for round := 1; round <= 3; round++ {
 		sparse, _ = mustRecord(t, sparse, runID, StartReadiness, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	}
-	sparse, err = AppendAuthorization(sparse, runID, StartReadiness, "retry needs a fresh dispatch", "dispatch-4a")
+	sparse, err = AppendAuthorization(sparse, runID, StartReadiness, "retry needs a fresh dispatch")
 	if err != nil {
 		t.Fatal(err)
 	}
+	sparse = BindDispatchToUnoccupied(sparse, runID, StartReadiness, "dispatch-4a")
 	sparse, err = BindDispatch(sparse, runID, StartReadiness, "dispatch-4b")
 	if err != nil {
 		t.Fatal(err)

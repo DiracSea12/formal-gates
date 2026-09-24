@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -404,11 +405,13 @@ func TestSplitTopologyAndCustomRouteBinding(t *testing.T) {
 }
 
 // TestReviewRepairLoopRoundExhaustionAndGrant：返修环 CONFIRM→仍 FAIL→
-// RESEVERITIZE 降 P3→PASS 推进；三轮耗尽后无授权拒绝、typed Ask 授权恰好
-// 一轮、第四轮记录占用授权。
+// RESEVERITIZE 降 P3→PASS 推进；三轮耗尽后未授权的下一轮被签发闸扣发
+// （保持 Expected、decline 仍闸、显式签发同闸）、typed Ask 授权恰好一轮
+// （不绑派发）后同事务补位签发＋自动绑定、伪造授权的证据仍拒、第四轮记
+// 录占用授权。
 func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "round.one", "round.two", "round.three", "round.four")
-	engine, dir := reviewEngine(t, cd, reg)
+	engine, _ := reviewEngine(t, cd, reg)
 
 	// 轮 1：FAIL，一条 P1 finding；CONFIRM 后仍 FAIL。
 	action := issueReady(t, engine)[0]
@@ -459,46 +462,61 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 		t.Fatalf("capacity boundary = %+v", product)
 	}
 
-	// 第四轮无授权：回执已配对路径下拒绝整个事件且零状态变化。
-	fourth := pendingActionID(t, engine)
-	unauthorized, err := NewReviewWorkerResultEvent("result-4-unauthorized", fourth, testProvider, "sha256:payload-4u", reviewEvidence(review.ProductReview, "dispatch-4", "", "FAIL", "round 4", []review.Finding{
-		{Severity: "P1", Message: "blocker persists"},
-	}))
-	if err != nil {
-		t.Fatalf("event: %v", err)
+	// 额度耗尽且无授权：第四轮审查步不签发——无 Attempt/pending action，
+	// 步骤保持 Expected/Ready；decline 后仍闸；显式签发入口同闸。
+	if len(snap.State.PendingActions) != 0 || len(snap.State.Attempts) != 0 {
+		t.Fatalf("the exhausted series must not carry an issued dispatch: %+v", snap.State.PendingActions)
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "spawn-4", fourth, "agent-4"), fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("spawn 4: %v", err)
+	plan, _, err := engine.Plan()
+	if err != nil || plan.Next.Kind != decision.KindReady || plan.Next.Ready == nil || len(plan.Next.Ready.Tasks) != 1 {
+		t.Fatalf("the fourth review step must stay ready behind the gate: %v %+v", err, plan.Next)
 	}
-	before := stateBytesOf(t, dir)
-	if _, err := engine.Submit(unauthorized, fingerprintOf(t, engine)); err == nil {
-		t.Fatal("fourth round without authorization accepted")
-	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
-		t.Fatalf("unauthorized round code = %q", code)
+	askAndDecide(t, engine, ControlReviewRoundGrant, "req-grant-decline", grantOptions(), "decline", nil)
+	snap = engine.LoadMustSucceed(t)
+	if got := len(snap.State.ReviewSeries.ProductReview.Authorizations); got != 0 {
+		t.Fatalf("decline added authorizations: %d", got)
 	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("rejected unauthorized round changed state bytes")
+	if len(snap.State.PendingActions) != 0 {
+		t.Fatalf("a declined grant must keep the fourth round gated: %+v", snap.State.PendingActions)
+	}
+	if issued := issueReady(t, engine); len(issued) != 0 {
+		t.Fatalf("explicit issuance signed past the exhausted series: %v", issued)
 	}
 
-	// typed Ask 授权恰好一轮：绑定第四个派发，容量扩展一格；decline 不
-	// 新增授权。
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "one more semantic round is required", DispatchID: fourth,
+	// typed Ask 授权恰好一轮（授权先于派发、不绑派发）：授权落账的同一事务
+	// 收尾补位签发第四轮并自动绑上授权。
+	acceptance := askAndDecide(t, engine, ControlReviewRoundGrant, "req-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "one more semantic round is required",
 	}})
 	snap = engine.LoadMustSucceed(t)
 	product = snap.State.ReviewSeries.ProductReview
 	if product.ExtraAuthorized != 1 || product.CurrentLimit != 4 || product.RemainingCapacity != 1 || product.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" {
 		t.Fatalf("authorization did not extend capacity: %+v", product)
 	}
+	fourth := pendingActionID(t, engine)
+	if len(acceptance.Refill) != 1 || acceptance.Refill[0] != fourth {
+		t.Fatalf("the grant transaction must refill-issue the authorized round: %+v", acceptance.Refill)
+	}
 	authorizationID := product.Authorizations[0].ID
-
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-grant-2", grantOptions(), "decline", nil)
-	snap = engine.LoadMustSucceed(t)
-	if got := len(snap.State.ReviewSeries.ProductReview.Authorizations); got != 1 {
-		t.Fatalf("decline added authorizations: %d", got)
+	if !slices.Contains(product.Authorizations[0].DispatchIDs, fourth) {
+		t.Fatalf("the issued dispatch must auto-bind the granted slot: %+v", product.Authorizations[0])
 	}
 
-	// 第四轮携授权记录：占用授权槽，完成数到 4（回执已在前文落账）。
+	// 入账负控：授权必须点名背书其派发——伪造的授权身份可区分拒绝。
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-4", fourth, "agent-4"), fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("spawn 4: %v", err)
+	}
+	forged, err := NewReviewWorkerResultEvent("result-4-forged", fourth, testProvider, "sha256:payload-4f", reviewEvidence(review.ProductReview, fourth, "review-authorization-forged", "FAIL", "round 4 with a forged grant", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if _, err := engine.Submit(forged, fingerprintOf(t, engine)); err == nil {
+		t.Fatal("evidence with a forged authorization was accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+		t.Fatalf("forged authorization code = %q", code)
+	}
+
+	// 第四轮携授权记录：占用授权槽，完成数到 4。
 	finalRound, err := NewReviewWorkerResultEvent("result-4", fourth, testProvider, "sha256:payload-4", reviewEvidence(review.ProductReview, fourth, authorizationID, "FAIL", "round 4 endorsed by the grant", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -526,9 +544,10 @@ func TestGrantIsPrematureWhileAutomaticCapacityRemains(t *testing.T) {
 	if completed := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Completed; completed != 1 {
 		t.Fatalf("automatic rounds completed = %d, want 1", completed)
 	}
-	next := pendingActionID(t, engine)
+	// 容量内的下一轮照常补位签发（一个在途派发）。
+	pendingActionID(t, engine)
 	err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-grant-premature", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the user wants one more round early", DispatchID: next,
+		Action: review.ProductReview, Reason: "the user wants one more round early",
 	}})
 	if err == nil {
 		t.Fatal("grant accepted while automatic capacity remains")
@@ -979,7 +998,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 
 	t.Run("decide payload union must carry exactly one branch", func(t *testing.T) {
 		payload := ReviewDecisionPayload{
-			RoundGrant: &RoundGrantDecision{Action: review.ProductReview, Reason: "r", DispatchID: "dispatch-1"},
+			RoundGrant: &RoundGrantDecision{Action: review.ProductReview, Reason: "r"},
 			Topology:   &TopologyDecision{Decision: "no-split", Note: "n"},
 		}
 		if _, err := NewReviewDecideEvent("evt-two-branches", "req-x", "sha256:token", "grant", payload); err == nil {
@@ -1505,16 +1524,18 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	}
 }
 
-// TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch：授权轮整轮
-// INVALIDATE_RESULT 后授权槽释放（投影容量+1）；签发点自动把重试新派发
-// 绑上释放槽——重试轮在新派发上入账消费它；释放槽在位期间新 grant 仍
-// 被"存在未占用授权"拒（正确）。
-func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
+// TestReleasedAuthorizationSlotIsConsumedByTheNextIssuance：授权轮整轮
+// INVALIDATE_RESULT 后授权槽释放；释放后的下一 ready 审查步经同一决定事
+// 务的收尾补位签出并自动绑上释放槽；占用期不存在未绑定后继——补位签发
+// 在授权被占用时被容量闸扣发（该形状不可达）。释放槽在位期间新 grant
+// 仍被"存在未占用授权"拒；在途派发经恢复换新（NEW_ATTEMPT）后替换派发
+// 同样自动绑定，重试轮在新派发上入账消费它。
+func TestReleasedAuthorizationSlotIsConsumedByTheNextIssuance(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "round.two", "round.three", "round.four", "round.five")
 	engine, dir := reviewEngine(t, cd, reg)
 	fp := fingerprintOf(t, engine)
 
-	// 三轮自动容量走满。
+	// 三轮自动容量走满：第四轮被闸，无在途派发。
 	first := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "result-slot-1", first, reviewEvidence(review.ProductReview, first, "", "PASS", "round one", nil))
 	round := func(step, event string) string {
@@ -1527,13 +1548,19 @@ func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
 	}
 	round("round.two", "result-slot-2")
 	round("round.three", "result-slot-3")
+	if snap := engine.LoadMustSucceed(t); len(snap.State.PendingActions) != 0 {
+		t.Fatalf("the fourth round must stay gated at exhausted capacity: %+v", snap.State.PendingActions)
+	}
 
-	// 授权一轮并完成第 4 轮（授权绑定第 4 轮派发）。
-	fourth := pendingActionID(t, engine)
+	// 授权一轮（不绑派发）：同事务补位签发第四轮并自动绑定。
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-slot-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "one more round is required", DispatchID: fourth,
+		Action: review.ProductReview, Reason: "one more round is required",
 	}})
 	grant := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0]
+	fourth := pendingActionID(t, engine)
+	if !slices.Contains(grant.DispatchIDs, fourth) {
+		t.Fatalf("the granted slot must auto-bind the issued dispatch: %+v", grant)
+	}
 	if _, err := engine.Submit(spawnReceipt(t, "spawn-slot-4", fourth, "agent-slot-4"), fp); err != nil {
 		t.Fatalf("spawn four: %v", err)
 	}
@@ -1548,7 +1575,13 @@ func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
 		t.Fatalf("authorized round = %v %+v", err, acceptance)
 	}
 
-	// 整轮失效：授权释放（投影回到 AUTHORIZED_EXTRA_ROUND、容量+1）。
+	// 授权占用期：未绑定后继的形状不可达——第五轮被容量闸扣发。
+	if snap := engine.LoadMustSucceed(t); len(snap.State.PendingActions) != 0 {
+		t.Fatalf("an in-flight successor must not exist while the granted slot is occupied: %+v", snap.State.PendingActions)
+	}
+
+	// 整轮失效：授权释放（投影回到 AUTHORIZED_EXTRA_ROUND、容量+1）；同一
+	// 决定事务的收尾补位签出第五轮并自动绑上释放槽。
 	snap := engine.LoadMustSucceed(t)
 	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[3]
 	choice := AskOption{ID: AskOptionID("INVALIDATE_RESULT"), Label: "invalidate"}
@@ -1563,32 +1596,32 @@ func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
 	if series.Completed != 3 || series.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" || series.RemainingCapacity != 1 {
 		t.Fatalf("the invalidated round must release its slot: %+v", series)
 	}
+	fifth := pendingActionID(t, engine)
+	if got := snap.State.PendingActions[fifth].Step; got != "round.five" {
+		t.Fatalf("the released slot must refill-issue the next ready review step, got %s", got)
+	}
+	if !slices.Contains(snap.State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs, fifth) {
+		t.Fatalf("the refill dispatch must auto-bind the released slot: %+v", snap.State.ReviewSeries.ProductReview.Authorizations[0])
+	}
 
 	// 释放槽在位：新 grant 仍被拒（存在未占用授权）。
 	if err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "another slot", DispatchID: "whatever",
+		Action: review.ProductReview, Reason: "another slot",
 	}}); err == nil {
 		t.Fatal("a second grant was accepted beside the released slot")
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 		t.Fatalf("second-grant code = %q", code)
 	}
 
-	// 在途的后继派发先经恢复换新（NEW_ATTEMPT 重试）：替换派发在签发点
-	// 自动绑上释放槽，重试轮在新派发上入账消费它。
-	fifth := pendingActionID(t, engine)
+	// 在途的第五轮派发先经恢复换新（NEW_ATTEMPT 重试）：替换派发同样自动
+	// 绑上授权槽，重试轮在新派发上入账消费它。
 	plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, fp)
 	if err != nil || plan.Action != RecoveryNewAttempt {
 		t.Fatalf("the in-flight successor must retry on a fresh attempt: %+v err=%v", plan, err)
 	}
 	replacement := engine.LoadMustSucceed(t).State.ObsoleteActions[fifth].ReplacedBy
-	bound := false
-	for _, dispatchID := range engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs {
-		if dispatchID == replacement {
-			bound = true
-		}
-	}
-	if !bound {
-		t.Fatalf("the retry dispatch must auto-bind the released slot: %+v", engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0])
+	if !slices.Contains(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs, replacement) {
+		t.Fatalf("the retry dispatch must auto-bind the same authorization: %+v", engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0])
 	}
 	if _, err := engine.Submit(spawnReceipt(t, "spawn-slot-5", replacement, "agent-slot-5"), fp); err != nil {
 		t.Fatalf("spawn retry: %v", err)
@@ -1610,5 +1643,163 @@ func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
 	}
 	if _, err := engine.Load(); err != nil {
 		t.Fatalf("load: %v", err)
+	}
+}
+
+// parallelReviewLanesFixture 构造同系列并行审查步定义：prep 后两条并行产
+// 品审步（review.lane.a、review.lane.b），lane.a 之后串行 review.followup.one
+// 与 review.followup.two——在途计数需要"同系列多条派发同时在途"的形态。
+func parallelReviewLanesFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	reg := compiler.NewRegistry()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("fixture: %v", err)
+		}
+	}
+	must(reg.RegisterHandler("engine.test.prep", authoring.RunnerEngineLocal))
+	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
+	must(reg.RegisterCodec("codec.any.in"))
+	must(reg.RegisterCodec("codec.any.out"))
+	must(reg.RegisterPredicate("pred.test.post"))
+	header := func(id string, deps ...string) authoring.Header {
+		ds := make([]authoring.StepID, 0, len(deps))
+		for _, d := range deps {
+			ds = append(ds, authoring.StepID(d))
+		}
+		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
+	}
+	io := func(bindings ...string) authoring.IO {
+		inputs := make([]authoring.InputBinding, 0, len(bindings))
+		for _, b := range bindings {
+			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
+		}
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+	}
+	reviewStep := func(name string, deps ...string) authoring.Step {
+		stepIO := io(deps...)
+		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+		step, err := authoring.NewAgentStep(header(name, deps...), stepIO, authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
+		})
+		must(err)
+		return step
+	}
+	prep, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.test.prep"})
+	must(err)
+	steps := []authoring.Step{
+		prep,
+		reviewStep("review.lane.a", "prep.parse"),
+		reviewStep("review.lane.b", "prep.parse"),
+		reviewStep("review.followup.one", "review.lane.a"),
+		reviewStep("review.followup.two", "review.followup.one"),
+	}
+	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: steps}, reg)
+	must(err)
+	return cd, reg
+}
+
+// TestInFlightReviewDispatchesCountAgainstSeriesCapacity：签发闸按"已入账
+// 轮＋在途轮"合计计——同系列在途派发占用容量额度，后继签发在合计到达
+// 自动上限时被扣发；同批并行签出的派发逐个计入；授权落账后的下一签发照
+// 常放行并自动绑定。
+func TestInFlightReviewDispatchesCountAgainstSeriesCapacity(t *testing.T) {
+	cd, reg := parallelReviewLanesFixture(t)
+	engine, _ := reviewEngine(t, cd, reg)
+
+	// 两条并行审查步同批签出：批内逐个计入在途（容量 3 覆盖两条）。
+	lanes := issueReady(t, engine)
+	if len(lanes) != 2 {
+		t.Fatalf("parallel review lanes = %v, want both issued", lanes)
+	}
+	laneB := lanes[1]
+
+	// lane.a 入账（completed 1）：followup.one 补位签出（容量 2 ＞ 在途 1）。
+	submitReviewResult(t, engine, "result-lane-a", lanes[0], reviewEvidence(review.ProductReview, lanes[0], "", "PASS", "lane a", nil))
+	followup := pendingActionByStep(t, engine, "review.followup.one")
+
+	// followup.one 入账（completed 2）：followup.two 被闸——在途的 lane.b
+	// 已占掉最后一个自动名额（容量 1 ≤ 在途 1）。
+	submitReviewResult(t, engine, "result-followup-one", followup, reviewEvidence(review.ProductReview, followup, "", "PASS", "followup one", nil))
+	snap := engine.LoadMustSucceed(t)
+	if pending := snap.State.PendingActions; len(pending) != 1 {
+		t.Fatalf("the aggregate gate must leave exactly the in-flight lane: %+v", pending)
+	} else if entry := pending[laneB]; entry.Step != "review.lane.b" {
+		t.Fatalf("the only in-flight dispatch must be review.lane.b, got %+v", entry)
+	}
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.RemainingCapacity != 1 {
+		t.Fatalf("capacity at the aggregate boundary = %+v", series)
+	}
+
+	// lane.b 入账（completed 3）：容量归零，followup.two 仍闸。
+	submitReviewResult(t, engine, "result-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
+	snap = engine.LoadMustSucceed(t)
+	if len(snap.State.PendingActions) != 0 {
+		t.Fatalf("the exhausted series must gate the successor: %+v", snap.State.PendingActions)
+	}
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("exhausted capacity = %+v", series)
+	}
+
+	// 授权一轮：同事务补位签出 followup.two 并自动绑定。
+	acceptance := askAndDecide(t, engine, ControlReviewRoundGrant, "req-lanes-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "one more round after the lanes settle",
+	}})
+	snap = engine.LoadMustSucceed(t)
+	final := pendingActionByStep(t, engine, "review.followup.two")
+	if len(acceptance.Refill) != 1 || acceptance.Refill[0] != final {
+		t.Fatalf("the grant transaction must refill-issue the successor: %+v", acceptance.Refill)
+	}
+	if !slices.Contains(snap.State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs, final) {
+		t.Fatalf("the granted slot must auto-bind the issued dispatch: %+v", snap.State.ReviewSeries.ProductReview.Authorizations[0])
+	}
+}
+
+// pendingActionByStep 返回指定步骤当前 pending action 的 ID（在途派发多
+// 于一条时按步骤定位，不要求唯一 pending）。
+func pendingActionByStep(t *testing.T, engine *Engine, step string) string {
+	t.Helper()
+	snap := engine.LoadMustSucceed(t)
+	for id, pending := range snap.State.PendingActions {
+		if pending.Step == step {
+			return id
+		}
+	}
+	t.Fatalf("no pending action for step %s: %+v", step, snap.State.PendingActions)
+	return ""
+}
+
+// TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted：容量闸只
+// 作用于带审查系列标记的派发——系列额度耗尽（façade 投影字段可见
+// Remaining=0 与"需要用户"）时，无系列标记的后续步骤照常补位签发。
+func TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted(t *testing.T) {
+	cd, reg := agentStepsDefinition(t, func(name string) authoring.AgentSpec {
+		if name == "plain.worker" {
+			return authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute}
+		}
+		return authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
+		}
+	}, "round.one", "round.two", "round.three", "plain.worker")
+	engine, _ := reviewEngine(t, cd, reg)
+
+	action := issueReady(t, engine)[0]
+	for round := 1; round <= 3; round++ {
+		submitReviewResult(t, engine, "result-unmarked-"+string(rune('0'+round)), action, reviewEvidence(review.ProductReview, action, "", "PASS", "round complete", nil))
+		if round < 3 {
+			action = pendingActionID(t, engine)
+		}
+	}
+	snap := engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Completed != 3 || series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("exhausted review capacity must be facade-visible: %+v", series)
+	}
+	pending := snap.State.PendingActions[pendingActionID(t, engine)]
+	if pending.Step != "plain.worker" || pending.ReviewSeries != "" {
+		t.Fatalf("the issued successor must be the unmarked worker step: %+v", pending)
 	}
 }
