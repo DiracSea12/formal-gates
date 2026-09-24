@@ -9,10 +9,13 @@ package protocol
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
@@ -1257,7 +1260,7 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 		Status: "PASS", Verification: reviewVerification(),
 	}, 0); err == nil {
 		t.Fatal("the sequence guard opened behind an out-of-ledger PASS")
-	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+	} else if code := rejectionCode(t, err); code != CodeReviewSequenceGate {
 		t.Fatalf("out-of-ledger guard code = %q", code)
 	}
 
@@ -1570,19 +1573,31 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		if _, voided := snap.State.ObsoleteResults[readiness]; voided {
 			t.Fatal("retained staging must not be voided")
 		}
-		// 迟到回执尝试配对：产品审重走期间顺序守卫（前提未过）拒绝配对，
-		// 暂存与派发槽原样保留——前提重过后可重试回执完成配对。
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-kept-late", readiness, "agent-kept-late"), fp); err == nil {
-			t.Fatal("the staged readiness round paired while its product premise is being redone")
-		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
-			t.Fatalf("late receipt code = %q", code)
+		// 迟到回执是无条件观察事实：产品审重走期间顺序门未开——回执
+		// ACCEPTED 落账、配对挂起、暂存与派发槽原样保留（产品审重新
+		// PASS 的事务自动补配对，见
+		// TestLateReceiptPairsWhenTheProductGateReopens）。
+		if acceptance, err := engine.Submit(spawnReceipt(t, "spawn-kept-late", readiness, "agent-kept-late"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+			t.Fatalf("late receipt during the redo = %v %+v", err, acceptance)
 		}
 		snap = engine.LoadMustSucceed(t)
 		if _, kept := snap.State.StagedResults[readiness]; !kept {
-			t.Fatalf("the rejected pairing must leave the staging intact: %+v", snap.State.StagedResults)
+			t.Fatalf("the suspended pairing must leave the staging intact: %+v", snap.State.StagedResults)
 		}
 		if _, waiting := snap.State.PendingActions[readiness]; !waiting {
 			t.Fatal("the readiness dispatch slot must stay intact for its fresh round")
+		}
+		if _, admitted := snap.State.Results[readiness]; admitted {
+			t.Fatal("the suspended round must not reach the results ledger yet")
+		}
+		suspended := false
+		for _, record := range snap.State.RecoveryRecords {
+			if record.ActionID == readiness && strings.Contains(record.Detail, "stays pending until the product-review conclusion re-passes") {
+				suspended = true
+			}
+		}
+		if !suspended {
+			t.Fatalf("no suspension trail: %+v", snap.State.RecoveryRecords)
 		}
 	})
 
@@ -2262,5 +2277,218 @@ func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
 	snap := engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("matching evidence on the marked dispatch = completed %d %+v", series.Completed, series.Effective)
+	}
+}
+
+// parallelTailFixture 构造双审（canonical 两步带标记）后并列两个未标记
+// agent 派发槽的定义：挂起配对（回执＋暂存占一槽）与开门补配对（另一
+// 槽完成产品审新鲜轮）需要两个同时在途的 action。
+func parallelTailFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	reg := compiler.NewRegistry()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("fixture: %v", err)
+		}
+	}
+	must(reg.RegisterHandler("engine.test.prep", authoring.RunnerEngineLocal))
+	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
+	must(reg.RegisterCodec("codec.any.in"))
+	must(reg.RegisterCodec("codec.any.out"))
+	must(reg.RegisterPredicate("pred.test.post"))
+	header := func(id string, deps ...string) authoring.Header {
+		ds := make([]authoring.StepID, 0, len(deps))
+		for _, d := range deps {
+			ds = append(ds, authoring.StepID(d))
+		}
+		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
+	}
+	io := func(from string) authoring.IO {
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+			Inputs:         []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}},
+			Postconditions: []authoring.PredicateRef{{ID: "pred.test.post"}}}
+	}
+	agent := func(id, dep string, mark authoring.ReviewSeriesAction) authoring.Step {
+		step, err := authoring.NewAgentStep(header(id, dep), io(dep), authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: mark, Timeout: time.Minute,
+		})
+		must(err)
+		return step
+	}
+	prep, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.test.prep"})
+	must(err)
+	steps := []authoring.Step{
+		prep,
+		agent("product.review", "prep.parse", authoring.ReviewSeriesProductReview),
+		agent("start.readiness", "product.review", authoring.ReviewSeriesStartReadiness),
+		agent("tail.one", "start.readiness", ""),
+		agent("tail.two", "start.readiness", ""),
+	}
+	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: steps}, reg)
+	must(err)
+	return cd, reg
+}
+
+// TestLateReceiptPairsWhenTheProductGateReopens：回执是无条件观察事实、
+// 配对是惰性业务动作——只勾重走产品审时，就绪系列的暂存结果其迟到回执
+// 在产品审重走期照常 ACCEPTED 落账（配对挂起、暂存保留、无重试请求）；
+// 另一派发完成产品审新鲜轮（effective PASS@rev-2）的同一事务内，挂起配
+// 对自动完成（completed+1、Results 在账）；同回执重发判 DUPLICATE、不
+// 双计。
+func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
+	cd, reg := parallelTailFixture(t)
+	engine, _ := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+
+	// 双审走完＋拓扑＋路线：并列两派发槽同时在途。
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "req-pair-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single unit"}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-pair-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
+	snap := engine.LoadMustSucceed(t)
+	tails := make([]string, 0, 2)
+	for actionID := range snap.State.PendingActions {
+		if strings.HasPrefix(actionID, "act:review/tail.") {
+			tails = append(tails, actionID)
+		}
+	}
+	slices.Sort(tails)
+	if len(tails) != 2 {
+		t.Fatalf("the parallel tail must hold two in-flight dispatches: %+v", snap.State.PendingActions)
+	}
+	stagedSlot, freshSlot := tails[0], tails[1]
+
+	// 就绪系列的下一轮证据先到（暂存，回执未到）。
+	staged, err := NewReviewWorkerResultEvent("result-pair-staged", stagedSlot, testProvider, "sha256:payload-pair-staged",
+		reviewEvidence(review.StartReadiness, "dispatch-readiness-2", "", "PASS", "readiness round before the change", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("stage: %v %+v", err, acceptance)
+	}
+
+	// 只勾重走产品审：就绪系列未勾即续用。
+	askAndDecideRequirement(t, engine, "req-pair-redo", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-pair",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "only the product review is redone",
+	})
+
+	// 回执在产品审重走期到达：无条件落账，配对挂起，暂存保留。
+	receipt := spawnReceipt(t, "spawn-pair-late", stagedSlot, "agent-pair-late")
+	if acceptance, err := engine.Submit(receipt, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("late receipt during the redo = %v %+v", err, acceptance)
+	}
+	snap = engine.LoadMustSucceed(t)
+	if _, kept := snap.State.StagedResults[stagedSlot]; !kept {
+		t.Fatalf("the suspended pairing must keep the staging: %+v", snap.State.StagedResults)
+	}
+	if _, admitted := snap.State.Results[stagedSlot]; admitted {
+		t.Fatal("the suspended round must not be admitted yet")
+	}
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 {
+		t.Fatalf("the suspended round must not count yet: completed=%d", series.Completed)
+	}
+	suspended := false
+	for _, record := range snap.State.RecoveryRecords {
+		if record.ActionID == stagedSlot && strings.Contains(record.Detail, "stays pending until the product-review conclusion re-passes") {
+			suspended = true
+		}
+	}
+	if !suspended {
+		t.Fatalf("no suspension trail: %+v", snap.State.RecoveryRecords)
+	}
+
+	// 另一派发完成产品审新鲜轮（pre-floor 旧派发按声明终止，替换派发
+	// PASS@rev-2）：同一事务内挂起配对自动完成。
+	freshRoundAfterRedo(t, engine, freshSlot, "result-pair-product", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh product round", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+		t.Fatalf("product fresh round = completed %d %+v", series.Completed, series.Effective)
+	}
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 2 || series.Effective.Status != "PASS" {
+		t.Fatalf("the suspended pairing did not complete in the same transaction: completed=%d %+v", series.Completed, series.Effective)
+	}
+	if _, admitted := snap.State.Results[stagedSlot]; !admitted {
+		t.Fatal("the paired round did not reach the results ledger")
+	}
+	if _, kept := snap.State.StagedResults[stagedSlot]; kept {
+		t.Fatalf("the paired round must leave staging: %+v", snap.State.StagedResults)
+	}
+
+	// 同回执字节换事件 ID 重发判 DUPLICATE；已完成的配对不双计。
+	duplicateReceipt := spawnReceipt(t, "spawn-pair-replay", stagedSlot, "agent-pair-late")
+	if acceptance, err := engine.Submit(duplicateReceipt, fingerprintOf(t, engine)); err != nil || acceptance.Status != "DUPLICATE" {
+		t.Fatalf("same-bytes receipt under a new event id = %v %+v", err, acceptance)
+	}
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 2 {
+		t.Fatalf("the replayed receipt double-counted: completed=%d", series.Completed)
+	}
+}
+
+// TestQuarantinedReadinessUnderProductRedoStaysSuspended：重放路径与回执
+// 配对同享惰性语义——产品审重走期隔离的就绪结果，屏障解除的重放在顺序
+// 门未开时回暂存挂起（不作废、不计轮），留挂起留痕。
+func TestQuarantinedReadinessUnderProductRedoStaysSuspended(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, _ := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-qap-product", product, reviewEvidence(review.ProductReview, "dispatch-qap-product", "", "PASS", "clean", nil))
+	readiness := pendingActionID(t, engine)
+
+	redo := &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-qap",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "only the product review is redone",
+	}
+	request, err := NewRequirementRequestEvent("req-qap", redo.packageView(), requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-qap", readiness, "agent-qap"), fp); err != nil {
+		t.Fatalf("receipt during barrier: %v", err)
+	}
+	quarantined, err := NewReviewWorkerResultEvent("evt-qap", readiness, testProvider, "sha256:payload-qap",
+		reviewEvidence(review.StartReadiness, "dispatch-qap-readiness", "", "PASS", "in-flight against rev-1", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(quarantined, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		t.Fatalf("quarantine: %+v %v", acceptance, err)
+	}
+	askAndDecideRequirement(t, engine, "req-qap", "proceed", redo)
+	snap := engine.LoadMustSucceed(t)
+	if len(snap.State.QuarantinedResults) != 0 {
+		t.Fatalf("the decide must reclassify the quarantine ledger: %+v", snap.State.QuarantinedResults)
+	}
+	if _, staged := snap.State.StagedResults[readiness]; !staged {
+		t.Fatalf("the gate-blocked replay must return to staging: %+v", snap.State.StagedResults)
+	}
+	if _, voided := snap.State.ObsoleteResults[readiness]; voided {
+		t.Fatal("the gate-blocked replay must not be voided")
+	}
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 0 {
+		t.Fatalf("the suspended replay must not count a round: completed=%d", series.Completed)
+	}
+	suspended := false
+	for _, record := range snap.State.RecoveryRecords {
+		if record.ActionID == readiness && strings.Contains(record.Detail, "returned to staging") {
+			suspended = true
+		}
+	}
+	if !suspended {
+		t.Fatalf("no suspension trail: %+v", snap.State.RecoveryRecords)
 	}
 }

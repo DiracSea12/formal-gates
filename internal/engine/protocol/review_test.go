@@ -507,7 +507,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		before := stateBytesOf(t, dir)
 		if _, err := engine.Submit(ev, fp); err == nil {
 			t.Fatal("start-readiness evidence accepted before product-review PASS")
-		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+		} else if code := rejectionCode(t, err); code != CodeReviewSequenceGate {
 			t.Fatalf("early readiness code = %q", code)
 		}
 		if after := stateBytesOf(t, dir); string(before) != string(after) {

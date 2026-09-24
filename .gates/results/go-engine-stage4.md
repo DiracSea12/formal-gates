@@ -192,3 +192,17 @@ Git provider＋canary＋route matrix。
 主代理独立复核（三探针走到底、跑毕即删）：标记派发（零证据）被重走决定主动终止——旧 actionID 进 ObsoleteActions 带 ReplacedBy、无 ObsoleteResults 泄漏、替换完成新鲜轮 completed=1@rev-2；未勾选系列标记派发存活且顺序门语义不变；不符证据零状态拒绝、相符证据完成。探针自纠一处（MP2 末步误期：产品重走期就绪顺序门本应关着，正是残留②的立项场景）。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
 
 残留（如实）：真实 workflow 的单一 review.worker 未标记（系列归属属产品建模，接入真实双审时再标）；compiler 越约路径配对复核未立专测；已标记 action 的非审查结果不触发一致性检查（规格未要求）。
+## 第 51 轮（2026-09-24，R2 残留②实施：回执无条件落账＋惰性配对，轻装）
+
+机主批准的推荐方案落地（子代理，protocol 6 文件，315/14）：**回执是无条件观察事实，配对是惰性业务动作**——消灭"顺序门未开连回执都进不了账、须人工换事件 ID 重试"的耦合。
+
+- 错误分界可识别化：新错误码 `REVIEW_SEQUENCE_GATE`（双审顺序守卫专用，errors.As 判别无宽匹配）；结构性拒绝照旧拒事件。
+- 回执无条件落账：配对撞顺序门→回执 ACCEPTED 提交＋暂存保留＋挂起留痕（"stays pending until the product-review conclusion re-passes"）；非门类错误零状态拒绝不变。
+- 惰性补配对 `pairSuspendedResults`：扫"回执 SPAWNED＋暂存＋未入账"逐条经唯一接纳核心补配对，单条失败快照恢复保持挂起。锚点两处＝产品审 effective 重新 PASS 的全部入口（worker result 接纳；DECIDE settle 后 refill 前，覆盖纠正生效与隔离重放）；空扫描零成本。重放路径同享（隔离重放撞顺序门→挂起不作废）。
+- 测试：端到端主场景（重走期回执 ACCEPTED＋挂起＋无重试请求→产品新鲜轮 PASS@rev-2 同一事务自动配对 completed=2→同字节回执重发 DUPLICATE 不双计）；新 `parallelTailFixture`（双审后并列双派发槽，线性 fixture 无法同时呈现挂起槽与开门槽）；out-of-scope 子测从"回执被拒"翻为"ACCEPTED＋挂起"；两处早到/账本外守卫断言改期新码。
+
+主代理独立复核（单探针走到底、跑毕即删，独立于子代理的 helper——显式走 pre-floor 旧尾槽 OBSOLETE_DISPATCH→替换派发 PASS 的完整舞蹈）：挂起状态三项（暂存保留/计轮不动/留痕）＋同事务配对证明（配对无独立提交事件，只能发生在产品 PASS 接纳事务）＋DUPLICATE 不双计，一次全绿。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
+
+残留（如实，均低危记档）：①已配对回执的**直接结果提交**撞顺序门仍整事件拒绝（本轮只把回执变为无条件；结果事件的暂存挂起未做，规格未要求）；②已确认阻塞门槛（同 revision P0/P1 拦新候选）是另一扇可开门（dismiss/降级），未纳入挂起类；③补配对对结构性坏死条目每次开门空转重试（无状态增长）。
+
+**第 49 轮四残留全部处置完毕（①②实施、③销案、④作废）。R2 全链收口，待外部评审总复核。**

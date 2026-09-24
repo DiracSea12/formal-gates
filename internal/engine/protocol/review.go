@@ -6,6 +6,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -250,7 +251,7 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, issuedRevisi
 	}
 	if evidence.Action == review.StartReadiness && !s.effectivePass(s.ReviewSeries.ProductReview) {
 		return review.Set{}, &RejectedError{
-			Code: CodeReviewEvidenceRejected,
+			Code: CodeReviewSequenceGate,
 			Detail: fmt.Sprintf("start-readiness evidence requires a carried product-review PASS at a confirmed requirement revision (current: %s bound to %q)",
 				s.ReviewSeries.ProductReview.Effective.Status, s.ReviewSeries.ProductReview.Effective.RequirementRevision),
 		}
@@ -267,6 +268,13 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, issuedRevisi
 		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 	}
 	return updated, nil
+}
+
+// isSequenceGate 报告错误是否为双审顺序门未开（区别于结构性不可纳）：
+// 门未开是暂时态——回执配对挂起、开门迁移点补配对；其余拒绝照旧。
+func isSequenceGate(err error) bool {
+	var rejected *RejectedError
+	return errors.As(err, &rejected) && rejected.Code == CodeReviewSequenceGate
 }
 
 // recordReviewCandidate 把审查证据经完整可接纳性判定后记账落回 state；

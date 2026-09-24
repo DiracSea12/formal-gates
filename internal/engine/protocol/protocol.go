@@ -117,6 +117,11 @@ const (
 	// CodeRequirementAskExpired：需求变化 Ask 落账的权威基线 revision 已被
 	// 后续确认取代——Ask 过期，零状态变化，须在新基线上重建 Ask。
 	CodeRequirementAskExpired = "REQUIREMENT_ASK_EXPIRED"
+	// CodeReviewSequenceGate：start-readiness 证据到达时产品审结论尚未
+	// 就绪（双审顺序门未开）。对结果提交是可区分拒绝；对回执配对是
+	// "暂不可配"信号——回执照常落账，配对挂起至产品审结论重新 PASS 的
+	// 事务自动补齐。
+	CodeReviewSequenceGate = "REVIEW_SEQUENCE_GATE"
 	// CodeChangeBarrierActive：存在未决的需求变化 Ask（修订屏障 Phase A），
 	// 新的业务任务签发被拒绝；既有 Ask、回执与结果类事件不受阻。
 	CodeChangeBarrierActive = "CHANGE_BARRIER_ACTIVE"

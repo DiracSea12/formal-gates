@@ -233,8 +233,9 @@ func (e *Engine) quarantineWorkerResult(state *State, ev Event, nextRevision uin
 // replayQuarantinedResults 在需求决定的屏障解除（最后一个未决 Ask 解决）
 // 的同一事务内逐条原子重分类隔离账（§7.2.2 的恢复侧）：每条记录经与
 // Submit 完全相同的接纳核心重放——未勾选 series 的审查证据按 carry 语义
-// 携原 revision 接纳并留痕；单条失败经快照恢复只落该条的 obsolete＋留痕
-// （零半套账目），其余记录照常继续。重放按 eventID 排序保持确定性；重放
+// 携原 revision 接纳并留痕；顺序门未开的记录回暂存挂起（回执已在账，
+// 开门迁移点补配对）；其余失败经快照恢复只落该条的 obsolete＋留痕（零
+// 半套账目），其余记录照常继续。重放按 eventID 排序保持确定性；重放
 // 内部的补位签发由 refill 的既有屏障扣发持住，决定提交后的统一 refill
 // 补进。
 func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRevision uint64, expectedFingerprint string) {
@@ -257,6 +258,17 @@ func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRe
 		if cloneErr != nil || admitErr != nil {
 			if snapshot != nil {
 				*state = *snapshot
+			}
+			if isSequenceGate(admitErr) {
+				// 顺序门未开：回暂存挂起（回执已在账），开门迁移点补配对
+				//——不作废。
+				state.StagedResults[record.ActionID] = record
+				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+					ActionID: record.ActionID,
+					Detail:   "quarantined result returned to staging; pairing stays suspended until the product-review conclusion re-passes",
+					Revision: nextRevision,
+				})
+				continue
 			}
 			state.ObsoleteResults[record.ActionID] = record
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{

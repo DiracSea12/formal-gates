@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -737,10 +738,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// options, and resolved state remain independently inspectable. Decisions
 		// remains the immutable decision history and also rejects later submissions.
 		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（
-		// submit 接纳后立即继续 Decide/SelectIssued）。
+		// submit 接纳后立即继续 Decide/SelectIssued）。纠正生效与隔离重放
+		// 都可能把产品审结论重新 PASS：同一事务内补齐挂起的配对。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
 		}
+		e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
 		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
 		if refillErr != nil {
 			return Acceptance{}, nil, false, refillErr
@@ -900,7 +903,17 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if staged, waiting := state.StagedResults[actionID]; waiting && ev.Spawn.Status == SpawnStatusSpawned {
 			refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
 			if err != nil {
-				return Acceptance{}, nil, false, err
+				if !isSequenceGate(err) {
+					return Acceptance{}, nil, false, err
+				}
+				// 顺序门未开：回执是无条件观察事实，照常落账；暂存保留、
+				// 配对挂起——产品审结论重新 PASS 的事务自动补配对。
+				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+					ActionID: actionID,
+					Detail:   "spawn receipt recorded; the staged result stays pending until the product-review conclusion re-passes",
+					Revision: nextRevision,
+				})
+				return acceptance, state, true, nil
 			}
 			delete(state.StagedResults, actionID)
 			acceptance.Refill = refill
@@ -927,6 +940,8 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if !wrote {
 			return acceptance, nil, false, nil
 		}
+		// 结果接纳可能把产品审结论重新 PASS：同一事务内补齐挂起的配对。
+		e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
 		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
@@ -1307,6 +1322,39 @@ func (e *Engine) terminateSupersededDispatch(state *State, actionID string, reco
 		EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_DISPATCH",
 		Revision: nextRevision, ActionID: actionID, Refill: []string{replacement},
 	}, true, nil
+}
+
+// pairSuspendedResults 补齐挂起的配对：回执已在账（SPAWNED）、暂存在
+// 账、尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条
+// 目保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。
+func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) {
+	if len(state.StagedResults) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(state.StagedResults))
+	for actionID := range state.StagedResults {
+		receipt, receipted := state.SpawnReceipts[actionID]
+		if !receipted || receipt.Status != SpawnStatusSpawned {
+			continue
+		}
+		if _, admitted := state.Results[actionID]; admitted {
+			continue
+		}
+		ids = append(ids, actionID)
+	}
+	slices.Sort(ids)
+	for _, actionID := range ids {
+		snapshot, cloneErr := cloneState(state)
+		if cloneErr != nil {
+			continue
+		}
+		payload := workerResultPayloadOf(state.StagedResults[actionID])
+		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, nextRevision, nextRevision, expectedFingerprint); err != nil {
+			*state = *snapshot
+			continue
+		}
+		delete(state.StagedResults, actionID)
+	}
 }
 
 func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, expectedFingerprint string) ([]string, error) {
