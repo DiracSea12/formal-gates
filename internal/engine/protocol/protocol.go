@@ -181,7 +181,10 @@ type PendingAsk struct {
 	Control   ControlKind      `json:"control"`
 	Step      authoring.StepID `json:"step,omitempty"`
 	Options   []AskOption      `json:"options"`
-	Resolved  bool             `json:"resolved"`
+	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
+	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
+	Package  *RequirementDecisionPackage `json:"package,omitempty"`
+	Resolved bool                        `json:"resolved"`
 }
 
 // RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。
@@ -410,6 +413,11 @@ type State struct {
 	// StagedResults 是 result-before-receipt 的暂存（actionID → result）：
 	// 不丢弃、不推进，receipt 配对后在同一事务内接纳。
 	StagedResults map[string]WorkerResult `json:"stagedResults"`
+	// QuarantinedResults 是修订屏障（Phase A）期间的持久隔离账
+	//（eventID → result）：接纳回执为 QUARANTINED、不推进不入 Results；
+	// 需求决定落账的同一事务内原子重分类（正常重放或按 revision 作废），
+	// 进程重启不丢失。
+	QuarantinedResults map[string]WorkerResult `json:"quarantinedResults"`
 	// Results 按 actionID 落账已接纳的 worker result。
 	Results map[string]WorkerResult `json:"results"`
 	// RecoverableResults 保留未终结当前 Attempt 的失败结果历史。后续同一
@@ -582,6 +590,9 @@ func (s *State) normalizeCollections() {
 	}
 	if s.StagedResults == nil {
 		s.StagedResults = map[string]WorkerResult{}
+	}
+	if s.QuarantinedResults == nil {
+		s.QuarantinedResults = map[string]WorkerResult{}
 	}
 	if s.Results == nil {
 		s.Results = map[string]WorkerResult{}

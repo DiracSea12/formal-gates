@@ -144,3 +144,17 @@ Git provider＋canary＋route matrix。
 - 保护错误语义的两条既有测试按新语义重写（屏障期计轮→quarantine；强制技术审→携用）。六探针翻绿；engine 15 包＋cli 全绿、vet/gofmt 干净。模型调用 0。
 
 **R2 返修收口，待外部评审复核。**
+## 第 48 轮（2026-09-24，R2 收敛刀：结构修复替代逐项补丁，轻装）
+
+机主对外部评审第五轮（4 P1＋2 P2）定调：**不要无脑打补丁，先根因分析**。主代理完成五家族根因归类（A 两段 Ask 无 typed 包绑定＝确认边界缺失；B 屏障/不变量散落调用点＝枚举式防守永远漏下一个入口；C revision 权威迁移无原子重分类；D 主代理返修合同停留在点位未升到不变量——含三处亲裁错误（级联裁定、"拒绝＝隔离"、屏障覆盖从未完整枚举）；E 测试断言补丁表面）后派发收敛刀（续用 R2 子代理，合同＝四结构改动＋净删散落检查＋测试升到端到端属性）：
+
+- **S1 Ask 绑定 typed 决定包**：`RequirementDecisionPackage`（9 字段，BaseRevision/Reason 不入包）随 REQUEST 落账并持久化于 `PendingAsk.Package`；DECIDE 载荷必须与包逐字段相等（冲突拒绝零状态）；其余控制携包 schema 拒。闭 F1（Ask 即用户确认边界）。
+- **S2 单一处置表** `admitInCurrentState`：屏障在位时观察类/在途回执/Ask 创建/需求变化与 RESET·ABORT 照常、WORKER_RESULT 持久隔离、其余一切 DECIDE 与 HostAction intent 拒绝；`admit()` 顶部与 `persistHostAction` 均经表。**删除**上轮两处散落屏障检查。闭 F3（覆盖面成为表属性；engine.go:415 的签发冻结是宿主侧调用非事件，独立机制保留）。
+- **S3 持久隔离＋原子重分类**：`State.QuarantinedResults`（eventID 键，QUARANTINED 回执、事件进台账防重放）；需求决定（含放弃）落账同一事务内重分类——CHANGED 绑旧权威 revision 的隔离审查证据直接作废（scope 无关）；其余经正常接纳路径重放（错误不否决决定、落 Obsolete＋留痕）。暂存规则统一为**只认 revision 绑定**（PRESERVED 同样清除），删除上轮 scope 依赖分支。闭 F4/F5。
+- **S4 范围语义统一＋来源绑处置**：scope 计算与机械执行移出分类分支（PRESERVED 可携 scope——§7.2.1 合法组合，账本不变量同步删除"PRESERVED⇒空 scope"错误规则）；来源必须绑用户有效裁决（CONFIRM/RESEVERITIZE），未裁决 finding 双向拒绝（先处置再发起）。闭 F2/F6。
+
+交付：protocol 包 5 文件（744 增/192 删，其中源码 4 文件、测试重写携包 helper＋`abortExistingAsk`）。主代理独立复核（自建 oracle 四探针、跑毕即删）：F1 单字段分歧冲突拒绝＋一致登记；F2 账本如实＋scope 机械执行＋界外 series 不动；F3 冻结零状态＋同 Ask 解除屏障后照常可决（正控）；F4 隔离跨重启持久＋绑候选 revision 的隔离结果重放至 completed+1＋绑旧权威的作废留痕；F5 暂存清除＋迟到回执不配对＋新 revision 结果完成接纳；F6 未裁决 P1/P2 源双向拒绝。探针三轮自纠（token 取早、helper 第三参误塞 revision、回执字节冲突、trace 文案过窄）均为探针构造错误，非实现缺陷。engine 15 包＋cli 全绿、vet/gofmt 干净。模型调用 0。
+
+子代理取舍（主代理核可）：HostAction 回执归在途回执照常（intent 冻结、回清纯账）；重放错误统一落 ObsoleteResults（结构不可纳＝死结果）；abort 同样触发重放（无 revision 变化＝全部应被纳）；屏障优先于 UNKNOWN_REQUEST（零状态等价）。已知残留：QuarantinedResults 无独立完整性校验（停车账，篡改仅能丢条目）；同 action 多条异字节隔离结果重放先到先得；审查类控制的 REQUEST 包未实现（机制已就位，按合同留后续）。
+
+**收敛刀收口，待外部评审复核。**

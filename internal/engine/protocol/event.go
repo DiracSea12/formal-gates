@@ -122,10 +122,14 @@ func (k EventKind) Valid() bool {
 	return false
 }
 
-// RequestPayload 是 REQUEST_CONTROL 的 payload：控制类型 + Ask 选项集。
+// RequestPayload 是 REQUEST_CONTROL 的 payload：控制类型 + Ask 选项集 +
+// 按控制类型的 typed 决定包（先例＝HostAction/Review 的变体指针）。当前
+// 只有需求变化控制携包：用户在 Ask 上看到并确认的完整变更包，DECIDE 载
+// 荷必须与之逐字段相等——Ask 即用户确认边界，不存在 Ask 之外的变更内容。
 type RequestPayload struct {
 	Control ControlKind
 	Options []AskOption
+	Package *RequirementDecisionPackage
 }
 
 // DecidePayload 是 DECIDE 的 payload：目标 request、freshness token 与
@@ -240,12 +244,43 @@ type RouteDecision struct {
 	Selected []string `json:"selected,omitempty"`
 }
 
+// RequirementDecisionPackage 是用户在 Ask 上看到并确认的完整变更包：
+// 候选 revision、review-delta 指纹、来源、含义分类、四个重走勾选与发现
+// 绑定。BaseRevision 不入包（CAS 基线由引擎按请求时的权威 revision 持
+// 有）；Reason 随 DECIDE 落账。结构只含 string/bool，可直接做逐字段相等
+// 比较。
+type RequirementDecisionPackage struct {
+	CandidateRevision  string `json:"candidateRevision"`
+	DeltaDigest        string `json:"deltaDigest"`
+	Source             string `json:"source"`
+	Classification     string `json:"classification"`
+	RedoProductReview  bool   `json:"redoProductReview"`
+	RedoStartReadiness bool   `json:"redoStartReadiness"`
+	RedoTopology       bool   `json:"redoTopology"`
+	RedoRoute          bool   `json:"redoRoute"`
+	FindingDigest      string `json:"findingDigest,omitempty"`
+}
+
+// packageView 投影出 DECIDE 载荷中的包字段，供与 Ask 落账包的逐字段
+// 相等比较。
+func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
+	return RequirementDecisionPackage{
+		CandidateRevision:  p.CandidateRevision,
+		DeltaDigest:        p.DeltaDigest,
+		Source:             p.Source,
+		Classification:     p.Classification,
+		RedoProductReview:  p.RedoProductReview,
+		RedoStartReadiness: p.RedoStartReadiness,
+		RedoTopology:       p.RedoTopology,
+		RedoRoute:          p.RedoRoute,
+		FindingDigest:      p.FindingDigest,
+	}
+}
+
 // RequirementDecisionPayload 是 REQUEST_REQUIREMENT_CHANGE 的 DECIDE
-// typed 载荷（总需求 §7.2.1）：BaseRevision 是 CAS 基线（必须等于当前
-// 权威 revision），CandidateRevision 是完整候选 revision 绑定，DeltaDigest
-// 是主代理生成之 review-delta 的指纹绑定（引擎不持有 base/diff 账本），
-// Source/Classification 由用户声明，四个 Redo 勾选框是用户逐项确认的重
-// 走范围。FindingDigest 把发现项驱动的修订绑回真实账目。
+// typed 载荷（总需求 §7.2.1）：在 Ask 落账的确认包之外补充 BaseRevision
+// （CAS 基线，必须等于当前权威 revision）与 Reason（决定理由，随决定落
+// 账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
 	BaseRevision       string `json:"baseRevision"`
 	CandidateRevision  string `json:"candidateRevision"`
@@ -340,6 +375,14 @@ type Event struct {
 // 选项集非空且 ID 唯一非空、标签非空。
 func NewRequestEvent(id EventID, control ControlKind, options ...AskOption) (Event, error) {
 	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{Control: control, Options: append([]AskOption(nil), options...)}}
+	return ev, ev.Validate()
+}
+
+// NewRequirementRequestEvent 构造携变更包的需求变化请求：包形状在此校
+// 验；控制固定为 REQUEST_REQUIREMENT_CHANGE，选项集由请求方枚举
+// （proceed/abort）。
+func NewRequirementRequestEvent(id EventID, pkg RequirementDecisionPackage, options ...AskOption) (Event, error) {
+	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{Control: ControlRequestRequirementChange, Options: append([]AskOption(nil), options...), Package: &pkg}}
 	return ev, ev.Validate()
 }
 
@@ -518,6 +561,16 @@ func (e Event) Validate() error {
 				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("request option %q duplicated", option.ID)}
 			}
 			seen[option.ID] = true
+		}
+		if e.Request.Control == ControlRequestRequirementChange {
+			if e.Request.Package == nil {
+				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a requirement change request must carry the typed decision package the user confirms"}
+			}
+			if err := validateRequirementPackage(e.Request.Package); err != nil {
+				return err
+			}
+		} else if e.Request.Package != nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not carry a decision package", e.Request.Control)}
 		}
 	case KindDecide:
 		if strings.TrimSpace(string(e.Decide.Request)) == "" {
@@ -712,8 +765,9 @@ type eventWire struct {
 }
 
 type requestWire struct {
-	Control string      `json:"control"`
-	Options []AskOption `json:"options"`
+	Control string                      `json:"control"`
+	Options []AskOption                 `json:"options"`
+	Package *RequirementDecisionPackage `json:"package,omitempty"`
 }
 
 type decideEventWire struct {
@@ -789,7 +843,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)
-		w.Request = &requestWire{Control: string(e.Request.Control), Options: options}
+		w.Request = &requestWire{Control: string(e.Request.Control), Options: options, Package: e.Request.Package}
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
@@ -845,6 +899,7 @@ func (e Event) Digest() (string, error) {
 
 // Acceptance 是事件接纳回执（含重放时原样返回的稳定结果）。Status 取值：
 // ACCEPTED（已接纳并提交）、STAGED（result-before-receipt 暂存）、
+// QUARANTINED（修订屏障期间的持久隔离，待需求决定同事务重分类）、
 // DUPLICATE（逐字节 payload 重发；新 event ID 仍会被 durable 占用）。
 type Acceptance struct {
 	EventID        string   `json:"eventId"`

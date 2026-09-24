@@ -18,10 +18,22 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// requirementOptions 是 REQUEST_REQUIREMENT_CHANGE 的示例选项集（引擎不
-// 锚定具体选项 id：typed 载荷才是登记修订的唯一权威，nil 载荷＝放弃）。
+// requirementOptions 是 REQUEST_REQUIREMENT_CHANGE 的标准选项集（choice id
+// 封闭为 proceed/abort，Ask 上绑定用户确认的变更包）。
 func requirementOptions() []AskOption {
 	return []AskOption{{ID: "proceed", Label: "确认变更包"}, {ID: "abort", Label: "放弃变更"}}
+}
+
+// requirementPackageOf 投影决定载荷的包字段；载荷为 nil（放弃路径）时给
+// 出合法默认包——Ask 必须携包，放弃决定不与包比对。
+func requirementPackageOf(payload *RequirementDecisionPayload) RequirementDecisionPackage {
+	if payload == nil {
+		return RequirementDecisionPackage{
+			CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-default",
+			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		}
+	}
+	return payload.packageView()
 }
 
 // reviewEvidenceAt 构造绑定任意需求 revision 的审查证据。
@@ -37,7 +49,7 @@ func reviewEvidenceAt(action review.Action, dispatchID, revision, status, messag
 func askAndDecideRequirement(t *testing.T, engine *Engine, requestID string, choice AskOptionID, payload *RequirementDecisionPayload) Acceptance {
 	t.Helper()
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent(EventID(requestID), ControlRequestRequirementChange, requirementOptions()...)
+	request, err := NewRequirementRequestEvent(EventID(requestID), requirementPackageOf(payload), requirementOptions()...)
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
@@ -60,7 +72,7 @@ func askAndDecideRequirement(t *testing.T, engine *Engine, requestID string, cho
 func askAndDecideRequirementRejecting(t *testing.T, engine *Engine, dir, requestID string, choice AskOptionID, payload *RequirementDecisionPayload) error {
 	t.Helper()
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent(EventID(requestID), ControlRequestRequirementChange, requirementOptions()...)
+	request, err := NewRequirementRequestEvent(EventID(requestID), requirementPackageOf(payload), requirementOptions()...)
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
@@ -80,6 +92,20 @@ func askAndDecideRequirementRejecting(t *testing.T, engine *Engine, dir, request
 		t.Fatalf("rejected decide %s changed state bytes", requestID)
 	}
 	return err
+}
+
+// abortExistingAsk 以 decide-only 放弃一个已存在的需求变化 Ask（Ask 已由
+// 原确认包创建，重发请求会撞事件台账）。
+func abortExistingAsk(t *testing.T, engine *Engine, requestID string) {
+	t.Helper()
+	fp := fingerprintOf(t, engine)
+	token, err := engine.Freshness(RequestID(requestID))
+	if err != nil {
+		t.Fatalf("freshness %s: %v", requestID, err)
+	}
+	if _, err := engine.Submit(requirementDecideEvent(t, requestID, token, "abort", nil), fp); err != nil {
+		t.Fatalf("abort %s: %v", requestID, err)
+	}
 }
 
 func requirementDecideEvent(t *testing.T, requestID, token string, choice AskOptionID, payload *RequirementDecisionPayload) Event {
@@ -399,14 +425,7 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 	// 被拒决定只解决不了 Ask——三笔未决 Ask 各以 abort 收束，解除其屏障
 	//（拒绝本身零状态，Ask 仍在等待有效决定）。
 	for _, pending := range []string{"req-p1-preserved", "req-p1-noscope", "req-unknown-finding"} {
-		fp := fingerprintOf(t, engine)
-		token, err := engine.Freshness(RequestID(pending))
-		if err != nil {
-			t.Fatalf("freshness %s: %v", pending, err)
-		}
-		if _, err := engine.Submit(requirementDecideEvent(t, pending, token, "abort", nil), fp); err != nil {
-			t.Fatalf("abort %s: %v", pending, err)
-		}
+		abortExistingAsk(t, engine, pending)
 	}
 
 	// 正确载荷：CHANGED＋重走 finding 所在 series。此后新 revision 的新
@@ -500,7 +519,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
-		request, err := NewRequestEvent("req-barrier", ControlRequestRequirementChange, requirementOptions()...)
+		request, err := NewRequirementRequestEvent("req-barrier", requirementPackageOf(nil), requirementOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
@@ -538,65 +557,175 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		}
 	})
 
-	t.Run("results are quarantined and resubmitted after the decide", func(t *testing.T) {
+	t.Run("results are durably quarantined and reclassified by a preserved decide", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-		engine, dir := reviewEngine(t, cd, reg)
+		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 		product := issueReady(t, engine)[0]
-		request, err := NewRequestEvent("req-barrier-result", ControlRequestRequirementChange, requirementOptions()...)
+		preserved := &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-barrier",
+			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+			Reason: "wording only",
+		}
+		request, err := NewRequirementRequestEvent("req-barrier-result", preserved.packageView(), requirementOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
 		if _, err := engine.Submit(request, fp); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
-		// 回执不受阻（观察类）；结果一律 quarantine：可区分错误、零状态，
-		// 事件不进台账。
+		// 回执不受阻；结果持久隔离：回执 QUARANTINED、事件进台账防重放、
+		// 不推进不入 Results（进程重启不丢失，重分类在决定事务内）。
 		if _, err := engine.Submit(spawnReceipt(t, "spawn-under-barrier", product, "agent-under-barrier"), fp); err != nil {
 			t.Fatalf("spawn receipt under barrier: %v", err)
 		}
-		ev, err := NewReviewWorkerResultEvent("result-under-barrier", product, testProvider, "sha256:payload-barrier", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		// worker 已按 Ask 绑定的候选 revision（rev-2）复审：隔离账存原样。
+		ev, err := NewReviewWorkerResultEvent("result-under-barrier", product, testProvider, "sha256:payload-barrier", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed the candidate", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
-			t.Fatal("worker result accepted while the change ask is pending")
-		} else if code := rejectionCode(t, err); code != CodeChangeBarrierActive {
-			t.Fatalf("quarantined result code = %q", code)
-		}
-		if after := stateBytesOf(t, dir); string(before) != string(after) {
-			t.Fatal("quarantined result changed state bytes")
-		}
-		snap := engine.LoadMustSucceed(t)
-		if len(snap.State.StagedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 0 {
-			t.Fatalf("quarantine must keep the ledger untouched: staged=%d completed=%d", len(snap.State.StagedResults), snap.State.ReviewSeries.ProductReview.Completed)
-		}
-		// 决定后解冻：放弃变更（不登记 revision、账本不动），原 ID 原字节
-		// 重交被纳（回执已配对→直接完成），refill 补进下一轮派发。登记了
-		// 变更的场景下旧 revision 结果按 F3 拒绝，须换绑新 revision 的
-		// 结果重交。
-		askAndDecideRequirement(t, engine, "req-barrier-result", "abort", nil)
 		acceptance, err := engine.Submit(ev, fp)
 		if err != nil {
-			t.Fatalf("resubmit after the decide: %v", err)
+			t.Fatalf("quarantined submit: %v", err)
 		}
-		if acceptance.Status != "ACCEPTED" {
-			t.Fatalf("resubmitted result status = %q, want ACCEPTED", acceptance.Status)
+		if acceptance.Status != "QUARANTINED" {
+			t.Fatalf("result under barrier status = %q, want QUARANTINED", acceptance.Status)
 		}
+		snap := engine.LoadMustSucceed(t)
+		if len(snap.State.QuarantinedResults) != 1 || len(snap.State.Results) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 0 {
+			t.Fatalf("quarantine must park the result without admitting it: quarantined=%d results=%d completed=%d",
+				len(snap.State.QuarantinedResults), len(snap.State.Results), snap.State.ReviewSeries.ProductReview.Completed)
+		}
+		// PRESERVED 决定的同一事务：隔离结果按正常接纳路径重放，真实完成
+		// 入账（completed+1），隔离账清空。
+		askAndDecideRequirement(t, engine, "req-barrier-result", "proceed", preserved)
 		snap = engine.LoadMustSucceed(t)
-		if snap.State.ReviewSeries.ProductReview.Completed != 1 {
-			t.Fatalf("resubmitted result did not reach the ledger: %+v", snap.State.ReviewSeries.ProductReview)
+		if len(snap.State.QuarantinedResults) != 0 {
+			t.Fatalf("the decide must reclassify the quarantine ledger: %+v", snap.State.QuarantinedResults)
+		}
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+			t.Fatalf("replayed result did not complete admission: completed=%d %+v", series.Completed, series.Effective)
+		}
+		if _, admitted := snap.State.Results[product]; !admitted {
+			t.Fatal("replayed result did not reach the results ledger")
 		}
 		if len(snap.State.PendingActions) != 1 {
 			t.Fatalf("issuance must resume after the decide: %v", snap.State.PendingActions)
 		}
 	})
 
+	t.Run("a changed decide voids old-revision quarantined evidence", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, _ := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		product := issueReady(t, engine)[0]
+		request, err := NewRequirementRequestEvent("req-barrier-void", RequirementDecisionPackage{
+			CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-void", Source: RequirementSourceUserInitiated,
+			Classification: RequirementClassificationChanged, RedoProductReview: true,
+		}, requirementOptions()...)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if _, err := engine.Submit(request, fp); err != nil {
+			t.Fatalf("submit request: %v", err)
+		}
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-void", product, "agent-void"), fp); err != nil {
+			t.Fatalf("spawn receipt under barrier: %v", err)
+		}
+		ev, err := NewReviewWorkerResultEvent("result-void", product, testProvider, "sha256:payload-void", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "bound to the superseded revision", nil))
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		if acceptance, err := engine.Submit(ev, fp); err != nil || acceptance.Status != "QUARANTINED" {
+			t.Fatalf("quarantine: %v %+v", err, acceptance)
+		}
+		askAndDecideRequirement(t, engine, "req-barrier-void", "proceed", &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-void",
+			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			RedoProductReview: true, Reason: "the product review is redone",
+		})
+		snap := engine.LoadMustSucceed(t)
+		if len(snap.State.QuarantinedResults) != 0 {
+			t.Fatalf("the decide must reclassify the quarantine ledger: %+v", snap.State.QuarantinedResults)
+		}
+		if _, voided := snap.State.ObsoleteResults[product]; !voided {
+			t.Fatalf("old-revision quarantined evidence must be voided: %+v", snap.State.ObsoleteResults)
+		}
+		voided := false
+		for _, record := range snap.State.RecoveryRecords {
+			if record.ActionID == product && strings.Contains(record.Detail, "permanently inadmissible") {
+				voided = true
+			}
+		}
+		if !voided {
+			t.Fatalf("no void trail for %s: %+v", product, snap.State.RecoveryRecords)
+		}
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 || series.Effective.Status != "PENDING" {
+			t.Fatalf("voided evidence must not reach the ledger: completed=%d %+v", series.Completed, series.Effective)
+		}
+	})
+
+	t.Run("other decides are frozen by the table", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		requirementAsk, err := NewRequirementRequestEvent("req-barrier-topology", requirementPackageOf(nil), requirementOptions()...)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if _, err := engine.Submit(requirementAsk, fp); err != nil {
+			t.Fatalf("submit request: %v", err)
+		}
+		topologyAsk, err := NewRequestEvent("req-topology-frozen", ControlConfirmTopology, topologyOptions()...)
+		if err != nil {
+			t.Fatalf("topology ask: %v", err)
+		}
+		if _, err := engine.Submit(topologyAsk, fp); err != nil {
+			t.Fatalf("submit topology ask: %v", err)
+		}
+		token, err := engine.Freshness("req-topology-frozen")
+		if err != nil {
+			t.Fatalf("freshness: %v", err)
+		}
+		ev, err := NewReviewDecideEvent("evt-req-topology-frozen", "req-topology-frozen", token, "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "no-split", Note: "建议不拆",
+		}})
+		if err != nil {
+			t.Fatalf("decide: %v", err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(ev, fp); err == nil {
+			t.Fatal("topology decide accepted while the change ask is pending")
+		} else if code := rejectionCode(t, err); code != CodeChangeBarrierActive {
+			t.Fatalf("frozen topology decide code = %q", code)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("frozen topology decide changed state bytes")
+		}
+		// 屏障解除后同一 Ask 的决定照常走接纳（此处被业务条件拒绝，证明
+		// 之前的拦截确系屏障而非其它约束）。
+		askAndDecideRequirement(t, engine, "req-barrier-topology", "abort", nil)
+		token, err = engine.Freshness("req-topology-frozen")
+		if err != nil {
+			t.Fatalf("freshness after the barrier: %v", err)
+		}
+		retry, err := NewReviewDecideEvent("evt-req-topology-retry", "req-topology-frozen", token, "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "no-split", Note: "建议不拆",
+		}})
+		if err != nil {
+			t.Fatalf("decide: %v", err)
+		}
+		if _, err := engine.Submit(retry, fp); err == nil {
+			t.Fatal("post-barrier topology decide accepted without readiness PASS")
+		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+			t.Fatalf("post-barrier topology code = %q", code)
+		}
+	})
+
 	t.Run("host action intents are frozen", func(t *testing.T) {
 		engine, _, _, _ := preparedEngine(t)
 		fp := fingerprintOf(t, engine)
-		request, err := NewRequestEvent("req-barrier-host", ControlRequestRequirementChange, requirementOptions()...)
+		request, err := NewRequirementRequestEvent("req-barrier-host", requirementPackageOf(nil), requirementOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
@@ -689,6 +818,10 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 		t.Fatalf("dual variant code = %q", code)
 	}
 
+	// 被拒决定留下未决 Ask（屏障在位）：先以 decide-only 收束（Ask 已由
+	// 原包创建，不得重发请求），避免污染后续配对用例。
+	abortExistingAsk(t, engine, "req-cas")
+
 	// 控制↔载荷配对：需求控制携 Review 载荷、审查控制携 Requirement 载荷
 	// 都拒绝。
 	reviewPayload := ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "n"}}
@@ -697,6 +830,7 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 		t.Fatalf("cross review code = %q", code)
 	}
+	abortExistingAsk(t, engine, "req-cross-review")
 	requirementPayload := RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}
 	if err := askAndDecideRequirementCrossPayload(t, engine, dir, "req-cross-requirement", nil, &requirementPayload); err == nil {
 		t.Fatal("topology control with a requirement payload accepted")
@@ -706,7 +840,7 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 
 	// freshness 过期回归：后续提交取代旧 token。
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent("req-fresh", ControlRequestRequirementChange, requirementOptions()...)
+	request, err := NewRequirementRequestEvent("req-fresh", requirementPackageOf(&requirementPayload), requirementOptions()...)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -745,12 +879,19 @@ func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requ
 	control := ControlRequestRequirementChange
 	choice := AskOptionID("proceed")
 	options := requirementOptions()
+	pkg := requirementPackageOf(requirementPayload)
 	if requirementPayload != nil {
 		control = ControlConfirmTopology
 		choice = "no-split"
 		options = topologyOptions()
 	}
-	request, err := NewRequestEvent(EventID(requestID), control, options...)
+	var request Event
+	var err error
+	if control == ControlRequestRequirementChange {
+		request, err = NewRequirementRequestEvent(EventID(requestID), pkg, options...)
+	} else {
+		request, err = NewRequestEvent(EventID(requestID), control, options...)
+	}
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
@@ -828,16 +969,6 @@ func TestRequirementLedgerTamperingRejectedAtLoad(t *testing.T) {
 		t.Fatal("out-of-set scope loaded")
 	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {
 		t.Fatalf("out-of-set scope code = %q", code)
-	}
-	restore()
-
-	tamperStateContent(t, dir, func(content map[string]any) {
-		entry(content)["classification"] = RequirementClassificationPreserved
-	})
-	if _, err := engine.Load(); err == nil {
-		t.Fatal("preserved classification with a redo scope loaded")
-	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {
-		t.Fatalf("preserved-with-scope code = %q", code)
 	}
 	restore()
 
@@ -1144,7 +1275,7 @@ func TestRequirementChangeChoiceAnchoring(t *testing.T) {
 	}
 	// 选项集由请求方枚举：集合内的外来 choice id（defer）仍被封闭集拒绝。
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent("req-anchor-defer", ControlRequestRequirementChange, AskOption{ID: "defer", Label: "推迟"})
+	request, err := NewRequirementRequestEvent("req-anchor-defer", valid.packageView(), AskOption{ID: "defer", Label: "推迟"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -1340,7 +1471,7 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 		}
 	})
 
-	t.Run("staging of an unredone series survives the change", func(t *testing.T) {
+	t.Run("old-revision staging is cleared regardless of scope", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "start.readiness.two")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
@@ -1355,14 +1486,217 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 			t.Fatalf("stage: %v", err)
 		}
 
+		// 只重走产品审：readiness 不在 scope 内，但规则只认 revision 绑定
+		//——绑旧权威 revision 的审查暂存经 F3 永不可纳，一律清除＋留痕。
 		askAndDecideRequirement(t, engine, "req-change-kept", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-kept",
 			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "only the product review is redone",
 		})
 		snap := engine.LoadMustSucceed(t)
-		if _, kept := snap.State.StagedResults[readiness]; !kept {
-			t.Fatalf("staging of an unredone series must survive: %+v", snap.State.StagedResults)
+		if _, kept := snap.State.StagedResults[readiness]; kept {
+			t.Fatalf("old-revision staging outside the redo scope must still be voided: %+v", snap.State.StagedResults)
+		}
+		trailed := false
+		for _, record := range snap.State.RecoveryRecords {
+			if record.ActionID == readiness && strings.Contains(record.Detail, "invalidated by the confirmed requirement change") {
+				trailed = true
+			}
+		}
+		if !trailed {
+			t.Fatalf("no invalidation trail for %s: %+v", readiness, snap.State.RecoveryRecords)
+		}
+		// 迟到回执照常接纳且不配对已清除的旧结果（暂存保持为空，readiness
+		// 派发槽完好——其新轮须待重走中的产品审重新过门后才可提交）。
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-kept-late", readiness, "agent-kept-late"), fp); err != nil {
+			t.Fatalf("late spawn receipt: %v", err)
+		}
+		snap = engine.LoadMustSucceed(t)
+		if len(snap.State.StagedResults) != 0 {
+			t.Fatalf("late receipt must not re-pair the voided staging: %+v", snap.State.StagedResults)
+		}
+		if _, waiting := snap.State.PendingActions[readiness]; !waiting {
+			t.Fatal("the readiness dispatch slot must stay intact for its fresh round")
 		}
 	})
+
+	t.Run("a preserved change clears old-revision staging too", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, _ := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		product := issueReady(t, engine)[0]
+		staged, err := NewReviewWorkerResultEvent("result-staged-preserved", product, testProvider, "sha256:payload-staged-preserved", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "bound before the change", nil))
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		if _, err := engine.Submit(staged, fp); err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+
+		// PRESERVED 修订同样登记新 revision：旧绑定暂存一律不可纳（F5）。
+		askAndDecideRequirement(t, engine, "req-change-preserved-staging", "proceed", &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-preserved-staging",
+			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+			Reason: "wording only",
+		})
+		snap := engine.LoadMustSucceed(t)
+		if len(snap.State.StagedResults) != 0 {
+			t.Fatalf("a preserved change must void old-revision staging: %+v", snap.State.StagedResults)
+		}
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-preserved-late", product, "agent-preserved-late"), fp); err != nil {
+			t.Fatalf("late spawn receipt: %v", err)
+		}
+		fresh, err := NewReviewWorkerResultEvent("result-preserved-fresh", product, testProvider, "sha256:payload-preserved-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
+			t.Fatalf("fresh result after a preserved change: %v %+v", err, acceptance)
+		}
+		snap = engine.LoadMustSucceed(t)
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.RequirementRevision != "rev-2" {
+			t.Fatalf("fresh result did not complete: completed=%d %+v", series.Completed, series.Effective)
+		}
+	})
+}
+
+// TestRequirementPackageBindsTheAsk：Ask 持久化用户确认的变更包，DECIDE 载
+// 荷必须与之逐字段相等——同一 Ask 不可登记单字段之差的另一个包（冲突拒
+// 绝零状态）；请求缺包在构造层即拒。
+func TestRequirementPackageBindsTheAsk(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+	confirmed := RequirementDecisionPackage{
+		CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-package",
+		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+	}
+	request, err := NewRequirementRequestEvent("req-package", confirmed, requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	token, err := engine.Freshness("req-package")
+	if err != nil {
+		t.Fatalf("freshness: %v", err)
+	}
+	base := RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-package",
+		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "matches the confirmed package",
+	}
+	for name, mutate := range map[string]func(*RequirementDecisionPayload){
+		"candidate revision": func(p *RequirementDecisionPayload) { p.CandidateRevision = "rev-3" },
+		"delta digest":       func(p *RequirementDecisionPayload) { p.DeltaDigest = "sha256:other-delta" },
+		"classification":     func(p *RequirementDecisionPayload) { p.Classification = RequirementClassificationChanged },
+		"redo scope":         func(p *RequirementDecisionPayload) { p.RedoTopology = true },
+	} {
+		diverging := base
+		mutate(&diverging)
+		ev, err := NewRequirementDecideEvent(EventID("evt-package-"+name), "req-package", token, "proceed", diverging)
+		if err != nil {
+			t.Fatalf("%s event: %v", name, err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(ev, fp); err == nil {
+			t.Fatalf("%s divergence from the confirmed package accepted", name)
+		} else if code := rejectionCode(t, err); code != CodeRequirementDecisionRejected || !strings.Contains(err.Error(), "package confirmed on ask") {
+			t.Fatalf("%s divergence code = %q (%v)", name, code, err)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatalf("%s divergence changed state bytes", name)
+		}
+	}
+	// 载荷与包逐字段相等时通过，登记照常。
+	askAndDecideRequirement(t, engine, "req-package", "proceed", &base)
+	snap := engine.LoadMustSucceed(t)
+	if entry := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1]; entry.Revision != "rev-2" || entry.Classification != RequirementClassificationPreserved || len(entry.DecidedScope) != 0 {
+		t.Fatalf("package-bound registration = %+v", entry)
+	}
+
+	// 请求缺包在构造层拒绝。
+	if _, err := NewRequestEvent("req-no-package", ControlRequestRequirementChange, requirementOptions()...); err == nil {
+		t.Fatal("package-less requirement request constructed")
+	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+		t.Fatalf("package-less request code = %q", code)
+	}
+	// 非需求控制不得携包。
+	misplaced := Event{ID: "req-misplaced", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlReset, Options: requirementOptions(), Package: &confirmed}}
+	if err := misplaced.Validate(); err == nil {
+		t.Fatal("a non-requirement request carrying a package validated")
+	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+		t.Fatalf("misplaced package code = %q", code)
+	}
+}
+
+// TestPreservedScopeIsRecordedAndExecuted：PRESERVED＋scope 是合法组合
+// （§7.2.1 保留产品含义＋重做受影响技术审）——账本如实落 DecidedScope，
+// 勾选的 series 真实重走（stale→PENDING），未勾选的续用；加载边界对
+// PRESERVED 带 scope 的账目不拒。
+func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	nextAction := walkToTopologyAndRoute(t, engine)
+
+	askAndDecideRequirement(t, engine, "req-preserved-scope", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-preserved-scope",
+		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		RedoStartReadiness: true, Reason: "product meaning preserved; the affected technical review is redone",
+	})
+	snap := engine.LoadMustSucceed(t)
+	entry := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1]
+	if entry.Classification != RequirementClassificationPreserved || len(entry.DecidedScope) != 1 || entry.DecidedScope[0] != "start-readiness" {
+		t.Fatalf("preserved scope entry = %+v", entry)
+	}
+	if product := snap.State.ReviewSeries.ProductReview; product.Completed != 1 || product.Effective.Status != "PASS" || product.Effective.RequirementRevision != "rev-1" {
+		t.Fatalf("the unredone product series must be carried: %+v completed=%d", product.Effective, product.Completed)
+	}
+	readiness := snap.State.ReviewSeries.StartReadiness
+	if readiness.Effective.Status != "PENDING" || !strings.HasPrefix(readiness.Effective.Source, "requirement-change:") || readiness.Completed != 1 {
+		t.Fatalf("the redone readiness series = %+v completed=%d", readiness.Effective, readiness.Completed)
+	}
+	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
+		t.Fatalf("phase = %s, want TOPOLOGY_AND_ROUTE (门因 readiness 重走关闭)", snap.State.Phase)
+	}
+	// 重走完成：readiness 在 rev-2 重新 PASS，门重新打开（路线接纳）。
+	submitReviewResult(t, engine, "result-readiness-2", nextAction, reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-after-preserved-scope", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	}
+	// PRESERVED 带 scope 的账目经加载边界完整接纳（完整性校验不拒）。
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("ledger with a preserved scope failed to load: %v", err)
+	}
+}
+
+// TestUnadjudicatedFindingCannotDriveAnySource：未裁决（raw）的 finding 不
+// 能驱动任何修订来源——P1/P2 源都拒绝，先处置再发起修订。
+func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, dir := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "FAIL", "blocked", []review.Finding{
+		{Severity: "P1", Message: "raw finding without a disposition"},
+	}))
+	snap := engine.LoadMustSucceed(t)
+	digest := snap.State.ReviewSeries.ProductReview.RawCandidates[0].Findings[0].Digest
+
+	for _, source := range []string{RequirementSourceReviewFindingP1, RequirementSourceReviewFindingP2} {
+		payload := &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-raw",
+			Source: source, Classification: RequirementClassificationChanged,
+			RedoProductReview: true, Reason: "raw finding probe", FindingDigest: digest,
+		}
+		if err := askAndDecideRequirementRejecting(t, engine, dir, "req-raw-"+source, "proceed", payload); err == nil {
+			t.Fatalf("an unadjudicated finding accepted as %s source", source)
+		} else if code := rejectionCode(t, err); code != CodeRequirementDecisionRejected || !strings.Contains(err.Error(), "adjudicate the disposition first") {
+			t.Fatalf("unadjudicated %s code = %q (%v)", source, code, err)
+		}
+	}
 }

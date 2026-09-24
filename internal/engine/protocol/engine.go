@@ -622,6 +622,21 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 // 是本事务将要提交到的 revision（CAS 保证其精确性），freshness token
 // 与 Attempt ID 都以它派生。
 func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
+	// 修订屏障（Phase A）的处置表是唯一屏障检查点：观察类照常、
+	// WORKER_RESULT 持久隔离、其余决定拒绝。表外不存在第二套屏障逻辑。
+	if state.requirementChangePending() {
+		switch err := state.admitInCurrentState(ev, false); {
+		case err == nil:
+			// 照常接纳，落入常规分支。
+		case errors.Is(err, errPhaseAQuarantine):
+			if perr := state.checkProvider(ev.Result.Provider); perr != nil {
+				return Acceptance{}, nil, false, perr
+			}
+			return e.quarantineWorkerResult(state, ev, digest, nextRevision)
+		default:
+			return Acceptance{}, nil, false, err
+		}
+	}
 	switch ev.Kind {
 	case KindRequestControl:
 		// 两阶段主动控制第一段：受限 REQUEST_* 只创建
@@ -637,7 +652,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			step = state.nextHumanAskStep(e.cfg.Definition)
 		}
 		state.PendingAsks[requestID] = PendingAsk{
-			RequestID: requestID, Control: ev.Request.Control, Step: step, Options: ev.Request.Options,
+			RequestID: requestID, Control: ev.Request.Control, Step: step, Options: ev.Request.Options, Package: ev.Request.Package,
 		}
 		token := freshnessToken(nextRevision, RequestID(requestID))
 		return Acceptance{
@@ -684,7 +699,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// 在落决定前执行确认登记与重走范围变换；非该控制携此载荷一律
 		// schema 拒绝。
 		if ask.Control == ControlRequestRequirementChange || ev.Decide.Requirement != nil {
-			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision); err != nil {
+			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, expectedFingerprint); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -881,15 +896,6 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// 并按容量补位签发。
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
 			return Acceptance{}, nil, false, err
-		}
-		// 修订屏障（Phase A，§7.2.2）：结果一律 quarantine——暂存与配对
-		// 完成都在屏障期间拒绝（可区分错误、零状态，事件不进台账，决定
-		// 后可原 ID 重交），防止旧 revision 结果经暂存槽毒化配对。
-		if state.requirementChangePending() {
-			return Acceptance{}, nil, false, &RejectedError{
-				Code:   CodeChangeBarrierActive,
-				Detail: fmt.Sprintf("worker result %q is quarantined while a requirement change ask is pending; resubmit after the decision", ev.Result.ActionID),
-			}
 		}
 		actionID := ev.Result.ActionID
 		// 结果身份与事件级 canonical 同一 wire 形态：审查证据是结果字节
@@ -1427,13 +1433,11 @@ func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActio
 }
 
 func (e *Engine) persistHostAction(state *State, revision uint64, intent HostActionIntent, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	// 修订屏障（Phase A，§7.2.2）：停止新的权威状态写入——HostAction
-	// intent 的落账（adapter 执行与 resume/terminate）在屏障期间拒绝，
-	// 决定后重试。观察类（Ask/回执/lifecycle/task-progress）不受阻。
+	// Submit 之外的落账路径同样只经处置表：屏障在位时新的 HostAction
+	// intent 属"停止新的权威写入"而被拒绝。
 	if state.requirementChangePending() {
-		return HostActionIntent{}, 0, &RejectedError{
-			Code:   CodeChangeBarrierActive,
-			Detail: "host action intents are frozen while a requirement change ask is pending",
+		if err := state.admitInCurrentState(Event{}, true); err != nil {
+			return HostActionIntent{}, 0, err
 		}
 	}
 	if _, exists := state.PendingHostActions[intent.ActionID]; exists {
