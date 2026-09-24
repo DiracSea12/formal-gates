@@ -100,7 +100,8 @@ func Workflow() *compiler.Definition {
 	reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIO, authoring.AgentSpec{
-			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute,
+			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	must("review.worker", err)
 	ask, err := authoring.NewHumanAskStep(header("ask.decide", "ask", "entry.persist"),

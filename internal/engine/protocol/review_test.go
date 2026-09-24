@@ -28,6 +28,37 @@ import (
 // 步驱动，每条审查证据各占一个 pending action。
 func reviewStepsFixture(t *testing.T, agentSteps ...string) (*compiler.CompiledDefinition, *compiler.Registry) {
 	t.Helper()
+	// INDEPENDENT_REVIEW 步必填系列归属标记：含 "readiness" 的步按技术审
+	// 系列标记，其余步（含 canonical 产品审步与连续审查轮步）按产品审
+	// 系列标记。
+	return agentStepsDefinition(t, func(name string) authoring.AgentSpec {
+		mark := authoring.ReviewSeriesProductReview
+		if strings.Contains(name, "readiness") {
+			mark = authoring.ReviewSeriesStartReadiness
+		}
+		return authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: mark, Timeout: time.Minute,
+		}
+	}, agentSteps...)
+}
+
+// declaredSeriesStepsFixture 构造语义判断（非独立审查）agent 步的定义：
+// 步不带系列标记，系列身份只能由到达的证据声明——签发标记缺失时的
+// floor 比对与按声明终止兜底以此为可达形态。
+func declaredSeriesStepsFixture(t *testing.T, agentSteps ...string) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	return agentStepsDefinition(t, func(string) authoring.AgentSpec {
+		return authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute,
+		}
+	}, agentSteps...)
+}
+
+// agentStepsDefinition 是串行 agent 步定义的共用构造：prep 本地步后接
+// 每步一线性依赖的 agent 步，步载荷由 specOf 按步名给出。
+func agentStepsDefinition(t *testing.T, specOf func(name string) authoring.AgentSpec, agentSteps ...string) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
 	reg := compiler.NewRegistry()
 	must := func(err error) {
 		t.Helper()
@@ -62,18 +93,7 @@ func reviewStepsFixture(t *testing.T, agentSteps ...string) (*compiler.CompiledD
 	for _, name := range agentSteps {
 		stepIO := io(previous)
 		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
-		spec := authoring.AgentSpec{
-			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute,
-		}
-		// 名为两条审查系列 canonical 步的按系列标记（其余步保持未标记，
-		// 覆盖仅证据声明身份的路径）。
-		switch authoring.StepID(name) {
-		case "product.review":
-			spec.ReviewSeries = authoring.ReviewSeriesProductReview
-		case "start.readiness":
-			spec.ReviewSeries = authoring.ReviewSeriesStartReadiness
-		}
-		step, err := authoring.NewAgentStep(header(name, previous), stepIO, spec)
+		step, err := authoring.NewAgentStep(header(name, previous), stepIO, specOf(name))
 		must(err)
 		steps = append(steps, step)
 		previous = name

@@ -125,14 +125,14 @@ type HostActionStep struct {
 
 // AgentStep 是不可程序化语义工作步骤（§5.4）。派生 AGENT/AGENT_WORKER；
 // 三值封闭理由枚举与 postcondition predicate 引用（worker result 合同）必填。
-// ReviewSeries 可选断言本步骤是某条开发前审查系列的独立复审派发：签发层
-// 据此在派发时就知道其审查系列身份。
+// ReviewSeries 声明本步骤的审查系列归属（INDEPENDENT_REVIEW 步必填）：
+// 签发层据此在派发时就知道其审查系列身份。
 type AgentStep struct {
 	Header
 	IO
 	Handler      HandlerID
 	Reason       NonProgrammableReason
-	ReviewSeries ReviewSeriesAction // 可选：审查系列身份标记
+	ReviewSeries ReviewSeriesAction // INDEPENDENT_REVIEW 步必填：审查系列归属标记
 	Timeout      time.Duration      // 必填 > 0
 	Retry        *RetryPolicy       // 可选
 }

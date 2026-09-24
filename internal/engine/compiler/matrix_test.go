@@ -27,6 +27,39 @@ import (
 // 二次防线行全部用绕过 constructor 的原始结构体构造：正常 authoring API 下
 // 这些非法状态不可构造，compiler 对零值/非法枚举一律拒绝。
 
+// TestAgentReviewSeriesVocabularyAcceptsTheClosedSet：三值封闭词汇逐值通过
+// compiler 校验（raw 结构体直通 validate 层的正控）。
+func TestAgentReviewSeriesVocabularyAcceptsTheClosedSet(t *testing.T) {
+	seriesIO := func(from string) authoring.IO {
+		var inputs []authoring.InputBinding
+		if from != "" {
+			inputs = []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}}
+		}
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+			Inputs:         inputs,
+			Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}}
+	}
+	steps := make([]authoring.Step, 0, 3)
+	previous := ""
+	for i, mark := range []authoring.ReviewSeriesAction{
+		authoring.ReviewSeriesProductReview, authoring.ReviewSeriesStartReadiness, authoring.ReviewSeriesUnaffiliated,
+	} {
+		id := authoring.StepID("entry.s" + string(rune('1'+i)))
+		header := rawHeader(string(id))
+		if previous != "" {
+			header.Dependencies = []authoring.StepID{authoring.StepID(previous)}
+		}
+		steps = append(steps, authoring.AgentStep{
+			Header: header, IO: seriesIO(previous), Handler: "engine.review.worker",
+			Reason: authoring.ReasonIndependentReview, ReviewSeries: mark, Timeout: time.Minute,
+		})
+		previous = string(id)
+	}
+	if _, err := Compile(defWith(steps...), goldenRegistry(t)); err != nil {
+		t.Fatalf("each closed-set series mark must validate: %v", err)
+	}
+}
+
 func rawHeader(id string) authoring.Header {
 	return authoring.Header{ID: authoring.StepID(id), NodeID: goldenEntry, DefinitionVersion: goldenVersion}
 }
@@ -95,6 +128,30 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: time.Second}},
 			"postcondition predicate reference required (worker result contract)"},
+		// 审查系列归属的二次防线：独立审查步必须显式声明系列归属，且系
+		// 列标记只随独立审查理由携带（constructor 主拦项复核；IO 携
+		// postcondition 使拒绝落在系列归属规则上）。
+		{"agent independent review without series mark", []authoring.Step{authoring.AgentStep{
+			Header: rawHeader("entry.s"),
+			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
+			Handler: "engine.review.worker",
+			Reason:  authoring.ReasonIndependentReview, Timeout: time.Second}},
+			"must declare its review series"},
+		{"agent series mark on a non-review reason", []authoring.Step{authoring.AgentStep{
+			Header: rawHeader("entry.s"),
+			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
+			Handler: "engine.review.worker",
+			Reason:  authoring.ReasonCreativeImplementation, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Second}},
+			"requires the INDEPENDENT_REVIEW reason"},
+		{"agent series mark outside the closed set", []authoring.Step{authoring.AgentStep{
+			Header: rawHeader("entry.s"),
+			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
+			Handler: "engine.review.worker",
+			Reason:  authoring.ReasonIndependentReview, ReviewSeries: "qa-review", Timeout: time.Second}},
+			`review series "qa-review" invalid (closed set: product-review, start-readiness, unaffiliated)`},
 		{"human without request schema", []authoring.Step{authoring.HumanAskStep{
 			Header: rawHeader("entry.s"), AskKind: "decision",
 			ResponseSchema: "schema.ask.decision.response", FreshnessTTL: time.Minute}},

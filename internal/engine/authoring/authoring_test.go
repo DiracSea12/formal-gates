@@ -243,9 +243,10 @@ func TestNewHostActionStep(t *testing.T) {
 
 func TestNewAgentStep(t *testing.T) {
 	spec := AgentSpec{
-		Handler: "engine.node.review",
-		Reason:  ReasonIndependentReview,
-		Timeout: time.Minute,
+		Handler:      "engine.node.review",
+		Reason:       ReasonIndependentReview,
+		ReviewSeries: ReviewSeriesProductReview,
+		Timeout:      time.Minute,
 	}
 	got, err := NewAgentStep(validHeader(), validIO(), spec)
 	if err != nil {
@@ -289,7 +290,8 @@ func TestNewAgentStep(t *testing.T) {
 		wantErr(t, err, row.want)
 	}
 
-	// 系列标记：封闭两值、只随 INDEPENDENT_REVIEW 携带。
+	// 系列标记：封闭三值、INDEPENDENT_REVIEW 步必填、只随
+	// INDEPENDENT_REVIEW 携带。
 	marked := spec
 	marked.ReviewSeries = ReviewSeriesProductReview
 	got, err = NewAgentStep(validHeader(), validIO(), marked)
@@ -298,6 +300,15 @@ func TestNewAgentStep(t *testing.T) {
 	}
 	if got.ReviewSeries != ReviewSeriesProductReview {
 		t.Fatalf("series mark not materialized: %+v", got)
+	}
+	unmarked := spec
+	unmarked.ReviewSeries = ""
+	_, err = NewAgentStep(validHeader(), validIO(), unmarked)
+	wantErr(t, err, "must declare its review series")
+	other := spec
+	other.ReviewSeries = ReviewSeriesUnaffiliated
+	if got, err = NewAgentStep(validHeader(), validIO(), other); err != nil || got.ReviewSeries != ReviewSeriesUnaffiliated {
+		t.Fatalf("an unaffiliated independent-review step rejected: %v %+v", err, got)
 	}
 	nonReview := spec
 	nonReview.Reason = ReasonSemanticJudgment

@@ -142,6 +142,13 @@ func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) 
 			i := stepIndex(t, d, "review.worker")
 			s := d.Steps[i].(authoring.AgentStep)
 			s.Reason = authoring.ReasonSemanticJudgment
+			s.ReviewSeries = ""
+			d.Steps[i] = s
+		}},
+		{"agent review series", func(d *compiler.Definition) {
+			i := stepIndex(t, d, "review.worker")
+			s := d.Steps[i].(authoring.AgentStep)
+			s.ReviewSeries = authoring.ReviewSeriesUnaffiliated
 			d.Steps[i] = s
 		}},
 		{"schema id", func(d *compiler.Definition) {

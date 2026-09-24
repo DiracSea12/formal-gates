@@ -98,6 +98,10 @@ func validateStepIR(cs CompiledStep) error {
 		if !p.Reason.Valid() {
 			return invariantError(`agent step %q: nonProgrammableReason required (SEMANTIC_JUDGMENT|CREATIVE_IMPLEMENTATION|INDEPENDENT_REVIEW)`, h.ID)
 		}
+		if p.ReviewSeries != "" && !p.ReviewSeries.Valid() {
+			return invariantError(`agent step %q: review series %q invalid (closed set: %s, %s, %s)`,
+				h.ID, p.ReviewSeries, authoring.ReviewSeriesProductReview, authoring.ReviewSeriesStartReadiness, authoring.ReviewSeriesUnaffiliated)
+		}
 		if p.Timeout <= 0 {
 			return invariantError(`agent step %q: positive timeout required`, h.ID)
 		}
@@ -276,6 +280,10 @@ func (c *resolveCtx) resolveStepRefs(cs *CompiledStep) error {
 		}
 		if p.ReviewSeries != "" && p.Reason != authoring.ReasonIndependentReview {
 			return invariantError(`step %q: a review-series mark (%s) requires the INDEPENDENT_REVIEW reason`, h.ID, p.ReviewSeries)
+		}
+		if p.ReviewSeries == "" && p.Reason == authoring.ReasonIndependentReview {
+			return invariantError(`step %q: an INDEPENDENT_REVIEW step must declare its review series (%s, %s, or %s)`,
+				h.ID, authoring.ReviewSeriesProductReview, authoring.ReviewSeriesStartReadiness, authoring.ReviewSeriesUnaffiliated)
 		}
 		return nil
 	case CompiledHumanAskStep:

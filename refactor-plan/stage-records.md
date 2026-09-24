@@ -135,7 +135,7 @@
   `definitions/workflow.json` 编译产物 version = "2"、stateSchemaVersion = "1"、
   writer = "engine"；与 `internal/engine/definition/identity_gen.go` 生成的
   `WorkflowDefinitionVersion = "2"`、
-  `WorkflowDefinitionDigest = "sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f"`
+  `WorkflowDefinitionDigest = "sha256:90cdb9ada60c1836964dafb5048941c538ac69db35ac732ab22c0092a70e8228"`
   同源（compiler 同一生成动作产出制品与期望身份常量，禁止人工双写；当前工作树
   `definitions/workflow.json` 的 sha256 复算值与该常量一致）。阶段 0 冻结的
   `phase0.go` 契约常量（"1" @ sha256:9ec68cd7…）按阶段 0 契约保持不变，两版本并存且

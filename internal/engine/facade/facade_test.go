@@ -502,7 +502,7 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 		t.Fatal("drive during the barrier lost the ask face")
 	}
 	// 放弃变更：屏障解除，投影恢复常规边界。
-	token, err := f.engine.Freshness("req-face-ask")
+	token, err := f.Freshness("req-face-ask")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}

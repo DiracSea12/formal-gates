@@ -159,7 +159,8 @@ func goldenSteps() []authoring.Step {
 	reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIO, authoring.AgentSpec{
-			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute,
+			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	if err != nil {
 		panic(err)

@@ -206,3 +206,23 @@ Git provider＋canary＋route matrix。
 残留（如实，均低危记档）：①已配对回执的**直接结果提交**撞顺序门仍整事件拒绝（本轮只把回执变为无条件；结果事件的暂存挂起未做，规格未要求）；②已确认阻塞门槛（同 revision P0/P1 拦新候选）是另一扇可开门（dismiss/降级），未纳入挂起类；③补配对对结构性坏死条目每次开门空转重试（无状态增长）。
 
 **第 49 轮四残留全部处置完毕（①②实施、③销案、④作废）。R2 全链收口，待外部评审总复核。**
+## 第 52 轮（2026-09-24，R2 第七轮五修复＋标记词汇闭环＋系统交集覆盖，轻装）
+
+第七轮评审（对 `cf3af98`）判 FAIL：3 P1＋2 P2。机主定调"每轮修出新交集"须终结。主代理核实：行为级两项独立复现（P1-1 即第 49 轮 VP5 断言的 completed=0——当时主代理把"原子但作废"误判为修复终局，评审正确裁定应恢复接纳；P2-4 复现 `retry:` 替换在双 Ask 期即签发），P1-2/P1-3/P2-5 结构级读码坐实。根因模式＝新修复面 × 既有状态的交集无覆盖＋façade 客户端侧从未系统走查。
+
+五修复交付（子代理，23 文件 603/157）：
+
+- **F1 terminal 对账**：接纳核心 not-pending 分支前置回执在账即恢复接纳（Results＋证据记账＋对账留痕，携决定 requestID；无任务迁移无 refill）；无回执仍拒、Obsolete 认领优先、三路（Submit/重放/补配对）同享。审查新鲜度两分支天然使"重走中旧证据"仍被拒——处置语义不因 terminal 改变。
+- **F2 标记词汇闭环**：第三值 `unaffiliated`（明确声明非开发前系列）；INDEPENDENT_REVIEW 步标记必填（constructor＋validate 双层）；canonical workflow.go 的 review.worker 标 product-review、workflow.json 重生成（envelope 冻结身份刻意不动，stage-records 已记账）；fixture 全标记改造（尾槽改名 tail.readiness/tail.product 按系列标记），证据声明身份路径的兜底回归改由 SEMANTIC_JUDGMENT 声明件驱动。
+- **F3 façade token**：PendingRequirementAskFace.Token（投影时即时求值）＋Facade.Freshness 公开直通；façade 测试改走公开入口。
+- **F4 屏障期零新派发身份**：replaceDispatch 遇仍有未决 Ask → 只退位＋Deferred 快照；installDeferredReplacements 锚在屏障解除事务补发（核实证据：refill 走 SelectIssued 对 ISSUED 任务无法再签发，必须显式补发）。
+- **F5 理由落账**：ConfirmedRevision.Reason＋carry 留痕携（requestID, 理由）。
+- **系统交集覆盖**（change_disposition_test.go，行为命名）：在途/暂存/隔离/terminal × 本系列重走/他系列重走/双系列/续用/放弃/双 Ask 可达组合逐个驱动到终局，断言 Results/Obsolete 归属＋计轮＋屏障期无新派发身份＋账本加载。
+
+小修单（子代理自报残留②、主代理核实）：`ReviewSeriesAction.Valid()` 单一词汇判定点，constructor 与 compiler validate 共用；validate 补封闭集值校验（与 Reason 同层同模式），raw 路径伪造值拒绝正负两控入树。
+
+主代理独立复核（五探针走到底＋façade 客户端视角两探针，跑毕即删）：terminal 恢复（completed=1＋Results＋留痕＋可加载）；双 Ask 零 retry 身份＋Deferred 在账＋解除事务补发且代数≥floor＋新鲜轮完成；理由落账（中文原文）＋carry 留痕含理由；客户端全流程（stale 拒→Freshness 刷新→公开入口提交成功）；canonical 标记与 raw 伪造值拒绝。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
+
+残留（如实）：①"could not be readmitted"作废分支在本套件内暂无可达驱动（唯一原驱动已走对账路径；屏障期确认阻塞 finding 的驱动场景未建，留待真出现时补）；②envelope 冻结身份与 canonical 制品身份并存（阶段 0 契约，已有记账）；③testkit/whitebox_qa 场景件标 unaffiliated 属必要波及。
+
+**R2 第七轮收口，待外部评审。交集覆盖为常设要求：后续每轮新增行为面必须同时落交集测试。**

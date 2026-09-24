@@ -108,6 +108,9 @@ type PendingRequirementAskFace struct {
 	Options      []protocol.AskOption                 `json:"options"`
 	Package      *protocol.RequirementDecisionPackage `json:"package"`
 	BaseRevision string                               `json:"baseRevision"`
+	// Token 是投影时按当前 revision 即时求值的 freshness token（stale 后
+	// 经 Freshness 重取再提交）。
+	Token string `json:"token"`
 }
 
 // ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
@@ -716,7 +719,7 @@ func (f *Facade) project() (Run, error) {
 	// 修订屏障在位：未决需求变化 Ask 即当前外部边界——Next 投影为 ask
 	// 边界（等待用户，而非 READY/ENGINE_INTERNAL 等待），Ask 面携完整
 	// 确认包与基线 revision。
-	if ask := pendingRequirementAskFace(snap.State); ask != nil {
+	if ask := f.pendingRequirementAskFace(snap); ask != nil {
 		plan.Next = decision.NextResult{Kind: decision.KindAsk, Ask: &decision.AskPayload{}}
 		run.Next = plan.Next
 		run.PendingRequirementAsk = ask
@@ -729,19 +732,33 @@ func (f *Facade) project() (Run, error) {
 
 // pendingRequirementAskFace 投影未决的需求变化 Ask；不存在（屏障不在位）
 // 时返回 nil。
-func pendingRequirementAskFace(state *protocol.State) *PendingRequirementAskFace {
-	for id, ask := range state.PendingAsks {
+func (f *Facade) pendingRequirementAskFace(snap protocol.Snapshot) *PendingRequirementAskFace {
+	for id, ask := range snap.State.PendingAsks {
 		if ask.Control != protocol.ControlRequestRequirementChange || ask.Resolved {
 			continue
+		}
+		token, err := f.engine.Freshness(protocol.RequestID(id))
+		if err != nil {
+			token = ""
 		}
 		return &PendingRequirementAskFace{
 			RequestID:    id,
 			Options:      append([]protocol.AskOption{}, ask.Options...),
 			Package:      ask.Package,
 			BaseRevision: ask.BaseRevision,
+			Token:        token,
 		}
 	}
 	return nil
+}
+
+// Freshness 返回未决 Ask 的当前 freshness token：token 随每次提交失效，
+// stale 后经本入口重取再提交决定。
+func (f *Facade) Freshness(requestID string) (string, error) {
+	if f == nil || f.engine == nil {
+		return "", fmt.Errorf("facade freshness: nil façade")
+	}
+	return f.engine.Freshness(protocol.RequestID(requestID))
 }
 
 func terminalSummaryPath(stateDir string) string {

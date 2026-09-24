@@ -29,9 +29,11 @@ const (
 // 零值与任何其他字符串（包括"实现麻烦"）一律非法。
 type NonProgrammableReason string
 
-// ReviewSeriesAction 是 AGENT 步骤可声明的开发前审查系列身份标记（封闭
-// 两值）。词汇与 review 内核的 Action 持久化值相同——本包不 import review
-// （review 经 encoder 依赖本包，会成环），两包词汇一致由协议层测试锁死。
+// ReviewSeriesAction 是 AGENT 步骤声明的审查系列归属标记（封闭三值，
+// INDEPENDENT_REVIEW 步必填）。两条开发前系列的词汇与 review 内核的
+// Action 持久化值相同——本包不 import review（review 经 encoder 依赖本
+// 包，会成环），两包词汇一致由协议层测试锁死；非开发前系列值没有内核
+// 对应物（它永不进入审查账本）。
 type ReviewSeriesAction string
 
 const (
@@ -40,7 +42,16 @@ const (
 	// ReviewSeriesStartReadiness 断言本步骤是技术审（开工就绪）系列的
 	// 复审派发。
 	ReviewSeriesStartReadiness ReviewSeriesAction = "start-readiness"
+	// ReviewSeriesUnaffiliated 断言本步骤是独立复审派发但不属于任何一条
+	// 开发前审查系列。
+	ReviewSeriesUnaffiliated ReviewSeriesAction = "unaffiliated"
 )
+
+// Valid 报告 r 是否属于三值封闭集合（两条开发前系列或非开发前系列）；
+// 词汇判定的单一归属点，constructor 与 compiler 校验共用。
+func (r ReviewSeriesAction) Valid() bool {
+	return r == ReviewSeriesProductReview || r == ReviewSeriesStartReadiness || r == ReviewSeriesUnaffiliated
+}
 
 const (
 	// ReasonSemanticJudgment：证据含义、影响范围、冲突意图等无法由确定性

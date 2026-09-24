@@ -235,13 +235,13 @@ func NewHostActionStep(h Header, io IO, spec HostActionSpec) (HostActionStep, er
 
 // AgentSpec 是 NewAgentStep 的 payload 必填/可选项。postcondition predicate
 // 引用由 IO.Postconditions 承载且至少一条（worker result 合同，§5.12）。
-// ReviewSeries 可选：断言本步骤是某条开发前审查系列的独立复审派发
-// （封闭词汇恰 review 包两值），且只在 Reason 为 INDEPENDENT_REVIEW 时
-// 可携——非独立审查步骤不得声明审查系列身份。
+// ReviewSeries 必填于 INDEPENDENT_REVIEW 步：显式声明审查系列归属（封闭
+// 三值——两条开发前系列或非开发前系列），且只在 Reason 为
+// INDEPENDENT_REVIEW 时可携——非独立审查步骤不得声明审查系列身份。
 type AgentSpec struct {
 	Handler      HandlerID
 	Reason       NonProgrammableReason
-	ReviewSeries ReviewSeriesAction // 可选：审查系列身份标记
+	ReviewSeries ReviewSeriesAction // INDEPENDENT_REVIEW 步必填：审查系列归属标记
 	Timeout      time.Duration      // 必填 > 0
 	Retry        *RetryPolicy       // 可选
 }
@@ -261,14 +261,17 @@ func NewAgentStep(h Header, io IO, spec AgentSpec) (AgentStep, error) {
 	if !spec.Reason.Valid() {
 		return AgentStep{}, fmt.Errorf("agent step %q: nonProgrammableReason required (SEMANTIC_JUDGMENT|CREATIVE_IMPLEMENTATION|INDEPENDENT_REVIEW)", h.ID)
 	}
-	switch spec.ReviewSeries {
-	case "":
-	case ReviewSeriesProductReview, ReviewSeriesStartReadiness:
-		if spec.Reason != ReasonIndependentReview {
-			return AgentStep{}, fmt.Errorf("agent step %q: a review-series mark (%s) requires the INDEPENDENT_REVIEW reason", h.ID, spec.ReviewSeries)
+	switch {
+	case spec.ReviewSeries == "":
+		if spec.Reason == ReasonIndependentReview {
+			return AgentStep{}, fmt.Errorf("agent step %q: an INDEPENDENT_REVIEW step must declare its review series (%s, %s, or %s)",
+				h.ID, ReviewSeriesProductReview, ReviewSeriesStartReadiness, ReviewSeriesUnaffiliated)
 		}
-	default:
-		return AgentStep{}, fmt.Errorf("agent step %q: review series %q invalid (closed set: %s, %s)", h.ID, spec.ReviewSeries, ReviewSeriesProductReview, ReviewSeriesStartReadiness)
+	case !spec.ReviewSeries.Valid():
+		return AgentStep{}, fmt.Errorf("agent step %q: review series %q invalid (closed set: %s, %s, %s)",
+			h.ID, spec.ReviewSeries, ReviewSeriesProductReview, ReviewSeriesStartReadiness, ReviewSeriesUnaffiliated)
+	case spec.Reason != ReasonIndependentReview:
+		return AgentStep{}, fmt.Errorf("agent step %q: a review-series mark (%s) requires the INDEPENDENT_REVIEW reason", h.ID, spec.ReviewSeries)
 	}
 	if len(io.Postconditions) == 0 {
 		return AgentStep{}, fmt.Errorf("agent step %q: postcondition predicate reference required (worker result contract)", h.ID)

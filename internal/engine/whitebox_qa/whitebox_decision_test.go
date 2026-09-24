@@ -613,7 +613,8 @@ func twoAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *decision.Stat
 	a1 := mkAgentStep(t, fxHeader("a.one", "n1", "a.root"), io,
 		authoring.AgentSpec{Handler: "h.a1", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute})
 	a2 := mkAgentStep(t, fxHeader("a.two", "n1", "a.root"), io,
-		authoring.AgentSpec{Handler: "h.a2", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute})
+		authoring.AgentSpec{Handler: "h.a2", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute})
 	reg := compiler.NewRegistry()
 	for _, h := range []struct {
 		id     authoring.HandlerID

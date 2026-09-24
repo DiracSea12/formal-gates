@@ -258,6 +258,7 @@
       "payload": {
         "handler": "engine.review.worker",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
+        "reviewSeries": "product-review",
         "timeoutNs": 60000000000
       }
     }

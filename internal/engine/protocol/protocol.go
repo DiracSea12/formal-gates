@@ -250,14 +250,25 @@ type WorkerResult struct {
 
 // ObsoleteAction 保留被替换 Attempt 的 action/attempt 关联，使迟到结果
 // 可被明确报告为 OBSOLETE_RESULT，而不是被误报成未知 action。
+// Deferred 非空表示替换派发因修订屏障在位而延迟：屏障解除的同一事务补
+// 签发（新派发代数≥floor）后清空。
 type ObsoleteAction struct {
-	ActionID   string          `json:"actionId"`
-	Task       runtime.TaskKey `json:"task"`
-	AttemptID  string          `json:"attemptId"`
-	ReplacedBy string          `json:"replacedBy"`
-	Reason     string          `json:"reason"`
-	Bindings   AttemptBindings `json:"bindings"`
-	Plan       PlanIdentity    `json:"plan"`
+	ActionID   string               `json:"actionId"`
+	Task       runtime.TaskKey      `json:"task"`
+	AttemptID  string               `json:"attemptId"`
+	ReplacedBy string               `json:"replacedBy"`
+	Reason     string               `json:"reason"`
+	Bindings   AttemptBindings      `json:"bindings"`
+	Plan       PlanIdentity         `json:"plan"`
+	Deferred   *DeferredReplacement `json:"deferred,omitempty"`
+}
+
+// DeferredReplacement 记录延迟补发所需的退位派发事实：落账形态与瞬态
+// 重试计数。
+type DeferredReplacement struct {
+	Pending     PendingAction `json:"pending"`
+	Attempts    int           `json:"attempts,omitempty"`
+	MaxAttempts int           `json:"maxAttempts,omitempty"`
 }
 
 // RecoveryRecord 是一次恢复路由的 durable 记录。它只记录 engine 已经
@@ -501,7 +512,10 @@ type ConfirmedRevision struct {
 	Classification string   `json:"classification"`
 	DecidedScope   []string `json:"decidedScope,omitempty"`
 	RequestID      string   `json:"requestId,omitempty"`
-	StateRevision  uint64   `json:"stateRevision"`
+	// Reason 是用户决定的理由原文（随确认落账持久化）：carry 留痕据此
+	// 携理由（§7.2.2:4 携原 revision、证据和理由）。
+	Reason        string `json:"reason,omitempty"`
+	StateRevision uint64 `json:"stateRevision"`
 }
 
 // IntakeArtifact is one canonical requirement/solution artifact binding.

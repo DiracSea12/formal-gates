@@ -743,7 +743,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
+		e.pairSuspendedResults(state, requestID, nextRevision, expectedFingerprint)
 		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
 		if refillErr != nil {
 			return Acceptance{}, nil, false, refillErr
@@ -933,7 +933,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), revision, nextRevision, expectedFingerprint)
+		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), "", revision, nextRevision, expectedFingerprint)
 		if err != nil {
 			return Acceptance{}, nil, false, err
 		}
@@ -941,7 +941,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return acceptance, nil, false, nil
 		}
 		// 结果接纳可能把产品审结论重新 PASS：同一事务内补齐挂起的配对。
-		e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
+		e.pairSuspendedResults(state, "", nextRevision, expectedFingerprint)
 		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
@@ -1172,6 +1172,15 @@ func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	}
 }
 
+// obsoleteTaskOf 返回 actionID 退位派发的任务键（无退位记录为零值）——
+// terminal 对账留痕用。
+func obsoleteTaskOf(state *State, actionID string) runtime.TaskKey {
+	if obsolete, known := state.ObsoleteActions[actionID]; known {
+		return obsolete.Task
+	}
+	return runtime.TaskKey{}
+}
+
 // issuedRevisionOf 返回 actionID 当前派发的签发代数（无当前派发为零）。
 func (s *State) issuedRevisionOf(actionID string) uint64 {
 	pending, ok := s.PendingActions[actionID]
@@ -1189,7 +1198,7 @@ func (s *State) issuedRevisionOf(actionID string) uint64 {
 // floor 比对（pre-floor 派发按声明终止并重签发）、result-before-receipt
 // 暂存（携审查证据先过完整预检）与回执配对后的完成。返回接纳回执与是
 // 否落账变更。
-func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID string, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
+func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID, requestID string, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
@@ -1217,10 +1226,38 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 	}
 	if _, pending := state.PendingActions[actionID]; !pending {
-		return Acceptance{}, false, &RejectedError{
-			Code:   CodeUnknownAction,
-			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
+		// terminal 对账路径：派发簿记已随任务终态收回，但已配对的
+		// SPAWNED 回执证明该派发真实在途过——结果照常入账（§7.2.2:4
+		// 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到 terminal 而
+		// 失效）：入 Results＋审查证据记账＋留痕，不做任务迁移不 refill
+		//（任务已终态）。无回执的迟到结果仍是未知 action。
+		receipt, receipted := state.SpawnReceipts[actionID]
+		if !receipted || receipt.Status != SpawnStatusSpawned {
+			return Acceptance{}, false, &RejectedError{
+				Code:   CodeUnknownAction,
+				Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
+			}
 		}
+		record := workerResultRecord(result)
+		if record.Review != nil {
+			if err := e.recordReviewCandidate(state, record.Review, actionID); err != nil {
+				return Acceptance{}, false, err
+			}
+		}
+		state.Results[actionID] = record
+		detail := "late result reconciled against the terminal task; no dispatch or step transition is derived"
+		if requestID != "" {
+			detail = fmt.Sprintf("late result reconciled against the terminal task by requirement decision %s; no dispatch or step transition is derived", requestID)
+		}
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			ActionID: actionID, Task: obsoleteTaskOf(state, actionID),
+			Detail:   detail,
+			Revision: nextRevision,
+		})
+		return Acceptance{
+			EventID: eventID, Kind: string(KindWorkerResult), Status: "ACCEPTED",
+			Revision: nextRevision, ActionID: actionID,
+		}, true, nil
 	}
 	// 系列身份以签发标记为权威（未标记的派发用证据声明）：重走态的
 	// floor 判定与按声明终止据此执行——证据声明与标记冲突时同样按标记
@@ -1232,7 +1269,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	}
 	if seriesAction != "" {
 		if series, ok := state.ReviewSeries.Series(seriesAction); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
-			return e.terminateSupersededDispatch(state, actionID, workerResultRecord(result), eventID, nextRevision, expectedFingerprint)
+			return e.terminateSupersededDispatch(state, actionID, workerResultRecord(result), eventID, requestID, nextRevision, expectedFingerprint)
 		}
 	}
 	// 已标记派发的证据一致性：证据声明的审查系列必须与签发标记相等
@@ -1297,12 +1334,13 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 }
 
 // terminateSupersededDispatch 按声明终止被需求重走决定取代的在途派发：
-// 结果留迟到证据账（obsolete）、派发退位并由同任务的新 attempt 立即重
-// 签发（新派发的签发代数＝本次提交，满足该 series 的 fresh floor）。接
-// 纳回执 Status=OBSOLETE_DISPATCH，Refill 携替换派发。
-func (e *Engine) terminateSupersededDispatch(state *State, actionID string, record WorkerResult, eventID string, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
-	replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo before its dispatch floor", nextRevision, expectedFingerprint)
-	if !inFlight {
+// 结果留迟到证据账（obsolete）、派发经 replaceDispatch 由同任务的新派发
+// 替换（签发代数＝本次提交，满足该 series 的 fresh floor；屏障在位时替
+// 换延迟至解除）。接纳回执 Status=OBSOLETE_DISPATCH，Refill 携即时替换
+// 派发。
+func (e *Engine) terminateSupersededDispatch(state *State, actionID string, record WorkerResult, eventID, requestID string, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
+	outcome, replacement, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo before its dispatch floor", requestID, nextRevision, expectedFingerprint)
+	if outcome == dispatchAbsent && err == nil {
 		return Acceptance{}, false, &RejectedError{
 			Code:   CodeUnknownAction,
 			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
@@ -1313,21 +1351,31 @@ func (e *Engine) terminateSupersededDispatch(state *State, actionID string, reco
 	}
 	state.ObsoleteResults[actionID] = record
 	obsolete := state.ObsoleteActions[actionID]
+	detail := "the dispatch predates the redo decision of its review series; it was terminated by declaration"
+	switch outcome {
+	case dispatchDeferred:
+		detail += "; the replacement dispatch is deferred until the barrier lifts"
+	case dispatchReplaced:
+		detail = fmt.Sprintf("%s and replaced by %s", detail, replacement)
+	}
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 		ActionID: actionID, Task: obsolete.Task, AttemptID: obsolete.AttemptID, Action: RecoveryNewAttempt,
-		Detail:   fmt.Sprintf("the dispatch predates the redo decision of its review series; it was terminated by declaration and replaced by %s", replacement),
-		Revision: nextRevision,
+		Detail: detail, Revision: nextRevision,
 	})
-	return Acceptance{
+	acceptance := Acceptance{
 		EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_DISPATCH",
-		Revision: nextRevision, ActionID: actionID, Refill: []string{replacement},
-	}, true, nil
+		Revision: nextRevision, ActionID: actionID,
+	}
+	if outcome == dispatchReplaced {
+		acceptance.Refill = []string{replacement}
+	}
+	return acceptance, true, nil
 }
 
 // pairSuspendedResults 补齐挂起的配对：回执已在账（SPAWNED）、暂存在
 // 账、尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条
 // 目保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。
-func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) {
+func (e *Engine) pairSuspendedResults(state *State, requestID string, nextRevision uint64, expectedFingerprint string) {
 	if len(state.StagedResults) == 0 {
 		return
 	}
@@ -1349,7 +1397,7 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 			continue
 		}
 		payload := workerResultPayloadOf(state.StagedResults[actionID])
-		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, nextRevision, nextRevision, expectedFingerprint); err != nil {
+		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, requestID, nextRevision, nextRevision, expectedFingerprint); err != nil {
 			*state = *snapshot
 			continue
 		}

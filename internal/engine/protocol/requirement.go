@@ -253,7 +253,7 @@ func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRe
 		snapshot, cloneErr := cloneState(state)
 		var admitErr error
 		if cloneErr == nil {
-			_, _, admitErr = e.admitWorkerResultRecord(state, record.ActionID, workerResultPayloadOf(record), eventID, nextRevision, nextRevision, expectedFingerprint)
+			_, _, admitErr = e.admitWorkerResultRecord(state, record.ActionID, workerResultPayloadOf(record), eventID, requestID, nextRevision, nextRevision, expectedFingerprint)
 		}
 		if cloneErr != nil || admitErr != nil {
 			if snapshot != nil {
@@ -280,14 +280,27 @@ func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRe
 			continue
 		}
 		if record.Review != nil && record.Review.RequirementRevision != state.RequirementRevision() {
+			// carry 留痕携原 revision 与用户理由（理由落在确认账目条目上，
+			// 放弃路径无账目即不携）。
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 				ActionID: record.ActionID,
-				Detail: fmt.Sprintf("carried by requirement decision %s: %s evidence bound to confirmed revision %q admitted unchanged",
-					requestID, record.Review.Action, record.Review.RequirementRevision),
+				Detail: fmt.Sprintf("carried by requirement decision %s (%s): %s evidence bound to confirmed revision %q admitted unchanged",
+					requestID, confirmedReasonOf(state, requestID), record.Review.Action, record.Review.RequirementRevision),
 				Revision: nextRevision,
 			})
 		}
 	}
+}
+
+// confirmedReasonOf 返回授权 requestID 的确认账目条目的用户理由（无该
+// 条目——放弃路径——为空）。
+func confirmedReasonOf(state *State, requestID string) string {
+	for _, entry := range state.RequirementRevisions {
+		if entry.RequestID == requestID {
+			return entry.Reason
+		}
+	}
+	return ""
 }
 
 // cloneState 深拷贝整个 state（重放的逐条原子性：单条失败恢复到该条重放
@@ -305,26 +318,80 @@ func cloneState(state *State) (*State, error) {
 	return out, nil
 }
 
+// dispatchOutcome 是 replaceDispatch 的退位处置。
+type dispatchOutcome int
+
+const (
+	dispatchAbsent   dispatchOutcome = iota // 派发不在途
+	dispatchDeferred                        // 已退位，替换因屏障在位延迟
+	dispatchReplaced                        // 已退位并即时替换
+)
+
 // replaceDispatch 退位在途派发并由同任务的新派发替换（签发代数＝
-// nextRevision，满足重走 series 的 fresh floor，系列标记随步继承）。派发
-// 不在途时零变化返回 ok=false；重签发失败（结构性不可达）返回 err——
-// 派发已退位，由调用方决定处置。
-func (e *Engine) replaceDispatch(state *State, actionID, reason string, nextRevision uint64, expectedFingerprint string) (string, bool, error) {
+// nextRevision，满足重走 series 的 fresh floor，系列标记随步继承）。修订
+// 屏障在位（除 requestID 外仍有未决需求 Ask）时不签发替换：退位事实携
+// Deferred 落账，屏障解除的同一事务补发——屏障期间账面不出现新派发身
+// 份。派发不在途时零变化；重签发失败（结构性不可达）返回 err——派发已
+// 退位，由调用方决定处置。
+func (e *Engine) replaceDispatch(state *State, actionID, reason, requestID string, nextRevision uint64, expectedFingerprint string) (dispatchOutcome, string, error) {
 	pending, ok := state.PendingActions[actionID]
 	if !ok {
-		return "", false, nil
+		return dispatchAbsent, "", nil
 	}
 	attempt := state.Attempts[pending.Task]
 	retired, _ := state.retireAction(actionID, "", reason)
+	if state.requirementChangePendingExcept(requestID) {
+		obsolete := state.ObsoleteActions[actionID]
+		obsolete.Deferred = &DeferredReplacement{
+			Pending: retired, Attempts: attempt.Attempts, MaxAttempts: attempt.MaxAttempts,
+		}
+		state.ObsoleteActions[actionID] = obsolete
+		return dispatchDeferred, "", nil
+	}
 	bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
 	replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts)
 	if err != nil {
-		return "", true, err
+		return dispatchAbsent, "", err
 	}
 	obsolete := state.ObsoleteActions[actionID]
 	obsolete.ReplacedBy = replacement.ActionID
 	state.ObsoleteActions[actionID] = obsolete
-	return replacement.ActionID, true, nil
+	return dispatchReplaced, replacement.ActionID, nil
+}
+
+// installDeferredReplacements 补发屏障期间延迟的替换派发：Deferred 非空
+// 的退位条目在屏障解除的本次事务补签发（新派发代数＝本次提交，≥该次重
+// 走决定的 floor）。补发失败只留痕——退位事实仍在账，后续提交可再补。
+func (e *Engine) installDeferredReplacements(state *State, nextRevision uint64, expectedFingerprint string) {
+	actionIDs := make([]string, 0, len(state.ObsoleteActions))
+	for actionID, obsolete := range state.ObsoleteActions {
+		if obsolete.Deferred != nil {
+			actionIDs = append(actionIDs, actionID)
+		}
+	}
+	slices.Sort(actionIDs)
+	for _, actionID := range actionIDs {
+		obsolete := state.ObsoleteActions[actionID]
+		deferred := *obsolete.Deferred
+		bindings := AttemptBindings{Task: deferred.Pending.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
+		replacement, err := state.installReplacement(deferred.Pending, nextRevision, bindings, obsolete.Plan, deferred.Attempts, deferred.MaxAttempts)
+		if err != nil {
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+				ActionID: actionID, Action: RecoveryNewAttempt,
+				Detail:   fmt.Sprintf("the deferred replacement for the retired dispatch could not be installed: %v", err),
+				Revision: nextRevision,
+			})
+			continue
+		}
+		obsolete.Deferred = nil
+		obsolete.ReplacedBy = replacement.ActionID
+		state.ObsoleteActions[actionID] = obsolete
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			ActionID: actionID, Task: deferred.Pending.Task, Action: RecoveryNewAttempt,
+			Detail:   fmt.Sprintf("the replacement deferred by the change barrier was issued as %s after the barrier lifted", replacement.ActionID),
+			Revision: nextRevision,
+		})
+	}
 }
 
 // terminateDeclaredDispatch 机械终止一个证据已声明重走系列身份的在途派
@@ -335,9 +402,7 @@ func (e *Engine) terminateDeclaredDispatch(state *State, actionID string, record
 	state.ObsoleteResults[actionID] = record
 	detail := fmt.Sprintf("the %s series was redone by requirement decision %s; the dispatch was terminated by declaration and its evidence is superseded",
 		evidenceActionName(record.Review), requestID)
-	if replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo", nextRevision, expectedFingerprint); inFlight && err == nil {
-		detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement)
-	}
+	detail += e.retireDispatchNote(state, actionID, "superseded by the confirmed requirement redo", requestID, nextRevision, expectedFingerprint)
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 		ActionID: actionID, Action: RecoveryNewAttempt, Detail: detail, Revision: nextRevision,
 	})
@@ -347,19 +412,29 @@ func (e *Engine) terminateDeclaredDispatch(state *State, actionID string, record
 // （无证据可作废）：退位＋同任务重签发＋留痕。决定事务内使用——重签发
 // 失败只留痕不否决决定（确认登记优先，容量补位由后续 refill 兜住）。
 func (e *Engine) terminateMarkedDispatch(state *State, actionID string, mark review.Action, requestID string, nextRevision uint64, expectedFingerprint string) {
-	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
-	replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo", nextRevision, expectedFingerprint)
-	switch {
-	case !inFlight:
+	if _, pending := state.PendingActions[actionID]; !pending {
 		return
-	case err != nil:
-		detail = fmt.Sprintf("%s; the replacement dispatch could not be installed: %v", detail, err)
-	default:
-		detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement)
 	}
+	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
+	detail += e.retireDispatchNote(state, actionID, "superseded by the confirmed requirement redo", requestID, nextRevision, expectedFingerprint)
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 		ActionID: actionID, Action: RecoveryNewAttempt, Detail: detail, Revision: nextRevision,
 	})
+}
+
+// retireDispatchNote 退位在途派发并把处置注记为留痕文案：即时替换携新
+// 派发身份，屏障在位携延迟说明，失败携错误。
+func (e *Engine) retireDispatchNote(state *State, actionID, reason, requestID string, nextRevision uint64, expectedFingerprint string) string {
+	outcome, replacement, err := e.replaceDispatch(state, actionID, reason, requestID, nextRevision, expectedFingerprint)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("; the replacement dispatch could not be installed: %v", err)
+	case outcome == dispatchDeferred:
+		return "; the replacement dispatch is deferred until the barrier lifts"
+	case outcome == dispatchReplaced:
+		return fmt.Sprintf("; replacement dispatch %s", replacement)
+	}
+	return ""
 }
 
 // evidenceActionName 返回证据声明的审查动作名（无审查证据即非审查派发）。
@@ -488,6 +563,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		Classification: payload.Classification,
 		DecidedScope:   scope,
 		RequestID:      requestID,
+		Reason:         payload.Reason,
 		StateRevision:  nextRevision,
 	})
 	// 机械执行 scope：勾选的 series 调单 series stale 原语（不跨 series
@@ -574,6 +650,7 @@ func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevi
 		return nil
 	}
 	e.replayQuarantinedResults(state, requestID, nextRevision, expectedFingerprint)
+	e.installDeferredReplacements(state, nextRevision, expectedFingerprint)
 	return nil
 }
 
