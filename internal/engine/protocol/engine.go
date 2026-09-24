@@ -631,35 +631,48 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 	return 0
 }
 
+// issuedWitnessReceipt 报告回执状态是否证明"派发真实签出去过"：SPAWNED
+// 是宿主对派发成功的直接声明，UNKNOWN 是宿主对派发中断的观察（经 lifecycle
+// 对账挂接为 ATTACHED 后是同一事实）。FAILED 只进失败史（从未签出去过）、
+// 未定义状态不构成任何证明。承诺谓词（liveDispatch）与 terminal 对账的失
+// 败结果准入以此为准。
+func issuedWitnessReceipt(status string) bool {
+	return status == SpawnStatusSpawned || status == SpawnStatusAttached || status == SpawnStatusUnknown
+}
+
 // inflightWitnessReceipt 报告回执状态是否构成"派发真实在途过"的观察事
 // 实：SPAWNED 是宿主对派发成功的直接声明，ATTACHED 是 UNKNOWN 回执经
-// lifecycle 对账挂接后的同一事实。签发闸的在途计数（liveDispatch）、
-// terminal 对账的结果准入与暂存结果的配对候选判定共用本谓词——承诺的计
-// 入与结果的可入账对回执状态必须同判（双条件：计入 ⇔ 可入账）。FAILED
-// 只进失败史、UNKNOWN 尚待对账，都不构成该事实。
+// lifecycle 对账挂接后的同一事实。它只承担结果准入的分层——terminal 对账
+// 的真实结果（PASS 或携审查证据）与暂存结果的配对候选判定以此为准；承诺
+// 的计入与解除（liveDispatch）读签出证明（issuedWitnessReceipt），不经由
+// 本判定。FAILED 只进失败史、UNKNOWN 尚待对账，都不构成该事实。
 func inflightWitnessReceipt(status string) bool {
 	return status == SpawnStatusSpawned || status == SpawnStatusAttached
 }
 
 // liveDispatch 判定一条派发是否仍未落定——签发闸的在途计数与授权槽的
-// 干净判定共用的承诺谓词。在途集合＝未落定派发：
+// 干净判定共用的承诺谓词。承诺始于签发、终于落定：回执状态只决定"哪类
+// 结果可入账"（terminal 对账的准入分层），不决定承诺是否存在，因此任何
+// 回执状态迁移（UNKNOWN 挂接为 ATTACHED）都不改变承诺集合——追认性承诺
+// 增长结构性不可能。在途集合＝未落定派发：
 //   - PendingActions 成员（任务未到终态）；或
-//   - 回执构成在途观察事实（inflightWitnessReceipt），且结果未入账
+//   - 回执证明派发真实签出去过（issuedWitnessReceipt），且结果未入账
 //     （Results 无该派发）、派发未退位（ObsoleteActions 无该派发）。
 //
 // 任务 terminal 化只收回簿记，不解除承诺：terminal 派发的迟到结果仍可经
 // 对账路径合法入账，承诺必须覆盖"结果仍可合法入账的每一条派发"。承诺解
 // 除仅随派发命运落定：结果入账（Results，含 terminal 对账与隔离重放的接
-// 纳）、换新退位（ObsoleteActions）、spawn 从未成功（回执非在途观察事
-// 实——FAILED 只进失败史，UNKNOWN 尚待对账）。被隔离重放拒绝的记录消化
-// 入迟到证据账（ObsoleteResults＋留痕），但派发本身不因此落定——新的合
-// 法结果仍可对账入账，直到某个结果真正落账或派发退位。
+// 纳）、换新退位（ObsoleteActions）、spawn 从未成功（回执非签出证明
+// ——FAILED 只进失败史）。无回执的非 pending 派发同样不计：其结果本就不
+// 可入账，账实一致。被隔离重放拒绝的记录消化入迟到证据账（ObsoleteResults
+// ＋留痕），但派发本身不因此落定——新的合法结果仍可对账入账，直到某个结
+// 果真正落账或派发退位。
 func (s *State) liveDispatch(dispatchID string) bool {
 	if _, pending := s.PendingActions[dispatchID]; pending {
 		return true
 	}
 	receipt, receipted := s.SpawnReceipts[dispatchID]
-	if !receipted || !inflightWitnessReceipt(receipt.Status) {
+	if !receipted || !issuedWitnessReceipt(receipt.Status) {
 		return false
 	}
 	if _, recorded := s.Results[dispatchID]; recorded {
@@ -1441,15 +1454,21 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 	}
 	if _, pending := state.PendingActions[actionID]; !pending {
-		// terminal 对账路径：派发簿记已随任务终态收回，但构成在途观察事
-		// 实的回执（SPAWNED，或经 lifecycle 对账挂接的 ATTACHED——与签
-		// 发闸的承诺计数、暂存配对的候选判定同判 inflightWitnessReceipt）
-		// 证明该派发真实在途过——结果照常入账（§7.2.2:4 对确认续用项的
-		// 恢复/接纳不因任务经 TASK_PROGRESS 到 terminal 而失效）：入
-		// Results＋审查证据记账＋留痕，PASS 与失败结果（僵尸出口）同走本
-		// 分支。无回执或回执尚待对账的迟到结果仍是未知 action。
+		// terminal 对账路径：派发簿记已随任务终态收回，准入按结果类别分层
+		// （§7.2.2:4 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
+		// terminal 而失效）：
+		//   - 真实结果（PASS 或携审查证据）仍须在途观察事实回执（SPAWNED，
+		//     或经 lifecycle 对账挂接的 ATTACHED）——其入账要完成步骤与候
+		//     选记账，观察事实是前提；UNKNOWN 尚待对账，不接纳真实结果。
+		//   - 失败结果（非 PASS 且无审查证据）接受任何签出证明回执
+		//     （issuedWitnessReceipt，含 UNKNOWN）——僵尸出口对一切计入者
+		//     可用：不建候选、不占轮、不完成步骤，承诺落定释放容量。
+		// 无回执或 FAILED 的迟到结果仍是未知 action（FAILED 从未签出去过）。
 		receipt, receipted := state.SpawnReceipts[actionID]
-		if !receipted || !inflightWitnessReceipt(receipt.Status) {
+		failureResult := result.Outcome != OutcomePass && result.Review == nil
+		admissible := receipted && issuedWitnessReceipt(receipt.Status) &&
+			(inflightWitnessReceipt(receipt.Status) || failureResult)
+		if !admissible {
 			return Acceptance{}, false, &RejectedError{
 				Code:   CodeUnknownAction,
 				Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
