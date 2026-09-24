@@ -548,13 +548,13 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 			// task. It starts at zero; the first transient result advances it
 			// to one, making a declared MaxAttempts value an exact exhaustion
 			// count for the registered step.
-			Attempts:       0,
-			IssuedRevision: nextRevision,
+			Attempts: 0,
 		}
 		if retryMax != nil {
 			attempt.MaxAttempts = retryMax(action.Step)
 		}
 		s.Attempts[action.Task] = attempt
+		s.DispatchIssueRevisions[action.ActionID] = nextRevision
 		s.PendingActions[action.ActionID] = PendingAction{
 			ActionID: action.ActionID, Task: action.Task, Step: string(action.Step), AttemptID: attempt.ID,
 			ReviewSeries: reviewSeriesOf(action.Step),
@@ -656,6 +656,22 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return Acceptance{}, nil, false, err
 		}
 	}
+	acceptance, mutated, wrote, reject := e.admitEvent(ev, digest, state, revision, nextRevision, expectedFingerprint)
+	if reject != nil || !wrote {
+		return acceptance, mutated, wrote, reject
+	}
+	// 事务收尾单点：kind 分支全部效果之后补齐挂起的配对——一次判定＋
+	// 一次扫描，天然覆盖结果完成、回执配对、纠正生效与屏障解除重放的
+	// 一切开门迁移；屏障在位时不配对（观察事实已落账，接纳等屏障解除）。
+	if !mutated.requirementChangePending() {
+		e.pairSuspendedResults(mutated, nextRevision, expectedFingerprint)
+	}
+	return acceptance, mutated, wrote, reject
+}
+
+// admitEvent 按事件 kind 做接纳校验与落账（屏障处置表之后）。补配对属
+// 事务收尾（见 admit），各分支不做。
+func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
 	switch ev.Kind {
 	case KindRequestControl:
 		// 两阶段主动控制第一段：受限 REQUEST_* 只创建
@@ -738,12 +754,11 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		// options, and resolved state remain independently inspectable. Decisions
 		// remains the immutable decision history and also rejects later submissions.
 		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（
-		// submit 接纳后立即继续 Decide/SelectIssued）。纠正生效与隔离重放
-		// 都可能把产品审结论重新 PASS：同一事务内补齐挂起的配对。
+		// submit 接纳后立即继续 Decide/SelectIssued）。挂起配对的补齐属
+		// 事务收尾单点（admit）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		e.pairSuspendedResults(state, requestID, nextRevision, expectedFingerprint)
 		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
 		if refillErr != nil {
 			return Acceptance{}, nil, false, refillErr
@@ -901,6 +916,16 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			acceptance.RecoveryAction = string(plan.Action)
 		}
 		if staged, waiting := state.StagedResults[actionID]; waiting && ev.Spawn.Status == SpawnStatusSpawned {
+			if state.requirementChangePending() {
+				// 屏障盖住一切业务结果接纳路径：回执是观察事实，上方已照
+				// 常落账；暂存保留、配对挂起，屏障解除事务的收尾单点扫清。
+				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+					ActionID: actionID,
+					Detail:   "spawn receipt recorded while the requirement change barrier holds; the staged result stays suspended until the barrier lifts",
+					Revision: nextRevision,
+				})
+				return acceptance, state, true, nil
+			}
 			refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
 			if err != nil {
 				if !isSequenceGate(err) {
@@ -940,8 +965,8 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if !wrote {
 			return acceptance, nil, false, nil
 		}
-		// 结果接纳可能把产品审结论重新 PASS：同一事务内补齐挂起的配对。
-		e.pairSuspendedResults(state, "", nextRevision, expectedFingerprint)
+		// 结果接纳可能把产品审结论重新 PASS——挂起配对的补齐属事务收尾
+		// 单点（admit），两种完成顺序（结果先到/回执先到）走同一处。
 		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
@@ -1181,16 +1206,11 @@ func obsoleteTaskOf(state *State, actionID string) runtime.TaskKey {
 	return runtime.TaskKey{}
 }
 
-// issuedRevisionOf 返回 actionID 当前派发的签发代数（无当前派发为零）。
+// issuedRevisionOf 返回 actionID 派发的签发代数（签发路径唯一写
+// DispatchIssueRevisions；终态清理不删，terminal 任务的迟到结果仍以
+// 真实代数过重走 floor 校验）。
 func (s *State) issuedRevisionOf(actionID string) uint64 {
-	pending, ok := s.PendingActions[actionID]
-	if !ok {
-		return 0
-	}
-	if attempt, ok := s.Attempts[pending.Task]; ok {
-		return attempt.IssuedRevision
-	}
-	return 0
+	return s.DispatchIssueRevisions[actionID]
 }
 
 // admitWorkerResultRecord 是 typed worker result 的唯一接纳核心（Submit 与
@@ -1372,17 +1392,19 @@ func (e *Engine) terminateSupersededDispatch(state *State, actionID string, reco
 	return acceptance, true, nil
 }
 
-// pairSuspendedResults 补齐挂起的配对：回执已在账（SPAWNED）、暂存在
-// 账、尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条
-// 目保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。
-func (e *Engine) pairSuspendedResults(state *State, requestID string, nextRevision uint64, expectedFingerprint string) {
+// pairSuspendedResults 补齐挂起的配对：回执已在账（SPAWNED，或经恢复
+// 挂接到 lifecycle 身份的 ATTACHED——同为派发观察事实）、暂存在账、
+// 尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条目
+// 保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。本函
+// 数只由事务收尾单点调用（屏障在位时收尾不调）。
+func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) {
 	if len(state.StagedResults) == 0 {
 		return
 	}
 	ids := make([]string, 0, len(state.StagedResults))
 	for actionID := range state.StagedResults {
 		receipt, receipted := state.SpawnReceipts[actionID]
-		if !receipted || receipt.Status != SpawnStatusSpawned {
+		if !receipted || (receipt.Status != SpawnStatusSpawned && receipt.Status != SpawnStatusAttached) {
 			continue
 		}
 		if _, admitted := state.Results[actionID]; admitted {
@@ -1397,7 +1419,7 @@ func (e *Engine) pairSuspendedResults(state *State, requestID string, nextRevisi
 			continue
 		}
 		payload := workerResultPayloadOf(state.StagedResults[actionID])
-		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, requestID, nextRevision, nextRevision, expectedFingerprint); err != nil {
+		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, "", nextRevision, nextRevision, expectedFingerprint); err != nil {
 			*state = *snapshot
 			continue
 		}

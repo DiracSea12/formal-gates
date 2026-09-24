@@ -351,6 +351,18 @@ func StaleSeries(set Set, action Action, source string, freshFloor uint64) Set {
 	series.Effective.AdvisoryFindingIDs = []string{}
 	series.Effective.DownstreamImpact = downstreamImpact(action)
 	series.FreshFloor = freshFloor
+	series.FreshOwed = true
+	return set
+}
+
+// DischargeFreshOwed 清偿 series 的新鲜轮义务——满足 floor 的新鲜轮完成
+// 接纳后由协议层调用，是 FreshOwed 的唯一清除点；纠正路径永不触碰。
+func DischargeFreshOwed(set Set, action Action) Set {
+	series, err := set.seriesFor(action)
+	if err != nil {
+		return set
+	}
+	series.FreshOwed = false
 	return set
 }
 

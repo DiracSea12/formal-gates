@@ -167,9 +167,6 @@ type Attempt struct {
 	Attempts       int  `json:"attempts,omitempty"`
 	MaxAttempts    int  `json:"maxAttempts,omitempty"`
 	RetryExhausted bool `json:"retryExhausted,omitempty"`
-	// IssuedRevision 是本派发落账时的 state 代数（签发路径填写）：重走
-	// series 的新鲜轮只认不早于其 fresh floor 的派发。
-	IssuedRevision uint64 `json:"issuedRevision,omitempty"`
 }
 
 // PendingAction 是 pendingActions[actionID] 的落账形态：
@@ -434,6 +431,10 @@ type State struct {
 	// RunProvider 是 run 绑定的宿主 provider 身份（Init 落账）：一切携带
 	// provider 的事件/回执与之精确比对，不同或为空即硬拒绝。
 	RunProvider string `json:"runProvider"`
+	// DispatchIssueRevisions 按 actionID 落账每个派发的签发代数（签发
+	// 路径唯一写两处：issueInto/installReplacement；终态清理不删——
+	// 签发事实是持久事实，任务 terminal 后的重走 floor 校验仍读它）。
+	DispatchIssueRevisions map[string]uint64 `json:"dispatchIssueRevisions"`
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`
 	// SpawnFailures 保留可恢复的 FAILED receipt 历史；它们不占用最终
@@ -601,6 +602,9 @@ func (s *State) normalizeCollections() {
 	}
 	if s.Attempts == nil {
 		s.Attempts = map[runtime.TaskKey]Attempt{}
+	}
+	if s.DispatchIssueRevisions == nil {
+		s.DispatchIssueRevisions = map[string]uint64{}
 	}
 	if s.PendingActions == nil {
 		s.PendingActions = map[string]PendingAction{}

@@ -205,10 +205,10 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 		Plan:         plan,
 		Attempts:     attempts,
 		MaxAttempts:  maxAttempts,
-		// 与 issueInto 同源的签发代数落账：重签发即新派发，floor 比对以
-		// 它为准。
-		IssuedRevision: nextRevision,
 	}
+	// 与 issueInto 同源的签发代数落账：重签发即新派发，floor 比对以它
+	// 为准（终态清理不删）。
+	s.DispatchIssueRevisions[actionID] = nextRevision
 	s.Attempts[pending.Task] = attempt
 	s.PendingActions[actionID] = PendingAction{
 		ActionID: actionID, Task: pending.Task, Step: pending.Step, AttemptID: attempt.ID,
@@ -316,12 +316,22 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 		state.SpawnReceipts[actionID] = receipt
 		plan.Detail = "unknown receipt attached to unique lifecycle identity " + matches[0]
 		if staged, waiting := state.StagedResults[actionID]; waiting {
-			refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
-			if err != nil {
-				return RecoveryPlan{}, 0, err
+			// 屏障盖住一切业务结果接纳路径：UNKNOWN 回执挂接是观察事实
+			// 照常落账，暂存配对接纳等屏障解除。
+			if state.requirementChangePending() {
+				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+					ActionID: actionID,
+					Detail:   "unknown receipt attached while the requirement change barrier holds; the staged result stays suspended until the barrier lifts",
+					Revision: nextRevision,
+				})
+			} else {
+				refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
+				if err != nil {
+					return RecoveryPlan{}, 0, err
+				}
+				delete(state.StagedResults, actionID)
+				_ = refill
 			}
-			delete(state.StagedResults, actionID)
-			_ = refill
 		}
 	} else {
 		plan.Detail = fmt.Sprintf("unknown receipt has %d lifecycle matches; operator reconciliation required", len(matches))

@@ -2021,13 +2021,12 @@ func TestDualAskRedoDefersTheReplacementUntilTheBarrierLifts(t *testing.T) {
 	if obsolete.Deferred != nil || !strings.HasPrefix(obsolete.ReplacedBy, "retry:") {
 		t.Fatalf("the lift must install the deferred replacement: %+v", obsolete)
 	}
-	replacement, replaced := snap.State.PendingActions[obsolete.ReplacedBy]
-	if !replaced {
+	if _, replaced := snap.State.PendingActions[obsolete.ReplacedBy]; !replaced {
 		t.Fatal("the deferred replacement must be a pending dispatch after the lift")
 	}
 	series, _ := snap.State.ReviewSeries.Series(review.ProductReview)
-	if attempt := snap.State.Attempts[replacement.Task]; attempt.IssuedRevision < series.FreshFloor {
-		t.Fatalf("the deferred replacement predates the fresh floor: issued=%d floor=%d", attempt.IssuedRevision, series.FreshFloor)
+	if issued := snap.State.DispatchIssueRevisions[obsolete.ReplacedBy]; issued < series.FreshFloor {
+		t.Fatalf("the deferred replacement predates the fresh floor: issued=%d floor=%d", issued, series.FreshFloor)
 	}
 	issued := false
 	for _, record := range snap.State.RecoveryRecords {
@@ -2292,8 +2291,8 @@ func TestMarkedReviewDispatchIsTerminatedByTheRedoDecision(t *testing.T) {
 			t.Fatalf("the replacement must inherit the series mark: %+v", replacementPending)
 		}
 		decide := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1]
-		if attempt := snap.State.Attempts[replacementPending.Task]; attempt.IssuedRevision != decide.StateRevision {
-			t.Fatalf("the replacement must be issued at the decide (state revision %d): %+v", decide.StateRevision, attempt)
+		if issued := snap.State.DispatchIssueRevisions[obsolete.ReplacedBy]; issued != decide.StateRevision {
+			t.Fatalf("the replacement must be issued at the decide (state revision %d): issued=%d", decide.StateRevision, issued)
 		}
 		terminated := false
 		for _, record := range snap.State.RecoveryRecords {
@@ -2657,5 +2656,359 @@ func TestQuarantinedReadinessUnderProductRedoStaysSuspended(t *testing.T) {
 	}
 	if !suspended {
 		t.Fatalf("no suspension trail: %+v", snap.State.RecoveryRecords)
+	}
+}
+
+// TestRedoObligationSurvivesACorrectionOfTheOldRound：重走义务是不可变事
+// 实，不活在投影里——确认重走后对旧轮 P2 建议项的 DISMISS 纠正照常记账
+// （账目成员前提不变、投影刷新为 PASS），义务不解除：进入开发的双审门
+// 保持关闭；满足 floor 的新鲜轮完成后义务清偿、门重开。手改 FreshOwed
+// 在加载边界可区分拒绝，恢复原状即照常加载。
+func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
+	engine, dir := reviewEngine(t, cd, reg)
+
+	// 产品审第一轮：PASS 携一条 P2 建议项；技术审 PASS 后走到拓扑。
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-owed-product-1", product, reviewEvidence(review.ProductReview, "dispatch-owed-1", "", "PASS", "clean round", []review.Finding{
+		{Severity: "P2", Message: "advisory noise in the old round"},
+	}))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-owed-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-owed-r1", "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "req-owed-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single unit"}})
+	snap := engine.LoadMustSucceed(t)
+	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
+	preRedoDispatch := pendingActionID(t, engine)
+
+	// 确认重走产品审：义务置位，在途产品派发退位＋替换。
+	askAndDecideRequirement(t, engine, "req-owed-redo", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-owed",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the product walk is redone",
+	})
+	snap = engine.LoadMustSucceed(t)
+	if !snap.State.ReviewSeries.ProductReview.FreshOwed {
+		t.Fatal("the redo decision must set the fresh-round obligation")
+	}
+
+	// 对旧轮 finding 的 DISMISS 纠正：记账成功、投影刷成 PASS，但义务
+	// 不解除——双审门保持关闭。
+	dismiss := findingOption(t, engine, review.ProductReview, 0, "dismiss")
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-owed-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: "dispatch-owed-1", RequirementRevision: "rev-1",
+		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
+		Decision: "DISMISS", Reason: "the advisory noise is accepted", ExpectedEffectiveRevision: snap.State.ReviewSeries.ProductReview.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
+		t.Fatalf("the correction must keep refreshing the projection: %+v", series.Effective)
+	}
+	if !series.FreshOwed {
+		t.Fatal("a correction of the old round must not discharge the redo obligation")
+	}
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-owed-route-closed", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"g1", "g2"},
+	}}); err == nil {
+		t.Fatal("the development gate opened on a corrected projection while the redo obligation stands")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("closed gate code = %q (%v)", code, err)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("the obligated ledger must load: %v", err)
+	}
+
+	// 篡改负控：手改 FreshOwed 在加载边界可区分拒绝。
+	original := stateBytesOf(t, dir)
+	tamperStateContent(t, dir, func(content map[string]any) {
+		productSeries := content["reviewSeries"].(map[string]any)["productReview"].(map[string]any)
+		delete(productSeries, "freshOwed")
+	})
+	if _, err := engine.Load(); err == nil {
+		t.Fatal("a forged discharged obligation loaded")
+	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {
+		t.Fatalf("forged obligation code = %q (%v)", code, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), original, 0o600); err != nil {
+		t.Fatalf("restore state: %v", err)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("restored state failed to load: %v", err)
+	}
+
+	// 满足 floor 的新鲜轮完成：义务清偿，双审门重开。
+	freshRoundOnTheReplacement(t, engine, preRedoDispatch, "result-owed-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-owed-2", "rev-2", "PASS", "fresh round of the changed requirement", nil))
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.FreshOwed {
+		t.Fatal("the satisfied fresh round must discharge the obligation")
+	}
+	askAndDecide(t, engine, ControlSelectRoute, "req-owed-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"g1", "g2"},
+	}})
+	if snap = engine.LoadMustSucceed(t); snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL after the obligation cleared", snap.State.Phase)
+	}
+}
+
+// TestBarrierHoldsTheReceiptPairingUntilTheDecision：屏障前暂存而屏障内收
+// 回执——回执是观察事实照常 ACCEPTED 落账，暂存保留、配对挂起（留痕），
+// 计轮为零；决定解除屏障的同一事务内补配对完成接纳。
+func TestBarrierHoldsTheReceiptPairingUntilTheDecision(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	fp := fingerprintOf(t, engine)
+
+	staged, err := NewReviewWorkerResultEvent("result-barrier-staged", product, testProvider, "sha256:payload-barrier-staged",
+		reviewEvidence(review.ProductReview, "dispatch-barrier-staged", "", "PASS", "staged before the barrier", nil))
+	if err != nil {
+		t.Fatalf("staged event: %v", err)
+	}
+	if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("stage: %v %+v", err, acceptance)
+	}
+	preserved := &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-barrier-pair",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "meaning preserved",
+	}
+	request, err := NewRequirementRequestEvent("req-barrier-pair", preserved.packageView(), requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+
+	// 屏障内迟到回执：观察事实照常落账；配对挂起、暂存保留、计轮为零。
+	receipt := spawnReceipt(t, "spawn-barrier-pair", product, "agent-barrier-pair")
+	if acceptance, err := engine.Submit(receipt, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("receipt during the barrier = %v %+v", err, acceptance)
+	}
+	snap := engine.LoadMustSucceed(t)
+	if _, kept := snap.State.StagedResults[product]; !kept {
+		t.Fatalf("the staged result must stay suspended while the barrier holds: %+v", snap.State.StagedResults)
+	}
+	if _, admitted := snap.State.Results[product]; admitted {
+		t.Fatal("no result admission may run while the barrier holds")
+	}
+	if snap.State.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatalf("a suspended pairing must not count: completed=%d", snap.State.ReviewSeries.ProductReview.Completed)
+	}
+	held := false
+	for _, record := range snap.State.RecoveryRecords {
+		if record.ActionID == product && strings.Contains(record.Detail, "stays suspended until the barrier lifts") {
+			held = true
+		}
+	}
+	if !held {
+		t.Fatalf("no suspension trail: %+v", snap.State.RecoveryRecords)
+	}
+
+	// 决定解除屏障：同一事务内补配对完成接纳。
+	askAndDecideRequirement(t, engine, "req-barrier-pair", "proceed", preserved)
+	snap = engine.LoadMustSucceed(t)
+	if _, kept := snap.State.StagedResults[product]; kept {
+		t.Fatalf("the lift must pair the suspended staging: %+v", snap.State.StagedResults)
+	}
+	if _, admitted := snap.State.Results[product]; !admitted {
+		t.Fatal("the paired result must reach Results in the lifting transaction")
+	}
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("the paired round = completed %d %+v", series.Completed, series.Effective)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}
+
+// TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision：替换派发
+// （签发代数＝重走决定）先 RUNNING→VALIDATING→TERMINAL 再交合法 fresh 结
+// 果——terminal 对账以持久签发事实过 floor 校验（真实代数 ≥floor），新鲜
+// 轮照常完成。
+func TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+
+	askAndDecideRequirement(t, engine, "req-terminal-fresh", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-terminal-fresh",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the product walk is redone",
+	})
+	snap := engine.LoadMustSucceed(t)
+	replacement := snap.State.ObsoleteActions[product].ReplacedBy
+	series, _ := snap.State.ReviewSeries.Series(review.ProductReview)
+	if issued := snap.State.DispatchIssueRevisions[replacement]; issued < series.FreshFloor {
+		t.Fatalf("the replacement must be issued at or after the floor: issued=%d floor=%d", issued, series.FreshFloor)
+	}
+
+	// 回执先落账（派发观察事实），替换派发随后到 terminal。
+	fp := fingerprintOf(t, engine)
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-terminal-fresh", replacement, "agent-terminal-fresh"), fp); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	pending := snap.State.PendingActions[replacement]
+	for i, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+		ev, err := NewTaskEvent(EventID("task-terminal-fresh-"+string(rune('a'+i))), pending.Task, pending.AttemptID, status)
+		if err != nil {
+			t.Fatalf("task event: %v", err)
+		}
+		if _, err := engine.Submit(ev, fp); err != nil {
+			t.Fatalf("task progress %s: %v", status, err)
+		}
+	}
+
+	// 合法 fresh 结果随后到达：真实签发代数过 floor，terminal 对账完成
+	// 新鲜轮。
+	fresh, err := NewReviewWorkerResultEvent("result-terminal-fresh", replacement, testProvider, "sha256:payload-terminal-fresh",
+		reviewEvidenceAt(review.ProductReview, "dispatch-terminal-fresh", "rev-2", "PASS", "fresh round on a terminal task", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("fresh result on the terminal replacement = %v %+v", err, acceptance)
+	}
+	snap = engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+		t.Fatalf("the terminal fresh round = completed %d %+v", series.Completed, series.Effective)
+	}
+	if series.FreshOwed {
+		t.Fatal("the completed fresh round must discharge the obligation")
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}
+
+// TestProductFreshRoundCompletionOrderReachesTheSameTerminalState：产品审
+// 新鲜轮经"结果先到（暂存→回执）"或"回执先到→结果后到"两种顺序完成，
+// 终态完全相同——挂起的技术审配对在两种路径的同一事务收尾单点都补齐
+// （completed、effective、Results 归属、暂存/隔离清空、账本可加载）。
+func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.T) {
+	type completionFacts struct {
+		productCompleted   int
+		productEffective   string
+		productBound       string
+		readinessCompleted int
+		readinessEffective string
+		readinessBound     string
+		resultsEntries     int
+		staging            int
+		quarantine         int
+	}
+	drive := func(t *testing.T, resultFirst bool) completionFacts {
+		cd, reg := parallelTailFixture(t)
+		engine, _ := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-order-product-1", product, reviewEvidence(review.ProductReview, "dispatch-order-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitReviewResult(t, engine, "result-order-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-order-readiness-1", "", "PASS", "ready", nil))
+		askAndDecide(t, engine, ControlConfirmTopology, "req-order-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single unit"}})
+		askAndDecide(t, engine, ControlSelectRoute, "req-order-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
+		snap := engine.LoadMustSucceed(t)
+		stagedSlot, freshSlot := "", ""
+		for actionID, pending := range snap.State.PendingActions {
+			switch pending.Step {
+			case "tail.readiness":
+				stagedSlot = actionID
+			case "tail.product":
+				freshSlot = actionID
+			}
+		}
+		if stagedSlot == "" || freshSlot == "" {
+			t.Fatalf("the parallel tail must hold both dispatches: %+v", snap.State.PendingActions)
+		}
+
+		// 技术审下一轮证据先到（暂存、回执未到）。
+		staged, err := NewReviewWorkerResultEvent("result-order-readiness-2", stagedSlot, testProvider, "sha256:payload-order-readiness-2",
+			reviewEvidence(review.StartReadiness, "dispatch-order-readiness-2", "", "PASS", "readiness round before the change", nil))
+		if err != nil {
+			t.Fatalf("staged event: %v", err)
+		}
+		if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+			t.Fatalf("stage: %v %+v", err, acceptance)
+		}
+
+		// 只勾重走产品审。
+		askAndDecideRequirement(t, engine, "req-order-redo", "proceed", &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-order",
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			RedoProductReview: true, Reason: "only the product review is redone",
+		})
+		snap = engine.LoadMustSucceed(t)
+		replacement := snap.State.ObsoleteActions[freshSlot].ReplacedBy
+
+		// 技术审槽的回执到达：配对在顺序门挂起（产品审义务未清偿）。
+		if acceptance, err := engine.Submit(spawnReceipt(t, "spawn-order-readiness", stagedSlot, "agent-order-readiness"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+			t.Fatalf("readiness receipt: %v %+v", err, acceptance)
+		}
+		snap = engine.LoadMustSucceed(t)
+		if _, kept := snap.State.StagedResults[stagedSlot]; !kept {
+			t.Fatalf("the readiness pairing must stay suspended at the gate: %+v", snap.State.StagedResults)
+		}
+
+		// 产品审新鲜轮经两种顺序完成。
+		fresh := reviewEvidenceAt(review.ProductReview, "dispatch-order-product-2", "rev-2", "PASS", "fresh product round", nil)
+		if resultFirst {
+			stagedFresh, err := NewReviewWorkerResultEvent("result-order-product-2", replacement, testProvider, "sha256:payload-order-product-2", fresh)
+			if err != nil {
+				t.Fatalf("fresh event: %v", err)
+			}
+			if acceptance, err := engine.Submit(stagedFresh, fp); err != nil || acceptance.Status != "STAGED" {
+				t.Fatalf("fresh stage: %v %+v", err, acceptance)
+			}
+			if acceptance, err := engine.Submit(spawnReceipt(t, "spawn-order-product", replacement, "agent-order-product"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+				t.Fatalf("fresh receipt: %v %+v", err, acceptance)
+			}
+		} else {
+			if acceptance, err := engine.Submit(spawnReceipt(t, "spawn-order-product", replacement, "agent-order-product"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+				t.Fatalf("fresh receipt: %v %+v", err, acceptance)
+			}
+			directFresh, err := NewReviewWorkerResultEvent("result-order-product-2", replacement, testProvider, "sha256:payload-order-product-2", fresh)
+			if err != nil {
+				t.Fatalf("fresh event: %v", err)
+			}
+			if acceptance, err := engine.Submit(directFresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
+				t.Fatalf("fresh result: %v %+v", err, acceptance)
+			}
+		}
+
+		snap = engine.LoadMustSucceed(t)
+		facts := completionFacts{
+			productCompleted:   snap.State.ReviewSeries.ProductReview.Completed,
+			productEffective:   snap.State.ReviewSeries.ProductReview.Effective.Status,
+			productBound:       snap.State.ReviewSeries.ProductReview.Effective.RequirementRevision,
+			readinessCompleted: snap.State.ReviewSeries.StartReadiness.Completed,
+			readinessEffective: snap.State.ReviewSeries.StartReadiness.Effective.Status,
+			readinessBound:     snap.State.ReviewSeries.StartReadiness.Effective.RequirementRevision,
+			staging:            len(snap.State.StagedResults),
+			quarantine:         len(snap.State.QuarantinedResults),
+		}
+		facts.resultsEntries = len(snap.State.Results)
+		if _, err := engine.Load(); err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return facts
+	}
+	stagedFirst := drive(t, true)
+	receiptFirst := drive(t, false)
+	if stagedFirst != receiptFirst {
+		t.Fatalf("the two completion orders reached different terminal states: %+v vs %+v", stagedFirst, receiptFirst)
+	}
+	if stagedFirst.productCompleted != 2 || stagedFirst.productEffective != "PASS" || stagedFirst.productBound != "rev-2" ||
+		stagedFirst.readinessCompleted != 2 || stagedFirst.readinessEffective != "PASS" || stagedFirst.readinessBound != "rev-1" ||
+		stagedFirst.staging != 0 || stagedFirst.quarantine != 0 {
+		t.Fatalf("terminal state = %+v (want product 2/PASS@rev-2, readiness 2/PASS@rev-1, no staging or quarantine)", stagedFirst)
+	}
+	if stagedFirst.resultsEntries != 4 {
+		t.Fatalf("the ledger must hold all four admitted results (two review rounds and two tail completions): %d", stagedFirst.resultsEntries)
 	}
 }

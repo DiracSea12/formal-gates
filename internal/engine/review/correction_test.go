@@ -580,3 +580,41 @@ func TestCorrectionRequiresUserAuthorizationReasonAndSource(t *testing.T) {
 		t.Fatalf("unknown decision was accepted: %v", err)
 	}
 }
+
+// TestCorrectionsLeaveTheRedoObligationUntouched：FreshOwed/FreshFloor 是
+// 重走义务事实，只由 StaleSeries 置位、DischargeFreshOwed 清偿——纠正路
+// 径（finding 纠正与整轮失效）对旧轮记账后义务原样保留。
+func TestCorrectionsLeaveTheRedoObligationUntouched(t *testing.T) {
+	runID := "run-redo-owed"
+	set, candidate := mustRecord(t, NewSet(), runID, ProductReview,
+		Dispatch{ID: "dispatch-owed-1", RequirementRevision: "rev-1"},
+		Result{Status: "PASS", Findings: []Finding{{Severity: "P2", Message: "advisory noise"}}})
+	set = StaleSeries(set, ProductReview, "requirement-change:req-owed", 7)
+	series, _ := set.Series(ProductReview)
+	if !series.FreshOwed || series.FreshFloor != 7 {
+		t.Fatalf("StaleSeries must set the obligation beside the floor: owed=%v floor=%d", series.FreshOwed, series.FreshFloor)
+	}
+
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: "dispatch-owed-1", RequirementRevision: "rev-1",
+		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
+		Decision: "DISMISS", Reason: "the advisory noise is accepted", Source: "kernel-test", UserAuthorized: true,
+	})
+	series, _ = set.Series(ProductReview)
+	if !series.FreshOwed || series.FreshFloor != 7 {
+		t.Fatalf("a finding correction must not touch the redo obligation: owed=%v floor=%d", series.FreshOwed, series.FreshFloor)
+	}
+	if series.Effective.Status != "PASS" {
+		t.Fatalf("the correction still refreshes the projection: %+v", series.Effective)
+	}
+
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: "dispatch-owed-1", RequirementRevision: "rev-1",
+		ResultDigest: candidate.ResultDigest,
+		Decision:     "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "the old round is void", Source: "kernel-test", UserAuthorized: true,
+	})
+	series, _ = set.Series(ProductReview)
+	if !series.FreshOwed || series.FreshFloor != 7 {
+		t.Fatalf("whole-result invalidation must not touch the redo obligation: owed=%v floor=%d", series.FreshOwed, series.FreshFloor)
+	}
+}

@@ -226,3 +226,21 @@ Git provider＋canary＋route matrix。
 残留（如实）：①"could not be readmitted"作废分支在本套件内暂无可达驱动（唯一原驱动已走对账路径；屏障期确认阻塞 finding 的驱动场景未建，留待真出现时补）；②envelope 冻结身份与 canonical 制品身份并存（阶段 0 契约，已有记账）；③testkit/whitebox_qa 场景件标 unaffiliated 属必要波及。
 
 **R2 第七轮收口，待外部评审。交集覆盖为常设要求：后续每轮新增行为面必须同时落交集测试。**
+## 第 53 轮（2026-09-24，R2 第八轮四收敛：义务事实/屏障单点/签发持久/配对单点，轻装）
+
+第八轮评审（对 `fa0092a`，范围＝14 个未推送提交全量）判 FAIL：3 P1＋1 P2，四项主代理全部独立复现（探针跑毕即删；BUG-D 探针自纠两处：尾槽字母序、决定已主动终止标记槽）。评审定调：整体方向＝收敛状态事实与接纳入口，禁止局部特判。四缺陷共性＝同一业务规则多入口：重走义务活在可被纠正覆盖的投影里；结果接纳分散四入口而屏障只盖一处；签发事实绑在会被终态清理的簿记上；补配对挂在部分事件分支。
+
+四收敛交付（子代理，protocol 6＋review 3 文件，524/46）：
+
+- **A 义务事实化**：`Series.FreshOwed`（StaleSeries 置位；`DischargeFreshOwed` 唯一清除点＝重走分支新鲜轮完成接纳后）；`seriesInRedoStale` 改读义务；`effectivePass` 义务感知（投影被纠正刷成旧 PASS 也不算过门）；纠正全路径不触碰义务（内核测试锁死＋篡改负控）；完整性判据入 verifyReviewIntegrity。
+- **B 屏障单点**：回执配对路径在 `requirementChangePending` 时只落账观察＋挂起留痕，不 completeResult；屏障解除事务收尾扫清。ReconcileUnknownReceipt 同类直调一并收口；挂接（ATTACHED）回执纳入补配对资格。
+- **C 签发持久**：`State.DispatchIssueRevisions`（写点恰两处：issueInto/installReplacement；终态清理不删），`Attempt.IssuedRevision` 字段删除（一个事实一个归属者）；terminal 对账以真实代数过 floor——校验保留不跳过。
+- **D 配对收尾单点**：admit 拆 admitEvent（屏障表后）＋事务收尾单点 pairSuspendedResults（落账提交且屏障不在位时执行一次）；删除 decide/worker-result 两处分支调用点；两种产品审完成顺序终态全等（等价性负控入树）。
+
+评审点名四组连续操作测试全部走到底入树；交集套件与全部回归未删弱。
+
+主代理独立复核（四探针走到底、跑毕即删）：义务在纠正下存活＋路线门拒＋新鲜轮完成清偿后门开到 DEVELOPMENT_PARALLEL；屏障期回执 ACCEPTED 落账＋暂存保留＋计轮 0＋决定事务内同事务接纳；先 terminal 后交结果以真实代数（≥floor 有断言）接纳并清偿义务；回执后到路径同事务补齐挂起技术审（completed=2＋暂存清空）。探针自纠一处（线性夹具无产品审新鲜轮承载派发，换 product.again 步）。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
+
+残留（如实，①需机主定调）：①FreshOwed 清偿计"完成接纳即计轮"——新鲜轮事后被 INVALIDATE_RESULT 不复活义务（复活需在失效路径开第二写点，与"清点单一/纠正不触碰"冲突；失效后投影 PENDING＋门判仍挡住推进，实务安全，语义上有"整轮失效后旧 revision 新轮可经 carry 接纳"的窄路径）；②收尾单点只覆盖 Submit 事务，恢复 API 自身落账事务不扫描；③屏障期 ATTACHED 回执挂接的补配对无独立端到端负控（四条件叠加场景未建）。
+
+**R2 第八轮收口，待外部评审。**

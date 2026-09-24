@@ -188,7 +188,9 @@ func (s *State) confirmedRequirementRevision(revision string) bool {
 // 勾选重走置 PENDING 或升阻塞自然关门。新轮证据的 F3 绑定不在此处——
 // 证据仍必须绑当前权威 revision。
 func (s *State) effectivePass(series review.Series) bool {
-	return series.Effective.Status == reviewStatusPass && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
+	// FreshOwed 在则该系列不算 PASS：重走义务未清偿时，即便投影被纠正
+	// 刷成携已确认 revision 的 PASS，门也不开。
+	return series.Effective.Status == reviewStatusPass && !series.FreshOwed && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
 }
 
 // dualReviewPass 报告双 series 的 effective 结论是否都是携带已确认
@@ -266,6 +268,11 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, issuedRevisi
 		evidence.Verification)
 	if err != nil {
 		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+	}
+	// 清点单一：重走义务只在满足 floor 的新鲜轮完成接纳时清偿（本分支
+	// 已验绑当前权威 revision 且签发代数 ≥floor）。
+	if seriesInRedoStale(series) {
+		updated = review.DischargeFreshOwed(updated, evidence.Action)
 	}
 	return updated, nil
 }
@@ -623,11 +630,36 @@ func verifyReviewIntegrity(state *State) error {
 		}
 		return floor
 	}
+	// FreshOwed ⇔ 确认账本最近覆盖该 series 的重走决定尚未被满足：满足
+	// ＝ series 记录过绑定"该决定所确认 revision 或其后继确认 revision"
+	// 的候选（完成接纳即计轮；整轮失效只除投影与计轮，不复活重走义务）。
+	expectedOwed := func(action review.Action, series review.Series) bool {
+		if expectedFloor(action) == 0 {
+			return false
+		}
+		for _, entry := range state.RequirementRevisions {
+			if entry.StateRevision < expectedFloor(action) {
+				continue
+			}
+			for _, candidate := range series.RawCandidates {
+				if candidate.RequirementRevision == entry.Revision {
+					return false
+				}
+			}
+		}
+		return true
+	}
 	product, readiness := state.ReviewSeries.ProductReview, state.ReviewSeries.StartReadiness
 	if product.FreshFloor != expectedFloor(review.ProductReview) || readiness.FreshFloor != expectedFloor(review.StartReadiness) {
 		return &RejectedError{
 			Code:   CodeStateIntegrityInvalid,
 			Detail: "review series fresh floors do not match the requirement confirmation ledger",
+		}
+	}
+	if product.FreshOwed != expectedOwed(review.ProductReview, product) || readiness.FreshOwed != expectedOwed(review.StartReadiness, readiness) {
+		return &RejectedError{
+			Code:   CodeStateIntegrityInvalid,
+			Detail: "review series fresh-round obligations do not match the requirement confirmation ledger",
 		}
 	}
 	return state.verifyPhaseAgainstLedgers()

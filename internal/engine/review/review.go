@@ -137,7 +137,13 @@ type Series struct {
 	// FreshFloor 记录用户确认重走本 series 的最后一次需求决定的 state 代
 	// 数：重走态下的新鲜轮只认签发不早于它的派发（协议层以确认账本复核
 	// 该值）。由 StaleSeries 随失效一并落账，无重走史的 series 为零。
-	FreshFloor     uint64               `json:"freshFloor,omitempty"`
+	FreshFloor uint64 `json:"freshFloor,omitempty"`
+	// FreshOwed 是用户确认重走本 series 后尚未清偿的新鲜轮义务：与
+	// FreshFloor 一同由 StaleSeries 置位，只在满足 floor 的新鲜轮完成
+	// 接纳时由协议层清除（DischargeFreshOwed 是唯一清除点）。它是义务
+	// 事实，不随 effective 投影变化——纠正路径不触碰它，置位期间本
+	// series 不算 PASS（即便投影被纠正刷成 PASS）。
+	FreshOwed      bool                 `json:"freshOwed,omitempty"`
 	Authorizations []RoundAuthorization `json:"authorizations"`
 	RawCandidates  []RawCandidate       `json:"rawCandidates"`
 	Adjudications  []Adjudication       `json:"adjudications"`
