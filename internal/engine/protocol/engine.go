@@ -514,7 +514,9 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 // 随后在同一事务里登记 expected 任务、当前 Attempt 与 pendingActions，
 // 任务视图经 decision.State.TransitionTask 推进 QUEUED→ISSUED（复用
 // runtime 任务状态机校验）。撞上已存在的 actionID 或任务已有当前
-// Attempt 时 DUPLICATE_ACTION 拒绝且零变化。
+// Attempt 时 DUPLICATE_ACTION 拒绝且零变化。签出集为空且 Expected 无
+// 新增条目时零状态变化、不经提交（原样返回当前 revision）；retainExpected
+// 有增量属状态变化，照常提交。
 func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expectedFingerprint string) (decision.IssuedSet, uint64, error) {
 	revision, state, err := e.load()
 	if err != nil {
@@ -536,10 +538,16 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	if err != nil {
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
+	expectedCount := len(state.Expected)
 	state.retainExpected(plan.Next.Ready)
 	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
 	if err != nil {
 		return nil, 0, err
+	}
+	// 零状态变化不经提交：签出集为空（全批被闸）且 Expected 未新增时，
+	// 提交只会空转 revision；retainExpected 有增量属状态变化，照常提交。
+	if len(issued) == 0 && len(state.Expected) == expectedCount {
+		return issued, revision, nil
 	}
 	commitRevision, err := e.commit(state, revision, expectedFingerprint)
 	if err != nil {
@@ -745,17 +753,26 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 //     何在途派发）→ 放行并独占绑定该槽；否则闸住不放。持槽者入账时越限
 //     由槽背书、限内按自动容量入账，任意序皆可入账。
 //
-// 闭环不变量：任意时点，每条在途审查派发要么持有独占干净槽（入账必可背
-// 书），要么容量自洽（任何序下入账仍在容量内）——放行 ⇒ 可背书 ⇒ 可入账
-// 对任意兄弟入账序成立；一条派发与在途兄弟共享槽的形状不存在。在途集合
-// ＝未落定派发（liveDispatch）：除 PendingActions 成员外，簿记已随任务
-// 终态收回、回执仍在账且结果未入账的 terminal 派发同样计入（terminal 化
+// 闭环不变量（只在受闸派发之间成立）：任意时点，每条经本闸放行的在途派
+// 发要么持有独占干净槽（入账必可背书），要么容量自洽（任何序下入账仍在
+// 容量内）——放行 ⇒ 可背书 ⇒ 可入账对任意受闸兄弟入账序成立；一条受闸
+// 派发与在途受闸兄弟共享槽的形状不存在。闸的在途计数只覆盖带标记派发
+// （未落定者，liveDispatch）：除 PendingActions 成员外，簿记已随任务终
+// 态收回、回执仍在账且结果未入账的 terminal 派发同样计入（terminal 化
 // 不解除承诺），同批签出的派发按签出顺序逐个计入（同批的自洽形放行者同
 // 样计入并占位"未持槽在途"）。
 //
+// 与无标记声明形状的交互：无系列标记的派发不经本闸（其系列身份由证据在
+// 结果侧声明，见 admitWorkerResultRecord 的声明回退），其轮次在闸外消费
+// 系列轮容量。声明轮入账可把 Completed 推过 AutomaticLimit，使在途的受
+// 闸自洽形派发在记录侧被"越限无授权"拒绝——记录侧轮额仍保护系列，被挤
+// 者经 action 授权或整轮作废（重走决定）恢复。
+//
 // 被闸住的 action 不签发、不转移任务，保持 Expected（retainExpected 语
 // 义）；授权落账后的下一次收尾补位经本闸自然签发。无系列标记或标记不在
-// 账（非审查派发、独立复审）不受闸。
+// 账（非审查派发、独立复审）不受闸。容量截断与被闸步叠加时，Ready 前沿
+// 落在容量前缀之外的后续步本批不被补选（仅当配置容量小于 Ready 前沿长
+// 度时可达）；它们保持 Expected，随下一次补位或签发的前沿重选进入前缀。
 func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action) decision.IssuedSet {
 	inflight := map[review.Action]int{}
 	unslotted := map[review.Action]bool{}
@@ -1512,7 +1529,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	}
 	// 系列身份以签发标记为权威（未标记的派发用证据声明）：重走态的
 	// floor 判定与按声明终止据此执行——证据声明与标记冲突时同样按标记
-	// 终止（该证据本就不可纳）。
+	// 终止（该证据本就不可纳）。声明确立的系列照样消费轮额：这类派发
+	// 不经签发闸，其轮次在闸外占用系列容量，可能把受闸自洽形放行者的
+	// 结果挤到记录侧越限拒绝（交互全貌见 admitReviewIssuance）。
 	mark := state.PendingActions[actionID].ReviewSeries
 	seriesAction := mark
 	if seriesAction == "" && result.Review != nil {

@@ -1,16 +1,20 @@
 // review_issuance_commitment_test.go 覆盖审查系列签发闸的序无关放行承诺：
 // Completed 在签发与入账之间漂移（整轮作废压回限内）时任意兄弟入账序下
 // "放行 ⇒ 可背书 ⇒ 可入账"保持成立；容量自洽的签出不绑槽不消费授权；换
-// 新派发继承被换新旧派发的原槽；同一派发绑两条授权在加载边界可区分拒绝。
+// 新派发继承被换新旧派发的原槽；同一派发绑两条授权在加载边界可区分拒绝；
+// 全批被闸的签发是零状态变化、不经提交（前沿首次登记除外）。
 package protocol
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
 )
 
@@ -297,6 +301,77 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 			t.Fatalf("the unbound replacement must record as an automatic round: %+v", series)
 		}
 	})
+}
+
+// TestFullyGatedIssueSkipsTheEmptyCommit：全批被闸的显式签发是零状态变
+// 化——签出集为空且 Expected 无新增条目时不经提交（revision 与落盘字节
+// 均不动）；对照：同形签发在 retainExpected 首次登记前沿（Expected 有增
+// 量）时属状态变化，照常提交。引擎容量取零，事务收尾的补位选不出任何派
+// 发、不预登记前沿，首次显式签发才是前沿登记者。
+func TestFullyGatedIssueSkipsTheEmptyCommit(t *testing.T) {
+	cd, reg := driftPairFixture(t)
+	engine, dir := reviewEngineCapacity(t, cd, reg, 0)
+
+	// 三轮串行自动容量走满（Completed=3）：容量为零使每轮都由显式签发驱
+	// 动，fan 对始终不进 Expected。
+	for round := 1; round <= 3; round++ {
+		lanes := issueReady(t, engine)
+		if len(lanes) != 1 {
+			t.Fatalf("round %d issued %d lanes, want the single serial round: %v", round, len(lanes), lanes)
+		}
+		submitReviewResult(t, engine, fmt.Sprintf("result-empty-commit-r%d", round), lanes[0],
+			reviewEvidence(review.ProductReview, lanes[0], "", "PASS", fmt.Sprintf("round %d", round), nil))
+	}
+	base := engine.LoadMustSucceed(t)
+	if series := base.State.ReviewSeries.ProductReview; series.Completed != 3 {
+		t.Fatalf("completed = %d, want 3 exhausted rounds", series.Completed)
+	}
+	expectedBefore := len(base.State.Expected)
+	baseBytes := stateBytesOf(t, dir)
+
+	// 首次对 fan 对签发：全批被闸、签出集为空，但 retainExpected 首次登记
+	// 两条前沿任务——状态变化，照常提交。
+	plan, _, err := engine.Plan()
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	issued, revision, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprintOf(t, engine))
+	if err != nil {
+		t.Fatalf("frontier-registering issue: %v", err)
+	}
+	if len(issued) != 0 {
+		t.Fatalf("the exhausted series must gate the whole batch: %v", issued)
+	}
+	if revision != base.Revision+1 {
+		t.Fatalf("the frontier registration is a state change and must commit: revision %d, want %d", revision, base.Revision+1)
+	}
+	if now := engine.LoadMustSucceed(t); len(now.State.Expected) != expectedBefore+2 {
+		t.Fatalf("the gated fan pair must be retained as Expected: %d entries, want %d", len(now.State.Expected), expectedBefore+2)
+	}
+	if bytes.Equal(stateBytesOf(t, dir), baseBytes) {
+		t.Fatal("the frontier-registering commit must change the persisted state bytes")
+	}
+
+	// 再次同形签发：全批被闸且 Expected 已登记——零状态变化，不经提交。
+	plan, _, err = engine.Plan()
+	if err != nil {
+		t.Fatalf("plan again: %v", err)
+	}
+	gatedBytes := stateBytesOf(t, dir)
+	issued, revision, err = engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprintOf(t, engine))
+	if err != nil {
+		t.Fatalf("fully gated issue: %v", err)
+	}
+	if len(issued) != 0 {
+		t.Fatalf("the exhausted series must keep the whole batch gated: %v", issued)
+	}
+	if revision != base.Revision+1 {
+		t.Fatalf("a fully gated issue with no new Expected entries must not commit: revision %d, want %d", revision, base.Revision+1)
+	}
+	if !bytes.Equal(stateBytesOf(t, dir), gatedBytes) {
+		t.Fatal("a fully gated issue with no new Expected entries must leave state bytes untouched")
+	}
+	assertSeriesCommitmentHeld(t, engine)
 }
 
 // TestLoadRejectsDispatchBoundToTwoAuthorizationSlots：同一派发同时绑两条
