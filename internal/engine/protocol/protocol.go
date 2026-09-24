@@ -451,6 +451,10 @@ type State struct {
 	// FrontierSettleHeld 标记屏障期内有决定/回执的 frontier settle 被挂
 	// 起：解除事务统一补 settle。
 	FrontierSettleHeld bool `json:"frontierSettleHeld,omitempty"`
+	// routingReleasedCapacity 是当前提交事务的瞬态事实（非导出＝不入账
+	// 本）：失败路由/FAIL 结果经终态化释放了派发容量，事务收尾单点读
+	// 取即复位，据此执行容量补位。
+	routingReleasedCapacity bool
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`
 	// SpawnFailures 保留可恢复的 FAILED receipt 历史；它们不占用最终

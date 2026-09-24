@@ -113,12 +113,20 @@ func reviewConfirmation() *IntakeConfirmationReceipt {
 	}
 }
 
-// reviewEngine 构造已受理的引擎：prep 步在视图内完成、受理回执落账后
-// run 处于 PRODUCT_REVIEW。runID 参与审查身份派生，固定为 run-review。
+// reviewEngine 构造已受理的引擎（容量 4）：prep 步在视图内完成、受理回
+// 执落账后 run 处于 PRODUCT_REVIEW。runID 参与审查身份派生，固定为
+// run-review。
 func reviewEngine(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.Registry) (*Engine, string) {
 	t.Helper()
+	return reviewEngineCapacity(t, cd, reg, 4)
+}
+
+// reviewEngineCapacity 是 reviewEngine 的容量参数化形态（容量边界测试
+// 用）。
+func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.Registry, capacity int) (*Engine, string) {
+	t.Helper()
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: capacity}, nil)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -982,24 +990,25 @@ func TestReviewGatingNegatives(t *testing.T) {
 	})
 }
 
-// TestUpstreamVoidRoundTripRestoresTheVoidedConclusion：双审 PASS、拓扑确
-// 认后，产品审纠正升 P1 重新阻塞＋级联失效技术审（路线门关闭）；驳回升
-// 级项使产品审回 PASS 的同一纠正事务内，技术审的失效前结论原文恢复
-// （UpstreamVoid 解除——它从未被新证据推翻，只是被上游冻结），路线门重
-// 新打开并推进 DEVELOPMENT_PARALLEL，不为被驳回项多耗一轮（§7.3.3）。
-// 技术审自身结论真被推翻时的重建语义由 review 内核测试覆盖。
-func TestUpstreamVoidRoundTripRestoresTheVoidedConclusion(t *testing.T) {
+// TestUpstreamVoidReleaseReprojectsTheDownstreamLedger：双审 PASS、拓扑
+// 确认后，产品审纠正升 P1 重新阻塞＋级联失效技术审（路线门关闭）。失
+// 效窗口内技术审对自己的 finding 纠正照常落账（投影仍被失效压住）；上
+// 游驳回升级项回 PASS 的同一事务内解除失效——技术审结论按其当前账本重
+// 投影：窗口内升级的 P1 如实阻塞（不是回放失效前快照），驳回后路线门
+// 重新打开并推进 DEVELOVELOPMENT_PARALLEL（§7.3.3）。
+func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
 	engine, dir := reviewEngine(t, cd, reg)
 
-	// 双审到位：产品审仅一条建议项（effective PASS），技术审 PASS。
+	// 双审到位：各携一条建议项（effective PASS）。
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory only", []review.Finding{
 		{Severity: "P2", Message: "advisory defect on the documented path"},
 	}))
 	readiness := pendingActionID(t, engine)
-	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
-	preVoid := engine.LoadMustSucceed(t).State.ReviewSeries.StartReadiness.Effective
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, readiness, "", "FAIL", "advisory only", []review.Finding{
+		{Severity: "P2", Message: "advisory defect on the readiness path"},
+	}))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "建议不拆：模块边界清晰，单人可并行推进",
 	}})
@@ -1007,11 +1016,11 @@ func TestUpstreamVoidRoundTripRestoresTheVoidedConclusion(t *testing.T) {
 	// 产品审纠正升 P1：重新阻塞＋级联失效技术审。
 	snap := engine.LoadMustSucceed(t)
 	productSeries := snap.State.ReviewSeries.ProductReview
-	finding := productSeries.RawCandidates[0].Findings[0]
-	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + finding.ID), Label: "reseverity"}
+	productFinding := productSeries.RawCandidates[0].Findings[0]
+	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + productFinding.ID), Label: "reseverity"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-upgrade", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
 		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
-		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: productFinding.ID,
 		Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the defect blocks the documented checkout path",
 		Reason: "user upgrades the advisory after re-tracing the impact", ExpectedEffectiveRevision: productSeries.Effective.Revision,
 	}})
@@ -1038,14 +1047,30 @@ func TestUpstreamVoidRoundTripRestoresTheVoidedConclusion(t *testing.T) {
 		t.Fatalf("route-under-block rejection does not name the dual gate: %v", err)
 	}
 
-	// 驳回升级项：产品审回 PASS 的同一纠正事务内，技术审的失效前结论
-	// 原文恢复（UpstreamVoid 解除），路线门无需新一轮技术审即重新打开。
+	// 失效窗口内：技术审对自己的建议项升级 P1——合法落账，投影仍被失
+	// 效压住（下游自身纠正不解除上游失效）。
+	readinessSeries := snap.State.ReviewSeries.StartReadiness
+	readinessFinding := readinessSeries.RawCandidates[0].Findings[0]
+	windowRaise := AskOption{ID: AskOptionID("RESEVERITIZE:" + readinessFinding.ID), Label: "reseverity"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-window-raise", []AskOption{windowRaise}, windowRaise.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.StartReadiness, DispatchID: readinessSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
+		ResultDigest: readinessSeries.RawCandidates[0].ResultDigest, FindingID: readinessFinding.ID,
+		Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "re-traced during the void: the readiness defect blocks the documented entry",
+		Reason: "raised inside the void window", ExpectedEffectiveRevision: readinessSeries.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.Effective.Status != "PENDING" || !series.UpstreamVoid {
+		t.Fatalf("the void-period correction must commit cleanly while staying held: %+v void=%v", series.Effective, series.UpstreamVoid)
+	}
+
+	// 上游驳回升级项回 PASS 的同一事务内解除失效：技术审按当前账本重
+	// 投影——窗口内升级的 P1 如实阻塞（不回放失效前快照）。
 	snap = engine.LoadMustSucceed(t)
 	productSeries = snap.State.ReviewSeries.ProductReview
-	dismiss := AskOption{ID: AskOptionID("dismiss:" + finding.ID), Label: "dismiss"}
+	dismiss := AskOption{ID: AskOptionID("dismiss:" + productFinding.ID), Label: "dismiss"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
 		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
-		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: productFinding.ID,
 		Decision: "DISMISS", Supersedes: productSeries.Adjudications[0].ID,
 		Reason: "user rejects the upgrade after re-verification", ExpectedEffectiveRevision: productSeries.Effective.Revision,
 	}})
@@ -1053,27 +1078,46 @@ func TestUpstreamVoidRoundTripRestoresTheVoidedConclusion(t *testing.T) {
 	if snap.State.ReviewSeries.ProductReview.Effective.Status != "PASS" {
 		t.Fatalf("dismiss did not restore product-review PASS: %+v", snap.State.ReviewSeries.ProductReview.Effective)
 	}
-	restored := snap.State.ReviewSeries.StartReadiness
-	if restored.Effective.Status != "PASS" || restored.UpstreamVoid || restored.Completed != 1 {
-		t.Fatalf("the dismissed upgrade must restore the voided conclusion in the same transaction: %+v void=%v", restored.Effective, restored.UpstreamVoid)
+	released := snap.State.ReviewSeries.StartReadiness
+	if released.UpstreamVoid {
+		t.Fatal("the upstream re-pass must release the void in the same transaction")
 	}
-	if restored.Effective.ResultDigest != preVoid.ResultDigest || restored.Effective.RequirementRevision != preVoid.RequirementRevision {
-		t.Fatalf("the restored conclusion must be the pre-void original: %+v vs %+v", restored.Effective, preVoid)
+	if released.Effective.Status != "FAIL" || len(released.Effective.BlockingFindingIDs) != 1 {
+		t.Fatalf("the release must re-project the current ledger (the window raise blocks): %+v", released.Effective)
 	}
-	if restored.Effective.Revision <= voided.Effective.Revision {
-		t.Fatalf("the restored projection must keep the revision monotonic: %d <= %d", restored.Effective.Revision, voided.Effective.Revision)
+	if released.Effective.Revision <= voided.Effective.Revision {
+		t.Fatalf("the released projection must keep the revision monotonic: %d <= %d", released.Effective.Revision, voided.Effective.Revision)
+	}
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-held", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality"},
+	}}); err == nil {
+		t.Fatal("route accepted while the re-projected readiness conclusion blocks")
+	}
+
+	// 驳回窗口内的升级项：技术审回 PASS，路线门打开并推进。
+	snap = engine.LoadMustSucceed(t)
+	readinessSeries = snap.State.ReviewSeries.StartReadiness
+	windowDismiss := AskOption{ID: AskOptionID("dismiss:" + readinessFinding.ID), Label: "dismiss"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-window-dismiss", []AskOption{windowDismiss}, windowDismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.StartReadiness, DispatchID: readinessSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
+		ResultDigest: readinessSeries.RawCandidates[0].ResultDigest, FindingID: readinessFinding.ID,
+		Decision: "DISMISS", Supersedes: readinessSeries.Adjudications[0].ID,
+		Reason: "the window raise is rejected after re-verification", ExpectedEffectiveRevision: readinessSeries.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.Effective.Status != "PASS" || series.Completed != 1 {
+		t.Fatalf("dismissing the window raise must restore readiness PASS: %+v", series.Effective)
 	}
 	askAndDecide(t, engine, ControlSelectRoute, "req-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
 		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
 	}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
-		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL after the round trip", snap.State.RouteMode, snap.State.Phase)
+		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL after the release round trip", snap.State.RouteMode, snap.State.Phase)
 	}
 	if _, err := engine.Load(); err != nil {
-		t.Fatalf("load after the round trip: %v", err)
+		t.Fatalf("load after the release round trip: %v", err)
 	}
-	_ = dir
 }
 
 // TestDirectDismissLeavesTheDownstreamConclusionUntouched：未经升级往返的
@@ -1458,5 +1502,113 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 		t.Fatal("rejected init wrote state")
 	} else if !os.IsNotExist(statErr) {
 		t.Fatalf("stat: %v", statErr)
+	}
+}
+
+// TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch：授权轮整轮
+// INVALIDATE_RESULT 后授权槽释放（投影容量+1）；签发点自动把重试新派发
+// 绑上释放槽——重试轮在新派发上入账消费它；释放槽在位期间新 grant 仍
+// 被"存在未占用授权"拒（正确）。
+func TestReleasedAuthorizationSlotIsConsumedByTheRetryDispatch(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "round.two", "round.three", "round.four", "round.five")
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+
+	// 三轮自动容量走满。
+	first := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-slot-1", first, reviewEvidence(review.ProductReview, first, "", "PASS", "round one", nil))
+	round := func(step, event string) string {
+		action := pendingActionID(t, engine)
+		if got := engine.LoadMustSucceed(t).State.PendingActions[action].Step; got != step {
+			t.Fatalf("pending step = %s, want %s", got, step)
+		}
+		submitReviewResult(t, engine, event, action, reviewEvidence(review.ProductReview, action, "", "PASS", "round "+step, nil))
+		return action
+	}
+	round("round.two", "result-slot-2")
+	round("round.three", "result-slot-3")
+
+	// 授权一轮并完成第 4 轮（授权绑定第 4 轮派发）。
+	fourth := pendingActionID(t, engine)
+	askAndDecide(t, engine, ControlReviewRoundGrant, "req-slot-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "one more round is required", DispatchID: fourth,
+	}})
+	grant := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0]
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-slot-4", fourth, "agent-slot-4"), fp); err != nil {
+		t.Fatalf("spawn four: %v", err)
+	}
+	authorized, err := NewReviewWorkerResultEvent("result-slot-4", fourth, testProvider, "sha256:payload-slot-4", ReviewResultEvidence{
+		Action: review.ProductReview, DispatchID: fourth, RequirementRevision: "rev-1", AuthorizationID: grant.ID,
+		Status: "PASS", Message: "authorized round", Verification: reviewVerification(),
+	})
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(authorized, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("authorized round = %v %+v", err, acceptance)
+	}
+
+	// 整轮失效：授权释放（投影回到 AUTHORIZED_EXTRA_ROUND、容量+1）。
+	snap := engine.LoadMustSucceed(t)
+	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[3]
+	choice := AskOption{ID: AskOptionID("INVALIDATE_RESULT"), Label: "invalidate"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-slot-invalidate", []AskOption{choice}, choice.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: fourth, RequirementRevision: "rev-1",
+		ResultDigest: candidate.ResultDigest,
+		Decision:     "INVALIDATE_RESULT", Invalidity: "INVALID",
+		Reason: "wrong document binding", ExpectedEffectiveRevision: snap.State.ReviewSeries.ProductReview.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Completed != 3 || series.NextRoundRequirement != "AUTHORIZED_EXTRA_ROUND" || series.RemainingCapacity != 1 {
+		t.Fatalf("the invalidated round must release its slot: %+v", series)
+	}
+
+	// 释放槽在位：新 grant 仍被拒（存在未占用授权）。
+	if err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "another slot", DispatchID: "whatever",
+	}}); err == nil {
+		t.Fatal("a second grant was accepted beside the released slot")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("second-grant code = %q", code)
+	}
+
+	// 在途的后继派发先经恢复换新（NEW_ATTEMPT 重试）：替换派发在签发点
+	// 自动绑上释放槽，重试轮在新派发上入账消费它。
+	fifth := pendingActionID(t, engine)
+	plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, fp)
+	if err != nil || plan.Action != RecoveryNewAttempt {
+		t.Fatalf("the in-flight successor must retry on a fresh attempt: %+v err=%v", plan, err)
+	}
+	replacement := engine.LoadMustSucceed(t).State.ObsoleteActions[fifth].ReplacedBy
+	bound := false
+	for _, dispatchID := range engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].DispatchIDs {
+		if dispatchID == replacement {
+			bound = true
+		}
+	}
+	if !bound {
+		t.Fatalf("the retry dispatch must auto-bind the released slot: %+v", engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0])
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-slot-5", replacement, "agent-slot-5"), fp); err != nil {
+		t.Fatalf("spawn retry: %v", err)
+	}
+	retry, err := NewReviewWorkerResultEvent("result-slot-5", replacement, testProvider, "sha256:payload-slot-5", ReviewResultEvidence{
+		Action: review.ProductReview, DispatchID: replacement, RequirementRevision: "rev-1", AuthorizationID: grant.ID,
+		Status: "PASS", Message: "retry round on the rebound dispatch", Verification: reviewVerification(),
+	})
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(retry, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("the retry round on the rebound dispatch = %v %+v", err, acceptance)
+	}
+	snap = engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Completed != 4 || series.ExtraConsumed != 1 || series.RemainingCapacity != 0 || series.NextRoundRequirement != "USER_DECISION_REQUIRED" {
+		t.Fatalf("the retry round must consume the released slot: %+v", series)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
 	}
 }

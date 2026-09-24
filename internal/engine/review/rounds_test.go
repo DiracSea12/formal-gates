@@ -274,6 +274,44 @@ func TestBindDispatchAttachesToFirstUnoccupiedAuthorization(t *testing.T) {
 	}
 }
 
+// TestBindDispatchToUnoccupiedConsumesReleasedSlots：整轮失效释放授权后，
+// 签发点的自动再绑定把新派发绑上空槽（无空槽时无操作）——释放槽由自然
+// 签发/重试路径消费。
+func TestBindDispatchToUnoccupiedConsumesReleasedSlots(t *testing.T) {
+	runID := "run-rebind"
+	set := NewSet()
+	for round := 1; round <= 3; round++ {
+		set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: fmt.Sprintf("dispatch-%d", round), RequirementRevision: "rev-1"}, Result{Status: "PASS"})
+	}
+	set, err := AppendAuthorization(set, runID, ProductReview, "one extra round", "dispatch-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	series, _ := set.Series(ProductReview)
+	authorizationID := series.Authorizations[0].ID
+	set, fourth := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-4", RequirementRevision: "rev-1", AuthorizationID: authorizationID}, Result{Status: "PASS"})
+	// 占用中的授权：签发点再绑定是无操作。
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
+	series, _ = set.Series(ProductReview)
+	if got := series.Authorizations[0].DispatchIDs; len(got) != 1 {
+		t.Fatalf("an occupied authorization must not rebind: %#v", got)
+	}
+	// 整轮失效释放：签发点自动绑上新派发。
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
+		Action: ProductReview, DispatchID: fourth.DispatchID, ResultDigest: fourth.ResultDigest, RequirementRevision: fourth.RequirementRevision,
+		Decision: "INVALIDATE_RESULT", Invalidity: "INVALID",
+		Reason: "wrong document binding", Source: "user", UserAuthorized: true,
+	})
+	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-5")
+	series, _ = set.Series(ProductReview)
+	if got := series.Authorizations[0].DispatchIDs; len(got) != 2 || got[1] != "dispatch-5" {
+		t.Fatalf("the released slot was not consumed at issuance: %#v", got)
+	}
+	if err := Validate(runID, set); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAuthorizationEndorsesAtMostOneValidResult(t *testing.T) {
 	runID := "run-endorse"
 	set := NewSet()

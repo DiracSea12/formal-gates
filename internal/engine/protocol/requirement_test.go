@@ -3018,3 +3018,74 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 		t.Fatalf("the ledger must hold all four admitted results (two review rounds and two tail completions): %d", stagedFirst.resultsEntries)
 	}
 }
+
+// TestUpstreamVoidReleaseCoversTheRequirementRedoPath：解除的触发是"上游
+// 重新 PASS"的任何事务——不只纠正路径：产品审升级项把技术审置上游失效
+// 后，需求变化（PRESERVED）只重走产品审，其替换派发完成新鲜轮 PASS 的
+// 同一事务内解除失效：技术审按自身账本重投影（rev-1 carry 续用），无技
+// 术审槽也不卡死，路线门开放推进 DEVELOPMENT_PARALLEL。
+func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
+	engine, dir := reviewEngine(t, cd, reg)
+
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-redo-release-product", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory only", []review.Finding{
+		{Severity: "P2", Message: "advisory defect on the documented path"},
+	}))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-redo-release-readiness", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "req-redo-release-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single"}})
+
+	// 产品审升级：技术审置上游失效（无 readiness 备用槽——fixture 到此
+	// 为止只有 product.again 在途）。
+	snap := engine.LoadMustSucceed(t)
+	productSeries := snap.State.ReviewSeries.ProductReview
+	finding := productSeries.RawCandidates[0].Findings[0]
+	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + finding.ID), Label: "reseverity"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-redo-release-upgrade", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the defect blocks the documented checkout path",
+		Reason: "user upgrades the advisory", ExpectedEffectiveRevision: productSeries.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	voided := snap.State.ReviewSeries.StartReadiness
+	if voided.Effective.Status != "PENDING" || !voided.UpstreamVoid {
+		t.Fatalf("upgrade did not void start-readiness: %+v", voided.Effective)
+	}
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-redo-release-blocked", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1"}}}); err == nil {
+		t.Fatal("route accepted while the void holds")
+	}
+
+	// 需求变化（PRESERVED）只重走产品审：标记派发退位换替换，新鲜轮
+	// PASS@rev-2 的同一事务内解除失效。
+	slot := pendingActionID(t, engine)
+	askAndDecideRequirement(t, engine, "req-redo-release-change", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-redo-release",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		RedoProductReview: true, Reason: "redo the product walk only, meaning preserved",
+	})
+	freshRoundOnTheReplacement(t, engine, slot, "result-redo-release-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-redo-release", "rev-2", "PASS", "fresh product round", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" || series.FreshOwed {
+		t.Fatalf("the fresh product round = %+v owed=%v", series.Effective, series.FreshOwed)
+	}
+	released := snap.State.ReviewSeries.StartReadiness
+	if released.UpstreamVoid || released.Effective.Status != "PASS" || released.Effective.RequirementRevision != "rev-1" {
+		t.Fatalf("the redo re-pass must release the void and re-project the carried conclusion: %+v void=%v", released.Effective, released.UpstreamVoid)
+	}
+	if released.Effective.Revision <= voided.Effective.Revision {
+		t.Fatalf("the released projection must keep the revision monotonic: %d <= %d", released.Effective.Revision, voided.Effective.Revision)
+	}
+
+	// 路线门开放：无需任何技术审新轮。
+	askAndDecide(t, engine, ControlSelectRoute, "req-redo-release-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL", snap.State.RouteMode, snap.State.Phase)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}

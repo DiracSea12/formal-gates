@@ -200,13 +200,15 @@ func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerpri
 }
 
 // commitEffects 是一切携业务后果事务的唯一提交点：落账前先过事务收尾
-// 单点（transactionEpilogue），并把收尾补位签发的 action ID 回传给调用
-// 方的接纳回执。观察/引导/显式签发入口用 commit（纯落账）。
+// 单点（transactionEpilogue）与上游失效解除判定（releaseUpstreamVoidIf-
+// Releasable），并把收尾补位签发的 action ID 回传给调用方的接纳回执。
+// 观察/引导/显式签发入口用 commit（纯落账）。
 func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, []string, error) {
 	refill, err := e.transactionEpilogue(state, expectedRevision+1, expectedFingerprint)
 	if err != nil {
 		return 0, nil, err
 	}
+	e.releaseUpstreamVoidIfReleasable(state)
 	if err := state.advanceReviewPhases(); err != nil {
 		return 0, nil, err
 	}
@@ -225,12 +227,30 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	return res.Revision, refill, nil
 }
 
+// releaseUpstreamVoidIfReleasable 是上游失效解除的唯一触发点：上游重新
+// PASS（effectivePass＝绑确认账本内 revision、无重走义务）且再无已确认
+// 阻塞的任何事务都在此解除下游 UpstreamVoid——纠正路径与新鲜轮完成同
+// 覆盖。下游自身负有新鲜轮义务时不解除（重走义务与上游失效正交，互不
+// 冒用：欠的新鲜轮只能由其自身完成清偿）；屏障在位时不做业务解除。
+func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) {
+	downstream := state.ReviewSeries.StartReadiness
+	if !downstream.UpstreamVoid || state.requirementChangePending() || seriesInRedoStale(downstream) {
+		return
+	}
+	upstream := state.ReviewSeries.ProductReview
+	if !state.effectivePass(upstream) || review.HasConfirmedBlocking(upstream) {
+		return
+	}
+	review.ReleaseUpstreamVoid(&state.ReviewSeries)
+}
+
 // transactionEpilogue 是事务收尾单点：一切携业务后果的提交在落账前经此
 // 一次判定＋一次扫描——屏障在位时不收尾（挂起事实保持持有）；屏障不在
 // 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、屏
 // 障期延迟的替换补发、挂起配对扫描与容量补位。返回补位签发的 action ID。
 func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
 	if state.requirementChangePending() {
+		state.routingReleasedCapacity = false
 		return nil, nil
 	}
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
@@ -239,9 +259,13 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
 	// 容量补位只在收尾真正做了改变派发面的工作时执行：观察类事务（回执
 	// 落账等）不得自动签发——否则调用方持有的 Plan（Plan→Submit→
-	// IssueFromPlan 驱动形态）会被收尾失效。结果完成与决定事务的补位
-	// 在各自完成路径（completeResult／DECIDE settle）照常执行。
-	if !heldRouted && !heldSettled && paired == 0 {
+	// IssueFromPlan 驱动形态）会被收尾失效。业务工作＝挂起路由/清算/配
+	// 对，或本事务经失败路由/终态化释放了容量（§8.2.3：释放即补位）。
+	// 结果完成与决定事务的补位在各自完成路径（completeResult／DECIDE
+	// settle）照常执行。
+	releasedCapacity := state.routingReleasedCapacity
+	state.routingReleasedCapacity = false
+	if !heldRouted && !heldSettled && paired == 0 && !releasedCapacity {
 		return nil, nil
 	}
 	issued, err := e.refill(state, nextRevision, expectedFingerprint)
@@ -647,6 +671,11 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		}
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
+		}
+		// 系列存在未被有效结果占用的授权（整轮失效释放的槽）时，新派发自
+		// 动绑上——释放的授权槽由自然重试路径消费，无需调用方手工再绑。
+		if mark := reviewSeriesOf(action.Step); mark != "" {
+			s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, mark, action.ActionID)
 		}
 	}
 	return nil
@@ -1550,6 +1579,9 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	}
 	state.Results[record.ActionID] = record
 	if record.Outcome != OutcomePass {
+		// FAIL 路由经终态化释放了容量：收尾补位据此执行（PASS 的补位在
+		// 本函数尾部完成路径）。
+		state.routingReleasedCapacity = true
 		return nil, nil
 	}
 	if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
@@ -1608,6 +1640,10 @@ func (s *State) applyFailedSpawnRouting(actionID string, receipt SpawnReceipt, n
 	if route.Action == RecoveryFail {
 		if err := s.terminalizeTask(pending.Task); err != nil {
 			s.appendRecovery(RecoveryRecord{ActionID: actionID, Detail: fmt.Sprintf("terminalize after a failed spawn: %v", err), Revision: nextRevision})
+		} else {
+			// 终态化收回了派发簿记：容量释放是本事务的业务工作，收尾补位
+			// 据此执行（transient：收尾读取即复位，不入账本）。
+			s.routingReleasedCapacity = true
 		}
 	}
 	if route.Action == RecoveryReconcile {

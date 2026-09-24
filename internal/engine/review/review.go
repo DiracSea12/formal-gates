@@ -132,14 +132,10 @@ type Series struct {
 	// UpstreamVoid 持久标记"本 series 的 PASS 建立其上的上游结论已不成立"
 	// （product-review 的纠正把 PASS 变阻塞时置位，仅 start-readiness 会被
 	// 置位）：置位期间任何重投影都把 effective 保持在 PENDING，直到新一轮
-	// candidate 重建本 series 自己的结论，或上游阻塞被纠正清除时经
-	// ReleaseUpstreamVoid 恢复失效前结论（它从未被新证据推翻，只是被上游
-	// 冻结）。
+	// candidate 重建本 series 自己的结论，或上游重新 PASS 时经
+	// ReleaseUpstreamVoid 按本 series 当前账本重投影解除（含失效窗口内其
+	// 自身的纠正）。
 	UpstreamVoid bool `json:"upstreamVoid"`
-	// VoidedEffective 快照 UpstreamVoid 置位前的 effective 结论原文——
-	// 上游阻塞清除后恢复的正是它（恢复时 Revision 取当前投影代数，其余
-	// 字段逐字还原）。
-	VoidedEffective *EffectiveStatus `json:"voidedEffective,omitempty"`
 	// FreshFloor 记录用户确认重走本 series 的最后一次需求决定的 state 代
 	// 数：重走态下的新鲜轮只认签发不早于它的派发（协议层以确认账本复核
 	// 该值）。由 StaleSeries 随失效一并落账，无重走史的 series 为零。

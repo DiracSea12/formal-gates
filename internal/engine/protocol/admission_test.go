@@ -11,6 +11,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -480,8 +481,8 @@ func TestWorkerResultNegatives(t *testing.T) {
 		t.Fatal("rejected results changed state")
 	}
 
-	// FAIL：任务终结、step 不完成；未签发的兄弟 Ready 仍保留在完整
-	// Expected 前沿中，失败分类路由属后续批次。
+	// FAIL：任务终结、step 不完成；终态化释放容量，同一提交的收尾补位
+	// 立即签发兄弟 Ready（§8.2.3 释放即补位）。
 	fail, err := NewWorkerResultEvent("evt-res-fail", alphaAction, testProvider, OutcomeFail, "sha256:fail", authoring.FailureBusinessReject)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -490,7 +491,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fail result: %v", err)
 	}
-	if acceptance.Status != "ACCEPTED" || len(acceptance.Refill) != 0 {
+	if acceptance.Status != "ACCEPTED" || len(acceptance.Refill) != 1 || acceptance.Refill[0] != "act:n/beta.worker" {
 		t.Fatalf("fail acceptance = %+v", acceptance)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -500,6 +501,9 @@ func TestWorkerResultNegatives(t *testing.T) {
 	}
 	if containsStep(snap.State.Completed, "alpha.worker") || len(snap.State.Expected) != 1 || snap.State.Expected[0].Step != "beta.worker" {
 		t.Fatalf("FAIL result advanced frontier: completed=%+v expected=%+v", snap.State.Completed, snap.State.Expected)
+	}
+	if _, pending := snap.State.PendingActions["act:n/beta.worker"]; !pending {
+		t.Fatalf("the released capacity must immediately refill the sibling: %+v", snap.State.PendingActions)
 	}
 
 	// 同字节结果换事件 ID 重发：DUPLICATE 幂等（任务已终结、结果已落账）。
@@ -967,4 +971,96 @@ func reopenEngineWith(t *testing.T, dir string) *Engine {
 		t.Fatalf("reopen engine: %v", err)
 	}
 	return engine
+}
+
+// parallelTailsFixture 构造"产品审标记步＋三个并列无标记尾步"的定义：
+// 容量边界测试用（容量小于尾步数）。
+func parallelTailsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+	t.Helper()
+	reg := compiler.NewRegistry()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("fixture: %v", err)
+		}
+	}
+	must(reg.RegisterHandler("engine.test.prep", authoring.RunnerEngineLocal))
+	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
+	must(reg.RegisterCodec("codec.any.in"))
+	must(reg.RegisterCodec("codec.any.out"))
+	must(reg.RegisterPredicate("pred.test.post"))
+	header := func(id string, deps ...string) authoring.Header {
+		ds := make([]authoring.StepID, 0, len(deps))
+		for _, d := range deps {
+			ds = append(ds, authoring.StepID(d))
+		}
+		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
+	}
+	io := func(from string) authoring.IO {
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+			Inputs:         []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}},
+			Postconditions: []authoring.PredicateRef{{ID: "pred.test.post"}}}
+	}
+	prep, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.test.prep"})
+	must(err)
+	product, err := authoring.NewAgentStep(header("product.review", "prep.parse"), io("prep.parse"), authoring.AgentSpec{
+		Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
+		ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
+	})
+	must(err)
+	steps := []authoring.Step{prep, product}
+	for _, name := range []string{"tail.a", "tail.b", "tail.c"} {
+		step, err := authoring.NewAgentStep(header(name, "product.review"), io("product.review"), authoring.AgentSpec{
+			Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute,
+		})
+		must(err)
+		steps = append(steps, step)
+	}
+	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: steps}, reg)
+	must(err)
+	return cd, reg
+}
+
+// TestFailedBranchRefillsTheFreedCapacityImmediately：三支并列尾步容量
+// 2——一支 FAILED 回执经 RecoveryFail 终态化释放容量的同一提交内，事务
+// 收尾立即补签第三支（§8.2.3 释放即补位，无需 Drive）。
+func TestFailedBranchRefillsTheFreedCapacityImmediately(t *testing.T) {
+	cd, reg := parallelTailsFixture(t)
+	engine, _ := reviewEngineCapacity(t, cd, reg, 2)
+	fp := fingerprintOf(t, engine)
+
+	first := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-refill-product", first, reviewEvidence(review.ProductReview, first, "", "PASS", "clean", nil))
+	snap := engine.LoadMustSucceed(t)
+	if len(snap.State.PendingActions) != 2 {
+		t.Fatalf("capacity 2 must hold two tail dispatches: %+v", snap.State.PendingActions)
+	}
+	var victim string
+	remaining := map[string]bool{}
+	for id, pending := range snap.State.PendingActions {
+		remaining[pending.Step] = true
+		victim = id
+	}
+	failed, err := NewSpawnReceiptWithFailureClass(EventID("spawn-refill-failed"), victim, testProvider, "agent-refill", SpawnStatusFailed, authoring.FailureBusinessReject)
+	if err != nil {
+		t.Fatalf("failed receipt event: %v", err)
+	}
+	acceptance, err := engine.Submit(failed, fp)
+	if err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("failed receipt = %v %+v", err, acceptance)
+	}
+	if len(acceptance.Refill) != 1 {
+		t.Fatalf("the freed capacity must refill in the same submit: %+v", acceptance)
+	}
+	snap = engine.LoadMustSucceed(t)
+	if len(snap.State.PendingActions) != 2 {
+		t.Fatalf("the third branch was not issued: %+v", snap.State.PendingActions)
+	}
+	refilled, issued := snap.State.PendingActions[acceptance.Refill[0]]
+	if !issued || remaining[refilled.Step] {
+		t.Fatalf("the refilled dispatch must be the third branch: %+v", snap.State.PendingActions)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
 }
