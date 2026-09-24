@@ -147,7 +147,10 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	set = review.BindDispatchToUnoccupied(set, runID, review.ProductReview, "dispatch-4", func(string) bool { return false })
+	set, err = review.BindDispatch(set, runID, review.ProductReview, "dispatch-4", func(string) bool { return false })
+	if err != nil {
+		t.Fatalf("bind fourth: %v", err)
+	}
 	series, _ := set.Series(review.ProductReview)
 	fourthGrantID := series.Authorizations[0].ID
 	next, _, err := review.RecordCandidate(set, runID, review.ProductReview,
@@ -161,7 +164,10 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	set = review.BindDispatchToUnoccupied(set, runID, review.ProductReview, "dispatch-5", func(string) bool { return false })
+	set, err = review.BindDispatch(set, runID, review.ProductReview, "dispatch-5", func(string) bool { return false })
+	if err != nil {
+		t.Fatalf("bind fifth: %v", err)
+	}
 
 	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {

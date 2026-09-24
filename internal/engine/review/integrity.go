@@ -37,9 +37,11 @@ func (s Series) validate(runID string, action Action) error {
 		return fail("effective status projections are partially initialized")
 	}
 	authorizationByID := map[string]bool{}
+	slotOfDispatch := map[string]string{}
 	for index, authorization := range s.Authorizations {
-		// 授权先于派发存在：DispatchIDs 允许为空（grant 已落账、签发点尚未
-		// 绑上首个派发的窗口）；已绑定的派发身份必须非空且不重复。
+		// 授权先于派发存在：DispatchIDs 允许为空（grant 已落账、签发闸尚未
+		// 绑上首个派发的窗口）；已绑定的派发身份必须非空、不重复，且独占
+		// 一条授权——同一派发绑两条授权即可在入账时择槽消费，属结构破坏。
 		if authorization.Action != action || authorization.Source != authorizationUserSource || strings.TrimSpace(authorization.Reason) == "" || authorization.DispatchIDs == nil || authorization.RecordedResultDigests == nil {
 			return fail("authorization %d has an incomplete binding, source, or reason", index+1)
 		}
@@ -55,7 +57,11 @@ func (s Series) validate(runID string, action Action) error {
 			if strings.TrimSpace(dispatchID) == "" || boundDispatches[dispatchID] {
 				return fail("authorization %s binds an empty or duplicated dispatch", authorization.ID)
 			}
+			if other, bound := slotOfDispatch[dispatchID]; bound {
+				return fail("dispatch %s is bound to authorizations %s and %s; a dispatch holds at most one slot", dispatchID, other, authorization.ID)
+			}
 			boundDispatches[dispatchID] = true
+			slotOfDispatch[dispatchID] = authorization.ID
 		}
 		authorizationByID[authorization.ID] = true
 	}

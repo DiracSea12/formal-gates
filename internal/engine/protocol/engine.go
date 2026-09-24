@@ -639,11 +639,11 @@ func (s *State) liveDispatch(dispatchID string) bool {
 }
 
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
-// 补位共用）：先经审查系列容量闸过滤，再对幸存集做重复 action/已有当前
-// Attempt/非法 QUEUED→ISSUED 转移校验，一律拒绝；Attempt ID 以落盘
-// revision 确定性派生。Expected 由调用方先登记完整 eligible Ready
-// frontier，因此这里只补齐缺失的已签发任务。返回实际签出的子集（被闸住
-// 的 action 不在其中，保持 Expected）。
+// 补位共用）：先经审查系列签发闸过滤（放行承诺与背书绑定都在闸上），再
+// 对幸存集做重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移校验，一
+// 律拒绝；Attempt ID 以落盘 revision 确定性派生。Expected 由调用方先登记
+// 完整 eligible Ready frontier，因此这里只补齐缺失的已签发任务。返回实际
+// 签出的子集（被闸住的 action 不在其中，保持 Expected）。
 func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) (decision.IssuedSet, error) {
 	issued = s.admitReviewIssuance(issued, reviewSeriesOf)
 	for _, action := range issued {
@@ -683,38 +683,77 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
 		}
-		// 系列存在可承载本派发的授权（新授权或整轮失效释放的槽；越限派发
-		// 要求槽不承载其他在途派发）时，新派发自动绑上——授权槽由签发与
-		// 自然重试路径消费，无需调用方手工再绑。
-		if mark := reviewSeriesOf(action.Step); mark != "" {
-			s.ReviewSeries = review.BindDispatchToUnoccupied(s.ReviewSeries, s.RunID, mark, action.ActionID, s.liveDispatch)
-		}
+		// 授权槽绑定发生在签发闸的背书形放行上（admitReviewIssuance 已随
+		// 放行独占绑定）；容量自洽的签出不绑槽。
 	}
 	return issued, nil
 }
 
-// admitReviewIssuance 是审查系列容量闸：对 ReviewSeries 标记非空的新签发
-// 派发，仅当系列容量（RemainingCapacity＝自动剩余轮数＋未占用授权数，
-// refresh 的权威投影）大于该系列在途派发数时签出——超出自动额度又没有
-// 可用授权的审查派发不得签发。在途派发数＝PendingActions 中同系列标记
-// 的活派发数，同批签出的派发按签出顺序逐个计入。被闸住的 action 不签
-// 发、不转移任务，保持 Expected（retainExpected 语义）；授权落账后的下
-// 一次收尾补位经本闸自然签发。无系列标记（非审查派发）不受闸。
+// admitReviewIssuance 是审查系列签发闸：对带审查系列标记的新签发派发做
+// 序无关的放行承诺。承诺直接读账本事实（Completed/AutomaticLimit/授权占
+// 用），不经 RemainingCapacity 投影、不另立容量账。放行分两形：
+//   - 容量自洽形：Completed + 在途(含本条) ≤ AutomaticLimit → 放行且不绑
+//     任何授权槽。任何兄弟入账序下，本条入账时 Completed 至多为
+//     Completed + 在途 − 1 ≤ AutomaticLimit − 1，必在容量内——承诺不依赖
+//     任何兄弟的选择，也不把用户的授权槽浪费在装得下的自动轮上。
+//   - 背书形：容量不自洽时，仅当系列没有未持槽的在途派发（自洽形放行者
+//     的容量承诺不容后到者挤占）且存在干净槽（无有效记录结果且不承载任
+//     何在途派发）→ 放行并独占绑定该槽；否则闸住不放。持槽者入账时越限
+//     由槽背书、限内按自动容量入账，任意序皆可入账。
+//
+// 闭环不变量：任意时点，每条在途审查派发要么持有独占干净槽（入账必可背
+// 书），要么容量自洽（任何序下入账仍在容量内）——放行 ⇒ 可背书 ⇒ 可入账
+// 对任意兄弟入账序成立；一条派发与在途兄弟共享槽的形状不存在。在途派发
+// 数＝PendingActions 中同系列标记的活派发数，同批签出的派发按签出顺序逐
+// 个计入（同批的自洽形放行者同样计入并占位"未持槽在途"）。
+//
+// 被闸住的 action 不签发、不转移任务，保持 Expected（retainExpected 语
+// 义）；授权落账后的下一次收尾补位经本闸自然签发。无系列标记或标记不在
+// 账（非审查派发、独立复审）不受闸。
 func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action) decision.IssuedSet {
 	inflight := map[review.Action]int{}
-	for _, pending := range s.PendingActions {
-		if pending.ReviewSeries != "" {
-			inflight[pending.ReviewSeries]++
+	unslotted := map[review.Action]bool{}
+	for actionID, pending := range s.PendingActions {
+		if pending.ReviewSeries == "" {
+			continue
+		}
+		series, ok := s.ReviewSeries.Series(pending.ReviewSeries)
+		if !ok {
+			continue
+		}
+		inflight[pending.ReviewSeries]++
+		if review.AuthorizationOfDispatch(series, actionID) == "" {
+			unslotted[pending.ReviewSeries] = true
 		}
 	}
 	admitted := make(decision.IssuedSet, 0, len(issued))
+	boundHere := map[string]bool{}
 	for _, action := range issued {
-		if mark := reviewSeriesOf(action.Step); mark != "" {
-			if series, ok := s.ReviewSeries.Series(mark); ok && series.RemainingCapacity <= inflight[mark] {
-				continue
-			}
-			inflight[mark]++
+		mark := reviewSeriesOf(action.Step)
+		series, ok := s.ReviewSeries.Series(mark)
+		if mark == "" || !ok {
+			admitted = append(admitted, action)
+			continue
 		}
+		if series.Completed+inflight[mark]+1 <= series.AutomaticLimit {
+			inflight[mark]++
+			unslotted[mark] = true
+			admitted = append(admitted, action)
+			continue
+		}
+		if unslotted[mark] {
+			continue
+		}
+		// 背书形放行即独占绑定：批内已绑定的派发计入在途判定，后续同批
+		// 背书形派发不会复用同一槽。
+		live := func(dispatchID string) bool { return boundHere[dispatchID] || s.liveDispatch(dispatchID) }
+		updated, err := review.BindDispatch(s.ReviewSeries, s.RunID, mark, action.ActionID, live)
+		if err != nil {
+			continue
+		}
+		s.ReviewSeries = updated
+		boundHere[action.ActionID] = true
+		inflight[mark]++
 		admitted = append(admitted, action)
 	}
 	return admitted

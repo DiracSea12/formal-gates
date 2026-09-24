@@ -67,22 +67,12 @@ func availableAuthorization(s Series) (int, bool) {
 	return 0, false
 }
 
-// bindableAuthorization 返回第一个可承载新派发绑定的授权下标；没有时第二
-// 返回值为 false。选槽按派发是否需要背书分两形：
-//   - 越限派发（Completed 已达 AutomaticLimit——与入账侧"结果必须携授权"
-//     同判）必须绑到独占槽：既无有效结果占用，也不承载任何在途派发（live
-//     判定在途，由协议层以挂起派发账传入）。闭环论证：若全部空槽都在途
-//     承载，空槽数不超过在途派发数，而签发闸放行越限派发的条件是
-//     RemainingCapacity（越限时恰为空槽数）大于在途派发数，两者矛盾——
-//     因此被闸放行的越限派发必有独占槽；找不到独占槽只剩未经闸的调用
-//     这一种形状。
-//   - 自动容量内的派发沿用首空槽绑定（与 availableAuthorization 同规）：
-//     多条派发共用同一授权时，至多一条在入账时消费该槽，其余按自动容量
-//     入账；闸的在途计数已保证容量容纳其余在途派发。
+// bindableAuthorization 返回第一个可承载背书绑定的授权下标；没有时第二
+// 返回值为 false。可承载的槽是干净槽：既无有效结果占用，也不承载任何在
+// 途派发（live 判定在途，由协议层以挂起派发账传入）。绑定只发生在需要背
+// 书的放行上（签发闸的背书形与换新继承），一条派发与在途兄弟共享槽的形
+// 状不存在——闭环论证见协议层签发闸的承诺注释。
 func bindableAuthorization(s Series, live func(dispatchID string) bool) (int, bool) {
-	if s.Completed < s.AutomaticLimit {
-		return availableAuthorization(s)
-	}
 	occupied := OccupiedAuthorizationIDs(s)
 	for index, authorization := range s.Authorizations {
 		if !occupied[authorization.ID] && !slices.ContainsFunc(authorization.DispatchIDs, live) {
@@ -90,6 +80,19 @@ func bindableAuthorization(s Series, live func(dispatchID string) bool) (int, bo
 		}
 	}
 	return 0, false
+}
+
+// AuthorizationOfDispatch 返回派发当前绑定的授权 ID。绑定是独占的：同一
+// 派发至多出现在一条授权的 DispatchIDs（完整性校验的结构负控）；未绑定时
+// 返回空串。签发闸以它区分在途派发是否已持背书槽，换新以它定位被换新旧
+// 派发的原槽。
+func AuthorizationOfDispatch(s Series, dispatchID string) string {
+	for _, authorization := range s.Authorizations {
+		if slices.Contains(authorization.DispatchIDs, dispatchID) {
+			return authorization.ID
+		}
+	}
+	return ""
 }
 
 // resultExcluded 判断一条结果是否已被整轮 INVALIDATE_RESULT 回执排除。
@@ -119,9 +122,8 @@ func nextRoundRequirement(s Series) string {
 // 使容量字段与账本保持一致。RemainingCapacity 与准入规则精确对齐：下一轮
 // 可立即记录 iff completed<automaticLimit 或存在空槽授权，因此它等于
 // 自动剩余轮数加未占用授权数（CurrentLimit 语义不变＝AutomaticLimit+授权
-// 总数）。它有三个消费点共用同一投影：入账判定（越限结果必须携空槽授
-// 权）、签发闸（新审查派发仅当 RemainingCapacity 大于该系列在途派发数时
-// 可签——未授权的越限派发根本不签出）与审查公开面。
+// 总数）。它的消费点是审查公开面与入账侧的容量投影；签发闸不经它放行
+// ——放行承诺直接读账本事实（见协议层 admitReviewIssuance）。
 func refresh(s *Series) {
 	s.Completed = completedRounds(*s)
 	s.CurrentLimit = s.AutomaticLimit + len(s.Authorizations)

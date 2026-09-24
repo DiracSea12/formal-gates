@@ -27,7 +27,10 @@ func richLedger(t *testing.T) (Set, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set = BindDispatchToUnoccupied(set, runID, StartReadiness, "dispatch-s2", noDispatchInFlight)
+	set, err = BindDispatch(set, runID, StartReadiness, "dispatch-s2", noDispatchInFlight)
+	if err != nil {
+		t.Fatal(err)
+	}
 	authorizationID := mustSeries(t, set, StartReadiness).Authorizations[0].ID
 	set, readinessSecond := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s2", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
 	set = mustApply(t, set, runID, "rev-2", CorrectionInput{
@@ -159,6 +162,22 @@ func TestValidateRejectsEachTamperClass(t *testing.T) {
 			marker: "absent from its authorization receipt",
 		},
 		{
+			name: "dispatch bound to a second authorization",
+			mutate: func(set *Set, _ string) {
+				series := &set.StartReadiness
+				second, err := AppendAuthorization(*set, "run-integrity", StartReadiness, "a second slot appears")
+				if err != nil {
+					t.Fatalf("forge second authorization: %v", err)
+				}
+				series.Authorizations = second.StartReadiness.Authorizations
+				bound := series.Authorizations[1]
+				bound.DispatchIDs = appendUnique(slices.Clone(bound.DispatchIDs), series.Authorizations[0].DispatchIDs[0])
+				series.Authorizations[1] = bound
+				refresh(series)
+			},
+			marker: "bound to authorizations",
+		},
+		{
 			name:   "nil ledger",
 			mutate: func(set *Set, _ string) { set.ProductReview.Adjudications = nil },
 			marker: "four ledgers",
@@ -278,7 +297,10 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRecomputed(t, set)
-	set = BindDispatchToUnoccupied(set, runID, ProductReview, "dispatch-p3", noDispatchInFlight)
+	set, err = BindDispatch(set, runID, ProductReview, "dispatch-p3", noDispatchInFlight)
+	if err != nil {
+		t.Fatal(err)
+	}
 	authorizationID := mustSeries(t, set, ProductReview).Authorizations[0].ID
 	set, extra := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p3", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "extra-round blocker"}}})
 	assertRecomputed(t, set)

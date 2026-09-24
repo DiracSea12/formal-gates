@@ -7,8 +7,8 @@ import (
 )
 
 // AppendAuthorization 追加一条用户请求的额外语义轮授权。授权先于派发存
-// 在：创建时只落理由与身份（DispatchIDs 为空账），签发点把首个派发自动
-// 绑上（BindDispatchToUnoccupied）。授权身份由 (runID, action, reason,
+// 在：创建时只落理由与身份（DispatchIDs 为空账），签发闸在放行需要背书的
+// 派发时自动绑上。授权身份由 (runID, action, reason,
 // 序号) 派生；是否越过自动上限才允许授权，由调用方的工作流政策决定，本
 // 函数只做账目变换。存在未占用的授权时拒绝——用户每次只授权恰好一轮，
 // 不得预先累计。
@@ -40,10 +40,10 @@ func AppendAuthorization(set Set, runID string, action Action, reason string) (S
 	return set, nil
 }
 
-// BindDispatch 把一个 dispatch 追加到第一条可承载它的授权上；没有可承载
-// 槽时拒绝。选槽规则见 bindableAuthorization：越限派发要求独占槽（不承载
-// 任何在途派发）；自动容量内的派发沿用首空槽绑定，运行期重试共用同一授
-// 权。live 判定一条派发是否在途，由协议层以挂起派发账传入（本包不可见）。
+// BindDispatch 把一个 dispatch 绑到第一条干净授权槽上（既无有效结果占用，
+// 也不承载任何在途派发——live 判定在途，由协议层以挂起派发账传入）；没有
+// 干净槽时拒绝。绑定是背书行为，只发生在需要背书的放行上（签发闸的背书
+// 形）；容量自洽的签出不绑槽，不消费用户的授权。
 func BindDispatch(set Set, runID string, action Action, dispatchID string, live func(dispatchID string) bool) (Set, error) {
 	if err := Validate(runID, set); err != nil {
 		return Set{}, err
@@ -67,24 +67,29 @@ func BindDispatch(set Set, runID string, action Action, dispatchID string, live 
 	return set, nil
 }
 
-// BindDispatchToUnoccupied 把派发绑到 series 第一条可承载它的授权上：授权
-// 先于派发存在（grant 不绑派发），签发点（新派发/重签发）以此自动消费空
-// 槽——包括新落账的授权与整轮失效释放的槽；越限派发只绑不承载在途派发
-// 的独占槽。没有可承载槽时是无操作（自动容量内的普通签发无需背书；越限
-// 派发经签发闸放行时必有独占槽，见 bindableAuthorization 的闭环论证）。
-func BindDispatchToUnoccupied(set Set, runID string, action Action, dispatchID string, live func(dispatchID string) bool) Set {
+// BindReplacementDispatch 把换新派发绑到承载被换新旧派发的授权槽上：旧派
+// 发已退位不在途，其槽不再承载在途派发，换新继承它作为背书者身份。旧派
+// 发未绑定（容量自洽的签出不绑槽）时换新保持未绑定。不存在原槽时不另选
+// 槽——换新不得抢占其他在途派发可依赖的干净槽。
+func BindReplacementDispatch(set Set, runID string, action Action, oldDispatchID, newDispatchID string) Set {
+	if err := Validate(runID, set); err != nil {
+		return set
+	}
 	series, err := set.seriesFor(action)
 	if err != nil {
 		return set
 	}
-	if _, ok := bindableAuthorization(*series, live); !ok {
+	for index, authorization := range series.Authorizations {
+		if !slices.Contains(authorization.DispatchIDs, oldDispatchID) {
+			continue
+		}
+		series.Authorizations = slices.Clone(series.Authorizations)
+		authorization.DispatchIDs = appendUnique(slices.Clone(authorization.DispatchIDs), newDispatchID)
+		series.Authorizations[index] = authorization
+		refresh(series)
 		return set
 	}
-	updated, err := BindDispatch(set, runID, action, dispatchID, live)
-	if err != nil {
-		return set
-	}
-	return updated
+	return set
 }
 
 // RecordCandidate 接纳一条完整、有效的语义审查结果：构造 finding 身份→查
