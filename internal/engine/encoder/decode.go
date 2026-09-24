@@ -174,7 +174,8 @@ func localPayloadFromWire(w *localPayloadWire) compiler.CompiledLocalStep {
 func agentPayloadFromWire(w *agentPayloadWire) compiler.CompiledAgentStep {
 	return compiler.CompiledAgentStep{
 		Handler: authoring.HandlerID(w.Handler), Reason: authoring.NonProgrammableReason(w.Reason),
-		Timeout: time.Duration(w.TimeoutNs), Retry: retryFromWire(w.Retry),
+		ReviewSeries: authoring.ReviewSeriesAction(w.ReviewSeries),
+		Timeout:      time.Duration(w.TimeoutNs), Retry: retryFromWire(w.Retry),
 	}
 }
 

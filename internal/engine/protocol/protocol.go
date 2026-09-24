@@ -169,12 +169,15 @@ type Attempt struct {
 
 // PendingAction 是 pendingActions[actionID] 的落账形态：
 // 已签发 intent 的参数。与 Attempt 同源同生（一次 Issue 同时落两处索引），
-// 任务到 TERMINAL 时一并移除。
+// 任务到 TERMINAL 时一并移除。ReviewSeries 是定义在签发时断言的审查系列
+// 身份（未标记为空）：签发点唯一写，重签发随步继承——证据声明的系列必须
+// 与之相等，需求重走决定按它主动终止在途派发。
 type PendingAction struct {
-	ActionID  string          `json:"actionId"`
-	Task      runtime.TaskKey `json:"task"`
-	Step      string          `json:"step"`
-	AttemptID string          `json:"attemptId"`
+	ActionID     string          `json:"actionId"`
+	Task         runtime.TaskKey `json:"task"`
+	Step         string          `json:"step"`
+	AttemptID    string          `json:"attemptId"`
+	ReviewSeries review.Action   `json:"reviewSeries,omitempty"`
 }
 
 // PendingAsk 是受限 REQUEST_* 事件创建的待决 Ask：request

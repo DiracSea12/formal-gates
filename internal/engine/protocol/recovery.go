@@ -210,7 +210,11 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 		IssuedRevision: nextRevision,
 	}
 	s.Attempts[pending.Task] = attempt
-	s.PendingActions[actionID] = PendingAction{ActionID: actionID, Task: pending.Task, Step: pending.Step, AttemptID: attempt.ID}
+	s.PendingActions[actionID] = PendingAction{
+		ActionID: actionID, Task: pending.Task, Step: pending.Step, AttemptID: attempt.ID,
+		// 系列身份是步骤的签发时事实，重签发随步继承。
+		ReviewSeries: pending.ReviewSeries,
+	}
 	return attempt, nil
 }
 

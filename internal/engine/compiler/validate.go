@@ -271,7 +271,13 @@ func (c *resolveCtx) resolveStepRefs(cs *CompiledStep) error {
 		if err := checkIORefs(); err != nil {
 			return err
 		}
-		return checkHandler(p.Handler)
+		if err := checkHandler(p.Handler); err != nil {
+			return err
+		}
+		if p.ReviewSeries != "" && p.Reason != authoring.ReasonIndependentReview {
+			return invariantError(`step %q: a review-series mark (%s) requires the INDEPENDENT_REVIEW reason`, h.ID, p.ReviewSeries)
+		}
+		return nil
 	case CompiledHumanAskStep:
 		if _, err := c.resolveID(h.ID, string(p.AskKind), KindAskKind); err != nil {
 			return err

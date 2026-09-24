@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -425,7 +426,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
 	state.retainExpected(plan.Next.Ready)
-	if err := state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts); err != nil {
+	if err := state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf); err != nil {
 		return nil, 0, err
 	}
 	commitRevision, err := e.commit(state, revision, expectedFingerprint)
@@ -477,6 +478,21 @@ func identityOfPlan(plan *decision.Plan) (PlanIdentity, error) {
 	}, nil
 }
 
+// reviewSeriesOf 返回编译定义中步骤声明的审查系列身份（未标记为零值）：
+// 签发点据此把系列身份落进 PendingAction（签发时事实，不从定义即时推导）。
+func (e *Engine) reviewSeriesOf(stepID authoring.StepID) review.Action {
+	for _, step := range e.cfg.Definition.Steps {
+		if step.Header.ID != stepID {
+			continue
+		}
+		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
+			return review.Action(payload.ReviewSeries)
+		}
+		return ""
+	}
+	return ""
+}
+
 // retryMaxAttempts returns the declaration attached to a compiled step. The
 // protocol does not invent a retry bound when the step has no retry policy;
 // this is important for the canonical review.worker fixture, whose transient
@@ -507,7 +523,7 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 // 补位共用）：重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移一律
 // 拒绝；Attempt ID 以落盘 revision 确定性派生。Expected 由调用方先登记
 // 完整 eligible Ready frontier，因此这里只补齐缺失的已签发任务。
-func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int) error {
+func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) error {
 	for _, action := range issued {
 		if _, exists := s.PendingActions[action.ActionID]; exists {
 			return &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("action %q already issued", action.ActionID)}
@@ -540,6 +556,7 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		s.Attempts[action.Task] = attempt
 		s.PendingActions[action.ActionID] = PendingAction{
 			ActionID: action.ActionID, Task: action.Task, Step: string(action.Step), AttemptID: attempt.ID,
+			ReviewSeries: reviewSeriesOf(action.Step),
 		}
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
@@ -1190,13 +1207,26 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
 		}
 	}
-	// 重走态的 floor：重走 series 的新鲜轮只认不早于该次决定的派发，
-	// pre-floor 派发的证据一律不纳——派发按声明终止并立即重签发
-	//（§7.2.2:4 的 terminate/stale 兜底；已声明身份的暂存/隔离证据在决定
-	// 事务内已被直接处置）。
-	if result.Review != nil {
-		if series, ok := state.ReviewSeries.Series(result.Review.Action); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
+	// 系列身份以签发标记为权威（未标记的派发用证据声明）：重走态的
+	// floor 判定与按声明终止据此执行——证据声明与标记冲突时同样按标记
+	// 终止（该证据本就不可纳）。
+	mark := state.PendingActions[actionID].ReviewSeries
+	seriesAction := mark
+	if seriesAction == "" && result.Review != nil {
+		seriesAction = result.Review.Action
+	}
+	if seriesAction != "" {
+		if series, ok := state.ReviewSeries.Series(seriesAction); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
 			return e.terminateSupersededDispatch(state, actionID, workerResultRecord(result), eventID, nextRevision, expectedFingerprint)
+		}
+	}
+	// 已标记派发的证据一致性：证据声明的审查系列必须与签发标记相等
+	//（标记是签发时事实；不等即可区分拒绝、零状态）。
+	if result.Review != nil && mark != "" && result.Review.Action != mark {
+		return Acceptance{}, false, &RejectedError{
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("dispatch %q was issued for the %s review series; its evidence declares %s",
+				actionID, mark, result.Review.Action),
 		}
 	}
 	record := workerResultRecord(result)
@@ -1256,32 +1286,26 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 // 签发（新派发的签发代数＝本次提交，满足该 series 的 fresh floor）。接
 // 纳回执 Status=OBSOLETE_DISPATCH，Refill 携替换派发。
 func (e *Engine) terminateSupersededDispatch(state *State, actionID string, record WorkerResult, eventID string, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
-	pending, ok := state.PendingActions[actionID]
-	if !ok {
+	replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo before its dispatch floor", nextRevision, expectedFingerprint)
+	if !inFlight {
 		return Acceptance{}, false, &RejectedError{
 			Code:   CodeUnknownAction,
 			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
 		}
 	}
-	attempt := state.Attempts[pending.Task]
-	retired, _ := state.retireAction(actionID, "", "superseded by the confirmed requirement redo before its dispatch floor")
-	bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
-	replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts)
 	if err != nil {
 		return Acceptance{}, false, err
 	}
-	obsolete := state.ObsoleteActions[actionID]
-	obsolete.ReplacedBy = replacement.ActionID
-	state.ObsoleteActions[actionID] = obsolete
 	state.ObsoleteResults[actionID] = record
+	obsolete := state.ObsoleteActions[actionID]
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-		ActionID: actionID, Task: retired.Task, AttemptID: retired.AttemptID, Action: RecoveryNewAttempt,
-		Detail:   fmt.Sprintf("the dispatch predates the redo decision of its review series (issued at state revision %d); it was terminated by declaration and replaced by %s", attempt.IssuedRevision, replacement.ActionID),
+		ActionID: actionID, Task: obsolete.Task, AttemptID: obsolete.AttemptID, Action: RecoveryNewAttempt,
+		Detail:   fmt.Sprintf("the dispatch predates the redo decision of its review series; it was terminated by declaration and replaced by %s", replacement),
 		Revision: nextRevision,
 	})
 	return Acceptance{
 		EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_DISPATCH",
-		Revision: nextRevision, ActionID: actionID, Refill: []string{replacement.ActionID},
+		Revision: nextRevision, ActionID: actionID, Refill: []string{replacement},
 	}, true, nil
 }
 
@@ -1392,7 +1416,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
-	if err := state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts); err != nil {
+	if err := state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(issued))

@@ -128,10 +128,11 @@ type hostPayloadWire struct {
 }
 
 type agentPayloadWire struct {
-	Handler   string     `json:"handler"`
-	Reason    string     `json:"nonProgrammableReason"`
-	TimeoutNs int64      `json:"timeoutNs"`
-	Retry     *retryWire `json:"retry,omitempty"`
+	Handler      string     `json:"handler"`
+	Reason       string     `json:"nonProgrammableReason"`
+	ReviewSeries string     `json:"reviewSeries,omitempty"`
+	TimeoutNs    int64      `json:"timeoutNs"`
+	Retry        *retryWire `json:"retry,omitempty"`
 }
 
 type humanPayloadWire struct {
@@ -435,7 +436,7 @@ func payloadToWire(cs *compiler.CompiledStep) (any, error) {
 		return hostPayloadWire{Handler: string(p.Handler), Boundary: string(p.Boundary),
 			Operation: string(p.Operation), Schema: string(p.Schema), TimeoutNs: int64(p.Timeout)}, nil
 	case compiler.CompiledAgentStep:
-		return agentPayloadWire{Handler: string(p.Handler), Reason: string(p.Reason),
+		return agentPayloadWire{Handler: string(p.Handler), Reason: string(p.Reason), ReviewSeries: string(p.ReviewSeries),
 			TimeoutNs: int64(p.Timeout), Retry: retryToWire(p.Retry)}, nil
 	case compiler.CompiledHumanAskStep:
 		return humanPayloadWire{AskKind: string(p.AskKind), RequestSchema: string(p.RequestSchema),

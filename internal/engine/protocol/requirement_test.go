@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
@@ -402,7 +403,7 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 // 不可声明 PRESERVED、重走范围必须包含 finding 所在 series；正确载荷登记
 // 后，已确认阻塞门槛在新 revision 下放行新一轮。
 func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
-	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
+	cd, reg := reviewStepsFixture(t, "review.p1.one", "review.p1.two", "review.p1.three")
 	engine, dir := reviewEngine(t, cd, reg)
 
 	// 产品审确认一条 P1 阻塞 finding。
@@ -1774,9 +1775,11 @@ func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
 // TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch：确认重走某审查
 // series 后，重走前签发的旧派发不能完成"新鲜复审"——其证据按声明终止
 // （OBSOLETE_DISPATCH＋迟到证据账＋同任务重签发），替换派发（签发代数
-// ≥floor）上的同证据才完成新鲜轮。
+// ≥floor）上的同证据才完成新鲜轮。步骤未标记系列身份（未标记派发的
+// floor＋按声明终止兜底路径；已标记路径见
+// TestMarkedReviewDispatchIsTerminatedByTheRedoDecision）。
 func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
-	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	cd, reg := reviewStepsFixture(t, "review.floor.one", "review.floor.two", "review.floor.three")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
 
@@ -2120,5 +2123,144 @@ func TestForgedFreshFloorRejectedAtLoad(t *testing.T) {
 	}
 	if _, err := engine.Load(); err != nil {
 		t.Fatalf("restored state failed to load: %v", err)
+	}
+}
+
+// TestReviewSeriesVocabularyMatchesTheReviewKernel：authoring 的系列标记
+// 词汇是 review 内核 Action 持久化值的镜像（authoring 不得 import review
+// ——review 经 encoder 依赖 authoring），两包词汇相等由本测试锁死。
+func TestReviewSeriesVocabularyMatchesTheReviewKernel(t *testing.T) {
+	if authoring.ReviewSeriesProductReview != authoring.ReviewSeriesAction(review.ProductReview) ||
+		authoring.ReviewSeriesStartReadiness != authoring.ReviewSeriesAction(review.StartReadiness) {
+		t.Fatalf("authoring marks %q/%q must equal the review kernel actions %q/%q",
+			authoring.ReviewSeriesProductReview, authoring.ReviewSeriesStartReadiness, review.ProductReview, review.StartReadiness)
+	}
+}
+
+// TestMarkedReviewDispatchIsTerminatedByTheRedoDecision：定义在签发时断言
+// 审查系列身份的派发，重走决定事务内被主动终止——无需等任何证据到达：
+// 旧派发退位（无结果可作废）、同任务替换派发（携标记、签发代数＝决定）
+// 完成新鲜轮；未勾选系列的已标记派发不被终止。
+func TestMarkedReviewDispatchIsTerminatedByTheRedoDecision(t *testing.T) {
+	t.Run("marked dispatch of the redone series", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review")
+		engine, _ := reviewEngine(t, cd, reg)
+		product := issueReady(t, engine)[0]
+
+		askAndDecideRequirement(t, engine, "req-marked-redo", "proceed", &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-marked",
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			RedoProductReview: true, Reason: "the product review is redone",
+		})
+		snap := engine.LoadMustSucceed(t)
+		if _, stillPending := snap.State.PendingActions[product]; stillPending {
+			t.Fatal("the marked dispatch was not terminated by the decide")
+		}
+		obsolete := snap.State.ObsoleteActions[product]
+		if obsolete.ReplacedBy == "" {
+			t.Fatalf("the terminated dispatch was not replaced: %+v", obsolete)
+		}
+		if len(snap.State.ObsoleteResults) != 0 {
+			t.Fatalf("a dispatch without any result must not void results: %+v", snap.State.ObsoleteResults)
+		}
+		replacementPending, ok := snap.State.PendingActions[obsolete.ReplacedBy]
+		if !ok || replacementPending.ReviewSeries != review.ProductReview {
+			t.Fatalf("the replacement must inherit the series mark: %+v", replacementPending)
+		}
+		decide := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1]
+		if attempt := snap.State.Attempts[replacementPending.Task]; attempt.IssuedRevision != decide.StateRevision {
+			t.Fatalf("the replacement must be issued at the decide (state revision %d): %+v", decide.StateRevision, attempt)
+		}
+		terminated := false
+		for _, record := range snap.State.RecoveryRecords {
+			if record.ActionID == product && strings.Contains(record.Detail, "terminated by the redo declared in requirement decision req-marked-redo") {
+				terminated = true
+			}
+		}
+		if !terminated {
+			t.Fatalf("no termination trail: %+v", snap.State.RecoveryRecords)
+		}
+		// 替换派发（≥floor、携标记）完成新鲜轮。
+		fresh, err := NewReviewWorkerResultEvent("result-marked-fresh", obsolete.ReplacedBy, testProvider, "sha256:payload-marked-fresh",
+			reviewEvidenceAt(review.ProductReview, "dispatch-marked-2", "rev-2", "PASS", "fresh round on the marked replacement", nil))
+		if err != nil {
+			t.Fatalf("event: %v", err)
+		}
+		fp := fingerprintOf(t, engine)
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-marked-fresh", obsolete.ReplacedBy, "agent-marked-fresh"), fp); err != nil {
+			t.Fatalf("spawn: %v", err)
+		}
+		if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
+			t.Fatalf("fresh round on the replacement: %v %+v", err, acceptance)
+		}
+		snap = engine.LoadMustSucceed(t)
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+			t.Fatalf("fresh round on the marked replacement = completed %d %+v", series.Completed, series.Effective)
+		}
+	})
+
+	t.Run("marked dispatch of an unchecked series stays in flight", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, _ := reviewEngine(t, cd, reg)
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-unchecked-product", product, reviewEvidence(review.ProductReview, "dispatch-unchecked-product", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+
+		askAndDecideRequirement(t, engine, "req-marked-unchecked", "proceed", &RequirementDecisionPayload{
+			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-unchecked",
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			RedoProductReview: true, Reason: "only the product review is redone",
+		})
+		snap := engine.LoadMustSucceed(t)
+		pending, ok := snap.State.PendingActions[readiness]
+		if !ok || pending.ReviewSeries != review.StartReadiness {
+			t.Fatalf("the unchecked marked dispatch must stay in flight with its mark: %+v", pending)
+		}
+		if _, obsolete := snap.State.ObsoleteActions[readiness]; obsolete {
+			t.Fatal("the unchecked marked dispatch was terminated")
+		}
+	})
+}
+
+// TestMarkedDispatchRejectsMismatchedEvidence：已标记派发的审查证据必须声
+// 明同一系列——签发标记是权威事实，声明他系列即可区分拒绝、零状态；同
+// action 的相符证据随后照常接纳。
+func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, dir := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	fp := fingerprintOf(t, engine)
+
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-mismatch", product, "agent-mismatch"), fp); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	mismatched, err := NewReviewWorkerResultEvent("result-mismatch", product, testProvider, "sha256:payload-mismatch",
+		reviewEvidence(review.StartReadiness, "dispatch-mismatch", "", "PASS", "declares the wrong series", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(mismatched, fp); err == nil {
+		t.Fatal("mismatched evidence accepted on a marked dispatch")
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), "issued for the product-review") {
+		t.Fatalf("mismatch code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("the mismatched evidence changed state bytes")
+	}
+	// 回执已配对：同 action 的相符证据直接完成。
+	matched, err := NewReviewWorkerResultEvent("result-match", product, testProvider, "sha256:payload-match",
+		reviewEvidence(review.ProductReview, "dispatch-match", "", "PASS", "declares the marked series", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if _, err := engine.Submit(matched, fp); err != nil {
+		t.Fatalf("matching evidence rejected: %v", err)
+	}
+	snap := engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("matching evidence on the marked dispatch = completed %d %+v", series.Completed, series.Effective)
 	}
 }

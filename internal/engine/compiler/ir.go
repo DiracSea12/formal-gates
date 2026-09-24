@@ -74,11 +74,13 @@ type CompiledHostActionStep struct {
 
 // CompiledAgentStep 是 agent 变体 payload：三值封闭理由枚举必填；
 // worker result 合同由共享 IO 段的 postcondition predicate 承载。
+// ReviewSeries 是可选的审查系列身份标记（随定义编译携带，签发层读取）。
 type CompiledAgentStep struct {
-	Handler authoring.HandlerID
-	Reason  authoring.NonProgrammableReason
-	Timeout time.Duration
-	Retry   *authoring.RetryPolicy
+	Handler      authoring.HandlerID
+	Reason       authoring.NonProgrammableReason
+	ReviewSeries authoring.ReviewSeriesAction
+	Timeout      time.Duration
+	Retry        *authoring.RetryPolicy
 }
 
 // CompiledHumanAskStep 是 human_ask 变体 payload：typed request/response

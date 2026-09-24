@@ -288,6 +288,26 @@ func TestNewAgentStep(t *testing.T) {
 		_, err := NewAgentStep(row.h, row.io, row.spec)
 		wantErr(t, err, row.want)
 	}
+
+	// 系列标记：封闭两值、只随 INDEPENDENT_REVIEW 携带。
+	marked := spec
+	marked.ReviewSeries = ReviewSeriesProductReview
+	got, err = NewAgentStep(validHeader(), validIO(), marked)
+	if err != nil {
+		t.Fatalf("a marked independent-review step rejected: %v", err)
+	}
+	if got.ReviewSeries != ReviewSeriesProductReview {
+		t.Fatalf("series mark not materialized: %+v", got)
+	}
+	nonReview := spec
+	nonReview.Reason = ReasonSemanticJudgment
+	nonReview.ReviewSeries = ReviewSeriesStartReadiness
+	_, err = NewAgentStep(validHeader(), validIO(), nonReview)
+	wantErr(t, err, "requires the INDEPENDENT_REVIEW reason")
+	bogus := spec
+	bogus.ReviewSeries = "qa-review"
+	_, err = NewAgentStep(validHeader(), validIO(), bogus)
+	wantErr(t, err, "review series")
 }
 
 func TestNewHumanAskStep(t *testing.T) {

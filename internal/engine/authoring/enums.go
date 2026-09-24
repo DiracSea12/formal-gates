@@ -29,6 +29,19 @@ const (
 // 零值与任何其他字符串（包括"实现麻烦"）一律非法。
 type NonProgrammableReason string
 
+// ReviewSeriesAction 是 AGENT 步骤可声明的开发前审查系列身份标记（封闭
+// 两值）。词汇与 review 内核的 Action 持久化值相同——本包不 import review
+// （review 经 encoder 依赖本包，会成环），两包词汇一致由协议层测试锁死。
+type ReviewSeriesAction string
+
+const (
+	// ReviewSeriesProductReview 断言本步骤是产品审系列的复审派发。
+	ReviewSeriesProductReview ReviewSeriesAction = "product-review"
+	// ReviewSeriesStartReadiness 断言本步骤是技术审（开工就绪）系列的
+	// 复审派发。
+	ReviewSeriesStartReadiness ReviewSeriesAction = "start-readiness"
+)
+
 const (
 	// ReasonSemanticJudgment：证据含义、影响范围、冲突意图等无法由确定性
 	// 规则完备判断。

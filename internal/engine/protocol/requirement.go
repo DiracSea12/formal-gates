@@ -293,25 +293,57 @@ func cloneState(state *State) (*State, error) {
 	return out, nil
 }
 
-// terminateDeclaredDispatch 机械终止一个已声明重走系列身份的在途派发
-// （§7.2.2:4 Phase B 的 terminate/stale）：结果判不可纳、入迟到证据账
-// （obsolete）＋留痕；派发仍在途则退位并由同任务的新 attempt 替换（其签
-// 发代数＝本次决定，满足该 series 的 fresh floor）；派发已不在（任务已
-// 到终态）时只落迟到证据与留痕。
+// replaceDispatch 退位在途派发并由同任务的新派发替换（签发代数＝
+// nextRevision，满足重走 series 的 fresh floor，系列标记随步继承）。派发
+// 不在途时零变化返回 ok=false；重签发失败（结构性不可达）返回 err——
+// 派发已退位，由调用方决定处置。
+func (e *Engine) replaceDispatch(state *State, actionID, reason string, nextRevision uint64, expectedFingerprint string) (string, bool, error) {
+	pending, ok := state.PendingActions[actionID]
+	if !ok {
+		return "", false, nil
+	}
+	attempt := state.Attempts[pending.Task]
+	retired, _ := state.retireAction(actionID, "", reason)
+	bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
+	replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts)
+	if err != nil {
+		return "", true, err
+	}
+	obsolete := state.ObsoleteActions[actionID]
+	obsolete.ReplacedBy = replacement.ActionID
+	state.ObsoleteActions[actionID] = obsolete
+	return replacement.ActionID, true, nil
+}
+
+// terminateDeclaredDispatch 机械终止一个证据已声明重走系列身份的在途派
+// 发（§7.2.2:4 Phase B 的 terminate/stale）：结果判不可纳、入迟到证据账
+// （obsolete）＋留痕；派发经 replaceDispatch 替换，派发已不在（任务已到
+// 终态）时只落迟到证据与留痕。
 func (e *Engine) terminateDeclaredDispatch(state *State, actionID string, record WorkerResult, requestID string, nextRevision uint64, expectedFingerprint string) {
 	state.ObsoleteResults[actionID] = record
 	detail := fmt.Sprintf("the %s series was redone by requirement decision %s; the dispatch was terminated by declaration and its evidence is superseded",
 		evidenceActionName(record.Review), requestID)
-	if pending, ok := state.PendingActions[actionID]; ok {
-		attempt := state.Attempts[pending.Task]
-		retired, _ := state.retireAction(actionID, "", "superseded by the confirmed requirement redo")
-		bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
-		if replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts); err == nil {
-			obsolete := state.ObsoleteActions[actionID]
-			obsolete.ReplacedBy = replacement.ActionID
-			state.ObsoleteActions[actionID] = obsolete
-			detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement.ActionID)
-		}
+	if replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo", nextRevision, expectedFingerprint); inFlight && err == nil {
+		detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement)
+	}
+	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+		ActionID: actionID, Action: RecoveryNewAttempt, Detail: detail, Revision: nextRevision,
+	})
+}
+
+// terminateMarkedDispatch 终止一个签发时已标记重走系列身份的在途派发
+// （无证据可作废）：退位＋同任务重签发＋留痕。决定事务内使用——重签发
+// 失败只留痕不否决决定（确认登记优先，容量补位由后续 refill 兜住）。
+func (e *Engine) terminateMarkedDispatch(state *State, actionID string, mark review.Action, requestID string, nextRevision uint64, expectedFingerprint string) {
+	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
+	replacement, inFlight, err := e.replaceDispatch(state, actionID, "superseded by the confirmed requirement redo", nextRevision, expectedFingerprint)
+	switch {
+	case !inFlight:
+		return
+	case err != nil:
+		detail = fmt.Sprintf("%s; the replacement dispatch could not be installed: %v", detail, err)
+	default:
+		detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement)
 	}
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 		ActionID: actionID, Action: RecoveryNewAttempt, Detail: detail, Revision: nextRevision,
@@ -464,14 +496,17 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		state.RouteMode = ""
 		state.SelectedGates = nil
 	}
-	// Phase B 的在途处置（§7.2.2:4）：重走范围内已声明系列身份的在途派
-	// 发（暂存或隔离证据携带 action↔series 绑定）按声明终止；未声明身份
-	// 的在途派发由接纳核心的 floor 比对＋按声明终止兜底。未勾选的 series
-	// 一律续用：暂存保留（迟到回执照常配对）、隔离结果携原 revision carry。
+	// Phase B 的在途处置（§7.2.2:4）：重走范围内的在途派发按声明终止
+	//——已声明系列身份的（暂存或隔离证据携带 action↔series 绑定）与签发
+	// 时已标记系列身份的（定义断言，无需等证据）；两者皆无的在途派发由
+	// 接纳核心的 floor 比对＋按声明终止兜底。未勾选的 series 一律续用：
+	// 暂存保留（迟到回执照常配对）、隔离结果携原 revision carry。
+	inScope := func(action review.Action) bool {
+		return (action == review.ProductReview && payload.RedoProductReview) ||
+			(action == review.StartReadiness && payload.RedoStartReadiness)
+	}
 	declaredInScope := func(evidence *ReviewResultEvidence) bool {
-		return evidence != nil &&
-			((evidence.Action == review.ProductReview && payload.RedoProductReview) ||
-				(evidence.Action == review.StartReadiness && payload.RedoStartReadiness))
+		return evidence != nil && inScope(evidence.Action)
 	}
 	stagedIDs := make([]string, 0, len(state.StagedResults))
 	for actionID := range state.StagedResults {
@@ -494,6 +529,22 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 			delete(state.QuarantinedResults, eventID)
 			e.terminateDeclaredDispatch(state, record.ActionID, record, requestID, nextRevision, expectedFingerprint)
 		}
+	}
+	// 签发时已标记系列身份的在途派发（此前两轮处置已退位其证据已声明的
+	// 条目）：按标记主动终止，无需等任何证据到达。只终止决定前签发的派
+	// 发——本事务内刚装上的替换派发（签发代数＝本次决定）就是重走要的
+	// 新鲜派发，不在终止之列。
+	pendingIDs := make([]string, 0, len(state.PendingActions))
+	for actionID := range state.PendingActions {
+		pendingIDs = append(pendingIDs, actionID)
+	}
+	slices.Sort(pendingIDs)
+	for _, actionID := range pendingIDs {
+		mark := state.PendingActions[actionID].ReviewSeries
+		if !inScope(mark) || state.issuedRevisionOf(actionID) >= nextRevision {
+			continue
+		}
+		e.terminateMarkedDispatch(state, actionID, mark, requestID, nextRevision, expectedFingerprint)
 	}
 	// 屏障解除边界上的隔离账重分类。
 	return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)

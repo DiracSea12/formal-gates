@@ -202,7 +202,7 @@ func materializeStep(def *Definition, s authoring.Step) (CompiledStep, error) {
 		}
 		return CompiledStep{Header: h, IO: normalizeIO(v.IO),
 			Payload: CompiledAgentStep{Handler: v.Handler, Reason: v.Reason,
-				Timeout: v.Timeout, Retry: v.Retry}}, nil
+				ReviewSeries: v.ReviewSeries, Timeout: v.Timeout, Retry: v.Retry}}, nil
 	case authoring.HumanAskStep:
 		h, err := compiledHeader(def, v.Header, KindHumanAsk, v)
 		if err != nil {

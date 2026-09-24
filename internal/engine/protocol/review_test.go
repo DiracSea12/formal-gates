@@ -62,9 +62,18 @@ func reviewStepsFixture(t *testing.T, agentSteps ...string) (*compiler.CompiledD
 	for _, name := range agentSteps {
 		stepIO := io(previous)
 		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
-		step, err := authoring.NewAgentStep(header(name, previous), stepIO, authoring.AgentSpec{
+		spec := authoring.AgentSpec{
 			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute,
-		})
+		}
+		// 名为两条审查系列 canonical 步的按系列标记（其余步保持未标记，
+		// 覆盖仅证据声明身份的路径）。
+		switch authoring.StepID(name) {
+		case "product.review":
+			spec.ReviewSeries = authoring.ReviewSeriesProductReview
+		case "start.readiness":
+			spec.ReviewSeries = authoring.ReviewSeriesStartReadiness
+		}
+		step, err := authoring.NewAgentStep(header(name, previous), stepIO, spec)
 		must(err)
 		steps = append(steps, step)
 		previous = name

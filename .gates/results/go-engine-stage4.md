@@ -177,3 +177,18 @@ Git provider＋canary＋route matrix。
 残留（子代理如实披露＋主代理核）：①未声明系列身份的在途 action 无法主动终止（floor＋按声明终止兜底；彻底解决需定义层 step↔series 标记，交机主）；②未勾 series 暂存证据的迟到回执若撞前提 series 重走中被拒，保留可重试；③lightweight 路由 CompleteAll 不经屏障表（引擎路由接通后复核）；④旧 run 在途 REQ Ask 无 BaseRevision 升级后按过期处理；⑤子代理报告的 carried_conclusion_reprobe_test.go 遗留不实（文件不存在，系其上下文残影，已核）。
 
 **生命周期收口，待外部评审复核。**
+## 第 50 轮（2026-09-24，R2 残留①实施：定义层系列标记与主动终止，轻装）
+
+第 49 轮四条残留机主裁决：①立项（本轮）、②惰性配对（已批准，下轮）、**③lightweight CompleteAll 屏障检查机主裁定不管（销案，后续合同不带）**、④作废（无老 run）。
+
+残留①交付（子代理，authoring 4＋compiler 3＋encoder 2＋protocol 6 文件，368/75）：
+
+- authoring：`ReviewSeriesAction` 封闭两值＋`AgentSpec.ReviewSeries`（构造期校验：词汇封闭＋必须随 INDEPENDENT_REVIEW）。层次裁定：不 import review（review→encoder→authoring 成环），镜像词汇由 protocol 测试锁两包一致。
+- compiler 携带＋encoder wire 双向（真实 workflow 未标记，canonical 制品 digest 零变化）；validate 补越约构造第二拦截。
+- protocol：`PendingAction.ReviewSeries`（签发点唯一写：issueInto 经 reviewSeriesOf 从编译定义读取落账；installReplacement 随步继承）。系列身份以标记为权威（floor/终止/一致性）；证据声明与标记不符＝可区分拒绝零状态。
+- Phase B 第三轮循环：标记入 scope 且决定前签发的在途派发主动终止（retire＋同任务重签发＋留痕，无结果不作废）；三终止路径共用 `replaceDispatch`。子代理自曝并修复双重终止缺陷（替换派发继承标记会被再终止→只终止决定前签发者）。
+- 测试：主动终止＋替换完成新鲜轮、未勾选系列标记派发存活、证据不符拒绝、词汇一致锁；既有 floor/按声明终止兜底回归保留（相关测试改用未标记步名继续覆盖证据声明路径）。
+
+主代理独立复核（三探针走到底、跑毕即删）：标记派发（零证据）被重走决定主动终止——旧 actionID 进 ObsoleteActions 带 ReplacedBy、无 ObsoleteResults 泄漏、替换完成新鲜轮 completed=1@rev-2；未勾选系列标记派发存活且顺序门语义不变；不符证据零状态拒绝、相符证据完成。探针自纠一处（MP2 末步误期：产品重走期就绪顺序门本应关着，正是残留②的立项场景）。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
+
+残留（如实）：真实 workflow 的单一 review.worker 未标记（系列归属属产品建模，接入真实双审时再标）；compiler 越约路径配对复核未立专测；已标记 action 的非审查结果不触发一致性检查（规格未要求）。
