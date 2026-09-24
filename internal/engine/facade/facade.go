@@ -91,9 +91,23 @@ type Run struct {
 	AvailableActions          []string                   `json:"availableActions,omitempty"`
 	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
 	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
-	Review      ReviewFace `json:"review"`
-	SummaryPath string     `json:"summaryPath,omitempty"`
-	Unverified  bool       `json:"unverified,omitempty"`
+	Review ReviewFace `json:"review"`
+	// PendingRequirementAsk 是修订屏障在位时未决需求变化 Ask 的公开面：
+	// 其存在即 run 的当前外部边界（Next 投影为 ask 边界，等待用户而非
+	// 错误）。
+	PendingRequirementAsk *PendingRequirementAskFace `json:"pendingRequirementAsk,omitempty"`
+	SummaryPath           string                     `json:"summaryPath,omitempty"`
+	Unverified            bool                       `json:"unverified,omitempty"`
+}
+
+// PendingRequirementAskFace 是未决需求变化 Ask 的公开面：请求身份、选项、
+// Ask 落账的确认包与创建时的权威基线 revision。内容与授权事实以 state 的
+// PendingAsk 为唯一权威，本面只读投影。
+type PendingRequirementAskFace struct {
+	RequestID    string                               `json:"requestId"`
+	Options      []protocol.AskOption                 `json:"options"`
+	Package      *protocol.RequirementDecisionPackage `json:"package"`
+	BaseRevision string                               `json:"baseRevision"`
 }
 
 // ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
@@ -592,7 +606,11 @@ func (f *Facade) Drive() (Run, error) {
 	} else {
 		plan, _, err = f.engine.Drive(emptyFingerprint())
 		if err != nil {
-			return Run{}, err
+			// 修订屏障冻结签发＝等待用户决定，不是错误：照常投影 ask 边界。
+			var rejected *protocol.RejectedError
+			if !errors.As(err, &rejected) || rejected.Code != protocol.CodeChangeBarrierActive {
+				return Run{}, err
+			}
 		}
 	}
 	run, err := f.project()
@@ -695,10 +713,35 @@ func (f *Facade) project() (Run, error) {
 	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, Review: reviewFace(snap.State), SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
+	// 修订屏障在位：未决需求变化 Ask 即当前外部边界——Next 投影为 ask
+	// 边界（等待用户，而非 READY/ENGINE_INTERNAL 等待），Ask 面携完整
+	// 确认包与基线 revision。
+	if ask := pendingRequirementAskFace(snap.State); ask != nil {
+		plan.Next = decision.NextResult{Kind: decision.KindAsk, Ask: &decision.AskPayload{}}
+		run.Next = plan.Next
+		run.PendingRequirementAsk = ask
+	}
 	if plan.Next.Kind == decision.KindAsk {
 		run.AvailableActions = []string{"submit"}
 	}
 	return run, nil
+}
+
+// pendingRequirementAskFace 投影未决的需求变化 Ask；不存在（屏障不在位）
+// 时返回 nil。
+func pendingRequirementAskFace(state *protocol.State) *PendingRequirementAskFace {
+	for id, ask := range state.PendingAsks {
+		if ask.Control != protocol.ControlRequestRequirementChange || ask.Resolved {
+			continue
+		}
+		return &PendingRequirementAskFace{
+			RequestID:    id,
+			Options:      append([]protocol.AskOption{}, ask.Options...),
+			Package:      ask.Package,
+			BaseRevision: ask.BaseRevision,
+		}
+	}
+	return nil
 }
 
 func terminalSummaryPath(stateDir string) string {

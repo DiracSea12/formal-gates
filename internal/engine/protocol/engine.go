@@ -531,7 +531,8 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 			// task. It starts at zero; the first transient result advances it
 			// to one, making a declared MaxAttempts value an exact exhaustion
 			// count for the registered step.
-			Attempts: 0,
+			Attempts:       0,
+			IssuedRevision: nextRevision,
 		}
 		if retryMax != nil {
 			attempt.MaxAttempts = retryMax(action.Step)
@@ -632,7 +633,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			if perr := state.checkProvider(ev.Result.Provider); perr != nil {
 				return Acceptance{}, nil, false, perr
 			}
-			return e.quarantineWorkerResult(state, ev, digest, nextRevision)
+			return e.quarantineWorkerResult(state, ev, nextRevision)
 		default:
 			return Acceptance{}, nil, false, err
 		}
@@ -651,9 +652,15 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if ev.Request.Control != ControlRecovery {
 			step = state.nextHumanAskStep(e.cfg.Definition)
 		}
-		state.PendingAsks[requestID] = PendingAsk{
+		ask := PendingAsk{
 			RequestID: requestID, Control: ev.Request.Control, Step: step, Options: ev.Request.Options, Package: ev.Request.Package,
 		}
+		if ev.Request.Control == ControlRequestRequirementChange {
+			// Ask 落账创建时的权威基线：任何后续确认都使本 Ask 过期
+			//（DECIDE 三方相等校验）。
+			ask.BaseRevision = state.RequirementRevision()
+		}
+		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
@@ -889,119 +896,21 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		return acceptance, state, true, nil
 
 	case KindWorkerResult:
-		// typed result 接纳：provider 精确比对；已有同 actionID 结果按
-		// payload digest 判幂等/冲突。receipt 未到时暂存（不丢弃、不推进，
-		// result-before-receipt）；receipt 已在则完成该 expected
-		// 项：任务沿合法边推进 TERMINAL、PASS 完成 step（frontier 推进）
-		// 并按容量补位签发。
+		// typed result 接纳：provider 精确比对后进入唯一接纳核心（与隔离
+		// 重放共用）——结果级摘要幂等/冲突、obsolete 认领、重走态的
+		// floor 比对与按声明终止重签发、result-before-receipt 暂存与回
+		// 执配对后的完成（frontier 推进＋容量补位）。
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		actionID := ev.Result.ActionID
-		// 结果身份与事件级 canonical 同一 wire 形态：审查证据是结果字节
-		// 的一部分，不参与即同外层摘要下换审查内容会被误判 DUPLICATE。
-		payloadDigest := digestOfCanonical(workerResultEventWire{
-			ActionID: ev.Result.ActionID, Provider: ev.Result.Provider,
-			Outcome: ev.Result.Outcome, PayloadDigest: ev.Result.PayloadDigest,
-			FailureClass: string(ev.Result.FailureClass), Review: ev.Result.Review,
-		})
-		if existing, seen := state.Results[actionID]; seen {
-			if existing.Digest != payloadDigest {
-				return Acceptance{}, nil, false, &RejectedError{
-					Code:   CodeReceiptConflict,
-					Detail: fmt.Sprintf("action %q worker result replayed with different bytes (recorded %s, submitted %s)", actionID, existing.Digest, payloadDigest),
-				}
-			}
-			return Acceptance{
-				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE",
-				Revision: revision, ActionID: actionID,
-			}, nil, false, nil
-		}
-		if obsolete, known := state.ObsoleteActions[actionID]; known {
-			if existing, seen := state.ObsoleteResults[actionID]; seen {
-				if existing.Digest != payloadDigest {
-					return Acceptance{}, nil, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("obsolete action %q worker result replayed with different bytes", actionID)}
-				}
-				return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "OBSOLETE_RESULT", Revision: revision, ActionID: actionID}, nil, false, nil
-			}
-			state.ObsoleteResults[actionID] = WorkerResult{ActionID: actionID, Provider: ev.Result.Provider, Outcome: ev.Result.Outcome, PayloadDigest: ev.Result.PayloadDigest, FailureClass: ev.Result.FailureClass, Digest: payloadDigest}
-			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: obsolete.Task, AttemptID: obsolete.AttemptID, Class: ev.Result.FailureClass, Action: RecoveryOperator, Detail: "late result belongs to an obsolete Attempt", Revision: nextRevision})
-			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "OBSOLETE_RESULT", Revision: nextRevision, ActionID: actionID}, state, true, nil
-		}
-		for _, recoverable := range state.RecoverableResults[actionID] {
-			if recoverable.Digest == payloadDigest {
-				return Acceptance{
-					EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE",
-					Revision: revision, ActionID: actionID,
-				}, nil, false, nil
-			}
-		}
-		if _, pending := state.PendingActions[actionID]; !pending {
-			return Acceptance{}, nil, false, &RejectedError{
-				Code:   CodeUnknownAction,
-				Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
-			}
-		}
-		record := WorkerResult{
-			ActionID: actionID, Provider: ev.Result.Provider,
-			Outcome: ev.Result.Outcome, PayloadDigest: ev.Result.PayloadDigest,
-			FailureClass: ev.Result.FailureClass, Review: ev.Result.Review, Digest: payloadDigest,
-		}
-		if receipt, receipted := state.SpawnReceipts[actionID]; !receipted || receipt.Status == SpawnStatusUnknown {
-			// 携审查证据的结果在暂存前先过与完成路径相同的完整可接纳性
-			// 预检（revision 绑定、双审顺序、证据结构与完整性）：不可接纳
-			// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
-			// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
-			if ev.Result.Review != nil {
-				if _, err := state.admitReviewEvidence(ev.Result.Review); err != nil {
-					return Acceptance{}, nil, false, err
-				}
-			}
-			if staged, exists := state.StagedResults[actionID]; exists {
-				if staged.Digest == payloadDigest {
-					return Acceptance{
-						EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE",
-						Revision: revision, ActionID: actionID,
-					}, nil, false, nil
-				}
-				return Acceptance{}, nil, false, &RejectedError{
-					Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q already has a different staged worker result", actionID),
-				}
-			}
-			state.StagedResults[actionID] = record
-			return Acceptance{
-				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "STAGED",
-				Revision: nextRevision, ActionID: actionID, RecoveryAction: func() string {
-					if receipted {
-						return string(RecoveryReconcile)
-					}
-					return ""
-				}(),
-			}, state, true, nil
-		}
-		refill, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
+		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), revision, nextRevision, expectedFingerprint)
 		if err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		class := record.FailureClass
-		if class != "" {
-			recoveryAction := RouteFailure(class).Action
-			if len(state.RecoveryRecords) > 0 {
-				last := state.RecoveryRecords[len(state.RecoveryRecords)-1]
-				if last.ActionID == actionID && last.Revision == nextRevision {
-					recoveryAction = last.Action
-				}
-			}
-			return Acceptance{
-				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-				Revision: nextRevision, ActionID: actionID, Refill: refill,
-				FailureClass: string(class), RecoveryAction: string(recoveryAction),
-			}, state, true, nil
+		if !wrote {
+			return acceptance, nil, false, nil
 		}
-		return Acceptance{
-			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-			Revision: nextRevision, ActionID: actionID, Refill: refill,
-		}, state, true, nil
+		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
 		// Operator typed observation 入账（主代理核实事实、
@@ -1201,6 +1110,181 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 // completeResult 在 result（或配对的暂存 result）接纳后处理对应 expected
 // 项。PASS 完成 step 并补位；失败先按 failure-class 路由。引擎瞬态和
 // UNKNOWN/用户动作路径保留当前 Attempt，不把 engine 故障伪装成 agent。
+// resultPayloadDigest 是 worker result 的结果级摘要定义（唯一计算点）：
+// canonical 编码涵盖 action 身份、provider、outcome、载荷摘要、失败类与
+// 审查证据，不含事件 ID——同一载荷换事件 ID 仍按它判幂等/冲突。
+func resultPayloadDigest(payload *WorkerResultPayload) string {
+	return digestOfCanonical(workerResultEventWire{
+		ActionID: payload.ActionID, Provider: payload.Provider,
+		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
+		FailureClass: string(payload.FailureClass), Review: payload.Review,
+	})
+}
+
+// workerResultRecord 把一条 worker result 载荷落成台账记录（摘要为结果
+// 级）：Submit 接纳、result-before-receipt 暂存与持久隔离共用同一形态。
+func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
+	return WorkerResult{
+		ActionID: payload.ActionID, Provider: payload.Provider,
+		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
+		FailureClass: payload.FailureClass, Review: payload.Review,
+		Digest: resultPayloadDigest(payload),
+	}
+}
+
+// workerResultPayloadOf 从台账记录还原接纳核心的载荷形态（隔离重放路径）。
+func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
+	return &WorkerResultPayload{
+		ActionID: record.ActionID, Provider: record.Provider, Outcome: record.Outcome,
+		PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review,
+	}
+}
+
+// issuedRevisionOf 返回 actionID 当前派发的签发代数（无当前派发为零）。
+func (s *State) issuedRevisionOf(actionID string) uint64 {
+	pending, ok := s.PendingActions[actionID]
+	if !ok {
+		return 0
+	}
+	if attempt, ok := s.Attempts[pending.Task]; ok {
+		return attempt.IssuedRevision
+	}
+	return 0
+}
+
+// admitWorkerResultRecord 是 typed worker result 的唯一接纳核心（Submit 与
+// 隔离重放共用）：结果级摘要幂等/冲突判定、obsolete 认领、重走态的
+// floor 比对（pre-floor 派发按声明终止并重签发）、result-before-receipt
+// 暂存（携审查证据先过完整预检）与回执配对后的完成。返回接纳回执与是
+// 否落账变更。
+func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID string, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
+	payloadDigest := resultPayloadDigest(result)
+	if existing, seen := state.Results[actionID]; seen {
+		if existing.Digest != payloadDigest {
+			return Acceptance{}, false, &RejectedError{
+				Code:   CodeReceiptConflict,
+				Detail: fmt.Sprintf("action %q worker result replayed with different bytes (recorded %s, submitted %s)", actionID, existing.Digest, payloadDigest),
+			}
+		}
+		return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
+	}
+	if obsolete, known := state.ObsoleteActions[actionID]; known {
+		if existing, seen := state.ObsoleteResults[actionID]; seen {
+			if existing.Digest != payloadDigest {
+				return Acceptance{}, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("obsolete action %q worker result replayed with different bytes", actionID)}
+			}
+			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_RESULT", Revision: revision, ActionID: actionID}, false, nil
+		}
+		state.ObsoleteResults[actionID] = WorkerResult{ActionID: actionID, Provider: result.Provider, Outcome: result.Outcome, PayloadDigest: result.PayloadDigest, FailureClass: result.FailureClass, Digest: payloadDigest}
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: obsolete.Task, AttemptID: obsolete.AttemptID, Class: result.FailureClass, Action: RecoveryOperator, Detail: "late result belongs to an obsolete Attempt", Revision: nextRevision})
+		return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_RESULT", Revision: nextRevision, ActionID: actionID}, true, nil
+	}
+	for _, recoverable := range state.RecoverableResults[actionID] {
+		if recoverable.Digest == payloadDigest {
+			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
+		}
+	}
+	if _, pending := state.PendingActions[actionID]; !pending {
+		return Acceptance{}, false, &RejectedError{
+			Code:   CodeUnknownAction,
+			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
+		}
+	}
+	// 重走态的 floor：重走 series 的新鲜轮只认不早于该次决定的派发，
+	// pre-floor 派发的证据一律不纳——派发按声明终止并立即重签发
+	//（§7.2.2:4 的 terminate/stale 兜底；已声明身份的暂存/隔离证据在决定
+	// 事务内已被直接处置）。
+	if result.Review != nil {
+		if series, ok := state.ReviewSeries.Series(result.Review.Action); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
+			return e.terminateSupersededDispatch(state, actionID, workerResultRecord(result), eventID, nextRevision, expectedFingerprint)
+		}
+	}
+	record := workerResultRecord(result)
+	if receipt, receipted := state.SpawnReceipts[actionID]; !receipted || receipt.Status == SpawnStatusUnknown {
+		// 携审查证据的结果在暂存前先过与完成路径相同的完整可接纳性
+		// 预检（revision 绑定、双审顺序、证据结构与完整性）：不可接纳
+		// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
+		// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
+		if result.Review != nil {
+			if _, err := state.admitReviewEvidence(result.Review, state.issuedRevisionOf(actionID)); err != nil {
+				return Acceptance{}, false, err
+			}
+		}
+		if staged, exists := state.StagedResults[actionID]; exists {
+			if staged.Digest == payloadDigest {
+				return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
+			}
+			return Acceptance{}, false, &RejectedError{
+				Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q already has a different staged worker result", actionID),
+			}
+		}
+		state.StagedResults[actionID] = record
+		return Acceptance{
+			EventID: eventID, Kind: string(KindWorkerResult), Status: "STAGED",
+			Revision: nextRevision, ActionID: actionID, RecoveryAction: func() string {
+				if receipted {
+					return string(RecoveryReconcile)
+				}
+				return ""
+			}(),
+		}, true, nil
+	}
+	refill, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
+	if err != nil {
+		return Acceptance{}, false, err
+	}
+	acceptance := Acceptance{
+		EventID: eventID, Kind: string(KindWorkerResult), Status: "ACCEPTED",
+		Revision: nextRevision, ActionID: actionID, Refill: refill,
+	}
+	if class := record.FailureClass; class != "" {
+		recoveryAction := RouteFailure(class).Action
+		if len(state.RecoveryRecords) > 0 {
+			last := state.RecoveryRecords[len(state.RecoveryRecords)-1]
+			if last.ActionID == actionID && last.Revision == nextRevision {
+				recoveryAction = last.Action
+			}
+		}
+		acceptance.FailureClass = string(class)
+		acceptance.RecoveryAction = string(recoveryAction)
+	}
+	return acceptance, true, nil
+}
+
+// terminateSupersededDispatch 按声明终止被需求重走决定取代的在途派发：
+// 结果留迟到证据账（obsolete）、派发退位并由同任务的新 attempt 立即重
+// 签发（新派发的签发代数＝本次提交，满足该 series 的 fresh floor）。接
+// 纳回执 Status=OBSOLETE_DISPATCH，Refill 携替换派发。
+func (e *Engine) terminateSupersededDispatch(state *State, actionID string, record WorkerResult, eventID string, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
+	pending, ok := state.PendingActions[actionID]
+	if !ok {
+		return Acceptance{}, false, &RejectedError{
+			Code:   CodeUnknownAction,
+			Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
+		}
+	}
+	attempt := state.Attempts[pending.Task]
+	retired, _ := state.retireAction(actionID, "", "superseded by the confirmed requirement redo before its dispatch floor")
+	bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
+	replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts)
+	if err != nil {
+		return Acceptance{}, false, err
+	}
+	obsolete := state.ObsoleteActions[actionID]
+	obsolete.ReplacedBy = replacement.ActionID
+	state.ObsoleteActions[actionID] = obsolete
+	state.ObsoleteResults[actionID] = record
+	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+		ActionID: actionID, Task: retired.Task, AttemptID: retired.AttemptID, Action: RecoveryNewAttempt,
+		Detail:   fmt.Sprintf("the dispatch predates the redo decision of its review series (issued at state revision %d); it was terminated by declaration and replaced by %s", attempt.IssuedRevision, replacement.ActionID),
+		Revision: nextRevision,
+	})
+	return Acceptance{
+		EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_DISPATCH",
+		Revision: nextRevision, ActionID: actionID, Refill: []string{replacement.ActionID},
+	}, true, nil
+}
+
 func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, expectedFingerprint string) ([]string, error) {
 	pending := state.PendingActions[record.ActionID]
 	key := pending.Task
@@ -1237,7 +1321,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	// 审查证据与 worker 结果身份绑定后在同一事务内交 review 内核记账：
 	// RecordCandidate 的错误拒绝整个事件（调用方不提交，零状态变化）。
 	if record.Review != nil {
-		if err := e.recordReviewCandidate(state, record.Review); err != nil {
+		if err := e.recordReviewCandidate(state, record.Review, record.ActionID); err != nil {
 			return nil, err
 		}
 	}

@@ -114,6 +114,9 @@ const (
 	// 无法执行（CAS 基线过期、发现项绑定缺失、P1 源缺重走范围等账目
 	// 约束）——零状态变化。
 	CodeRequirementDecisionRejected = "REQUIREMENT_DECISION_REJECTED"
+	// CodeRequirementAskExpired：需求变化 Ask 落账的权威基线 revision 已被
+	// 后续确认取代——Ask 过期，零状态变化，须在新基线上重建 Ask。
+	CodeRequirementAskExpired = "REQUIREMENT_ASK_EXPIRED"
 	// CodeChangeBarrierActive：存在未决的需求变化 Ask（修订屏障 Phase A），
 	// 新的业务任务签发被拒绝；既有 Ask、回执与结果类事件不受阻。
 	CodeChangeBarrierActive = "CHANGE_BARRIER_ACTIVE"
@@ -159,6 +162,9 @@ type Attempt struct {
 	Attempts       int  `json:"attempts,omitempty"`
 	MaxAttempts    int  `json:"maxAttempts,omitempty"`
 	RetryExhausted bool `json:"retryExhausted,omitempty"`
+	// IssuedRevision 是本派发落账时的 state 代数（签发路径填写）：重走
+	// series 的新鲜轮只认不早于其 fresh floor 的派发。
+	IssuedRevision uint64 `json:"issuedRevision,omitempty"`
 }
 
 // PendingAction 是 pendingActions[actionID] 的落账形态：
@@ -183,8 +189,12 @@ type PendingAsk struct {
 	Options   []AskOption      `json:"options"`
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
-	Package  *RequirementDecisionPackage `json:"package,omitempty"`
-	Resolved bool                        `json:"resolved"`
+	Package *RequirementDecisionPackage `json:"package,omitempty"`
+	// BaseRevision 是需求变化 Ask 创建时的权威基线 revision（引擎落账，
+	// 不随请求载荷）：DECIDE 必须三方相等——载荷基线＝Ask 基线＝当前权
+	// 威。任何后续确认都使 Ask 过期（可区分拒绝、零状态、须重建）。
+	BaseRevision string `json:"baseRevision,omitempty"`
+	Resolved     bool   `json:"resolved"`
 }
 
 // RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。

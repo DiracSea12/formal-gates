@@ -30,7 +30,8 @@ func requirementPackageOf(payload *RequirementDecisionPayload) RequirementDecisi
 	if payload == nil {
 		return RequirementDecisionPackage{
 			CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-default",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 		}
 	}
 	return payload.packageView()
@@ -125,6 +126,38 @@ func requirementDecideEvent(t *testing.T, requestID, token string, choice AskOpt
 	return ev
 }
 
+// freshRoundAfterRedo 在重走确认后提交新鲜轮证据：pre-floor 的旧派发被
+// 按声明终止并立即重签发（OBSOLETE_DISPATCH，结果留迟到证据账），同一
+// 证据在替换派发上被正常接纳（回执先到）。返回替换派发的 actionID。
+func freshRoundAfterRedo(t *testing.T, engine *Engine, oldActionID, eventID string, evidence ReviewResultEvidence) string {
+	t.Helper()
+	fp := fingerprintOf(t, engine)
+	superseded, err := NewReviewWorkerResultEvent(EventID(eventID+"-old"), oldActionID, testProvider, "sha256:payload-"+eventID+"-old", evidence)
+	if err != nil {
+		t.Fatalf("superseded event: %v", err)
+	}
+	acceptance, err := engine.Submit(superseded, fp)
+	if err != nil || acceptance.Status != "OBSOLETE_DISPATCH" {
+		t.Fatalf("the pre-floor dispatch must be terminated by declaration: %v %+v", err, acceptance)
+	}
+	snap := engine.LoadMustSucceed(t)
+	replacement := snap.State.ObsoleteActions[oldActionID].ReplacedBy
+	if replacement == "" || replacement == oldActionID {
+		t.Fatalf("the terminated dispatch was not replaced: %+v", snap.State.ObsoleteActions[oldActionID])
+	}
+	if _, err := engine.Submit(spawnReceipt(t, EventID(eventID+"-spawn"), replacement, "agent-"+eventID), fp); err != nil {
+		t.Fatalf("replacement spawn: %v", err)
+	}
+	fresh, err := NewReviewWorkerResultEvent(EventID(eventID), replacement, testProvider, "sha256:payload-"+eventID, evidence)
+	if err != nil {
+		t.Fatalf("fresh event: %v", err)
+	}
+	if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
+		t.Fatalf("fresh round on the replacement: %v %+v", err, acceptance)
+	}
+	return replacement
+}
+
 // walkToDevelopment 走完双审（rev-1 双 PASS）＋拓扑（no-split）＋路线
 // （full），返回尚未提交结果的第三个 agent 步的 pending action（重走轮
 // 的派发槽）。
@@ -168,8 +201,8 @@ func TestRequirementLedgerSeedsFromIntakeReceipt(t *testing.T) {
 
 // TestP2DrivenPreservedRevisionKeepsReviews：P2 处置驱动的修订按用户声明
 // 落 PRESERVED——series 原样（completed/effective 不动、不清审、不耗轮
-// 次）、拓扑路线不动；旧 revision 的证据此后被拒，新 revision 的新鲜轮
-// 被纳且无强制重审要求。
+// 次）、拓扑路线不动；未勾重走即续用，绑已确认旧 revision 的证据按
+// carry 接纳，新 revision 的新鲜轮也被纳且无强制重审要求。
 func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
 	engine, _ := reviewEngine(t, cd, reg)
@@ -208,7 +241,8 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 	// REVIEW_FINDING_P2 修订，用户声明 PRESERVED（P2 默认不清审）。
 	acceptance := askAndDecideRequirement(t, engine, "req-change-p2", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p2",
-		Source: RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved,
 		Reason: "the fix touches wording only", FindingDigest: candidate.Findings[0].Digest,
 	})
 	snap = engine.LoadMustSucceed(t)
@@ -244,34 +278,26 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 		t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
 
-	// 旧 revision 证据被拒（新权威不再认 rev-1 绑定）。
+	// 未勾重走即续用（carry 授权，§7.2.2:4）：绑已确认 rev-1 的证据照常
+	// 接纳并携原 revision 记账——不因新权威 rev-2 而失格，也无强制重审。
 	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(spawnReceipt(t, "spawn-stale-rev", nextAction, "agent-stale-rev"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-carry-rev", nextAction, "agent-carry-rev"), fp); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	stale, err := NewReviewWorkerResultEvent("result-stale-rev", nextAction, testProvider, "sha256:stale-rev", reviewEvidenceAt(review.ProductReview, "dispatch-stale", "rev-1", "PASS", "old binding", nil))
+	carried, err := NewReviewWorkerResultEvent("result-carried-rev", nextAction, testProvider, "sha256:carried-rev", reviewEvidenceAt(review.ProductReview, "dispatch-carried", "rev-1", "PASS", "old binding carried", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(stale, fp); err == nil {
-		t.Fatal("rev-1 evidence accepted after the revision change")
-	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
-		t.Fatalf("stale evidence code = %q", code)
-	}
-
-	// 新 revision 的新鲜轮被纳：轮次可继续、无重审要求、无阻塞门槛（派发
-	// 回执已随被拒的旧绑定尝试落账，重用同一 action）。
-	fresh, err := NewReviewWorkerResultEvent("result-product-2", nextAction, testProvider, "sha256:payload-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh round on the changed requirement", nil))
-	if err != nil {
-		t.Fatalf("event: %v", err)
-	}
-	if _, err := engine.Submit(fresh, fp); err != nil {
-		t.Fatalf("fresh round at rev-2: %v", err)
+	if _, err := engine.Submit(carried, fp); err != nil {
+		t.Fatalf("carried rev-1 evidence rejected under a preserved change: %v", err)
 	}
 	snap = engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
-	if series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
-		t.Fatalf("fresh round at rev-2 = completed %d %+v", series.Completed, series.Effective)
+	if series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
+		t.Fatalf("carried round = completed %d %+v", series.Completed, series.Effective)
+	}
+	if _, admitted := snap.State.Results[nextAction]; !admitted {
+		t.Fatal("the carried round did not reach the results ledger")
 	}
 }
 
@@ -292,7 +318,8 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 		nextAction := pendingActionID(t, engine)
 		askAndDecideRequirement(t, engine, "req-change-partial", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-partial",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "product meaning changed",
 		})
 		snap := engine.LoadMustSucceed(t)
@@ -313,10 +340,11 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 		if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 			t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL (phase 不变)", snap.State.Phase)
 		}
-		// 新 revision 的产品审新鲜轮可走；其重过不消耗技术审的任何轮次
-		// ——携用的 readiness PASS 原样（门重开的完整走线见
+		// 新 revision 的产品审新鲜轮可走（pre-floor 旧派发按声明终止后由
+		// 替换派发完成）；其重过不消耗技术审的任何轮次——携用的 readiness
+		// PASS 原样（门重开的完整走线见
 		// TestProductOnlyRedoCarriesTheReadinessConclusion）。
-		submitReviewResult(t, engine, "result-product-2", nextAction, reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+		freshRoundAfterRedo(t, engine, nextAction, "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
 		snap = engine.LoadMustSucceed(t)
 		if downstream := snap.State.ReviewSeries.StartReadiness; downstream.Effective.Status != "PASS" || downstream.Completed != 1 || downstream.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("the carried readiness must survive the product re-review without a fresh round: %+v completed=%d", downstream.Effective, downstream.Completed)
@@ -328,7 +356,8 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 		productRound := pendingActionID(t, engine)
 		askAndDecideRequirement(t, engine, "req-change-full", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-full",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, RedoStartReadiness: true, RedoTopology: true, RedoRoute: true,
 			Reason: "the whole walk is affected",
 		})
@@ -343,11 +372,13 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 		if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 			t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL (账本 residue 仍证明其合法)", snap.State.Phase)
 		}
-		// 重新双审（rev-2）→ 重新拓扑 → 重新路线。
+		// 重新双审（rev-2）→ 重新拓扑 → 重新路线。pre-floor 的产品审在途
+		// 派发按声明终止，替换派发完成新鲜轮；其后签发的技术审派发天然
+		// ≥floor。
 		if snap.State.ReviewSeries.ProductReview.Effective.Status != "PENDING" || snap.State.ReviewSeries.StartReadiness.Effective.Status != "PENDING" {
 			t.Fatalf("both series must be staled: %+v %+v", snap.State.ReviewSeries.ProductReview.Effective, snap.State.ReviewSeries.StartReadiness.Effective)
 		}
-		submitReviewResult(t, engine, "result-product-2", productRound, reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+		freshRoundAfterRedo(t, engine, productRound, "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
 		readinessRound := pendingActionID(t, engine)
 		submitReviewResult(t, engine, "result-readiness-2", readinessRound, reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 		snap = engine.LoadMustSucceed(t)
@@ -391,7 +422,8 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 	digest := candidate.Findings[0].Digest
 	preserved := &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p1",
-		Source: RequirementSourceReviewFindingP1, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceReviewFindingP1, Classification: RequirementClassificationPreserved,
 		Reason: "attempt to preserve meaning", FindingDigest: digest,
 	}
 	if err := askAndDecideRequirementRejecting(t, engine, dir, "req-p1-preserved", "proceed", preserved); err == nil {
@@ -402,7 +434,8 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 
 	missingScope := &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p1",
-		Source: RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
 		RedoTopology: true, Reason: "scope omits the owning series", FindingDigest: digest,
 	}
 	if err := askAndDecideRequirementRejecting(t, engine, dir, "req-p1-noscope", "proceed", missingScope); err == nil {
@@ -413,7 +446,8 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 
 	unknown := &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p1",
-		Source: RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved,
 		Reason: "binds a finding that does not exist", FindingDigest: "sha256:no-such-finding",
 	}
 	if err := askAndDecideRequirementRejecting(t, engine, dir, "req-unknown-finding", "proceed", unknown); err == nil {
@@ -429,14 +463,16 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 	}
 
 	// 正确载荷：CHANGED＋重走 finding 所在 series。此后新 revision 的新
-	// 鲜轮放行（既有阻塞不再拦）。
+	// 鲜轮放行（既有阻塞不再拦）——pre-floor 的在途派发按声明终止，替
+	// 换派发完成新鲜轮。
 	askAndDecideRequirement(t, engine, "req-p1-changed", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p1",
-		Source: RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "the confirmed blocker is repaired in the changed requirement", FindingDigest: digest,
 	})
 	freshRound := pendingActionID(t, engine)
-	submitReviewResult(t, engine, "result-product-2", freshRound, reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh review of the changed requirement", nil))
+	freshRoundAfterRedo(t, engine, freshRound, "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh review of the changed requirement", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
 		t.Fatalf("fresh round under the new revision = completed %d %+v", series.Completed, series.Effective)
@@ -564,7 +600,8 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		product := issueReady(t, engine)[0]
 		preserved := &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-barrier",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 			Reason: "wording only",
 		}
 		request, err := NewRequirementRequestEvent("req-barrier-result", preserved.packageView(), requirementOptions()...)
@@ -614,13 +651,14 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		}
 	})
 
-	t.Run("a changed decide voids old-revision quarantined evidence", func(t *testing.T) {
+	t.Run("a changed decide voids in-scope quarantined evidence", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 		product := issueReady(t, engine)[0]
 		request, err := NewRequirementRequestEvent("req-barrier-void", RequirementDecisionPackage{
 			CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-void", Source: RequirementSourceUserInitiated,
+			ImpactDigest:   "sha256:impact",
 			Classification: RequirementClassificationChanged, RedoProductReview: true,
 		}, requirementOptions()...)
 		if err != nil {
@@ -641,7 +679,8 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		}
 		askAndDecideRequirement(t, engine, "req-barrier-void", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-void",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "the product review is redone",
 		})
 		snap := engine.LoadMustSucceed(t)
@@ -649,11 +688,14 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 			t.Fatalf("the decide must reclassify the quarantine ledger: %+v", snap.State.QuarantinedResults)
 		}
 		if _, voided := snap.State.ObsoleteResults[product]; !voided {
-			t.Fatalf("old-revision quarantined evidence must be voided: %+v", snap.State.ObsoleteResults)
+			t.Fatalf("in-scope quarantined evidence must be voided: %+v", snap.State.ObsoleteResults)
+		}
+		if replacement := snap.State.ObsoleteActions[product].ReplacedBy; replacement == "" {
+			t.Fatalf("the in-scope dispatch must be replaced for the fresh round: %+v", snap.State.ObsoleteActions[product])
 		}
 		voided := false
 		for _, record := range snap.State.RecoveryRecords {
-			if record.ActionID == product && strings.Contains(record.Detail, "permanently inadmissible") {
+			if record.ActionID == product && strings.Contains(record.Detail, "terminated by declaration") {
 				voided = true
 			}
 		}
@@ -776,15 +818,17 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 
-	// CAS：基线不是当前权威 revision → 冲突拒绝。
+	// CAS：载荷基线≠Ask 落账基线（＝当前权威）→ Ask 过期拒绝（零状态，
+	// 须在新基线上重建）。
 	stale := &RequirementDecisionPayload{
 		BaseRevision: "rev-0", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 		Reason: "stale base",
 	}
 	if err := askAndDecideRequirementRejecting(t, engine, dir, "req-cas", "proceed", stale); err == nil {
 		t.Fatal("stale base accepted")
-	} else if code := rejectionCode(t, err); code != CodeRequirementDecisionRejected || !strings.Contains(err.Error(), "conflict") {
+	} else if code := rejectionCode(t, err); code != CodeRequirementAskExpired || !strings.Contains(err.Error(), "rebuild the ask") {
 		t.Fatalf("stale base code = %q (%v)", code, err)
 	}
 
@@ -793,13 +837,14 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 		name    string
 		payload RequirementDecisionPayload
 	}{
-		{"candidate equals base", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-1", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}},
-		{"empty delta digest", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}},
-		{"empty reason", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved}},
-		{"unknown source", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: "AI_INITIATED", Classification: RequirementClassificationPreserved, Reason: "r"}},
-		{"unknown classification", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: "UNCHANGED", Reason: "r"}},
-		{"user-initiated binds a finding", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r", FindingDigest: "sha256:f"}},
-		{"finding-driven without a digest", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved, Reason: "r"}},
+		{"candidate equals base", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-1", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}},
+		{"empty delta digest", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}},
+		{"empty impact digest", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}},
+		{"empty reason", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved}},
+		{"unknown source", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: "AI_INITIATED", Classification: RequirementClassificationPreserved, Reason: "r"}},
+		{"unknown classification", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: "UNCHANGED", Reason: "r"}},
+		{"user-initiated binds a finding", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r", FindingDigest: "sha256:f"}},
+		{"finding-driven without a digest", RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceReviewFindingP2, Classification: RequirementClassificationPreserved, Reason: "r"}},
 	}
 	for _, tc := range schema {
 		if _, err := NewRequirementDecideEvent("evt-schema", "req-schema", "sha256:token", "proceed", tc.payload); err == nil {
@@ -811,7 +856,7 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 	// 双 typed 变体并存拒绝。
 	both := Event{ID: "evt-both", Kind: KindDecide, Decide: &DecidePayload{Request: "req-both", Token: "sha256:token", Choice: "proceed",
 		Review:      &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "n"}},
-		Requirement: &RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}}}
+		Requirement: &RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}}}
 	if err := both.Validate(); err == nil {
 		t.Fatal("dual typed variants accepted")
 	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
@@ -831,7 +876,7 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 		t.Fatalf("cross review code = %q", code)
 	}
 	abortExistingAsk(t, engine, "req-cross-review")
-	requirementPayload := RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}
+	requirementPayload := RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:d", ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "r"}
 	if err := askAndDecideRequirementCrossPayload(t, engine, dir, "req-cross-requirement", nil, &requirementPayload); err == nil {
 		t.Fatal("topology control with a requirement payload accepted")
 	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
@@ -926,7 +971,8 @@ func TestRequirementLedgerTamperingRejectedAtLoad(t *testing.T) {
 	engine, dir := reviewEngine(t, cd, reg)
 	askAndDecideRequirement(t, engine, "req-change-tamper", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-tamper",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "seed a committed change entry",
 	})
 	original := stateBytesOf(t, dir)
@@ -1013,7 +1059,8 @@ func TestRequirementLedgerTamperingRejectedAtLoad(t *testing.T) {
 func TestRequirementVariantsParticipateInCanonicalDigest(t *testing.T) {
 	payload := RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "first",
 	}
 	first, err := NewRequirementDecideEvent("evt-requirement-digest", "req-1", "sha256:token", "proceed", payload)
@@ -1072,7 +1119,8 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 
 		askAndDecideRequirement(t, engine, "req-change-readiness-only", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-readiness",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoStartReadiness: true, Reason: "only the readiness walk is affected",
 		})
 		snap := engine.LoadMustSucceed(t)
@@ -1093,8 +1141,9 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 		}
 
 		// 死锁修复点：rev-2 的新一轮 readiness 证据被顺序守卫放行（续用的
-		// 产品审 PASS 绑 rev-1 同样有效）。
-		submitReviewResult(t, engine, "result-readiness-2", nextAction, reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
+		// 产品审 PASS 绑 rev-1 同样有效）；pre-floor 的旧派发按声明终止，
+		// 替换派发完成新鲜轮。
+		freshRoundAfterRedo(t, engine, nextAction, "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 		snap = engine.LoadMustSucceed(t)
 		if readiness := snap.State.ReviewSeries.StartReadiness; readiness.Completed != 2 || readiness.Effective.Status != "PASS" || readiness.Effective.RequirementRevision != "rev-2" {
 			t.Fatalf("readiness fresh round at rev-2 = completed %d %+v", readiness.Completed, readiness.Effective)
@@ -1115,14 +1164,13 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 		nextAction := walkToDevelopment(t, engine)
 		askAndDecideRequirement(t, engine, "req-change-dev-repro", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-dev",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoStartReadiness: true, Reason: "readiness-only redo after development started",
 		})
-		// 主代理复现的原句拒绝在这里必须不再发生。
-		acceptance := submitReviewResult(t, engine, "result-readiness-2", nextAction, reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
-		if acceptance.Status != "ACCEPTED" {
-			t.Fatalf("rev-2 readiness evidence status = %q, want ACCEPTED", acceptance.Status)
-		}
+		// 主代理复现的原句拒绝在这里必须不再发生（pre-floor 旧派发按声明
+		// 终止，替换派发完成 rev-2 新鲜轮）。
+		freshRoundAfterRedo(t, engine, nextAction, "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 		snap := engine.LoadMustSucceed(t)
 		if readiness := snap.State.ReviewSeries.StartReadiness; readiness.Effective.Status != "PASS" || readiness.Effective.RequirementRevision != "rev-2" {
 			t.Fatalf("readiness after the fresh round = %+v", readiness.Effective)
@@ -1148,7 +1196,8 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 
 	askAndDecideRequirement(t, engine, "req-change-product-only", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-product",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "only the product walk is affected",
 	})
 	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-pending-1", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
@@ -1159,9 +1208,9 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 		t.Fatalf("pending-product gate code = %q", code)
 	}
 
-	// 产品审在 rev-2 重新 PASS：携用的 readiness 不被级联失效、不耗新轮次，
-	// 双审门直接重开。
-	submitReviewResult(t, engine, "result-product-2", productRound, reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+	// 产品审在 rev-2 重新 PASS（pre-floor 旧派发按声明终止，替换派发完成）：
+	// 携用的 readiness 不被级联失效、不耗新轮次，双审门直接重开。
+	freshRoundAfterRedo(t, engine, productRound, "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
 	snap := engine.LoadMustSucceed(t)
 	if readiness := snap.State.ReviewSeries.StartReadiness; readiness.Effective.Status != "PASS" || readiness.UpstreamVoid || readiness.Completed != 1 || readiness.Effective.RequirementRevision != "rev-1" {
 		t.Fatalf("the carried readiness must open the gate without a fresh round: %+v void=%v completed=%d", readiness.Effective, readiness.UpstreamVoid, readiness.Completed)
@@ -1205,7 +1254,7 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 	if _, err := phantom.admitReviewEvidence(&ReviewResultEvidence{
 		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
 		Status: "PASS", Verification: reviewVerification(),
-	}); err == nil {
+	}, 0); err == nil {
 		t.Fatal("the sequence guard opened behind an out-of-ledger PASS")
 	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
 		t.Fatalf("out-of-ledger guard code = %q", code)
@@ -1218,7 +1267,7 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 	if _, err := carried.admitReviewEvidence(&ReviewResultEvidence{
 		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
 		Status: "PASS", Verification: reviewVerification(),
-	}); err != nil {
+	}, 0); err != nil {
 		t.Fatalf("the sequence guard must admit behind a confirmed-revision PASS: %v", err)
 	}
 }
@@ -1260,7 +1309,8 @@ func TestRequirementChangeChoiceAnchoring(t *testing.T) {
 	engine, dir := reviewEngine(t, cd, reg)
 	valid := RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-anchor",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 		Reason: "anchoring probe",
 	}
 	if err := askAndDecideRequirementRejecting(t, engine, dir, "req-anchor-abort", "abort", &valid); err == nil {
@@ -1325,7 +1375,8 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 	// 只重走产品审：readiness 携用（绑 rev-1、带一条建议项）。
 	askAndDecideRequirement(t, engine, "req-change-carry", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-carry",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "product meaning changed again",
 	})
 	snap := engine.LoadMustSucceed(t)
@@ -1390,7 +1441,8 @@ func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
 		for _, classification := range []string{RequirementClassificationPreserved, RequirementClassificationChanged} {
 			payload := &RequirementDecisionPayload{
 				BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-label",
-				Source: RequirementSourceReviewFindingP2, Classification: classification,
+				ImpactDigest: "sha256:impact",
+				Source:       RequirementSourceReviewFindingP2, Classification: classification,
 				RedoProductReview: classification == RequirementClassificationChanged,
 				Reason:            "mislabeled source", FindingDigest: digest,
 			}
@@ -1406,7 +1458,8 @@ func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
 		engine, dir, digest := newEngineWithFinding(t, "P2")
 		payload := &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-label",
-			Source: RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "inflated source", FindingDigest: digest,
 		}
 		if err := askAndDecideRequirementRejecting(t, engine, dir, "req-label-p1", "proceed", payload); err == nil {
@@ -1417,12 +1470,14 @@ func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
 	})
 }
 
-// TestRequirementChangeInvalidatesStaleReviewStaging：需求变化登记的同一
-// 事务内，重走 series 上绑旧权威 revision 的暂存审查证据被作废并留痕——
-// 迟到回执照常接纳（不再把旧结果配对进账），新 revision 结果随后被纳；
-// 未覆盖 series 的暂存不动。
-func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
-	t.Run("redone series staging cleared and the fresh result admitted", func(t *testing.T) {
+// TestRequirementChangeDisposesInFlightEvidenceByScope：需求变化登记的同
+// 一事务内，处置只认用户勾选的重走范围——重走 series 上已声明身份的暂
+// 存证据按声明作废（派发退位、结果留迟到证据账、同任务重签发，替换派
+// 发完成新鲜轮）；未勾选 series 的暂存一律保留（迟到回执照常配对或由
+// 顺序守卫按前提状态判定），PRESERVED 的旧 revision 暂存携原 revision
+// carry 完成。
+func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
+	t.Run("redone series staging is terminated and the replacement completes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
@@ -1437,33 +1492,41 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 
 		askAndDecideRequirement(t, engine, "req-change-staging", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-staging",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "the product review is redone",
 		})
 		snap := engine.LoadMustSucceed(t)
 		if len(snap.State.StagedResults) != 0 {
-			t.Fatalf("staged old-revision evidence must be invalidated: %+v", snap.State.StagedResults)
+			t.Fatalf("in-scope staging must be disposed: %+v", snap.State.StagedResults)
 		}
-		invalidated := false
+		replacement := snap.State.ObsoleteActions[product].ReplacedBy
+		if replacement == "" {
+			t.Fatalf("the terminated dispatch must be replaced: %+v", snap.State.ObsoleteActions[product])
+		}
+		if _, voided := snap.State.ObsoleteResults[product]; !voided {
+			t.Fatalf("the terminated staging must be kept as late evidence: %+v", snap.State.ObsoleteResults)
+		}
+		terminated := false
 		for _, record := range snap.State.RecoveryRecords {
-			if record.ActionID == product && strings.Contains(record.Detail, "invalidated by the confirmed requirement change") {
-				invalidated = true
+			if record.ActionID == product && strings.Contains(record.Detail, "terminated by declaration") {
+				terminated = true
 			}
 		}
-		if !invalidated {
-			t.Fatalf("no invalidation trail for %s: %+v", product, snap.State.RecoveryRecords)
+		if !terminated {
+			t.Fatalf("no termination trail for %s: %+v", product, snap.State.RecoveryRecords)
 		}
 
-		// 迟到回执：接纳、不配对旧结果；新 revision 结果随后被纳。
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-late", product, "agent-late"), fp); err != nil {
-			t.Fatalf("late spawn receipt: %v", err)
+		// 替换派发（≥floor）完成新鲜轮：completed=1、effective 绑 rev-2。
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-fresh-staging", replacement, "agent-fresh-staging"), fp); err != nil {
+			t.Fatalf("replacement spawn: %v", err)
 		}
-		fresh, err := NewReviewWorkerResultEvent("result-fresh", product, testProvider, "sha256:payload-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+		fresh, err := NewReviewWorkerResultEvent("result-fresh", replacement, testProvider, "sha256:payload-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
 		if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
-			t.Fatalf("fresh result after the late receipt: %v %+v", err, acceptance)
+			t.Fatalf("fresh result on the replacement: %v %+v", err, acceptance)
 		}
 		snap = engine.LoadMustSucceed(t)
 		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.RequirementRevision != "rev-2" {
@@ -1471,7 +1534,7 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 		}
 	})
 
-	t.Run("old-revision staging is cleared regardless of scope", func(t *testing.T) {
+	t.Run("out-of-scope staging is retained", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "start.readiness.two")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
@@ -1486,41 +1549,43 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 			t.Fatalf("stage: %v", err)
 		}
 
-		// 只重走产品审：readiness 不在 scope 内，但规则只认 revision 绑定
-		//——绑旧权威 revision 的审查暂存经 F3 永不可纳，一律清除＋留痕。
+		// 只重走产品审：readiness 不在 scope 内即续用——暂存保留，不因
+		// revision 绑定被清除（处置只认用户勾选的重走范围）。
 		askAndDecideRequirement(t, engine, "req-change-kept", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-kept",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "only the product review is redone",
 		})
 		snap := engine.LoadMustSucceed(t)
-		if _, kept := snap.State.StagedResults[readiness]; kept {
-			t.Fatalf("old-revision staging outside the redo scope must still be voided: %+v", snap.State.StagedResults)
+		if _, kept := snap.State.StagedResults[readiness]; !kept {
+			t.Fatalf("out-of-scope staging must be retained for its late receipt: %+v", snap.State.StagedResults)
 		}
-		trailed := false
 		for _, record := range snap.State.RecoveryRecords {
-			if record.ActionID == readiness && strings.Contains(record.Detail, "invalidated by the confirmed requirement change") {
-				trailed = true
+			if record.ActionID == readiness {
+				t.Fatalf("retained staging must not carry a disposal trail: %+v", record)
 			}
 		}
-		if !trailed {
-			t.Fatalf("no invalidation trail for %s: %+v", readiness, snap.State.RecoveryRecords)
+		if _, voided := snap.State.ObsoleteResults[readiness]; voided {
+			t.Fatal("retained staging must not be voided")
 		}
-		// 迟到回执照常接纳且不配对已清除的旧结果（暂存保持为空，readiness
-		// 派发槽完好——其新轮须待重走中的产品审重新过门后才可提交）。
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-kept-late", readiness, "agent-kept-late"), fp); err != nil {
-			t.Fatalf("late spawn receipt: %v", err)
+		// 迟到回执尝试配对：产品审重走期间顺序守卫（前提未过）拒绝配对，
+		// 暂存与派发槽原样保留——前提重过后可重试回执完成配对。
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-kept-late", readiness, "agent-kept-late"), fp); err == nil {
+			t.Fatal("the staged readiness round paired while its product premise is being redone")
+		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+			t.Fatalf("late receipt code = %q", code)
 		}
 		snap = engine.LoadMustSucceed(t)
-		if len(snap.State.StagedResults) != 0 {
-			t.Fatalf("late receipt must not re-pair the voided staging: %+v", snap.State.StagedResults)
+		if _, kept := snap.State.StagedResults[readiness]; !kept {
+			t.Fatalf("the rejected pairing must leave the staging intact: %+v", snap.State.StagedResults)
 		}
 		if _, waiting := snap.State.PendingActions[readiness]; !waiting {
 			t.Fatal("the readiness dispatch slot must stay intact for its fresh round")
 		}
 	})
 
-	t.Run("a preserved change clears old-revision staging too", func(t *testing.T) {
+	t.Run("a preserved change carries the old-revision staging to completion", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
@@ -1533,30 +1598,30 @@ func TestRequirementChangeInvalidatesStaleReviewStaging(t *testing.T) {
 			t.Fatalf("stage: %v", err)
 		}
 
-		// PRESERVED 修订同样登记新 revision：旧绑定暂存一律不可纳（F5）。
+		// PRESERVED 修订：未勾重走即续用——旧 revision 暂存保留，迟到回
+		// 执按 carry 语义携原 revision 配对完成（completed+1）。
 		askAndDecideRequirement(t, engine, "req-change-preserved-staging", "proceed", &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-preserved-staging",
-			Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+			ImpactDigest: "sha256:impact",
+			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 			Reason: "wording only",
 		})
 		snap := engine.LoadMustSucceed(t)
-		if len(snap.State.StagedResults) != 0 {
-			t.Fatalf("a preserved change must void old-revision staging: %+v", snap.State.StagedResults)
+		if _, kept := snap.State.StagedResults[product]; !kept {
+			t.Fatalf("a preserved change must retain the old-revision staging: %+v", snap.State.StagedResults)
 		}
 		if _, err := engine.Submit(spawnReceipt(t, "spawn-preserved-late", product, "agent-preserved-late"), fp); err != nil {
 			t.Fatalf("late spawn receipt: %v", err)
 		}
-		fresh, err := NewReviewWorkerResultEvent("result-preserved-fresh", product, testProvider, "sha256:payload-preserved-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
-		if err != nil {
-			t.Fatalf("event: %v", err)
-		}
-		if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
-			t.Fatalf("fresh result after a preserved change: %v %+v", err, acceptance)
-		}
 		snap = engine.LoadMustSucceed(t)
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.RequirementRevision != "rev-2" {
-			t.Fatalf("fresh result did not complete: completed=%d %+v", series.Completed, series.Effective)
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
+			t.Fatalf("the carried staging did not complete on its late receipt: completed=%d %+v", series.Completed, series.Effective)
 		}
+		if _, admitted := snap.State.Results[product]; !admitted {
+			t.Fatal("the carried staging did not reach the results ledger")
+		}
+		// 新 revision 的新鲜轮仍可走（重用同一 action 的新派发槽不可得——
+		// 任务已完成；由后续派发承载，语义已由上一用例覆盖）。
 	})
 }
 
@@ -1569,7 +1634,8 @@ func TestRequirementPackageBindsTheAsk(t *testing.T) {
 	fp := fingerprintOf(t, engine)
 	confirmed := RequirementDecisionPackage{
 		CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-package",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 	}
 	request, err := NewRequirementRequestEvent("req-package", confirmed, requirementOptions()...)
 	if err != nil {
@@ -1584,7 +1650,8 @@ func TestRequirementPackageBindsTheAsk(t *testing.T) {
 	}
 	base := RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-package",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 		Reason: "matches the confirmed package",
 	}
 	for name, mutate := range map[string]func(*RequirementDecisionPayload){
@@ -1642,7 +1709,8 @@ func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
 
 	askAndDecideRequirement(t, engine, "req-preserved-scope", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-preserved-scope",
-		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
 		RedoStartReadiness: true, Reason: "product meaning preserved; the affected technical review is redone",
 	})
 	snap := engine.LoadMustSucceed(t)
@@ -1660,8 +1728,9 @@ func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
 	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
 		t.Fatalf("phase = %s, want TOPOLOGY_AND_ROUTE (门因 readiness 重走关闭)", snap.State.Phase)
 	}
-	// 重走完成：readiness 在 rev-2 重新 PASS，门重新打开（路线接纳）。
-	submitReviewResult(t, engine, "result-readiness-2", nextAction, reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
+	// 重走完成：readiness 在 rev-2 重新 PASS（pre-floor 旧派发按声明终止，
+	// 替换派发完成新鲜轮），门重新打开（路线接纳）。
+	freshRoundAfterRedo(t, engine, nextAction, "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 	askAndDecide(t, engine, ControlSelectRoute, "req-route-after-preserved-scope", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
 		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
 	}})
@@ -1690,7 +1759,8 @@ func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
 	for _, source := range []string{RequirementSourceReviewFindingP1, RequirementSourceReviewFindingP2} {
 		payload := &RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-raw",
-			Source: source, Classification: RequirementClassificationChanged,
+			ImpactDigest: "sha256:impact",
+			Source:       source, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "raw finding probe", FindingDigest: digest,
 		}
 		if err := askAndDecideRequirementRejecting(t, engine, dir, "req-raw-"+source, "proceed", payload); err == nil {
@@ -1698,5 +1768,357 @@ func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
 		} else if code := rejectionCode(t, err); code != CodeRequirementDecisionRejected || !strings.Contains(err.Error(), "adjudicate the disposition first") {
 			t.Fatalf("unadjudicated %s code = %q (%v)", source, code, err)
 		}
+	}
+}
+
+// TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch：确认重走某审查
+// series 后，重走前签发的旧派发不能完成"新鲜复审"——其证据按声明终止
+// （OBSOLETE_DISPATCH＋迟到证据账＋同任务重签发），替换派发（签发代数
+// ≥floor）上的同证据才完成新鲜轮。
+func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+
+	askAndDecideRequirement(t, engine, "req-redo-floor", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-floor",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "redo the product review",
+	})
+	snap := engine.LoadMustSucceed(t)
+	if _, pending := snap.State.PendingActions[product]; !pending {
+		t.Fatal("setup: the in-flight action disappeared before any result")
+	}
+	floor := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1].StateRevision
+	if snap.State.ReviewSeries.ProductReview.FreshFloor != floor {
+		t.Fatalf("fresh floor = %d, want the decide revision %d", snap.State.ReviewSeries.ProductReview.FreshFloor, floor)
+	}
+	// 旧派发（pre-floor）即使绑新 revision 也不纳：按声明终止＋重签发。
+	freshRoundAfterRedo(t, engine, product, "result-floor-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-floor-2", "rev-2", "PASS", "old dispatch completing the fresh round", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
+		t.Fatalf("the fresh round must complete exactly once on the replacement: completed=%d %+v", series.Completed, series.Effective)
+	}
+	if _, voided := snap.State.ObsoleteResults[product]; !voided {
+		t.Fatal("the terminated dispatch's evidence must be kept as late evidence")
+	}
+}
+
+// TestUnredoneSeriesQuarantinedResultIsCarried：未勾重走的 series，其屏障
+// 期隔离结果按 carry 恢复——携原 revision、原证据字节接纳完成（completed
+// +1），留 carry 留痕，不作废。
+func TestUnredoneSeriesQuarantinedResultIsCarried(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	readiness := func() string {
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-carry-product", product, reviewEvidence(review.ProductReview, "dispatch-carry-product", "", "PASS", "clean", nil))
+		return pendingActionID(t, engine)
+	}()
+	fp := fingerprintOf(t, engine)
+
+	preserved := &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-carry",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "meaning preserved, nothing redone",
+	}
+	request, err := NewRequirementRequestEvent("req-carry", preserved.packageView(), requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-carry", readiness, "agent-carry"), fp); err != nil {
+		t.Fatalf("receipt during barrier: %v", err)
+	}
+	quarantined, err := NewReviewWorkerResultEvent("evt-carry", readiness, testProvider, "sha256:payload-carry",
+		reviewEvidence(review.StartReadiness, "dispatch-carry-readiness", "", "PASS", "in-flight against rev-1", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(quarantined, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		t.Fatalf("quarantine = %+v %v", acceptance, err)
+	}
+	askAndDecideRequirement(t, engine, "req-carry", "proceed", preserved)
+	snap := engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
+		t.Fatalf("the quarantined result was not carried to admission: completed=%d %+v", series.Completed, series.Effective)
+	}
+	if _, admitted := snap.State.Results[readiness]; !admitted {
+		t.Fatal("the carried result did not reach the results ledger")
+	}
+	if _, voided := snap.State.ObsoleteResults[readiness]; voided {
+		t.Fatal("a carried result must not be voided")
+	}
+	carried := false
+	for _, record := range snap.State.RecoveryRecords {
+		if record.ActionID == readiness && strings.Contains(record.Detail, "carried by requirement decision req-carry") {
+			carried = true
+		}
+	}
+	if !carried {
+		t.Fatalf("no carry trail: %+v", snap.State.RecoveryRecords)
+	}
+}
+
+// TestQuarantineHeldUntilTheLastPendingAskResolves：多个需求 Ask 并存时，
+// 屏障只随最后一个未决 Ask 的解决解除——此前隔离账继续持有（留痕），任
+// 何单个决定都不提前重放。
+func TestQuarantineHeldUntilTheLastPendingAskResolves(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	fp := fingerprintOf(t, engine)
+
+	for _, requestID := range []string{"req-held-first", "req-held-second"} {
+		request, err := NewRequirementRequestEvent(EventID(requestID), requirementPackageOf(nil), requirementOptions()...)
+		if err != nil {
+			t.Fatalf("request %s: %v", requestID, err)
+		}
+		if _, err := engine.Submit(request, fp); err != nil {
+			t.Fatalf("submit request %s: %v", requestID, err)
+		}
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-held", product, "agent-held"), fp); err != nil {
+		t.Fatalf("receipt during barrier: %v", err)
+	}
+	quarantined, err := NewReviewWorkerResultEvent("evt-held", product, testProvider, "sha256:payload-held",
+		reviewEvidence(review.ProductReview, "dispatch-held", "", "PASS", "quarantined while two asks pend", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(quarantined, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		t.Fatalf("quarantine = %+v %v", acceptance, err)
+	}
+	abortExistingAsk(t, engine, "req-held-first")
+	snap := engine.LoadMustSucceed(t)
+	if len(snap.State.QuarantinedResults) != 1 {
+		t.Fatalf("the quarantine ledger must stay held while another ask is pending: %+v", snap.State.QuarantinedResults)
+	}
+	if snap.State.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatalf("replay must not run before the last ask resolves: completed=%d", snap.State.ReviewSeries.ProductReview.Completed)
+	}
+	held := false
+	for _, record := range snap.State.RecoveryRecords {
+		if strings.Contains(record.Detail, "quarantine ledger stays held") {
+			held = true
+		}
+	}
+	if !held {
+		t.Fatalf("no hold trail: %+v", snap.State.RecoveryRecords)
+	}
+	// 最后一个 Ask 解决：同一事务内重放完成。
+	abortExistingAsk(t, engine, "req-held-second")
+	snap = engine.LoadMustSucceed(t)
+	if len(snap.State.QuarantinedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 1 {
+		t.Fatalf("the last decide must replay the quarantine: held=%d completed=%d",
+			len(snap.State.QuarantinedResults), snap.State.ReviewSeries.ProductReview.Completed)
+	}
+}
+
+// TestRequirementAskExpiresWhenItsBaseRevisionIsSuperseded：Ask 落账创建时
+// 绑定权威基线；后续确认使基线前移后，旧 Ask 的决定（即使把载荷基线改
+// 成新权威）以可区分错误拒绝且零状态——必须在新基线上重建 Ask。
+func TestRequirementAskExpiresWhenItsBaseRevisionIsSuperseded(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, dir := reviewEngine(t, cd, reg)
+	issueReady(t, engine)
+
+	// 两个 Ask 都在 rev-1 创建；先确认第一个（→rev-2），第二个的基线随
+	// 之过期。
+	first := &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-expire-first",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "first",
+	}
+	secondPackage := requirementPackageOf(&RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-3", DeltaDigest: "sha256:delta-expire-second",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "authored on the superseded base",
+	})
+	fp := fingerprintOf(t, engine)
+	secondRequest, err := NewRequirementRequestEvent("req-expire-second", secondPackage, requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(secondRequest, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	askAndDecideRequirement(t, engine, "req-expire-first", "proceed", first)
+	// 把载荷基线改成新权威也过不了三方相等：Ask 本身绑的还是 rev-1。
+	token, err := engine.Freshness("req-expire-second")
+	if err != nil {
+		t.Fatalf("freshness: %v", err)
+	}
+	rebasedEvent := requirementDecideEvent(t, "req-expire-second", token, "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-2", CandidateRevision: "rev-3", DeltaDigest: "sha256:delta-expire-second",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "rebased onto the newer baseline",
+	})
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(rebasedEvent, fp); err == nil {
+		t.Fatal("a stale-based ask was decided")
+	} else if code := rejectionCode(t, err); code != CodeRequirementAskExpired {
+		t.Fatalf("expired ask code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("the expired decide changed state bytes")
+	}
+	if tail := engine.LoadMustSucceed(t).State.RequirementRevisions; len(tail) != 2 || tail[1].Revision != "rev-2" {
+		t.Fatalf("the expired decide must not register: %+v", tail)
+	}
+	// 新基线上重建的 Ask 照常确认。
+	askAndDecideRequirement(t, engine, "req-expire-rebuilt", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-2", CandidateRevision: "rev-3", DeltaDigest: "sha256:delta-expire-rebuilt",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
+		Reason: "rebuilt on the current base",
+	})
+	if tail := engine.LoadMustSucceed(t).State.RequirementRevisions; len(tail) != 3 || tail[2].Revision != "rev-3" {
+		t.Fatalf("the rebuilt ask did not register: %+v", tail)
+	}
+}
+
+// TestFailedQuarantineReplayLeavesOnlyTheObsoleteEntry：隔离记录的重放失败
+// 只落该条的 obsolete＋留痕——审查账本、结果账与任务簿记都保持该条重放
+// 前的形状（零半套账目），state 照常加载。
+func TestFailedQuarantineReplayLeavesOnlyTheObsoleteEntry(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	snap := engine.LoadMustSucceed(t)
+	task := snap.State.PendingActions[product].Task
+	attempt := snap.State.PendingActions[product].AttemptID
+	fp := fingerprintOf(t, engine)
+
+	request, err := NewRequirementRequestEvent("req-replay-fail", requirementPackageOf(nil), requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-replay-fail", product, "agent-replay-fail"), fp); err != nil {
+		t.Fatalf("receipt during barrier: %v", err)
+	}
+	quarantined, err := NewReviewWorkerResultEvent("evt-replay-fail", product, testProvider, "sha256:payload-replay-fail",
+		reviewEvidence(review.ProductReview, "dispatch-replay-fail", "", "PASS", "quarantined then the task reports terminal", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(quarantined, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		t.Fatalf("quarantine: %+v %v", acceptance, err)
+	}
+	for i, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+		ev, err := NewTaskEvent(EventID("task-replay-fail-"+string(rune('a'+i))), task, attempt, status)
+		if err != nil {
+			t.Fatalf("task event: %v", err)
+		}
+		if _, err := engine.Submit(ev, fp); err != nil {
+			t.Fatalf("task progress %s during barrier: %v", status, err)
+		}
+	}
+	abortExistingAsk(t, engine, "req-replay-fail")
+	snap = engine.LoadMustSucceed(t)
+	if completed := snap.State.ReviewSeries.ProductReview.Completed; completed != 0 {
+		t.Fatalf("the failed replay must not touch the review ledger: completed=%d", completed)
+	}
+	if _, inResults := snap.State.Results[product]; inResults {
+		t.Fatal("the failed replay must not admit the result")
+	}
+	if _, obsolete := snap.State.ObsoleteResults[product]; !obsolete {
+		t.Fatal("the failed replay must keep the obsolete entry")
+	}
+	failed := false
+	for _, record := range snap.State.RecoveryRecords {
+		if record.ActionID == product && strings.Contains(record.Detail, "could not be readmitted") {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("no replay-failure trail: %+v", snap.State.RecoveryRecords)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load after the failed replay: %v", err)
+	}
+}
+
+// TestQuarantinedResultIdentityIgnoresTheEventID：隔离账与重放后的结果账
+// 都按结果级摘要（不含事件 ID）记身份——同一载荷换事件 ID 重发判
+// DUPLICATE，不误报 RECEIPT_CONFLICT。
+func TestQuarantinedResultIdentityIgnoresTheEventID(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	fp := fingerprintOf(t, engine)
+
+	request, err := NewRequirementRequestEvent("req-digest-identity", requirementPackageOf(nil), requirementOptions()...)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatalf("submit request: %v", err)
+	}
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-digest", product, "agent-digest"), fp); err != nil {
+		t.Fatalf("receipt during barrier: %v", err)
+	}
+	first, err := NewReviewWorkerResultEvent("evt-digest-first", product, testProvider, "sha256:payload-digest",
+		reviewEvidence(review.ProductReview, "dispatch-digest", "", "PASS", "digest identity", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(first, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		t.Fatalf("quarantine: %+v %v", acceptance, err)
+	}
+	abortExistingAsk(t, engine, "req-digest-identity")
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.Completed != 1 {
+		t.Fatalf("the replayed result did not complete: completed=%d", snap.State.ReviewSeries.ProductReview.Completed)
+	}
+	replay, err := NewReviewWorkerResultEvent("evt-digest-second", product, testProvider, "sha256:payload-digest",
+		reviewEvidence(review.ProductReview, "dispatch-digest", "", "PASS", "digest identity", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	acceptance, err := engine.Submit(replay, fingerprintOf(t, engine))
+	if err != nil || acceptance.Status != "DUPLICATE" {
+		t.Fatalf("same payload under a new event id = %v %+v (want DUPLICATE)", err, acceptance)
+	}
+}
+
+// TestForgedFreshFloorRejectedAtLoad：series 的 fresh floor 只认确认账本
+// （覆盖该 series 的最后一次决定的 state 代数）——手改 floor 在加载边界
+// 可区分拒绝，恢复原状即照常加载。
+func TestForgedFreshFloorRejectedAtLoad(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, dir := reviewEngine(t, cd, reg)
+	issueReady(t, engine)
+	askAndDecideRequirement(t, engine, "req-floor-tamper", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-floor-tamper",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "set the fresh floor",
+	})
+	original := stateBytesOf(t, dir)
+	tamperStateContent(t, dir, func(content map[string]any) {
+		series := content["reviewSeries"].(map[string]any)
+		product := series["productReview"].(map[string]any)
+		product["freshFloor"] = float64(1)
+	})
+	if _, err := engine.Load(); err == nil {
+		t.Fatal("a forged fresh floor loaded")
+	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {
+		t.Fatalf("forged floor code = %q", code)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), original, 0o600); err != nil {
+		t.Fatalf("restore state: %v", err)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("restored state failed to load: %v", err)
 	}
 }

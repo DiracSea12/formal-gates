@@ -158,3 +158,22 @@ Git provider＋canary＋route matrix。
 子代理取舍（主代理核可）：HostAction 回执归在途回执照常（intent 冻结、回清纯账）；重放错误统一落 ObsoleteResults（结构不可纳＝死结果）；abort 同样触发重放（无 revision 变化＝全部应被纳）；屏障优先于 UNKNOWN_REQUEST（零状态等价）。已知残留：QuarantinedResults 无独立完整性校验（停车账，篡改仅能丢条目）；同 action 多条异字节隔离结果重放先到先得；审查类控制的 REQUEST 包未实现（机制已就位，按合同留后续）。
 
 **收敛刀收口，待外部评审复核。**
+## 第 49 轮（2026-09-24，R2 生命周期收口：Phase B 处置驱动，轻装）
+
+外部评审第六轮对收敛刀（`0397c12`）判 FAIL：4 P1＋1 P2。机主质问"按根因改了为何还有问题"——根因：第 48 轮的家族归纳来自症状而非状态机接缝枚举，漏了三处（在途工作本身不是"绑旧权威的数据"枚举的一员；屏障的解除边界与重放事务性未定义；"引擎持有创建时基线"的设计声明未实现、façade 无展示侧）。其中 P1-1 一半是主代理第 48 轮的裁定错误：把暂存槽卫生问题过度泛化为"revision 变化一律作废"，被规格 §7.2.2:4 原文否定（处置只认用户勾选的重走范围）。
+
+五项主代理全部独立复现（六探针一次全红，跑毕即删）：BUG1a 重走后旧派发完成"新鲜复审"；BUG1b PRESERVED 未勾重走隔离结果被作废 completed=0；BUG2 双 Ask 放弃第一个即重放；BUG3 旧包改载荷基线静默换基线接纳；BUG4 重放报错提交半套账；BUG5 隔离摘要含事件 ID 致重发 RECEIPT_CONFLICT。
+
+第二刀（续用 R2 子代理，按需求变化完整生命周期五设计派发）：
+
+- **D1 处置驱动 Phase B**：`Series.FreshFloor`＋`Attempt.IssuedRevision`（唯一两写点 issueInto/installReplacement）；`admitReviewEvidence` 两分支——重走态（PENDING＋requirement-change: 来源）只认当前权威＋派发代数 ≥ floor，否则账本成员（carry）；pre-floor 派发按声明终止（OBSOLETE_DISPATCH＋同任务重签发）；决定事务内对已声明系列身份的暂存/隔离记录直接 terminate。第 48 轮"统一暂存规则"整块删除重写，S1–S3 步标清除。
+- **D2 屏障解除边界**：`requirementChangePendingExcept`——只有最后一个未决 Ask 解决才重放，否则留痕持账。
+- **D3 Ask 完整绑定＋展示**：`PendingAsk.BaseRevision`（引擎落账）；三方相等（载荷＝Ask＝当前权威），不等＝新错误码 `REQUIREMENT_ASK_EXPIRED` 零状态；包/载荷增 `ImpactDigest`（§7.2.1）；façade `Run.PendingRequirementAsk`＋Next 投影 ask 边界＋Drive 对屏障冻结不报错。
+- **D4 重放逐条原子**：`cloneState`（JSON 往返）快照恢复——单条失败净效果＝该条 obsolete＋留痕。
+- **D5 单一接纳核心**：`admitWorkerResultRecord`（Submit 与重放共用）＋`resultPayloadDigest` 唯一摘要点（不含事件 ID）→ 同载荷换事件 ID＝DUPLICATE；`readmitWorkerResult` 与 scope 无关作废分支删除。
+
+主代理独立复核（六探针走到底、跑毕即删）：旧派发 OBSOLETE_DISPATCH＋替换派发完成新鲜轮（completed=1@rev-2）；PRESERVED 隔离结果 carry 接纳＋留痕；双 Ask 先持后放；过期基线三方拒绝零状态＋重建通过；重放失败零半套账（completed=0/无 Results 泄漏/加载通过）；DUPLICATE 幂等。引擎 15 包＋cli 全绿、vet/gofmt 净。模型调用 0。
+
+残留（子代理如实披露＋主代理核）：①未声明系列身份的在途 action 无法主动终止（floor＋按声明终止兜底；彻底解决需定义层 step↔series 标记，交机主）；②未勾 series 暂存证据的迟到回执若撞前提 series 重走中被拒，保留可重试；③lightweight 路由 CompleteAll 不经屏障表（引擎路由接通后复核）；④旧 run 在途 REQ Ask 无 BaseRevision 升级后按过期处理；⑤子代理报告的 carried_conclusion_reprobe_test.go 遗留不实（文件不存在，系其上下文残影，已核）。
+
+**生命周期收口，待外部评审复核。**

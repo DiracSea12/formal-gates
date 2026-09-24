@@ -12,9 +12,12 @@ import (
 	"testing"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 )
 
 func testReceipt() IntakeConfirmationReceipt {
@@ -398,5 +401,116 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(badRoot, EngineNamespace)); !os.IsNotExist(statErr) {
 		t.Fatalf("bad solution digest created engine namespace: %v", statErr)
+	}
+}
+
+// newEngineRouteFacade 在包内直接构建 engine 路由的 façade（Start 在
+// phase 3 只接 lightweight 路由；屏障投影的正路径是 engine 路由的
+// Show/Status/Next/Drive）。
+func newEngineRouteFacade(t *testing.T, runID string) *Facade {
+	t.Helper()
+	root := t.TempDir()
+	stateDir := filepath.Join(root, EngineNamespace, runID)
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	store, err := persistence.NewStore(stateDir, persistence.Config{
+		PackageDigest: "sha256:package", DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: "target-1",
+	})
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	confirmation := &protocol.IntakeConfirmationReceipt{
+		Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher,
+		Source: "stable-driver", RequirementSource: "requirement.md", RequirementRevision: "rev-1",
+		Artifacts:        []protocol.IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
+		SolutionRevision: "s1", SolutionDigest: "sha256:solution",
+	}
+	fp, err := engine.ObserveFingerprint()
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
+		t.Fatalf("intake receipt: %v", err)
+	}
+	return &Facade{
+		root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"),
+		store: store, engine: engine, envelope: Envelope{}, definition: cd, capacity: 4,
+	}
+}
+
+// TestFacadeProjectsThePendingRequirementAsk：修订屏障在位时，未决需求变
+// 化 Ask 即 run 的当前外部边界——Show/Status/Next 呈 ask 面与确认包而不
+// 报错，Drive 冻结签发也不报错（等待用户而非错误）；Ask 解决后投影恢复
+// 常规边界。
+func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
+	f := newEngineRouteFacade(t, "pending-ask-face")
+	pkg := protocol.RequirementDecisionPackage{
+		CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-face", ImpactDigest: "sha256:impact-face",
+		Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved,
+	}
+	askEvent, err := protocol.NewRequirementRequestEvent("req-face-ask", pkg,
+		protocol.AskOption{ID: "proceed", Label: "确认变更包"}, protocol.AskOption{ID: "abort", Label: "放弃变更"})
+	if err != nil {
+		t.Fatalf("ask event: %v", err)
+	}
+	if _, _, err := f.Submit(askEvent); err != nil {
+		t.Fatalf("submit ask: %v", err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		t.Fatalf("show during the barrier: %v", err)
+	}
+	if run.PendingRequirementAsk == nil {
+		t.Fatal("the pending requirement ask was not projected")
+	}
+	face := run.PendingRequirementAsk
+	if face.RequestID != "req-face-ask" || face.Package == nil || *face.Package != pkg ||
+		len(face.Options) != 2 || face.BaseRevision != "rev-1" {
+		t.Fatalf("ask face = %+v", face)
+	}
+	if run.Next.Kind != decision.KindAsk || run.Next.Ask == nil {
+		t.Fatalf("next during the barrier = %+v, want the ask boundary", run.Next)
+	}
+	if len(run.AvailableActions) != 1 || run.AvailableActions[0] != "submit" {
+		t.Fatalf("available actions during the barrier = %v", run.AvailableActions)
+	}
+	if statusRun, err := f.Status(); err != nil || statusRun.PendingRequirementAsk == nil {
+		t.Fatalf("status during the barrier = %v %v", statusRun.PendingRequirementAsk, err)
+	}
+	if next, err := f.Next(); err != nil || next.Kind != decision.KindAsk {
+		t.Fatalf("next during the barrier = %+v %v", next, err)
+	}
+	// 屏障期 Drive：签发冻结＝等待用户，不是错误。
+	driven, err := f.Drive()
+	if err != nil {
+		t.Fatalf("drive during the barrier: %v", err)
+	}
+	if driven.PendingRequirementAsk == nil {
+		t.Fatal("drive during the barrier lost the ask face")
+	}
+	// 放弃变更：屏障解除，投影恢复常规边界。
+	token, err := f.engine.Freshness("req-face-ask")
+	if err != nil {
+		t.Fatalf("freshness: %v", err)
+	}
+	abort, err := protocol.NewDecideEvent("evt-face-ask", "req-face-ask", token, "abort")
+	if err != nil {
+		t.Fatalf("abort event: %v", err)
+	}
+	if _, lifted, err := f.Submit(abort); err != nil || lifted.PendingRequirementAsk != nil {
+		t.Fatalf("abort lifted the barrier: %v %+v", err, lifted.PendingRequirementAsk)
 	}
 }

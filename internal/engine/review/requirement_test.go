@@ -25,7 +25,7 @@ func TestStaleSeriesRefreshesOnlyTheCheckedAction(t *testing.T) {
 	productRevision := set.ProductReview.Effective.Revision
 	readinessRevision := set.StartReadiness.Effective.Revision
 
-	staled := StaleSeries(set, ProductReview, "requirement-change:req-1")
+	staled := StaleSeries(set, ProductReview, "requirement-change:req-1", 5)
 	product := staled.ProductReview
 	if product.Effective.Status != "PENDING" || product.Effective.Source != "requirement-change:req-1" || product.Effective.Revision != productRevision+1 {
 		t.Fatalf("staled product effective = %+v", product.Effective)
@@ -48,7 +48,7 @@ func TestStaleSeriesRefreshesOnlyTheCheckedAction(t *testing.T) {
 	}
 
 	// 反向：stale start-readiness 不触碰 product-review。
-	onlyReadiness := StaleSeries(set, StartReadiness, "requirement-change:req-2")
+	onlyReadiness := StaleSeries(set, StartReadiness, "requirement-change:req-2", 7)
 	if onlyReadiness.ProductReview.Effective.Status != "PASS" || onlyReadiness.ProductReview.Effective.Revision != productRevision {
 		t.Fatalf("stale start-readiness must not touch product-review: %+v", onlyReadiness.ProductReview.Effective)
 	}
@@ -126,7 +126,7 @@ func TestHasConfirmedBlockingRequiresConfirmedBlockingSeverity(t *testing.T) {
 
 	// 需求 revision 前移：在新 revision 记一轮新候选后，effective 绑定离
 	// 开 rev-1，旧 revision 下确认的阻塞不再计数。
-	reconfirmed := StaleSeries(downgraded, ProductReview, "requirement-change:req-5")
+	reconfirmed := StaleSeries(downgraded, ProductReview, "requirement-change:req-5", 9)
 	reconfirmed, _ = mustRecord(t, reconfirmed, "run-blocking", ProductReview,
 		Dispatch{ID: "dispatch-2", RequirementRevision: "rev-2"},
 		Result{Status: "PASS", Message: "fresh round on the changed requirement"})

@@ -133,7 +133,11 @@ type Series struct {
 	// （product-review 的纠正把 PASS 变阻塞时置位，仅 start-readiness 会被
 	// 置位）：置位期间任何重投影都把 effective 保持在 PENDING，直到新一轮
 	// candidate 重建本 series 自己的结论。
-	UpstreamVoid   bool                 `json:"upstreamVoid"`
+	UpstreamVoid bool `json:"upstreamVoid"`
+	// FreshFloor 记录用户确认重走本 series 的最后一次需求决定的 state 代
+	// 数：重走态下的新鲜轮只认签发不早于它的派发（协议层以确认账本复核
+	// 该值）。由 StaleSeries 随失效一并落账，无重走史的 series 为零。
+	FreshFloor     uint64               `json:"freshFloor,omitempty"`
 	Authorizations []RoundAuthorization `json:"authorizations"`
 	RawCandidates  []RawCandidate       `json:"rawCandidates"`
 	Adjudications  []Adjudication       `json:"adjudications"`

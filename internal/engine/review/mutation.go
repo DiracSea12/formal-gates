@@ -334,11 +334,12 @@ func MarkStale(set Set, source string) Set {
 
 // StaleSeries 在用户确认的需求修订重走范围内把单个动作的 series 刷为
 // PENDING：与 MarkStale 同形（来源、revision+1、投影清空、该动作的下游
-// 影响表打标），四本账与计轮不动。不做跨 series 级联——用户未勾选重走
-// 的 series 即明确续用其结论（§7.2.3/§7.2.4"不勾不失效"），其 PASS 由
-// 协议层的 carry 判定继续有效；上游结论被同 revision 纠正推翻的依赖语
-// 义（markUpstreamStale）只属于纠正路径。
-func StaleSeries(set Set, action Action, source string) Set {
+// 影响表打标），四本账与计轮不动，并落 freshFloor＝本次决定的 state 代数
+// ——重走态下的新鲜轮只认签发不早于该代数的派发。不做跨 series 级联
+// ——用户未勾选重走的 series 即明确续用其结论（§7.2.3/§7.2.4"不勾不
+// 失效"），其 PASS 由协议层的 carry 判定继续有效；上游结论被同 revision
+// 纠正推翻的依赖语义（markUpstreamStale）只属于纠正路径。
+func StaleSeries(set Set, action Action, source string, freshFloor uint64) Set {
 	series, err := set.seriesFor(action)
 	if err != nil {
 		return set
@@ -349,6 +350,7 @@ func StaleSeries(set Set, action Action, source string) Set {
 	series.Effective.BlockingFindingIDs = []string{}
 	series.Effective.AdvisoryFindingIDs = []string{}
 	series.Effective.DownstreamImpact = downstreamImpact(action)
+	series.FreshFloor = freshFloor
 	return set
 }
 

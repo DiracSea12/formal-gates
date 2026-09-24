@@ -8,6 +8,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -72,15 +73,19 @@ func validRequirementClassification(classification string) bool {
 
 // ---- 事件 schema（无状态形状校验，由 Event.Validate 调用） ----
 
-// validateRequirementPackage 校验变更包的形状：候选 revision 与 delta 指纹
-// 非空；来源与分类封闭；发现项驱动的来源必携 finding digest，用户主动发
-// 起必空。来源↔分类↔真实裁决的对照与账目绑定在接纳层执行。
+// validateRequirementPackage 校验变更包的形状：候选 revision、delta 指纹
+// 与影响预览指纹非空；来源与分类封闭；发现项驱动的来源必携 finding
+// digest，用户主动发起必空。来源↔分类↔真实裁决的对照与账目绑定在接纳
+// 层执行。
 func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 	if strings.TrimSpace(pkg.CandidateRevision) == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the candidate revision binding"}
 	}
 	if strings.TrimSpace(pkg.DeltaDigest) == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the review-delta digest binding"}
+	}
+	if strings.TrimSpace(pkg.ImpactDigest) == "" {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the impact-preview digest binding"}
 	}
 	if !validRequirementSource(pkg.Source) {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement decision source %q invalid (closed set: USER_INITIATED, REVIEW_FINDING_P2, REVIEW_FINDING_P1)", pkg.Source)}
@@ -133,18 +138,37 @@ func (s *State) RequirementRevision() string {
 // requirementChangePending 报告修订屏障是否在位：存在未决的
 // REQUEST_REQUIREMENT_CHANGE Ask。
 func (s *State) requirementChangePending() bool {
-	for _, ask := range s.PendingAsks {
-		if ask.Control == ControlRequestRequirementChange && !ask.Resolved {
+	return s.requirementChangePendingExcept("")
+}
+
+// requirementChangePendingExcept 报告除 requestID 外是否仍有未决的需求
+// 变化 Ask：需求决定事务内以它判定屏障解除边界——只有最后一个未决 Ask
+// 的解决才触发隔离账重分类，此前隔离继续持有。
+func (s *State) requirementChangePendingExcept(requestID string) bool {
+	for id, ask := range s.PendingAsks {
+		if id != requestID && ask.Control == ControlRequestRequirementChange && !ask.Resolved {
 			return true
 		}
 	}
 	return false
 }
 
+// requirementChangeSourcePrefix 是重走失效来源的前缀（后接授权它的
+// requestID）；seriesInRedoStale 以它识别重走态。
+const requirementChangeSourcePrefix = "requirement-change:"
+
+// seriesInRedoStale 报告 series 是否处于用户确认重走后的待新鲜轮态
+// （effective PENDING 且失效来源为某次需求决定）。该态下证据只认绑当前
+// 权威 revision 且派发不早于 series 的 fresh floor；未处于该态的 series
+// 一律按 carry 语义接纳已确认 revision 的证据。
+func seriesInRedoStale(series review.Series) bool {
+	return series.Effective.Status == "PENDING" && strings.HasPrefix(series.Effective.Source, requirementChangeSourcePrefix)
+}
+
 // ---- 修订屏障的单一处置表（§7.2.2 Phase A，S2） ----
 
 // errPhaseAQuarantine 是处置表对 WORKER_RESULT 的哨兵：区别于 nil（照常
-// 接纳）与拒绝错误，表示进入持久隔离账（S3）。
+// 接纳）与拒绝错误，表示进入持久隔离账。
 var errPhaseAQuarantine = errors.New("phase A quarantine")
 
 // admitInCurrentState 是修订屏障在位时的单一处置表：一切 admit 分支与
@@ -153,7 +177,7 @@ var errPhaseAQuarantine = errors.New("phase A quarantine")
 //	照常接纳：观察类（lifecycle/task-progress/operator observation）、在途
 //	          回执（spawn/HostAction，可到 terminal）、Ask 创建（惰性，其
 //	          DECIDE 另经表）、需求变化自身的 REQUEST/DECIDE、RESET/ABORT。
-//	持久隔离：WORKER_RESULT（在途计算结果，S3 原子重分类）。
+//	持久隔离：WORKER_RESULT（在途计算结果，屏障解除边界上原子重分类）。
 //	拒绝    ：其余一切 DECIDE（拓扑/路线/审查决定/grant/恢复）与新的
 //	          HostAction intent（停止新的权威写入）。
 //
@@ -195,36 +219,25 @@ func (s *State) admitInCurrentState(ev Event, hostActionIntent bool) error {
 
 // quarantineWorkerResult 把屏障期的 worker result 原子落入持久隔离账
 // （按 eventID，事件同时进台账防重放）：不推进、不入 Results，接纳回执
-// Status=QUARANTINED。重分类发生在需求决定落账的同一事务内
-// （replayQuarantinedResults），进程重启不丢失。
-func (e *Engine) quarantineWorkerResult(state *State, ev Event, digest string, nextRevision uint64) (Acceptance, *State, bool, error) {
-	state.QuarantinedResults[string(ev.ID)] = WorkerResult{
-		ActionID:      ev.Result.ActionID,
-		Provider:      ev.Result.Provider,
-		Outcome:       ev.Result.Outcome,
-		PayloadDigest: ev.Result.PayloadDigest,
-		FailureClass:  ev.Result.FailureClass,
-		Review:        ev.Result.Review,
-		Digest:        digest,
-	}
+// Status=QUARANTINED。摘要与正常接纳路径同源（resultPayloadDigest，不含
+// 事件 ID）——重分类与事后重发都按结果级身份判幂等/冲突。重分类发生在
+// 需求决定落账的同一事务内（replayQuarantinedResults），进程重启不丢失。
+func (e *Engine) quarantineWorkerResult(state *State, ev Event, nextRevision uint64) (Acceptance, *State, bool, error) {
+	state.QuarantinedResults[string(ev.ID)] = workerResultRecord(ev.Result)
 	return Acceptance{
 		EventID: string(ev.ID), Kind: string(ev.Kind), Status: "QUARANTINED",
 		Revision: nextRevision, ActionID: ev.Result.ActionID,
 	}, state, true, nil
 }
 
-// replayQuarantinedResults 在需求决定（含放弃）落账的同一事务内原子重分
-// 类隔离账（§7.2.2 的恢复侧）：
-//   - CHANGED：绑旧权威 revision 的审查证据经 F3 永不可纳——直接作废入
-//     ObsoleteResults 并留痕（scope 覆盖与否都作废，这是不变量不是选择）。
-//   - 其余（放弃/PRESERVED 的全部、CHANGED 下的非 Review 结果）：逐条走
-//     正常接纳路径重放——回执未到则回到暂存，已配对则完成；接纳错误
-//     （结构缺陷、revision 失配等）不否决决定，把该结果判为不可纳、入
-//     ObsoleteResults 并留痕。
-//
-// 重放按 eventID 排序保持确定性；重放内部的补位签发由 refill 的既有屏障
-// 扣发持住，决定提交后的统一 refill 补进。
-func (e *Engine) replayQuarantinedResults(state *State, classification, newRevision string, nextRevision uint64, expectedFingerprint string) {
+// replayQuarantinedResults 在需求决定的屏障解除（最后一个未决 Ask 解决）
+// 的同一事务内逐条原子重分类隔离账（§7.2.2 的恢复侧）：每条记录经与
+// Submit 完全相同的接纳核心重放——未勾选 series 的审查证据按 carry 语义
+// 携原 revision 接纳并留痕；单条失败经快照恢复只落该条的 obsolete＋留痕
+// （零半套账目），其余记录照常继续。重放按 eventID 排序保持确定性；重放
+// 内部的补位签发由 refill 的既有屏障扣发持住，决定提交后的统一 refill
+// 补进。
+func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRevision uint64, expectedFingerprint string) {
 	if len(state.QuarantinedResults) == 0 {
 		return
 	}
@@ -236,64 +249,94 @@ func (e *Engine) replayQuarantinedResults(state *State, classification, newRevis
 	for _, eventID := range eventIDs {
 		record := state.QuarantinedResults[eventID]
 		delete(state.QuarantinedResults, eventID)
-		if record.Review != nil && classification == RequirementClassificationChanged && record.Review.RequirementRevision != newRevision {
+		snapshot, cloneErr := cloneState(state)
+		var admitErr error
+		if cloneErr == nil {
+			_, _, admitErr = e.admitWorkerResultRecord(state, record.ActionID, workerResultPayloadOf(record), eventID, nextRevision, nextRevision, expectedFingerprint)
+		}
+		if cloneErr != nil || admitErr != nil {
+			if snapshot != nil {
+				*state = *snapshot
+			}
 			state.ObsoleteResults[record.ActionID] = record
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 				ActionID: record.ActionID,
-				Detail:   fmt.Sprintf("quarantined %s evidence bound to superseded requirement revision %q is permanently inadmissible and was voided by the confirmed change", record.Review.Action, record.Review.RequirementRevision),
+				Detail: fmt.Sprintf("quarantined result could not be readmitted after the requirement decision %s: %v",
+					requestID, errors.Join(cloneErr, admitErr)),
 				Revision: nextRevision,
 			})
 			continue
 		}
-		if err := e.readmitWorkerResult(state, record, nextRevision, expectedFingerprint); err != nil {
-			state.ObsoleteResults[record.ActionID] = record
+		if record.Review != nil && record.Review.RequirementRevision != state.RequirementRevision() {
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 				ActionID: record.ActionID,
-				Detail:   fmt.Sprintf("quarantined result could not be readmitted after the requirement decision: %v", err),
+				Detail: fmt.Sprintf("carried by requirement decision %s: %s evidence bound to confirmed revision %q admitted unchanged",
+					requestID, record.Review.Action, record.Review.RequirementRevision),
 				Revision: nextRevision,
 			})
 		}
 	}
 }
 
-// readmitWorkerResult 以正常接纳语义重放一条结果：回执未到（或 UNKNOWN）
-// 则按 result-before-receipt 回到暂存（携审查证据的先过完整可接纳性预
-// 检），已配对则完成该 expected 项。
-func (e *Engine) readmitWorkerResult(state *State, record WorkerResult, nextRevision uint64, expectedFingerprint string) error {
-	if existing, seen := state.Results[record.ActionID]; seen {
-		if existing.Digest == record.Digest {
-			return nil
-		}
-		return fmt.Errorf("action %q already has a different admitted result", record.ActionID)
+// cloneState 深拷贝整个 state（重放的逐条原子性：单条失败恢复到该条重放
+// 之前的完整快照）。state 本身就是 JSON 权威编码，往返即深拷贝；错误视
+// 为不可重放。
+func cloneState(state *State) (*State, error) {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
 	}
-	if receipt, receipted := state.SpawnReceipts[record.ActionID]; !receipted || receipt.Status == SpawnStatusUnknown {
-		if record.Review != nil {
-			if _, err := state.admitReviewEvidence(record.Review); err != nil {
-				return err
-			}
-		}
-		if staged, exists := state.StagedResults[record.ActionID]; exists {
-			if staged.Digest == record.Digest {
-				return nil
-			}
-			return fmt.Errorf("action %q already has a different staged worker result", record.ActionID)
-		}
-		state.StagedResults[record.ActionID] = record
-		return nil
+	out := &State{}
+	if err := json.Unmarshal(data, out); err != nil {
+		return nil, err
 	}
-	_, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
-	return err
+	return out, nil
+}
+
+// terminateDeclaredDispatch 机械终止一个已声明重走系列身份的在途派发
+// （§7.2.2:4 Phase B 的 terminate/stale）：结果判不可纳、入迟到证据账
+// （obsolete）＋留痕；派发仍在途则退位并由同任务的新 attempt 替换（其签
+// 发代数＝本次决定，满足该 series 的 fresh floor）；派发已不在（任务已
+// 到终态）时只落迟到证据与留痕。
+func (e *Engine) terminateDeclaredDispatch(state *State, actionID string, record WorkerResult, requestID string, nextRevision uint64, expectedFingerprint string) {
+	state.ObsoleteResults[actionID] = record
+	detail := fmt.Sprintf("the %s series was redone by requirement decision %s; the dispatch was terminated by declaration and its evidence is superseded",
+		evidenceActionName(record.Review), requestID)
+	if pending, ok := state.PendingActions[actionID]; ok {
+		attempt := state.Attempts[pending.Task]
+		retired, _ := state.retireAction(actionID, "", "superseded by the confirmed requirement redo")
+		bindings := AttemptBindings{Task: retired.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider}
+		if replacement, err := state.installReplacement(retired, nextRevision, bindings, attempt.Plan, attempt.Attempts, attempt.MaxAttempts); err == nil {
+			obsolete := state.ObsoleteActions[actionID]
+			obsolete.ReplacedBy = replacement.ActionID
+			state.ObsoleteActions[actionID] = obsolete
+			detail = fmt.Sprintf("%s; replacement dispatch %s", detail, replacement.ActionID)
+		}
+	}
+	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+		ActionID: actionID, Action: RecoveryNewAttempt, Detail: detail, Revision: nextRevision,
+	})
+}
+
+// evidenceActionName 返回证据声明的审查动作名（无审查证据即非审查派发）。
+func evidenceActionName(evidence *ReviewResultEvidence) string {
+	if evidence == nil {
+		return "non-review"
+	}
+	return string(evidence.Action)
 }
 
 // ---- 决定的账目变换（DECIDE 接纳路径） ----
 
 // admitRequirementDecision 在选项合法后执行需求变化控制的账目变换。
 // choice id 封闭为 proceed/abort（固定项锚定）：abort 不得携载荷——放弃
-// 即不登记，但隔离账仍须重分类（屏障解除）；proceed 必携 typed 载荷且与
-// Ask 落账的确认包逐字段相等（Ask 即用户确认边界，包外内容不存在）。
-// 前置校验全部通过后，同一事务内：登记 ConfirmedRevision → 机械执行
-// scope（两类分类一致：勾选的 series stale、拓扑/路线解绑）→ 统一按
-// revision 绑定作废旧权威审查暂存 → 原子重分类隔离账。
+// 即不登记；proceed 必携 typed 载荷且与 Ask 落账的确认包逐字段相等（Ask
+// 即用户确认边界，包外内容不存在）。基线三方相等：载荷基线＝Ask 落账基
+// 线＝当前权威 revision，任何不等即 Ask 过期（可区分拒绝、零状态、须在
+// 新基线上重建）。前置校验全部通过后，同一事务内：登记 ConfirmedRevision
+// → 机械执行 scope（两类分类一致：勾选的 series stale＋fresh floor、拓
+// 扑/路线解绑、重走范围内已声明系列身份的在途派发按声明终止）→ 屏障解
+// 除边界上的隔离账重分类（未勾选 series 携原 revision carry）。
 func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, expectedFingerprint string) error {
 	if ask.Control != ControlRequestRequirementChange {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a requirement decision payload", ask.Control)}
@@ -303,9 +346,9 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		if decide.Requirement != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "aborting a requirement change cannot carry a decision payload"}
 		}
-		// 放弃：不登记 revision、不动 scope，隔离账按现行权威重放（应被纳）。
-		e.replayQuarantinedResults(state, "", state.RequirementRevision(), nextRevision, expectedFingerprint)
-		return nil
+		// 放弃：不登记 revision、不动 scope；最后一个未决 Ask 解决时隔离
+		// 账按现行权威重放（应被纳），否则继续持有。
+		return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)
 	case requirementProceedOption:
 		if decide.Requirement == nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "proceeding with a requirement change requires the typed requirement payload"}
@@ -317,7 +360,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	reject := func(detail string) error {
 		return &RejectedError{Code: CodeRequirementDecisionRejected, Detail: detail}
 	}
-	// S1：DECIDE 载荷必须与 Ask 落账的确认包逐字段相等——同一 Ask 不可
+	// DECIDE 载荷必须与 Ask 落账的确认包逐字段相等——同一 Ask 不可
 	// 登记不同于用户所见所确认的变更内容。
 	if ask.Package == nil {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "the requirement change ask does not carry the confirmed package"}
@@ -328,9 +371,14 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if state.IntakeReceipt == nil {
 		return reject("requirement change requires the recorded intake receipt (the run has not started)")
 	}
-	current := state.RequirementRevision()
-	if payload.BaseRevision != current {
-		return reject(fmt.Sprintf("requirement decision base revision %q is not the current authoritative revision %q (conflict)", payload.BaseRevision, current))
+	// 基线三方相等：Ask 创建时的权威基线、载荷 CAS 基线与当前权威必须
+	// 是同一 revision——任何后续确认都使旧 Ask 过期。
+	if current := state.RequirementRevision(); ask.BaseRevision == "" || ask.BaseRevision != current || payload.BaseRevision != ask.BaseRevision {
+		return &RejectedError{
+			Code: CodeRequirementAskExpired,
+			Detail: fmt.Sprintf("the requirement change ask %s is expired: it was raised at base %q, the decide carries %q, the current authoritative revision is %q; rebuild the ask on the current base",
+				requestID, ask.BaseRevision, payload.BaseRevision, current),
+		}
 	}
 	// 来源必须绑用户的 finding 处置（§7.1 的引擎强制）：
 	//   - 未裁决（raw）的 finding 不能驱动任何修订来源——先处置再发起。
@@ -399,14 +447,15 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		StateRevision:  nextRevision,
 	})
 	// 机械执行 scope：勾选的 series 调单 series stale 原语（不跨 series
-	// 级联：未勾选即续用）；勾选拓扑/路线即解绑，重新确认走既有
+	// 级联：未勾选即续用），fresh floor＝本次决定的 state 代数——重走态
+	// 的新鲜轮只认不早于它的派发；勾选拓扑/路线即解绑，重新确认走既有
 	// CONFIRM_TOPOLOGY/SELECT_ROUTE 路径。phase 与推进门不变。
-	source := "requirement-change:" + requestID
+	source := requirementChangeSourcePrefix + requestID
 	if payload.RedoProductReview {
-		state.ReviewSeries = review.StaleSeries(state.ReviewSeries, review.ProductReview, source)
+		state.ReviewSeries = review.StaleSeries(state.ReviewSeries, review.ProductReview, source, nextRevision)
 	}
 	if payload.RedoStartReadiness {
-		state.ReviewSeries = review.StaleSeries(state.ReviewSeries, review.StartReadiness, source)
+		state.ReviewSeries = review.StaleSeries(state.ReviewSeries, review.StartReadiness, source, nextRevision)
 	}
 	if payload.RedoTopology {
 		state.Topology = nil
@@ -415,22 +464,53 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		state.RouteMode = ""
 		state.SelectedGates = nil
 	}
-	// 统一的暂存规则：任何已确认 revision 变化（PRESERVED 或 CHANGED）都
-	// 使绑旧权威 revision 的审查暂存条目经 F3 永不可纳——一律清除＋留痕
-	//（规则只认 revision 绑定，不认 scope）；非 Review 暂存不动。
-	for actionID, staged := range state.StagedResults {
-		if staged.Review == nil || staged.Review.RequirementRevision != payload.BaseRevision {
-			continue
+	// Phase B 的在途处置（§7.2.2:4）：重走范围内已声明系列身份的在途派
+	// 发（暂存或隔离证据携带 action↔series 绑定）按声明终止；未声明身份
+	// 的在途派发由接纳核心的 floor 比对＋按声明终止兜底。未勾选的 series
+	// 一律续用：暂存保留（迟到回执照常配对）、隔离结果携原 revision carry。
+	declaredInScope := func(evidence *ReviewResultEvidence) bool {
+		return evidence != nil &&
+			((evidence.Action == review.ProductReview && payload.RedoProductReview) ||
+				(evidence.Action == review.StartReadiness && payload.RedoStartReadiness))
+	}
+	stagedIDs := make([]string, 0, len(state.StagedResults))
+	for actionID := range state.StagedResults {
+		stagedIDs = append(stagedIDs, actionID)
+	}
+	slices.Sort(stagedIDs)
+	for _, actionID := range stagedIDs {
+		if staged := state.StagedResults[actionID]; declaredInScope(staged.Review) {
+			delete(state.StagedResults, actionID)
+			e.terminateDeclaredDispatch(state, actionID, staged, requestID, nextRevision, expectedFingerprint)
 		}
+	}
+	quarantinedIDs := make([]string, 0, len(state.QuarantinedResults))
+	for eventID := range state.QuarantinedResults {
+		quarantinedIDs = append(quarantinedIDs, eventID)
+	}
+	slices.Sort(quarantinedIDs)
+	for _, eventID := range quarantinedIDs {
+		if record := state.QuarantinedResults[eventID]; declaredInScope(record.Review) {
+			delete(state.QuarantinedResults, eventID)
+			e.terminateDeclaredDispatch(state, record.ActionID, record, requestID, nextRevision, expectedFingerprint)
+		}
+	}
+	// 屏障解除边界上的隔离账重分类。
+	return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)
+}
+
+// replayWhenBarrierLifts 是隔离账重分类的屏障解除边界：本 Ask 解决后仍
+// 有未决需求 Ask 时隔离继续持有（本次决定已生效的 scope 处置不受影响）
+// 并留痕；这是最后一个未决 Ask 时在同一事务内逐条原子重放。
+func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevision uint64, expectedFingerprint string) error {
+	if state.requirementChangePendingExcept(requestID) {
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-			ActionID: actionID,
-			Detail:   fmt.Sprintf("staged %s evidence bound to superseded requirement revision %q invalidated by the confirmed requirement change %s", staged.Review.Action, payload.BaseRevision, payload.CandidateRevision),
+			Detail:   fmt.Sprintf("the quarantine ledger stays held: another requirement change ask is still pending after %s", requestID),
 			Revision: nextRevision,
 		})
-		delete(state.StagedResults, actionID)
+		return nil
 	}
-	// 原子重分类隔离账。
-	e.replayQuarantinedResults(state, payload.Classification, payload.CandidateRevision, nextRevision, expectedFingerprint)
+	e.replayQuarantinedResults(state, requestID, nextRevision, expectedFingerprint)
 	return nil
 }
 

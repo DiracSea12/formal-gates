@@ -205,6 +205,9 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 		Plan:         plan,
 		Attempts:     attempts,
 		MaxAttempts:  maxAttempts,
+		// 与 issueInto 同源的签发代数落账：重签发即新派发，floor 比对以
+		// 它为准。
+		IssuedRevision: nextRevision,
 	}
 	s.Attempts[pending.Task] = attempt
 	s.PendingActions[actionID] = PendingAction{ActionID: actionID, Task: pending.Task, Step: pending.Step, AttemptID: attempt.ID}

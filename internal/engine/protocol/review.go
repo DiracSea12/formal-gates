@@ -198,18 +198,43 @@ func (s *State) dualReviewPass() bool {
 }
 
 // admitReviewEvidence 对一条审查证据执行完整可接纳性判定并返回记账后的
-// Set：受理 revision 绑定（stale 绑定的结果不计）、start-readiness 的双审
-// 顺序守卫（product-review 须携已确认 revision 的 effective PASS）、review
-// 内核的记录变换（重复摘要、越限无授权、核实缺项、finding 形状）。非空
-// 错误即 CodeReviewEvidenceRejected 且零状态变化。暂存预检与回执配对后
-// 的权威接纳共用本函数（单一事实源）：预检丢弃返回值只取错误——内核变换
-// 不改写调用方输入（包契约并有回归测试），账本在暂存与回执之间可能变化，
-// 落账仍以配对时的接纳为准。
-func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence) (review.Set, error) {
-	if evidence.RequirementRevision != s.RequirementRevision() {
+// Set。revision 绑定按 series 的重走态分两支（处置只认用户勾选的重走范
+// 围，§7.2.2:4）：
+//
+//	重走态（用户确认重走、尚待新鲜轮）：只认绑当前权威 revision 的新鲜轮，
+//	  且所在派发的签发代数不得早于该次决定的 fresh floor——pre-floor 派
+//	  发的证据一律拒绝（由接纳核心按声明终止并重签发）。
+//	其余（未勾选即续用）：绑任一已确认 revision 的证据按 carry 语义可纳
+//	  （用户不勾重走即 carry 授权，携原 revision 接纳）。
+//
+// 另受理 start-readiness 的双审顺序守卫（product-review 须携已确认
+// revision 的 effective PASS）、review 内核的记录变换（重复摘要、越限无
+// 授权、核实缺项、finding 形状）。非空错误即 CodeReviewEvidenceRejected
+// 且零状态变化。暂存预检与回执配对后的权威接纳共用本函数（单一事实源）：
+// 预检丢弃返回值只取错误——内核变换不改写调用方输入（包契约并有回归测
+// 试），账本在暂存与回执之间可能变化，落账仍以配对时的接纳为准。
+func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, issuedRevision uint64) (review.Set, error) {
+	series, _ := s.ReviewSeries.Series(evidence.Action)
+	if seriesInRedoStale(series) {
+		if evidence.RequirementRevision != s.RequirementRevision() {
+			return review.Set{}, &RejectedError{
+				Code: CodeReviewEvidenceRejected,
+				Detail: fmt.Sprintf("%s is being redone; its fresh round must bind the current authoritative revision %q (evidence binds %q)",
+					evidence.Action, s.RequirementRevision(), evidence.RequirementRevision),
+			}
+		}
+		if issuedRevision < series.FreshFloor {
+			return review.Set{}, &RejectedError{
+				Code: CodeReviewEvidenceRejected,
+				Detail: fmt.Sprintf("%s fresh round requires a dispatch issued at or after the redo decision (state revision >= %d; this dispatch was issued at %d)",
+					evidence.Action, series.FreshFloor, issuedRevision),
+			}
+		}
+	} else if !s.confirmedRequirementRevision(evidence.RequirementRevision) {
 		return review.Set{}, &RejectedError{
-			Code:   CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("review evidence requirement revision %q is a stale binding (intake binds %q)", evidence.RequirementRevision, s.RequirementRevision()),
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("review evidence requirement revision %q is not a confirmed revision (current authoritative %q)",
+				evidence.RequirementRevision, s.RequirementRevision()),
 		}
 	}
 	// §7.1.2 门槛：series 上存在当前 revision 下确认的 P0/P1 阻塞 finding
@@ -217,7 +242,6 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence) (review.Set,
 	// 确认的需求缺陷，必须先换到经确认变更的新 revision（或经纠正路径
 	// dismiss/降级清除阻塞，该路径不受本门槛约束）。series 的 effective
 	// 尚绑在旧 revision 时门槛自然关闭，新 revision 的新鲜轮自动放行。
-	series, _ := s.ReviewSeries.Series(evidence.Action)
 	if series.Effective.RequirementRevision == evidence.RequirementRevision && review.HasConfirmedBlocking(series) {
 		return review.Set{}, &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
@@ -245,11 +269,11 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence) (review.Set,
 	return updated, nil
 }
 
-// recordReviewCandidate 把审查证据经完整可接纳性判定后记账落回 state。
-// RecordCandidate 的错误（重复摘要、越限无授权、核实不全）拒绝整个事
-// 件。
-func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence) error {
-	updated, err := state.admitReviewEvidence(evidence)
+// recordReviewCandidate 把审查证据经完整可接纳性判定后记账落回 state；
+// floor 比对读该结果所属派发的签发代数。RecordCandidate 的错误（重复摘
+// 要、越限无授权、核实不全）拒绝整个事件。
+func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence, actionID string) error {
+	updated, err := state.admitReviewEvidence(evidence, state.issuedRevisionOf(actionID))
 	if err != nil {
 		return err
 	}
@@ -579,6 +603,24 @@ func verifyReviewIntegrity(state *State) error {
 	}
 	if err := verifyRequirementLedger(state); err != nil {
 		return err
+	}
+	// FreshFloor 只认确认账本：每条 series 的 floor 必须等于覆盖该 series
+	// 的最后一次决定的 state 代数（无覆盖为零）——手改 floor 可检出。
+	expectedFloor := func(action review.Action) uint64 {
+		var floor uint64
+		for _, entry := range state.RequirementRevisions {
+			if entry.StateRevision > floor && slices.Contains(entry.DecidedScope, string(action)) {
+				floor = entry.StateRevision
+			}
+		}
+		return floor
+	}
+	product, readiness := state.ReviewSeries.ProductReview, state.ReviewSeries.StartReadiness
+	if product.FreshFloor != expectedFloor(review.ProductReview) || readiness.FreshFloor != expectedFloor(review.StartReadiness) {
+		return &RejectedError{
+			Code:   CodeStateIntegrityInvalid,
+			Detail: "review series fresh floors do not match the requirement confirmation ledger",
+		}
 	}
 	return state.verifyPhaseAgainstLedgers()
 }

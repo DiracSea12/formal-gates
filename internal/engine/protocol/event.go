@@ -245,13 +245,14 @@ type RouteDecision struct {
 }
 
 // RequirementDecisionPackage 是用户在 Ask 上看到并确认的完整变更包：
-// 候选 revision、review-delta 指纹、来源、含义分类、四个重走勾选与发现
-// 绑定。BaseRevision 不入包（CAS 基线由引擎按请求时的权威 revision 持
-// 有）；Reason 随 DECIDE 落账。结构只含 string/bool，可直接做逐字段相等
-// 比较。
+// 候选 revision、review-delta 指纹、影响预览指纹、来源、含义分类、四个
+// 重走勾选与发现绑定。BaseRevision 不入包（Ask 的权威基线由引擎按请求
+// 时的权威 revision 持有）；Reason 随 DECIDE 落账。结构只含 string/bool，
+// 可直接做逐字段相等比较。
 type RequirementDecisionPackage struct {
 	CandidateRevision  string `json:"candidateRevision"`
 	DeltaDigest        string `json:"deltaDigest"`
+	ImpactDigest       string `json:"impactDigest"`
 	Source             string `json:"source"`
 	Classification     string `json:"classification"`
 	RedoProductReview  bool   `json:"redoProductReview"`
@@ -267,6 +268,7 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 	return RequirementDecisionPackage{
 		CandidateRevision:  p.CandidateRevision,
 		DeltaDigest:        p.DeltaDigest,
+		ImpactDigest:       p.ImpactDigest,
 		Source:             p.Source,
 		Classification:     p.Classification,
 		RedoProductReview:  p.RedoProductReview,
@@ -279,12 +281,13 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 
 // RequirementDecisionPayload 是 REQUEST_REQUIREMENT_CHANGE 的 DECIDE
 // typed 载荷（总需求 §7.2.1）：在 Ask 落账的确认包之外补充 BaseRevision
-// （CAS 基线，必须等于当前权威 revision）与 Reason（决定理由，随决定落
-// 账）。其余字段必须与包逐字段相等。
+// （CAS 基线，必须等于 Ask 落账基线与当前权威 revision）与 Reason（决定
+// 理由，随决定落账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
 	BaseRevision       string `json:"baseRevision"`
 	CandidateRevision  string `json:"candidateRevision"`
 	DeltaDigest        string `json:"deltaDigest"`
+	ImpactDigest       string `json:"impactDigest"`
 	Source             string `json:"source"`
 	Classification     string `json:"classification"`
 	RedoProductReview  bool   `json:"redoProductReview"`
