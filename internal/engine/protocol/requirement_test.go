@@ -156,6 +156,8 @@ func freshRoundOnTheReplacement(t *testing.T, engine *Engine, retiredActionID, e
 func freshRoundAfterDeclaredTermination(t *testing.T, engine *Engine, oldActionID, eventID string, evidence ReviewResultEvidence) string {
 	t.Helper()
 	fp := fingerprintOf(t, engine)
+	evidence.DispatchID = oldActionID
+	evidence.DispatchID = oldActionID
 	superseded, err := NewReviewWorkerResultEvent(EventID(eventID+"-old"), oldActionID, testProvider, "sha256:payload-"+eventID+"-old", evidence)
 	if err != nil {
 		t.Fatalf("superseded event: %v", err)
@@ -172,6 +174,8 @@ func freshRoundAfterDeclaredTermination(t *testing.T, engine *Engine, oldActionI
 	if _, err := engine.Submit(spawnReceipt(t, EventID(eventID+"-spawn"), replacement, "agent-"+eventID), fp); err != nil {
 		t.Fatalf("replacement spawn: %v", err)
 	}
+	evidence.DispatchID = replacement
+	evidence.DispatchID = replacement
 	fresh, err := NewReviewWorkerResultEvent(EventID(eventID), replacement, testProvider, "sha256:payload-"+eventID, evidence)
 	if err != nil {
 		t.Fatalf("fresh event: %v", err)
@@ -240,7 +244,7 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 	snap := engine.LoadMustSucceed(t)
 	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm-p2", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "CONFIRM", Reason: "user confirms the advisory", ExpectedEffectiveRevision: 1,
 	}})
@@ -308,7 +312,7 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 	if _, err := engine.Submit(spawnReceipt(t, "spawn-carry-rev", nextAction, "agent-carry-rev"), fp); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	carried, err := NewReviewWorkerResultEvent("result-carried-rev", nextAction, testProvider, "sha256:carried-rev", reviewEvidenceAt(review.ProductReview, "dispatch-carried", "rev-1", "PASS", "old binding carried", nil))
+	carried, err := NewReviewWorkerResultEvent("result-carried-rev", nextAction, testProvider, "sha256:carried-rev", reviewEvidenceAt(review.ProductReview, nextAction, "rev-1", "PASS", "old binding carried", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -438,7 +442,7 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 	snap := engine.LoadMustSucceed(t)
 	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm-p1", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "CONFIRM", Reason: "user confirms the blocker", ExpectedEffectiveRevision: 1,
 	}})
@@ -519,7 +523,7 @@ func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 	snap := engine.LoadMustSucceed(t)
 	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "CONFIRM", Reason: "user confirms the blocker", ExpectedEffectiveRevision: 1,
 	}})
@@ -529,7 +533,7 @@ func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 	if _, err := engine.Submit(spawnReceipt(t, "spawn-2", second, "agent-2"), fp); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	blocked, err := NewReviewWorkerResultEvent("result-2", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, "dispatch-2", "", "PASS", "resample the same inputs", nil))
+	blocked, err := NewReviewWorkerResultEvent("result-2", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, second, "", "PASS", "resample the same inputs", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -549,7 +553,7 @@ func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 	series := snap.State.ReviewSeries.ProductReview
 	dismiss := AskOption{ID: AskOptionID("dismiss:" + candidate.Findings[0].ID), Label: "dismiss"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "DISMISS", Supersedes: series.Adjudications[0].ID,
 		Reason: "user rejects the finding after re-verification", ExpectedEffectiveRevision: series.Effective.Revision,
@@ -558,7 +562,7 @@ func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 	if series := snap.State.ReviewSeries.ProductReview; series.Effective.Status != "PASS" {
 		t.Fatalf("dismiss must clear the block: %+v", series.Effective)
 	}
-	retry, err := NewReviewWorkerResultEvent("result-2-retry", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, "dispatch-2", "", "PASS", "round after the dismissal", nil))
+	retry, err := NewReviewWorkerResultEvent("result-2-retry", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, second, "", "PASS", "round after the dismissal", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -641,7 +645,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 			t.Fatalf("spawn receipt under barrier: %v", err)
 		}
 		// worker 已按 Ask 绑定的候选 revision（rev-2）复审：隔离账存原样。
-		ev, err := NewReviewWorkerResultEvent("result-under-barrier", product, testProvider, "sha256:payload-barrier", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed the candidate", nil))
+		ev, err := NewReviewWorkerResultEvent("result-under-barrier", product, testProvider, "sha256:payload-barrier", reviewEvidenceAt(review.ProductReview, product, "rev-2", "PASS", "re-reviewed the candidate", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -694,7 +698,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if _, err := engine.Submit(spawnReceipt(t, "spawn-void", product, "agent-void"), fp); err != nil {
 			t.Fatalf("spawn receipt under barrier: %v", err)
 		}
-		ev, err := NewReviewWorkerResultEvent("result-void", product, testProvider, "sha256:payload-void", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "bound to the superseded revision", nil))
+		ev, err := NewReviewWorkerResultEvent("result-void", product, testProvider, "sha256:payload-void", reviewEvidence(review.ProductReview, product, "", "PASS", "bound to the superseded revision", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -1276,9 +1280,9 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 		t.Fatal("a PASS bound outside the confirmed ledger must not be a valid conclusion")
 	}
 	if _, err := phantom.admitReviewEvidence(&ReviewResultEvidence{
-		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
+		Action: review.StartReadiness, DispatchID: "act:review/start.readiness", RequirementRevision: "rev-1",
 		Status: "PASS", Verification: reviewVerification(),
-	}, 0); err == nil {
+	}, "act:review/start.readiness", 0); err == nil {
 		t.Fatal("the sequence guard opened behind an out-of-ledger PASS")
 	} else if code := rejectionCode(t, err); code != CodeReviewSequenceGate {
 		t.Fatalf("out-of-ledger guard code = %q", code)
@@ -1289,9 +1293,9 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 		t.Fatal("a PASS bound to a confirmed revision must stay valid")
 	}
 	if _, err := carried.admitReviewEvidence(&ReviewResultEvidence{
-		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
+		Action: review.StartReadiness, DispatchID: "act:review/start.readiness", RequirementRevision: "rev-1",
 		Status: "PASS", Verification: reviewVerification(),
-	}, 0); err != nil {
+	}, "act:review/start.readiness", 0); err != nil {
 		t.Fatalf("the sequence guard must admit behind a confirmed-revision PASS: %v", err)
 	}
 }
@@ -1412,7 +1416,7 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 
 	// CAS 负控照旧：过期 ExpectedEffectiveRevision 拒绝且零状态。
 	staleCAS := ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
+		Action: review.StartReadiness, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "DISMISS", Reason: "stale CAS probe", ExpectedEffectiveRevision: carried.Effective.Revision + 5,
 	}}
@@ -1426,7 +1430,7 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 	// 正控：携用结论上的 finding 处置纠正被纳——stale 门按绑定 revision
 	//（rev-1）判定而非当前权威（rev-2）。
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss-carried", []AskOption{dismissOption}, dismissOption.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.StartReadiness, DispatchID: "dispatch-readiness-1", RequirementRevision: "rev-1",
+		Action: review.StartReadiness, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "DISMISS", Reason: "user rejects the advisory on the carried conclusion", ExpectedEffectiveRevision: carried.Effective.Revision,
 	}})
@@ -1453,7 +1457,7 @@ func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
 		snap := engine.LoadMustSucceed(t)
 		candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 		askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm-label", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-			Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+			Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 			ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 			Decision: "CONFIRM", Reason: "user confirms the disposition", ExpectedEffectiveRevision: 1,
 		}})
@@ -1506,7 +1510,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 		product := issueReady(t, engine)[0]
-		staged, err := NewReviewWorkerResultEvent("result-staged-old", product, testProvider, "sha256:payload-staged-old", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "bound before the change", nil))
+		staged, err := NewReviewWorkerResultEvent("result-staged-old", product, testProvider, "sha256:payload-staged-old", reviewEvidence(review.ProductReview, product, "", "PASS", "bound before the change", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -1545,7 +1549,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		if _, err := engine.Submit(spawnReceipt(t, "spawn-fresh-staging", replacement, "agent-fresh-staging"), fp); err != nil {
 			t.Fatalf("replacement spawn: %v", err)
 		}
-		fresh, err := NewReviewWorkerResultEvent("result-fresh", replacement, testProvider, "sha256:payload-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "re-reviewed product", nil))
+		fresh, err := NewReviewWorkerResultEvent("result-fresh", replacement, testProvider, "sha256:payload-fresh", reviewEvidenceAt(review.ProductReview, replacement, "rev-2", "PASS", "re-reviewed product", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -1565,7 +1569,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		product := issueReady(t, engine)[0]
 		submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
 		readiness := pendingActionID(t, engine)
-		staged, err := NewReviewWorkerResultEvent("result-staged-kept", readiness, testProvider, "sha256:payload-staged-kept", reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "bound before the change", nil))
+		staged, err := NewReviewWorkerResultEvent("result-staged-kept", readiness, testProvider, "sha256:payload-staged-kept", reviewEvidence(review.StartReadiness, readiness, "", "PASS", "bound before the change", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -1626,7 +1630,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 		product := issueReady(t, engine)[0]
-		staged, err := NewReviewWorkerResultEvent("result-staged-preserved", product, testProvider, "sha256:payload-staged-preserved", reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "bound before the change", nil))
+		staged, err := NewReviewWorkerResultEvent("result-staged-preserved", product, testProvider, "sha256:payload-staged-preserved", reviewEvidence(review.ProductReview, product, "", "PASS", "bound before the change", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -1873,7 +1877,7 @@ func TestUnredoneSeriesQuarantinedResultIsCarried(t *testing.T) {
 		t.Fatalf("receipt during barrier: %v", err)
 	}
 	quarantined, err := NewReviewWorkerResultEvent("evt-carry", readiness, testProvider, "sha256:payload-carry",
-		reviewEvidence(review.StartReadiness, "dispatch-carry-readiness", "", "PASS", "in-flight against rev-1", nil))
+		reviewEvidence(review.StartReadiness, readiness, "", "PASS", "in-flight against rev-1", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -1924,7 +1928,7 @@ func TestQuarantineHeldUntilTheLastPendingAskResolves(t *testing.T) {
 		t.Fatalf("receipt during barrier: %v", err)
 	}
 	quarantined, err := NewReviewWorkerResultEvent("evt-held", product, testProvider, "sha256:payload-held",
-		reviewEvidence(review.ProductReview, "dispatch-held", "", "PASS", "quarantined while two asks pend", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "quarantined while two asks pend", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2131,7 +2135,7 @@ func TestTerminalTaskQuarantinedResultReconcilesOnReplay(t *testing.T) {
 		t.Fatalf("receipt during barrier: %v", err)
 	}
 	quarantined, err := NewReviewWorkerResultEvent("evt-replay-terminal", product, testProvider, "sha256:payload-replay-terminal",
-		reviewEvidence(review.ProductReview, "dispatch-replay-terminal", "", "PASS", "quarantined then the task reports terminal", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "quarantined then the task reports terminal", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2192,7 +2196,7 @@ func TestQuarantinedResultIdentityIgnoresTheEventID(t *testing.T) {
 		t.Fatalf("receipt during barrier: %v", err)
 	}
 	first, err := NewReviewWorkerResultEvent("evt-digest-first", product, testProvider, "sha256:payload-digest",
-		reviewEvidence(review.ProductReview, "dispatch-digest", "", "PASS", "digest identity", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "digest identity", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2205,7 +2209,7 @@ func TestQuarantinedResultIdentityIgnoresTheEventID(t *testing.T) {
 		t.Fatalf("the replayed result did not complete: completed=%d", snap.State.ReviewSeries.ProductReview.Completed)
 	}
 	replay, err := NewReviewWorkerResultEvent("evt-digest-second", product, testProvider, "sha256:payload-digest",
-		reviewEvidence(review.ProductReview, "dispatch-digest", "", "PASS", "digest identity", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "digest identity", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2305,7 +2309,7 @@ func TestMarkedReviewDispatchIsTerminatedByTheRedoDecision(t *testing.T) {
 		}
 		// 替换派发（≥floor、携标记）完成新鲜轮。
 		fresh, err := NewReviewWorkerResultEvent("result-marked-fresh", obsolete.ReplacedBy, testProvider, "sha256:payload-marked-fresh",
-			reviewEvidenceAt(review.ProductReview, "dispatch-marked-2", "rev-2", "PASS", "fresh round on the marked replacement", nil))
+			reviewEvidenceAt(review.ProductReview, obsolete.ReplacedBy, "rev-2", "PASS", "fresh round on the marked replacement", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -2359,7 +2363,7 @@ func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 	mismatched, err := NewReviewWorkerResultEvent("result-mismatch", product, testProvider, "sha256:payload-mismatch",
-		reviewEvidence(review.StartReadiness, "dispatch-mismatch", "", "PASS", "declares the wrong series", nil))
+		reviewEvidence(review.StartReadiness, product, "", "PASS", "declares the wrong series", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2374,7 +2378,7 @@ func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
 	}
 	// 回执已配对：同 action 的相符证据直接完成。
 	matched, err := NewReviewWorkerResultEvent("result-match", product, testProvider, "sha256:payload-match",
-		reviewEvidence(review.ProductReview, "dispatch-match", "", "PASS", "declares the marked series", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "declares the marked series", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2413,7 +2417,7 @@ func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
 		"start-readiness": review.StartReadiness,
 	} {
 		mismatched, err := NewReviewWorkerResultEvent(EventID("result-unaffiliated-"+name), gate, testProvider, "sha256:payload-unaffiliated-"+name,
-			reviewEvidence(action, "dispatch-unaffiliated-"+name, "", "PASS", "predevelopment evidence on an unaffiliated dispatch", nil))
+			reviewEvidence(action, gate, "", "PASS", "predevelopment evidence on an unaffiliated dispatch", nil))
 		if err != nil {
 			t.Fatalf("event %s: %v", name, err)
 		}
@@ -2530,7 +2534,7 @@ func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
 
 	// 就绪系列的下一轮证据先到（暂存，回执未到）。
 	staged, err := NewReviewWorkerResultEvent("result-pair-staged", stagedSlot, testProvider, "sha256:payload-pair-staged",
-		reviewEvidence(review.StartReadiness, "dispatch-readiness-2", "", "PASS", "readiness round before the change", nil))
+		reviewEvidence(review.StartReadiness, stagedSlot, "", "PASS", "readiness round before the change", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2627,7 +2631,7 @@ func TestQuarantinedReadinessUnderProductRedoStaysSuspended(t *testing.T) {
 		t.Fatalf("receipt during barrier: %v", err)
 	}
 	quarantined, err := NewReviewWorkerResultEvent("evt-qap", readiness, testProvider, "sha256:payload-qap",
-		reviewEvidence(review.StartReadiness, "dispatch-qap-readiness", "", "PASS", "in-flight against rev-1", nil))
+		reviewEvidence(review.StartReadiness, readiness, "", "PASS", "in-flight against rev-1", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2696,7 +2700,7 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 	// 不解除——双审门保持关闭。
 	dismiss := findingOption(t, engine, review.ProductReview, 0, "dismiss")
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-owed-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-owed-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "DISMISS", Reason: "the advisory noise is accepted", ExpectedEffectiveRevision: snap.State.ReviewSeries.ProductReview.Effective.Revision,
 	}})
@@ -2761,7 +2765,7 @@ func TestBarrierHoldsTheReceiptPairingUntilTheDecision(t *testing.T) {
 	fp := fingerprintOf(t, engine)
 
 	staged, err := NewReviewWorkerResultEvent("result-barrier-staged", product, testProvider, "sha256:payload-barrier-staged",
-		reviewEvidence(review.ProductReview, "dispatch-barrier-staged", "", "PASS", "staged before the barrier", nil))
+		reviewEvidence(review.ProductReview, product, "", "PASS", "staged before the barrier", nil))
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
 	}
@@ -2865,7 +2869,7 @@ func TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision(t *testing.T) {
 	// 合法 fresh 结果随后到达：真实签发代数过 floor，terminal 对账完成
 	// 新鲜轮。
 	fresh, err := NewReviewWorkerResultEvent("result-terminal-fresh", replacement, testProvider, "sha256:payload-terminal-fresh",
-		reviewEvidenceAt(review.ProductReview, "dispatch-terminal-fresh", "rev-2", "PASS", "fresh round on a terminal task", nil))
+		reviewEvidenceAt(review.ProductReview, replacement, "rev-2", "PASS", "fresh round on a terminal task", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -2928,7 +2932,7 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 
 		// 技术审下一轮证据先到（暂存、回执未到）。
 		staged, err := NewReviewWorkerResultEvent("result-order-readiness-2", stagedSlot, testProvider, "sha256:payload-order-readiness-2",
-			reviewEvidence(review.StartReadiness, "dispatch-order-readiness-2", "", "PASS", "readiness round before the change", nil))
+			reviewEvidence(review.StartReadiness, stagedSlot, "", "PASS", "readiness round before the change", nil))
 		if err != nil {
 			t.Fatalf("staged event: %v", err)
 		}
@@ -2958,6 +2962,7 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 		// 产品审新鲜轮经两种顺序完成。
 		fresh := reviewEvidenceAt(review.ProductReview, "dispatch-order-product-2", "rev-2", "PASS", "fresh product round", nil)
 		if resultFirst {
+			fresh.DispatchID = replacement
 			stagedFresh, err := NewReviewWorkerResultEvent("result-order-product-2", replacement, testProvider, "sha256:payload-order-product-2", fresh)
 			if err != nil {
 				t.Fatalf("fresh event: %v", err)
@@ -2972,6 +2977,7 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 			if acceptance, err := engine.Submit(spawnReceipt(t, "spawn-order-product", replacement, "agent-order-product"), fp); err != nil || acceptance.Status != "ACCEPTED" {
 				t.Fatalf("fresh receipt: %v %+v", err, acceptance)
 			}
+			fresh.DispatchID = replacement
 			directFresh, err := NewReviewWorkerResultEvent("result-order-product-2", replacement, testProvider, "sha256:payload-order-product-2", fresh)
 			if err != nil {
 				t.Fatalf("fresh event: %v", err)

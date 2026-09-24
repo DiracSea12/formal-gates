@@ -96,8 +96,13 @@ type Run struct {
 	// 其存在即 run 的当前外部边界（Next 投影为 ask 边界，等待用户而非
 	// 错误）。
 	PendingRequirementAsk *PendingRequirementAskFace `json:"pendingRequirementAsk,omitempty"`
-	SummaryPath           string                     `json:"summaryPath,omitempty"`
-	Unverified            bool                       `json:"unverified,omitempty"`
+	// PendingAsks 是一切未决受限控制 Ask 的泛化公开面（requestID/control/
+	// options/token；需求变化 Ask 另有携包特化面 PendingRequirementAsk）
+	//——完成路径与可见性对称：grant/topology/route/finding-decision 同样
+	// 可见。
+	PendingAsks []PendingAskFace `json:"pendingAsks,omitempty"`
+	SummaryPath string           `json:"summaryPath,omitempty"`
+	Unverified  bool             `json:"unverified,omitempty"`
 }
 
 // PendingRequirementAskFace 是未决需求变化 Ask 的公开面：请求身份、选项、
@@ -111,6 +116,16 @@ type PendingRequirementAskFace struct {
 	// Token 是投影时按当前 revision 即时求值的 freshness token（stale 后
 	// 经 Freshness 重取再提交）。
 	Token string `json:"token"`
+}
+
+// PendingAskFace 是任意未决受限控制 Ask 的公开面：请求身份、控制类型、
+// 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
+// 唯一权威，本面只读投影。
+type PendingAskFace struct {
+	RequestID string               `json:"requestId"`
+	Control   protocol.ControlKind `json:"control"`
+	Options   []protocol.AskOption `json:"options"`
+	Token     string               `json:"token"`
 }
 
 // ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
@@ -724,6 +739,9 @@ func (f *Facade) project() (Run, error) {
 		run.Next = plan.Next
 		run.PendingRequirementAsk = ask
 	}
+	if faces := f.pendingAskFaces(snap); len(faces) > 0 {
+		run.PendingAsks = faces
+	}
 	if plan.Next.Kind == decision.KindAsk {
 		run.AvailableActions = []string{"submit"}
 	}
@@ -750,6 +768,37 @@ func (f *Facade) pendingRequirementAskFace(snap protocol.Snapshot) *PendingRequi
 		}
 	}
 	return nil
+}
+
+// pendingAskFaces 投影一切未决受限控制 Ask（按 requestID 排序，确定性输
+// 出）；无未决 Ask 时返回 nil。
+func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
+	ids := make([]string, 0, len(snap.State.PendingAsks))
+	for id, ask := range snap.State.PendingAsks {
+		if ask.Resolved {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	faces := make([]PendingAskFace, 0, len(ids))
+	for _, id := range ids {
+		ask := snap.State.PendingAsks[id]
+		token, err := f.engine.Freshness(protocol.RequestID(id))
+		if err != nil {
+			token = ""
+		}
+		faces = append(faces, PendingAskFace{
+			RequestID: id,
+			Control:   ask.Control,
+			Options:   append([]protocol.AskOption{}, ask.Options...),
+			Token:     token,
+		})
+	}
+	return faces
 }
 
 // Freshness 返回未决 Ask 的当前 freshness token：token 随每次提交失效，

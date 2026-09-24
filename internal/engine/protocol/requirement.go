@@ -141,6 +141,20 @@ func (s *State) requirementChangePending() bool {
 	return s.requirementChangePendingExcept("")
 }
 
+// errWriteBarrier 是权威写入口共用的屏障闸判定（FA 单一判定函数）：屏
+// 障在位时返回可区分拒绝，不在位返回 nil。一切 API 头部闸（签发、恢复、
+// 对账、host intent）与提交路径的挂起判定共用 requirementChangePending
+// 这一个事实源。
+func (s *State) errWriteBarrier(entry string) error {
+	if !s.requirementChangePending() {
+		return nil
+	}
+	return &RejectedError{
+		Code:   CodeChangeBarrierActive,
+		Detail: fmt.Sprintf("%s is frozen while a requirement change ask is pending", entry),
+	}
+}
+
 // requirementChangePendingExcept 报告除 requestID 外是否仍有未决的需求
 // 变化 Ask：需求决定事务内以它判定屏障解除边界——只有最后一个未决 Ask
 // 的解决才触发隔离账重分类，此前隔离继续持有。
@@ -651,7 +665,6 @@ func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevi
 		return nil
 	}
 	e.replayQuarantinedResults(state, requestID, nextRevision, expectedFingerprint)
-	e.installDeferredReplacements(state, nextRevision, expectedFingerprint)
 	return nil
 }
 

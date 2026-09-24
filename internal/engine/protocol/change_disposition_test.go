@@ -225,7 +225,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 			engine, _, target := intersectionFixture(t, row.mark)
 			fp := fingerprintOf(t, engine)
 			staged, err := NewReviewWorkerResultEvent("result-ix-staged", target, testProvider, "sha256:payload-ix-staged",
-				reviewEvidence(seriesEvidenceOf(row.mark), "dispatch-ix-staged", "", "PASS", "evidence before the receipt", nil))
+				reviewEvidence(seriesEvidenceOf(row.mark), target, "", "PASS", "evidence before the receipt", nil))
 			if err != nil {
 				t.Fatalf("staged event: %v", err)
 			}
@@ -300,7 +300,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-q", target, testProvider, "sha256:payload-ix-q",
-			reviewEvidence(review.ProductReview, "dispatch-ix-q", "", "PASS", "quarantined while the ask pends", nil))
+			reviewEvidence(review.ProductReview, target, "", "PASS", "quarantined while the ask pends", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -475,7 +475,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-term", target, testProvider, "sha256:payload-ix-term",
-			reviewEvidence(review.ProductReview, "dispatch-ix-term", "", "PASS", "quarantined then the task reports terminal", nil))
+			reviewEvidence(review.ProductReview, target, "", "PASS", "quarantined then the task reports terminal", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -527,7 +527,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-term-own", target, testProvider, "sha256:payload-ix-term-own",
-			reviewEvidence(review.ProductReview, "dispatch-ix-term-own", "", "PASS", "quarantined then the task reports terminal", nil))
+			reviewEvidence(review.ProductReview, target, "", "PASS", "quarantined then the task reports terminal", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}

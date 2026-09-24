@@ -191,10 +191,12 @@ func reviewEvidence(action review.Action, dispatchID, authorizationID, status, m
 // submitReviewResult 派发回执后提交携带审查证据的 PASS worker result。
 func submitReviewResult(t *testing.T, engine *Engine, event, actionID string, evidence ReviewResultEvidence) Acceptance {
 	t.Helper()
+	evidence.DispatchID = actionID
 	fp := fingerprintOf(t, engine)
 	if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-"+event), actionID, "agent-"+event), fp); err != nil {
 		t.Fatalf("spawn %s: %v", event, err)
 	}
+	evidence.DispatchID = actionID
 	ev, err := NewReviewWorkerResultEvent(EventID(event), actionID, testProvider, "sha256:payload-"+event, evidence)
 	if err != nil {
 		t.Fatalf("review result event: %v", err)
@@ -306,7 +308,7 @@ func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 	dismiss := findingOption(t, engine, review.ProductReview, 0, "dismiss")
 	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-finding-1", []AskOption{confirm, dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: product.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: product.RawCandidates[0].ResultDigest, FindingID: product.RawCandidates[0].Findings[0].ID,
 		Decision: "DISMISS", Reason: "user rejects the finding after checking the entry", ExpectedEffectiveRevision: 1,
 	}})
@@ -409,7 +411,7 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	round1 := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 	confirm := AskOption{ID: AskOptionID("confirm:" + round1.Findings[0].ID), Label: "confirm"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm-1", []AskOption{confirm, findingOption(t, engine, review.ProductReview, 0, "dismiss")}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: round1.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: round1.ResultDigest, FindingID: round1.Findings[0].ID,
 		Decision: "CONFIRM", Reason: "user confirms the blocker", ExpectedEffectiveRevision: 1,
 	}})
@@ -422,7 +424,7 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	// RESEVERITIZE 降 P3：有效严重度降级后立即 PASS 并推进 phase。
 	option := AskOption{ID: AskOptionID("RESEVERITIZE:" + round1.Findings[0].ID), Label: "reseverity"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-resev-1", []AskOption{option}, option.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: round1.DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: round1.ResultDigest, FindingID: round1.Findings[0].ID,
 		Decision: "RESEVERITIZE", Severity: "P3", SeverityRationale: "impact limited to an optional path",
 		Supersedes: product.Adjudications[0].ID, Reason: "user downgrades after tracing the impact", ExpectedEffectiveRevision: 2,
@@ -473,7 +475,7 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	// typed Ask 授权恰好一轮：绑定第四个派发，容量扩展一格；decline 不
 	// 新增授权。
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "one more semantic round is required", DispatchID: "dispatch-4",
+		Action: review.ProductReview, Reason: "one more semantic round is required", DispatchID: fourth,
 	}})
 	snap = engine.LoadMustSucceed(t)
 	product = snap.State.ReviewSeries.ProductReview
@@ -489,7 +491,7 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	}
 
 	// 第四轮携授权记录：占用授权槽，完成数到 4（回执已在前文落账）。
-	finalRound, err := NewReviewWorkerResultEvent("result-4", fourth, testProvider, "sha256:payload-4", reviewEvidence(review.ProductReview, "dispatch-4", authorizationID, "FAIL", "round 4 endorsed by the grant", nil))
+	finalRound, err := NewReviewWorkerResultEvent("result-4", fourth, testProvider, "sha256:payload-4", reviewEvidence(review.ProductReview, fourth, authorizationID, "FAIL", "round 4 endorsed by the grant", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -500,6 +502,32 @@ func TestReviewRepairLoopRoundExhaustionAndGrant(t *testing.T) {
 	product = snap.State.ReviewSeries.ProductReview
 	if product.Completed != 4 || product.ExtraConsumed != 1 || product.RemainingCapacity != 0 || product.NextRoundRequirement != "USER_DECISION_REQUIRED" {
 		t.Fatalf("authorized round did not consume its slot: %+v", product)
+	}
+}
+
+// TestGrantIsPrematureWhileAutomaticCapacityRemains：授权政策由引擎强制
+// ——自动容量未耗尽（completed < automatic limit）时 REVIEW_ROUND_GRANT
+// 可区分拒绝且零状态变化；容量耗尽后的授权正控见上文耗尽/授权测试。
+func TestGrantIsPrematureWhileAutomaticCapacityRemains(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "round.one", "round.two")
+	engine, dir := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-grant-premature", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "one automatic round is done", []review.Finding{
+		{Severity: "P1", Message: "blocker persists"},
+	}))
+	if completed := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Completed; completed != 1 {
+		t.Fatalf("automatic rounds completed = %d, want 1", completed)
+	}
+	next := pendingActionID(t, engine)
+	err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-grant-premature", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "the user wants one more round early", DispatchID: next,
+	}})
+	if err == nil {
+		t.Fatal("grant accepted while automatic capacity remains")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("premature grant code = %q", code)
+	} else if !strings.Contains(err.Error(), "automatic round capacity is not exhausted") {
+		t.Fatalf("premature grant rejection does not name the policy: %v", err)
 	}
 }
 
@@ -517,7 +545,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			{Severity: "P1", Message: "core path broken"},
 		}))
 		readiness := pendingActionID(t, engine)
-		ev, err := NewReviewWorkerResultEvent("result-readiness-early", readiness, testProvider, "sha256:early", reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "early", nil))
+		ev, err := NewReviewWorkerResultEvent("result-readiness-early", readiness, testProvider, "sha256:early", reviewEvidence(review.StartReadiness, readiness, "", "PASS", "early", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
@@ -720,7 +748,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 		confirm := AskOption{ID: AskOptionID("confirm:" + candidate.Findings[0].ID), Label: "confirm"}
 		payload := ReviewDecisionPayload{Correction: &review.CorrectionInput{
-			Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+			Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 			ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 			Decision: "DISMISS", Reason: "payload says dismiss", ExpectedEffectiveRevision: 1,
 		}}
@@ -742,7 +770,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		snap := engine.LoadMustSucceed(t)
 		candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
 		payload := ReviewDecisionPayload{Correction: &review.CorrectionInput{
-			Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+			Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
 			ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 			Decision: "DISMISS", Reason: "stale CAS", ExpectedEffectiveRevision: 99,
 		}}
@@ -828,27 +856,22 @@ func TestReviewGatingNegatives(t *testing.T) {
 		engine, dir := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 		first := issueReady(t, engine)[0]
-		evidence := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "same bytes", []review.Finding{
+		evidence := reviewEvidence(review.ProductReview, first, "", "FAIL", "same bytes", []review.Finding{
 			{Severity: "P1", Message: "same finding"},
 		})
 		submitReviewResult(t, engine, "result-1", first, evidence)
-		second := pendingActionID(t, engine)
-		duplicate, err := NewReviewWorkerResultEvent("result-duplicate", second, testProvider, "sha256:payload-dup", evidence)
+		// 派发身份绑定后，同摘要只能来自同 action 的逐字节重发：结果级
+		// 摘要幂等判 DUPLICATE（跨 action 的摘要碰撞已被 DispatchID 绑定
+		// 结构性排除；内核级重复摘要拒绝由 review 包测试覆盖）。
+		repeat, err := NewReviewWorkerResultEvent("result-duplicate", first, testProvider, "sha256:payload-result-1", evidence)
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-dup", second, "agent-dup"), fp); err != nil {
-			t.Fatalf("spawn: %v", err)
-		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(duplicate, fp); err == nil {
-			t.Fatal("duplicate result digest accepted")
-		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
-			t.Fatalf("duplicate code = %q", code)
+		if acceptance, err := engine.Submit(repeat, fp); err != nil || acceptance.Status != "DUPLICATE" {
+			t.Fatalf("same-bytes resubmission = %v %+v (want DUPLICATE)", err, acceptance)
 		}
-		if after := stateBytesOf(t, dir); string(before) != string(after) {
-			t.Fatal("rejected duplicate changed state bytes")
-		}
+		_ = before
 	})
 
 	t.Run("review evidence with a stale requirement revision", func(t *testing.T) {
@@ -863,6 +886,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			{Severity: "P1", Message: "old revision finding"},
 		})
 		stale.RequirementRevision = "rev-0"
+		stale.DispatchID = product
 		ev, err := NewReviewWorkerResultEvent("result-stale-revision", product, testProvider, "sha256:stale-revision", stale)
 		if err != nil {
 			t.Fatalf("event: %v", err)
@@ -887,6 +911,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		submitReviewResult(t, engine, "result-identity", product, evidence)
 		// 同字节重发（新 event ID）仍是 DUPLICATE——判重口径收窄不误伤
 		// 幂等重放。
+		evidence.DispatchID = product
 		identical, err := NewReviewWorkerResultEvent("result-identity-replay", product, testProvider, "sha256:payload-result-identity", evidence)
 		if err != nil {
 			t.Fatalf("event: %v", err)
@@ -903,6 +928,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		// 冲突拒绝而非误判 DUPLICATE。
 		altered := evidence
 		altered.Message = "second verdict"
+		altered.DispatchID = product
 		replayed, err := NewReviewWorkerResultEvent("result-identity-alt", product, testProvider, "sha256:payload-result-identity", altered)
 		if err != nil {
 			t.Fatalf("event: %v", err)
@@ -956,23 +982,24 @@ func TestReviewGatingNegatives(t *testing.T) {
 	})
 }
 
-// TestRouteGateStaysClosedUntilBothReviewsRepass：双审 PASS、拓扑确认后，
-// 产品审纠正升 P1 重新阻塞——路线选择必须关闭（不得进入开发）；驳回升级
-// 项使产品审回 PASS 后，被级联失效的技术审仍持有 PENDING，门依旧关闭；
-// 只有新一轮 start-readiness 重建自身结论后，路线接纳才重新打开并推进
-// DEVELOPMENT_PARALLEL（门会重新打开，不是死锁）。
-func TestRouteGateStaysClosedUntilBothReviewsRepass(t *testing.T) {
+// TestUpstreamVoidRoundTripRestoresTheVoidedConclusion：双审 PASS、拓扑确
+// 认后，产品审纠正升 P1 重新阻塞＋级联失效技术审（路线门关闭）；驳回升
+// 级项使产品审回 PASS 的同一纠正事务内，技术审的失效前结论原文恢复
+// （UpstreamVoid 解除——它从未被新证据推翻，只是被上游冻结），路线门重
+// 新打开并推进 DEVELOPMENT_PARALLEL，不为被驳回项多耗一轮（§7.3.3）。
+// 技术审自身结论真被推翻时的重建语义由 review 内核测试覆盖。
+func TestUpstreamVoidRoundTripRestoresTheVoidedConclusion(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
 	engine, dir := reviewEngine(t, cd, reg)
 
 	// 双审到位：产品审仅一条建议项（effective PASS），技术审 PASS。
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "FAIL", "advisory only", []review.Finding{
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory only", []review.Finding{
 		{Severity: "P2", Message: "advisory defect on the documented path"},
 	}))
 	readiness := pendingActionID(t, engine)
-	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
-	secondReadiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+	preVoid := engine.LoadMustSucceed(t).State.ReviewSeries.StartReadiness.Effective
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "建议不拆：模块边界清晰，单人可并行推进",
 	}})
@@ -983,7 +1010,7 @@ func TestRouteGateStaysClosedUntilBothReviewsRepass(t *testing.T) {
 	finding := productSeries.RawCandidates[0].Findings[0]
 	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + finding.ID), Label: "reseverity"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-upgrade", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
 		Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the defect blocks the documented checkout path",
 		Reason: "user upgrades the advisory after re-tracing the impact", ExpectedEffectiveRevision: productSeries.Effective.Revision,
@@ -1011,12 +1038,13 @@ func TestRouteGateStaysClosedUntilBothReviewsRepass(t *testing.T) {
 		t.Fatalf("route-under-block rejection does not name the dual gate: %v", err)
 	}
 
-	// 驳回升级项：产品审回 PASS，但技术审的上游失效持续——门保持关闭。
+	// 驳回升级项：产品审回 PASS 的同一纠正事务内，技术审的失效前结论
+	// 原文恢复（UpstreamVoid 解除），路线门无需新一轮技术审即重新打开。
 	snap = engine.LoadMustSucceed(t)
 	productSeries = snap.State.ReviewSeries.ProductReview
 	dismiss := AskOption{ID: AskOptionID("dismiss:" + finding.ID), Label: "dismiss"}
 	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: "dispatch-product-1", RequirementRevision: "rev-1",
+		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
 		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
 		Decision: "DISMISS", Supersedes: productSeries.Adjudications[0].ID,
 		Reason: "user rejects the upgrade after re-verification", ExpectedEffectiveRevision: productSeries.Effective.Revision,
@@ -1025,30 +1053,60 @@ func TestRouteGateStaysClosedUntilBothReviewsRepass(t *testing.T) {
 	if snap.State.ReviewSeries.ProductReview.Effective.Status != "PASS" {
 		t.Fatalf("dismiss did not restore product-review PASS: %+v", snap.State.ReviewSeries.ProductReview.Effective)
 	}
-	if downstream := snap.State.ReviewSeries.StartReadiness; downstream.Effective.Status != "PENDING" || !downstream.UpstreamVoid {
-		t.Fatalf("dismiss must not revive the voided start-readiness: %+v", downstream.Effective)
+	restored := snap.State.ReviewSeries.StartReadiness
+	if restored.Effective.Status != "PASS" || restored.UpstreamVoid || restored.Completed != 1 {
+		t.Fatalf("the dismissed upgrade must restore the voided conclusion in the same transaction: %+v void=%v", restored.Effective, restored.UpstreamVoid)
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-void", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality"},
-	}}); err == nil {
-		t.Fatal("route accepted while start-readiness stays void")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("route-under-void code = %q", code)
+	if restored.Effective.ResultDigest != preVoid.ResultDigest || restored.Effective.RequirementRevision != preVoid.RequirementRevision {
+		t.Fatalf("the restored conclusion must be the pre-void original: %+v vs %+v", restored.Effective, preVoid)
 	}
-
-	// 新一轮 start-readiness：顺序守卫此时放行（产品审已 PASS），候选重建
-	// 自身结论、失效清除，门重新打开。
-	submitReviewResult(t, engine, "result-readiness-2", secondReadiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-2", "", "PASS", "ready again", nil))
-	snap = engine.LoadMustSucceed(t)
-	if downstream := snap.State.ReviewSeries.StartReadiness; downstream.Effective.Status != "PASS" || downstream.UpstreamVoid || downstream.Completed != 2 {
-		t.Fatalf("a fresh readiness round must rebuild its conclusion: %+v void=%v", downstream.Effective, downstream.UpstreamVoid)
+	if restored.Effective.Revision <= voided.Effective.Revision {
+		t.Fatalf("the restored projection must keep the revision monotonic: %d <= %d", restored.Effective.Revision, voided.Effective.Revision)
 	}
 	askAndDecide(t, engine, ControlSelectRoute, "req-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
 		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
 	}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
-		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL", snap.State.RouteMode, snap.State.Phase)
+		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL after the round trip", snap.State.RouteMode, snap.State.Phase)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load after the round trip: %v", err)
+	}
+	_ = dir
+}
+
+// TestDirectDismissLeavesTheDownstreamConclusionUntouched：未经升级往返的
+// 直接 DISMISS 对照：产品审建议项被驳回时技术审从未被失效，其结论与计轮
+// 原样（与往返恢复的路径区分）。
+func TestDirectDismissLeavesTheDownstreamConclusionUntouched(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
+	engine, _ := reviewEngine(t, cd, reg)
+
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory only", []review.Finding{
+		{Severity: "P2", Message: "advisory defect on the documented path"},
+	}))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+	before := engine.LoadMustSucceed(t).State.ReviewSeries.StartReadiness
+
+	productSeries := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	finding := productSeries.RawCandidates[0].Findings[0]
+	dismiss := AskOption{ID: AskOptionID("dismiss:" + finding.ID), Label: "dismiss"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss-direct", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: productSeries.RawCandidates[0].DispatchID, RequirementRevision: "rev-1",
+		ResultDigest: productSeries.RawCandidates[0].ResultDigest, FindingID: finding.ID,
+		Decision: "DISMISS",
+		Reason:   "user rejects the advisory directly", ExpectedEffectiveRevision: productSeries.Effective.Revision,
+	}})
+	after := engine.LoadMustSucceed(t).State.ReviewSeries.StartReadiness
+	if after.Effective.ResultDigest != before.Effective.ResultDigest || after.Effective.Revision != before.Effective.Revision ||
+		after.Completed != before.Completed || after.UpstreamVoid {
+		t.Fatalf("a direct dismissal must leave the downstream conclusion untouched: before %+v after %+v", before.Effective, after.Effective)
+	}
+	if _, err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
 	}
 }
 
@@ -1064,6 +1122,7 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 
 	stale := reviewEvidence(review.ProductReview, "dispatch-stale", "", "PASS", "bound to an older requirement", nil)
 	stale.RequirementRevision = "rev-0"
+	stale.DispatchID = product
 	ev, err := NewReviewWorkerResultEvent("result-stale-first", product, testProvider, "sha256:stale-first", stale)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -1082,6 +1141,7 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 	}
 
 	current := reviewEvidence(review.ProductReview, "dispatch-current", "", "PASS", "current verdict", nil)
+	current.DispatchID = product
 	evCurrent, err := NewReviewWorkerResultEvent("result-current", product, testProvider, "sha256:current", current)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -1099,6 +1159,42 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 	snap := engine.LoadMustSucceed(t)
 	if snap.State.ReviewSeries.ProductReview.Completed != 1 || len(snap.State.StagedResults) != 0 {
 		t.Fatalf("paired current result did not reach the ledger: completed=%d staged=%d", snap.State.ReviewSeries.ProductReview.Completed, len(snap.State.StagedResults))
+	}
+}
+
+// TestReviewEvidenceMustBindItsDispatchingAction：证据的 DispatchID 就是
+// 提交结果的 actionID（派发身份唯一事实）——指向其它派发的证据可区分
+// 拒绝且零状态变化，正确绑定的结果随后照常暂存（暂存槽不被毒化）。
+func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, dir := reviewEngine(t, cd, reg)
+	fp := fingerprintOf(t, engine)
+	product := issueReady(t, engine)[0]
+
+	misbound := reviewEvidence(review.ProductReview, "act:review/another.dispatch", "", "PASS", "evidence naming a foreign dispatch", nil)
+	misboundEvent, err := NewReviewWorkerResultEvent("result-misbound", product, testProvider, "sha256:payload-misbound", misbound)
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(misboundEvent, fp); err == nil {
+		t.Fatal("foreign-dispatch evidence accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
+		t.Fatalf("misbound evidence code = %q", code)
+	} else if !strings.Contains(err.Error(), "does not match the dispatching action") {
+		t.Fatalf("misbound rejection does not name the dispatch identity: %v", err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected misbound evidence changed state bytes")
+	}
+
+	correct, err := NewReviewWorkerResultEvent("result-bound", product, testProvider, "sha256:payload-bound",
+		reviewEvidence(review.ProductReview, product, "", "PASS", "evidence bound to its own dispatch", nil))
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if acceptance, err := engine.Submit(correct, fp); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("correctly bound result after the rejection: %v %+v", err, acceptance)
 	}
 }
 
@@ -1130,6 +1226,7 @@ func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
 				{Severity: "P1", Message: "core path broken"},
 			})
 			tc.corrupt(&broken)
+			broken.DispatchID = product
 			ev, err := NewReviewWorkerResultEvent("result-inadmissible", product, testProvider, "sha256:inadmissible", broken)
 			if err != nil {
 				t.Fatalf("event: %v", err)
@@ -1153,6 +1250,7 @@ func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
 			correct := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "admissible evidence", []review.Finding{
 				{Severity: "P1", Message: "core path broken"},
 			})
+			correct.DispatchID = product
 			evCorrect, err := NewReviewWorkerResultEvent("result-correct", product, testProvider, "sha256:correct", correct)
 			if err != nil {
 				t.Fatalf("event: %v", err)
@@ -1288,6 +1386,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 	evidence := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "blocked", []review.Finding{
 		{Severity: "P1", Message: "core path broken"},
 	})
+	evidence.DispatchID = "act:a"
 	first, err := NewReviewWorkerResultEvent("evt-digest", "act:a", testProvider, "sha256:payload", evidence)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -1296,6 +1395,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("digest: %v", err)
 	}
+	evidence.DispatchID = "act:a"
 	repeated, err := NewReviewWorkerResultEvent("evt-digest", "act:a", testProvider, "sha256:payload", evidence)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -1304,6 +1404,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 		t.Fatal("review result digest is not stable")
 	}
 	evidence.Status = "PASS"
+	evidence.DispatchID = "act:a"
 	changed, err := NewReviewWorkerResultEvent("evt-digest", "act:a", testProvider, "sha256:payload", evidence)
 	if err != nil {
 		t.Fatalf("event: %v", err)

@@ -229,7 +229,11 @@ type SpawnReceipt struct {
 	Status            string                 `json:"status"`
 	FailureClass      authoring.FailureClass `json:"failureClass,omitempty"`
 	LifecycleIdentity string                 `json:"lifecycleIdentity,omitempty"`
-	Digest            string                 `json:"digest"`
+	// Task 是回执落账时固化的派发任务身份（观察事实）：任务簿记随后可
+	// 被收回（如 TASK_PROGRESS 到 terminal），terminal 对账以它定位机
+	// 械后果的归属步骤。
+	Task   runtime.TaskKey `json:"task,omitempty"`
+	Digest string          `json:"digest"`
 }
 
 // WorkerResult 是落账的 typed worker result（含 result-before-receipt
@@ -435,6 +439,18 @@ type State struct {
 	// 路径唯一写两处：issueInto/installReplacement；终态清理不删——
 	// 签发事实是持久事实，任务 terminal 后的重走 floor 校验仍读它）。
 	DispatchIssueRevisions map[string]uint64 `json:"dispatchIssueRevisions"`
+	// HeldFailureRoutes 记录屏障期内到达的 FAILED 回执（spawn 与 host
+	// action）的 actionID：回执本身是观察事实已照常落账，其失败路由
+	//（暂存删除、重试记账、terminalize、intent 清算）挂起至此，屏障解
+	// 除事务的收尾单点按既定规则统一执行。
+	HeldFailureRoutes []string `json:"heldFailureRoutes,omitempty"`
+	// HeldHostSettles 记录屏障期内 EXECUTED host action 回执的 actionID：
+	// 回执已落账，intent 清算与 frontier settle 挂起至此，解除事务统一
+	// 执行。
+	HeldHostSettles []string `json:"heldHostSettles,omitempty"`
+	// FrontierSettleHeld 标记屏障期内有决定/回执的 frontier settle 被挂
+	// 起：解除事务统一补 settle。
+	FrontierSettleHeld bool `json:"frontierSettleHeld,omitempty"`
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`
 	// SpawnFailures 保留可恢复的 FAILED receipt 历史；它们不占用最终

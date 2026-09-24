@@ -215,6 +215,13 @@ func ApplyCorrection(set Set, runID, requirementRevision string, input Correctio
 	}
 	if input.Action == ProductReview && previousStatus == statusPass && series.Effective.Status == statusFail {
 		markUpstreamStale(&set, series.Effective.Source)
+		return set, nil
+	}
+	// 上游失效可逆：产品审经纠正重投影回 PASS 且再无已确认阻塞时，同一
+	// 事务内解除 start-readiness 的 UpstreamVoid 并恢复其失效前结论原文
+	//——不为被驳回/降级的 finding 让下游多耗一轮（§7.3.3）。
+	if input.Action == ProductReview && series.Effective.Status == statusPass && !HasConfirmedBlocking(*series) {
+		ReleaseUpstreamVoid(&set, nextRevision)
 	}
 	return set, nil
 }
@@ -355,6 +362,24 @@ func StaleSeries(set Set, action Action, source string, freshFloor uint64) Set {
 	return set
 }
 
+// ReleaseUpstreamVoid 在上游阻塞被清除（上游系列重投影回 PASS 且无其他
+// 已确认阻塞）的同一纠正事务内解除下游的 UpstreamVoid：恢复的是失效前
+// 的 effective 结论原文（Revision 取当前投影代数保持单调），它从未被新
+// 证据推翻，只是被上游冻结（§7.3.3"只清除错误阻塞时立即开放下一合法节
+// 点"）。无快照时不动作。
+func ReleaseUpstreamVoid(set *Set, nextRevision int) {
+	series := &set.StartReadiness
+	if !series.UpstreamVoid || series.VoidedEffective == nil {
+		return
+	}
+	restored := *series.VoidedEffective
+	restored.Revision = nextRevision
+	series.Effective = restored
+	series.UpstreamVoid = false
+	series.VoidedEffective = nil
+	refresh(series)
+}
+
 // DischargeFreshOwed 清偿 series 的新鲜轮义务——满足 floor 的新鲜轮完成
 // 接纳后由协议层调用，是 FreshOwed 的唯一清除点；纠正路径永不触碰。
 func DischargeFreshOwed(set Set, action Action) Set {
@@ -373,6 +398,8 @@ func DischargeFreshOwed(set Set, action Action) Set {
 // effective 复活为 PASS。
 func markUpstreamStale(set *Set, source string) {
 	series := &set.StartReadiness
+	snapshot := series.Effective
+	series.VoidedEffective = &snapshot
 	series.UpstreamVoid = true
 	series.Effective.Status = statusPending
 	series.Effective.Source = "UPSTREAM_CORRECTION:" + source

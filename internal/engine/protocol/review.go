@@ -216,7 +216,16 @@ func (s *State) dualReviewPass() bool {
 // 且零状态变化。暂存预检与回执配对后的权威接纳共用本函数（单一事实源）：
 // 预检丢弃返回值只取错误——内核变换不改写调用方输入（包契约并有回归测
 // 试），账本在暂存与回执之间可能变化，落账仍以配对时的接纳为准。
-func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, issuedRevision uint64) (review.Set, error) {
+func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
+	// 派发身份唯一事实：证据的 DispatchID 必须就是提交结果的 actionID
+	//（授权占用按真实派发判）。
+	if evidence.DispatchID != actionID {
+		return review.Set{}, &RejectedError{
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("review evidence dispatch id %q does not match the dispatching action %q",
+				evidence.DispatchID, actionID),
+		}
+	}
 	series, _ := s.ReviewSeries.Series(evidence.Action)
 	if seriesInRedoStale(series) {
 		if evidence.RequirementRevision != s.RequirementRevision() {
@@ -288,7 +297,7 @@ func isSequenceGate(err error) bool {
 // floor 比对读该结果所属派发的签发代数。RecordCandidate 的错误（重复摘
 // 要、越限无授权、核实不全）拒绝整个事件。
 func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence, actionID string) error {
-	updated, err := state.admitReviewEvidence(evidence, state.issuedRevisionOf(actionID))
+	updated, err := state.admitReviewEvidence(evidence, actionID, state.issuedRevisionOf(actionID))
 	if err != nil {
 		return err
 	}
@@ -347,6 +356,16 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 	switch ask.Control {
 	case ControlReviewRoundGrant:
 		grant := payload.RoundGrant
+		// §7.3:5 授权政策由引擎强制：自动容量未耗尽时拒绝额外 slot——
+		// "达到上限后……增加一个 slot"不是调用方自律。
+		target, seriesKnown := state.ReviewSeries.Series(grant.Action)
+		if !seriesKnown {
+			return reviewReject(fmt.Errorf("review: unknown pre-development review action %q", grant.Action))
+		}
+		if target.Completed < target.AutomaticLimit {
+			return reviewReject(fmt.Errorf("review: %s automatic round capacity is not exhausted yet (completed %d of %d); a grant is premature",
+				grant.Action, target.Completed, target.AutomaticLimit))
+		}
 		updated, err := review.AppendAuthorization(state.ReviewSeries, state.RunID, grant.Action, grant.Reason, grant.DispatchID)
 		if err != nil {
 			return reviewReject(err)

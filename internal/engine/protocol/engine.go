@@ -195,11 +195,23 @@ func equalIntakeArtifacts(a, b []IntakeArtifact) bool {
 // phase 门控（条件可从持久账本重算）并做账本完整性校验——条件不满足
 // 时静默留置，账本/phase 与投影不一致则拒绝写入。
 func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, error) {
+	revision, _, err := e.commitEffects(state, expectedRevision, expectedFingerprint)
+	return revision, err
+}
+
+// commitEffects 是一切携业务后果事务的唯一提交点：落账前先过事务收尾
+// 单点（transactionEpilogue），并把收尾补位签发的 action ID 回传给调用
+// 方的接纳回执。观察/引导/显式签发入口用 commit（纯落账）。
+func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, []string, error) {
+	refill, err := e.transactionEpilogue(state, expectedRevision+1, expectedFingerprint)
+	if err != nil {
+		return 0, nil, err
+	}
 	if err := state.advanceReviewPhases(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := verifyReviewIntegrity(state); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	res, err := e.store.Save(persistence.Transaction{
 		ExpectedRevision:    expectedRevision,
@@ -208,9 +220,86 @@ func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerpri
 		Content:             state,
 	})
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return res.Revision, nil
+	return res.Revision, refill, nil
+}
+
+// transactionEpilogue 是事务收尾单点：一切携业务后果的提交在落账前经此
+// 一次判定＋一次扫描——屏障在位时不收尾（挂起事实保持持有）；屏障不在
+// 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、屏
+// 障期延迟的替换补发、挂起配对扫描与容量补位。返回补位签发的 action ID。
+func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if state.requirementChangePending() {
+		return nil, nil
+	}
+	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
+	heldSettled := e.executeHeldSettles(state, nextRevision)
+	e.installDeferredReplacements(state, nextRevision, expectedFingerprint)
+	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
+	// 容量补位只在收尾真正做了改变派发面的工作时执行：观察类事务（回执
+	// 落账等）不得自动签发——否则调用方持有的 Plan（Plan→Submit→
+	// IssueFromPlan 驱动形态）会被收尾失效。结果完成与决定事务的补位
+	// 在各自完成路径（completeResult／DECIDE settle）照常执行。
+	if !heldRouted && !heldSettled && paired == 0 {
+		return nil, nil
+	}
+	issued, err := e.refill(state, nextRevision, expectedFingerprint)
+	if err != nil {
+		// 补位失败不否决已合法的落账：留痕后由下一次提交重试。
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			Detail: fmt.Sprintf("capacity refill deferred after an internal error: %v", err), Revision: nextRevision,
+		})
+		return pairedRefills, nil
+	}
+	return append(pairedRefills, issued...), nil
+}
+
+// executeHeldFailureRoutes 执行屏障期挂起的 FAILED 回执失败路由（按既定
+// 规则：暂存删除、瞬态重试记账、terminalize、intent 清算、路由留痕）。
+func (e *Engine) executeHeldFailureRoutes(state *State, nextRevision uint64) bool {
+	if len(state.HeldFailureRoutes) == 0 {
+		return false
+	}
+	held := append([]string(nil), state.HeldFailureRoutes...)
+	slices.Sort(held)
+	state.HeldFailureRoutes = nil
+	for _, actionID := range held {
+		if receipts, ok := state.SpawnFailures[actionID]; ok && len(receipts) > 0 {
+			state.applyFailedSpawnRouting(actionID, receipts[len(receipts)-1], nextRevision)
+			continue
+		}
+		if receipts, ok := state.HostActionFailures[actionID]; ok && len(receipts) > 0 {
+			state.applyFailedHostActionRouting(actionID, receipts[len(receipts)-1], nextRevision)
+		}
+	}
+	return true
+}
+
+// executeHeldSettles 执行清算账上的 intent 清算与 frontier settle：屏障
+// 期挂起的 EXECUTED 回执结算与 fulfilled 对账的立即清算共用本执行路径
+// （同一提交的事务收尾）。
+func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) bool {
+	if len(state.HeldHostSettles) == 0 && !state.FrontierSettleHeld {
+		return false
+	}
+	for _, actionID := range state.HeldHostSettles {
+		delete(state.PendingHostActions, actionID)
+	}
+	state.HeldHostSettles = nil
+	state.FrontierSettleHeld = false
+	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			Detail:   fmt.Sprintf("commit-boundary frontier settle failed: %v", err),
+			Revision: nextRevision,
+		})
+		return true
+	}
+	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+		Detail:   "settled host action intents were cleared and the frontier settled at the commit boundary",
+		Revision: nextRevision,
+	})
+	return true
 }
 
 // Snapshot 是一次 Load 的只读结果。
@@ -412,11 +501,8 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	}
 	// 修订屏障（Phase A）：未决的需求变化 Ask 期间冻结新的业务任务签发，
 	// 以可区分错误拒绝直接签发调用；Drive 经此同步受阻。
-	if state.requirementChangePending() {
-		return nil, 0, &RejectedError{
-			Code:   CodeChangeBarrierActive,
-			Detail: "a requirement change ask is pending; new task issuance is frozen until it is decided",
-		}
+	if err := state.errWriteBarrier("new task issuance"); err != nil {
+		return nil, 0, err
 	}
 	identity, err := e.validatePlan(state, plan)
 	if err != nil {
@@ -621,7 +707,8 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 	if !wrote {
 		// Payload-level duplicate under a new event ID still consumes that ID.
 		// Otherwise the same ID could later carry different bytes and bypass the
-		// hard event identity invariant.
+		// hard event identity invariant. 重放零状态变化：纯台账落账不经
+		// 事务收尾。
 		acceptance.Revision = nextRevision
 		state.Events[string(ev.ID)] = EventRecord{Digest: digest, Acceptance: acceptance}
 		if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
@@ -630,9 +717,11 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		return acceptance, nil
 	}
 	state.Events[string(ev.ID)] = EventRecord{Digest: digest, Acceptance: acceptance}
-	if _, err := e.commit(mutated, revision, expectedFingerprint); err != nil {
+	_, refill, err := e.commitEffects(mutated, revision, expectedFingerprint)
+	if err != nil {
 		return Acceptance{}, err
 	}
+	acceptance.Refill = append(acceptance.Refill, refill...)
 	// CAS 语义保证提交恰好落在 nextRevision；acceptance.Revision 即它。
 	return acceptance, nil
 }
@@ -656,17 +745,9 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return Acceptance{}, nil, false, err
 		}
 	}
-	acceptance, mutated, wrote, reject := e.admitEvent(ev, digest, state, revision, nextRevision, expectedFingerprint)
-	if reject != nil || !wrote {
-		return acceptance, mutated, wrote, reject
-	}
-	// 事务收尾单点：kind 分支全部效果之后补齐挂起的配对——一次判定＋
-	// 一次扫描，天然覆盖结果完成、回执配对、纠正生效与屏障解除重放的
-	// 一切开门迁移；屏障在位时不配对（观察事实已落账，接纳等屏障解除）。
-	if !mutated.requirementChangePending() {
-		e.pairSuspendedResults(mutated, nextRevision, expectedFingerprint)
-	}
-	return acceptance, mutated, wrote, reject
+	// 事务收尾（挂起配对扫描、延迟补发、held 失效路由与 settle、容量补
+	// 位）在唯一提交点 commitEffects——各分支不做。
+	return e.admitEvent(ev, digest, state, revision, nextRevision, expectedFingerprint)
 }
 
 // admitEvent 按事件 kind 做接纳校验与落账（屏障处置表之后）。补配对属
@@ -753,15 +834,21 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
 		// remains the immutable decision history and also rejects later submissions.
-		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（
-		// submit 接纳后立即继续 Decide/SelectIssued）。挂起配对的补齐属
-		// 事务收尾单点（admit）。
-		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
-			return Acceptance{}, nil, false, err
-		}
-		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
-		if refillErr != nil {
-			return Acceptance{}, nil, false, refillErr
+		// 决定落账即完成对应 HUMAN_ASK frontier 步骤（机械后果）。屏障仍在
+		// 位时（RESET/ABORT，或重走决定之后仍有未决 Ask）settle 挂起至解
+		// 除事务统一执行；补位签发属事务收尾单点（commitEffects）。
+		var refill []string
+		if state.requirementChangePending() {
+			state.FrontierSettleHeld = true
+		} else {
+			if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			issued, err := e.refill(state, nextRevision, expectedFingerprint)
+			if err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			refill = issued
 		}
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
@@ -841,16 +928,19 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				Revision: revision, ActionID: actionID,
 			}, nil, false, nil
 		}
-		if _, pending := state.PendingActions[actionID]; !pending {
+		pending, known := state.PendingActions[actionID]
+		if !known {
 			return Acceptance{}, nil, false, &RejectedError{
 				Code:   CodeUnknownAction,
 				Detail: fmt.Sprintf("spawn receipt references unknown or completed action %q", actionID),
 			}
 		}
+		// 回执落账即固化派发的任务身份（观察事实）：任务簿记随后可被
+		// 收回，terminal 对账以回执里的任务身份完成同一机械后果。
 		receipt := SpawnReceipt{
 			ActionID: actionID, Provider: ev.Spawn.Provider,
 			Correlation: ev.Spawn.Correlation, Status: ev.Spawn.Status,
-			FailureClass: ev.Spawn.FailureClass, Digest: payloadDigest,
+			FailureClass: ev.Spawn.FailureClass, Task: pending.Task, Digest: payloadDigest,
 		}
 		acceptance := Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
@@ -858,49 +948,20 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.Spawn.Status == SpawnStatusFailed {
 			state.SpawnFailures[actionID] = append(state.SpawnFailures[actionID], receipt)
-			route := RouteFailure(ev.Spawn.FailureClass)
-			pending := state.PendingActions[actionID]
-			if route.Class == authoring.FailureTransientEngine {
-				attempt := state.Attempts[pending.Task]
-				if attempt.MaxAttempts > 0 {
-					if !attempt.RetryExhausted {
-						attempt.Attempts++
-						if attempt.Attempts >= attempt.MaxAttempts {
-							attempt.RetryExhausted = true
-						}
-					}
-					state.Attempts[pending.Task] = attempt
-					if attempt.RetryExhausted {
-						route.Action = RecoveryWait
-						routeDetail := fmt.Sprintf("transient retry attempts exhausted (%d/%d); wait for terminal handling", attempt.Attempts, attempt.MaxAttempts)
-						state.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: route.Class, Action: route.Action, Detail: routeDetail, Revision: nextRevision})
-						delete(state.StagedResults, actionID)
-						acceptance.FailureClass = string(route.Class)
-						acceptance.RecoveryAction = string(route.Action)
-						return acceptance, state, true, nil
-					}
+			// 回执是观察事实照常落账；失败路由（暂存删除、重试记账、
+			// terminalize）是业务后果——屏障期挂起至解除事务统一执行。
+			if state.requirementChangePending() {
+				if !slices.Contains(state.HeldFailureRoutes, actionID) {
+					state.HeldFailureRoutes = append(state.HeldFailureRoutes, actionID)
 				}
+				state.appendRecovery(RecoveryRecord{
+					ActionID: actionID,
+					Detail:   "failed spawn receipt recorded; its failure routing is held while the requirement change barrier holds",
+					Revision: nextRevision,
+				})
+				return acceptance, state, true, nil
 			}
-			// A FAILED spawn cannot settle a result that arrived before the
-			// receipt. The result belongs to the failed dispatch boundary and
-			// must be submitted again after a later retry.
-			delete(state.StagedResults, actionID)
-			state.appendRecovery(RecoveryRecord{
-				ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
-				Class: route.Class, Action: route.Action, Detail: route.ActionDetail(), Revision: nextRevision,
-			})
-			if route.Action == RecoveryFail {
-				if err := state.terminalizeTask(pending.Task); err != nil {
-					return Acceptance{}, nil, false, err
-				}
-			}
-			if route.Action == RecoveryReconcile {
-				// Keep the wire-level FAILED receipt in SpawnFailures, while
-				// exposing an UNKNOWN ledger entry for external reconciliation.
-				unknown := receipt
-				unknown.Status = SpawnStatusUnknown
-				state.SpawnReceipts[actionID] = unknown
-			}
+			route := state.applyFailedSpawnRouting(actionID, receipt, nextRevision)
 			acceptance.FailureClass = string(route.Class)
 			acceptance.RecoveryAction = string(route.Action)
 			return acceptance, state, true, nil
@@ -915,37 +976,16 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			})
 			acceptance.RecoveryAction = string(plan.Action)
 		}
-		if staged, waiting := state.StagedResults[actionID]; waiting && ev.Spawn.Status == SpawnStatusSpawned {
+		if _, waiting := state.StagedResults[actionID]; waiting && ev.Spawn.Status == SpawnStatusSpawned {
+			// 回执是观察事实照常落账；暂存结果的配对接纳属事务收尾单点
+			//（commitEffects）——屏障在位时收尾不配对，解除事务扫清；顺
+			// 序门未开时由收尾扫描挂起并留痕。
 			if state.requirementChangePending() {
-				// 屏障盖住一切业务结果接纳路径：回执是观察事实，上方已照
-				// 常落账；暂存保留、配对挂起，屏障解除事务的收尾单点扫清。
 				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 					ActionID: actionID,
 					Detail:   "spawn receipt recorded while the requirement change barrier holds; the staged result stays suspended until the barrier lifts",
 					Revision: nextRevision,
 				})
-				return acceptance, state, true, nil
-			}
-			refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
-			if err != nil {
-				if !isSequenceGate(err) {
-					return Acceptance{}, nil, false, err
-				}
-				// 顺序门未开：回执是无条件观察事实，照常落账；暂存保留、
-				// 配对挂起——产品审结论重新 PASS 的事务自动补配对。
-				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-					ActionID: actionID,
-					Detail:   "spawn receipt recorded; the staged result stays pending until the product-review conclusion re-passes",
-					Revision: nextRevision,
-				})
-				return acceptance, state, true, nil
-			}
-			delete(state.StagedResults, actionID)
-			acceptance.Refill = refill
-			class := staged.FailureClass
-			if class != "" {
-				acceptance.FailureClass = string(class)
-				acceptance.RecoveryAction = string(RouteFailure(class).Action)
 			}
 		}
 		return acceptance, state, true, nil
@@ -1073,24 +1113,23 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.HostAction.Status == HostActionStatusFailed {
 			state.HostActionFailures[actionID] = append(state.HostActionFailures[actionID], receipt)
-			route := RouteFailure(ev.HostAction.FailureClass)
-			state.appendRecovery(RecoveryRecord{
-				ActionID: actionID, Class: route.Class, Action: route.Action,
-				Detail: route.ActionDetail(), Revision: nextRevision,
-			})
-			if route.Action == RecoveryReconcile {
-				// Keep the wire-level FAILED receipt in HostActionFailures while
-				// exposing an UNKNOWN ledger entry, mirroring the spawn-side
-				// bridge: without it the declared RECOVER route has no
-				// reconciliation entry (ReconcileHostAction requires a durable
-				// UNKNOWN receipt) and the recovery instruction dead-ends.
-				unknown := receipt
-				unknown.Status = HostActionStatusUnknown
-				state.HostActionReceipts[actionID] = unknown
+			// 回执是观察事实照常落账；失败路由与 intent 清算是业务后果
+			//——屏障期挂起至解除事务统一执行。
+			if state.requirementChangePending() {
+				if !slices.Contains(state.HeldFailureRoutes, actionID) {
+					state.HeldFailureRoutes = append(state.HeldFailureRoutes, actionID)
+				}
+				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+					ActionID: actionID,
+					Detail:   "failed host action receipt recorded; its failure routing is held while the requirement change barrier holds",
+					Revision: nextRevision,
+				})
+				return Acceptance{
+					EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision,
+					ActionID: actionID,
+				}, state, true, nil
 			}
-			if route.Action == RecoveryFail {
-				delete(state.PendingHostActions, actionID)
-			}
+			route := state.applyFailedHostActionRouting(actionID, receipt, nextRevision)
 			return Acceptance{
 				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision,
 				ActionID: actionID, FailureClass: string(route.Class), RecoveryAction: string(route.Action),
@@ -1105,19 +1144,29 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			})
 			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision, ActionID: actionID, RecoveryAction: string(RecoveryReconcile)}, state, true, nil
 		}
+		// EXECUTED 回执是观察事实照常落账；intent 清算与 frontier settle
+		// 是机械后果——屏障期挂起至解除事务统一执行。
+		if state.requirementChangePending() {
+			if !slices.Contains(state.HeldHostSettles, actionID) {
+				state.HeldHostSettles = append(state.HeldHostSettles, actionID)
+			}
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+				ActionID: actionID,
+				Detail:   "executed host action receipt recorded; its intent settlement and frontier settle are held while the requirement change barrier holds",
+				Revision: nextRevision,
+			})
+			return Acceptance{
+				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
+				Revision: nextRevision, ActionID: actionID,
+			}, state, true, nil
+		}
 		delete(state.PendingHostActions, actionID)
-		// EXECUTED 回执清账即完成对应 HOST_ACTION frontier 步骤并补位签发
-		//（submit 接纳后立即继续 Decide/SelectIssued）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
-		if refillErr != nil {
-			return Acceptance{}, nil, false, refillErr
-		}
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-			Revision: nextRevision, ActionID: actionID, Refill: refill,
+			Revision: nextRevision, ActionID: actionID,
 		}, state, true, nil
 
 	case KindLifecycleEvent:
@@ -1197,15 +1246,6 @@ func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	}
 }
 
-// obsoleteTaskOf 返回 actionID 退位派发的任务键（无退位记录为零值）——
-// terminal 对账留痕用。
-func obsoleteTaskOf(state *State, actionID string) runtime.TaskKey {
-	if obsolete, known := state.ObsoleteActions[actionID]; known {
-		return obsolete.Task
-	}
-	return runtime.TaskKey{}
-}
-
 // issuedRevisionOf 返回 actionID 派发的签发代数（签发路径唯一写
 // DispatchIssueRevisions；终态清理不删，terminal 任务的迟到结果仍以
 // 真实代数过重走 floor 校验）。
@@ -1249,8 +1289,8 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		// terminal 对账路径：派发簿记已随任务终态收回，但已配对的
 		// SPAWNED 回执证明该派发真实在途过——结果照常入账（§7.2.2:4
 		// 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到 terminal 而
-		// 失效）：入 Results＋审查证据记账＋留痕，不做任务迁移不 refill
-		//（任务已终态）。无回执的迟到结果仍是未知 action。
+		// 失效）：入 Results＋审查证据记账＋留痕。无回执的迟到结果仍是
+		// 未知 action。
 		receipt, receipted := state.SpawnReceipts[actionID]
 		if !receipted || receipt.Status != SpawnStatusSpawned {
 			return Acceptance{}, false, &RejectedError{
@@ -1265,18 +1305,33 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			}
 		}
 		state.Results[actionID] = record
-		detail := "late result reconciled against the terminal task; no dispatch or step transition is derived"
+		detail := "late result reconciled against the terminal task"
 		if requestID != "" {
-			detail = fmt.Sprintf("late result reconciled against the terminal task by requirement decision %s; no dispatch or step transition is derived", requestID)
+			detail = fmt.Sprintf("late result reconciled against the terminal task by requirement decision %s", requestID)
 		}
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-			ActionID: actionID, Task: obsoleteTaskOf(state, actionID),
+			ActionID: actionID, Task: receipt.Task,
 			Detail:   detail,
 			Revision: nextRevision,
 		})
+		// PASS 的机械后果与结果先到的完成路径（completeResult）同源：任
+		// 务迁移已由 TASK_PROGRESS 完成，此处不做；步骤完成、frontier
+		// settle 与补位签发照常，两种完成顺序到达同一终态（§8.2.3）。
+		if record.Outcome == OutcomePass {
+			if err := state.CompleteStep(receipt.Task.Step, e.cfg.Definition); err != nil {
+				return Acceptance{}, false, fmt.Errorf("protocol: complete step %s: %w", receipt.Task.Step, err)
+			}
+			if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+				return Acceptance{}, false, err
+			}
+		}
+		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
+		if refillErr != nil {
+			return Acceptance{}, false, refillErr
+		}
 		return Acceptance{
 			EventID: eventID, Kind: string(KindWorkerResult), Status: "ACCEPTED",
-			Revision: nextRevision, ActionID: actionID,
+			Revision: nextRevision, ActionID: actionID, Refill: refill,
 		}, true, nil
 	}
 	// 系列身份以签发标记为权威（未标记的派发用证据声明）：重走态的
@@ -1308,7 +1363,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
 		// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
 		if result.Review != nil {
-			if _, err := state.admitReviewEvidence(result.Review, state.issuedRevisionOf(actionID)); err != nil {
+			if _, err := state.admitReviewEvidence(result.Review, actionID, state.issuedRevisionOf(actionID)); err != nil {
 				return Acceptance{}, false, err
 			}
 		}
@@ -1397,33 +1452,56 @@ func (e *Engine) terminateSupersededDispatch(state *State, actionID string, reco
 // 尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条目
 // 保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。本函
 // 数只由事务收尾单点调用（屏障在位时收尾不调）。
-func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) {
+func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) (int, []string) {
 	if len(state.StagedResults) == 0 {
-		return
+		return 0, nil
 	}
-	ids := make([]string, 0, len(state.StagedResults))
-	for actionID := range state.StagedResults {
-		receipt, receipted := state.SpawnReceipts[actionID]
-		if !receipted || (receipt.Status != SpawnStatusSpawned && receipt.Status != SpawnStatusAttached) {
-			continue
+	paired := 0
+	var refills []string
+	// 一次配对可能开门（产品审结论重新 PASS）使同批另一条挂起条目变为
+	// 可配——迭代到不动点，两种完成顺序终态等价。
+	for {
+		ids := make([]string, 0, len(state.StagedResults))
+		for actionID := range state.StagedResults {
+			receipt, receipted := state.SpawnReceipts[actionID]
+			if !receipted || (receipt.Status != SpawnStatusSpawned && receipt.Status != SpawnStatusAttached) {
+				continue
+			}
+			if _, admitted := state.Results[actionID]; admitted {
+				continue
+			}
+			ids = append(ids, actionID)
 		}
-		if _, admitted := state.Results[actionID]; admitted {
-			continue
+		slices.Sort(ids)
+		progressed := false
+		for _, actionID := range ids {
+			snapshot, cloneErr := cloneState(state)
+			if cloneErr != nil {
+				continue
+			}
+			payload := workerResultPayloadOf(state.StagedResults[actionID])
+			pairAcceptance, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, "", nextRevision, nextRevision, expectedFingerprint)
+			if err != nil {
+				*state = *snapshot
+				if isSequenceGate(err) {
+					// 顺序门未开：回执已在账，暂存保留、配对挂起——开门迁
+					// 移（含本批更早条目开门后的下一轮迭代）自动补配对。
+					state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+						ActionID: actionID,
+						Detail:   "the staged result stays pending until the product-review conclusion re-passes",
+						Revision: nextRevision,
+					})
+				}
+				continue
+			}
+			delete(state.StagedResults, actionID)
+			paired++
+			progressed = true
+			refills = append(refills, pairAcceptance.Refill...)
 		}
-		ids = append(ids, actionID)
-	}
-	slices.Sort(ids)
-	for _, actionID := range ids {
-		snapshot, cloneErr := cloneState(state)
-		if cloneErr != nil {
-			continue
+		if !progressed {
+			return paired, refills
 		}
-		payload := workerResultPayloadOf(state.StagedResults[actionID])
-		if _, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, "", nextRevision, nextRevision, expectedFingerprint); err != nil {
-			*state = *snapshot
-			continue
-		}
-		delete(state.StagedResults, actionID)
 	}
 }
 
@@ -1483,6 +1561,88 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		return nil, err
 	}
 	return e.refill(state, nextRevision, expectedFingerprint)
+}
+
+// applyFailedSpawnRouting 执行一条 FAILED spawn 回执的失败路由：瞬态重试
+// 记账（耗尽即 WAIT）、暂存结果删除（失败派发边界的结果不能由它结算）、
+// FAIL 路由 terminalize、RECOVER 路由的 UNKNOWN 账面桥接。立即接纳与屏
+// 障解除的统一执行共用本函数。
+func (s *State) applyFailedSpawnRouting(actionID string, receipt SpawnReceipt, nextRevision uint64) FailureRoute {
+	route := RouteFailure(receipt.FailureClass)
+	pending, known := s.PendingActions[actionID]
+	if !known {
+		// 派发簿记已被收回（如任务先到 terminal）：只落路由留痕。
+		s.appendRecovery(RecoveryRecord{ActionID: actionID, Class: route.Class, Action: route.Action,
+			Detail: route.ActionDetail() + " (the dispatch bookkeeping is already reclaimed)", Revision: nextRevision})
+		return route
+	}
+	if route.Class == authoring.FailureTransientEngine {
+		attempt := s.Attempts[pending.Task]
+		if attempt.MaxAttempts > 0 {
+			if !attempt.RetryExhausted {
+				attempt.Attempts++
+				if attempt.Attempts >= attempt.MaxAttempts {
+					attempt.RetryExhausted = true
+				}
+			}
+			s.Attempts[pending.Task] = attempt
+			if attempt.RetryExhausted {
+				route.Action = RecoveryWait
+				s.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
+					Class: route.Class, Action: route.Action,
+					Detail:   fmt.Sprintf("transient retry attempts exhausted (%d/%d); wait for terminal handling", attempt.Attempts, attempt.MaxAttempts),
+					Revision: nextRevision})
+				delete(s.StagedResults, actionID)
+				return route
+			}
+		}
+	}
+	// A FAILED spawn cannot settle a result that arrived before the receipt.
+	// The result belongs to the failed dispatch boundary and must be submitted
+	// again after a later retry.
+	delete(s.StagedResults, actionID)
+	s.appendRecovery(RecoveryRecord{
+		ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
+		Class: route.Class, Action: route.Action, Detail: route.ActionDetail(), Revision: nextRevision,
+	})
+	if route.Action == RecoveryFail {
+		if err := s.terminalizeTask(pending.Task); err != nil {
+			s.appendRecovery(RecoveryRecord{ActionID: actionID, Detail: fmt.Sprintf("terminalize after a failed spawn: %v", err), Revision: nextRevision})
+		}
+	}
+	if route.Action == RecoveryReconcile {
+		// Keep the wire-level FAILED receipt in SpawnFailures, while exposing
+		// an UNKNOWN ledger entry for external reconciliation.
+		unknown := receipt
+		unknown.Status = SpawnStatusUnknown
+		s.SpawnReceipts[actionID] = unknown
+	}
+	return route
+}
+
+// applyFailedHostActionRouting 执行一条 FAILED host action 回执的失败路由：
+// 路由留痕、RECOVER 路由的 UNKNOWN 账面桥接、FAIL 路由的 intent 清算。
+// 立即接纳与屏障解除的统一执行共用本函数。
+func (s *State) applyFailedHostActionRouting(actionID string, receipt HostActionReceipt, nextRevision uint64) FailureRoute {
+	route := RouteFailure(receipt.FailureClass)
+	s.appendRecovery(RecoveryRecord{
+		ActionID: actionID, Class: route.Class, Action: route.Action,
+		Detail: route.ActionDetail(), Revision: nextRevision,
+	})
+	if route.Action == RecoveryReconcile {
+		// Keep the wire-level FAILED receipt in HostActionFailures while
+		// exposing an UNKNOWN ledger entry, mirroring the spawn-side bridge:
+		// without it the declared RECOVER route has no reconciliation entry
+		// (ReconcileHostAction requires a durable UNKNOWN receipt) and the
+		// recovery instruction dead-ends.
+		unknown := receipt
+		unknown.Status = HostActionStatusUnknown
+		s.HostActionReceipts[actionID] = unknown
+	}
+	if route.Action == RecoveryFail {
+		delete(s.PendingHostActions, actionID)
+	}
+	return route
 }
 
 // terminalizeTask advances a current task along every missing legal progress

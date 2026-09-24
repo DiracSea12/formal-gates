@@ -244,3 +244,22 @@ Git provider＋canary＋route matrix。
 残留（如实，①需机主定调）：①FreshOwed 清偿计"完成接纳即计轮"——新鲜轮事后被 INVALIDATE_RESULT 不复活义务（复活需在失效路径开第二写点，与"清点单一/纠正不触碰"冲突；失效后投影 PENDING＋门判仍挡住推进，实务安全，语义上有"整轮失效后旧 revision 新轮可经 carry 接纳"的窄路径）；②收尾单点只覆盖 Submit 事务，恢复 API 自身落账事务不扫描；③屏障期 ATTACHED 回执挂接的补配对无独立端到端负控（四条件叠加场景未建）。
 
 **R2 第八轮收口，待外部评审。**
+## 第 54 轮（2026-09-24，根因＋广范围：双线审计＋框架三修复，轻装）
+
+机主定调"根因＋广范围，不要只看眼前"。本轮流程改为：**主代理接缝审计＋新鲜红队全表面审计并行**，合并去重后单一综合派发，内部清零才送外审。
+
+双线审计合并（7 缺陷＋3 观察，全部复现）：红队 2 P1＋3 P2＋3 P3（D1 RecoverAttempt 屏障期签发、D2/D3 HostAction 回执与 RESET/ABORT 决定屏障期 settle、D3' UpstreamVoid 棘轮死锁、D4 terminal 对账不补位、O1 grant 政策无执行、O2 非需求 Ask 无 façade 面、O3 DispatchID 不绑派发）；主代理独立坐实 RISK-4（＝D1）与 RISK-1（屏障期 FAILED 回执无处置删暂存——红队负控只验"无新身份"漏掉此面），RISK-2/3 并入观察。两线互补验证了审计方法。
+
+框架三修复（子代理，12 文件 737/285）：
+
+- **FA 屏障闸＝提交边界属性**：全部权威写入口过同一判定（清单入报告：Submit 处置表、IssueFromPlan/RecoverAttempt/ReconcileHostAction 头部闸、persistHostAction、refill 扣发、ReconcileUnknownReceipt 挂接/配对分置）；观察照常落账，业务后果（配对/settle/结算/失败路由/新派发）屏障期落持久挂起账（HeldFailureRoutes/HeldHostSettles/FrontierSettleHeld/Deferred），解除事务统一执行。
+- **FB 事务收尾单点**：commitEffects（transactionEpilogue→advanceReviewPhases→verifyReviewIntegrity→Save）为唯一提交点，一切持久化事务过路；收尾屏障感知。如实申报偏差：收尾补位为条件执行（仅当收尾确做了业务工作），否则观察类事务自动签发会击穿 Plan→Submit→Issue 驱动契约。
+- **FC 上游失效可逆**：`Series.VoidedEffective` 快照＋`ReleaseUpstreamVoid` 反向原语——纠正使上游回 PASS 且无其他阻塞时，同一事务恢复下游失效前结论（原文恢复，仅 Revision 单调）；新候选重建语义不变。§7.3.3 死锁解除。
+- 过程中发现并修复两缺口：terminal 对账不完成步骤（两序等价测试揭出，SpawnReceipt 增 Task 观察字段，对账执行与 completeResult 同源机械后果）；fulfilled 对账结算旁路（入同一清算账）。
+- P3：grant 未达上限引擎拒；façade 泛化 PendingAsks 面（token 即时求值，需求面保留携包特化）；证据 DispatchID 必须绑定提交 actionID（跨 action 摘要碰撞结构性不可能）。
+
+主代理独立复核（探针走到底、跑毕即删）：屏障期 RecoverAttempt 拒（CHANGE_BARRIER_ACTIVE）＋解除后照常；FAILED 回执屏障期只落观察＋暂存保留＋解除事务按规则处置（删暂存＋路由）——两序收敛；UpstreamVoid 往返解除走到底（恢复失效前结论＋拓扑确认照常）；grant 早授权拒＋DispatchID 不绑拒。TERMINAL/结果两序等价由入树结构全等测试覆盖（主代理线性构造与任务进度事件模型相性不合，弃用独立副本）。engine 15 包＋cli 全绿、vet/gofmt 净。模型调用 0（红队探针仅 /tmp overlay，仓库零改动）。
+
+残留（如实）：①收尾补位条件执行（设计取舍已申报）；②FC 释放仅在纠正路径触发（新轮重投影走重建路径）；③FreshOwed 失效不复活仍待机主定调（第 53 轮残留①）；④红队二跑待执行（本轮收口后立即派）。
+
+**框架收口，待红队二跑清零后送外审。**

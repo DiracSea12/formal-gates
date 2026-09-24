@@ -514,3 +514,59 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 		t.Fatalf("abort lifted the barrier: %v %+v", err, lifted.PendingRequirementAsk)
 	}
 }
+
+// TestFacadeProjectsEveryPendingAsk：泛化 pending-ask 面覆盖一切未决受
+// 限控制 Ask（requestID/control/options/即时 token，按 requestID 排序）
+// ——非需求变化的 Ask 同样可见；携包特化面只留给需求变化 Ask。
+func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
+	f := newEngineRouteFacade(t, "pending-asks-face")
+	options := []protocol.AskOption{{ID: "no-split", Label: "不拆分"}, {ID: "split", Label: "拆分"}}
+	topology, err := protocol.NewRequestEvent("req-face-topology", protocol.ControlConfirmTopology, options...)
+	if err != nil {
+		t.Fatalf("topology ask event: %v", err)
+	}
+	if _, _, err := f.Submit(topology); err != nil {
+		t.Fatalf("submit topology ask: %v", err)
+	}
+	grant, err := protocol.NewRequestEvent("req-face-grant", protocol.ControlReviewRoundGrant,
+		protocol.AskOption{ID: "grant", Label: "授权恰好一轮"}, protocol.AskOption{ID: "decline", Label: "拒绝"})
+	if err != nil {
+		t.Fatalf("grant ask event: %v", err)
+	}
+	if _, _, err := f.Submit(grant); err != nil {
+		t.Fatalf("submit grant ask: %v", err)
+	}
+
+	run, err := f.Show()
+	if err != nil {
+		t.Fatalf("show with pending asks: %v", err)
+	}
+	if len(run.PendingAsks) != 2 {
+		t.Fatalf("pending ask faces = %+v, want both asks", run.PendingAsks)
+	}
+	// 确定性输出：按 requestID 排序。
+	if run.PendingAsks[0].RequestID != "req-face-grant" || run.PendingAsks[1].RequestID != "req-face-topology" {
+		t.Fatalf("pending ask faces are not sorted: %+v", run.PendingAsks)
+	}
+	topologyFace := run.PendingAsks[1]
+	if topologyFace.Control != protocol.ControlConfirmTopology || len(topologyFace.Options) != 2 ||
+		topologyFace.Options[0].ID != options[0].ID || topologyFace.Options[1].ID != options[1].ID {
+		t.Fatalf("topology ask face = %+v", topologyFace)
+	}
+	grantFace := run.PendingAsks[0]
+	if grantFace.Control != protocol.ControlReviewRoundGrant || len(grantFace.Options) != 2 {
+		t.Fatalf("grant ask face = %+v", grantFace)
+	}
+	for _, face := range run.PendingAsks {
+		token, err := f.Freshness(face.RequestID)
+		if err != nil || token == "" || face.Token != token {
+			t.Fatalf("ask face token = %q, freshness = %q err=%v (request %s)", face.Token, token, err, face.RequestID)
+		}
+	}
+	if run.PendingRequirementAsk != nil {
+		t.Fatal("non-requirement asks must not populate the package-carrying face")
+	}
+	if statusRun, err := f.Status(); err != nil || len(statusRun.PendingAsks) != 2 {
+		t.Fatalf("status with pending asks = %d %v", len(statusRun.PendingAsks), err)
+	}
+}

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -230,6 +231,11 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 	if state == nil {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
+	// 屏障闸（FA）：恢复决定是权威写入——重试派发、terminalize 与恢复
+	// Ask 的创建在未决需求变化期间冻结（解除后照常）。
+	if err := state.errWriteBarrier("attempt recovery"); err != nil {
+		return RecoveryPlan{}, 0, err
+	}
 	pending, ok := state.PendingActions[actionID]
 	if !ok {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("recovery references unknown action %q", actionID)}
@@ -273,7 +279,7 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 		state.removeTaskBookkeeping(pending.Task)
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: plan.Class, Action: plan.Action, RequestID: plan.RequestID, Detail: plan.Detail, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision})
-	commitRevision, err := e.commit(state, revision, expectedFingerprint)
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -315,29 +321,20 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 		receipt.LifecycleIdentity = matches[0]
 		state.SpawnReceipts[actionID] = receipt
 		plan.Detail = "unknown receipt attached to unique lifecycle identity " + matches[0]
-		if staged, waiting := state.StagedResults[actionID]; waiting {
-			// 屏障盖住一切业务结果接纳路径：UNKNOWN 回执挂接是观察事实
-			// 照常落账，暂存配对接纳等屏障解除。
-			if state.requirementChangePending() {
-				state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-					ActionID: actionID,
-					Detail:   "unknown receipt attached while the requirement change barrier holds; the staged result stays suspended until the barrier lifts",
-					Revision: nextRevision,
-				})
-			} else {
-				refill, err := e.completeResult(state, staged, nextRevision, expectedFingerprint)
-				if err != nil {
-					return RecoveryPlan{}, 0, err
-				}
-				delete(state.StagedResults, actionID)
-				_ = refill
-			}
+		// 挂接是观察事实照常落账；暂存结果的配对接纳属事务收尾单点
+		//（commitEffects）——屏障在位时收尾不配对，解除事务扫清。
+		if state.requirementChangePending() {
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+				ActionID: actionID,
+				Detail:   "unknown receipt attached while the requirement change barrier holds; the staged result stays suspended until the barrier lifts",
+				Revision: nextRevision,
+			})
 		}
 	} else {
 		plan.Detail = fmt.Sprintf("unknown receipt has %d lifecycle matches; operator reconciliation required", len(matches))
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: authoring.FailureSideEffectUnknown, Action: plan.Action, Detail: plan.Detail, LifecycleMatches: len(matches), Revision: nextRevision})
-	commitRevision, err := e.commit(state, revision, expectedFingerprint)
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -356,11 +353,16 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 	if state == nil {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
+	// 屏障闸（FA）：host action 对账是权威写入——intent 结算、frontier
+	// settle 与补位签发在未决需求变化期间冻结（解除后照常）。
+	if err := state.errWriteBarrier("host action reconciliation"); err != nil {
+		return RecoveryPlan{}, 0, err
+	}
 	if effect, reconciled := state.ReconciledEffects[actionID]; reconciled {
 		return RecoveryPlan{
 			Class:  authoring.FailureSideEffectUnknown,
 			Action: RecoveryReconcile,
-			Detail: "host action was already reconciled as " + effect.Status,
+			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
 	}
 	receipt, hasReceipt := state.HostActionReceipts[actionID]
@@ -378,27 +380,24 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		plan.Detail = "external observation conflicts with the pending host action intent"
 	} else if fulfilled {
 		plan.Detail = "external observation already satisfies the intent; result committed without re-execution"
-		delete(state.PendingHostActions, actionID)
 		var adapterOperation authoring.OperationID
 		if intent.Adapter != nil {
 			adapterOperation = intent.Adapter.Operation
 		}
 		state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: adapterOperation, ObservationDigest: observationDigest, Status: "FULFILLED", Revision: nextRevision}
 		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Step: intent.Step, Provider: state.RunProvider, Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: HostActionStatusReconciled, Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": HostActionStatusReconciled})}
-		// 对账即外部事实已满足：完成对应 HOST_ACTION frontier 步骤并补位
-		// 签发（与 EXECUTED 回执接纳同一条 settle 语义，不再次执行）。
-		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
-			return RecoveryPlan{}, 0, err
-		}
-		if _, refillErr := e.refill(state, nextRevision, expectedFingerprint); refillErr != nil {
-			return RecoveryPlan{}, 0, refillErr
+		// 对账即外部事实已满足（与 EXECUTED 回执接纳同一条 settle 语义，
+		// 不再次执行）：intent 清算入同一清算账，由事务收尾单点
+		//（commitEffects）与屏障期挂起的清算共用一条执行路径。
+		if !slices.Contains(state.HeldHostSettles, actionID) {
+			state.HeldHostSettles = append(state.HeldHostSettles, actionID)
 		}
 	} else {
 		plan.Action = RecoveryWait
 		plan.Detail = "external observation does not yet satisfy the intent; keep pending and wait"
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: plan.Class, Action: plan.Action, Detail: plan.Detail, Revision: nextRevision})
-	commitRevision, err := e.commit(state, revision, expectedFingerprint)
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
