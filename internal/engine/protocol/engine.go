@@ -29,7 +29,7 @@ func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
 
 // Config 是 Engine 的定义绑定与容量输入：CompiledDefinition 供结果接纳的
 // step 完成（CompleteStep）与补位签发（Decide/SelectIssued）使用；
-// Registry 保留为编译期绑定的 runtime fixture 输入；HostAction 的 operation
+// Registry 保留为编译期绑定的注册表输入；HostAction 的 operation
 // 与 schema 以 Definition 中的 compiled payload 为唯一运行时来源。Capacity
 // 是补位签发的固定容量（真实容量收集器属后续批次）。
 type Config struct {
@@ -613,10 +613,10 @@ func (e *Engine) reviewSeriesOf(stepID authoring.StepID) review.Action {
 	return ""
 }
 
-// retryMaxAttempts returns the declaration attached to a compiled step. The
-// protocol does not invent a retry bound when the step has no retry policy;
-// this is important for the canonical review.worker fixture, whose transient
-// result must remain resumable by the existing recovery contract.
+// retryMaxAttempts returns the retry bound declared on a compiled step. The
+// protocol does not invent a retry bound when the step declares no retry
+// policy: zero leaves every transient result resumable through the recovery
+// contract, because no exhaustion edge exists for a step without a bound.
 func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 	for _, step := range e.cfg.Definition.Steps {
 		if step.Header.ID != stepID {
@@ -1978,8 +1978,9 @@ func (e *Engine) TerminateAgent(workerActionID, identity, reason, expectedFinger
 	return e.TerminateAgentWithCorrelation(workerActionID, identity, reason, "", expectedFingerprint)
 }
 
-// TerminateAgentWithCorrelation binds a known lifecycle transport correlation
-// for receipt-file fixtures and adapters that establish it before execution.
+// TerminateAgentWithCorrelation binds a caller-established lifecycle transport
+// correlation, for hosts that fix the correlation before execution instead of
+// generating it when the intent is issued.
 func (e *Engine) TerminateAgentWithCorrelation(workerActionID, identity, reason, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
 	if strings.TrimSpace(reason) == "" {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "TERMINATE_AGENT reason is empty"}

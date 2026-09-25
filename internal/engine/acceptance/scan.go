@@ -26,8 +26,8 @@ import (
 //  2. 命令行（对 checked-in definitions/workflow.json 的编译产物执行同一扫描）：
 //     go test ./internal/engine/acceptance -run TestAcceptanceMarkerScan -v
 //
-// 本函数是拒绝性扫描，永远不产出 marker 定义；diagnostic 模式的 fixture
-// 只存在于测试内（CompileDiagnostic 产物），不经本函数放行。
+// 本函数是拒绝性扫描，永远不产出 marker 定义；diagnostic 模式的定义产物
+// （CompileDiagnostic）只存在于测试内，不经本函数放行。
 func ScanNoMissingEngineAdapter(cd *compiler.CompiledDefinition) error {
 	if cd == nil {
 		return fmt.Errorf("acceptance: marker scan: nil definition")

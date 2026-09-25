@@ -1053,7 +1053,7 @@ func validateConfirmation(receipt IntakeConfirmationReceipt, definitionSource st
 // validateArtifactBindings recomputes the injected artifact revisions using
 // the same deterministic content hash used by the stable intake writer. It is
 // intentionally scoped to normal repository files beneath ArtifactRoot;
-// callers that construct an in-memory protocol fixture may omit ArtifactRoot.
+// callers that run the protocol entirely in memory may omit ArtifactRoot.
 func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) error {
 	rootAbs, err := filepath.Abs(strings.TrimSpace(root))
 	if err != nil {

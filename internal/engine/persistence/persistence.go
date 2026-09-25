@@ -146,7 +146,7 @@ func expectedEnvelope(cfg Config) Envelope {
 
 // ExpectedEnvelope returns the exact engine envelope for an owning package.
 // It is used by the isolated harness to construct positive and negative
-// envelope fixtures without opening a state file.
+// envelope samples without opening a state file.
 func ExpectedEnvelope(packageDigest string) (Envelope, error) {
 	if strings.TrimSpace(packageDigest) == "" {
 		return Envelope{}, fmt.Errorf("persistence: package digest is required")

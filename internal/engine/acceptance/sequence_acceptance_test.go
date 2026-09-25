@@ -18,10 +18,10 @@ import (
 
 // workflowGoldenOrder 是一个合法完成序列（拓扑序；sibling 先后任意，此处
 // 取编译 ordinal 的稳定参考序）：parse → persist → split → slice →
-// transport → join → ask → review → cost。
+// transport → join → ask → review → readiness → cost。
 var workflowGoldenOrder = []string{
 	"entry.parse", "entry.persist", "fan.split", "fan.slice",
-	"fan.transport", "fan.join", "ask.decide", "review.worker", "report.cost",
+	"fan.transport", "fan.join", "ask.decide", "review.worker", "review.readiness", "report.cost",
 }
 
 func newRunState(t *testing.T, cd *compiler.CompiledDefinition) *decision.State {

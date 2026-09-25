@@ -28,9 +28,9 @@ type Config struct {
 	PackageDigest string
 	// DefinitionSource and InstalledTargetIdentity optionally bind a candidate
 	// run to the exact definition file and admitted installed target.
-	// Protocol fixtures leave these empty; candidate façades provide both so
-	// the loader can enforce the full six-field envelope without changing
-	// existing callers.
+	// In-memory protocol engines leave these empty; candidate façades provide
+	// both so the loader can enforce the full six-field envelope without
+	// changing existing callers.
 	DefinitionSource        string
 	InstalledTargetIdentity string
 	FaultInjector           func(FaultPoint) error

@@ -43,7 +43,7 @@ func TestLoadFutureDefinitionRejectsChangedBytesWithoutVersionBump(t *testing.T)
 	if err := os.MkdirAll(definitionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// checked-in definitions/workflow.json 版本为 "2"（完整拓扑），不是本负例
+	// checked-in definitions/workflow.json 版本为 "3"（完整拓扑），不是本负例
 	// 的载体：版本已不同即为新 future 候选。此处内联构造一个版本等于当前
 	// 常量、但字节不同于冻结 digest 的 v1 形态定义，保持 "changed bytes
 	// without bump 被拒"的断言语义。

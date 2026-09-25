@@ -103,9 +103,29 @@ func TestFakeWorkerResultBeforeReceiptReplaysAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary after receipt: %v", err)
 	}
-	if summary.PendingResults != 0 || summary.Results != 1 || summary.PendingActions != 0 {
+	// 产品审步落定后补位签发技术审步（review.readiness）：结果清账、
+	// pending 换成下一条审查派发。
+	if summary.PendingResults != 0 || summary.Results != 1 || summary.PendingActions != 1 {
 		t.Fatalf("settled summary = %+v", summary)
 	}
+	snapshot, err := restarted.Engine.Load()
+	if err != nil {
+		t.Fatalf("load settled state: %v", err)
+	}
+	refill, ok := snapshot.State.PendingActions[actionIDOfStep(snapshot.State, "review.readiness")]
+	if !ok || refill.Step != "review.readiness" {
+		t.Fatalf("settled pending actions = %+v, want the refilled review.readiness dispatch", snapshot.State.PendingActions)
+	}
+}
+
+// actionIDOfStep 返回 state 中落在给定步骤上的 actionID（无则空串）。
+func actionIDOfStep(state *protocol.State, step string) string {
+	for id, pending := range state.PendingActions {
+		if pending.Step == step {
+			return id
+		}
+	}
+	return ""
 }
 
 func TestSubmitResponseLossIsIdempotent(t *testing.T) {

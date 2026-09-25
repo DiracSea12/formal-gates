@@ -7,13 +7,13 @@ package definition
 // 人工编辑。期望身份常量供 loader/校验方钉死当前 definition 身份。
 //
 // 衔接：validate 侧手工常量 CurrentWorkflowDefinitionDigest 冻结的是阶段 0
-// 契约身份（definition version "1"），与 canonical 制品身份（version "2"）
-// 并存；canonical 制品身份由本生成常量承载。
+// 契约身份（definition version "1"），与 canonical 制品身份并存；canonical
+// 制品身份由本生成常量承载。
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。
-	WorkflowDefinitionVersion = "2"
+	WorkflowDefinitionVersion = "3"
 	// WorkflowDefinitionDigest 是 canonical 制品字节的 SHA-256 摘要
 	// （sha256: 前缀，与仓库现行格式一致）。
-	WorkflowDefinitionDigest = "sha256:90cdb9ada60c1836964dafb5048941c538ac69db35ac732ab22c0092a70e8228"
+	WorkflowDefinitionDigest = "sha256:d6a89c8bd32d35639126de3cae6ac036103bd327bf688182a9e6178c97ae8b92"
 )

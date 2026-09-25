@@ -20,20 +20,27 @@ import (
 )
 
 // Version 是 definition 版本信封。内容为完整拓扑
-// （definitions/workflow.json），按"changed bytes 必须 bump"规则从 "1"
-// 晋升 "2"。identity_gen.go 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "2"
+// （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
+// 的 WorkflowDefinitionVersion 与其同源。
+const Version authoring.DefinitionVersion = "3"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
 
-// 定义表拓扑（九步覆盖全部六变体 + 并行组，与 compiler 批的金图表同构；
+// 定义表拓扑（十步覆盖全部六变体 + 并行组，与 compiler 批的金图表同构；
 // 图表 A → B 表示 B 依赖 A）：
 //
 //	entry.parse ──→ entry.persist ──→ ask.decide ──┐
-//	    │              └──────────→ review.worker  │
+//	    │              └──→ review.worker          │
+//	    │                     └──→ review.readiness
 //	    └──→ fan.split ──→ fan.slice ──→ fan.join ─┴→ report.cost
 //	                └───→ fan.transport ──↗
+//
+// 双审两条系列各有一个 agent 步承载：review.worker 标记 product-review，
+// review.readiness 标记 start-readiness。步骤依赖 review.worker →
+// review.readiness 与协议层双审顺序门（产品审 effective PASS 先于
+// start-readiness 证据接纳）同构：技术审派发在拓扑上只能继产品审完成
+// 之后进入 Ready 前沿。
 var (
 	workflowHandlers = []struct {
 		id     authoring.HandlerID
@@ -96,14 +103,20 @@ func Workflow() *compiler.Definition {
 			Retry: authoring.RetryPolicy{MaxAttempts: 3, Backoff: 2 * time.Second},
 		})
 	must("entry.persist", err)
-	reviewIO := ioWith("entry.persist")
-	reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
-		reviewIO, authoring.AgentSpec{
+		reviewIOWith("entry.persist"), authoring.AgentSpec{
 			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	must("review.worker", err)
+	// 技术审（开工就绪）系列的派发载体：与产品审步复用同一 handler、
+	// 后置谓词与超时，只以系列标记与依赖位置区分（见上面的拓扑注释）。
+	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
+		reviewIOWith("review.worker"), authoring.AgentSpec{
+			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
+		})
+	must("review.readiness", err)
 	ask, err := authoring.NewHumanAskStep(header("ask.decide", "ask", "entry.persist"),
 		authoring.HumanAskSpec{
 			AskKind: "decision", RequestSchema: "schema.ask.decision.request",
@@ -135,7 +148,7 @@ func Workflow() *compiler.Definition {
 		})
 	must("report.cost", err)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode,
-		Steps: []authoring.Step{parse, persist, review, ask, split, slice, transport, join, cost}}
+		Steps: []authoring.Step{parse, persist, review, readiness, ask, split, slice, transport, join, cost}}
 }
 
 // must 把定义表/注册表的构造错误转为 panic：表内容是编译期常量，失败即
@@ -169,4 +182,12 @@ func ioWith(bindings ...string) authoring.IO {
 		})
 	}
 	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+}
+
+// reviewIOWith 在 ioWith 之上加两条审查 agent 步共用的后置谓词引用
+// （agent 步必填的 worker result 合同）。
+func reviewIOWith(bindings ...string) authoring.IO {
+	review := ioWith(bindings...)
+	review.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
+	return review
 }

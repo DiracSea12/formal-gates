@@ -121,7 +121,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	} else if code := rejectionCode(t, err); code != CodeNotInitialized {
 		t.Fatalf("load before init code = %q", code)
 	}
-	view, err := decision.NewState("2", runtime.PhaseIntakeRegistered)
+	view, err := decision.NewState("3", runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	if snap.Revision != 1 {
 		t.Fatalf("initial revision = %d, want 1", snap.Revision)
 	}
-	if snap.State.Phase != runtime.PhaseIntakeRegistered || string(snap.State.DefinitionVersion) != "2" {
+	if snap.State.Phase != runtime.PhaseIntakeRegistered || string(snap.State.DefinitionVersion) != "3" {
 		t.Fatalf("view not persisted: %+v", snap.State.State)
 	}
 	before := stateBytesOf(t, dir)
@@ -284,7 +284,7 @@ func TestIssueNegativePaths(t *testing.T) {
 	}
 
 	fresh, _ := newTestEngine(t)
-	view, err := decision.NewState("2", runtime.PhaseIntakeRegistered)
+	view, err := decision.NewState("3", runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}

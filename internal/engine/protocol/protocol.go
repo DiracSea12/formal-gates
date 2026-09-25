@@ -161,9 +161,9 @@ type Attempt struct {
 	Plan     PlanIdentity    `json:"plan"`
 	// Attempts counts transient executions observed for this logical task. It
 	// starts at zero and advances once per transient result. MaxAttempts is
-	// copied from the compiled step's declaration when issued; zero means that
-	// the step declares no retry bound (the review.worker fixture intentionally
-	// has this shape).
+	// copied from the compiled step's declaration when issued; zero means the
+	// step declares no retry bound, so a transient result never exhausts and
+	// stays resumable through the recovery contract.
 	Attempts       int  `json:"attempts,omitempty"`
 	MaxAttempts    int  `json:"maxAttempts,omitempty"`
 	RetryExhausted bool `json:"retryExhausted,omitempty"`

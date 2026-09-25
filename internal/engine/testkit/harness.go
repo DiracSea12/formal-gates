@@ -2846,7 +2846,10 @@ func isPersistenceFault(point persistence.FaultPoint) bool {
 func controlKind(value string) (protocol.ControlKind, error) {
 	kind := protocol.ControlKind(strings.TrimSpace(value))
 	if !kind.Valid() {
-		return "", fmt.Errorf("testkit: unsupported control %q (closed set: RESET, ABORT, RECOVER_ATTEMPT)", value)
+		return "", fmt.Errorf("testkit: unsupported control %q (closed set: %s, %s, %s, %s, %s, %s, %s, %s)",
+			value, protocol.ControlReset, protocol.ControlAbort, protocol.ControlRecovery,
+			protocol.ControlReviewRoundGrant, protocol.ControlReviewFindingDecision, protocol.ControlConfirmTopology,
+			protocol.ControlSelectRoute, protocol.ControlRequestRequirementChange)
 	}
 	return kind, nil
 }

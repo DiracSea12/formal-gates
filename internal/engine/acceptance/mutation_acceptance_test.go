@@ -27,8 +27,8 @@ func TestAcceptanceRegistryCompleteness(t *testing.T) {
 		if cd.MissingEngineAdapter {
 			t.Fatal("fully registered definition must not carry MISSING_ENGINE_ADAPTER")
 		}
-		if len(cd.Steps) != 9 {
-			t.Fatalf("step count = %d, want 9", len(cd.Steps))
+		if len(cd.Steps) != 10 {
+			t.Fatalf("step count = %d, want 10", len(cd.Steps))
 		}
 		if digest != definition.WorkflowDefinitionDigest {
 			t.Fatalf("fixture registry digest = %s, want checked-in identity %s (fixture drifted from definition.Registry)", digest, definition.WorkflowDefinitionDigest)

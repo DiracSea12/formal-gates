@@ -58,8 +58,8 @@ package definition
 // 人工编辑。期望身份常量供 loader/校验方钉死当前 definition 身份。
 //
 // 衔接：validate 侧手工常量 CurrentWorkflowDefinitionDigest 冻结的是阶段 0
-// 契约身份（definition version "1"），与 canonical 制品身份（version "2"）
-// 并存；canonical 制品身份由本生成常量承载。
+// 契约身份（definition version "1"），与 canonical 制品身份并存；canonical
+// 制品身份由本生成常量承载。
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。

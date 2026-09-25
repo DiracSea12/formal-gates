@@ -132,10 +132,10 @@
 ### 2. 包摘要、installed-target digest、state schema version、workflow definition version、definition digest
 
 - workflow definition version / definition digest（本阶段新增的 canonical 制品身份）：
-  `definitions/workflow.json` 编译产物 version = "2"、stateSchemaVersion = "1"、
+  `definitions/workflow.json` 编译产物 version = "3"、stateSchemaVersion = "1"、
   writer = "engine"；与 `internal/engine/definition/identity_gen.go` 生成的
-  `WorkflowDefinitionVersion = "2"`、
-  `WorkflowDefinitionDigest = "sha256:90cdb9ada60c1836964dafb5048941c538ac69db35ac732ab22c0092a70e8228"`
+  `WorkflowDefinitionVersion = "3"`、
+  `WorkflowDefinitionDigest = "sha256:d6a89c8bd32d35639126de3cae6ac036103bd327bf688182a9e6178c97ae8b92"`
   同源（compiler 同一生成动作产出制品与期望身份常量，禁止人工双写；当前工作树
   `definitions/workflow.json` 的 sha256 复算值与该常量一致）。阶段 0 冻结的
   `phase0.go` 契约常量（"1" @ sha256:9ec68cd7…）按阶段 0 契约保持不变，两版本并存且

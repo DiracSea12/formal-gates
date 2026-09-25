@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "2",
+  "version": "3",
   "stateSchemaVersion": "1",
   "writer": "engine",
   "transactionOwner": "validate",
@@ -17,7 +17,7 @@
       "nodeId": "ask",
       "ordinal": 2,
       "kind": "HUMAN_ASK",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "entry.persist"
       ],
@@ -35,7 +35,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -51,7 +51,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "entry.parse"
       ],
@@ -84,7 +84,7 @@
       "nodeId": "fan",
       "ordinal": 3,
       "kind": "PARALLEL",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "entry.parse"
       ],
@@ -110,7 +110,7 @@
       "nodeId": "fan",
       "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "fan.split"
       ],
@@ -136,7 +136,7 @@
       "nodeId": "fan",
       "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "fan.split"
       ],
@@ -166,7 +166,7 @@
       "nodeId": "fan",
       "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "fan.slice",
         "fan.transport"
@@ -198,7 +198,7 @@
       "nodeId": "report",
       "ordinal": 7,
       "kind": "LOCAL",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "ask.decide",
         "fan.join"
@@ -233,7 +233,7 @@
       "nodeId": "review",
       "ordinal": 8,
       "kind": "AGENT",
-      "definitionVersion": "2",
+      "definitionVersion": "3",
       "dependencies": [
         "entry.persist"
       ],
@@ -259,6 +259,40 @@
         "handler": "engine.review.worker",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "product-review",
+        "timeoutNs": 60000000000
+      }
+    },
+    {
+      "id": "review.readiness",
+      "nodeId": "review",
+      "ordinal": 9,
+      "kind": "AGENT",
+      "definitionVersion": "3",
+      "dependencies": [
+        "review.worker"
+      ],
+      "authority": "AGENT",
+      "runner": "AGENT_WORKER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "postconditions": [
+          {
+            "id": "pred.review.post"
+          }
+        ],
+        "inputs": [
+          {
+            "from": "review.worker",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.review.worker",
+        "nonProgrammableReason": "INDEPENDENT_REVIEW",
+        "reviewSeries": "start-readiness",
         "timeoutNs": 60000000000
       }
     }

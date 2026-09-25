@@ -547,7 +547,11 @@ func (e Event) Validate() error {
 	switch e.Kind {
 	case KindRequestControl:
 		if !e.Request.Control.Valid() {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("request control %q invalid (closed set: RESET, ABORT, RECOVER_ATTEMPT)", e.Request.Control)}
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf(
+				"request control %q invalid (closed set: %s, %s, %s, %s, %s, %s, %s, %s)",
+				e.Request.Control, ControlReset, ControlAbort, ControlRecovery,
+				ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
+				ControlRequestRequirementChange)}
 		}
 		if len(e.Request.Options) == 0 {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "request options are empty"}
@@ -623,7 +627,9 @@ func (e Event) Validate() error {
 		switch e.Spawn.Status {
 		case SpawnStatusSpawned, SpawnStatusFailed, SpawnStatusUnknown:
 		default:
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("spawn receipt status %q invalid (closed set: SPAWNED, FAILED)", e.Spawn.Status)}
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf(
+				"spawn receipt status %q invalid (closed set: %s, %s, %s)",
+				e.Spawn.Status, SpawnStatusSpawned, SpawnStatusFailed, SpawnStatusUnknown)}
 		}
 		if e.Spawn.Status == SpawnStatusFailed {
 			if !e.Spawn.FailureClass.Valid() {
@@ -701,7 +707,9 @@ func (e Event) Validate() error {
 		switch e.HostAction.Status {
 		case HostActionStatusExecuted, HostActionStatusFailed, HostActionStatusUnknown:
 		default:
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("host action receipt status %q invalid (closed set: EXECUTED, FAILED)", e.HostAction.Status)}
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf(
+				"host action receipt status %q invalid (closed set: %s, %s, %s)",
+				e.HostAction.Status, HostActionStatusExecuted, HostActionStatusFailed, HostActionStatusUnknown)}
 		}
 		if e.HostAction.Status == HostActionStatusFailed {
 			if !e.HostAction.FailureClass.Valid() {

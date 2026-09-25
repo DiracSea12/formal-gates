@@ -86,7 +86,7 @@ func TestAcceptanceMarkerScan(t *testing.T) {
 	})
 }
 
-// TestAcceptanceWorkflowStepKindsFixed 是扫描的补充钉定：checked-in 定义九步
+// TestAcceptanceWorkflowStepKindsFixed 是扫描的补充钉定：checked-in 定义十步
 // 的 kind/authority/runner 物化值固定（marker 扫描所依据的 compiled IR 形态
 // 不随批漂移）。
 func TestAcceptanceWorkflowStepKindsFixed(t *testing.T) {
@@ -96,15 +96,16 @@ func TestAcceptanceWorkflowStepKindsFixed(t *testing.T) {
 		auth authoring.DecisionAuthority
 		run  authoring.RunnerKind
 	}{
-		"entry.parse":   {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
-		"entry.persist": {compiler.KindDurable, authoring.AuthorityEngine, authoring.RunnerDurableActivity},
-		"review.worker": {compiler.KindAgent, authoring.AuthorityAgent, authoring.RunnerAgentWorker},
-		"ask.decide":    {compiler.KindHumanAsk, authoring.AuthorityHuman, authoring.RunnerHostAdapter},
-		"fan.split":     {compiler.KindParallel, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
-		"fan.slice":     {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
-		"fan.transport": {compiler.KindHostAction, authoring.AuthorityEngine, authoring.RunnerHostAdapter},
-		"fan.join":      {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
-		"report.cost":   {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
+		"entry.parse":      {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
+		"entry.persist":    {compiler.KindDurable, authoring.AuthorityEngine, authoring.RunnerDurableActivity},
+		"review.worker":    {compiler.KindAgent, authoring.AuthorityAgent, authoring.RunnerAgentWorker},
+		"review.readiness": {compiler.KindAgent, authoring.AuthorityAgent, authoring.RunnerAgentWorker},
+		"ask.decide":       {compiler.KindHumanAsk, authoring.AuthorityHuman, authoring.RunnerHostAdapter},
+		"fan.split":        {compiler.KindParallel, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
+		"fan.slice":        {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
+		"fan.transport":    {compiler.KindHostAction, authoring.AuthorityEngine, authoring.RunnerHostAdapter},
+		"fan.join":         {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
+		"report.cost":      {compiler.KindLocal, authoring.AuthorityEngine, authoring.RunnerEngineLocal},
 	}
 	if len(cd.Steps) != len(want) {
 		t.Fatalf("step count = %d, want %d", len(cd.Steps), len(want))
