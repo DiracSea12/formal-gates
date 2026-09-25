@@ -6,6 +6,8 @@
 package protocol
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
@@ -21,7 +23,7 @@ import (
 // TOPOLOGY_AND_ROUTE；拓扑确认与路线选择 Ask 相继可达，路线绑定后进入
 // DEVELOPMENT_PARALLEL。
 func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
-	engine := canonicalReviewEngine(t)
+	engine, _ := canonicalReviewEngine(t)
 
 	// 产品审：entry 两步完成后 Ready 前沿只含 review.worker（ask.decide 属
 	// Ask 边界、fan.* 属引擎内部，都不进 Ready 派发集）。
@@ -89,7 +91,7 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 
 // canonicalReviewEngine 构造绑定 canonical 编译定义的已受理引擎：entry
 // 两步在视图内完成、受理回执落账，run 处于 PRODUCT_REVIEW。
-func canonicalReviewEngine(t *testing.T) *Engine {
+func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
 	engine, err := New(mustStore(t, dir), Config{
@@ -116,5 +118,220 @@ func canonicalReviewEngine(t *testing.T) *Engine {
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
 		t.Fatalf("intake receipt: %v", err)
 	}
-	return engine
+	return engine, dir
+}
+
+// TestCanonicalProductFailReissuesTheSecondAutomaticRound：产品审语义
+// FAIL 不完成载体步——技术审不被签出（顺序门要守的越序面不再出现），
+// 载体步留在前沿、同事务补位签发第二轮产品审派发（轮派发身份）；第二
+// 轮 PASS 后 effective PASS、载体步完成、技术审步随即可达。
+func TestCanonicalProductFailReissuesTheSecondAutomaticRound(t *testing.T) {
+	engine, _ := canonicalReviewEngine(t)
+
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "canonical-fail-1", product,
+		reviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
+			{Severity: "P1", Message: "core acceptance blocked"},
+		}))
+	snap := engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Completed != 1 || series.Effective.Status != "FAIL" || series.RemainingAutomatic != 2 {
+		t.Fatalf("product ledger after the FAIL round = %+v", series)
+	}
+	if snap.State.stepCompleted("review.worker") {
+		t.Fatal("a semantically-FAIL round must not complete the carrier step")
+	}
+	if snap.State.Phase != runtime.PhaseProductReview {
+		t.Fatalf("phase after the FAIL round = %s, want PRODUCT_REVIEW", snap.State.Phase)
+	}
+
+	// 第二轮在 FAIL 落账的同事务补位签出（账本欠轮提案）：同一载体步的
+	// 轮任务（scope＝轮号）派生新派发身份，与首轮规范身份互异。
+	second := pendingActionByStep(t, engine, "review.worker")
+	if second == product || !strings.HasPrefix(second, product+"/") {
+		t.Fatalf("second round dispatch = %q, want a scoped round identity of %q", second, product)
+	}
+	submitReviewResult(t, engine, "canonical-pass-2", second,
+		reviewEvidence(review.ProductReview, second, "", "PASS", "clean on the second sample", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" {
+		t.Fatalf("product ledger after the second round = %+v", series)
+	}
+	if !snap.State.stepCompleted("review.worker") {
+		t.Fatal("the effective PASS must complete the product carrier step")
+	}
+	if readiness := pendingActionByStep(t, engine, "review.readiness"); readiness == "" {
+		t.Fatalf("pending actions after the effective PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
+	}
+}
+
+// TestCanonicalExhaustionThenGrantEndorsesTheFourthRound：三轮自动容量
+// 耗尽后签发闸关闭（无第四轮派发）；授权决定背书后第四轮以背书形签出
+// 并绑定授权槽，其 PASS 完成 effective 结论与载体步。
+func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
+	engine, _ := canonicalReviewEngine(t)
+
+	action := issueReady(t, engine)[0]
+	for round := 1; round <= 3; round++ {
+		submitReviewResult(t, engine, "canonical-exhaust-"+string(rune('0'+round)), action,
+			reviewEvidence(review.ProductReview, action, "", "FAIL", "still blocked", []review.Finding{
+				{Severity: "P1", Message: "blocking defect survives round " + string(rune('0'+round))},
+			}))
+		if round < 3 {
+			action = pendingActionByStep(t, engine, "review.worker")
+		}
+	}
+	snap := engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 {
+		t.Fatalf("series at exhaustion = %+v", series)
+	}
+	if len(snap.State.PendingActions) != 0 {
+		t.Fatalf("pending actions at exhaustion = %+v, want none", snap.State.PendingActions)
+	}
+
+	askAndDecide(t, engine, ControlReviewRoundGrant, "canonical-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+		Action: review.ProductReview, Reason: "the fourth sample must be endorsed",
+	}})
+	fourth := pendingActionByStep(t, engine, "review.worker")
+	snap = engine.LoadMustSucceed(t)
+	series := snap.State.ReviewSeries.ProductReview
+	if !slices.Contains(series.Authorizations[0].DispatchIDs, fourth) {
+		t.Fatalf("the fourth round must bind the granted slot: %+v", series.Authorizations[0])
+	}
+	authID := series.Authorizations[0].ID
+	submitReviewResult(t, engine, "canonical-pass-4", fourth,
+		reviewEvidence(review.ProductReview, fourth, authID, "PASS", "clean on the endorsed round", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("series after the endorsed round = %+v", series)
+	}
+	if !snap.State.stepCompleted("review.worker") {
+		t.Fatal("the endorsed PASS must complete the product carrier step")
+	}
+	if readiness := pendingActionByStep(t, engine, "review.readiness"); readiness == "" {
+		t.Fatalf("pending actions after the endorsed PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
+	}
+}
+
+// TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched：双审通过、拓
+// 扑与路线绑定后全勾重走——两条系列 FreshOwed、载体步保持完成（一次性
+// 闩）、
+// 新鲜轮由账本欠轮提案在容量内派发；两条新鲜轮 PASS 各自清偿义务后双审
+// 门重开，拓扑与路线重新确认可达开发阶段。
+func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
+	engine, _ := canonicalReviewEngine(t)
+
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "canonical-redo-product-1", product,
+		reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+	submitReviewResult(t, engine, "canonical-redo-ready-1", pendingActionByStep(t, engine, "review.readiness"),
+		reviewEvidence(review.StartReadiness, pendingActionByStep(t, engine, "review.readiness"), "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-1", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "no-split", Note: "single lane",
+	}})
+	askAndDecide(t, engine, ControlSelectRoute, "canonical-redo-route-1", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+	}})
+
+	askAndDecideRequirement(t, engine, "canonical-redo-change", "proceed", &RequirementDecisionPayload{
+		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-redo",
+		ImpactDigest: "sha256:impact",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, RedoStartReadiness: true, RedoTopology: true, RedoRoute: true,
+		Reason: "the whole walk is affected",
+	})
+	snap := engine.LoadMustSucceed(t)
+	for _, mark := range []review.Action{review.ProductReview, review.StartReadiness} {
+		series, _ := snap.State.ReviewSeries.Series(mark)
+		if !series.FreshOwed || series.Effective.Status != "PENDING" {
+			t.Fatalf("%s after the full redo = %+v", mark, series)
+		}
+	}
+	// 步完成是一次性闩：重走只刷账本结论（PENDING＋欠新鲜轮），载体步保持
+	// 完成、不再 reopen——新鲜轮由账本欠轮提案签发，不依赖前沿。
+	if !snap.State.stepCompleted("review.worker") || !snap.State.stepCompleted("review.readiness") {
+		t.Fatal("the redo must keep both canonical carrier steps completed (one-way latch)")
+	}
+
+	// 新鲜轮由账本提案在自动容量内签发：产品审先行（start-readiness 的顺
+	// 序门在签发侧把技术审新鲜轮扣住）。
+	freshProduct := pendingActionByStep(t, engine, "review.worker")
+	submitReviewResult(t, engine, "canonical-redo-product-2", freshProduct,
+		reviewEvidenceAt(review.ProductReview, freshProduct, "rev-2", "PASS", "fresh round clean", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.FreshOwed {
+		t.Fatalf("the fresh product round must discharge the obligation: %+v", series)
+	}
+	freshReadiness := pendingActionByStep(t, engine, "review.readiness")
+	submitReviewResult(t, engine, "canonical-redo-ready-2", freshReadiness,
+		reviewEvidenceAt(review.StartReadiness, freshReadiness, "rev-2", "PASS", "fresh round ready", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.FreshOwed {
+		t.Fatalf("the fresh readiness round must discharge the obligation: %+v", series)
+	}
+	if !snap.State.stepCompleted("review.worker") || !snap.State.stepCompleted("review.readiness") {
+		t.Fatal("both carriers must stay completed through the fresh rounds")
+	}
+
+	// 双审门重开：拓扑与路线重新确认后回到开发阶段。
+	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-2", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "no-split", Note: "reconfirmed after the redo",
+	}})
+	askAndDecide(t, engine, ControlSelectRoute, "canonical-redo-route-2", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+	}})
+	if snap := engine.LoadMustSucceed(t); snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase after the redone walk = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	}
+}
+
+// TestCanonicalInvalidateThenRepassReleasesUpstreamVoid：双审通过后整轮
+// 作废产品审——产品审系列 PENDING、技术审携结论被置上游失效，载体步保持
+// 完成（一次性闩）、产品审新鲜轮由账本提案签出；重新 PASS 后上游失效解
+// 除、携结论重投影，技术审不被重新派发。
+func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
+	engine, _ := canonicalReviewEngine(t)
+
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "canonical-void-product-1", product,
+		reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+	readiness := pendingActionByStep(t, engine, "review.readiness")
+	submitReviewResult(t, engine, "canonical-void-ready-1", readiness,
+		reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
+		t.Fatalf("phase after dual PASS = %s, want TOPOLOGY_AND_ROUTE", snap.State.Phase)
+	}
+
+	invalidateRoundOf(t, engine, "canonical-void-invalidate", product)
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Effective.Status != "PENDING" {
+		t.Fatalf("the invalidated product series = %+v", series)
+	}
+	if series := snap.State.ReviewSeries.StartReadiness; !series.UpstreamVoid || series.Effective.Status != "PENDING" {
+		t.Fatalf("the downstream series must be voided and pending: %+v", series)
+	}
+	// 一次性闩：作废只刷账本结论（PENDING＋上游失效），载体步保持完成。
+	if !snap.State.stepCompleted("review.worker") || !snap.State.stepCompleted("review.readiness") {
+		t.Fatal("the invalidation must keep both carrier steps completed (one-way latch)")
+	}
+	if fresh := pendingActionByStep(t, engine, "review.worker"); fresh == "" {
+		t.Fatalf("pending actions after the invalidation = %+v, want the fresh product round", snap.State.PendingActions)
+	}
+
+	// 重新 PASS：上游失效解除、携结论重投影——载体步本就保持完成（闩单
+	// 调），技术审载体不被重新派发（携结论续用，不产生第二条技术审派发）。
+	second := pendingActionByStep(t, engine, "review.worker")
+	submitReviewResult(t, engine, "canonical-void-product-2", second,
+		reviewEvidence(review.ProductReview, second, "", "PASS", "clean again", nil))
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.StartReadiness; series.UpstreamVoid || series.Effective.Status != "PASS" || series.Completed != 1 {
+		t.Fatalf("the re-pass must release the void and re-project the carried conclusion: %+v", series)
+	}
+	if !snap.State.stepCompleted("review.worker") || !snap.State.stepCompleted("review.readiness") {
+		t.Fatal("both carriers must stay completed after the re-pass")
+	}
+	if len(snap.State.PendingActions) != 0 {
+		t.Fatalf("pending actions after the re-pass = %+v, want none (no readiness re-dispatch)", snap.State.PendingActions)
+	}
 }

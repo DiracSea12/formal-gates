@@ -123,7 +123,8 @@ func nextRoundRequirement(s Series) string {
 // 可立即记录 iff completed<automaticLimit 或存在空槽授权，因此它等于
 // 自动剩余轮数加未占用授权数（CurrentLimit 语义不变＝AutomaticLimit+授权
 // 总数）。它的消费点是审查公开面与入账侧的容量投影；签发闸不经它放行
-// ——放行承诺直接读账本事实（见协议层 admitReviewIssuance）。
+// ——放行承诺直接读账本事实（见协议层 admitReviewIssuance）。首过闩在同
+// 一点置位：effective 首次投影为 PASS 即写 FirstPass，只写一次、永不回退。
 func refresh(s *Series) {
 	s.Completed = completedRounds(*s)
 	s.CurrentLimit = s.AutomaticLimit + len(s.Authorizations)
@@ -132,6 +133,9 @@ func refresh(s *Series) {
 	s.ExtraAuthorized = len(s.Authorizations)
 	s.ExtraConsumed = occupiedExtraAuthorizations(*s)
 	s.NextRoundRequirement = nextRoundRequirement(*s)
+	if !s.FirstPass && s.Effective.Status == statusPass {
+		s.FirstPass = true
+	}
 }
 
 // ---- effective 投影与决定查询 ----

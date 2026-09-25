@@ -75,7 +75,14 @@ func TestFakeHostSpawnCrashDoesNotRepeatSideEffect(t *testing.T) {
 
 func TestFakeWorkerResultBeforeReceiptReplaysAfterRestart(t *testing.T) {
 	fixture, actionID := fixtureWithAction(t)
-	acceptance, err := fixture.Worker.ResultBeforeReceipt(actionID, protocol.OutcomePass, "sha256:result", "")
+	// 首发派发落在产品审载体步上：结果必须携带审查证据，载体完成才走审查
+	// 账投影、补位签发技术审步。
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	mark := snapshot.State.PendingActions[actionID].ReviewSeries
+	acceptance, err := fixture.Worker.ReviewResultBeforeReceipt(actionID, mark, "sha256:result")
 	if err != nil {
 		t.Fatalf("result before receipt: %v", err)
 	}
@@ -108,7 +115,7 @@ func TestFakeWorkerResultBeforeReceiptReplaysAfterRestart(t *testing.T) {
 	if summary.PendingResults != 0 || summary.Results != 1 || summary.PendingActions != 1 {
 		t.Fatalf("settled summary = %+v", summary)
 	}
-	snapshot, err := restarted.Engine.Load()
+	snapshot, err = restarted.Engine.Load()
 	if err != nil {
 		t.Fatalf("load settled state: %v", err)
 	}
@@ -277,7 +284,7 @@ func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load after concurrent submit: %v", err)
 	}
-	if snapshot.Revision != 4 || len(snapshot.State.PendingAsks) != 2 || len(snapshot.State.Events) != 2 {
+	if snapshot.Revision != 5 || len(snapshot.State.PendingAsks) != 2 || len(snapshot.State.Events) != 2 {
 		t.Fatalf("concurrent state = revision %d asks %d events %d", snapshot.Revision, len(snapshot.State.PendingAsks), len(snapshot.State.Events))
 	}
 }

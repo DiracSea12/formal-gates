@@ -21,8 +21,9 @@ import (
 )
 
 // ackStore 是 IssueFromPlan 内部透传给 decision.SelectIssued 的落账回调：
-// actionID 派生（"act:" + 规范键形态）由 SelectIssued 持有，真实持久化
-// 随本包的事务紧随其后原子完成。
+// SelectIssued 只给每条签发一个初始派发身份，落账前的最终身份由
+// issueInto 按审查系列轮计数改定（轮任务的 scope 判别位）；真实持久化随
+// 本包的事务紧随其后原子完成。
 type ackStore struct{}
 
 func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
@@ -208,13 +209,17 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	if err != nil {
 		return 0, nil, err
 	}
-	e.releaseUpstreamVoidIfReleasable(state)
+	if err := e.releaseUpstreamVoidIfReleasable(state); err != nil {
+		return 0, nil, err
+	}
 	if err := state.advanceReviewPhases(); err != nil {
 		return 0, nil, err
 	}
 	if err := verifyReviewIntegrity(state); err != nil {
 		return 0, nil, err
 	}
+	// 事务边界：本事务的轮签出计数到此为止，下一事务重新起算。
+	state.roundsIssuedTx = nil
 	res, err := e.store.Save(persistence.Transaction{
 		ExpectedRevision:    expectedRevision,
 		ExpectedFingerprint: expectedFingerprint,
@@ -231,23 +236,27 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 // PASS（effectivePass＝绑确认账本内 revision、无重走义务）且再无已确认
 // 阻塞的任何事务都在此解除下游 UpstreamVoid——纠正路径与新鲜轮完成同
 // 覆盖。下游自身负有新鲜轮义务时不解除（重走义务与上游失效正交，互不
-// 冒用：欠的新鲜轮只能由其自身完成清偿）；屏障在位时不做业务解除。
-func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) {
+// 冒用：欠的新鲜轮只能由其自身完成清偿）；屏障在位时不做业务解除。解
+// 除后下游结论按其当前账本重投影，frontier 步随同一事务经 settle 补齐
+// （§7.3.3 可逆——载体步的完成闩单调，重投影只影响账本结论）。
+func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) error {
 	downstream := state.ReviewSeries.StartReadiness
 	if !downstream.UpstreamVoid || state.requirementChangePending() || seriesInRedoStale(downstream) {
-		return
+		return nil
 	}
 	upstream := state.ReviewSeries.ProductReview
 	if !state.effectivePass(upstream) || review.HasConfirmedBlocking(upstream) {
-		return
+		return nil
 	}
 	review.ReleaseUpstreamVoid(&state.ReviewSeries)
+	return state.settleFrontierSteps(e.cfg.Definition)
 }
 
 // transactionEpilogue 是事务收尾单点：一切携业务后果的提交在落账前经此
 // 一次判定＋一次扫描——屏障在位时不收尾（挂起事实保持持有）；屏障不在
-// 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、屏
-// 障期延迟的替换补发、挂起配对扫描与容量补位。返回补位签发的 action ID。
+// 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、挂
+// 起配对扫描与容量补位。屏障期延迟的替换派发在解除屏障的决定事务内、
+// 投影与补位之前补发（见 KindDecide）。返回补位签发的 action ID。
 func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
 	if state.requirementChangePending() {
 		state.routingReleasedCapacity = false
@@ -255,7 +264,6 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	}
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
 	heldSettled := e.executeHeldSettles(state, nextRevision)
-	e.installDeferredReplacements(state, nextRevision, expectedFingerprint)
 	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
 	// 容量补位只在收尾真正做了改变派发面的工作时执行：观察类事务（回执
 	// 落账等）不得自动签发——否则调用方持有的 Plan（Plan→Submit→
@@ -540,7 +548,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	}
 	expectedCount := len(state.Expected)
 	state.retainExpected(plan.Next.Ready)
-	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.firstReviewCarrier)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -613,6 +621,25 @@ func (e *Engine) reviewSeriesOf(stepID authoring.StepID) review.Action {
 	return ""
 }
 
+// reviewSeriesBooked 报告声明身份是否落在账本系列上（封闭两值）：声明了
+// 未入账标记（unaffiliated）的派发不进轮计数与事务提案账。
+func (s *State) reviewSeriesBooked(mark review.Action) bool {
+	_, ok := s.ReviewSeries.Series(mark)
+	return ok
+}
+
+// firstReviewCarrier 返回系列在编译定义中的第一个载体步（编译序）——欠轮
+// 提案的签发目标：轮身份按系列计数，新鲜轮回到系列首载体。
+func (e *Engine) firstReviewCarrier(mark review.Action) (authoring.StepID, authoring.NodeID, bool) {
+	for i := range e.cfg.Definition.Steps {
+		step := &e.cfg.Definition.Steps[i]
+		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok && review.Action(payload.ReviewSeries) == mark {
+			return step.Header.ID, step.Header.NodeID, true
+		}
+	}
+	return "", "", false
+}
+
 // retryMaxAttempts returns the retry bound declared on a compiled step. The
 // protocol does not invent a retry bound when the step declares no retry
 // policy: zero leaves every transient result resumable through the recovery
@@ -667,6 +694,30 @@ func inflightWitnessReceipt(status string) bool {
 //   - 回执证明派发真实签出去过（issuedWitnessReceipt），且结果未入账
 //     （Results 无该派发）、派发未退位（ObsoleteActions 无该派发）。
 //
+// eachSeriesLiveDispatch 是系列在途派发枚举的唯一遍历（签发闸的在途计
+// 数）：PendingActions 成员（系列身份＝签发标记），或回执在账且结果
+// 未入账、派发未退位的 terminal 派发（簿记已收回，系列身份从回执固化的
+// 任务步骤推导——签发标记与步骤标记同源，issueInto 以同一函数落标记）。
+// visit 收到每条在途派发与其系列标记（含不在账本的标记，过滤归调用方）。
+func (s *State) eachSeriesLiveDispatch(seriesOf func(authoring.StepID) review.Action, visit func(actionID string, mark review.Action)) {
+	for actionID, pending := range s.PendingActions {
+		if pending.ReviewSeries != "" {
+			visit(actionID, pending.ReviewSeries)
+		}
+	}
+	for actionID, receipt := range s.SpawnReceipts {
+		if _, pending := s.PendingActions[actionID]; pending {
+			continue
+		}
+		if !s.liveDispatch(actionID) {
+			continue
+		}
+		if mark := seriesOf(receipt.Task.Step); mark != "" {
+			visit(actionID, mark)
+		}
+	}
+}
+
 // 任务 terminal 化只收回簿记，不解除承诺：terminal 派发的迟到结果仍可经
 // 对账路径合法入账，承诺必须覆盖"结果仍可合法入账的每一条派发"。承诺解
 // 除仅随派发命运落定：结果入账（Results，含 terminal 对账与隔离重放的接
@@ -691,12 +742,17 @@ func (s *State) liveDispatch(dispatchID string) bool {
 }
 
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
-// 补位共用）：先经审查系列签发闸过滤（放行承诺与背书绑定都在闸上），再
-// 对幸存集做重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移校验，一
-// 律拒绝；Attempt ID 以落盘 revision 确定性派生。Expected 由调用方先登记
-// 完整 eligible Ready frontier，因此这里只补齐缺失的已签发任务。返回实际
-// 签出的子集（被闸住的 action 不在其中，保持 Expected）。
-func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) (decision.IssuedSet, error) {
+// 补位共用，是审查轮签发的唯一漏斗）：先并入账本欠轮提案，再把带账本系
+// 列标记的签发改定为轮任务（scope 判别位），然后经审查系列签发闸过滤
+// （放行承诺与背书绑定都在闸上，绑定的即最终派发身份），最后对幸存集做
+// 重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移校验，一律拒绝；
+// Attempt ID 以落盘 revision 确定性派生，账本轮计数随幸存集逐条递增。
+// Expected 由调用方先登记完整 eligible Ready frontier，因此这里只补齐缺
+// 失的已签发任务。返回实际签出的子集（被闸住的 action 不在其中，保持
+// Expected）。
+func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action, firstReviewCarrier func(review.Action) (authoring.StepID, authoring.NodeID, bool)) (decision.IssuedSet, error) {
+	issued = s.mergeOwedRoundProposals(issued, reviewSeriesOf, firstReviewCarrier)
+	issued = s.applyRoundScopes(issued, reviewSeriesOf)
 	issued = s.admitReviewIssuance(issued, reviewSeriesOf)
 	for _, action := range issued {
 		if _, exists := s.PendingActions[action.ActionID]; exists {
@@ -735,15 +791,95 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
 		}
+		if mark := reviewSeriesOf(action.Step); s.reviewSeriesBooked(mark) {
+			s.ReviewSeries = review.IssueRound(s.ReviewSeries, mark)
+			if s.roundsIssuedTx == nil {
+				s.roundsIssuedTx = map[review.Action]bool{}
+			}
+			s.roundsIssuedTx[mark] = true
+		}
 		// 授权槽绑定发生在签发闸的背书形放行上（admitReviewIssuance 已随
 		// 放行独占绑定）；容量自洽的签出不绑槽。
 	}
 	return issued, nil
 }
 
+// mergeOwedRoundProposals 把账本欠轮提案并入签发集（先于签发闸）：系列
+// 未 effectivePass 时账本欠一个新结论轮——每系列每事务至多一条提案，签发
+// 目标是该系列编译序第一个载体步（轮身份按系列计数，新鲜轮回到首载体）；
+// 签发集已覆盖的系列不重复提案（前沿派发就是本轮，本事务早前已提案或已
+// 签出轮的系列同理——事务计数记在 roundsIssuedTx、提交点清零）。提案与
+// 在途无关：并发 endorsed 形态由签发闸的两形准入治理（放行 ⇒ 可背书 ⇒
+// 可入账）。
+func (s *State) mergeOwedRoundProposals(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action, firstReviewCarrier func(review.Action) (authoring.StepID, authoring.NodeID, bool)) decision.IssuedSet {
+	covered := map[review.Action]bool{}
+	for _, action := range issued {
+		if mark := reviewSeriesOf(action.Step); mark != "" {
+			covered[mark] = true
+		}
+	}
+	for _, mark := range []review.Action{review.ProductReview, review.StartReadiness} {
+		if covered[mark] || s.roundsIssuedTx[mark] {
+			continue
+		}
+		series, ok := s.ReviewSeries.Series(mark)
+		if !ok || s.effectivePass(series) {
+			continue
+		}
+		stepID, nodeID, ok := firstReviewCarrier(mark)
+		if !ok {
+			continue
+		}
+		key, err := runtime.NewTaskKey(nodeID, stepID, "")
+		if err != nil {
+			continue
+		}
+		issued = append(issued, decision.IssuedAction{ActionID: "act:" + key.String(), Task: key, Step: stepID})
+		if s.roundsIssuedTx == nil {
+			s.roundsIssuedTx = map[review.Action]bool{}
+		}
+		s.roundsIssuedTx[mark] = true
+	}
+	return issued
+}
+
+// applyRoundScopes 把带账本系列标记的签发改定为轮任务：系列已签发
+// Issued 轮，本批内第 k 条（按序）是第 Issued+k 轮——第 1 轮用规范键
+// （scope 空），第 N>1 轮 scope＝十进制轮号，派发身份＝"act:"+任务键规范
+// 串。同一步骤跨轮的任务键天然互异，不存在第二身份改写机制；无账本标
+// 记的签发保持 SelectIssued 的规范身份。约束：审查载体步是前置串行步、
+// 不携带扇出 scope——第 1 轮清空 scope 只对无扇出身份的载体成立。
+func (s *State) applyRoundScopes(issued decision.IssuedSet, reviewSeriesOf func(authoring.StepID) review.Action) decision.IssuedSet {
+	batchRounds := map[review.Action]int{}
+	for i := range issued {
+		mark := reviewSeriesOf(issued[i].Step)
+		if mark == "" {
+			continue
+		}
+		series, ok := s.ReviewSeries.Series(mark)
+		if !ok {
+			continue
+		}
+		round := series.Issued + batchRounds[mark] + 1
+		batchRounds[mark]++
+		key := issued[i].Task
+		if round > 1 {
+			key.Scope = strconv.Itoa(round)
+		} else {
+			key.Scope = ""
+		}
+		issued[i].Task = key
+		issued[i].ActionID = "act:" + key.String()
+	}
+	return issued
+}
+
 // admitReviewIssuance 是审查系列签发闸：对带审查系列标记的新签发派发做
 // 序无关的放行承诺。承诺直接读账本事实（Completed/AutomaticLimit/授权占
-// 用），不经 RemainingCapacity 投影、不另立容量账。放行分两形：
+// 用），不经 RemainingCapacity 投影、不另立容量账。准入前置两条规则：
+// 已结论的系列（effectivePass 且无 FreshOwed）拒绝一切轮签发；start-
+// readiness 在产品审未 effectivePass 或处于上游失效窗口时拒绝。放行分
+// 两形：
 //   - 容量自洽形：Completed + 在途(含本条) ≤ AutomaticLimit → 放行且不绑
 //     任何授权槽。任何兄弟入账序下，本条入账时 Completed 至多为
 //     Completed + 在途 − 1 ≤ AutomaticLimit − 1，必在容量内——承诺不依赖
@@ -786,24 +922,7 @@ func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf fu
 			unslotted[mark] = true
 		}
 	}
-	for actionID, pending := range s.PendingActions {
-		if pending.ReviewSeries != "" {
-			countLive(actionID, pending.ReviewSeries)
-		}
-	}
-	// 簿记已收回的 terminal 派发：系列身份从回执固化的任务步骤推导（签发
-	// 标记与步骤标记同源——issueInto 以同一函数落标记）。
-	for actionID, receipt := range s.SpawnReceipts {
-		if _, pending := s.PendingActions[actionID]; pending {
-			continue
-		}
-		if !s.liveDispatch(actionID) {
-			continue
-		}
-		if mark := reviewSeriesOf(receipt.Task.Step); mark != "" {
-			countLive(actionID, mark)
-		}
-	}
+	s.eachSeriesLiveDispatch(reviewSeriesOf, countLive)
 	admitted := make(decision.IssuedSet, 0, len(issued))
 	boundHere := map[string]bool{}
 	for _, action := range issued {
@@ -811,6 +930,18 @@ func (s *State) admitReviewIssuance(issued decision.IssuedSet, reviewSeriesOf fu
 		series, ok := s.ReviewSeries.Series(mark)
 		if mark == "" || !ok {
 			admitted = append(admitted, action)
+			continue
+		}
+		// 轮次生命周期归账本：已结论的系列不再签发任何轮——首过闩下载体
+		// 步保持完成，账本不欠轮，前沿的载体签发（多载体系列的下游载体）
+		// 与欠轮提案同样被拒。
+		if s.effectivePass(series) {
+			continue
+		}
+		// start-readiness 的顺序门（签发侧）：产品审未 effectivePass 或本
+		// 系列处于上游失效窗口时不签发——越序面在签发点即不存在（证据
+		// 侧守卫保留为纵深防御）。
+		if mark == review.StartReadiness && (!s.effectivePass(s.ReviewSeries.ProductReview) || series.UpstreamVoid) {
 			continue
 		}
 		if series.Completed+inflight[mark]+1 <= series.AutomaticLimit {
@@ -1019,9 +1150,15 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
 		// remains the immutable decision history and also rejects later submissions.
-		// 决定落账即完成对应 HUMAN_ASK frontier 步骤（机械后果）。屏障仍在
-		// 位时（RESET/ABORT，或重走决定之后仍有未决 Ask）settle 挂起至解
-		// 除事务统一执行；补位签发属事务收尾单点（commitEffects）。
+		// 本决定解除修订屏障时，先补发屏障期延迟的替换派发：随后的投影与
+		// 补位必须把替换计入在途（重走义务的载体、继承授权槽的占位者），
+		// 否则补位会把替换将继承的槽当干净槽绑走——同槽双载。
+		if !state.requirementChangePending() {
+			e.installDeferredReplacements(state, nextRevision, expectedFingerprint)
+		}
+		// 决定落账即完成对应 HUMAN_ASK frontier 步骤（机械后果）。屏障在位
+		// 时 frontier settle 挂起至解除事务统一执行，补位签发属事务收尾单
+		// 点（commitEffects）；屏障不在位时先 settle 再补位。
 		var refill []string
 		if state.requirementChangePending() {
 			state.FrontierSettleHeld = true
@@ -1508,15 +1645,16 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			Revision: nextRevision,
 		})
 		// PASS 的机械后果与结果先到的完成路径（completeResult）同源：任
-		// 务迁移已由 TASK_PROGRESS 完成，此处不做；步骤完成、frontier
-		// settle 与补位签发照常，两种完成顺序到达同一终态（§8.2.3）。
-		if record.Outcome == OutcomePass {
+		// 务迁移已由 TASK_PROGRESS 完成，此处不做；步骤完成（载体步＝系
+		// 列首过闩，其余 agent 步凭 PASS 结果）、frontier settle 与补位
+		// 签发照常，两种完成顺序到达同一终态（§8.2.3）。
+		if record.Outcome == OutcomePass && state.passResultCompletesStep(receipt.Task.Step, e.reviewSeriesOf) {
 			if err := state.CompleteStep(receipt.Task.Step, e.cfg.Definition); err != nil {
 				return Acceptance{}, false, fmt.Errorf("protocol: complete step %s: %w", receipt.Task.Step, err)
 			}
-			if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
-				return Acceptance{}, false, err
-			}
+		}
+		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			return Acceptance{}, false, err
 		}
 		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
 		if refillErr != nil {
@@ -1754,16 +1892,19 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	}
 	state.Results[record.ActionID] = record
 	if record.Outcome != OutcomePass {
-		// FAIL 路由经终态化释放了容量：收尾补位据此执行（PASS 的补位在
-		// 本函数尾部完成路径）。
+		// FAIL 路由经终态化释放了容量：收尾补位据此执行（PASS 的补位在本
+		// 函数尾部完成路径）。
 		state.routingReleasedCapacity = true
 		return nil, nil
 	}
-	if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
-		return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)
+	// PASS 结果完成其步骤：非载体 agent 步直接完成；载体步完成 ⟺ 所属系
+	// 列首过闩（语义 FAIL 的证据不置闩，载体保持开放等待下一轮）。完成后
+	// 补一次 frontier settle——外部边界事实与其余载体按依赖序补齐。
+	if state.passResultCompletesStep(authoring.StepID(pending.Step), e.reviewSeriesOf) {
+		if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
+			return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)
+		}
 	}
-	// PASS 结果完成步骤后，其外部边界事实（已落账的 Ask 决定 / EXECUTED
-	// 回执）可能恰好满足其他 frontier 步骤——补一次 settle。
 	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 		return nil, err
 	}
@@ -1877,11 +2018,13 @@ func (s *State) terminalizeTask(key runtime.TaskKey) error {
 	return nil
 }
 
-// refill 按 「submit 接纳事件后立即继续 Decide/SelectIssued」：
-// 对推进后的视图重新决策，Ready 计划经 SelectIssued 按容量裁剪后落账
-// （复用与 IssueFromPlan 完全相同的签发语义）。修订屏障（Phase A）期间
-// 静默扣发：触发本函数的回执/结果/决定事件本身合法且必须接纳，被冻结的
-// 只是"从中继续签发新任务"这一步——屏障解除后的下一次提交会补进。
+// refill 按 「submit 接纳事件后立即继续 Decide/SelectIssued」：对推进后
+// 的视图重新决策，Ready 计划经 SelectIssued 按容量裁剪后落账（复用与
+// IssueFromPlan 完全相同的签发语义）。修订屏障（Phase A）期间静默扣发：
+// 触发本函数的回执/结果/决定事件本身合法且必须接纳，被冻结的只是"从中
+// 继续签发新任务"这一步——屏障解除后的下一次提交会补进。计划不含 Ready
+// 派发时仍过一次签发漏斗：欠轮提案住在账本里、不依赖 frontier——载体步
+// 完成是一次性闩，欠轮系列的新鲜轮从账本提案签出。
 func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
 	if state.requirementChangePending() {
 		return nil, nil
@@ -1890,22 +2033,18 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill decide: %w", err)
 	}
-	if plan.Next.Kind != decision.KindReady || plan.Next.Ready == nil {
-		return nil, nil
-	}
-	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: e.cfg.Capacity}, ackStore{})
-	if err != nil {
-		return nil, fmt.Errorf("protocol: refill select: %w", err)
-	}
-	if len(issued) == 0 {
-		return nil, nil
+	var issued decision.IssuedSet
+	if plan.Next.Kind == decision.KindReady && plan.Next.Ready != nil {
+		if issued, err = decision.SelectIssued(plan, decision.Admission{Capacity: e.cfg.Capacity}, ackStore{}); err != nil {
+			return nil, fmt.Errorf("protocol: refill select: %w", err)
+		}
 	}
 	state.retainExpected(plan.Next.Ready)
 	identity, err := identityOfPlan(plan)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
-	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.firstReviewCarrier)
 	if err != nil {
 		return nil, err
 	}

@@ -145,7 +145,17 @@ type Series struct {
 	// 接纳时由协议层清除（DischargeFreshOwed 是唯一清除点）。它是义务
 	// 事实，不随 effective 投影变化——纠正路径不触碰它，置位期间本
 	// series 不算 PASS（即便投影被纠正刷成 PASS）。
-	FreshOwed      bool                 `json:"freshOwed,omitempty"`
+	FreshOwed bool `json:"freshOwed,omitempty"`
+	// Issued 是本系列已签发的语义轮数：签发闸每放行一条带本系列标记的
+	// 派发即经 IssueRound 递增，是轮号的唯一权威——第 1 轮（Issued==0
+	// 时签发）用规范任务键，第 N>1 轮的任务键 scope＝十进制轮号 N。与
+	// Completed（候选投影的完成轮数）独立：签发即计数，完成由证据另行
+	// 投影。
+	Issued int `json:"issued,omitempty"`
+	// FirstPass 是首过闩：首次 effective PASS 时由 refresh 置位，只写一
+	// 次、永不回退。载体步完成 ⟺ 所属系列 FirstPass——步完成是单调事
+	// 实，与 effective 的当前值（可被纠正/重走刷回 PENDING）解耦。
+	FirstPass      bool                 `json:"firstPass,omitempty"`
 	Authorizations []RoundAuthorization `json:"authorizations"`
 	RawCandidates  []RawCandidate       `json:"rawCandidates"`
 	Adjudications  []Adjudication       `json:"adjudications"`

@@ -1405,6 +1405,29 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 	return nil
 }
 
+// drivablePendingAction 挑一条可驱动的在途派发（确定性：按 actionID 排
+// 序取最小者，并发轮在场时驱动顺序稳定）：优先无回执者（补回执＋结
+// 果），否则回执已在账者（只欠结果）。
+func drivablePendingAction(pending map[string]protocol.PendingAction, receipts map[string]protocol.SpawnReceipt) string {
+	unreceipted := make([]string, 0, len(pending))
+	any := make([]string, 0, len(pending))
+	for id := range pending {
+		any = append(any, id)
+		if _, receipted := receipts[id]; !receipted {
+			unreceipted = append(unreceipted, id)
+		}
+	}
+	sort.Strings(unreceipted)
+	if len(unreceipted) > 0 {
+		return unreceipted[0]
+	}
+	sort.Strings(any)
+	if len(any) > 0 {
+		return any[0]
+	}
+	return ""
+}
+
 func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOptions) error {
 	if strings.TrimSpace(options.Fixture) != "" {
 		plan, err := readFullRecoveryFixture(options.Fixture)
@@ -1456,13 +1479,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			// WAIT(TASKS_IN_FLIGHT)：frontier 的外部步骤已全部签发在途——
 			// 驱动唯一 pending action（spawn 回执 + PASS result）完成它，
 			// 而不是空转。无在途任务时才是真正的死锁。
-			actionID := ""
-			for id := range snapshot.State.PendingActions {
-				if _, receipted := snapshot.State.SpawnReceipts[id]; !receipted {
-					actionID = id
-					break
-				}
-			}
+			actionID := drivablePendingAction(snapshot.State.PendingActions, snapshot.State.SpawnReceipts)
 			if actionID == "" {
 				return fmt.Errorf("full scenario WAIT without a drivable pending action")
 			}
@@ -1470,7 +1487,9 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			if spawnErr != nil {
 				return spawnErr
 			}
-			result, resultErr := fixture.Worker.ResultEvent(nextEventID("wait-result"), actionID, protocol.OutcomePass, "sha256:full-result", "")
+			// 审查载体步的结果必须携带语义证据（载体完成走审查账投影），
+			// 其余派发以普通 PASS 落定。
+			result, resultErr := fixture.Worker.ResultEventFor(nextEventID("wait-result"), actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
 			if resultErr != nil {
 				return resultErr
 			}
@@ -1481,6 +1500,24 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 				return loadErr
 			}
 			if final.State.Phase != runtime.PhaseTerminal && len(final.State.Expected) != 0 {
+				// 步集已 COMPLETE 而账本欠轮提案仍在途（跨事务并发轮，
+				// 与在途无关）：先驱动在途轮落定（与 WAIT 分支同一驱动
+				// 面），全部落定后才是干净的终态。
+				if actionID := drivablePendingAction(final.State.PendingActions, final.State.SpawnReceipts); actionID != "" {
+					if _, receipted := final.State.SpawnReceipts[actionID]; !receipted {
+						spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("wait-spawn"), actionID, "full-agent-wait", protocol.SpawnStatusSpawned)
+						if spawnErr != nil {
+							return spawnErr
+						}
+						report.Acceptances = append(report.Acceptances, spawn.Acceptance)
+					}
+					result, resultErr := fixture.Worker.ResultEventFor(nextEventID("wait-result"), actionID, final.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
+					if resultErr != nil {
+						return resultErr
+					}
+					report.Acceptances = append(report.Acceptances, result)
+					continue
+				}
 				return fmt.Errorf("full scenario reached COMPLETE with %d unsettled tasks", len(final.State.Expected))
 			}
 			hostReceiptDigest := ""
@@ -1521,7 +1558,9 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 					return spawnErr
 				}
 				report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-				result, resultErr := fixture.Worker.ResultEvent(nextEventID("result"), actionID, protocol.OutcomePass, "sha256:full-result", "")
+				// 审查载体步的结果必须携带语义证据（载体完成走审查账投影），
+				// 其余派发以普通 PASS 落定。
+				result, resultErr := fixture.Worker.ResultEventFor(nextEventID("result"), actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
 				if resultErr != nil {
 					return resultErr
 				}
@@ -2229,7 +2268,13 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 	if err := fixture.Initialize(view, "fake-host"); err != nil {
 		return report, err
 	}
-	plan, err := decision.Decide(view, decision.Observation{}, compiled)
+	// 计划从提交后的权威状态推导：受理回执落账改变了状态摘要，本地 view
+	// 只是 Init 的输入，不再代表权威状态。
+	initialized, err := fixture.Engine.Load()
+	if err != nil {
+		return report, err
+	}
+	plan, err := decision.Decide(&initialized.State.State, decision.Observation{}, compiled)
 	if err != nil {
 		return report, err
 	}

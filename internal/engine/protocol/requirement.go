@@ -377,7 +377,8 @@ func (e *Engine) replaceDispatch(state *State, actionID, reason, requestID strin
 
 // installDeferredReplacements 补发屏障期间延迟的替换派发：Deferred 非空
 // 的退位条目在屏障解除的本次事务补签发（新派发代数＝本次提交，≥该次重
-// 走决定的 floor）。补发失败只留痕——退位事实仍在账，后续提交可再补。
+// 走决定的 floor）。补发失败只留恢复留痕——退位事实（Deferred）仍在账，
+// 留待屏障解除的下一次决定事务重试。
 func (e *Engine) installDeferredReplacements(state *State, nextRevision uint64, expectedFingerprint string) {
 	actionIDs := make([]string, 0, len(state.ObsoleteActions))
 	for actionID, obsolete := range state.ObsoleteActions {

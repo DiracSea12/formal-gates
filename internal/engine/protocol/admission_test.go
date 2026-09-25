@@ -558,7 +558,9 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 			if acceptance.FailureClass != string(class) || acceptance.RecoveryAction != string(RecoveryFail) {
 				t.Fatalf("failure acceptance = %+v", acceptance)
 			}
-			if len(acceptance.Refill) != 0 {
+			// 定义失败不回收失败派发本身：收尾补位只签账本欠轮提案（新任务
+			// 键的下一轮），不进入失败任务的任何恢复路径。
+			if len(acceptance.Refill) != 1 || acceptance.Refill[0] == reviewAction {
 				t.Fatalf("definition failure refilled actions: %+v", acceptance.Refill)
 			}
 
@@ -567,8 +569,8 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 			if snap.State.TaskStatusOf(key) != runtime.TaskTerminal {
 				t.Fatalf("task status = %s, want TERMINAL", snap.State.TaskStatusOf(key))
 			}
-			if len(snap.State.Expected) != 0 {
-				t.Fatalf("expected tasks remain: %+v", snap.State.Expected)
+			if len(snap.State.Expected) != 1 || snap.State.Expected[0].Step != "review.worker" || snap.State.Expected[0].Scope != "2" {
+				t.Fatalf("only the ledger-owed round may stay expected: %+v", snap.State.Expected)
 			}
 			if _, ok := snap.State.Attempts[key]; ok {
 				t.Fatalf("current Attempt remains: %+v", snap.State.Attempts[key])

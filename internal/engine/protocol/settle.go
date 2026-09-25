@@ -5,6 +5,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/review"
 )
 
 // settleFrontierSteps completes every frontier step whose external boundary
@@ -16,8 +17,13 @@ import (
 //     recorded.
 //   - HOST_ACTION step: complete when its own intent has an EXECUTED or
 //     RECONCILED receipt.
-//   - AGENT steps are never settled here — only a PASS worker result through
-//     completeResult completes them.
+//   - AGENT steps: a step carrying a review-series mark (carrier step)
+//     completes iff its series' first-pass latch is set—a monotonic fact, so
+//     sibling carriers of a concluded series complete in dependency order
+//     without their own dispatches and a later PASS transaction idempotently
+//     skips already-completed carriers. Non-carrier agent steps are never
+//     settled here: their completion fact is a recorded PASS result and
+//     completeResult completes them directly.
 //   - LOCAL / DURABLE steps execute inside the engine's controller boundary;
 //     once eligible they complete mechanically in dependency order.
 //   - PARALLEL steps are pure scheduling markers; once eligible they complete
@@ -41,7 +47,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 				continue
 			}
 			settle := false
-			switch step.Payload.(type) {
+			switch payload := step.Payload.(type) {
 			case compiler.CompiledHumanAskStep:
 				settle = s.hasDecisionForStep(step.Header.ID)
 			case compiler.CompiledHostActionStep:
@@ -49,7 +55,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
 			case compiler.CompiledAgentStep:
-				settle = false
+				settle = s.carrierLatched(payload)
 			default:
 				return fmt.Errorf("protocol: settle: unknown compiled payload %T", step.Payload)
 			}
@@ -67,6 +73,31 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 		}
 	}
 	return nil
+}
+
+// carrierLatched 报告载体步（携带账本审查系列标记的 agent 步）的完成条
+// 件：所属系列首过闩已置位（首次 effective PASS 的同一事务内由内核
+// refresh 写入）。闩单调：置位后纠正/重走只改 effective 投影，不回退步
+// 完成。非载体 agent 步不经 settle 完成——其完成事实＝入账 PASS 结果，
+// 由 completeResult 直接完成。
+func (s *State) carrierLatched(payload compiler.CompiledAgentStep) bool {
+	series, ok := s.ReviewSeries.Series(review.Action(payload.ReviewSeries))
+	return ok && series.FirstPass
+}
+
+// passResultCompletesStep 报告一条入账 PASS 结果是否完成其步骤：非载体
+// agent 步直接完成；载体步完成 ⟺ 所属系列首过闩——语义 FAIL 的证据不置
+// 闩，载体步保持开放等待下一轮。已完成的步幂等跳过（后续轮次的 PASS 不
+// 重复完成）。
+func (s *State) passResultCompletesStep(stepID authoring.StepID, seriesOf func(authoring.StepID) review.Action) bool {
+	if s.stepCompleted(stepID) {
+		return false
+	}
+	series, ok := s.ReviewSeries.Series(seriesOf(stepID))
+	if !ok {
+		return true
+	}
+	return series.FirstPass
 }
 
 func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authoring.StepID {

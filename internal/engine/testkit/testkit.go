@@ -24,6 +24,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -387,6 +388,71 @@ func (w *FakeWorker) ResultBeforeReceipt(actionID, outcome, payloadDigest string
 		return protocol.Acceptance{}, fault
 	}
 	return w.Result(actionID, outcome, payloadDigest, class)
+}
+
+// fakeReviewVerification is the complete record of the operator's eight
+// checks, as the fake adapter books each round it drives.
+func fakeReviewVerification() review.OperatorVerification {
+	return review.OperatorVerification{
+		Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
+		Evidence: "the fake adapter re-ran the bound dispatch and compared the recorded evidence",
+	}
+}
+
+// ReviewResult submits a typed worker result carrying review evidence: a
+// ledger review-series dispatch completes only through the review-ledger
+// projection, so driving its round requires semantic evidence bound to the
+// authoritative requirement revision.
+func (w *FakeWorker) ReviewResult(actionID string, action review.Action, payloadDigest string) (protocol.Acceptance, error) {
+	wireID := protocol.EventID(fmt.Sprintf("fake-worker-review-%d", w.seq.Add(1)))
+	return w.ReviewResultEvent(wireID, actionID, action, payloadDigest)
+}
+
+// ReviewResultEvent submits a review-evidence result with a caller-owned
+// event ID.
+func (w *FakeWorker) ReviewResultEvent(eventID protocol.EventID, actionID string, action review.Action, payloadDigest string) (protocol.Acceptance, error) {
+	snapshot, err := w.Engine.Load()
+	if err != nil {
+		return protocol.Acceptance{}, err
+	}
+	ev, err := protocol.NewReviewWorkerResultEvent(eventID, actionID, w.Provider, payloadDigest, protocol.ReviewResultEvidence{
+		Action: action, DispatchID: actionID, RequirementRevision: snapshot.State.RequirementRevision(),
+		Status: protocol.OutcomePass, Message: "fake review round", Verification: fakeReviewVerification(),
+	})
+	if err != nil {
+		return protocol.Acceptance{}, err
+	}
+	fp, err := w.Engine.ObserveFingerprint()
+	if err != nil {
+		return protocol.Acceptance{}, err
+	}
+	acceptance, err := w.Engine.Submit(ev, fp)
+	if err != nil {
+		return acceptance, err
+	}
+	if fault := w.Faults.Inject(persistence.FaultSubmitResponseLost); fault != nil {
+		return acceptance, fault
+	}
+	return acceptance, nil
+}
+
+// ReviewResultBeforeReceipt stages the review-evidence variant of the
+// result-before-receipt boundary.
+func (w *FakeWorker) ReviewResultBeforeReceipt(actionID string, action review.Action, payloadDigest string) (protocol.Acceptance, error) {
+	if fault := w.Faults.Inject(persistence.FaultResultBeforeReceipt); fault != nil {
+		return protocol.Acceptance{}, fault
+	}
+	return w.ReviewResult(actionID, action, payloadDigest)
+}
+
+// ResultEventFor submits the typed result a dispatch's review-series mark
+// calls for: ledger-marked dispatches need review evidence, everything else
+// settles with a plain PASS.
+func (w *FakeWorker) ResultEventFor(eventID protocol.EventID, actionID string, mark review.Action, payloadDigest string) (protocol.Acceptance, error) {
+	if mark == review.ProductReview || mark == review.StartReadiness {
+		return w.ReviewResultEvent(eventID, actionID, mark, payloadDigest)
+	}
+	return w.ResultEvent(eventID, actionID, protocol.OutcomePass, payloadDigest, "")
 }
 
 func (w *FakeWorker) SubmitEvent(ev protocol.Event) (protocol.Acceptance, error) {
@@ -814,12 +880,33 @@ func (f *ProtocolFixture) Restart() (*ProtocolFixture, persistence.RecoveryRepor
 	return restarted, report, err
 }
 
+// fakeIntakeConfirmation 是测试适配器为 run 预置的受理确认：审查证据必
+// 须绑已确认的需求 revision，测试 run 因此从受理回执起步（与真实首驱
+// 一致）。
+func fakeIntakeConfirmation() *protocol.IntakeConfirmationReceipt {
+	return &protocol.IntakeConfirmationReceipt{
+		Source: "fake-adapter", Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher,
+		RequirementSource: "requirement.md", RequirementRevision: "rev-1",
+		Artifacts:        []protocol.IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
+		SolutionRevision: "s1", SolutionDigest: "sha256:solution",
+	}
+}
+
 func (f *ProtocolFixture) Initialize(view *decision.State, provider string) error {
 	fingerprint, err := f.Engine.ObserveFingerprint()
 	if err != nil {
 		return err
 	}
-	return f.Engine.Init(view, provider, fingerprint)
+	confirmation := fakeIntakeConfirmation()
+	if err := f.Engine.InitWithMetadata(view, provider, fingerprint, "", "", confirmation); err != nil {
+		return err
+	}
+	fingerprint, err = f.Engine.ObserveFingerprint()
+	if err != nil {
+		return err
+	}
+	_, err = f.Engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, fingerprint)
+	return err
 }
 
 func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
@@ -848,7 +935,13 @@ func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
 	if err := f.Initialize(view, "fake-host"); err != nil {
 		return nil, err
 	}
-	plan, err := decision.Decide(view, decision.Observation{}, compiled)
+	// 计划从提交后的权威状态推导：受理回执落账改变了状态摘要，本地 view
+	// 只是 Init 的输入，不再代表权威状态。
+	snapshot, err := f.Engine.Load()
+	if err != nil {
+		return nil, err
+	}
+	plan, err := decision.Decide(&snapshot.State.State, decision.Observation{}, compiled)
 	if err != nil {
 		return nil, err
 	}

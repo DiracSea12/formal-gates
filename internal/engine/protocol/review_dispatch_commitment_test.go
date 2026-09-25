@@ -164,6 +164,15 @@ func submitSpawnReceipt(t *testing.T, engine *Engine, event, actionID string) {
 	}
 }
 
+// blockingReviewEvidence 构造记语义 FAIL 轮的审查证据（一条未裁决 P1 阻
+// 塞——计轮但不结论系列）：承诺与容量形状的中间轮用它，系列保持未结论
+// 时载体步不随首过闩完成、显式签发路径持续可走。
+func blockingReviewEvidence(action review.Action, dispatchID, message string) ReviewResultEvidence {
+	return reviewEvidence(action, dispatchID, "", "FAIL", message, []review.Finding{
+		{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
+	})
+}
+
 // submitLateDispatchResult 为已 terminal 化的派发提交迟到 worker result
 // （回执必须已在账），返回提交错误供拒绝断言。
 func submitLateDispatchResult(t *testing.T, engine *Engine, event, actionID string, evidence ReviewResultEvidence) error {
@@ -218,10 +227,10 @@ func TestTerminalizedDispatchKeepsCapacityPromiseUntilItsResultRecords(t *testin
 		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
 	}
 
-	// 迟到 PASS 对账入账（Completed=1）：此刻在途 {b,c}，1+2+1=4>3，
-	// lane.d 仍被闸。
+	// 迟到 FAIL 轮对账入账（Completed=1，未结论）：此刻在途 {b,c}，
+	// 1+2+1=4>3，lane.d 仍被闸。
 	if err := submitLateDispatchResult(t, engine, "late-terminal-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result of the terminalized lane", nil)); err != nil {
+		blockingReviewEvidence(review.ProductReview, laneA, "late result of the terminalized lane")); err != nil {
 		t.Fatalf("the late result of the terminalized dispatch must reconcile: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
@@ -233,8 +242,8 @@ func TestTerminalizedDispatchKeepsCapacityPromiseUntilItsResultRecords(t *testin
 	}
 
 	// 兄弟序走完：b、c 相继入账（任意序都在容量内），Completed=3。
-	submitReviewResult(t, engine, "result-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
 		t.Fatalf("completed = %d, want 3", series.Completed)
 	}
@@ -243,11 +252,12 @@ func TestTerminalizedDispatchKeepsCapacityPromiseUntilItsResultRecords(t *testin
 		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
 	}
 
-	// 授权后 lane.d 经背书形放行并独占绑槽，携槽入账闭环——无悬空派发。
+	// 授权后被闸的第四轮经背书形放行并独占绑槽，携槽入账闭环——无悬空派
+	// 发（背书轮落在系列当前开放的载体上）。
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-lane-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the gated fourth lane",
 	}})
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	laneD := pendingActionByStep(t, engine, "lane.b")
 	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 	authID := review.AuthorizationOfDispatch(series, laneD)
 	if authID == "" {
@@ -275,11 +285,11 @@ func TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords(t *t
 	)
 	engine, _ := reviewEngine(t, cd, reg)
 
-	// 三轮自动容量走满（Completed=3），并行对被闸；授权一轮：pair.a 背书
-	// 形独占绑 auth[0]，pair.b 被闸。
+	// 三轮自动容量走满（Completed=3，均记 FAIL 轮不结论），授权一轮：背
+	// 书形独占绑 auth[0]，并行对被闸。
 	action := issueReady(t, engine)[0]
 	for round := 1; round <= 3; round++ {
-		submitReviewResult(t, engine, fmt.Sprintf("result-slot-r%d", round), action, reviewEvidence(review.ProductReview, action, "", "PASS", fmt.Sprintf("round %d", round), nil))
+		submitReviewResult(t, engine, fmt.Sprintf("result-slot-r%d", round), action, blockingReviewEvidence(review.ProductReview, action, fmt.Sprintf("round %d", round)))
 		if round < 3 {
 			action = pendingActionID(t, engine)
 		}
@@ -287,7 +297,7 @@ func TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords(t *t
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-slot-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "one endorsed lane",
 	}})
-	pairA := pendingActionByStep(t, engine, "pair.a")
+	pairA := pendingActionByStep(t, engine, "round.one")
 	authA := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairA)
 	if authA == "" {
 		t.Fatal("the endorsed dispatch must hold the granted slot")
@@ -295,17 +305,20 @@ func TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords(t *t
 	assertSeriesCommitmentHeld(t, engine)
 
 	// pair.a 落回执后置 terminal：承诺保持——auth[0] 仍承载未落定派发，
-	// pair.b 不得绑上"看似干净"的原槽。
+	// pair.b 不得绑上"看似干净"的原槽（载体步保持开放、其规范任务已终态，
+	// 无可签前沿——无新 pending 轮即被闸）。
 	submitSpawnReceipt(t, engine, "spawn-terminal-pair-a", pairA)
 	terminalizeDispatchTask(t, engine, pairA)
 	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("pair.b must stay gated while the terminalized pair.a holds the slot: %v", reissued)
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("pair.b must stay gated while the terminalized pair.a holds the slot: %+v", pending)
 	}
 
-	// 迟到携原授权 PASS 对账入账：越限轮由槽背书，槽被有效结果消费。
+	// 迟到携原授权 FAIL 轮对账入账：越限轮由槽背书，槽被有效结果消费。
 	if err := submitLateDispatchResult(t, engine, "late-terminal-pair-a", pairA,
-		reviewEvidence(review.ProductReview, pairA, authA, "PASS", "late endorsed result of the terminalized lane", nil)); err != nil {
+		reviewEvidence(review.ProductReview, pairA, authA, "FAIL", "late endorsed result of the terminalized lane", []review.Finding{
+			{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
+		})); err != nil {
 		t.Fatalf("the late endorsed result must reconcile: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
@@ -314,13 +327,13 @@ func TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords(t *t
 	assertSeriesCommitmentHeld(t, engine)
 
 	// pair.b 仍闸（槽已背书有效结果）；再授权放行并独占绑新槽，携槽入账。
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("pair.b must stay gated while no clean slot exists: %v", reissued)
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("pair.b must stay gated while no clean slot exists: %+v", pending)
 	}
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
 	}})
-	pairB := pendingActionByStep(t, engine, "pair.b")
+	pairB := pendingActionByStep(t, engine, "round.one")
 	authB := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairB)
 	if authB == "" || authB == authA {
 		t.Fatalf("the gated sibling must hold a distinct fresh slot: %q vs %q", authB, authA)
@@ -369,7 +382,7 @@ func TestQuarantinedLateResultReplayKeepsCapacityPromise(t *testing.T) {
 	}
 	late, err := NewReviewWorkerResultEvent(EventID("quarantine-late-lane-a"), laneA, testProvider,
 		"sha256:payload-quarantine-late-lane-a",
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "quarantined late result of the terminalized lane", nil))
+		blockingReviewEvidence(review.ProductReview, laneA, "quarantined late result of the terminalized lane"))
 	if err != nil {
 		t.Fatalf("late event: %v", err)
 	}
@@ -389,13 +402,13 @@ func TestQuarantinedLateResultReplayKeepsCapacityPromise(t *testing.T) {
 		t.Fatalf("lane.d must stay gated after the replay records the late round: %v", reissued)
 	}
 
-	// 兄弟序走完（Completed=3），lane.d 经授权背书放行闭环。
-	submitReviewResult(t, engine, "result-quarantine-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-quarantine-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	// 兄弟序走完（Completed=3），第四轮经授权背书放行闭环。
+	submitReviewResult(t, engine, "result-quarantine-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-quarantine-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-quarantine-lane-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the gated fourth lane after the replay",
 	}})
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	laneD := pendingActionByStep(t, engine, "lane.b")
 	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
 	if authID == "" {
 		t.Fatal("the gated lane must hold the granted slot after the replay")
@@ -514,9 +527,9 @@ func TestAttachedTerminalDispatchKeepsPromiseUntilItsResultRecords(t *testing.T)
 		t.Fatalf("lane.d must stay gated while the attached terminal dispatch holds its promise: %v", reissued)
 	}
 
-	// 迟到 PASS 经 terminal 对账入账（Completed=1）：承诺随 Results 落定。
+	// 迟到 FAIL 轮经 terminal 对账入账（Completed=1）：承诺随 Results 落定。
 	if err := submitLateDispatchResult(t, engine, "late-attached-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result of the attached terminal dispatch", nil)); err != nil {
+		blockingReviewEvidence(review.ProductReview, laneA, "late result of the attached terminal dispatch")); err != nil {
 		t.Fatalf("the late result of the attached terminal dispatch must reconcile: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
@@ -527,16 +540,16 @@ func TestAttachedTerminalDispatchKeepsPromiseUntilItsResultRecords(t *testing.T)
 		t.Fatalf("lane.d must stay gated until the siblings settle: %v", reissued)
 	}
 
-	// 兄弟序走完（Completed=3），lane.d 仍闸；授权背书放行并携槽入账闭环。
-	submitReviewResult(t, engine, "result-attached-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-attached-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	// 兄弟序走完（Completed=3），第四轮仍闸；授权背书放行并携槽入账闭环。
+	submitReviewResult(t, engine, "result-attached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-attached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	if reissued := issueReady(t, engine); len(reissued) != 0 {
 		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
 	}
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the gated fourth lane",
 	}})
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	laneD := pendingActionByStep(t, engine, "lane.b")
 	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
 	if authID == "" {
 		t.Fatal("the gated lane must hold the granted slot")
@@ -591,14 +604,22 @@ func TestAttachedTerminalDispatchFailureResultSettlesTheHeldPromise(t *testing.T
 	}
 	assertSeriesCommitmentHeld(t, engine)
 
-	// 承诺已落定：同一事务的容量补位放行 lane.d（0+2+1=3 达界），兄弟任
-	// 意序入账全部闭环。
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界），兄弟任
+	// 意序入账全部闭环（补位轮落在系列当前开放的载体上）。
+	laneD := ""
+	for id := range engine.LoadMustSucceed(t).State.PendingActions {
+		if id != laneB && id != laneC {
+			laneD = id
+		}
+	}
+	if laneD == "" {
+		t.Fatal("the released promise must refill a fresh round beside the siblings")
+	}
 	if got := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, laneD); got != "" {
 		t.Fatalf("the refilled lane must stay unslotted: %q", got)
 	}
-	submitReviewResult(t, engine, "result-settle-attached-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-settle-attached-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-settle-attached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-settle-attached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	submitReviewResult(t, engine, "result-settle-attached-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
 		t.Fatalf("completed = %d, want 3", series.Completed)
@@ -652,10 +673,10 @@ func TestUnknownTerminalDispatchKeepsItsPromiseUntilItsResultRecords(t *testing.
 		t.Fatalf("lane.d must stay gated across the attach migration: %v", reissued)
 	}
 
-	// 迟到 PASS 对账入账（Completed=1）：承诺随 Results 落定，此刻在途
+	// 迟到 FAIL 轮对账入账（Completed=1）：承诺随 Results 落定，此刻在途
 	// {b,c}，1+2+1=4>3，lane.d 仍被闸。
 	if err := submitLateDispatchResult(t, engine, "late-unknown-terminal-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result of the unknown terminal dispatch", nil)); err != nil {
+		blockingReviewEvidence(review.ProductReview, laneA, "late result of the unknown terminal dispatch")); err != nil {
 		t.Fatalf("the late result after the attach must reconcile: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
@@ -666,17 +687,17 @@ func TestUnknownTerminalDispatchKeepsItsPromiseUntilItsResultRecords(t *testing.
 		t.Fatalf("lane.d must stay gated until the siblings settle: %v", reissued)
 	}
 
-	// 兄弟序走完（Completed=3），lane.d 经授权背书放行并携槽入账——四条结
+	// 兄弟序走完（Completed=3），第四轮经授权背书放行并携槽入账——四条结
 	// 果全部闭环。
-	submitReviewResult(t, engine, "result-unknown-terminal-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-unknown-terminal-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-unknown-terminal-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-unknown-terminal-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	if reissued := issueReady(t, engine); len(reissued) != 0 {
 		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
 	}
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-unknown-terminal-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the gated fourth lane",
 	}})
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	laneD := pendingActionByStep(t, engine, "lane.b")
 	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
 	if authID == "" {
 		t.Fatal("the gated lane must hold the granted slot")
@@ -733,14 +754,22 @@ func TestUnknownTerminalDispatchFailureResultSettlesAndRefills(t *testing.T) {
 	}
 	assertSeriesCommitmentHeld(t, engine)
 
-	// 承诺已落定：同一事务的容量补位放行 lane.d（0+2+1=3 达界），不绑槽；
-	// 兄弟任意序入账闭环。
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界，落在系列
+	// 当前开放的载体上），不绑槽；兄弟任意序入账闭环。
+	laneD := ""
+	for id := range engine.LoadMustSucceed(t).State.PendingActions {
+		if id != laneB && id != laneC {
+			laneD = id
+		}
+	}
+	if laneD == "" {
+		t.Fatal("the released promise must refill a fresh round beside the siblings")
+	}
 	if got := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, laneD); got != "" {
 		t.Fatalf("the refilled lane must stay unslotted: %q", got)
 	}
-	submitReviewResult(t, engine, "result-unknown-unattached-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-unknown-unattached-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-unknown-unattached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-unknown-unattached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	submitReviewResult(t, engine, "result-unknown-unattached-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
 		t.Fatalf("completed = %d, want 3", series.Completed)
@@ -769,12 +798,12 @@ func TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords(t *testing.T) 
 	)
 	engine, dir := reviewEngine(t, cd, reg)
 
-	// 三轮自动容量走满（Completed=3），授权一轮：pair.a 背书形独占绑
-	// auth[0]，pair.b 被闸。
+	// 三轮自动容量走满（Completed=3，均记 FAIL 轮不结论），授权一轮：背
+	// 书形独占绑 auth[0]，被闸兄弟无轮可走。
 	action := issueReady(t, engine)[0]
 	for round := 1; round <= 3; round++ {
 		submitReviewResult(t, engine, fmt.Sprintf("result-attached-slot-r%d", round), action,
-			reviewEvidence(review.ProductReview, action, "", "PASS", fmt.Sprintf("round %d", round), nil))
+			blockingReviewEvidence(review.ProductReview, action, fmt.Sprintf("round %d", round)))
 		if round < 3 {
 			action = pendingActionID(t, engine)
 		}
@@ -782,21 +811,22 @@ func TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords(t *testing.T) 
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-slot-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the endorsed carrier",
 	}})
-	pairA := pendingActionByStep(t, engine, "pair.a")
+	pairA := pendingActionByStep(t, engine, "round.one")
 	authA := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairA)
 	if authA == "" {
 		t.Fatal("the endorsed dispatch must hold the granted slot")
 	}
 	assertSeriesCommitmentHeld(t, engine)
 
-	// pair.a 走到 ATTACHED+terminal：槽仍承载未落定派发——pair.b 被闸，
-	// 再授权被"存在未消费授权"拒绝（每次只授权恰好一轮）。
+	// 背书轮走到 ATTACHED+terminal：槽仍承载未落定派发——被闸兄弟无轮可
+	// 走（载体步保持开放、其规范任务已终态），再授权被"存在未消费授权"拒
+	// 绝（每次只授权恰好一轮）。
 	submitUnknownReceipt(t, engine, "spawn-unknown-pair-a", pairA, "corr-unknown-pair-a")
 	terminalizeDispatchTask(t, engine, pairA)
 	attachUnknownReceipt(t, engine, pairA, "corr-unknown-pair-a", "worker-pair-a")
 	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("pair.b must stay gated while the attached carrier holds the slot: %v", reissued)
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("pair.b must stay gated while the attached carrier holds the slot: %+v", pending)
 	}
 	if err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-attached-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
@@ -804,10 +834,12 @@ func TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords(t *testing.T) 
 		t.Fatal("a second grant must not be creatable while the attached carrier holds the unconsumed slot")
 	}
 
-	// 迟到携原授权 PASS 经 terminal 对账入账：越限轮由槽背书，槽被有效
+	// 迟到携原授权 FAIL 轮经 terminal 对账入账：越限轮由槽背书，槽被有效
 	// 结果消费。
 	if err := submitLateDispatchResult(t, engine, "late-attached-pair-a", pairA,
-		reviewEvidence(review.ProductReview, pairA, authA, "PASS", "late endorsed result of the attached terminal carrier", nil)); err != nil {
+		reviewEvidence(review.ProductReview, pairA, authA, "FAIL", "late endorsed result of the attached terminal carrier", []review.Finding{
+			{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
+		})); err != nil {
 		t.Fatalf("the late endorsed result must reconcile and consume the slot: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
@@ -815,15 +847,15 @@ func TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords(t *testing.T) 
 	}
 	assertSeriesCommitmentHeld(t, engine)
 
-	// pair.b 仍闸（原槽已背书有效结果）；再授权放行并独占绑新槽，携槽
+	// 被闸兄弟仍无轮（原槽已背书有效结果）；再授权放行并独占绑新槽，携槽
 	// 入账闭环。
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("pair.b must stay gated while no clean slot exists: %v", reissued)
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("pair.b must stay gated while no clean slot exists: %+v", pending)
 	}
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-slot-grant-3", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
 	}})
-	pairB := pendingActionByStep(t, engine, "pair.b")
+	pairB := pendingActionByStep(t, engine, "round.one")
 	authB := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairB)
 	if authB == "" || authB == authA {
 		t.Fatalf("the gated sibling must hold a distinct fresh slot: %q vs %q", authB, authA)
@@ -856,8 +888,9 @@ func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
 	laneB := pendingActionByStep(t, engine, "lane.b")
 	laneC := pendingActionByStep(t, engine, "lane.c")
 
-	// 结果先到（无回执）：暂存并携证据过完整预检。
-	evidence := reviewEvidence(review.ProductReview, laneA, "", "PASS", "staged before the unknown receipt", nil)
+	// 结果先到（无回执）：暂存并携证据过完整预检（记 FAIL 轮不结论——配
+	// 对后兄弟仍有可签载体与被闸前沿）。
+	evidence := blockingReviewEvidence(review.ProductReview, laneA, "staged before the unknown receipt")
 	staged, err := NewReviewWorkerResultEvent(EventID("staged-attached-lane-a"), laneA, testProvider, "sha256:payload-staged-attached", evidence)
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
@@ -886,7 +919,7 @@ func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
 
 	// 兄弟序走完（Completed=3）：lane.d 在承诺与兄弟全部落定前保持被闸。
 	for _, lane := range []string{laneB, laneC} {
-		submitReviewResult(t, engine, "result-staged-"+lane, lane, reviewEvidence(review.ProductReview, lane, "", "PASS", "sibling lane", nil))
+		submitReviewResult(t, engine, "result-staged-"+lane, lane, blockingReviewEvidence(review.ProductReview, lane, "sibling lane"))
 	}
 	if reissued := issueReady(t, engine); len(reissued) != 0 {
 		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
@@ -931,9 +964,9 @@ func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
 		t.Fatalf("lane.d must stay gated while the recovered dispatch holds its promise: %v", reissued)
 	}
 
-	// 迟到 PASS 经 terminal 对账入账：承诺随 Results 落定。
+	// 迟到 FAIL 轮经 terminal 对账入账：承诺随 Results 落定。
 	if err := submitLateDispatchResult(t, engine, "late-recovered-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result after the FAIL route", nil)); err != nil {
+		blockingReviewEvidence(review.ProductReview, laneA, "late result after the FAIL route")); err != nil {
 		t.Fatalf("the dispatch kept recordable after the FAIL route: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 {
@@ -1031,8 +1064,8 @@ func TestQuarantineReplayRejectionKeepsThePromiseUntilAResultRecords(t *testing.
 	// lane.d 被闸。
 	submitSpawnReceipt(t, engine, "spawn-reject-lane-a", laneA)
 	terminalizeDispatchTask(t, engine, laneA)
-	submitReviewResult(t, engine, "result-reject-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-reject-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-reject-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-reject-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	assertSeriesCommitmentHeld(t, engine)
 	if reissued := issueReady(t, engine); len(reissued) != 0 {
 		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
@@ -1084,7 +1117,7 @@ func TestQuarantineReplayRejectionKeepsThePromiseUntilAResultRecords(t *testing.
 	// 随后到达的可纳迟到结果经同一对账路径落账（Completed=3），承诺随
 	// Results 落定；lane.d 仍闸，经授权背书放行闭环。
 	if err := submitLateDispatchResult(t, engine, "late-admissible-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "the admissible late result", nil)); err != nil {
+		blockingReviewEvidence(review.ProductReview, laneA, "the admissible late result")); err != nil {
 		t.Fatalf("the admissible late result must reconcile: %v", err)
 	}
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
@@ -1094,7 +1127,7 @@ func TestQuarantineReplayRejectionKeepsThePromiseUntilAResultRecords(t *testing.
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-reject-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the gated fourth lane after the rejected replay",
 	}})
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	laneD := pendingActionByStep(t, engine, "lane.b")
 	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
 	if authID == "" {
 		t.Fatal("the gated lane must hold the granted slot")
@@ -1154,14 +1187,22 @@ func TestTerminalDispatchFailureResultSettlesTheHeldPromise(t *testing.T) {
 	}
 	assertSeriesCommitmentHeld(t, engine)
 
-	// 承诺已落定：同一事务的容量补位放行 lane.d（0+2+1=3 达界），兄弟任
-	// 意序入账全部闭环。
-	laneD := pendingActionByStep(t, engine, "lane.d")
+	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界，落在系列
+	// 当前开放的载体上），兄弟任意序入账全部闭环。
+	laneD := ""
+	for id := range engine.LoadMustSucceed(t).State.PendingActions {
+		if id != laneB && id != laneC {
+			laneD = id
+		}
+	}
+	if laneD == "" {
+		t.Fatal("the released promise must refill a fresh round beside the siblings")
+	}
 	if got := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD); got != "" {
 		t.Fatalf("the refilled lane must stay unslotted: %q", got)
 	}
-	submitReviewResult(t, engine, "result-settle-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	submitReviewResult(t, engine, "result-settle-lane-c", laneC, reviewEvidence(review.ProductReview, laneC, "", "PASS", "lane c", nil))
+	submitReviewResult(t, engine, "result-settle-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
+	submitReviewResult(t, engine, "result-settle-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
 	submitReviewResult(t, engine, "result-settle-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
 	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
 		t.Fatalf("completed = %d, want 3", series.Completed)

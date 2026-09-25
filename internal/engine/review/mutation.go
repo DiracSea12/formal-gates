@@ -419,6 +419,18 @@ func DischargeFreshOwed(set Set, action Action) Set {
 	return set
 }
 
+// IssueRound 把签发闸放行的一条带系列标记派发计入系列签发轮数（Issued）。
+// 轮号由此唯一权威派生：第 1 轮（Issued==0 时签发）为规范任务键，第 N>1
+// 轮任务键 scope＝十进制轮号 N——同一步骤跨轮的派发身份天然互异。
+func IssueRound(set Set, action Action) Set {
+	series, err := set.seriesFor(action)
+	if err != nil {
+		return set
+	}
+	series.Issued++
+	return set
+}
+
 // markUpstreamStale 在 product-review 的纠正把此前 PASS 的结论变为阻塞时，
 // 把 start-readiness 的 effective 刷为 PENDING：其 PASS 依赖的上游结论已不
 // 成立。start-readiness 的证据账本与计轮保持不动。UpstreamVoid 随之置位：

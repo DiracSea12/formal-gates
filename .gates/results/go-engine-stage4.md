@@ -331,3 +331,26 @@ P3 记账（不阻塞）：TERMINAL 任务无再派发路径（步骤可能永�
 P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观察）；floor 判定历史不对称已成注释；ObsoleteResults last-wins（预先存在）；internal/validate 对齐；历史格式共享槽；空账本回退窗口。
 
 **七刀链＋双维评审（行为红队九跑×质量零上下文）双双清零。R2 重新到达待外审状态。**
+## 第 59 轮（2026-09-25，外审 FAIL 修复→第八刀→机主令收敛架构：轮次归账本＋首过闩，轻装）
+
+外审 FAIL（1 P1＋2 P3）：P1＝canonical 定义无 start-readiness 载体步、dualReviewPass 永不开（协议测试全靠夹具注入＝过拟合）；P3 封闭集文本×2。修复 0d3514c：definition 增 review.readiness 步（deps=[review.worker]、series start-readiness、同 handler/pred/timeout）、Version "2"→"3" 同源重生成（digest d6a89c8b…）、树内 canonical 双审验收、文本对齐真实集合。主代理独立复核：自建 canonical 走查探针（产品 PASS→同事务补位 readiness→PASS→双审门开→相位推进）＋制品一致性（v3/摘要/identity_gen）＋16 包＋探针 4–9 全绿。
+
+**红队十跑（双跑收敛）**：上下文耗尽孤儿化的原跑与重派跑在同一发现独立收敛——canonical 每系列仅一个载体步×NewReviewWorkerResultEvent outcome 恒 PASS（event.go:451）→语义 FAIL 判定轮也完成载体步→完成步永不回前沿→第二轮/授权轮/FreshOwed 重走/INVALIDATE 恢复结构性死亡（21 条探针主代理亲跑坐实＋四处代码点亲核）。
+
+**第八刀（载体步完成＝审查账本投影）**：完成 ⟺ effectivePass∧依赖完成∧本任务有已入账语义轮；条件破裂级联 reopen；roundDispatchID 轮身份；签发闸补 UpstreamVoid 窗口；加载/提交边界投影校验。主代理复核期间亲证两真缺陷并返修：R1 任务视图重置守卫系列级过度串行化（并发 endorsed 死路）；R2 屏障解除事务补位抢走延迟替换将继承的槽→同槽双载（修＝KindDecide 先装替换再投影补位）。
+
+**红队十一跑＋零上下文评审双收敛同一 P1（主代理三处亲证）**：投影单遍不到不动点——同系列载体间夹非载体中继步（LOCAL/HUMAN_ASK/编译序倒置）时重 PASS 事务被 verifyCarrierProjection 判 STATE_INTEGRITY_INVALID，确定性活锁无恢复出口（readiness 链无 void 补偿投影兜底）。返修＝联合不动点 settleCarriersAndFrontier＋eachSeriesLiveDispatch 共用枚举＋ackStore 注释。
+
+**机主令（2026-09-25）：「不要一个一个补丁地一直往上落，落得越来越高很难看，要从架构，根因层面解决」**。根因定案：轮次生命周期（签发→回执→入账→轮额/新鲜义务）属审查账本，第八刀却把「该不该派下一轮」路由进 DAG 步完成态，用双向投影（完成/reopen）撬两个单调模型（步完成集、任务状态机）——三轮返修全是给错误原语打补偿。教训入记忆（勿用双向投影撞单调模型；返修第二轮即升收敛刀；派发权归属跟着事实权威走）。
+
+**收敛刀（本轮落地，删投影层）**：①轮次＝一等任务——series.Issued 轮计数为轮号唯一权威（IssueRound 唯一调用点在 issueInto 漏斗），第 1 轮规范键、第 N>1 轮 TaskKey scope＝轮号，派发身份＝act:<任务键>，删 roundDispatchID 后缀改写；②欠轮提案归账本——mergeOwedRoundProposals 在漏斗内闸之前并入（每系列每事务至多一条，roundsIssuedTx 事务瞬态提交点清零），闸补两前置规则（已结论拒发；start-readiness 顺序门签发侧前置），提案与在途无关、并发 endorsed 两形准入不变，删 UpstreamVoid 窗口补丁与两级让位守卫；③步完成＝一次性闩——series.FirstPass 首过置位（refresh 尾部单点、无清除路径），settleFrontierSteps AGENT 分支 carrierLatched，删全部 reopen/级联/不动点/投影校验/unmarkedAgentPassRecorded（11 符号 grep 零残留），completeResult 恢复直完成。保留：七刀闸核心、installDeferredReplacements 先装顺序、testkit 受理确认。
+
+主代理全套复核：全量（除 internal/harness 本机 docker 环境既知失败，基线 stash 复现归因）零失败；自建闩模型 oracle 六条全绿（四复活路径＋闩单调＋scope 轮跨重启回放）；探针 4–10 失败逐条定性为两族旧模型期望（多载体后继自身派发／readiness 顺序签发侧前置），无槽绑定/容量/不变量类；树内 canonical 五验收＋承诺独占槽＋屏障先装测试全绿（期望翻转仅为指令声明的闩语义）。
+
+**零上下文评审（收敛树终审）：可合入**——九维度全 PASS；roundsIssuedTx 判定最简合理；两 P2 注释失真（owedProposedTx 幻影字段、延迟替换恢复路径失真）＋八 P3。
+
+**收口清理批（主代理亲落——派发通道因模型配额中止不可用、机主令「继续」，偏离实施派发红线一处、如实声明）**：两 P2 注释按当前语义改写；死条件 `&& !series.FreshOwed`×2 删除（effectivePass 已含）；轮计数闸门改账本成员判定（reviewSeriesBooked，unaffiliated 不入轮账与提案账）；testkit 封闭枚举改常量比较；applyRoundScopes 补扇出约束注释。触面三包＋全量复跑全绿。
+
+红队十二跑**因模型配额上限中止**（09-29 20:32 重置）——收敛树的独立红队未清零；其审计面由主代理亲核探针（闩单调/重启回放/四复活路径）＋零上下文评审＋树内承诺/屏障/顺序门测试覆盖，但独立对抗面缺位。P3 新账（不阻塞）：integrity 未重算 FirstPass/Issued（防篡改建议位）；Expected 残留（系列结论后未签发的兄弟载体规范任务无清理点，仅 harness "unsettled tasks" 判定面）；mergeOwedRoundProposals 无载体静默 continue（排障留痕缺）；commitEffects 释放次序（SR 自身轮亦作废的复合场景欠轮推迟，携结论重投影自愈）；被闸提案占 roundsIssuedTx（一轮推迟到下事务，各交织净效果自愈）；轮身份后缀与含":"步骤名的命名自律；probe10/4/8 旧模型期望族退役留档。
+
+**R2 待机主定夺：收敛树内部验收全绿＋零上下文可合入，但独立红队因配额未跑完——外审重送时机待机主（配额重置后补跑十二跑，或机主授权即时送审）。模型调用：子代理配额内已耗尽，本轮后半（清理批＋复核）模型调用 0。**

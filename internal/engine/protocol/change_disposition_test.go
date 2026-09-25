@@ -16,8 +16,11 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// intersectionFixture 走完双审与拓扑，返回引擎与在途的目标步派发：目标
-// 步（第三步）按给定系列归属标记构造，双审 canonical 步各携自身系列标记。
+// intersectionFixture 返回引擎与在途的目标步派发：目标步（第三步）按给定
+// 系列归属标记构造。非开发前标记走完双审与拓扑后在第三步上取目标；开发
+// 前系列在结论后不再签发任何轮（签发闸规则 a），带标记目标改为该系列的
+// 在途第二轮——首轮记录语义 FAIL（未裁决 P1 阻塞，系列未结论），账本欠轮
+// 提案签出第二轮。
 func intersectionFixture(t *testing.T, mark authoring.ReviewSeriesAction) (*Engine, string, string) {
 	t.Helper()
 	targetStep := "tail.gate"
@@ -40,8 +43,28 @@ func intersectionFixture(t *testing.T, mark authoring.ReviewSeriesAction) (*Engi
 		}
 	}, "product.review", "start.readiness", targetStep)
 	engine, dir := reviewEngine(t, cd, reg)
-	target := walkToTopologyAndRoute(t, engine)
-	return engine, dir, target
+	if mark == authoring.ReviewSeriesUnaffiliated {
+		return engine, dir, walkToTopologyAndRoute(t, engine)
+	}
+	return engine, dir, walkToInFlightRound(t, engine, seriesEvidenceOf(mark))
+}
+
+// walkToInFlightRound 把带标记系列驱动到在途的第二轮：首轮记录语义 FAIL
+// （未裁决 P1 阻塞——系列保持未结论），账本欠轮提案在容量内签出第二轮。
+// readiness 系列先过产品审（顺序门前提）。返回在途第二轮的派发身份。
+func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) string {
+	t.Helper()
+	if action == review.StartReadiness {
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-ix-gate", product, reviewEvidence(review.ProductReview, product, "", "PASS", "gate round", nil))
+	} else {
+		issueReady(t, engine)
+	}
+	round1 := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "FAIL", "round one blocks", []review.Finding{
+		{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
+	}))
+	return pendingActionID(t, engine)
 }
 
 // intersectionChange 描述一组需求变化决定：redoProduct/redoReadiness 勾选

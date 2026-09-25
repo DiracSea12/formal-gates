@@ -455,6 +455,11 @@ type State struct {
 	// 本）：失败路由/FAIL 结果经终态化释放了派发容量，事务收尾单点读
 	// 取即复位，据此执行容量补位。
 	routingReleasedCapacity bool
+	// roundsIssuedTx 记录本提交事务内已提案或已签出轮的系列（非导出＝
+	// 不入账本；提案可能随后被闸，同计——同一事务内不重复提案）：同一
+	// 事务可能经多条补位路径多次进入 issueInto，欠轮提案只落在本事务尚
+	// 未得过轮的系列上，提交点清零。
+	roundsIssuedTx map[review.Action]bool
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`
 	// SpawnFailures 保留可恢复的 FAILED receipt 历史；它们不占用最终
