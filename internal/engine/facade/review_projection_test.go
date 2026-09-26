@@ -63,6 +63,22 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 	if product.EffectiveSource == "" || product.EffectiveSource == candidate.ResultDigest {
 		t.Fatalf("effective source must name the adjudication: %q", product.EffectiveSource)
 	}
+	// 裁决身份面：候选/派发/需求 revision/raw 状态/排除态与逐 finding 的
+	// 有效裁决（DISMISS 已落）与投影代数全部在面内。
+	if len(product.Candidates) != 1 || product.Candidates[0].ResultDigest != candidate.ResultDigest ||
+		product.Candidates[0].DispatchID != "dispatch-1" || product.Candidates[0].RequirementRevision != "rev-1" ||
+		product.Candidates[0].RawStatus != "FAIL" || product.Candidates[0].Excluded {
+		t.Fatalf("candidate face = %+v", product.Candidates)
+	}
+	finding := product.Candidates[0].Findings[0]
+	if finding.ID != candidate.Findings[0].ID || finding.Digest != candidate.Findings[0].Digest ||
+		finding.Severity != "P1" || finding.Message != "blocker" || finding.EffectiveDecision != "DISMISS" {
+		t.Fatalf("finding face = %+v", finding)
+	}
+	series, _ = set.Series(review.ProductReview)
+	if product.EffectiveRevision != series.Effective.Revision {
+		t.Fatalf("effective revision = %d, want the projected %d", product.EffectiveRevision, series.Effective.Revision)
+	}
 	readiness := face.Actions[1]
 	if readiness.Action != "start-readiness" || readiness.Completed != 0 || readiness.EffectiveStatus != "PENDING" ||
 		readiness.Remaining != 3 || readiness.NextRoundRequirement != "AUTOMATIC_CAPACITY" ||
@@ -72,6 +88,55 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 	if face.Topology == nil || face.Topology.Decision != "no-split" || face.RouteMode != "custom" ||
 		len(face.SelectedGates) != 1 || face.SelectedGates[0] != "gate.quality" {
 		t.Fatalf("bindings = %+v %q %v", face.Topology, face.RouteMode, face.SelectedGates)
+	}
+}
+
+// TestReviewFaceComposesTheCorrectionInput：仅凭 face 字段构造
+// CorrectionInput 完成一次 DISMISS 的包内走查——候选摘要、派发、需求
+// revision、finding 身份与 CAS 代数全部在审查面内，Show 的审查面自足
+// 于裁决输入；纠正后重投影把有效裁决如实带出面。
+func TestReviewFaceComposesTheCorrectionInput(t *testing.T) {
+	set := review.NewSet()
+	set, _, err := review.RecordCandidate(set, "run-compose", review.ProductReview,
+		review.Dispatch{ID: "dispatch-compose", RequirementRevision: "rev-1"},
+		review.Result{Status: "FAIL", Findings: []review.Finding{{Severity: "P1", Message: "compose blocker"}}},
+		review.OperatorVerification{
+			Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
+			Evidence: "operator verified the dispatch",
+		})
+	if err != nil {
+		t.Fatalf("record candidate: %v", err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	state := protocol.NewState(*view)
+	state.RunID = "run-compose"
+	state.ReviewSeries = set
+
+	product := reviewFace(state).Actions[0]
+	candidate := product.Candidates[0]
+	dismiss := review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: candidate.DispatchID,
+		RequirementRevision: candidate.RequirementRevision,
+		ResultDigest:        candidate.ResultDigest,
+		FindingID:           candidate.Findings[0].ID,
+		Decision:            "DISMISS", Reason: "the blocker does not survive re-verification",
+		Source: "face-walkthrough", UserAuthorized: true,
+		ExpectedEffectiveRevision: product.EffectiveRevision,
+	}
+	set, err = review.ApplyCorrection(set, "run-compose", candidate.RequirementRevision, dismiss)
+	if err != nil {
+		t.Fatalf("face-composed dismissal: %v", err)
+	}
+	series, _ := set.Series(review.ProductReview)
+	if series.Effective.Status != "PASS" || !series.FirstPass {
+		t.Fatalf("the face-composed dismissal must conclude the series: %+v", series.Effective)
+	}
+	state.ReviewSeries = set
+	if decision := reviewFace(state).Actions[0].Candidates[0].Findings[0].EffectiveDecision; decision != "DISMISS" {
+		t.Fatalf("the effective decision must be face-visible after the dismissal: %q", decision)
 	}
 }
 

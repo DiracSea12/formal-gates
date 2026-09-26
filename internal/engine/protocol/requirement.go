@@ -471,8 +471,10 @@ func evidenceActionName(evidence *ReviewResultEvidence) string {
 // 线＝当前权威 revision，任何不等即 Ask 过期（可区分拒绝、零状态、须在
 // 新基线上重建）。前置校验全部通过后，同一事务内：登记 ConfirmedRevision
 // → 机械执行 scope（两类分类一致：勾选的 series stale＋fresh floor、拓
-// 扑/路线解绑、重走范围内已声明系列身份的在途派发按声明终止）→ 屏障解
-// 除边界上的隔离账重分类（未勾选 series 携原 revision carry）。
+// 扑/路线解绑、重走范围内已标记系列身份的在途派发按标记终止）与下游工
+// 作决定项（勾选＝未落定下游派发退位、已落账下游结果入迟到证据账；不勾
+// ＝续用留痕）→ 屏障解除边界上的隔离账重分类（未勾选 series 携原
+// revision carry）。
 func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, expectedFingerprint string) error {
 	if ask.Control != ControlRequestRequirementChange {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a requirement decision payload", ask.Control)}
@@ -650,6 +652,48 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 			continue
 		}
 		e.terminateMarkedDispatch(state, actionID, mark, requestID, nextRevision, expectedFingerprint)
+	}
+	// 下游工作决定项（§5 处理顺序 2/5/7 的机械面）：勾选＝非审查系列的
+	// 未落定派发按既有退位机制终止（替换派发按本次决定的 revision 落
+	// 位），已落账的下游结果同账入既有迟到证据账——旧 revision 时代的
+	// 下游证据不再推进工作流；不勾＝用户明确续用，同事务留痕、接纳行为
+	// 不变。
+	if payload.RedoDownstreamWork {
+		for _, actionID := range pendingIDs {
+			pending, live := state.PendingActions[actionID]
+			if !live || pending.ReviewSeries != "" {
+				continue
+			}
+			detail := fmt.Sprintf("the downstream dispatch was terminated by the downstream redo declared in requirement decision %s", requestID)
+			detail += e.retireDispatchNote(state, actionID, "superseded by the confirmed requirement downstream redo", requestID, nextRevision, expectedFingerprint)
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+				ActionID: actionID, Task: pending.Task, Action: RecoveryNewAttempt,
+				Detail: detail, Revision: nextRevision,
+			})
+		}
+		recordIDs := make([]string, 0, len(state.Results))
+		for actionID := range state.Results {
+			recordIDs = append(recordIDs, actionID)
+		}
+		slices.Sort(recordIDs)
+		for _, actionID := range recordIDs {
+			receipt, receipted := state.SpawnReceipts[actionID]
+			if !receipted || e.reviewSeriesOf(receipt.Task.Step) != "" {
+				continue
+			}
+			state.ObsoleteResults[actionID] = state.Results[actionID]
+			delete(state.Results, actionID)
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+				ActionID: actionID, Task: receipt.Task,
+				Detail:   fmt.Sprintf("the downstream result recorded before requirement decision %s was retired to the late-evidence ledger by the downstream redo", requestID),
+				Revision: nextRevision,
+			})
+		}
+	} else {
+		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
+			Detail:   fmt.Sprintf("the downstream work continues by the user's explicit carry decision in requirement decision %s (downstream redo unchecked)", requestID),
+			Revision: nextRevision,
+		})
 	}
 	// 屏障解除边界上的隔离账重分类。
 	return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)

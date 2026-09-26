@@ -136,23 +136,48 @@ type ReviewGrantFace struct {
 	Occupied bool   `json:"occupied"`
 }
 
+// ReviewCandidateFace 是单条候选的裁决身份公开面（含整轮已排除者，以
+// Excluded 标记）：仅凭本面即可构造精确绑定的 CorrectionInput——派发、
+// 候选摘要、需求 revision、finding 与下游 CAS 代数全部在审查面内。
+type ReviewCandidateFace struct {
+	ResultDigest        string              `json:"resultDigest"`
+	DispatchID          string              `json:"dispatchId"`
+	RequirementRevision string              `json:"requirementRevision"`
+	RawStatus           string              `json:"rawStatus"`
+	Excluded            bool                `json:"excluded"`
+	Findings            []ReviewFindingFace `json:"findings"`
+}
+
+// ReviewFindingFace 是候选内一条 finding 的公开面：ID 与 digest 是绑定
+// 裁决的稳定身份，severity 为有效严重度，EffectiveDecision 空＝未裁决。
+type ReviewFindingFace struct {
+	ID                string `json:"id"`
+	Digest            string `json:"digest"`
+	Severity          string `json:"severity"`
+	Message           string `json:"message"`
+	EffectiveDecision string `json:"effectiveDecision,omitempty"`
+}
+
 // ReviewActionFace 是单个审查动作的账本公开面：completed/base/extra(授
 // 权数)/effective(有效上限)/remaining、逐条授权来源（id/reason/占用态）、
-// raw/adjudication/correction 计数与 effective 状态及来源、下一轮准入形态。
+// raw/adjudication/correction 计数与 effective 状态及来源、下一轮准入形
+// 态、逐条候选的裁决身份面与投影代数。
 type ReviewActionFace struct {
-	Action               string            `json:"action"`
-	Completed            int               `json:"completed"`
-	BaseLimit            int               `json:"baseLimit"`
-	ExtraAuthorized      int               `json:"extraAuthorized"`
-	EffectiveLimit       int               `json:"effectiveLimit"`
-	Remaining            int               `json:"remaining"`
-	NextRoundRequirement string            `json:"nextRoundRequirement"`
-	Grants               []ReviewGrantFace `json:"grants"`
-	RawResults           int               `json:"rawResults"`
-	Adjudications        int               `json:"adjudications"`
-	Corrections          int               `json:"corrections"`
-	EffectiveStatus      string            `json:"effectiveStatus"`
-	EffectiveSource      string            `json:"effectiveSource"`
+	Action               string                `json:"action"`
+	Completed            int                   `json:"completed"`
+	BaseLimit            int                   `json:"baseLimit"`
+	ExtraAuthorized      int                   `json:"extraAuthorized"`
+	EffectiveLimit       int                   `json:"effectiveLimit"`
+	Remaining            int                   `json:"remaining"`
+	NextRoundRequirement string                `json:"nextRoundRequirement"`
+	Grants               []ReviewGrantFace     `json:"grants"`
+	RawResults           int                   `json:"rawResults"`
+	Adjudications        int                   `json:"adjudications"`
+	Corrections          int                   `json:"corrections"`
+	EffectiveStatus      string                `json:"effectiveStatus"`
+	EffectiveSource      string                `json:"effectiveSource"`
+	Candidates           []ReviewCandidateFace `json:"candidates"`
+	EffectiveRevision    int                   `json:"effectiveRevision"`
 }
 
 // RequirementChangeFace 是最近一次修订确认的公开面：确认后的 revision、
@@ -225,6 +250,28 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 			Occupied: occupied[authorization.ID],
 		})
 	}
+	candidates := make([]ReviewCandidateFace, 0, len(series.RawCandidates))
+	for _, candidate := range series.RawCandidates {
+		findings := make([]ReviewFindingFace, 0, len(candidate.Findings))
+		for _, finding := range candidate.Findings {
+			decision, severity, _ := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+			findings = append(findings, ReviewFindingFace{
+				ID:                finding.ID,
+				Digest:            finding.Digest,
+				Severity:          severity,
+				Message:           finding.Message,
+				EffectiveDecision: decision,
+			})
+		}
+		candidates = append(candidates, ReviewCandidateFace{
+			ResultDigest:        candidate.ResultDigest,
+			DispatchID:          candidate.DispatchID,
+			RequirementRevision: candidate.RequirementRevision,
+			RawStatus:           candidate.RawStatus,
+			Excluded:            review.ResultExcluded(series, candidate.ResultDigest),
+			Findings:            findings,
+		})
+	}
 	return ReviewActionFace{
 		Action:               string(series.Action),
 		Completed:            series.Completed,
@@ -239,6 +286,8 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 		Corrections:          len(series.Corrections),
 		EffectiveStatus:      series.Effective.Status,
 		EffectiveSource:      series.Effective.Source,
+		Candidates:           candidates,
+		EffectiveRevision:    series.Effective.Revision,
 	}
 }
 

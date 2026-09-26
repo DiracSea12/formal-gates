@@ -361,3 +361,18 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 主代理复核：探针全套亲跑绿；B1 断言诚实性抽查（逐事务账目三元组＋槽释放＋zombie 语义）。模型调用：1 次子代理（5.3-flash）。
 
 **内部红队清零达成（十跑双收敛发现×十一跑 P1 全部修复，十二跑六面 PASS）。R2 重新到达待外审状态，待机主送审。**
+## 第 61 轮（2026-09-26，外审未通过（3 P1＋2 P2）修复：聚合未决阻塞＋下游决定项＋单一权威，轻装）
+
+机主送外审（范围 origin/codex/dogfood-dsh..HEAD 31 提交）判未通过：3 P1＋2 P2＋逐维度代码要求表。主代理逐项亲复现（/tmp/audit-probe15，五条全坐实）＋规格判定：
+- **F1/P1 未裁决 P1 被下一轮 PASS 覆盖**：规格 draft:276"未处置**或已确认** P0/P1 阻塞"——现行只投影最新候选（series.go Effective 单候选），canonical 测试固化了错误形状。修＝唯一定义点聚合：全系列未被整轮排除候选的 findings 求并集（DISMISS/INVALIDATE_FINDING 跳过、未裁决按原始严重度），存在 P0/P1 ⇒ FAIL；绑定锚最新未排除候选、跨 revision 候选不互拦（与 FreshFloor/HasConfirmedBlocking 同一 revision 界）；RecordCandidate/纠正/ReleaseUpstreamVoid/integrity 全部同源。correctFinding 的 stale 门随聚合模型收敛为"未排除且绑当前 revision"（否则旧轮阻塞不可驳回，与"全部 P0/P1 被驳回时直接 PASS"矛盾）。边界亲证：全候选排除×纠正＝可区分拒绝非 panic。
+- **F2/P1 需求变更缺下游工作决定项**：规格 §5 处理顺序 2/5/7＋§5.1"使下游失效"＋机主修订（未决定前不自动失效，但决定项不能缺席）。修＝载荷增第五项 `RedoDownstreamWork`（omitempty 保事件字节）：勾选＝既有 terminate 机制退位未落定下游派发＋已落账结果入既有 ObsoleteResults；不勾＝同事务 carry RecoveryRecord 留痕、接纳不变。零新账本、零第二套终止路径。
+- **F3/P1 未标记 worker 自报审查系列被接纳**：AGENTS.md 单一权威。修＝**删**声明回退（engine.go 声明回退分支整个死亡，幻影轮世系终结）：审查证据只在签发标记非空且与 evidence.Action 相等时接纳；floor/终止只认标记；unaffiliated 枚举保留（步骤词汇）。依赖回退的测试翻转为拒绝负控。
+- **F4/P2 过期结果丢评审证据**：ObsoleteResults 落账改复用 workerResultRecord（:1760 本就携带，如实核证）。
+- **F5/P2 façade 面缺裁决身份**：ReviewActionFace 增 Candidates（ResultDigest/DispatchID/RequirementRevision/RawStatus/Excluded/Findings{ID/Digest/Severity/Message/有效裁决}）＋EffectiveRevision；内核 resultExcluded 导出为 ResultExcluded（单一定义点）；补"仅凭 face 构造 CorrectionInput 完成 DISMISS"走查。
+- P3（只记账）：cloneState JSON 往返不带未导出事务瞬态（评审提出、未复现正常路径故障）。
+
+机主红线（派发前再令）："不要哪错哪打补丁屎山越摞越高"——修法逐项过补丁判据（删机制/补全枚举/唯一定义点），已入记忆。15 文件 +419/−139；未新增事件 kind/错误码/账本/state 字段。
+
+主代理复核：build/vet/gofmt 净；全量（除 internal/harness 本机环境）零失败；验收探针五条（/tmp/audit-probe15/accept，F1–F5 翻转形状）全绿；原缺陷形状探针如期转红；anchor 下溢边界亲证安全。**probe14 七红逐一定性**：六个＝F1 同族旧世界期望（其走查正是"下一轮 PASS 覆盖未裁决阻塞"形状——N1 转储实证聚合生效：晚到阻塞 finding 使 effective=FAIL 而闩单向保持 true），一个（A3 伪造/删除完成态 bricking）＝第 60 轮已记账的载入边界篡改 P3 残余；不变量测试（首过单写/签发计数/并发独占槽/顺序门三向/迟到证据）全绿。probe14 红项属参考探针陈旧期望，迁移随下一轮。
+
+**外审五发现全部修复。R2 待重新送审。**

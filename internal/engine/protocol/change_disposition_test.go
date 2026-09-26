@@ -50,8 +50,10 @@ func intersectionFixture(t *testing.T, mark authoring.ReviewSeriesAction) (*Engi
 }
 
 // walkToInFlightRound 把带标记系列驱动到在途的第二轮：首轮记录语义 FAIL
-// （未裁决 P1 阻塞——系列保持未结论），账本欠轮提案在容量内签出第二轮。
-// readiness 系列先过产品审（顺序门前提）。返回在途第二轮的派发身份。
+// （P1 阻塞——系列保持未结论），账本欠轮提案在容量内签出第二轮；在途
+// 第二轮不受影响，首轮 P1 由用户驳回（聚合按 draft §4.4 重算转 PASS，其
+// PASS 轮入账时完成结论）。readiness 系列先过产品审（顺序门前提）。返回
+// 在途第二轮的派发身份。
 func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) string {
 	t.Helper()
 	if action == review.StartReadiness {
@@ -64,7 +66,9 @@ func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) str
 	submitReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "FAIL", "round one blocks", []review.Finding{
 		{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
 	}))
-	return pendingActionID(t, engine)
+	round2 := pendingActionID(t, engine)
+	dismissSeriesFinding(t, engine, "req-ix-dismiss", action, round1)
+	return round2
 }
 
 // intersectionChange 描述一组需求变化决定：redoProduct/redoReadiness 勾选
@@ -158,6 +162,7 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.change.name+" on "+string(row.mark), func(t *testing.T) {
 			engine, _, target := intersectionFixture(t, row.mark)
+			readinessTarget := pendingActionOfStep(t, engine, "start.readiness")
 			row.change.drive(t, engine, "req-ix-pending")
 			snap := engine.LoadMustSucceed(t)
 			if row.freshOK {
@@ -178,6 +183,11 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 				if row.mark == authoring.ReviewSeriesUnaffiliated {
 					submitPlainResult(t, engine, "result-ix-plain", target)
 				} else {
+					if row.change.redoReadiness {
+						// 夹具的驳回结论补发并派发了 readiness 在途派发；重走
+						// 决定替换它后，其新鲜轮照常在替换上完成（floor revision）。
+						freshRoundOnTheReplacement(t, engine, readinessTarget, "result-ix-fresh-other", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-fresh-other", "rev-2", "PASS", "fresh readiness round after the redo", nil))
+					}
 					submitReviewResult(t, engine, "result-ix-carry", target, reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-carry", "rev-1", "PASS", "carried binding", nil))
 				}
 			}
@@ -482,6 +492,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 	}
 	t.Run("redo of another series reconciles the terminal task", func(t *testing.T) {
 		engine, _, target := intersectionFixture(t, authoring.ReviewSeriesProductReview)
+		readinessTarget := pendingActionOfStep(t, engine, "start.readiness")
 		fp := fingerprintOf(t, engine)
 		request, err := NewRequirementRequestEvent("req-ix-term-other", requirementPackageOf(&RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:ix-term-other",
@@ -511,6 +522,9 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
 			Classification: RequirementClassificationChanged, RedoStartReadiness: true, Reason: "only the readiness walk is redone",
 		})
+		// 夹具的驳回结论补发并派发了 readiness 在途派发；重走决定替换它后，
+		// 其新鲜轮照常在替换上完成（floor revision）。
+		freshRoundOnTheReplacement(t, engine, readinessTarget, "result-ix-term-readiness", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-term-readiness", "rev-2", "PASS", "fresh readiness round after the redo", nil))
 		snap := engine.LoadMustSucceed(t)
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the terminal task's record must reconcile into Results")

@@ -17,7 +17,7 @@ import (
 func completedRounds(s Series) int {
 	count := 0
 	for _, candidate := range s.RawCandidates {
-		if candidate.Completeness == completenessComplete && !resultExcluded(s, candidate.ResultDigest) {
+		if candidate.Completeness == completenessComplete && !ResultExcluded(s, candidate.ResultDigest) {
 			count++
 		}
 	}
@@ -29,7 +29,7 @@ func completedRounds(s Series) int {
 func OccupiedAuthorizationIDs(s Series) map[string]bool {
 	occupied := map[string]bool{}
 	for _, candidate := range s.RawCandidates {
-		if candidate.AuthorizationID != "" && !resultExcluded(s, candidate.ResultDigest) {
+		if candidate.AuthorizationID != "" && !ResultExcluded(s, candidate.ResultDigest) {
 			occupied[candidate.AuthorizationID] = true
 		}
 	}
@@ -95,8 +95,8 @@ func AuthorizationOfDispatch(s Series, dispatchID string) string {
 	return ""
 }
 
-// resultExcluded 判断一条结果是否已被整轮 INVALIDATE_RESULT 回执排除。
-func resultExcluded(s Series, resultDigest string) bool {
+// ResultExcluded 判断一条结果是否已被整轮 INVALIDATE_RESULT 回执排除。
+func ResultExcluded(s Series, resultDigest string) bool {
 	for _, correction := range s.Corrections {
 		if correction.ResultDigest == resultDigest && correction.Decision == decisionInvalidateResult {
 			return true
@@ -140,26 +140,42 @@ func refresh(s *Series) {
 
 // ---- effective 投影与决定查询 ----
 
-// Effective 把一个候选连同覆盖它的全部裁决投影为 effective status：
-// DISMISS/INVALIDATE_FINDING 的 finding 跳过；有效严重度 P0/P1 阻塞、其余
-// 建议化；有阻塞 finding 即 FAIL，否则 PASS——全部 P0/P1 被驳回时直接
-// PASS，不为改聚合状态另派一轮。DownstreamImpact 恒为空表，由接纳路径按
-// 状态迁移另行标记。
-func Effective(s Series, candidate RawCandidate, revision int) EffectiveStatus {
+// Effective 把系列内全部未被整轮排除、且与最新候选绑定同一需求 revision 的
+// 候选 findings 求并集，投影为 effective status：DISMISS/INVALIDATE_FINDING
+// 的 finding 跳过；其余按有效严重度计入——未裁决保持原始严重度，未处置或
+// 已确认的 P0/P1 阻塞即 FAIL；仅 P2/P3 为 PASS+advisory；全部 P0/P1 被驳回
+// /判无效且无其他 blocker 时直接 PASS，不签发只为改聚合状态的 fresh review
+// （refactor-plan/final-implementation-draft.md §4.4）。绑定字段（RawStatus/
+// ResultDigest/RequirementRevision）锚最新候选：旧 revision 的证据随
+// revision 前移不再拦新轮，与 HasConfirmedBlocking 同一 revision 界；
+// DownstreamImpact 恒为空表，由接纳路径按状态迁移另行标记。
+func Effective(s Series, revision int) EffectiveStatus {
 	blocking, advisory := []string{}, []string{}
-	source := candidate.ResultDigest
-	for _, finding := range candidate.Findings {
-		decision, severity, decisionSource := EffectiveFindingDecision(s, candidate.ResultDigest, finding)
-		if decisionSource != "" {
-			source = decisionSource
-		}
-		if decision == decisionDismiss || decision == decisionInvalidateFinding {
+	// 绑定锚是最新未被整轮排除的候选：整轮失效的 PENDING 投影保留指向被
+	// 排除者的绑定、不经本函数落账（由失效路径直接写入）。
+	anchorIndex := len(s.RawCandidates) - 1
+	for ResultExcluded(s, s.RawCandidates[anchorIndex].ResultDigest) {
+		anchorIndex--
+	}
+	anchor := s.RawCandidates[anchorIndex]
+	source := anchor.ResultDigest
+	for _, candidate := range s.RawCandidates {
+		if candidate.RequirementRevision != anchor.RequirementRevision || ResultExcluded(s, candidate.ResultDigest) {
 			continue
 		}
-		if severity == "P0" || severity == "P1" {
-			blocking = append(blocking, finding.ID)
-		} else {
-			advisory = append(advisory, finding.ID)
+		for _, finding := range candidate.Findings {
+			decision, severity, decisionSource := EffectiveFindingDecision(s, candidate.ResultDigest, finding)
+			if decisionSource != "" {
+				source = decisionSource
+			}
+			if decision == decisionDismiss || decision == decisionInvalidateFinding {
+				continue
+			}
+			if severity == "P0" || severity == "P1" {
+				blocking = appendUnique(blocking, finding.ID)
+			} else {
+				advisory = appendUnique(advisory, finding.ID)
+			}
 		}
 	}
 	status := statusPass
@@ -168,9 +184,9 @@ func Effective(s Series, candidate RawCandidate, revision int) EffectiveStatus {
 	}
 	return EffectiveStatus{
 		Status:              status,
-		RawStatus:           candidate.RawStatus,
-		ResultDigest:        candidate.ResultDigest,
-		RequirementRevision: candidate.RequirementRevision,
+		RawStatus:           anchor.RawStatus,
+		ResultDigest:        anchor.ResultDigest,
+		RequirementRevision: anchor.RequirementRevision,
 		Source:              source,
 		Revision:            revision,
 		BlockingFindingIDs:  blocking,
@@ -248,7 +264,7 @@ func LatestDecisionID(s Series, resultDigest, findingID string) string {
 func HasConfirmedBlocking(s Series) bool {
 	revision := s.Effective.RequirementRevision
 	for _, candidate := range s.RawCandidates {
-		if candidate.RequirementRevision != revision || resultExcluded(s, candidate.ResultDigest) {
+		if candidate.RequirementRevision != revision || ResultExcluded(s, candidate.ResultDigest) {
 			continue
 		}
 		for _, finding := range candidate.Findings {
@@ -268,7 +284,7 @@ func FindingDecision(set Set, findingDigest string) (action Action, decision, se
 	for _, action := range []Action{ProductReview, StartReadiness} {
 		series, _ := set.Series(action)
 		for _, candidate := range series.RawCandidates {
-			if resultExcluded(series, candidate.ResultDigest) {
+			if ResultExcluded(series, candidate.ResultDigest) {
 				continue
 			}
 			for _, finding := range candidate.Findings {

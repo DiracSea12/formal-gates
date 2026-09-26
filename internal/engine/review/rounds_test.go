@@ -106,8 +106,10 @@ func TestCompleteResultsCountRoundsWhileDispositionsDoNot(t *testing.T) {
 	}
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-2", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	series, _ = set.Series(ProductReview)
-	if series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.ResultDigest == candidate.ResultDigest {
-		t.Fatalf("second complete result did not reproject: %#v", series)
+	// 计轮只认完整有效结果；已确认的 P1 跨候选阻塞聚合（refactor-plan/
+	// final-implementation-draft.md §4.4），PASS 轮不改聚合状态。
+	if series.Completed != 2 || series.Effective.Status != "FAIL" || series.Effective.ResultDigest == candidate.ResultDigest || len(series.Effective.BlockingFindingIDs) != 1 {
+		t.Fatalf("second complete result did not count or keep the confirmed blocker: %#v", series)
 	}
 	if err := Validate(runID, set); err != nil {
 		t.Fatal(err)

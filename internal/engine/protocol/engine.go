@@ -898,12 +898,6 @@ func (s *State) applyRoundScopes(issued decision.IssuedSet, reviewSeriesOf func(
 // 不解除承诺），同批签出的派发按签出顺序逐个计入（同批的自洽形放行者同
 // 样计入并占位"未持槽在途"）。
 //
-// 与无标记声明形状的交互：无系列标记的派发不经本闸（其系列身份由证据在
-// 结果侧声明，见 admitWorkerResultRecord 的声明回退），其轮次在闸外消费
-// 系列轮容量。声明轮入账可把 Completed 推过 AutomaticLimit，使在途的受
-// 闸自洽形派发在记录侧被"越限无授权"拒绝——记录侧轮额仍保护系列，被挤
-// 者经 action 授权或整轮作废（重走决定）恢复。
-//
 // 被闸住的 action 不签发、不转移任务，保持 Expected（retainExpected 语
 // 义）；授权落账后的下一次收尾补位经本闸自然签发。无系列标记或标记不在
 // 账（非审查派发、独立复审）不受闸。容量截断与被闸步叠加时，Ready 前沿
@@ -1598,13 +1592,32 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			}
 			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_RESULT", Revision: revision, ActionID: actionID}, false, nil
 		}
-		state.ObsoleteResults[actionID] = WorkerResult{ActionID: actionID, Provider: result.Provider, Outcome: result.Outcome, PayloadDigest: result.PayloadDigest, FailureClass: result.FailureClass, Digest: payloadDigest}
+		// 过期账保留原始证据供追溯：记录形态与接纳路径同源（含审查证据）。
+		state.ObsoleteResults[actionID] = workerResultRecord(result)
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: obsolete.Task, AttemptID: obsolete.AttemptID, Class: result.FailureClass, Action: RecoveryOperator, Detail: "late result belongs to an obsolete Attempt", Revision: nextRevision})
 		return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "OBSOLETE_RESULT", Revision: nextRevision, ActionID: actionID}, true, nil
 	}
 	for _, recoverable := range state.RecoverableResults[actionID] {
 		if recoverable.Digest == payloadDigest {
 			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
+		}
+	}
+	// 系列身份以签发标记为唯一权威：在途派发读 PendingAction；簿记已收
+	// 回的 terminal 派发从回执固化的任务步骤推导（签发标记与步骤标记同
+	// 源，issueInto 以同一函数落标记）。审查证据只接纳自查发时携带同系
+	// 列标记的派发：未标记的派发没有可绑定的系列身份，标记不一致的证据
+	// 与签发事实冲突——都可区分拒绝、零状态变化。
+	mark := review.Action("")
+	if pending, ok := state.PendingActions[actionID]; ok {
+		mark = pending.ReviewSeries
+	} else if receipt, receipted := state.SpawnReceipts[actionID]; receipted {
+		mark = e.reviewSeriesOf(receipt.Task.Step)
+	}
+	if result.Review != nil && result.Review.Action != mark {
+		return Acceptance{}, false, &RejectedError{
+			Code: CodeReviewEvidenceRejected,
+			Detail: fmt.Sprintf("dispatch %q was issued for the %q review series; its evidence declares %s (review evidence is only admissible from a dispatch issued for the same series)",
+				actionID, mark, result.Review.Action),
 		}
 	}
 	if _, pending := state.PendingActions[actionID]; !pending {
@@ -1665,28 +1678,11 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			Revision: nextRevision, ActionID: actionID, Refill: refill,
 		}, true, nil
 	}
-	// 系列身份以签发标记为权威（未标记的派发用证据声明）：重走态的
-	// floor 判定与按声明终止据此执行——证据声明与标记冲突时同样按标记
-	// 终止（该证据本就不可纳）。声明确立的系列照样消费轮额：这类派发
-	// 不经签发闸，其轮次在闸外占用系列容量，可能把受闸自洽形放行者的
-	// 结果挤到记录侧越限拒绝（交互全貌见 admitReviewIssuance）。
-	mark := state.PendingActions[actionID].ReviewSeries
-	seriesAction := mark
-	if seriesAction == "" && result.Review != nil {
-		seriesAction = result.Review.Action
-	}
-	if seriesAction != "" {
-		if series, ok := state.ReviewSeries.Series(seriesAction); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
+	// 重走态的 floor 判定与按声明终止只在标记的系列上执行——系列身份
+	// 的唯一权威是签发标记（见上方的一致性判定）。
+	if mark != "" {
+		if series, ok := state.ReviewSeries.Series(mark); ok && seriesInRedoStale(series) && state.issuedRevisionOf(actionID) < series.FreshFloor {
 			return e.terminateSupersededDispatch(state, actionID, workerResultRecord(result), eventID, requestID, nextRevision, expectedFingerprint)
-		}
-	}
-	// 已标记派发的证据一致性：证据声明的审查系列必须与签发标记相等
-	//（标记是签发时事实；不等即可区分拒绝、零状态）。
-	if result.Review != nil && mark != "" && result.Review.Action != mark {
-		return Acceptance{}, false, &RejectedError{
-			Code: CodeReviewEvidenceRejected,
-			Detail: fmt.Sprintf("dispatch %q was issued for the %s review series; its evidence declares %s",
-				actionID, mark, result.Review.Action),
 		}
 	}
 	record := workerResultRecord(result)

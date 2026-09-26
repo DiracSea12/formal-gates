@@ -286,7 +286,7 @@ func TestHistoricalInvalidationKeepsTheCurrentEffectiveResult(t *testing.T) {
 		Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "user invalidates the historical result", Source: "user", UserAuthorized: true,
 	})
 	series, _ = set.Series(ProductReview)
-	if series.Completed != 1 || len(series.RawCandidates) != 2 || len(series.Corrections) != 1 || !resultExcluded(series, first.ResultDigest) {
+	if series.Completed != 1 || len(series.RawCandidates) != 2 || len(series.Corrections) != 1 || !ResultExcluded(series, first.ResultDigest) {
 		t.Fatalf("historical invalidation did not preserve evidence while removing one round: %#v", series)
 	}
 	if series.Effective.Status != "PASS" || series.Effective.ResultDigest != second.ResultDigest || series.Effective.Revision != beforeRevision+1 {
@@ -297,8 +297,8 @@ func TestHistoricalInvalidationKeepsTheCurrentEffectiveResult(t *testing.T) {
 		FindingID: first.Findings[0].ID, Decision: "DISMISS", Reason: "late correction of a historical finding", Source: "user", UserAuthorized: true,
 		ExpectedEffectiveRevision: series.Effective.Revision,
 	}
-	if _, err := ApplyCorrection(set, runID, "rev-1", staleHop); err == nil || !strings.Contains(err.Error(), "stale") {
-		t.Fatalf("finding correction on a historical result was accepted: %v", err)
+	if _, err := ApplyCorrection(set, runID, "rev-1", staleHop); err == nil || !strings.Contains(err.Error(), "no longer be corrected") {
+		t.Fatalf("finding correction on an invalidated historical result was accepted: %v", err)
 	}
 	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
 		Action: ProductReview, DispatchID: second.DispatchID, ResultDigest: second.ResultDigest, RequirementRevision: second.RequirementRevision,
@@ -536,11 +536,13 @@ func TestConfirmedBlockingProjectionBindsTheRequirementRevision(t *testing.T) {
 	if len(series.Effective.BlockingFindingIDs) != 1 || series.Effective.RequirementRevision != "rev-1" {
 		t.Fatalf("confirmed blocker projection is not derivable: %#v", series.Effective)
 	}
-	// 内核不把守门槛本身：同 revision 的再次记录是允许的，投影跟随最新证据
+	// 未处置或已确认 P0/P1 阻塞（refactor-plan/final-implementation-draft.md
+	// §4.4）：同 revision 的新一轮 PASS 不改聚合——已确认阻塞跨候选存在，
+	// 直至被驳回/判无效或换到已确认的新 revision。
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-again", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
 	series = mustSeries(t, set, ProductReview)
-	if series.Completed != 2 || series.Effective.Status != "PASS" {
-		t.Fatalf("same-revision record was gated by the kernel: %#v", series)
+	if series.Completed != 2 || series.Effective.Status != "FAIL" || len(series.Effective.BlockingFindingIDs) != 1 {
+		t.Fatalf("the confirmed blocker must survive the later PASS round: %#v", series.Effective)
 	}
 	set = MarkStale(set, "REQUIREMENT_REVISION_INVALIDATION")
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-changed", RequirementRevision: "rev-2"}, Result{Status: "PASS"})

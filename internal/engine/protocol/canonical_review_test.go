@@ -124,7 +124,10 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 // TestCanonicalProductFailReissuesTheSecondAutomaticRound：产品审语义
 // FAIL 不完成载体步——技术审不被签出（顺序门要守的越序面不再出现），
 // 载体步留在前沿、同事务补位签发第二轮产品审派发（轮派发身份）；第二
-// 轮 PASS 后 effective PASS、载体步完成、技术审步随即可达。
+// 轮 PASS 后聚合仍被首轮未处置 P1 阻塞（draft §4.4「未处置或已确认
+// P0/P1 阻塞」）——effective 保持 FAIL、不闩、技术审不签出；对首轮 P1
+// 的 DISMISS 驳回后聚合直接 PASS：闩置位、载体步完成、技术审步随即可
+// 达，不为改聚合状态另签发轮次。
 func TestCanonicalProductFailReissuesTheSecondAutomaticRound(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 
@@ -154,8 +157,22 @@ func TestCanonicalProductFailReissuesTheSecondAutomaticRound(t *testing.T) {
 	submitReviewResult(t, engine, "canonical-pass-2", second,
 		reviewEvidence(review.ProductReview, second, "", "PASS", "clean on the second sample", nil))
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" {
-		t.Fatalf("product ledger after the second round = %+v", series)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "FAIL" || series.FirstPass {
+		t.Fatalf("the unadjudicated blocker must survive the PASS round: %+v", series.Effective)
+	}
+	if snap.State.stepCompleted("review.worker") {
+		t.Fatal("the aggregated FAIL must not complete the product carrier step")
+	}
+	if readiness := pendingActionOfStep(t, engine, "review.readiness"); readiness != "" {
+		t.Fatalf("readiness must not be issued while the aggregate blocks: %q", readiness)
+	}
+
+	// 对首轮 P1 的 DISMISS：全部 P0/P1 被驳回且无其他 blocker 时直接 PASS
+	//（draft §4.4）——闩置位、载体步完成、技术审签出。
+	dismissSeriesFinding(t, engine, "canonical-dismiss-1", review.ProductReview, product)
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || !series.FirstPass {
+		t.Fatalf("the dismissal must conclude the aggregate: %+v", series.Effective)
 	}
 	if !snap.State.stepCompleted("review.worker") {
 		t.Fatal("the effective PASS must complete the product carrier step")
@@ -172,6 +189,7 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 
 	action := issueReady(t, engine)[0]
+	rounds := []string{action}
 	for round := 1; round <= 3; round++ {
 		submitReviewResult(t, engine, "canonical-exhaust-"+string(rune('0'+round)), action,
 			reviewEvidence(review.ProductReview, action, "", "FAIL", "still blocked", []review.Finding{
@@ -179,6 +197,7 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 			}))
 		if round < 3 {
 			action = pendingActionByStep(t, engine, "review.worker")
+			rounds = append(rounds, action)
 		}
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -202,14 +221,25 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	submitReviewResult(t, engine, "canonical-pass-4", fourth,
 		reviewEvidence(review.ProductReview, fourth, authID, "PASS", "clean on the endorsed round", nil))
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" {
-		t.Fatalf("series after the endorsed round = %+v", series)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "FAIL" {
+		t.Fatalf("the three unadjudicated blockers must survive the endorsed PASS: %+v", series.Effective)
+	}
+
+	// 逐轮驳回三轮的未裁决 P1（draft §4.4：全部 P0/P1 被驳回且无其他
+	// blocker 时直接 PASS，不为改聚合状态另签发轮次）——聚合收口在已
+	// 背书的第四轮证据上。
+	for index, roundDispatch := range rounds {
+		dismissSeriesFinding(t, engine, "canonical-exhaust-dismiss-"+string(rune('0'+index+1)), review.ProductReview, roundDispatch)
+	}
+	snap = engine.LoadMustSucceed(t)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" || !series.FirstPass {
+		t.Fatalf("series after the dismissals = %+v", series.Effective)
 	}
 	if !snap.State.stepCompleted("review.worker") {
-		t.Fatal("the endorsed PASS must complete the product carrier step")
+		t.Fatal("the effective PASS must complete the product carrier step")
 	}
 	if readiness := pendingActionByStep(t, engine, "review.readiness"); readiness == "" {
-		t.Fatalf("pending actions after the endorsed PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
+		t.Fatalf("pending actions after the effective PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
 	}
 }
 

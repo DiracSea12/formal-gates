@@ -241,7 +241,7 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 			//（与准入规则对齐），不调用生产投影函数。
 			occupied := map[string]bool{}
 			for _, candidate := range series.RawCandidates {
-				if candidate.AuthorizationID != "" && !resultExcluded(series, candidate.ResultDigest) {
+				if candidate.AuthorizationID != "" && !ResultExcluded(series, candidate.ResultDigest) {
 					occupied[candidate.AuthorizationID] = true
 				}
 			}
@@ -260,11 +260,10 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 			if series.Effective.Status == statusPending {
 				continue
 			}
-			candidate, ok := candidateByDigest(series, series.Effective.ResultDigest)
-			if !ok {
+			if _, ok := candidateByDigest(series, series.Effective.ResultDigest); !ok {
 				t.Fatalf("%s effective result is missing from the ledger", action)
 			}
-			expected := Effective(series, candidate, series.Effective.Revision)
+			expected := Effective(series, series.Effective.Revision)
 			expected.DownstreamImpact = series.Effective.DownstreamImpact
 			if !reflect.DeepEqual(expected, series.Effective) {
 				t.Fatalf("%s stored effective %#v differs from the reprojection %#v", action, series.Effective, expected)

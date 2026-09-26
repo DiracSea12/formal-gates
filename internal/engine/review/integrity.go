@@ -208,7 +208,7 @@ func (s Series) validate(runID string, action Action) error {
 	for _, authorization := range s.Authorizations {
 		validResults := 0
 		for _, resultDigest := range authorization.RecordedResultDigests {
-			if !resultExcluded(s, resultDigest) {
+			if !ResultExcluded(s, resultDigest) {
 				validResults++
 			}
 		}
@@ -268,10 +268,10 @@ func validateEffectiveProjection(action Action, s Series) error {
 		return nil
 	}
 	candidate, ok := candidateByDigest(s, effective.ResultDigest)
-	if !ok || resultExcluded(s, candidate.ResultDigest) || candidate.RequirementRevision != effective.RequirementRevision {
+	if !ok || ResultExcluded(s, candidate.ResultDigest) || candidate.RequirementRevision != effective.RequirementRevision {
 		return fmt.Errorf("effective result binding is missing, excluded, or inconsistent")
 	}
-	expected := Effective(s, candidate, effective.Revision)
+	expected := Effective(s, effective.Revision)
 	if expected.Status != effective.Status || expected.RawStatus != effective.RawStatus || expected.Source != effective.Source || !slices.Equal(expected.BlockingFindingIDs, effective.BlockingFindingIDs) || !slices.Equal(expected.AdvisoryFindingIDs, effective.AdvisoryFindingIDs) {
 		return fmt.Errorf("effective status does not match the raw/adjudication projection")
 	}

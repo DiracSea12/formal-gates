@@ -245,10 +245,10 @@ type RouteDecision struct {
 }
 
 // RequirementDecisionPackage 是用户在 Ask 上看到并确认的完整变更包：
-// 候选 revision、review-delta 指纹、影响预览指纹、来源、含义分类、四个
-// 重走勾选与发现绑定。BaseRevision 不入包（Ask 的权威基线由引擎按请求
-// 时的权威 revision 持有）；Reason 随 DECIDE 落账。结构只含 string/bool，
-// 可直接做逐字段相等比较。
+// 候选 revision、review-delta 指纹、影响预览指纹、来源、含义分类、重走
+// 勾选（四项审查/拓扑/路线项与下游工作决定项）与发现绑定。BaseRevision
+// 不入包（Ask 的权威基线由引擎按请求时的权威 revision 持有）；Reason 随
+// DECIDE 落账。结构只含 string/bool，可直接做逐字段相等比较。
 type RequirementDecisionPackage struct {
 	CandidateRevision  string `json:"candidateRevision"`
 	DeltaDigest        string `json:"deltaDigest"`
@@ -259,6 +259,11 @@ type RequirementDecisionPackage struct {
 	RedoStartReadiness bool   `json:"redoStartReadiness"`
 	RedoTopology       bool   `json:"redoTopology"`
 	RedoRoute          bool   `json:"redoRoute"`
+	// RedoDownstreamWork 是非审查系列下游工作的重走决定项（总需求 §5
+	// 处理顺序 2/5/7 的机主修订：重走/续用逐项由用户确认后引擎机械执
+	// 行）：勾选＝未落定的下游派发按既有退位机制终止、已落账的下游结果
+	// 入既有迟到证据账；不勾＝用户明确续用，决定留痕、接纳行为不变。
+	RedoDownstreamWork bool   `json:"redoDownstreamWork,omitempty"`
 	FindingDigest      string `json:"findingDigest,omitempty"`
 }
 
@@ -275,6 +280,7 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 		RedoStartReadiness: p.RedoStartReadiness,
 		RedoTopology:       p.RedoTopology,
 		RedoRoute:          p.RedoRoute,
+		RedoDownstreamWork: p.RedoDownstreamWork,
 		FindingDigest:      p.FindingDigest,
 	}
 }
@@ -294,6 +300,7 @@ type RequirementDecisionPayload struct {
 	RedoStartReadiness bool   `json:"redoStartReadiness"`
 	RedoTopology       bool   `json:"redoTopology"`
 	RedoRoute          bool   `json:"redoRoute"`
+	RedoDownstreamWork bool   `json:"redoDownstreamWork,omitempty"`
 	Reason             string `json:"reason"`
 	FindingDigest      string `json:"findingDigest,omitempty"`
 }

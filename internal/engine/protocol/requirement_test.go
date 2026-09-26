@@ -1826,14 +1826,13 @@ func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
 }
 
 // TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch：确认重走某审查
-// series 后，重走前签发的旧派发不能完成"新鲜复审"——其证据按声明终止
-// （OBSOLETE_DISPATCH＋迟到证据账＋同任务重签发），替换派发（签发代数
-// ≥floor）上的同证据才完成新鲜轮。步为语义判断步（不带签发标记——系
-// 列身份由证据声明，标记缺失派发的 floor＋按声明终止兜底路径；已标记
-// 路径见 TestMarkedReviewDispatchIsTerminatedByTheRedoDecision）。
+// series 后，重走前签发的旧派发不能完成"新鲜复审"——语义判断步不携带
+// 任何审查系列身份，其上的审查证据与签发标记冲突，可区分拒绝、零状态
+// （重走范围派发在决定事务内按标记终止并由替换派发完成新鲜轮，见
+// TestMarkedReviewDispatchIsTerminatedByTheRedoDecision）。
 func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
 	cd, reg := declaredSeriesStepsFixture(t, "review.floor.one", "review.floor.two", "review.floor.three")
-	engine, _ := reviewEngine(t, cd, reg)
+	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
 
 	askAndDecideRequirement(t, engine, "req-redo-floor", "proceed", &RequirementDecisionPayload{
@@ -1850,14 +1849,21 @@ func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
 	if snap.State.ReviewSeries.ProductReview.FreshFloor != floor {
 		t.Fatalf("fresh floor = %d, want the decide revision %d", snap.State.ReviewSeries.ProductReview.FreshFloor, floor)
 	}
-	// 旧派发（pre-floor）即使绑新 revision 也不纳：按声明终止＋重签发。
-	freshRoundAfterDeclaredTermination(t, engine, product, "result-floor-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-floor-2", "rev-2", "PASS", "old dispatch completing the fresh round", nil))
-	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
-		t.Fatalf("the fresh round must complete exactly once on the replacement: completed=%d %+v", series.Completed, series.Effective)
+	// 旧派发（pre-floor）的声明证据不再被接纳：未标记派发没有可绑定的
+	// 系列身份，证据与签发标记冲突即可区分拒绝、零状态。
+	evidence := reviewEvidenceAt(review.ProductReview, product, "rev-2", "PASS", "old dispatch completing the fresh round", nil)
+	ev, err := NewReviewWorkerResultEvent("result-floor-fresh", product, testProvider, "sha256:payload-result-floor-fresh", evidence)
+	if err != nil {
+		t.Fatalf("event: %v", err)
 	}
-	if _, voided := snap.State.ObsoleteResults[product]; !voided {
-		t.Fatal("the terminated dispatch's evidence must be kept as late evidence")
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(ev, fingerprintOf(t, engine)); err == nil {
+		t.Fatal("the pre-floor dispatch's declared evidence was accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), `issued for the "" review series`) {
+		t.Fatalf("pre-floor declared evidence code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("the rejected declared evidence changed state bytes")
 	}
 }
 
@@ -2384,7 +2390,7 @@ func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
 	before := stateBytesOf(t, dir)
 	if _, err := engine.Submit(mismatched, fp); err == nil {
 		t.Fatal("mismatched evidence accepted on a marked dispatch")
-	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), "issued for the product-review") {
+	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), `issued for the "product-review"`) {
 		t.Fatalf("mismatch code = %q (%v)", code, err)
 	}
 	if after := stateBytesOf(t, dir); string(before) != string(after) {
@@ -2438,7 +2444,7 @@ func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
 		before := stateBytesOf(t, dir)
 		if _, err := engine.Submit(mismatched, fp); err == nil {
 			t.Fatalf("%s evidence accepted on an unaffiliated dispatch", name)
-		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), "issued for the unaffiliated") {
+		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), `issued for the "unaffiliated"`) {
 			t.Fatalf("%s mismatch code = %q (%v)", name, code, err)
 		}
 		if after := stateBytesOf(t, dir); string(before) != string(after) {
@@ -2956,6 +2962,11 @@ func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
 	if series := snap.State.ReviewSeries.ProductReview; series.FreshOwed || series.Effective.Status != "FAIL" {
 		t.Fatalf("the fresh round must discharge the obligation and block: %+v", series.Effective)
 	}
+
+	// 新鲜轮的未裁决 P1 跨候选阻塞聚合（refactor-plan/final-implementation-
+	// draft.md §4.4）：用户驳回后聚合在 rev-2 上直接 PASS，其后的 floor 轮
+	// 照常入账。
+	dismissSeriesFinding(t, engine, "req-atfloor-dismiss", review.ProductReview, carriers[0])
 
 	// 清偿后的 carry 新一轮：floor 派发携 rev-2 正常入账——effective 重投影
 	// PASS@rev-2、phase 推进 TECHNICAL_REVIEW。

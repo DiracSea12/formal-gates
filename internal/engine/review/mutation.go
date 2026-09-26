@@ -94,7 +94,7 @@ func BindReplacementDispatch(set Set, runID string, action Action, oldDispatchID
 
 // RecordCandidate 接纳一条完整、有效的语义审查结果：构造 finding 身份→查
 // 重→授权绑定（越过自动上限的结果必须携带绑定其 dispatch 的有效授权）→
-// 追加不可变候选→把 effective 重投影到新候选→刷新容量。RUNTIME_ERROR 等
+// 追加不可变候选→按全候选聚合重投影 effective→刷新容量。RUNTIME_ERROR 等
 // 非语义状态在此即被拒绝，根本不建账。
 func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, result Result, verification OperatorVerification) (Set, EffectiveStatus, error) {
 	series, err := set.seriesFor(action)
@@ -151,7 +151,7 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 			return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s result is not bound to a valid review authorization", action)
 		}
 		for _, recorded := range series.Authorizations[index].RecordedResultDigests {
-			if !resultExcluded(*series, recorded) {
+			if !ResultExcluded(*series, recorded) {
 				return Set{}, EffectiveStatus{}, fmt.Errorf("review: authorization %s already endorses a valid result", authorizationID)
 			}
 		}
@@ -177,7 +177,7 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 	series.RawCandidates = append(slices.Clone(series.RawCandidates), candidate)
 	// 新一轮审查重建本 series 自己的结论：上游失效标记随之清除。
 	series.UpstreamVoid = false
-	series.Effective = Effective(*series, candidate, series.Effective.Revision+1)
+	series.Effective = Effective(*series, series.Effective.Revision+1)
 	refresh(series)
 	carryDownstreamImpact(series, action, previousEffective)
 	return set, series.Effective, nil
@@ -246,9 +246,9 @@ func ApplyCorrection(set Set, runID, requirementRevision string, input Correctio
 	return set, nil
 }
 
-// invalidateResult 处理整轮失效：目标可为任意未被排除的候选；命中当前
-// effective 候选时投影回到 PENDING（保留指向证据的 digest），否则只推进投
-// 影代数。变更就地写入 series，返回回执与是否命中当前投影。
+// invalidateResult 处理整轮失效：目标可为任意未被排除的候选；命中最新
+// 候选（effective 绑定）时投影回到 PENDING（保留指向证据的 digest），否则
+// 对余下未排除证据重投影。变更就地写入 series，返回回执与是否命中当前投影。
 func invalidateResult(series *Series, runID string, candidate RawCandidate, input CorrectionInput, nextRevision int) (CorrectionReceipt, bool, error) {
 	invalidatesEffective := candidate.ResultDigest == series.Effective.ResultDigest
 	if input.FindingID != "" {
@@ -260,7 +260,7 @@ func invalidateResult(series *Series, runID string, candidate RawCandidate, inpu
 	if !validInvalidity(input.Invalidity) {
 		return CorrectionReceipt{}, false, fmt.Errorf("review: whole-result invalidation must classify invalidity as INVALID, INCOMPLETE, STALE, or MISBOUND")
 	}
-	if resultExcluded(*series, candidate.ResultDigest) {
+	if ResultExcluded(*series, candidate.ResultDigest) {
 		return CorrectionReceipt{}, false, fmt.Errorf("review: result %s is already invalidated", candidate.ResultDigest)
 	}
 	receipt := newCorrectionReceipt(runID, candidate, input, nextRevision, "VALID_RESULT:"+candidate.RawStatus, "INVALID_RESULT:"+input.Invalidity)
@@ -278,20 +278,22 @@ func invalidateResult(series *Series, runID string, candidate RawCandidate, inpu
 			DownstreamImpact:    downstreamImpact(input.Action),
 		}
 	} else {
-		series.Effective.Revision = nextRevision
+		previous := series.Effective
+		series.Effective = Effective(*series, nextRevision)
+		carryDownstreamImpact(series, input.Action, EffectiveStatus{Status: previous.Status, DownstreamImpact: previous.DownstreamImpact})
 	}
 	refresh(series)
 	return receipt, invalidatesEffective, nil
 }
 
-// correctFinding 处理 finding 级纠正：目标必须是当前 effective 候选且其需
-// 求 revision 等于当前需求 revision；首裁不得带 supersedes，后续纠正必须精
-// 确命中当前最新决定。变更就地写入 series。
+// correctFinding 处理 finding 级纠正：目标必须是未被整轮排除、且需求
+// revision 等于当前需求 revision 的候选；首裁不得带 supersedes，后续纠正
+// 必须精确命中当前最新决定。变更就地写入 series。
 func correctFinding(series *Series, runID, requirementRevision string, candidate RawCandidate, input CorrectionInput, previousStatus string, previousImpact []string, nextRevision int) error {
-	if candidate.ResultDigest != series.Effective.ResultDigest || candidate.RequirementRevision != requirementRevision {
-		return fmt.Errorf("review: correction is stale: the target must be the current effective result at the current requirement revision")
+	if candidate.RequirementRevision != requirementRevision {
+		return fmt.Errorf("review: correction is stale: the target must be a recorded candidate bound to the current requirement revision")
 	}
-	if resultExcluded(*series, candidate.ResultDigest) {
+	if ResultExcluded(*series, candidate.ResultDigest) {
 		return fmt.Errorf("review: result %s was invalidated as a whole; its findings can no longer be corrected", candidate.ResultDigest)
 	}
 	finding, ok := findingByID(candidate, input.FindingID)
@@ -333,7 +335,7 @@ func correctFinding(series *Series, runID, requirementRevision string, candidate
 			decisionValue(input.Decision, correctedSeverity(input, previousSeverity)),
 		))
 	}
-	series.Effective = Effective(*series, candidate, nextRevision)
+	series.Effective = Effective(*series, nextRevision)
 	if series.UpstreamVoid {
 		holdUpstreamVoid(series)
 	} else {
@@ -393,18 +395,18 @@ func ReleaseUpstreamVoid(set *Set) {
 		return
 	}
 	series.UpstreamVoid = false
-	if resultExcluded(*series, series.Effective.ResultDigest) {
+	if len(series.RawCandidates) == 0 {
+		// 无候选可重投影：解除失效标记后结论保持当前投影（PENDING——上
+		// 游结论重建不凭空制造本系列证据），只刷新容量投影。
+		refresh(series)
+		return
+	}
+	if ResultExcluded(*series, series.Effective.ResultDigest) {
 		series.Effective.Revision++
 		refresh(series)
 		return
 	}
-	for i := range series.RawCandidates {
-		candidate := series.RawCandidates[i]
-		if candidate.ResultDigest == series.Effective.ResultDigest {
-			series.Effective = Effective(*series, candidate, series.Effective.Revision+1)
-			break
-		}
-	}
+	series.Effective = Effective(*series, series.Effective.Revision+1)
 	refresh(series)
 }
 

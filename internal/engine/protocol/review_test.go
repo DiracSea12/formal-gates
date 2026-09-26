@@ -1821,13 +1821,20 @@ func TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted(t *testing.T)
 	// 语义 FAIL 两轮入账（completed 2、系列不结论、plain 链未就绪）：账
 	// 本欠轮提案逐轮回签首载体。
 	action := issueReady(t, engine)[0]
+	failRounds := []string{action}
 	for round := 1; round <= 2; round++ {
 		submitReviewResult(t, engine, "result-unmarked-fail-"+string(rune('0'+round)), action, blockingReviewEvidence(review.ProductReview, action, "round keeps failing"))
 		action = pendingActionID(t, engine)
+		failRounds = append(failRounds, action)
 	}
-	// 第 3 轮 PASS 入账：容量走满（completed 3），首过闩完成载体步——同
-	// 事务补位签发无标记的 plain.gate。
+	// 第 3 轮 PASS 入账：容量走满（completed 3）；前两轮的未处置 P1 跨候
+	// 选阻塞聚合（refactor-plan/final-implementation-draft.md §4.4），用户
+	// 驳回后聚合直接 PASS——首过闩完成载体步，同事务补位签发无标记的
+	// plain.gate。
 	submitReviewResult(t, engine, "result-unmarked-pass", action, reviewEvidence(review.ProductReview, action, "", "PASS", "round three passes", nil))
+	for index, failed := range failRounds[:2] {
+		dismissSeriesFinding(t, engine, "req-unmarked-dismiss-"+string(rune('0'+index+1)), review.ProductReview, failed)
+	}
 	snap := engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
 	if series.Completed != 3 || series.RemainingCapacity != 0 {
@@ -1842,6 +1849,42 @@ func TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted(t *testing.T)
 	if worker := engine.LoadMustSucceed(t).State.PendingActions[pendingActionID(t, engine)]; worker.Step != "plain.worker" || worker.ReviewSeries != "" {
 		t.Fatalf("the unmarked worker must issue while the series stays exhausted: %+v", worker)
 	}
+}
+
+// pendingActionOfStep 返回某步当前在途派发的身份（无在途派发时为空），
+// 供"未签出"负控断言读取。
+func pendingActionOfStep(t *testing.T, engine *Engine, step string) string {
+	t.Helper()
+	snap := engine.LoadMustSucceed(t)
+	for id, pending := range snap.State.PendingActions {
+		if pending.Step == step {
+			return id
+		}
+	}
+	return ""
+}
+
+// dismissSeriesFinding 以用户纠正驳回绑定到 dispatchID 的候选的首个
+// finding（REVIEW_FINDING_DECISION 决定）：聚合按 draft §4.4 重算，被驳回
+// 的 P0/P1 不再拦后续轮的 PASS。
+func dismissSeriesFinding(t *testing.T, engine *Engine, requestID string, action review.Action, dispatchID string) {
+	t.Helper()
+	snap := engine.LoadMustSucceed(t)
+	series, _ := snap.State.ReviewSeries.Series(action)
+	for _, candidate := range series.RawCandidates {
+		if candidate.DispatchID != dispatchID || len(candidate.Findings) == 0 {
+			continue
+		}
+		choice := AskOption{ID: AskOptionID("dismiss:" + candidate.Findings[0].ID), Label: "dismiss"}
+		askAndDecide(t, engine, ControlReviewFindingDecision, requestID, []AskOption{choice}, choice.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+			Action: action, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision,
+			ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
+			Decision: "DISMISS", Reason: "the round-one blocker is rejected after re-verification",
+			ExpectedEffectiveRevision: series.Effective.Revision,
+		}})
+		return
+	}
+	t.Fatalf("no candidate with findings bound to dispatch %s on %s: %+v", dispatchID, action, series.RawCandidates)
 }
 
 // invalidateRoundOf 整轮作废绑定到 dispatchID 的候选。
