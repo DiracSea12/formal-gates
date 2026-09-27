@@ -43,8 +43,9 @@ type CaseSet struct {
 	ReviewHistory []CaseReviewEvidence        `json:"reviewHistory,omitempty"`
 }
 type CaseReviewEvidence struct {
-	Manifest coverage.AcceptanceManifest `json:"manifest"`
-	Review   coverage.ReviewResult       `json:"review"`
+	Candidate string                      `json:"candidate,omitempty"`
+	Manifest  coverage.AcceptanceManifest `json:"manifest"`
+	Review    coverage.ReviewResult       `json:"review"`
 }
 type QASuggestion struct {
 	ID       string `json:"id"`
@@ -328,6 +329,22 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	return b
 }
 
+// A design obligation advances only after an accepted design result. Manifest
+// content, review rounds and failed execution attempts do not identify it.
+func (s *State) nextDesignScope(mode coverage.ReviewKind, cd *compiler.CompiledDefinition) string {
+	completed := 0
+	for _, result := range s.Results {
+		if result.Outcome != OutcomePass || result.Validation == nil || result.Validation.Status != "PASS" || result.Validation.Manifest == nil {
+			continue
+		}
+		key := result.Validation.Binding.Task
+		if s.validationRole(key, cd) == "engine.qa.design" && s.validationMode(key) == mode {
+			completed++
+		}
+	}
+	return fmt.Sprintf("%d:%s:%d", s.Validation.Generation, mode, completed+1)
+}
+
 func (s *State) projectValidationTasks(view *decision.State, cd *compiler.CompiledDefinition) {
 	if !pipelineEnabled(s, cd) {
 		return
@@ -359,13 +376,13 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		set := v.Sets[mode]
 		if set == nil {
 			if mode == coverage.ReviewBlackbox || v.AuthoringWorkspace != "" {
-				add("engine.qa.design", fmt.Sprintf("%d:%s:1", v.Generation, mode), false)
+				add("engine.qa.design", s.nextDesignScope(mode, cd), false)
 			}
 			continue
 		}
 		switch set.Status {
 		case "DRAFT", "THAWED":
-			add("engine.qa.design", fmt.Sprintf("%d:%s:%s", v.Generation, mode, set.Version), false)
+			add("engine.qa.design", s.nextDesignScope(mode, cd), false)
 		case "REVIEW":
 			add("engine.qa.review", fmt.Sprintf("%d:%s:%s:%d", v.Generation, mode, set.Version, len(set.ReviewHistory)+1), len(set.ReviewHistory) >= s.qaReviewLimit(mode) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
 		}

@@ -1300,8 +1300,8 @@ func qaConstString(t *testing.T, src, name string) string {
 // 与验收 3：阶段记录（与矩阵）引用的全部全哈希 git 对象真实存在；runId/SEALED/
 // currentSnapshot/baseSnapshot 与封板 JSON 一致并出现在对应阶段节；sealed commit
 // 的父提交声明与 git 历史一致、且等于 JSON baseSnapshot；黑盒用例交付物的行数
-// 声明与实际一致；阶段 0 契约常量与 envelope.go 一致、阶段 1 definition digest 与
-// identity_gen.go 常量及 definitions/workflow.json 复算值一致。
+// 声明与实际一致；阶段 0 契约常量与 envelope.go 一致；阶段 1 definition 身份与
+// sealed commit 的生成常量和制品一致；当前制品摘要与当前生成常量一致。
 func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 	records := loadRepoFileForMatrixTest(t, "refactor-plan/stage-records.md")
 	matrix := loadRepoFileForMatrixTest(t, "refactor-plan/route-matrix.md")
@@ -1383,12 +1383,38 @@ func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 		}
 	}
 
+	phase1 := qaLoadPhaseIdentity(t, ".gates/results/phase-1-decision-kernel.json")
+	sealedSrc := qaGitOutput(t, "show", phase1.CurrentSnapshot+":internal/engine/definition/identity_gen.go")
+	sealedDigest := qaConstString(t, sealedSrc, "WorkflowDefinitionDigest")
+	sealedVersion := qaConstString(t, sealedSrc, "WorkflowDefinitionVersion")
+	stage1 := qaStageSection(t, records, "## 阶段 1")
+	for _, needle := range []string{sealedDigest, `WorkflowDefinitionVersion = "` + sealedVersion + `"`, `version = "` + sealedVersion + `"`} {
+		if !strings.Contains(stage1, needle) {
+			t.Errorf("stage 1 section does not register the sealed definition identity %q from %s", needle, phase1.CurrentSnapshot)
+		}
+	}
+	cmd := exec.Command("git", "show", phase1.CurrentSnapshot+":definitions/workflow.json")
+	cmd.Dir = repoRootValidateTest(t)
+	sealedArtifact, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read sealed definition from %s: %v\n%s", phase1.CurrentSnapshot, err, sealedArtifact)
+	}
+	var sealedEnvelope struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(sealedArtifact, &sealedEnvelope); err != nil {
+		t.Fatalf("parse sealed definition from %s: %v", phase1.CurrentSnapshot, err)
+	}
+	if sealedEnvelope.Version != sealedVersion {
+		t.Errorf("sealed definition version %q does not match the generated constant %q at %s", sealedEnvelope.Version, sealedVersion, phase1.CurrentSnapshot)
+	}
+	sealedSum := sha256.Sum256(sealedArtifact)
+	if recomputed := "sha256:" + hex.EncodeToString(sealedSum[:]); recomputed != sealedDigest {
+		t.Errorf("sealed definition sha256 %s does not match the generated constant %s at %s", recomputed, sealedDigest, phase1.CurrentSnapshot)
+	}
+
 	genSrc := loadRepoFileForMatrixTest(t, "internal/engine/definition/identity_gen.go")
 	engineDigest := qaConstString(t, genSrc, "WorkflowDefinitionDigest")
-	stage1 := qaStageSection(t, records, "## 阶段 1")
-	if !strings.Contains(stage1, engineDigest) {
-		t.Errorf("stage 1 section does not register the engine definition digest %q", engineDigest)
-	}
 	artifactData, err := os.ReadFile(filepath.Join(repoRootValidateTest(t), "definitions", "workflow.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -1396,6 +1422,6 @@ func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 	sum := sha256.Sum256(artifactData)
 	recomputed := "sha256:" + hex.EncodeToString(sum[:])
 	if recomputed != engineDigest {
-		t.Errorf("definitions/workflow.json sha256 %s does not match the engine digest constant %s (stage-records claims the recomputed value agrees)", recomputed, engineDigest)
+		t.Errorf("definitions/workflow.json sha256 %s does not match the engine digest constant %s", recomputed, engineDigest)
 	}
 }

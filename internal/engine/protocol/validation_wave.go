@@ -42,6 +42,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		switch w.Status {
 		case "ADJUDICATING":
 			message = "submit per-finding ADJUDICATE observations"
+			if s.validationFindingsAdjudicated(w) && w.hasFailedQA() {
+				message = "QA failure remains unresolved; request QA_ARTIFACT_REPAIR or VALIDATION_DETAIL_DISPOSITION with a justified remedy"
+			}
 		case "COMPLETE":
 			message = "validation complete; candidate promotion provider is not installed"
 		}
@@ -200,6 +203,19 @@ func (s *State) validateFinalCoverage() error {
 
 // applyCandidateReceipt is the common settlement of immediate and held adapter
 // receipts. A receipt supplies observed facts for an already issued intent.
+func decodeCandidateEvidence(receipt HostActionReceipt) (CandidateEvidence, error) {
+	var evidence CandidateEvidence
+	if receipt.AdapterEvidence == nil {
+		return evidence, validationError("candidate receipt needs typed adapter evidence")
+	}
+	data, err := json.Marshal(receipt.AdapterEvidence.Values)
+	if err != nil {
+		return evidence, err
+	}
+	err = json.Unmarshal(data, &evidence)
+	return evidence, err
+}
+
 func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receipt HostActionReceipt) error {
 	if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
 		return nil
@@ -209,9 +225,8 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	if err := json.Unmarshal(data, &params); err != nil {
 		return err
 	}
-	var evidence CandidateEvidence
-	data, _ = json.Marshal(receipt.AdapterEvidence.Values)
-	if err := json.Unmarshal(data, &evidence); err != nil {
+	evidence, err := decodeCandidateEvidence(receipt)
+	if err != nil {
 		return err
 	}
 	if evidence.ParametersDigest != intent.PayloadDigest || evidence.Identity == "" || evidence.Digest == "" {
@@ -320,16 +335,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode) {
 		}
 		target.Task = s.validationRequiredTask(pipelineTask(e.cfg.Definition, handler, w.ID+":"+part), e.cfg.Definition)
 		if prior != nil && mode == "" {
-			for _, p := range prior.Targets {
-				if p.Gate == gate && p.Status == "PASS" && prior.Candidate == w.Candidate {
-					target.Status = "PASS"
-					target.ResultAction = p.ResultAction
-				}
-				if prior.Repair != nil && prior.Repair.PureP2 && prior.Repair.Evidence != nil && p.Gate == gate {
-					target.Status = "PASS"
-					target.ResultAction = prior.Repair.ResultAction
-				}
-			}
+			s.carryGateResult(target, prior, w.Candidate)
 		}
 		w.Targets[target.Task.String()] = target
 	}
@@ -341,6 +347,45 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode) {
 		Scope     coverage.ScopeMode
 	}{w.Candidate, w.Versions, w.RouteDigest, sortedTargetKeys(&w), scope})
 	v.Waves = append(v.Waves, w)
+}
+
+// A disposition applies to its candidate. P2 completion can carry only genuine
+// passes or failures whose verified problems were covered by that repair.
+func (s *State) carryGateResult(target *ValidationTarget, prior *ValidationWave, candidate coverage.ValidationCandidate) {
+	for _, previous := range prior.Targets {
+		if previous.Gate != target.Gate {
+			continue
+		}
+		if prior.Candidate == candidate && (previous.Status == "PASS" || previous.Status == "DISPOSED") {
+			target.Status = previous.Status
+			target.ResultAction = previous.ResultAction
+			target.DispositionReason = previous.DispositionReason
+			return
+		}
+		if prior.Repair == nil || !prior.Repair.PureP2 || prior.Repair.Evidence == nil {
+			return
+		}
+		if previous.Status == "PASS" {
+			target.Status = "PASS"
+			target.ResultAction = previous.ResultAction
+			return
+		}
+		if previous.Status != "FAIL" {
+			return
+		}
+		for _, finding := range s.Validation.Findings {
+			if finding.WaveID != prior.ID || finding.Target != previous.Task.String() || len(finding.History) == 0 {
+				continue
+			}
+			resolution := finding.History[len(finding.History)-1]
+			if resolution.Decision != "DISMISSED" && resolution.Severity == "P2" && slices.Contains(prior.Repair.Problems, resolution.ProblemID) {
+				target.Status = "PASS"
+				target.ResultAction = prior.Repair.ResultAction
+				return
+			}
+		}
+		return
+	}
 }
 
 func (e *Engine) adjudicateValidation(s *State, subject string, items []FindingResolution) error {
@@ -394,9 +439,31 @@ func (e *Engine) adjudicateValidation(s *State, subject string, items []FindingR
 	e.settleValidationWave(s)
 	return nil
 }
+func (w *ValidationWave) hasFailedQA() bool {
+	for _, target := range w.Targets {
+		if target.Kind == "QA" && target.Status == "FAIL" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) validationFindingsAdjudicated(w *ValidationWave) bool {
+	for _, finding := range s.Validation.Findings {
+		if finding.WaveID == w.ID && len(finding.History) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *State) validationDispositionReady(w *ValidationWave) bool {
+	return w != nil && (w.Status == "REPAIR" || w.Status == "ADJUDICATING" && w.hasFailedQA() && s.validationFindingsAdjudicated(w))
+}
+
 func (e *Engine) settleValidationWave(s *State) {
 	w := s.currentValidationWave()
-	if w == nil || w.Status != "ADJUDICATING" {
+	if w == nil || w.Status != "ADJUDICATING" || !s.validationFindingsAdjudicated(w) {
 		return
 	}
 	problems := []string{}
@@ -405,14 +472,14 @@ func (e *Engine) settleValidationWave(s *State) {
 		if f.WaveID != w.ID {
 			continue
 		}
-		if len(f.History) == 0 {
-			return
-		}
 		a := f.History[len(f.History)-1]
 		if a.Decision == "DISMISSED" {
 			continue
 		}
 		target := w.Targets[f.Target]
+		if target.Status == "DISPOSED" {
+			continue
+		}
 		obligation := target.Kind == "QA" && target.Status == "FAIL" || a.Severity == "P0" || a.Severity == "P1" || target.Kind == "GATE" && a.Severity == "P2"
 		if obligation {
 			if !slices.Contains(problems, a.ProblemID) {
@@ -425,6 +492,9 @@ func (e *Engine) settleValidationWave(s *State) {
 	}
 	slices.Sort(problems)
 	if len(problems) == 0 {
+		if w.hasFailedQA() {
+			return
+		}
 		w.Status = "COMPLETE"
 		w.Counted = s.validationWaveCountable(w)
 		return

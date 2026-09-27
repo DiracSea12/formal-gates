@@ -70,12 +70,11 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			v.AuthoringWorkspace = ""
 		case "engine.qa.design", "engine.qa.review":
 			if set := v.Sets[s.validationMode(key)]; set != nil {
-				set.Status = "DRAFT"
-				set.Candidate = ""
-				set.AffectedCases = nil
+				var affected []string
 				for _, c := range set.Manifest.Cases {
-					set.AffectedCases = append(set.AffectedCases, c.CaseID)
+					affected = append(affected, c.CaseID)
 				}
+				set.reopen(affected)
 			}
 		}
 	}
@@ -95,11 +94,11 @@ func (s *State) carryCaseBindings() {
 	for mode, set := range s.Validation.Sets {
 		set.Manifest.Binding = coverage.ManifestBinding{SourceBinding: contract.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
 		if err := s.validateManifest(mode, set.Manifest); err != nil {
-			set.Status = "DRAFT"
-			set.AffectedCases = nil
+			var affected []string
 			for _, c := range set.Manifest.Cases {
-				set.AffectedCases = append(set.AffectedCases, c.CaseID)
+				affected = append(affected, c.CaseID)
 			}
+			set.reopen(affected)
 		}
 		set.Version = digestOfCanonical(set.Manifest)
 		if set.Review != nil {

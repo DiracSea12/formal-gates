@@ -35,11 +35,14 @@ func caseReviewIdentity(m coverage.AcceptanceManifest, id string) string {
 		Edges []coverage.CoverageEdge
 	}{*item, steps, edges})
 }
-func inheritableCases(set *CaseSet) []string {
+func (s *State) inheritableCases(set *CaseSet) []string {
 	if len(set.ReviewHistory) == 0 {
 		return nil
 	}
 	prior := set.ReviewHistory[len(set.ReviewHistory)-1]
+	if set.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && !s.sameCandidateContent(prior.Candidate, set.Candidate) {
+		return nil
+	}
 	ids := []string{}
 	for _, d := range prior.Review.CaseDecisions {
 		if !slices.Contains(set.AffectedCases, d.ID) && d.Status == coverage.StatusPass && caseReviewIdentity(prior.Manifest, d.ID) == caseReviewIdentity(set.Manifest, d.ID) && caseReviewIdentity(set.Manifest, d.ID) != "" {
@@ -48,8 +51,8 @@ func inheritableCases(set *CaseSet) []string {
 	}
 	return ids
 }
-func validateReviewInheritance(set *CaseSet, result coverage.ReviewResult) error {
-	allowed := inheritableCases(set)
+func (s *State) validateReviewInheritance(set *CaseSet, result coverage.ReviewResult) error {
+	allowed := s.inheritableCases(set)
 	for _, d := range result.CaseDecisions {
 		if d.Inherited && (d.Status != coverage.StatusPass || !slices.Contains(allowed, d.ID)) {
 			return validationError("case approval cannot be inherited after an affected change: " + d.ID)
@@ -64,4 +67,32 @@ func validateReviewInheritance(set *CaseSet, result coverage.ReviewResult) error
 		}
 	}
 	return nil
+}
+
+// Whitebox approval covers the immutable test implementation as well as its
+// manifest. Equal content may have different provider-native identities.
+func (s *State) sameCandidateContent(previous, current string) bool {
+	if previous == "" || current == "" {
+		return false
+	}
+	if previous == current {
+		return true
+	}
+	var previousDigest, currentDigest string
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.candidate" || (receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled) {
+			continue
+		}
+		evidence, err := decodeCandidateEvidence(receipt)
+		if err != nil {
+			continue
+		}
+		if evidence.Identity == previous {
+			previousDigest = evidence.Digest
+		}
+		if evidence.Identity == current {
+			currentDigest = evidence.Digest
+		}
+	}
+	return previousDigest != "" && previousDigest == currentDigest
 }

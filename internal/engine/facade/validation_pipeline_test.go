@@ -186,12 +186,16 @@ func approvedReview(m coverage.AcceptanceManifest) coverage.ReviewResult {
 }
 func (d *validationDriver) reviewReady() {
 	d.t.Helper()
+	_, input := d.action("engine.qa.design")
+	d.reviewReadyWithManifest(simpleManifest(input))
+}
+func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
+	d.t.Helper()
 	dev, di := d.action("engine.development")
 	design, qi := d.action("engine.qa.design")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
 	}
-	m := simpleManifest(qi)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
 	reviewID, ri := d.action("engine.qa.review")

@@ -105,13 +105,24 @@ func reopenCases(set *CaseSet, ids []string) error {
 			return validationError("affected case is not in the manifest: " + id)
 		}
 	}
-	set.AffectedCases = slices.Clone(ids)
-	set.Status = "DRAFT"
-	set.Candidate = ""
+	set.reopen(ids)
 	return nil
 }
+
+// Reopening invalidates current approval; prior reviews remain inheritance evidence.
+func (set *CaseSet) reopen(ids []string) {
+	for _, id := range ids {
+		if !slices.Contains(set.AffectedCases, id) {
+			set.AffectedCases = append(set.AffectedCases, id)
+		}
+	}
+	set.Status = "DRAFT"
+	set.Review = nil
+	set.Candidate = ""
+}
+
 func freezeReviewed(set *CaseSet) {
-	if set.Review == nil || set.Review.SetStatus != coverage.StatusPass {
+	if (set.Status != "REVIEW" && set.Status != "SUGGESTIONS") || set.Review == nil || set.Review.SetStatus != coverage.StatusPass {
 		return
 	}
 	for _, sg := range set.Suggestions {
@@ -307,7 +318,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		if set == nil || count != 1 || p.Review == nil || set.Status != "REVIEW" || b.CaseVersion != set.Version {
 			return validationError("review does not bind an open case-set version")
 		}
-		if err := validateReviewInheritance(set, *p.Review); err != nil {
+		if err := s.validateReviewInheritance(set, *p.Review); err != nil {
 			return err
 		}
 		if err := s.validateCaseReview(mode, *p.Review); err != nil {
@@ -328,12 +339,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 			}{record.ActionID, i, sg.Message})
 			set.Suggestions = append(set.Suggestions, sg)
 		}
+		set.AffectedCases = nil
 		set.Review = p.Review
 		rawManifest := set.Manifest
 		rawManifest.Binding = record.Validation.Review.Binding
-		set.ReviewHistory = append(set.ReviewHistory, CaseReviewEvidence{Manifest: rawManifest, Review: *record.Validation.Review})
+		set.ReviewHistory = append(set.ReviewHistory, CaseReviewEvidence{Candidate: record.Validation.Binding.Candidate, Manifest: rawManifest, Review: *record.Validation.Review})
 		if p.Review.SetStatus == coverage.StatusFail {
-			set.Status = "DRAFT"
+			set.reopen(nil)
 		} else {
 			freezeReviewed(set)
 		}

@@ -44,19 +44,24 @@ func (s *State) ensureValidationAsk(r ValidationRequest, nextRevision uint64) bo
 	r.Summary = s.validationRequestBasis(r)
 	r.Digest = digestOfCanonical(r.Summary)
 	r.StateRevision = nextRevision
+	var superseded []string
 	for id, a := range s.PendingAsks {
 		if a.Control != ControlValidation || a.Validation == nil || a.Validation.Kind != r.Kind || a.Validation.Target != r.Target {
 			continue
 		}
+		if _, decided := s.Decisions[id]; decided && a.Validation.Digest == r.Digest {
+			return false
+		}
 		if a.Resolved {
-			if a.Validation.Digest == r.Digest {
-				return false
-			}
 			continue
 		}
 		if a.Validation.Digest == r.Digest && a.Validation.StateRevision >= nextRevision-1 {
 			return false
 		}
+		superseded = append(superseded, id)
+	}
+	for _, id := range superseded {
+		a := s.PendingAsks[id]
 		a.Resolved = true
 		s.PendingAsks[id] = a
 	}
@@ -95,13 +100,16 @@ func (e *Engine) acceptValidationRequest(s *State, r *ValidationRequest, nextRev
 	}
 	if copy.Kind == "VALIDATION_DETAIL_DISPOSITION" {
 		wave := s.currentValidationWave()
-		if wave == nil || wave.Status != "REPAIR" || wave.ID != copy.Target || len(copy.Remedies) < 2 {
+		if !s.validationDispositionReady(wave) || wave.ID != copy.Target || len(copy.Remedies) < 2 {
 			return nil, validationError("detail disposition requires adjudicated findings and multiple concrete remedies")
 		}
 		seen := map[string]bool{}
 		for _, remedy := range copy.Remedies {
 			if seen[remedy] || !slices.Contains([]string{"REPAIR", "QA_ARTIFACT_REPAIR", "REQUEST_REQUIREMENT_CHANGE", "DISMISS"}, remedy) {
 				return nil, validationError("invalid or duplicate remedy")
+			}
+			if remedy == "REPAIR" && wave.Repair == nil {
+				return nil, validationError("implementation repair requires a verified problem")
 			}
 			seen[remedy] = true
 		}
@@ -185,7 +193,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			return validationError("selected remedy is not in the bound offer")
 		}
 		w := s.currentValidationWave()
-		if w == nil || w.ID != r.Target || w.Status != "REPAIR" {
+		if !s.validationDispositionReady(w) || w.ID != r.Target {
 			return validationError("detail obligation is no longer current")
 		}
 		switch d.Remedy {
@@ -203,7 +211,15 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			id := fmt.Sprintf("requirement:%s:%d", w.ID, nextRevision)
 			s.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Options: []AskOption{{ID: requirementProceedOption, Label: "Confirm revised requirement"}, {ID: requirementAbortOption, Label: "Keep current requirement"}}}
 		case "DISMISS":
-			w.Status = "COMPLETE"
+			for _, finding := range s.Validation.Findings {
+				if finding.WaveID == w.ID {
+					target := w.Targets[finding.Target]
+					target.Status = "DISPOSED"
+					target.DispositionReason = d.Reason
+				}
+			}
+			w.Status = "ADJUDICATING"
+			e.settleValidationWave(s)
 			e.retireValidationWave(s, w.ID, "user dismissed the repair obligation: "+d.Reason)
 		}
 

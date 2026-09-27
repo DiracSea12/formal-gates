@@ -1,0 +1,121 @@
+package facade
+
+import (
+	"testing"
+
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
+)
+
+func (d *validationDriver) gateAction(gate string) (string, protocol.ValidationInput) {
+	d.t.Helper()
+	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	for _, target := range wave.Targets {
+		if target.Gate != gate {
+			continue
+		}
+		for id, input := range d.run.ValidationInputs {
+			if input.Binding.Task == target.Task {
+				return id, input
+			}
+		}
+	}
+	d.t.Fatalf("missing gate %s dispatch", gate)
+	return "", protocol.ValidationInput{}
+}
+
+func (d *validationDriver) disposeGate(gate string) {
+	d.t.Helper()
+	var target string
+	for i := 0; i < 2; i++ {
+		id, input := d.gateAction(gate)
+		target = input.Binding.Task.String()
+		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "INVALID"})
+		d.drive()
+	}
+	d.chooseValidation(protocol.ValidationRequest{Kind: "DISPOSE", Target: target}, "")
+}
+
+func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
+	for _, original := range []string{"PASS", "DISPOSED"} {
+		t.Run(original, func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox", "quality", "security")
+			d.reviewReady()
+			id, input := d.action("engine.qa.execution")
+			executed := executionFor(input)
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed, Tool: "app-v1", Environment: "isolated-project"})
+			id, input = d.gateAction("quality")
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "Output ordering differs from required ordering"}}})
+			if original == "PASS" {
+				id, input = d.gateAction("security")
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+			} else {
+				d.disposeGate("security")
+			}
+			var previous protocol.ValidationTarget
+			for _, target := range d.run.Validation.Waves[0].Targets {
+				if target.Gate == "security" {
+					previous = *target
+				}
+			}
+			var findingID string
+			for id := range d.run.Validation.Findings {
+				findingID = id
+			}
+			resolution := protocol.FindingResolution{FindingID: findingID, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run", Module: "output", RootCause: "ordering", Consequence: "limited output order mismatch", Severity: "P2", SeverityRationale: "input validation remains usable", Verification: review.FindingVerification{Scope: "confirmed requirement", Severity: "limited", Causality: "ordering logic", Reproduction: "app run", Classification: "implementation"}, Reason: "Verified the specific ordering defect"}
+			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.run.Validation.Waves[0].ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
+			d.drive()
+			id, input = d.action("engine.repair")
+			repairAction := id
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"full build passed"}, Tests: []string{"full tests passed"}, AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}})
+			d.materialize()
+			d.materialize()
+			d.reopen()
+			d.drive()
+			wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if wave.Scope != coverage.ScopeAffected || wave.Candidate == d.run.Validation.Waves[0].Candidate {
+				t.Fatal("fixture did not create the repaired candidate")
+			}
+			for _, target := range wave.Targets {
+				if target.Gate == "quality" && (target.Status != "PASS" || target.ResultAction != repairAction) {
+					t.Fatal("verified repaired P2 lost its completion evidence")
+				}
+				if target.Gate == "security" {
+					if original == "PASS" && (target.Status != "PASS" || target.ResultAction != previous.ResultAction) {
+						t.Fatal("genuine PASS did not retain its result identity")
+					}
+					if original == "DISPOSED" && target.Status != "PENDING" {
+						t.Fatal("old disposition authorized the new candidate")
+					}
+				}
+			}
+			if original == "DISPOSED" {
+				d.disposeGate("security")
+			}
+			id, input = d.action("engine.qa.execution")
+			executed = executionFor(input)
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed, Tool: "app-v1", Environment: "isolated-project"})
+			d.drive()
+			full := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if full.Scope != coverage.ScopeFull || full.Candidate != wave.Candidate {
+				t.Fatal("final FULL did not retain the affected candidate")
+			}
+			for _, target := range full.Targets {
+				if target.Gate == "security" {
+					if target.Status != original {
+						t.Fatalf("scope-only transition changed %s to %s", original, target.Status)
+					}
+					if original == "DISPOSED" && target.DispositionReason == "" {
+						t.Fatal("same-candidate disposition lost its reason")
+					}
+				}
+			}
+			for _, target := range d.run.Validation.Waves[0].Targets {
+				if target.Gate == "security" && *target != previous {
+					t.Fatal("carry rewrote original gate evidence")
+				}
+			}
+		})
+	}
+}

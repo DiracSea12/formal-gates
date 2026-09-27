@@ -437,3 +437,53 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 - 最终 `go vet ./internal/engine/... ./internal/cli/... ./internal/requirement/... ./cmd/...`、55 个变更 Go 文件 gofmt 检查、`git diff --check` 通过。definition 生成物新鲜度包含在 definition 包回归中。
 
 未执行 R4 guard/cost bridge、R5 真实 Git provider/promotion、真实外部模型/宿主 canary、进程 kill 全矩阵或 Seal。测试中 adapter/worker 是输入身份明确的协议夹具。当前交付到验证完成和待 promotion 的明确边界；没有推送。
+
+## 验证生命周期返修合同（2026-09-27）
+
+用户明确要求将全部代码要求作为硬标准并立即返修。当前基线为 `3b8bb58`。上一次“从根因解决、不叠补丁”的通过结论被本次公开路径反例推翻，不再作为验收依据。全仓回归另有 validate 的阶段记录 identity 不匹配和 harness 超时；须分别核验，不混同为四项业务问题。
+
+设计依据原文：AGENTS.md“调用轮次、任务代次、重试次数、业务返修轮次是四个概念，各有权威事实源，不得互相冒用或合并计数”；“正常执行与崩溃恢复共用同一业务处理与接纳路径”；start-readiness.md“是否有更简单的既有归属者或原生能力可用，以及它是否是足够且最简的做法”。据此，开发先核对任务身份、Ask 生命周期、QA 完成条件和角色输入四处归属及受影响入口，复用已有事实表达修正，不预设新增计数器、账本或通用框架。沿用本期确认的 state.json 唯一状态投影。
+
+硬验收条件：
+- 白盒测试实现变化而 manifest 不变时，每次合法设计返修可派发；任务代次、有限 attempt 和语义审查额度分别受既有规则约束。
+- 当前仍有效的 RETRY 等授权请求可在独立分支推进后得到新鲜展示和批准；旧请求不能授权，新请求不会被自动替代记录当作已处置；一次追加额度不扩张。
+- finding 驳回不消除独立 QA FAIL；合法 QA 更正/重跑或显式处置沿现有路径闭合，没有未解决 QA 失败的候选才能完成。不得为方便要求无意义生产返修。
+- gate 输入满足主需求 §8.3.5 的隔离；各角色仅携带其职责需要的现有契约信息，QA 所需覆盖与执行绑定仍完整。
+- 逐项核验全部代码要求：正确性、需求完整性、质量、简洁、耦合、维护性、可读性、设计一致性、不当硬编码/窄逻辑/过拟合、过度设计/防御/抽象、测试与业务隔离。每项须给当前实现或测试证据；没有验证不能填通过。
+- 删除被替代路径；跨正常执行、必要的重复/并行与恢复边界验证同一业务不变量；测试命名去过程化，诚实失败记录，不反改需求期望。
+
+派发给同一开发代理连续返工，设计事实先由主代理核验再实施；独立审查不接收开发者通过结论。主代理承担独立复现、代码与标准验收、记账。禁止 push，禁止真实模型/宿主 canary。候选来源参数建议尚未证实缺陷，不纳入功能扩展。
+
+### 验证生命周期返修与独立复核
+
+本次主代理把代码要求的验收执行写入 AGENTS.md：功能通过不能替代逐项工程核验；设计先明确业务不变量、事实归属和相关入口；新增状态/抽象须解释既有能力不足；被替代路径须删除；未验证不得记通过。开发代理在方案经主代理核验后实施，主代理没有直接修改业务源码。
+
+已实现并通过公开路径核实的归属修正：
+1. 设计义务身份从已接纳的有效 design Results 推导，manifest 版本、ReviewHistory 和 Attempt 分别保留内容、语义审查和执行重试的含义。
+2. 自动 Ask 是否已有用户处置以 Decisions 为事实源；自动替代的 Resolved 记录不阻止新鲜授权，旧 token/revision 仍拒绝，同 TaskKey 只追加一次。
+3. finding 驳回与 QA 执行义务分别核算；未解决 QA FAIL 保持待处置，授权更正走设计/审查/新候选/重跑，显式豁免保留 DISPOSED、原因和原始失败证据。
+4. ValidationInputs 根据既有 handler 投影；门保留需求和候选绑定，移除 QA 用例正文，QA 保留覆盖和执行所需材料。
+5. 所有集合重开入口集中到 CaseSet.reopen，失效当前审批、保留历史审批，累积尚未消化的影响；只有新审查接纳后消化影响，建议 DEFER/DECLINE 不能覆盖重新设计义务。
+6. 白盒审批历史补充原签发 Candidate 关联，内容等价只复用已有已接纳 candidate 回执 Identity/Digest；不把 TestRef 相同当作测试实现未变，不增加第二摘要账本。
+7. gate carry 集中判定：同候选保留真实 PASS/DISPOSED；新候选只有真实 PASS 或该目标已完成的 P2 修复可继承 PASS，其余保持待执行。
+
+第 5–7 项来自本次全新零上下文审查；主代理逐项独立复现后交回开发。其中白盒探针用真实 tree 摘要和实际 go test 证明共享测试修改导致原用例 PASS→FAIL；不能以不同 native identity 单独推定内容变化。多条建议覆盖未完成影响的问题由同一重开归属一并修复。测试前置曾有 manifest oracle 与执行描述不一致，已要求真实提交 exit-1 oracle 后再观察 exit-2，原断言未降低。
+
+另两项全仓失败已查明并处理：历史阶段记录错误绑定当前 definition，现从阶段 1 sealed ref 核实历史 version 2/digest，并保留当前制品的独立复算；harness 命中 ignored 的旧本地二进制，其公开 supervise 命令不受支持。主代理核对普通文件/无链接后备份到 `/tmp/validation-obligation-oracle/local-binary-before-rebuild`，按当前源码构建本地 .harness/bin/formal-gates。HEAD 与基线的隔离源码构建均通过取消/退出码对照；未修改 harness 运行逻辑或增加超时，未修改固定全局安装。
+
+独立审查结论 PASS，覆盖 7eb32e8 到本次冻结工作区的完整交付源码、开发者测试及必要文档；按合同排除 .gates/results 正文和独立 whitebox_qa 用例正文。原始独立探针在 `/tmp/validation-contract-review.Jp8kso/`。主代理另外合并九个公开路径探针独立执行，全 PASS（17.499s），含并行授权/重开、QA artifact 更正完整链、门输入、第三次白盒设计、checkpoint、P2 AFFECTED/最终 FULL 以及三项新增反例；日志 `/tmp/validation-obligation-oracle/final-independent-probes.log`。
+
+| 硬标准 | 核验结果与证据 |
+|---|---|
+| 正确性、需求完整性 | 原始四项及复审三类公开反例均已修复，失败证据先留存；最终独立 probe PASS，独立审查核对覆盖/冻结/wave/裁决/有限重试/需求变化接缝 |
+| 质量、简洁、低耦合 | 复用 Results、Decisions、ReviewHistory、HostActionReceipts；领域变换集中，无新增通用状态机、缓存或影响分析平台 |
+| 维护性、可读性、设计一致性 | 重开、冻结、继承有明确归属；正常接纳与恢复共用原路径；实际新建字段只为不可变审查证据关联原候选 |
+| 无不当硬编码、窄逻辑、过拟合 | 未按 case/gate 名称放行；实际正负内容、不同身份同内容、三类自动授权、多建议及同/异候选处置均有行为对照 |
+| 无过度设计、防御、抽象 | 未建立平行账本或兜底旁路；仅增加已有领域不变量所需判据与候选证据关联 |
+| 测试不污染业务、夹具诚实 | 模拟树与子进程测试仅在测试文件；生产不识别探针；真实内容变化可使 TestNegative 失败，不同 native identity 同内容仍能继承 |
+| 根因修正、删除被替代路径 | 删除内容版本充当设计身份、Resolved充当决定、零problem直接完成、无条件QA正文、各处手写重开和无资格gate carry等路径 |
+| 历史准确性与验证纪律 | 阶段记录绑定实际sealed提交；保留当前生成物检查；失败、未执行与验证范围分别记录 |
+
+测试与范围：全仓 `go test ./... -count=1` 已退出 0（CLI 127.781s、harness 420.231s、validate 431.302s），原始日志 `/tmp/validation-obligation-oracle/full-suite.log`。该命令在最初四项修订冻结时启动，之后新增集合/继承/carry修正另做最终受影响包验证，不把较早全仓执行冒充最终所有源码的同次执行。最终 14 个变更 Go 文件 gofmt 检查和 git diff --check 通过。最终受影响包与 vet 完成结果接下条记录。没有 push，没有真实模型/宿主 canary，没有实际 provider/promotion 或整阶段 Seal 声明。
+
+最终冻结后的受影响包 `go test ./internal/engine/protocol ./internal/engine/facade ./internal/engine/whitebox_qa ./internal/cli -count=1` 全 PASS（63.177s / 39.791s / 17.723s / 105.100s），日志 `/tmp/validation-obligation-oracle/final-affected-packages.log`。最终 `go vet ./internal/engine/... ./internal/validate/... ./cmd/...` 退出 0（`final-vet.log`）；历史记录单测由主代理独立复跑 PASS（`stage-records-verified.log`）。本次验收所发现的范围内缺陷和工程准则违反均已闭合；此结论保留上述明确的交付及验证范围。
