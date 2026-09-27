@@ -15,7 +15,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/definition"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // TestAcceptanceRegistryCompleteness：registry 三类失败全拒；完整解析才产出

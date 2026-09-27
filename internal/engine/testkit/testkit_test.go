@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 )
 
 func fixtureWithAction(t *testing.T) (*ProtocolFixture, string) {
@@ -141,7 +142,7 @@ func TestSubmitResponseLossIsIdempotent(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 	fixture.Faults.Arm(persistence.FaultSubmitResponseLost)
-	acceptance, err := fixture.Worker.Result(actionID, protocol.OutcomePass, "sha256:result", "")
+	acceptance, err := fixture.Worker.ReviewResult(actionID, review.ProductReview, "sha256:result")
 	if !errors.Is(err, ErrInjected) || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("response-loss result=%+v err=%v", acceptance, err)
 	}
@@ -149,7 +150,7 @@ func TestSubmitResponseLossIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary before retry: %v", err)
 	}
-	retry, err := fixture.Worker.Result(actionID, protocol.OutcomePass, "sha256:result", "")
+	retry, err := fixture.Worker.ReviewResult(actionID, review.ProductReview, "sha256:result")
 	if err != nil {
 		t.Fatalf("result retry: %v", err)
 	}

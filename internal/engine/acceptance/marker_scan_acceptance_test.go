@@ -21,9 +21,9 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 func TestAcceptanceMarkerScan(t *testing.T) {

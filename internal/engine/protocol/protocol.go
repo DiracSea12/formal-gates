@@ -158,6 +158,10 @@ type PlanIdentity struct {
 // （QUEUED/ISSUED/...）不在本结构重复维护——权威投影就是内嵌
 // decision.State 的 Tasks 视图。
 type Attempt struct {
+	Business       bool         `json:"business,omitempty"`
+	AwaitingResult bool         `json:"awaitingResult,omitempty"`
+	PreviousAction string       `json:"previousAction,omitempty"`
+	Work           *WorkBinding `json:"work,omitempty"`
 	decision.IssuedAction
 	ID       string          `json:"id"`
 	Bindings AttemptBindings `json:"bindings"`
@@ -192,10 +196,11 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
-	RequestID string           `json:"requestId"`
-	Control   ControlKind      `json:"control"`
-	Step      authoring.StepID `json:"step,omitempty"`
-	Options   []AskOption      `json:"options"`
+	Validation *ValidationRequest `json:"validation,omitempty"`
+	RequestID  string             `json:"requestId"`
+	Control    ControlKind        `json:"control"`
+	Step       authoring.StepID   `json:"step,omitempty"`
+	Options    []AskOption        `json:"options"`
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
@@ -250,6 +255,7 @@ type SpawnReceipt struct {
 // 暂存复用同一形态）。Review 非空时是审查派发的语义证据：随结果接纳交
 // review 内核记账，并随回执字节一并参与幂等/冲突判定。
 type WorkerResult struct {
+	Validation    *ValidationResult      `json:"validation,omitempty"`
 	ActionID      string                 `json:"actionId"`
 	Provider      string                 `json:"provider"`
 	Outcome       string                 `json:"outcome"`
@@ -451,6 +457,10 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	Validation       *Validation                 `json:"validation,omitempty"`
+	DispatchBindings map[string]WorkBinding      `json:"dispatchBindings,omitempty"`
+	EndedAttempts    map[runtime.TaskKey]Attempt `json:"endedAttempts,omitempty"`
+	RejectedResults  map[string]RejectedResult   `json:"rejectedResults,omitempty"`
 	decision.State
 	// Run metadata is owned by the engine façade but persisted with the same
 	// authoritative state document so a read never needs a second workflow
@@ -562,6 +572,7 @@ type TopologyBinding struct {
 // 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
 // 代数（单调，防篡改链的一环）。
 type ConfirmedRevision struct {
+	Coverage       *CoverageInventory        `json:"coverage,omitempty"`
 	Revision       string                    `json:"revision"`
 	DeltaDigest    string                    `json:"deltaDigest,omitempty"`
 	BaseRevision   string                    `json:"baseRevision,omitempty"`
@@ -603,17 +614,18 @@ const (
 // host.  It is deliberately data-only: validation and canonical digesting are
 // performed by the façade before Engine.Init writes anything.
 type IntakeConfirmationReceipt struct {
-	Source              string           `json:"source"`
-	Authority           IntakeAuthority  `json:"authority"`
-	Transport           IntakeTransport  `json:"transport"`
-	RequirementSource   string           `json:"requirementSource"`
-	RequirementRevision string           `json:"requirementRevision"`
-	Artifacts           []IntakeArtifact `json:"artifacts"`
-	SolutionRevision    string           `json:"solutionRevision"`
-	SolutionDigest      string           `json:"solutionDigest"`
-	ConfirmedAt         string           `json:"confirmedAt,omitempty"`
-	ExpiresAt           string           `json:"expiresAt,omitempty"`
-	Digest              string           `json:"digest,omitempty"`
+	Coverage            *CoverageInventory `json:"coverage,omitempty"`
+	Source              string             `json:"source"`
+	Authority           IntakeAuthority    `json:"authority"`
+	Transport           IntakeTransport    `json:"transport"`
+	RequirementSource   string             `json:"requirementSource"`
+	RequirementRevision string             `json:"requirementRevision"`
+	Artifacts           []IntakeArtifact   `json:"artifacts"`
+	SolutionRevision    string             `json:"solutionRevision"`
+	SolutionDigest      string             `json:"solutionDigest"`
+	ConfirmedAt         string             `json:"confirmedAt,omitempty"`
+	ExpiresAt           string             `json:"expiresAt,omitempty"`
+	Digest              string             `json:"digest,omitempty"`
 }
 
 // IntakeReceipt is the first-drive durable projection of the exact
@@ -648,6 +660,15 @@ func (s *State) UnmarshalJSON(data []byte) error {
 }
 
 func (s *State) normalizeCollections() {
+	if s.DispatchBindings == nil {
+		s.DispatchBindings = map[string]WorkBinding{}
+	}
+	if s.EndedAttempts == nil {
+		s.EndedAttempts = map[runtime.TaskKey]Attempt{}
+	}
+	if s.RejectedResults == nil {
+		s.RejectedResults = map[string]RejectedResult{}
+	}
 	if s.Completed == nil {
 		s.Completed = []authoring.StepID{}
 	}

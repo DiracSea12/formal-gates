@@ -79,16 +79,24 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
-	RunID                     string                     `json:"runId"`
-	Runtime                   string                     `json:"runtime"`
-	Route                     string                     `json:"route"`
-	Status                    string                     `json:"status"`
-	Revision                  uint64                     `json:"revision"`
-	Envelope                  Envelope                   `json:"envelope"`
-	IntakeConfirmationReceipt *IntakeConfirmationReceipt `json:"intakeConfirmationReceipt,omitempty"`
-	IntakeReceipt             *IntakeReceipt             `json:"intakeReceipt,omitempty"`
-	Next                      decision.NextResult        `json:"next"`
-	AvailableActions          []string                   `json:"availableActions,omitempty"`
+	ValidationInputs          map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
+	Attempts                  map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
+	PendingActions            map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
+	RejectedResults           map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
+	Validation                *protocol.Validation                 `json:"validation,omitempty"`
+	DispatchBindings          map[string]protocol.WorkBinding      `json:"dispatchBindings,omitempty"`
+	AdapterIntents            map[string]protocol.HostActionIntent `json:"adapterIntents,omitempty"`
+	EndedAttempts             map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
+	RunID                     string                               `json:"runId"`
+	Runtime                   string                               `json:"runtime"`
+	Route                     string                               `json:"route"`
+	Status                    string                               `json:"status"`
+	Revision                  uint64                               `json:"revision"`
+	Envelope                  Envelope                             `json:"envelope"`
+	IntakeConfirmationReceipt *IntakeConfirmationReceipt           `json:"intakeConfirmationReceipt,omitempty"`
+	IntakeReceipt             *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
+	Next                      decision.NextResult                  `json:"next"`
+	AvailableActions          []string                             `json:"availableActions,omitempty"`
 	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
 	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
 	Review ReviewFace `json:"review"`
@@ -124,6 +132,7 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
+	Validation *protocol.ValidationRequest  `json:"validation,omitempty"`
 	RoundGrant *protocol.ReviewGrantRequest `json:"roundGrant,omitempty"`
 	RequestID  string                       `json:"requestId"`
 	Control    protocol.ControlKind         `json:"control"`
@@ -417,8 +426,8 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if strings.TrimSpace(req.Route) == "" {
 		req.Route = "lightweight"
 	}
-	if req.Route != "lightweight" {
-		return nil, Run{}, fmt.Errorf("engine start: route %q is unsupported in phase 3", req.Route)
+	if req.Route != "lightweight" && req.Route != "regular" {
+		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
 	}
 	if strings.TrimSpace(req.Provider) == "" {
 		req.Provider = DefaultProvider
@@ -789,7 +798,27 @@ func (f *Facade) project() (Run, error) {
 			return Run{}, intentErr
 		}
 	}
-	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, Review: reviewFace(snap.State), SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
+	run := Run{
+		ValidationInputs: snap.State.ValidationInputs(f.definition),
+		Attempts:         snap.State.Attempts,
+		PendingActions:   snap.State.PendingActions,
+		RejectedResults:  snap.State.RejectedResults,
+		Validation:       snap.State.Validation,
+		DispatchBindings: snap.State.DispatchBindings,
+		AdapterIntents:   snap.State.PendingHostActions,
+		EndedAttempts:    snap.State.EndedAttempts,
+		RunID:            f.runID,
+		Runtime:          RuntimeEngine,
+		Route:            snap.State.Route,
+		Status:           status,
+		Revision:         snap.Revision,
+		Envelope:         f.envelope,
+		Next:             plan.Next,
+		Review:           reviewFace(snap.State),
+		SummaryPath:      filepath.Join(f.stateDir, "terminal-summary.json"),
+		Unverified:       snap.State.Route == "lightweight",
+	}
+
 	run.RequirementWork = work
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
@@ -851,6 +880,7 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
+			Validation: ask.Validation,
 			RequestID:  id,
 			RoundGrant: ask.RoundGrant,
 			Control:    ask.Control,
@@ -1062,15 +1092,16 @@ func IntakeDigest(receipt IntakeConfirmationReceipt) (string, error) {
 	// bindings. Excluding them keeps the digest stable when a receipt is
 	// replayed and makes ConfirmedAt/ExpiresAt non-authoritative as required.
 	canonical := struct {
-		Source              string           `json:"source"`
-		Authority           IntakeAuthority  `json:"authority"`
-		Transport           IntakeTransport  `json:"transport"`
-		RequirementSource   string           `json:"requirementSource"`
-		RequirementRevision string           `json:"requirementRevision"`
-		Artifacts           []IntakeArtifact `json:"artifacts"`
-		SolutionRevision    string           `json:"solutionRevision"`
-		SolutionDigest      string           `json:"solutionDigest"`
-	}{receipt.Source, receipt.Authority, receipt.Transport, receipt.RequirementSource, receipt.RequirementRevision, receipt.Artifacts, receipt.SolutionRevision, receipt.SolutionDigest}
+		Coverage            *protocol.CoverageInventory `json:"coverage,omitempty"`
+		Source              string                      `json:"source"`
+		Authority           IntakeAuthority             `json:"authority"`
+		Transport           IntakeTransport             `json:"transport"`
+		RequirementSource   string                      `json:"requirementSource"`
+		RequirementRevision string                      `json:"requirementRevision"`
+		Artifacts           []IntakeArtifact            `json:"artifacts"`
+		SolutionRevision    string                      `json:"solutionRevision"`
+		SolutionDigest      string                      `json:"solutionDigest"`
+	}{receipt.Coverage, receipt.Source, receipt.Authority, receipt.Transport, receipt.RequirementSource, receipt.RequirementRevision, receipt.Artifacts, receipt.SolutionRevision, receipt.SolutionDigest}
 	data, err := json.Marshal(canonical)
 	if err != nil {
 		return "", err

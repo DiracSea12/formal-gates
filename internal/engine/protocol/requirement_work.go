@@ -169,7 +169,7 @@ func (e *Engine) validateRequirementWork(state *State, decisions []RequirementWo
 }
 
 func sameRequirementPackage(a, b RequirementDecisionPackage) bool {
-	return a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
+	return digestOfCanonical(a.Coverage) == digestOfCanonical(b.Coverage) && a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
 		a.Source == b.Source && a.Classification == b.Classification && a.RedoProductReview == b.RedoProductReview &&
 		a.RedoStartReadiness == b.RedoStartReadiness && a.RedoTopology == b.RedoTopology && a.RedoRoute == b.RedoRoute &&
 		a.FindingDigest == b.FindingDigest && slices.Equal(a.WorkDecisions, b.WorkDecisions)
@@ -246,6 +246,7 @@ func (s *State) requiredWorkTasks() []runtime.TaskKey {
 
 func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDecision, requestID string) error {
 	entry := state.RequirementRevisions[len(state.RequirementRevisions)-1]
+	e.invalidateValidationWork(state, choices)
 	for i, choice := range choices {
 		if choice.Disposition == RequirementWorkCarry {
 			continue

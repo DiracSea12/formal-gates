@@ -15,11 +15,11 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 const (
@@ -1291,7 +1291,11 @@ func runResultBeforeReceipt(report *HarnessReport, fixture *ProtocolFixture) err
 		return err
 	}
 	actionID := first(actions)
-	staged, err := fixture.Worker.ResultEvent("result-before-receipt", actionID, protocol.OutcomePass, "sha256:staged", "")
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return err
+	}
+	staged, err := fixture.Worker.ResultEventFor("result-before-receipt", actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:staged")
 	if err != nil {
 		return err
 	}
@@ -2402,47 +2406,51 @@ func runTransientRetryRouting(report *HarnessReport, options HarnessOptions) err
 		return fmt.Errorf("testkit: retry fixture did not expose a positive compiled maxAttempts")
 	}
 	retrySequence := make([]int, 0, max)
+	initialAction := actionID
+	newSpawns := 0
 	for i := 1; i <= max; i++ {
-		accepted, resultErr := fixture.Worker.ResultEvent(protocol.EventID(fmt.Sprintf("failure-routing-result-%d", i)), actionID, protocol.OutcomeRuntimeError, fmt.Sprintf("sha256:retry-%d", i), authoring.FailureTransientEngine)
-		if resultErr != nil {
-			return resultErr
+		accepted, err := fixture.Worker.ResultEvent(protocol.EventID(fmt.Sprintf("failure-routing-result-%d", i)), actionID, protocol.OutcomeRuntimeError, fmt.Sprintf("sha256:retry-%d", i), authoring.FailureTransientEngine)
+		if err != nil {
+			return err
 		}
 		report.Acceptances = append(report.Acceptances, accepted)
-		current, loadErr := fixture.Engine.Load()
-		if loadErr != nil {
-			return loadErr
+		current, err := fixture.Engine.Load()
+		if err != nil {
+			return err
 		}
-		for _, attempt := range current.State.Attempts {
-			retrySequence = append(retrySequence, attempt.Attempts)
-			break
+		key := runtime.TaskKey{Node: "retry", Step: "retry.worker"}
+		attempt, active := current.State.Attempts[key]
+		if !active {
+			attempt = current.State.EndedAttempts[key]
 		}
-		if accepted.RecoveryAction == string(protocol.RecoveryWait) {
-			if len(current.State.RecoveryRecords) == 0 {
-				return fmt.Errorf("testkit: retry exhaustion accepted without a durable recovery record")
-			}
+		retrySequence = append(retrySequence, attempt.Attempts)
+		if attempt.RetryExhausted {
 			latest := current.State.RecoveryRecords[len(current.State.RecoveryRecords)-1]
-			plan := protocol.RecoveryPlan{Class: latest.Class, Action: latest.Action, Detail: latest.Detail, LifecycleMatches: latest.LifecycleMatches}
-			if len(report.RecoveryPlan) > 0 {
-				report.RecoveryPlan[len(report.RecoveryPlan)-1] = plan
-			} else {
-				report.RecoveryPlan = append(report.RecoveryPlan, plan)
-			}
-			report.Next = append(report.Next, NextRecord{Kind: decision.KindWait, Payload: decision.WaitPayload{Reason: decision.WaitTasksInFlight}})
-			report.Metadata["retryPolicyMaxAttempts"] = current.State.Attempts[runtime.TaskKey{Node: "retry", Step: "retry.worker"}].MaxAttempts
-			report.Metadata["retryAttemptsExhausted"] = current.State.Attempts[runtime.TaskKey{Node: "retry", Step: "retry.worker"}].Attempts
+			report.RecoveryPlan = []protocol.RecoveryPlan{{Class: latest.Class, Action: latest.Action, Detail: latest.Detail}}
+			report.Next = append(report.Next, NextRecord{Kind: decision.KindWait, Payload: decision.WaitPayload{Reason: decision.WaitCapacity}})
+			report.Metadata["retryPolicyMaxAttempts"] = attempt.MaxAttempts
+			report.Metadata["retryAttemptsExhausted"] = attempt.Attempts
 			report.Metadata["retryAttemptSequence"] = retrySequence
 			report.Metadata["finalFailureKind"] = string(latest.Class)
 			report.Metadata["recoveryAction"] = string(latest.Action)
 			break
 		}
+		if !active || attempt.ActionID == actionID {
+			return fmt.Errorf("testkit: failed execution was not replaced")
+		}
+		actionID = attempt.ActionID
+		spawned, err := fixture.Host.SpawnEvent(protocol.EventID(fmt.Sprintf("retry-spawn-%d", i)), actionID, fmt.Sprintf("retry-agent-%d", i), protocol.SpawnStatusSpawned)
+		if err != nil {
+			return err
+		}
+		report.Acceptances = append(report.Acceptances, spawned.Acceptance)
+		newSpawns++
 	}
-	initialSpawnCalls := fixture.Host.SpawnCalls(actionID)
-	// `spawn` is reserved for new retry dispatches. The one setup spawn is
-	// exposed separately so exhaustion proves that no replacement dispatch was
-	// created while retaining the observable fixture side effect count.
+	initialSpawnCalls := fixture.Host.SpawnCalls(initialAction)
 	report.Metadata["initialSpawn"] = initialSpawnCalls
-	report.Metadata["newSpawns"] = 0
-	report.SideEffects = map[string]int{"spawn": 0, "initialSpawn": initialSpawnCalls}
+	report.Metadata["newSpawns"] = newSpawns
+	report.SideEffects = map[string]int{"spawn": newSpawns, "initialSpawn": initialSpawnCalls}
+
 	if snapshot, loadErr := fixture.Engine.Load(); loadErr == nil {
 		report.Snapshot = &snapshot
 		report.Summary, _ = Summarize(fixture.Engine)

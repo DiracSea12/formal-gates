@@ -91,7 +91,7 @@ func TestPhase3FacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 			return req
 		}, want: "run id"},
 		{name: "unsupported route", mutate: func(req facade.StartRequest, _ *facade.StartOptions) facade.StartRequest {
-			req.Route = "regular"
+			req.Route = "unrecognized"
 			return req
 		}, want: "unsupported"},
 		{name: "negative capacity", mutate: func(req facade.StartRequest, options *facade.StartOptions) facade.StartRequest {

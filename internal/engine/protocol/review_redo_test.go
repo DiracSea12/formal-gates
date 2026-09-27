@@ -42,12 +42,16 @@ func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
 						t.Fatal(err)
 					}
 					accepted, err := engine.Submit(event, fingerprintOf(t, engine))
-					if err != nil || accepted.RecoveryAction != string(RecoveryResumeAttempt) {
+					if err != nil || accepted.Status != OutcomeRuntimeError {
 						t.Fatalf("transient failure = %+v, %v", accepted, err)
 					}
 					if attempt := engine.LoadMustSucceed(t).State.Attempts[original.Task]; attempt.Attempts != 1 {
 						t.Fatalf("fixture did not consume a retry: %+v", attempt)
 					}
+				}
+				if usedRetry {
+					old = pendingActionID(t, engine)
+					submitSpawnReceipt(t, engine, "redo-retry-spawn", old)
 				}
 				if terminal {
 					terminalizeDispatchTask(t, engine, old)

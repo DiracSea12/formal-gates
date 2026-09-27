@@ -382,7 +382,7 @@ func TestHarnessFailureRoutingTransientExhaustionWaits(t *testing.T) {
 	if len(report.Next) != 1 || report.Next[0].Kind != decision.KindWait {
 		t.Fatalf("transient Next records = %+v, want one WAIT record", report.Next)
 	}
-	if report.SideEffects["spawn"] != 0 || report.SideEffects["initialSpawn"] != 1 || report.Metadata["newSpawns"] != 0 {
+	if report.SideEffects["spawn"] != 2 || report.SideEffects["initialSpawn"] != 1 || report.Metadata["newSpawns"] != 2 {
 		t.Fatalf("transient spawn accounting = sideEffects=%+v metadata=%+v", report.SideEffects, report.Metadata)
 	}
 }

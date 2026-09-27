@@ -145,6 +145,7 @@ const (
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {
+	Scenario      string   `json:"scenario,omitempty"`
 	SharedSteps   []string `json:"sharedSteps,omitempty"`
 	CaseID        string   `json:"caseId"`
 	Mode          CaseMode `json:"mode"`
@@ -320,8 +321,9 @@ type CoverageContract struct {
 
 // ReviewDecision is a decision over a source, point, or case ID.
 type ReviewDecision struct {
-	ID     string         `json:"id"`
-	Status DecisionStatus `json:"status"`
+	Inherited bool           `json:"inherited,omitempty"`
+	ID        string         `json:"id"`
+	Status    DecisionStatus `json:"status"`
 }
 
 // ReviewResult contains the required per-manifest source, point, and case
@@ -381,6 +383,9 @@ type ExecutionBinding struct {
 
 // ExecutionRecord accounts for one approved source-point-case edge.
 type ExecutionRecord struct {
+	Procedure              string          `json:"procedure,omitempty"`
+	Observation            string          `json:"observation,omitempty"`
+	Comparison             string          `json:"comparison,omitempty"`
 	ReviewKind             ReviewKind      `json:"reviewKind"`
 	SourceID               string          `json:"sourceId"`
 	PointID                string          `json:"pointId"`
@@ -559,7 +564,7 @@ func (c CoverageContract) Validate() error {
 	}
 	coveredQA := make(map[string]struct{})
 	seenKinds := make(map[ReviewKind]struct{}, len(c.Manifests))
-	seenPointIDs := make(map[string]struct{})
+	seenPointIDs := make(map[string]AcceptancePoint)
 	seenCaseIDs := make(map[string]struct{})
 	seenWhiteboxRefs := make(map[string]struct{})
 	for mi, manifest := range c.Manifests {
@@ -605,10 +610,10 @@ func (c CoverageContract) Validate() error {
 			if _, exists := pointByID[point.PointID]; exists {
 				return invalid(CodeDuplicateID, ppath+".pointId", "duplicate point ID")
 			}
-			if _, exists := seenPointIDs[point.PointID]; exists {
-				return invalid(CodeDuplicateID, ppath+".pointId", "point ID is reused across manifests")
+			if prior, exists := seenPointIDs[point.PointID]; exists && prior != point {
+				return invalid(CodeDuplicateID, ppath+".pointId", "point ID has conflicting semantics across manifests")
 			}
-			seenPointIDs[point.PointID] = struct{}{}
+			seenPointIDs[point.PointID] = point
 			pointByID[point.PointID] = point
 		}
 		sharedIDs := map[string]bool{}
@@ -873,6 +878,16 @@ func CanonicalDigest(value any) (string, error) { return canonicalDigest(value) 
 // the approved whitelist.  Reviews must contain exactly one result for every
 // manifest in the contract.
 func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhitelist, error) {
+	return c.validateReviews(reviews, true)
+}
+
+// ValidateReviewEvidence checks complete PASS/FAIL decisions without approving
+// failed entries or projecting a whitelist.
+func (c CoverageContract) ValidateReviewEvidence(reviews []ReviewResult) error {
+	_, err := c.validateReviews(reviews, false)
+	return err
+}
+func (c CoverageContract) validateReviews(reviews []ReviewResult, requirePass bool) (ApprovedWhitelist, error) {
 	if err := c.Validate(); err != nil {
 		return ApprovedWhitelist{}, err
 	}
@@ -894,7 +909,7 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 		if review.Scope != ScopeFull && review.Scope != ScopeAffected {
 			return ApprovedWhitelist{}, invalid(CodeIncompleteReview, path+".scope", "review scope must be FULL or AFFECTED")
 		}
-		if review.SetStatus != "" && review.SetStatus != StatusPass {
+		if review.SetStatus != "" && review.SetStatus != StatusPass && (requirePass || review.SetStatus != StatusFail) {
 			return ApprovedWhitelist{}, invalid(CodeReviewNotPass, path+".setStatus", "set-level review status is not PASS")
 		}
 		if len(review.UnboundSources) != 0 || len(review.UnboundPoints) != 0 || len(review.UnboundCases) != 0 {
@@ -904,29 +919,50 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 			return ApprovedWhitelist{}, invalid(CodeDuplicateID, path+".binding.reviewKind", "duplicate review result")
 		}
 		seenKinds[review.Binding.ReviewKind] = struct{}{}
-		if err := validateDecisions(review.SourceDecisions, manifest.Sources, path+".sourceDecisions", "source"); err != nil {
+		if err := validateDecisions(review.SourceDecisions, manifest.Sources, path+".sourceDecisions", "source", requirePass); err != nil {
 			return ApprovedWhitelist{}, err
 		}
 		sharedIDs := make([]string, len(manifest.SharedSteps))
 		for i, step := range manifest.SharedSteps {
 			sharedIDs[i] = step.ID
 		}
-		if err := validateDecisions(review.SharedStepDecisions, sharedIDs, path+".sharedStepDecisions", "shared step"); err != nil {
+		if err := validateDecisions(review.SharedStepDecisions, sharedIDs, path+".sharedStepDecisions", "shared step", requirePass); err != nil {
 			return ApprovedWhitelist{}, err
 		}
 		pointIDs := make([]string, len(manifest.Points))
 		for i := range manifest.Points {
 			pointIDs[i] = manifest.Points[i].PointID
 		}
-		if err := validateDecisions(review.PointDecisions, pointIDs, path+".pointDecisions", "point"); err != nil {
+		if err := validateDecisions(review.PointDecisions, pointIDs, path+".pointDecisions", "point", requirePass); err != nil {
 			return ApprovedWhitelist{}, err
 		}
 		caseIDs := make([]string, len(manifest.Cases))
 		for i := range manifest.Cases {
 			caseIDs[i] = manifest.Cases[i].CaseID
 		}
-		if err := validateDecisions(review.CaseDecisions, caseIDs, path+".caseDecisions", "case"); err != nil {
+		if err := validateDecisions(review.CaseDecisions, caseIDs, path+".caseDecisions", "case", requirePass); err != nil {
 			return ApprovedWhitelist{}, err
+		}
+		if !requirePass {
+			values := map[string]DecisionStatus{}
+			failed := false
+			for _, group := range []struct {
+				prefix string
+				rows   []ReviewDecision
+			}{{"s", review.SourceDecisions}, {"p", review.PointDecisions}, {"c", review.CaseDecisions}, {"h", review.SharedStepDecisions}} {
+				for _, row := range group.rows {
+					values[group.prefix+row.ID] = row.Status
+					failed = failed || row.Status == StatusFail
+				}
+			}
+			if (review.SetStatus == StatusFail) != failed {
+				return ApprovedWhitelist{}, invalid(CodeIncompleteReview, path, "set verdict contradicts item decisions")
+			}
+			for _, edge := range manifest.Edges {
+				if values["c"+edge.CaseID] == StatusFail && values["p"+edge.PointID] != StatusFail || values["p"+edge.PointID] == StatusFail && values["s"+edge.SourceID] != StatusFail {
+					return ApprovedWhitelist{}, invalid(CodeIncompleteReview, path, "source/point/case decisions contradict their mapped obligations")
+				}
+			}
 		}
 		for _, edge := range manifest.Edges {
 			entries = append(entries, WhitelistEntry{ReviewKind: manifest.Binding.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID})
@@ -934,6 +970,9 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 	}
 	if len(seenKinds) != len(manifestByKind) {
 		return ApprovedWhitelist{}, invalid(CodeIncompleteReview, "reviews", "a manifest review is missing")
+	}
+	if !requirePass {
+		return ApprovedWhitelist{}, nil
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
@@ -972,7 +1011,7 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 	return w, nil
 }
 
-func validateDecisions(decisions []ReviewDecision, expected []string, path, label string) error {
+func validateDecisions(decisions []ReviewDecision, expected []string, path, label string, requirePass bool) error {
 	if len(decisions) != len(expected) {
 		return invalid(CodeIncompleteReview, path, "review must contain exactly one decision for every "+label)
 	}
@@ -989,7 +1028,7 @@ func validateDecisions(decisions []ReviewDecision, expected []string, path, labe
 			return invalid(CodeDuplicateID, fmt.Sprintf("%s[%d].id", path, i), "duplicate "+label+" decision")
 		}
 		seen[decision.ID] = struct{}{}
-		if decision.Status != StatusPass {
+		if decision.Status != StatusPass && (requirePass || decision.Status != StatusFail) {
 			return invalid(CodeReviewNotPass, fmt.Sprintf("%s[%d].status", path, i), label+" decision is not PASS")
 		}
 	}
@@ -1070,6 +1109,15 @@ func validateWhitelist(c CoverageContract, whitelist ApprovedWhitelist, required
 // edge partition.  AFFECTED reports may use inherited PASS records only when a
 // source candidate and reuse evidence are both supplied.
 func (c CoverageContract) ValidateExecution(whitelist ApprovedWhitelist, report ExecutionReport) error {
+	return c.validateExecution(whitelist, report, true)
+}
+
+// ValidateResults reconciles a complete report, including genuine failures.
+func (c CoverageContract) ValidateResults(whitelist ApprovedWhitelist, report ExecutionReport) error {
+	return c.validateExecution(whitelist, report, false)
+}
+
+func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report ExecutionReport, requirePass bool) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -1153,7 +1201,7 @@ func (c CoverageContract) ValidateExecution(whitelist ApprovedWhitelist, report 
 			return invalid(CodeExecutionSetMismatch, path+".provenance", "FULL execution cannot use inherited or not-executed records")
 		}
 		if record.Provenance == ProvenanceExecuted {
-			if record.Result != ExecutedPass {
+			if record.Result != ExecutedPass && (requirePass || record.Result != ExecutedFail) {
 				return invalid(CodeExecutionNotPass, path+".result", "executed result is not EXECUTED_PASS")
 			}
 			if record.InheritedFromCandidate != "" || record.ReuseEvidence != "" {
@@ -1221,6 +1269,9 @@ func (c CoverageContract) ValidateExecution(whitelist ApprovedWhitelist, report 
 		if actualIDs[i] != reportedActual[i] {
 			return invalid(CodeExecutionSetMismatch, "execution.binding.actualCaseIds", "actual case ID set does not match execution records")
 		}
+	}
+	if !requirePass {
+		return nil
 	}
 	for _, edge := range whitelist.Entries {
 		pointKey := string(edge.ReviewKind) + "\x00" + edge.PointID

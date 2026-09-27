@@ -505,6 +505,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	// 登记确认事实（新权威 revision）。
 	state.RequirementRevisions = append(state.RequirementRevisions, ConfirmedRevision{
+		Coverage:       payload.Coverage,
 		Revision:       payload.CandidateRevision,
 		DeltaDigest:    payload.DeltaDigest,
 		BaseRevision:   payload.BaseRevision,

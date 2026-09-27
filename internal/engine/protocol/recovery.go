@@ -276,12 +276,31 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 		plan.Options = recoveryAskOptions()
 		state.PendingAsks[plan.RequestID] = PendingAsk{RequestID: plan.RequestID, Control: ControlRecovery, Options: append([]AskOption(nil), plan.Options...)}
 	}
-	if plan.Action == RecoveryNewAttempt {
+	if plan.Action == RecoveryNewAttempt && attempt.Business {
+		if err := state.endInvalidAttempt(actionID, OutcomeRuntimeError, "identified interrupted business execution", WorkerResult{ActionID: actionID, Outcome: OutcomeRuntimeError, FailureClass: interruption.Class}, nextRevision); err != nil {
+			return RecoveryPlan{}, 0, err
+		}
+		ended := state.EndedAttempts[pending.Task]
+		if ended.RetryExhausted {
+			plan.Action = RecoveryWait
+			plan.Detail = "business attempt exhausted; explicit one-attempt authorization required"
+		} else {
+			issued, err := state.issueInto(decision.IssuedSet{{ActionID: "retry:" + actionID + ":" + strconv.FormatUint(nextRevision, 10), Task: pending.Task, Step: authoring.StepID(pending.Step)}}, nextRevision, expectedFingerprint, state.RunProvider, attempt.Plan, e.retryMaxAttempts, e.reviewSeriesOf)
+			if err != nil {
+				return RecoveryPlan{}, 0, err
+			}
+			e.bindBusinessAttempt(state, issued[0].Task)
+		}
+	} else if plan.Action == RecoveryNewAttempt {
 		retired, _ := state.retireAction(actionID, "", "recovery replaced the interrupted Attempt")
 		replacement, err := state.installReplacement(retired, nextRevision, currentBindings, attempt.Plan, attempt.Attempts+1, attempt.MaxAttempts)
 		if err != nil {
 			return RecoveryPlan{}, 0, err
 		}
+		replacement.Work = attempt.Work
+		replacement.PreviousAction = attempt.ActionID
+		state.Attempts[pending.Task] = replacement
+		e.bindBusinessAttempt(state, pending.Task)
 		plan.Detail = plan.Detail + "; replacement attempt " + replacement.ID
 		obsolete := state.ObsoleteActions[actionID]
 		obsolete.ReplacedBy = replacement.ActionID

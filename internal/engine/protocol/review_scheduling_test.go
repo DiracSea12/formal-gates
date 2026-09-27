@@ -8,8 +8,8 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 func TestReviewIssuanceRespectsZeroCapacity(t *testing.T) {

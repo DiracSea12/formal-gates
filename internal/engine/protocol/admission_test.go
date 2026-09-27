@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,10 +10,10 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // spawnReceipt 构造标准 SPAWNED 回执事件。
@@ -77,25 +78,44 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	if _, err := engine.Submit(spawnReceipt(t, "retry-spawn", action, "retry-agent"), fp); err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []RecoveryAction{RecoveryResumeAttempt, RecoveryResumeAttempt, RecoveryWait} {
-		result, err := NewWorkerResultEvent(EventID("retry-result-"+string(rune('1'+i))), action, testProvider, OutcomeRuntimeError, "sha256:retry-"+string(rune('1'+i)), authoring.FailureTransientEngine)
+	original := issued[0].Task
+	for i := 1; i <= 3; i++ {
+		event, err := NewWorkerResultEvent(EventID(fmt.Sprintf("retry-result-%d", i)), action, testProvider, OutcomeRuntimeError, fmt.Sprintf("sha256:retry-%d", i), authoring.FailureTransientEngine)
 		if err != nil {
 			t.Fatal(err)
 		}
-		accepted, err := engine.Submit(result, fp)
-		if err != nil || accepted.RecoveryAction != string(want) {
-			t.Fatalf("retry %d acceptance=%+v err=%v want=%s", i+1, accepted, err, want)
+		accepted, err := engine.Submit(event, fp)
+		if err != nil || accepted.Status != OutcomeRuntimeError {
+			t.Fatalf("invalid result: %+v %v", accepted, err)
+		}
+		snap := engine.LoadMustSucceed(t)
+		if snap.State.ReviewSeries.ProductReview.Completed != 0 {
+			t.Fatal("runtime error consumed a semantic round")
+		}
+		if i < 3 {
+			if len(snap.State.PendingActions) != 1 {
+				t.Fatalf("missing replacement: %+v", snap.State.PendingActions)
+			}
+			for id, pending := range snap.State.PendingActions {
+				if pending.Task != original || id == action {
+					t.Fatal("retry changed task or reused execution")
+				}
+				action = id
+			}
+			if _, err := engine.Submit(spawnReceipt(t, EventID(fmt.Sprintf("retry-spawn-%d", i)), action, "retry-agent"), fp); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			a := snap.State.EndedAttempts[original]
+			if len(snap.State.PendingActions) != 0 || a.Attempts != 3 || a.MaxAttempts != 3 || !a.RetryExhausted {
+				t.Fatalf("exhaustion: %+v", a)
+			}
+			if len(snap.State.PendingAsks) != 1 {
+				t.Fatalf("missing bound extra-attempt offer: %+v", snap.State.PendingAsks)
+			}
 		}
 	}
-	snapshot := engine.LoadMustSucceed(t)
-	attempt := snapshot.State.Attempts[runtime.TaskKey{Node: "retry", Step: "retry.worker"}]
-	if attempt.Attempts != 3 || attempt.MaxAttempts != 3 || !attempt.RetryExhausted {
-		t.Fatalf("retry ledger = %+v", attempt)
-	}
-	recovery, _, err := engine.RecoverAttempt(action, Interruption{Class: authoring.FailureTransientEngine}, fp)
-	if err != nil || recovery.Action != RecoveryWait {
-		t.Fatalf("exhausted recovery = %+v err=%v", recovery, err)
-	}
+
 }
 
 // workerResult 构造标准 PASS 结果事件。
@@ -600,60 +620,33 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 	}
 }
 
-// TestTransientResultCanResumeOriginalAttempt verifies that a recoverable
-// RUNTIME_ERROR remains audit-visible without occupying the terminal result
-// slot. The same action/Attempt can subsequently finish with PASS.
-func TestTransientResultCanResumeOriginalAttempt(t *testing.T) {
-	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
-		t.Fatalf("issue: %v", err)
+// A business runtime error closes its execution while the logical obligation
+// and semantic review round remain unchanged.
+func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, _ := reviewEngine(t, cd, reg)
+	action := issueReady(t, engine)[0]
+	original := engine.LoadMustSucceed(t).State.PendingActions[action]
+	submitSpawnReceipt(t, engine, "transient-spawn", action)
+	ev, _ := NewWorkerResultEvent("transient-result", action, testProvider, OutcomeRuntimeError, "sha256:temporary", authoring.FailureTransientEngine)
+	accepted, err := engine.Submit(ev, fingerprintOf(t, engine))
+	if err != nil || accepted.Status != OutcomeRuntimeError {
+		t.Fatalf("invalid result %+v %v", accepted, err)
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "evt-transient-spawn", reviewAction, "agent-review-1"), fp); err != nil {
-		t.Fatalf("spawn receipt: %v", err)
+	snap := engine.LoadMustSucceed(t)
+	replacement := pendingActionID(t, engine)
+	if replacement == action || snap.State.PendingActions[replacement].Task != original.Task || snap.State.RejectedResults[action].Reason == "" {
+		t.Fatal("retry did not preserve logical task and rejection evidence")
 	}
-	transient, err := NewWorkerResultEvent(
-		"evt-transient-failure", reviewAction, testProvider, OutcomeRuntimeError,
-		"sha256:temporary", authoring.FailureTransientEngine,
-	)
-	if err != nil {
-		t.Fatalf("transient event: %v", err)
+	late, _ := NewWorkerResultEvent("transient-late", action, testProvider, OutcomePass, "sha256:late", "")
+	a, err := engine.Submit(late, fingerprintOf(t, engine))
+	if err != nil || a.Status != "OBSOLETE_RESULT" {
+		t.Fatalf("late result %+v %v", a, err)
 	}
-	accepted, err := engine.Submit(transient, fp)
-	if err != nil {
-		t.Fatalf("transient result: %v", err)
-	}
-	if accepted.RecoveryAction != string(RecoveryResumeAttempt) {
-		t.Fatalf("transient acceptance = %+v", accepted)
-	}
-	afterFailure := engine.LoadMustSucceed(t)
-	if _, terminal := afterFailure.State.Results[reviewAction]; terminal {
-		t.Fatal("recoverable result occupied terminal result slot")
-	}
-	if len(afterFailure.State.RecoverableResults[reviewAction]) != 1 || len(afterFailure.State.PendingActions) != 1 {
-		t.Fatalf("recoverable ledger/pending = %+v / %+v", afterFailure.State.RecoverableResults, afterFailure.State.PendingActions)
-	}
-	beforeAttempt := afterFailure.State.Attempts[reviewTaskKey()]
-	recovery, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine}, fp)
-	if err != nil || recovery.Action != RecoveryResumeAttempt {
-		t.Fatalf("recover original Attempt = %+v err=%v", recovery, err)
-	}
-	if current := engine.LoadMustSucceed(t).State.Attempts[reviewTaskKey()]; current.ID != beforeAttempt.ID {
-		t.Fatalf("resume replaced Attempt %q with %q", beforeAttempt.ID, current.ID)
-	}
-	pass, err := NewWorkerResultEvent("evt-transient-pass", reviewAction, testProvider, OutcomePass, "sha256:complete", "")
-	if err != nil {
-		t.Fatalf("pass event: %v", err)
-	}
-	if finalAcceptance, err := engine.Submit(pass, fp); err != nil || finalAcceptance.Status != "ACCEPTED" {
-		t.Fatalf("PASS after resume = %+v err=%v", finalAcceptance, err)
-	}
-	final := engine.LoadMustSucceed(t)
-	if result, ok := final.State.Results[reviewAction]; !ok || result.Outcome != OutcomePass {
-		t.Fatalf("terminal result = %+v ok=%v", result, ok)
-	}
-	if _, pending := final.State.PendingActions[reviewAction]; pending {
-		t.Fatal("completed resumed Attempt remained pending")
+	submitReviewResult(t, engine, "replacement-pass", replacement, reviewEvidenceAt(review.ProductReview, replacement, snap.State.RequirementRevision(), "PASS", "review completed", nil))
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.ReviewSeries.ProductReview.Completed != 1 || snap.State.Results[replacement].Outcome != OutcomePass {
+		t.Fatal("replacement did not complete exactly one semantic round")
 	}
 }
 
@@ -737,9 +730,10 @@ func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
 	if _, err := engine.Submit(transient, fp); err != nil {
 		t.Fatalf("transient result: %v", err)
 	}
-	if _, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine, CauseKnown: true}, fp); err != nil {
-		t.Fatalf("replace attempt: %v", err)
+	if snap := engine.LoadMustSucceed(t); snap.State.ObsoleteActions[reviewAction].ReplacedBy == "" {
+		t.Fatal("runtime error did not install replacement")
 	}
+
 	late, err := NewWorkerResultEvent("evt-late-recoverable-result", reviewAction, testProvider, OutcomeRuntimeError, "sha256:temporary", authoring.FailureTransientEngine)
 	if err != nil {
 		t.Fatalf("late result event: %v", err)

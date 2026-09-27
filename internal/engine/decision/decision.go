@@ -285,6 +285,14 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 			}
 		case compiler.KindHostAction:
 			externalPresent = true
+			if tasks, managed := required[cs.Header.ID]; managed {
+				queued = false
+				for _, task := range tasks {
+					if task.BlockedBy == "" {
+						queued = true
+					}
+				}
+			}
 			if queued {
 				hostSteps = append(hostSteps, cs.Header.ID)
 			}
@@ -310,6 +318,8 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 		next = NextResult{Kind: KindHostAction, HostAction: &HostActionPayload{Steps: hostSteps}}
 	case len(askSteps) > 0 || len(state.ControlRequests) > 0:
 		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Steps: askSteps, Requests: state.ControlRequests}}
+	case len(state.OperatorFacts) > 0:
+		next = NextResult{Kind: KindOperator, Operator: &OperatorPayload{Facts: state.OperatorFacts}}
 	case blockedBy != "":
 		next = NextResult{Kind: KindWait, Wait: &WaitPayload{Reason: blockedBy}}
 	case externalPresent:

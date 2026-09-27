@@ -18,10 +18,10 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // reviewStepsFixture constructs serial review carriers after a local prep step.
@@ -1191,12 +1191,8 @@ func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
 	}
 }
 
-// TestInadmissibleReviewEvidenceIsRejectedBeforeStaging：回执未到时携不完
-// 整审查证据（Operator 核实缺项、finding 严重度 P9）的结果不得进入暂存
-// ——直接 CodeReviewEvidenceRejected 拒绝且零状态变化；回执照常接纳，正
-// 确结果随后照常完成入账（一次填写错误不污染暂存槽、不必换 attempt 即可
-// 恢复）。
-func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
+// Invalid signed review evidence consumes its attempt only after receipt pairing.
+func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 	cases := []struct {
 		name    string
 		corrupt func(evidence *ReviewResultEvidence)
@@ -1211,7 +1207,7 @@ func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-			engine, dir := reviewEngine(t, cd, reg)
+			engine, _ := reviewEngine(t, cd, reg)
 			fp := fingerprintOf(t, engine)
 			product := issueReady(t, engine)[0]
 
@@ -1224,22 +1220,21 @@ func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
 			if err != nil {
 				t.Fatalf("event: %v", err)
 			}
-			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(ev, fp); err == nil {
-				t.Fatal("inadmissible review result staged before its receipt")
-			} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
-				t.Fatalf("inadmissible staging code = %q", code)
+			if a, err := engine.Submit(ev, fp); err != nil || a.Status != "STAGED" {
+				t.Fatalf("result before receipt: %+v %v", a, err)
 			}
-			if after := stateBytesOf(t, dir); string(before) != string(after) {
-				t.Fatal("rejected inadmissible staging changed state bytes")
+			submitSpawnReceipt(t, engine, "spawn-pair", product)
+			snap := engine.LoadMustSucceed(t)
+			if snap.State.RejectedResults[product].Status != "REJECTED_INVALID_RESULT" || len(snap.State.StagedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 0 {
+				t.Fatalf("invalid evidence effects: %+v", snap.State.RejectedResults)
 			}
-			if snap := engine.LoadMustSucceed(t); len(snap.State.StagedResults) != 0 {
-				t.Fatalf("inadmissible review result poisoned staging: %+v", snap.State.StagedResults)
+			replacement := pendingActionID(t, engine)
+			if snap.State.PendingActions[replacement].Task != snap.State.ObsoleteActions[product].Task {
+				t.Fatal("invalid result changed logical duty")
 			}
+			product = replacement
+			submitSpawnReceipt(t, engine, "replacement-spawn", product)
 
-			if _, err := engine.Submit(spawnReceipt(t, "spawn-pair", product, "agent-pair"), fp); err != nil {
-				t.Fatalf("receipt after a rejected staging: %v", err)
-			}
 			correct := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "admissible evidence", []review.Finding{
 				{Severity: "P1", Message: "core path broken"},
 			})
@@ -1255,7 +1250,7 @@ func TestInadmissibleReviewEvidenceIsRejectedBeforeStaging(t *testing.T) {
 			if acceptance.Status != "ACCEPTED" {
 				t.Fatalf("correct result status = %q, want ACCEPTED", acceptance.Status)
 			}
-			snap := engine.LoadMustSucceed(t)
+			snap = engine.LoadMustSucceed(t)
 			if snap.State.ReviewSeries.ProductReview.Completed != 1 || len(snap.State.StagedResults) != 0 {
 				t.Fatalf("correct result did not reach the ledger: completed=%d staged=%d", snap.State.ReviewSeries.ProductReview.Completed, len(snap.State.StagedResults))
 			}

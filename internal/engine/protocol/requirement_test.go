@@ -15,9 +15,9 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // requirementOptions 是 REQUEST_REQUIREMENT_CHANGE 的标准选项集（choice id

@@ -2,12 +2,11 @@ package validate
 
 import (
 	"fmt"
+	"formal-gates/internal/engine/coverage"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"formal-gates/internal/engine/coverage"
 )
 
 // QACaseInput 是一次 qa-design 记录轮输入的用例。CaseID 是增量契约的引用键：
@@ -1135,29 +1134,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 }
 
 func validateQAExecutionEvidence(item QAResultInput) error {
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{name: "procedure", value: item.Procedure},
-		{name: "observation", value: item.Observation},
-		{name: "oracle result", value: item.OracleResult},
-	}
-	protocolSentinels := map[string]bool{
-		"p": true, "o": true, "m": true,
-		"procedure": true, "observation": true, "oracle": true,
-		"run": true, "executed": true, "ok": true, "success": true,
-		"pass": true, "passed": true, "matched": true,
-		"skipped": true, "authorized pass": true, "observed success": true,
-		"compared": true, "executed blackbox": true, "executed whitebox": true,
-	}
-	for _, field := range fields {
-		normalized := strings.ToLower(strings.Join(strings.Fields(field.value), " "))
-		if protocolSentinels[normalized] {
-			return fmt.Errorf("QA result %s %s is a reserved protocol sentinel, not per-case execution evidence", item.CaseID, field.name)
-		}
-	}
-	return nil
+	return coverage.ValidateEvidence(item.CaseID, item.Procedure, item.Observation, item.OracleResult)
 }
 
 func qaExecutionRecordMode(state RunState, requested string) string {

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // resetRequest 是两阶段测试的标准受限请求事件构造器。

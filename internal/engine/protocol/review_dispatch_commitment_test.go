@@ -467,22 +467,24 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 				t.Fatal("replay did not consume quarantine")
 			}
 			if rejected {
-				if history := snap.State.ObsoleteResults[action]; len(history) != 1 || history[0].PayloadDigest != "sha256:quarantined-review" || history[0].Review == nil {
-					t.Fatalf("rejected replay did not retain its evidence: %+v", history)
+				if record := snap.State.RejectedResults[action]; record.Status != "REJECTED_INVALID_RESULT" || record.Payload.PayloadDigest != "sha256:quarantined-review" || record.Payload.Review == nil {
+					t.Fatalf("rejected replay did not retain evidence: %+v", record)
 				}
 				if _, recorded := snap.State.Results[action]; recorded {
 					t.Fatal("rejected evidence must not settle the dispatch")
 				}
 				trail := false
 				for _, record := range snap.State.RecoveryRecords {
-					trail = trail || record.ActionID == action && strings.Contains(record.Detail, "could not be readmitted")
+					trail = trail || record.ActionID == action && strings.Contains(record.Detail, "REJECTED_INVALID_RESULT")
 				}
 				if !trail {
 					t.Fatal("rejected replay has no recovery trail")
 				}
 				assertSeriesCommitmentHeld(t, engine)
 				assertReviewIssuanceHeld(t, engine)
-				if err := submitLateDispatchResult(t, engine, "admissible-review", action, blockingReviewEvidence(review.ProductReview, action, "verified late review")); err != nil {
+				action = pendingActionID(t, engine)
+				submitSpawnReceipt(t, engine, "retry-review-spawn", action)
+				if err := submitLateDispatchResult(t, engine, "admissible-review", action, blockingReviewEvidence(review.ProductReview, action, "verified replacement review")); err != nil {
 					t.Fatalf("admissible late evidence: %v", err)
 				}
 			}

@@ -36,8 +36,8 @@ func TestDefinitionArtifactIdentityMatchesCheckedInBytes(t *testing.T) {
 	if got, want := encoder.Digest(data), definition.WorkflowDefinitionDigest; got != want {
 		t.Fatalf("artifact digest = %s, identity constant = %s", got, want)
 	}
-	if got, want := string(cd.Version), definition.WorkflowDefinitionVersion; got != want || got != "3" {
-		t.Fatalf("definition version = %s, identity constant = %s, want \"3\"", got, want)
+	if got, want := string(cd.Version), definition.WorkflowDefinitionVersion; got != want || got != "4" {
+		t.Fatalf("definition version = %s, identity constant = %s, want \"4\"", got, want)
 	}
 	// checked-in 制品必须可解码（信封常量与物化一致性双向成立）。
 	if _, err := encoder.Decode(checkedIn); err != nil {

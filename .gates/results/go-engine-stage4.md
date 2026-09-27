@@ -386,3 +386,54 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 验证证据：`go test ./internal/engine/... ./cmd/... -count=1`、8 项相关 CLI 回归、定向生命周期回归、`go vet ./internal/engine/... ./internal/cli/... ./cmd/...`、生成物新鲜度检查及 `git diff --check` 均通过；主代理另用临时独立探针验证屏障入口、原内容再次确认后的新鲜审查、额度耗尽和同系列多载体依赖，并检查负控。引擎、CLI 与生命周期输出分别留在 `/tmp/boundary-engine-tests.log`、`/tmp/boundary-cli-tests.log`、`/tmp/boundary-lifecycle-tests.log`。未重跑全仓长期 harness/validate 套件，未调用真实外部模型。
 
 用户已授权接续 R3：QA 覆盖契约接入、FROZEN/review-ready 屏障、验证 wave 与开发后 finding/problem 归并、有限重试、唯一返修。R4 guard 和 R5 Git provider/canary/route matrix 仍属后续单元。本地提交用于将本次已审阅修复交接给新的零上下文开发代理；不推送。
+
+## R3 开发派发（2026-09-27）
+
+用户授权派子代理实施，代码要求沿用此前约束。已派新的零上下文开发代理，本批从 `7eb32e8` 开始；同批连续实施，不跨批复用代理记忆。另派独立验收代理从需求准备正常公开路径及恢复对照。
+
+范围依本文件第 46 轮和增量交付计划阶段 4：QA 覆盖、冻结和候选绑定、验证 wave、开发后裁决及唯一返修、有限 attempt。3.5c 明确修订的可选建议处置与中断续跑规则优先于旧的强制吸收措辞。R3 验收到 canonical facade 的 Drive/Submit 可到达验证完成及待 promotion 的 typed 边界；不将尚未实施的真实 Git provider、guard/cost bridge 或完整 regular Seal 计作本批完成。
+
+设计取舍依据 `prompts/actions/start-readiness.md`：“是否有更简单的既有归属者或原生能力可用，以及它是否是足够且最简的做法”；依据项目准则：“一个控制事实只有一个权威来源”、“正常执行与崩溃恢复共用同一业务处理与接纳路径”。覆盖继续归 coverage，业务状态进入现有 State/Store，调度使用 RequiredTasks 派生投影，接纳与恢复共享同一事务路径。先复用 handler 表达业务职责，只有现有能力确实无法表达时才新增契约字段。不得反复 complete/reopen 静态 DAG 来驱动动态业务，也不得保留被替代的平行调度或计数路径。
+
+实施包括必要的 definition/facade/typed 事件接线及相关生成物；候选事实必须来自已签发 adapter intent 对应回执，不能由自由 Operator 声明冒充。共享纯需求解析和执行证据校验仅按实际接入需要抽取，legacy 保留委托入口，不产生第二 writer。持久化遵循本期具体方案 `final-implementation-draft.md` §3.3 的“state.json 继续是唯一权威工作流投影”及不引入 SQLite 的明确边界，不在本批迁移现有 Store。
+
+验收要求覆盖 source/point/case 完整对账、真实 FAIL 和 checkpoint、建议处置与受影响复审、屏障前零执行、收齐与核实前零返修、同快照唯一 repair、纯 P2 carry、有限重试及一次追加、迟到/重启/需求变化隔离重放。相关回归按改动面执行，真实外部模型调用未授权。开工记录不表示已完成或通过验收。
+
+### R3 实施中复核记录
+
+另一次复用审查会话的派发被审查者按上下文独立性契约拒绝，返回 RUNTIME_ERROR，未进入代码审查；随后成功创建新的零上下文代码审查代理。独立公开 API 验收代理和代码审查代理分别工作，未据中间通过结果宣告交付。
+
+主代理已亲自复现并交回的正常路径缺陷：typed candidate 参数未进入共同结构化参数校验；已知中断恢复丢失业务重试身份并绕过同 TaskKey 上限；纯门审 P2 修复后错误增加验证轮数；未知 affected case 被接纳；同 AC 被黑盒/白盒共同覆盖时停滞；最终候选丢失白盒测试工件；需求变化 CARRY 同时保留原任务并派发新任务；已有白盒工件在 CARRY 后丢失不可变候选引用。复现输出保留于 `/tmp/qa-pipeline-root-public-path.log`、`/tmp/qa-pipeline-recovery-behavior.log`、`/tmp/qa-pipeline-root-p2-carry.log`、`/tmp/qa-pipeline-root-unknown-case.log`、`/tmp/qa-pipeline-root-shared-ac.log`、`/tmp/qa-pipeline-root-whitebox.log`、`/tmp/qa-pipeline-root-carry.log`、`/tmp/qa-pipeline-root-whitebox-carry.log`。这些是实施中失败证据，最终修复状态需以本记录后续验收为准。
+
+实施中运行：整包 CLI 回归通过（`/tmp/qa-pipeline-cli-tests.log`，86.146s）；coverage 与标准需求解析定向测试通过；legacy QA efficiency 初次因并行实施尚缺函数而编译失败，完成后定向重跑通过（`/tmp/qa-pipeline-legacy-efficiency.log` 与 `-final.log`）。首轮 engine/cmd 整包回归失败，包含生产定义替换后演示图测试夹具耦合及真实失败分类等回归（`/tmp/qa-pipeline-engine-tests.log`），尚待整体复跑。临时恢复探针一轮被测试夹具 definition 版本混用阻断（`/tmp/qa-pipeline-root-recovery-final.log`），未将该结果冒充恢复行为通过。
+
+### R3 交付与最终复核（2026-09-27）
+
+本批实现完成，独立公开接口验收 PASS，独立代码审查及最后 detail remedy 补审 PASS。新开发、验收和代码审查代理均以零上下文开始；各自后续在同批会话持续返修/复核。主代理亲自核实原始失败及修后结果。当前没有未闭合的范围内实证缺陷；本结论只覆盖本批协议交付，不是整个阶段 4 的 Seal。
+
+实际交付：canonical regular 入口接入确认的需求/方案来源、source/point/case 覆盖、逐项审查、建议处置、FROZEN 和含白盒测试工件的 review-ready 候选；并行验证 wave、finding/problem 裁决史、同快照统一 repair、纯门审 P2 carry、AFFECTED 与最终 FULL；有限 attempt、一次追加、checkpoint 续跑；需求变化对原签发工作的 CARRY/REDO；typed detail remedy。候选由精确绑定 intent/receipt 提供，真实 provider 仍在后续范围。
+
+结构收敛：coverage 持有结构校验与 whitelist 投影；纯需求解析移入共享 requirement 包，legacy 委托调用；业务事实进入现有 State/Store。尝试计数使用现有 Attempt；正常接纳与恢复使用同一身份/接纳路径。wave 保存冻结覆盖与审查材料以核对其原始派发结果，当前需求投影不覆盖原证据。通用步骤测试图移入 testkit，生产 definition 只承载当前业务职责。未保留独立可写 whitelist、平行重试计数、候选专用签发、Next 覆写或伪造 PASS 验证路径。
+
+已闭合的问题包括：候选参数契约不一致；业务恢复重试身份丢失；无效结果/缺 Review 绕过有限重试；P2 修复错误计轮；未知 affected case 和缺逐项自跑证据被接受；双 QA 共用 AC 被拒；候选丢白盒测试及删除；CARRY 重复派发、丢已审工件、原在途 review/execution/gate 身份失配（含公开 DECIDE panic）；确认方案 source 与非 QA 验证接入缺失；detail requirement Ask 选项与既有确认接口不一致。末项修正复用既有 proceed/abort 常量，同一 Ask 补包、确认/取消与屏障继续使用原路径。
+
+| 用户代码要求 | 本批结论及依据 |
+|---|---|
+| 正确性、全部范围内需求点 | 通过有限验收；19 项公开 facade 场景加独立恢复、在途 CARRY、缺审查证据与 detail requirement 分流复核；排除项见下文 |
+| 质量、简洁、优雅、可读、可维护 | 独立审查通过；优先既有归属，领域模块按职责组织，新增大字面量已分行，无额外通用平台 |
+| 低耦合、单一权威 | 通过；当前状态与冻结签发证据分开，原始材料不被重绑覆盖，whitelist 只计算投影 |
+| 无不当硬编码、窄逻辑、过拟合 | 未发现未解决的范围内问题；补齐多 source、多 QA、原始签发身份及正常需求变化，未针对样例 ID 放行 |
+| 无过度设计、防御、抽象 | 独立审查未发现阻塞；未新增 registry、独立确认、数据库或通用框架 |
+| 从根因解决、不叠补丁 | 通过；移除被替代路径，覆盖/签发/恢复/接纳保持既有归属 |
+| 测试不污染业务 | 通过；测试图在 testkit；候选夹具按实际输入身份装配并断言测试内容/删除，生产代码无验收探针分支 |
+| 不改期望迎合实现、诚实证据 | 重试测试按已确认“终结 attempt、同 TaskKey 重派”语义调整；持久化测试补齐实际 Review，原接纳/重启断言保留。独立 P2 oracle 原先误要求初次不计轮，按主需求 §8.4.5 更正为初次计 1、P2 修复不增加，并保留说明 |
+
+最终验证与限制：
+- 主代理完整执行 engine/cmd 包回归，除 4 条仍使用裸 PASS 代替 Review 的旧白盒夹具外均通过；两次失败输出保留在 `/tmp/qa-pipeline-engine-final.log`、`/tmp/qa-pipeline-engine-verified.log`。修正夹具后，主代理执行最后所有受影响包 `go test ./internal/engine/protocol ./internal/engine/facade ./internal/engine/whitebox_qa -count=1`，全部通过（45.474s / 15.524s / 16.058s），原始输出 `/tmp/qa-pipeline-changed-packages-final.log`。因此不把先前整包命令的非零退出记为成功。
+- CLI 整包最终运行通过，110.067s，`/tmp/qa-pipeline-cli-final.log`。共享需求解析与 legacy QA efficiency 定向回归通过，未重跑全仓长期 harness/validate 套件。
+- 独立公开 facade 最终集合 19 项通过；主代理在冻结 wave 修正后再跑同套，40.846s，`/tmp/qa-pipeline-root-acceptance-verified.log`。覆盖矩阵在 `/tmp/pipeline-acceptance-0sjt2ua2/acceptance-status.md`。
+- 主代理恢复身份/有限额度、容量变化、INVARIANT/BLOCKED 终态、缺 Review、在途 CARRY 和 detail 取消路径复核均通过；原始输出分别为 `/tmp/qa-pipeline-root-recovery-verified.log`、`/tmp/qa-pipeline-root-failure-capacity.log`、`/tmp/qa-pipeline-root-missing-review-verified.log`、`/tmp/qa-pipeline-root-inflight-carry-verified.log`、`/tmp/qa-pipeline-root-detail-requirement-verified.log`。在树保留缺 Review 2+1、source/nonQA、双 QA 内容及删除、CARRY 三种在途职责、同一 requirement Ask proceed/abort 等回归。
+- 在途 CARRY 修前失败保留 `/tmp/qa-pipeline-root-inflight-review-carry.log`、`-inflight-wave-carry.log`、`-inflight-gate-carry.log`；detail requirement 修前失败保留 `/tmp/qa-pipeline-root-detail-requirement.log` 和 `/tmp/validation-requirement-remedy/before.log`。开发收尾有一次测试字段名编译错误，保留 `/tmp/qa-pipeline-carry-fixture-tests.log`，修后定向通过；不计作生产逻辑缺陷。
+- 最终 `go vet ./internal/engine/... ./internal/cli/... ./internal/requirement/... ./cmd/...`、55 个变更 Go 文件 gofmt 检查、`git diff --check` 通过。definition 生成物新鲜度包含在 definition 包回归中。
+
+未执行 R4 guard/cost bridge、R5 真实 Git provider/promotion、真实外部模型/宿主 canary、进程 kill 全矩阵或 Seal。测试中 adapter/worker 是输入身份明确的协议夹具。当前交付到验证完成和待 promotion 的明确边界；没有推送。

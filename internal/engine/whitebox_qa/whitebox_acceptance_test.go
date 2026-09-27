@@ -8,8 +8,8 @@ import (
 	"formal-gates/internal/engine/acceptance"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // 用例：收口段 marker 扫描——nil 定义、携带 MISSING_ENGINE_ADAPTER 的

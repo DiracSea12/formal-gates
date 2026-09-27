@@ -51,6 +51,9 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			case compiler.CompiledHumanAskStep:
 				settle = s.hasDecisionForStep(step.Header.ID)
 			case compiler.CompiledHostActionStep:
+				if payload.Operation == "op.candidate" {
+					continue
+				}
 				settle = s.hasSettledHostActionForStep(step.Header.ID)
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
@@ -121,7 +124,7 @@ func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operat
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID) {
+		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Handler != "engine.candidate") {
 			continue
 		}
 		return step.Header.ID
@@ -138,14 +141,14 @@ func (s *State) askStepBound(stepID authoring.StepID) bool {
 	return false
 }
 
-func (s *State) hostActionStepBound(stepID authoring.StepID) bool {
+func (s *State) hostActionStepBound(stepID authoring.StepID, includeReceipts bool) bool {
 	for _, intent := range s.PendingHostActions {
 		if intent.Step == stepID {
 			return true
 		}
 	}
 	for _, receipt := range s.HostActionReceipts {
-		if receipt.Step == stepID {
+		if includeReceipts && receipt.Step == stepID {
 			return true
 		}
 	}

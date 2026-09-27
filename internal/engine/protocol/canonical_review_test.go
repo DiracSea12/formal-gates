@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
@@ -95,12 +96,12 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
 	engine, err := New(mustStore(t, dir), Config{
-		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
+		Definition: compiledCanonicalWorkflow(t), Registry: definition.Registry(), Capacity: 4,
 	}, nil)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	cd := compiledWorkflow(t)
+	cd := compiledCanonicalWorkflow(t)
 	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
@@ -366,4 +367,13 @@ func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
 	if len(snap.State.PendingActions) != 0 {
 		t.Fatalf("pending actions after the re-pass = %+v, want none (no readiness re-dispatch)", snap.State.PendingActions)
 	}
+}
+
+func compiledCanonicalWorkflow(t *testing.T) *compiler.CompiledDefinition {
+	t.Helper()
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cd
 }

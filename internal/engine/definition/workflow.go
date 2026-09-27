@@ -22,25 +22,13 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "3"
+const Version authoring.DefinitionVersion = "4"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
 
-// 定义表拓扑（十步覆盖全部六变体 + 并行组，与 compiler 批的金图表同构；
-// 图表 A → B 表示 B 依赖 A）：
-//
-//	entry.parse ──→ entry.persist ──→ ask.decide ──┐
-//	    │              └──→ review.worker          │
-//	    │                     └──→ review.readiness
-//	    └──→ fan.split ──→ fan.slice ──→ fan.join ─┴→ report.cost
-//	                └───→ fan.transport ──↗
-//
-// 双审两条系列各有一个 agent 步承载：review.worker 标记 product-review，
-// review.readiness 标记 start-readiness。步骤依赖 review.worker →
-// review.readiness 与协议层双审顺序门（产品审 effective PASS 先于
-// start-readiness 证据接纳）同构：技术审派发在拓扑上只能继产品审完成
-// 之后进入 Ready 前沿。
+// Regular work is carried by explicit handlers; dynamic obligations belong to
+// protocol State and are projected as RequiredTasks.
 var (
 	workflowHandlers = []struct {
 		id     authoring.HandlerID
@@ -49,17 +37,21 @@ var (
 		{"engine.entry.parse", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
 		{"engine.review.worker", authoring.RunnerAgentWorker},
-		{"engine.fan.slice", authoring.RunnerEngineLocal},
-		{"engine.fan.transport", authoring.RunnerHostAdapter},
-		{"engine.fan.join", authoring.RunnerEngineLocal},
-		{"engine.report.cost", authoring.RunnerEngineLocal},
+
+		{"engine.development", authoring.RunnerAgentWorker},
+		{"engine.qa.design", authoring.RunnerAgentWorker},
+		{"engine.qa.review", authoring.RunnerAgentWorker},
+		{"engine.qa.execution", authoring.RunnerAgentWorker},
+		{"engine.gate", authoring.RunnerAgentWorker},
+		{"engine.repair", authoring.RunnerAgentWorker},
+		{"engine.candidate", authoring.RunnerHostAdapter},
 	}
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	workflowSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.host.fan.transport"}
-	workflowOperations = []authoring.OperationID{"op.fan.transport"}
-	workflowAskKinds   = []authoring.AskKindID{"decision"}
+	workflowSchemas    = []authoring.SchemaID{"schema.candidate"}
+	workflowOperations = []authoring.OperationID{"op.candidate"}
+	workflowAskKinds   = []authoring.AskKindID{}
 )
 
 // Registry 返回注册了定义引用的全部封闭 ID 的 registry。条目不携带实现：
@@ -117,38 +109,30 @@ func Workflow() *compiler.Definition {
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
 		})
 	must("review.readiness", err)
-	ask, err := authoring.NewHumanAskStep(header("ask.decide", "ask", "entry.persist"),
-		authoring.HumanAskSpec{
-			AskKind: "decision", RequestSchema: "schema.ask.decision.request",
-			ResponseSchema: "schema.ask.decision.response", FreshnessTTL: 15 * time.Minute,
-		})
-	must("ask.decide", err)
-	split, err := authoring.NewParallelStep(header("fan.split", "fan", "entry.parse"),
-		authoring.ParallelSpec{
-			Children: []authoring.StepID{"fan.transport", "fan.slice"},
-			Join:     authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAll},
-			Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
-		})
-	must("fan.split", err)
-	slice, err := authoring.NewLocalStep(header("fan.slice", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.LocalSpec{Handler: "engine.fan.slice"})
-	must("fan.slice", err)
-	transport, err := authoring.NewHostActionStep(header("fan.transport", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.HostActionSpec{
-			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: 10 * time.Second,
-		})
-	must("fan.transport", err)
-	join, err := authoring.NewLocalStep(header("fan.join", "fan", "fan.slice", "fan.transport"),
-		ioWith("fan.slice", "fan.transport"), authoring.LocalSpec{Handler: "engine.fan.join"})
-	must("fan.join", err)
-	cost, err := authoring.NewLocalStep(header("report.cost", "report", "fan.join", "ask.decide"),
-		ioWith("fan.join", "ask.decide"), authoring.LocalSpec{
-			Handler: "engine.report.cost", Retry: &authoring.RetryPolicy{MaxAttempts: 2},
-		})
-	must("report.cost", err)
-	return &compiler.Definition{Version: Version, EntryNode: entryNode,
-		Steps: []authoring.Step{parse, persist, review, readiness, ask, split, slice, transport, join, cost}}
+	steps := []authoring.Step{parse, persist, review, readiness}
+	for _, spec := range []struct {
+		id, handler string
+		reason      authoring.NonProgrammableReason
+	}{
+		{"development.worker", "engine.development", authoring.ReasonCreativeImplementation},
+		{"qa.design", "engine.qa.design", authoring.ReasonSemanticJudgment},
+		{"qa.review", "engine.qa.review", authoring.ReasonIndependentReview},
+		{"qa.execution", "engine.qa.execution", authoring.ReasonSemanticJudgment},
+		{"validation.gate", "engine.gate", authoring.ReasonIndependentReview},
+		{"development.repair", "engine.repair", authoring.ReasonCreativeImplementation},
+	} {
+		payload := authoring.AgentSpec{Handler: authoring.HandlerID(spec.handler), Reason: spec.reason, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
+		if spec.reason == authoring.ReasonIndependentReview {
+			payload.ReviewSeries = authoring.ReviewSeriesUnaffiliated
+		}
+		step, err := authoring.NewAgentStep(header(spec.id, "validation", "review.readiness"), reviewIOWith("review.readiness"), payload)
+		must(spec.id, err)
+		steps = append(steps, step)
+	}
+	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate", Boundary: authoring.BoundaryAgentDispatchAPI, Operation: "op.candidate", Schema: "schema.candidate", Timeout: time.Minute})
+	must("candidate.materialize", err)
+	steps = append(steps, candidate)
+	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}
 }
 
 // must 把定义表/注册表的构造错误转为 panic：表内容是编译期常量，失败即

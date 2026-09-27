@@ -33,9 +33,10 @@ type (
 type ControlKind string
 
 const (
-	ControlReset    ControlKind = "RESET"
-	ControlAbort    ControlKind = "ABORT"
-	ControlRecovery ControlKind = "RECOVER_ATTEMPT"
+	ControlValidation ControlKind = "VALIDATION"
+	ControlReset      ControlKind = "RESET"
+	ControlAbort      ControlKind = "ABORT"
+	ControlRecovery   ControlKind = "RECOVER_ATTEMPT"
 	// 四个开发前审查/拓扑/路线业务控制（总需求 §6.2、§7.3.5、§8.1.1）：
 	// Ask 创建方给出选项集，DECIDE 携带与控制一一对应的 typed Review
 	// 载荷分支（REVIEW_ROUND_GRANT 的 decline 选项除外）。
@@ -53,7 +54,7 @@ const (
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
 	switch k {
-	case ControlReset, ControlAbort, ControlRecovery,
+	case ControlValidation, ControlReset, ControlAbort, ControlRecovery,
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 		ControlRequestRequirementChange:
 		return true
@@ -126,6 +127,7 @@ func (k EventKind) Valid() bool {
 // without a package to freeze work during clarification. A later update binds
 // the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
+	Validation *ValidationRequest
 	// Request and Token bind a package update to an existing requirement Ask.
 	// Empty Request starts a new control request, including a package-free barrier.
 	Request RequestID
@@ -141,6 +143,7 @@ type RequestPayload struct {
 // 控制携带 typed Requirement 载荷（或作为 decline 两者皆空）。两个变体
 // 指针同时只允许一个非空。
 type DecidePayload struct {
+	Validation  *ValidationDecision
 	Request     RequestID
 	Token       string
 	Choice      AskOptionID
@@ -185,6 +188,7 @@ const (
 // 结果上携带，RUNTIME_ERROR/FAIL 的审查结果是普通失败结果、不建
 // candidate。
 type WorkerResultPayload struct {
+	Validation    *ValidationResult
 	ActionID      string
 	Provider      string
 	Outcome       string
@@ -250,6 +254,7 @@ type RouteDecision struct {
 // RequirementDecisionPackage binds the revision, impact preview and each
 // downstream work disposition shown on the requirement-change Ask.
 type RequirementDecisionPackage struct {
+	Coverage           *CoverageInventory        `json:"coverage,omitempty"`
 	CandidateRevision  string                    `json:"candidateRevision"`
 	DeltaDigest        string                    `json:"deltaDigest"`
 	ImpactDigest       string                    `json:"impactDigest"`
@@ -266,7 +271,7 @@ type RequirementDecisionPackage struct {
 // packageView 投影出 DECIDE 载荷中的包字段，供与 Ask 落账包的逐字段
 // 相等比较。
 func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
-	return RequirementDecisionPackage{
+	return RequirementDecisionPackage{Coverage: p.Coverage,
 		CandidateRevision:  p.CandidateRevision,
 		DeltaDigest:        p.DeltaDigest,
 		ImpactDigest:       p.ImpactDigest,
@@ -286,6 +291,7 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 // （CAS 基线，必须等于 Ask 落账基线与当前权威 revision）与 Reason（决定
 // 理由，随决定落账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
+	Coverage           *CoverageInventory        `json:"coverage,omitempty"`
 	BaseRevision       string                    `json:"baseRevision"`
 	CandidateRevision  string                    `json:"candidateRevision"`
 	DeltaDigest        string                    `json:"deltaDigest"`
@@ -314,8 +320,9 @@ const (
 // 核实的事实集合（复用 decision.Fact 的 typed 形态与来源枚举）与它绑定
 // 的来源对账项标识（如 actionID/receipt）。
 type OperatorObservationPayload struct {
-	Subject string
-	Facts   []decision.Fact
+	Validation *ValidationObservation
+	Subject    string
+	Facts      []decision.Fact
 }
 
 // HostActionReceiptPayload 是 HOST_ACTION_RECEIPT 的 payload：
@@ -679,9 +686,6 @@ func (e Event) Validate() error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "failed worker result requires an explicit failure class"}
 		}
 		if e.Result.Review != nil {
-			if err := validateReviewEvidence(e.Result.Review); err != nil {
-				return err
-			}
 			// 审查证据是完整语义裁决，只能由成功完成的派发携带
 			// （NewReviewWorkerResultEvent 固定 OutcomePass）；崩溃或失败的
 			// 结果是普通失败结果，不产生语义候选。
@@ -693,7 +697,7 @@ func (e Event) Validate() error {
 		if strings.TrimSpace(e.Observation.Subject) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "operator observation subject is empty"}
 		}
-		if len(e.Observation.Facts) == 0 {
+		if len(e.Observation.Facts) == 0 && e.Observation.Validation == nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "operator observation facts are empty"}
 		}
 		for _, fact := range e.Observation.Facts {
@@ -792,14 +796,16 @@ type eventWire struct {
 }
 
 type requestWire struct {
-	Request string                      `json:"request,omitempty"`
-	Token   string                      `json:"token,omitempty"`
-	Control string                      `json:"control"`
-	Options []AskOption                 `json:"options"`
-	Package *RequirementDecisionPackage `json:"package,omitempty"`
+	Validation *ValidationRequest          `json:"validation,omitempty"`
+	Request    string                      `json:"request,omitempty"`
+	Token      string                      `json:"token,omitempty"`
+	Control    string                      `json:"control"`
+	Options    []AskOption                 `json:"options"`
+	Package    *RequirementDecisionPackage `json:"package,omitempty"`
 }
 
 type decideEventWire struct {
+	Validation  *ValidationDecision         `json:"validation,omitempty"`
 	Request     string                      `json:"request"`
 	Token       string                      `json:"token"`
 	Choice      AskOptionID                 `json:"choice"`
@@ -822,6 +828,7 @@ type spawnReceiptEventWire struct {
 }
 
 type workerResultEventWire struct {
+	Validation    *ValidationResult     `json:"validation,omitempty"`
 	ActionID      string                `json:"actionId"`
 	Provider      string                `json:"provider"`
 	Outcome       string                `json:"outcome"`
@@ -831,8 +838,9 @@ type workerResultEventWire struct {
 }
 
 type operatorObsWire struct {
-	Subject string             `json:"subject"`
-	Facts   []operatorFactWire `json:"facts"`
+	Validation *ValidationObservation `json:"validation,omitempty"`
+	Subject    string                 `json:"subject"`
+	Facts      []operatorFactWire     `json:"facts"`
 }
 
 type operatorFactWire struct {
@@ -872,10 +880,10 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)
-		w.Request = &requestWire{Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token}
+		w.Request = &requestWire{Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token}
 	}
 	if e.Decide != nil {
-		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
+		w.Decide = &decideEventWire{Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}
@@ -890,7 +898,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Result = &workerResultEventWire{
 			ActionID: e.Result.ActionID, Provider: e.Result.Provider,
 			Outcome: e.Result.Outcome, PayloadDigest: e.Result.PayloadDigest,
-			FailureClass: string(e.Result.FailureClass), Review: e.Result.Review,
+			FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
 		}
 	}
 	if e.Observation != nil {
@@ -898,7 +906,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		for _, fact := range e.Observation.Facts {
 			facts = append(facts, operatorFactWire{Source: string(fact.Source), Key: fact.Key, Value: fact.Value})
 		}
-		w.Observation = &operatorObsWire{Subject: e.Observation.Subject, Facts: facts}
+		w.Observation = &operatorObsWire{Validation: e.Observation.Validation, Subject: e.Observation.Subject, Facts: facts}
 	}
 	if e.HostAction != nil {
 		w.HostAction = &hostActionReceiptWire{

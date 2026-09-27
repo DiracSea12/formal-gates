@@ -12,12 +12,12 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/testkit"
+	definition "formal-gates/internal/engine/testkit/workflow"
 	"formal-gates/internal/validate"
 )
 

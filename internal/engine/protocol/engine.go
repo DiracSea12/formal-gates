@@ -253,6 +253,9 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 		state.routingReleasedCapacity = false
 		return nil, nil
 	}
+	if _, err := e.advanceValidation(state, nextRevision); err != nil {
+		return nil, err
+	}
 	e.reconcileReviewGrantAsks(state)
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
 	heldSettled := e.executeHeldSettles(state, nextRevision)
@@ -308,6 +311,10 @@ func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) bool {
 		return false
 	}
 	for _, actionID := range state.HeldHostSettles {
+		if err := e.applyCandidateReceipt(state, state.PendingHostActions[actionID], state.HostActionReceipts[actionID]); err != nil {
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Detail: err.Error(), Revision: nextRevision})
+			continue
+		}
 		delete(state.PendingHostActions, actionID)
 	}
 	state.HeldHostSettles = nil
@@ -466,6 +473,9 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 			break
 		}
 	}
+	s.projectValidationTasks(&view, compiled)
+	s.projectRetryTasks(&view, compiled)
+	s.projectValidationBoundary(&view, compiled)
 	return view
 }
 
@@ -508,7 +518,11 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		if state == nil {
 			return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 		}
-		if e.reconcileReviewGrantAsks(state) {
+		advanced, err := e.advanceValidation(state, revision+1)
+		if err != nil {
+			return nil, revision, err
+		}
+		if advanced || e.reconcileReviewGrantAsks(state) {
 			if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
 				return nil, revision, err
 			}
@@ -648,6 +662,9 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	expectedCount := len(state.Expected)
 	state.retainExpected(plan.Next.Ready)
 	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	for _, action := range issued {
+		e.bindBusinessAttempt(state, action.Task)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -747,6 +764,7 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 			if payload.Retry != nil {
 				return payload.Retry.MaxAttempts
 			}
+			return 2
 		}
 		return 0
 	}
@@ -832,6 +850,15 @@ func (s *State) liveDispatch(dispatchID string) bool {
 // membership or task identities. Extra review authorization binds here to the
 // selected action, and issuance advances the series' round ledger atomically.
 func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) (decision.IssuedSet, error) {
+	for i := range issued {
+		if prior, ok := s.EndedAttempts[issued[i].Task]; ok {
+			if prior.RetryExhausted {
+				return nil, fmt.Errorf("retry exhausted for %s", issued[i].Task)
+			}
+			issued[i].ActionID = fmt.Sprintf("%s:attempt:%d", issued[i].ActionID, prior.Attempts+1)
+		}
+	}
+
 	for _, action := range issued {
 		if _, exists := s.PendingActions[action.ActionID]; exists {
 			return nil, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("action %q already issued", action.ActionID)}
@@ -869,7 +896,7 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		if !s.expectedContains(action.Task) {
 			s.Expected = append(s.Expected, action.Task)
 		}
-		if mark := reviewSeriesOf(action.Step); s.reviewSeriesBooked(mark) {
+		if mark := reviewSeriesOf(action.Step); s.reviewSeriesBooked(mark) && s.EndedAttempts[action.Task].ID == "" {
 			series, _ := s.ReviewSeries.Series(mark)
 			if series.Completed >= series.AutomaticLimit {
 				updated, err := review.BindDispatch(s.ReviewSeries, s.RunID, mark, action.ActionID, s.liveDispatch)
@@ -880,6 +907,7 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 			}
 			s.ReviewSeries = review.IssueRound(s.ReviewSeries, mark)
 		}
+		s.restoreRetryBinding(action, nextRevision)
 	}
 	return issued, nil
 }
@@ -1033,6 +1061,14 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			ask.BaseRevision = state.RequirementRevision()
 			ask.BaseGeneration = state.requirementGeneration()
 		}
+		if ev.Request.Control == ControlValidation {
+			value, err := e.acceptValidationRequest(state, ev.Request.Validation, nextRevision)
+			if err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			ask.Validation = value
+			ask.Options = []AskOption{{ID: "approve", Label: "Approve the described action"}, {ID: "decline", Label: "Keep current state"}}
+		}
 		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
 		return Acceptance{
@@ -1080,6 +1116,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// schema 拒绝。
 		if ask.Control == ControlRequestRequirementChange || ev.Decide.Requirement != nil {
 			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, expectedFingerprint); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
+		if ask.Control == ControlValidation || ev.Decide.Validation != nil {
+			if err := e.acceptValidationDecision(state, ask, ev.Decide, revision, nextRevision); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -1143,6 +1184,10 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 		}
 		if ev.Task.Status == runtime.TaskTerminal {
+			if attempt.Business {
+				attempt.AwaitingResult = true
+				state.EndedAttempts[key] = attempt
+			}
 			state.removeTaskBookkeeping(key)
 		}
 		return Acceptance{
@@ -1268,6 +1313,12 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
+		if ev.Observation.Validation != nil {
+			if err := e.acceptValidationObservation(state, ev.Observation, revision, nextRevision); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision}, state, true, nil
+		}
 		// Operator typed observation 入账（主代理核实事实、
 		// 不替用户授权）：绑定来源对账项并保留提交时 revision。Subject 必
 		// 须指向引擎当前真实等待处置的对账对象——UNKNOWN spawn receipt、
@@ -1418,6 +1469,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				Revision: nextRevision, ActionID: actionID,
 			}, state, true, nil
 		}
+		if err := e.applyCandidateReceipt(state, intent, receipt); err != nil {
+			return Acceptance{}, nil, false, err
+		}
 		delete(state.PendingHostActions, actionID)
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
 			return Acceptance{}, nil, false, err
@@ -1481,7 +1535,7 @@ func resultPayloadDigest(payload *WorkerResultPayload) string {
 	return digestOfCanonical(workerResultEventWire{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		FailureClass: string(payload.FailureClass), Review: payload.Review,
+		FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
 	})
 }
 
@@ -1491,7 +1545,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 	return WorkerResult{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		FailureClass: payload.FailureClass, Review: payload.Review,
+		FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
 		Digest: resultPayloadDigest(payload),
 	}
 }
@@ -1500,7 +1554,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	return &WorkerResultPayload{
 		ActionID: record.ActionID, Provider: record.Provider, Outcome: record.Outcome,
-		PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review,
+		PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
 	}
 }
 
@@ -1564,6 +1618,11 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 				actionID, mark, result.Review.Action),
 		}
 	}
+	if result.Review != nil {
+		if _, err := state.reviewAdmission(result.Review, actionID, state.issuedRevisionOf(actionID)); err != nil {
+			return Acceptance{}, false, err
+		}
+	}
 	if _, pending := state.PendingActions[actionID]; !pending {
 		// terminal 对账路径：派发簿记已随任务终态收回，准入按结果类别分层
 		// （§7.2.2:4 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
@@ -1584,6 +1643,26 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 				Code:   CodeUnknownAction,
 				Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
 			}
+		}
+		if retained, ok := state.EndedAttempts[receipt.Task]; ok && retained.ActionID == actionID && retained.AwaitingResult {
+			retained.AwaitingResult = false
+			state.Attempts[receipt.Task] = retained
+			state.PendingActions[actionID] = PendingAction{ActionID: actionID, Task: receipt.Task, Step: string(receipt.Task.Step), AttemptID: retained.ID, ReviewSeries: e.reviewSeriesOf(receipt.Task.Step)}
+			delete(state.EndedAttempts, receipt.Task)
+			detail := "late result reconciled against the terminal task"
+			if requestID != "" {
+				detail += " by requirement decision " + requestID
+			}
+			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: receipt.Task, Detail: detail, Revision: nextRevision})
+			refill, err := e.completeResult(state, workerResultRecord(result), nextRevision, expectedFingerprint)
+			if err != nil {
+				return Acceptance{}, false, err
+			}
+			status := "ACCEPTED"
+			if rejected, ok := state.RejectedResults[actionID]; ok {
+				status = rejected.Status
+			}
+			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: status, Revision: nextRevision, ActionID: actionID, Refill: refill}, true, nil
 		}
 		record := workerResultRecord(result)
 		if record.Review != nil {
@@ -1635,11 +1714,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		// 预检（revision 绑定、双审顺序、证据结构与完整性）：不可接纳
 		// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
 		// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
-		if result.Review != nil {
-			if _, err := state.admitReviewEvidence(result.Review, actionID, state.issuedRevisionOf(actionID)); err != nil {
-				return Acceptance{}, false, err
-			}
-		}
+
 		if staged, exists := state.StagedResults[actionID]; exists {
 			if staged.Digest == payloadDigest {
 				return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
@@ -1666,6 +1741,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	acceptance := Acceptance{
 		EventID: eventID, Kind: string(KindWorkerResult), Status: "ACCEPTED",
 		Revision: nextRevision, ActionID: actionID, Refill: refill,
+	}
+	if rejected, ok := state.RejectedResults[actionID]; ok {
+		acceptance.Status = rejected.Status
 	}
 	if class := record.FailureClass; class != "" {
 		recoveryAction := RouteFailure(class).Action
@@ -1765,6 +1843,30 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	pending := state.PendingActions[record.ActionID]
 	key := pending.Task
 	class := record.FailureClass
+	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && (class == "" || class == authoring.FailureTransientEngine) {
+		return nil, state.endInvalidAttempt(record.ActionID, OutcomeRuntimeError, "worker reported runtime error", record, nextRevision)
+	}
+	if record.Outcome == OutcomePass && state.reviewSeriesBooked(pending.ReviewSeries) && record.Review == nil {
+		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "signed review duty requires review evidence", record, nextRevision)
+	}
+	if record.Review != nil {
+		if _, err := state.admitReviewEvidence(record.Review, record.ActionID, state.issuedRevisionOf(record.ActionID)); err != nil {
+			if rejected, ok := err.(*RejectedError); ok && rejected.Code == CodeReviewEvidenceRejected {
+				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", rejected.Detail, record, nextRevision)
+			}
+			return nil, err
+		}
+	}
+	if class == "" && state.validationRole(key, e.cfg.Definition) != "" {
+		next, err := e.prepareValidationResult(state, record)
+		if err != nil {
+			return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", err.Error(), record, nextRevision)
+		}
+		state.Validation = next
+		if record.Validation != nil && record.Validation.Checkpoint {
+			return nil, nil
+		}
+	}
 	if class != "" {
 		plan := DecideRecovery(Interruption{Class: class})
 		attempt := state.Attempts[key]
@@ -1814,7 +1916,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	// PASS 结果完成其步骤：非载体 agent 步直接完成；载体步完成 ⟺ 所属系
 	// 列首过闩（语义 FAIL 的证据不置闩，载体保持开放等待下一轮）。完成后
 	// 补一次 frontier settle——外部边界事实与其余载体按依赖序补齐。
-	if state.passResultCompletesStep(authoring.StepID(pending.Step), e.reviewSeriesOf) {
+	if state.validationRole(key, e.cfg.Definition) == "" && state.passResultCompletesStep(authoring.StepID(pending.Step), e.reviewSeriesOf) {
 		if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
 			return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)
 		}
@@ -1962,6 +2064,9 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
 	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	for _, action := range issued {
+		e.bindBusinessAttempt(state, action.Task)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1991,17 +2096,6 @@ func (e *Engine) executeHostAction(operation authoring.OperationID, params any, 
 	if operation == "" {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeFreeCommandForm, Detail: "host action requires an operation reference; free command forms do not exist"}
 	}
-	schema, err := e.schemaForOperation(operation)
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	normalized, err := normalizeHostActionParams(params)
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	if err := validateAdapterPayload(schema, "adapter parameters", normalized); err != nil {
-		return HostActionIntent{}, 0, err
-	}
 	revision, state, err := e.load()
 	if err != nil {
 		return HostActionIntent{}, 0, err
@@ -2009,16 +2103,9 @@ func (e *Engine) executeHostAction(operation authoring.OperationID, params any, 
 	if state == nil {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	nextRevision := revision + 1
-	adapter := &AdapterHostAction{Operation: operation, Schema: schema, Params: normalized}
-	intent := HostActionIntent{
-		ActionID:      "hact:" + string(HostActionExecuteAdapterOperation) + ":" + strconv.FormatUint(nextRevision, 10),
-		Operation:     HostActionExecuteAdapterOperation,
-		Step:          state.nextHostActionStep(e.cfg.Definition, operation),
-		Adapter:       adapter,
-		PayloadDigest: digestOfCanonical(adapter),
-		Correlation:   strings.TrimSpace(correlation),
-		Revision:      nextRevision,
+	intent, err := e.prepareAdapterIntent(state, revision+1, operation, params, correlation)
+	if err != nil {
+		return HostActionIntent{}, 0, err
 	}
 	return e.persistHostAction(state, revision, intent, expectedFingerprint)
 }
@@ -2134,17 +2221,18 @@ func (e *Engine) schemaForOperation(operation authoring.OperationID) (authoring.
 // adapter contract. Strings, arrays, and other free command forms are rejected
 // before any state is loaded or changed.
 func normalizeHostActionParams(params any) (map[string]any, error) {
-	switch typed := params.(type) {
-	case nil:
+	if params == nil {
 		return map[string]any{}, nil
-	case map[string]any:
-		return typed, nil
-	default:
-		return nil, &RejectedError{
-			Code:   CodeFreeCommandForm,
-			Detail: fmt.Sprintf("host action params must be a structured object, got %T (free command forms do not exist)", params),
-		}
 	}
+	data, err := json.Marshal(params)
+	var object map[string]any
+	if err == nil {
+		err = json.Unmarshal(data, &object)
+	}
+	if err != nil || object == nil {
+		return nil, &RejectedError{Code: CodeFreeCommandForm, Detail: fmt.Sprintf("host action params must be a structured object, got %T", params)}
+	}
+	return object, nil
 }
 
 func (e *Engine) validateHostActionEvidence(state *State, intent HostActionIntent, receipt *HostActionReceiptPayload) error {
@@ -2217,6 +2305,12 @@ func validateAdapterPayload(schema authoring.SchemaID, label string, value map[s
 	}
 	var decodeErr error
 	switch schema {
+	case authoring.SchemaID("schema.candidate"):
+		if label == "adapter parameters" {
+			decodeErr = decode(&CandidateParameters{})
+		} else {
+			decodeErr = decode(&CandidateEvidence{})
+		}
 	case authoring.SchemaID("schema.host.fan.transport"):
 		if label == "adapter parameters" {
 			decodeErr = decode(&fanTransportParams{})
@@ -2375,4 +2469,24 @@ func (s *State) removeTaskBookkeeping(key runtime.TaskKey) {
 		delete(s.Attempts, key)
 		delete(s.PendingActions, attempt.ActionID)
 	}
+}
+
+// prepareAdapterIntent owns the typed operation/schema checks and durable
+// identity for both explicit HostActions and controller-required candidates.
+func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operation authoring.OperationID, params any, correlation string) (HostActionIntent, error) {
+	schema, err := e.schemaForOperation(operation)
+	if err != nil {
+		return HostActionIntent{}, err
+	}
+	normalized, err := normalizeHostActionParams(params)
+	if err != nil {
+		return HostActionIntent{}, err
+	}
+	if err := validateAdapterPayload(schema, "adapter parameters", normalized); err != nil {
+		return HostActionIntent{}, err
+	}
+	step := state.nextHostActionStep(e.cfg.Definition, operation)
+	adapter := &AdapterHostAction{Operation: operation, Schema: schema, Params: normalized}
+	action := fmt.Sprintf("hact:%s:%d", HostActionExecuteAdapterOperation, nextRevision)
+	return HostActionIntent{ActionID: action, Operation: HostActionExecuteAdapterOperation, Step: step, Adapter: adapter, PayloadDigest: digestOfCanonical(adapter), Correlation: strings.TrimSpace(correlation), Revision: nextRevision}, nil
 }

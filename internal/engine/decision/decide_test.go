@@ -7,8 +7,8 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // testDefinition 构造覆盖全部六变体的测试定义（定义形态的最小复用）：

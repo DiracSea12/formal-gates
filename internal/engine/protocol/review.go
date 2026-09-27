@@ -223,7 +223,7 @@ func (s *State) dualReviewPass() bool {
 // 且零状态变化。暂存预检与回执配对后的权威接纳共用本函数（单一事实源）：
 // 预检丢弃返回值只取错误——内核变换不改写调用方输入（包契约并有回归测
 // 试），账本在暂存与回执之间可能变化，落账仍以配对时的接纳为准。
-func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
+func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
 	// 派发身份唯一事实：证据的 DispatchID 必须就是提交结果的 actionID
 	//（授权占用按真实派发判）。
 	if evidence.DispatchID != actionID {
@@ -234,6 +234,9 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID str
 		}
 	}
 	series, _ := s.ReviewSeries.Series(evidence.Action)
+	if evidence.AuthorizationID != review.AuthorizationOfDispatch(series, actionID) && (evidence.AuthorizationID != "" || series.Completed >= series.AutomaticLimit) {
+		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review authorization differs from its signed dispatch"}
+	}
 	if seriesInRedoStale(series) {
 		if evidence.RequirementRevision != s.RequirementRevision() {
 			return review.Set{}, &RejectedError{
@@ -283,6 +286,14 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID str
 				s.ReviewSeries.ProductReview.Effective.Status, s.ReviewSeries.ProductReview.Effective.RequirementRevision),
 		}
 	}
+	return s.ReviewSeries, nil
+}
+
+func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
+	if _, err := s.reviewAdmission(evidence, actionID, issuedRevision); err != nil {
+		return review.Set{}, err
+	}
+	series, _ := s.ReviewSeries.Series(evidence.Action)
 	updated, _, err := review.RecordCandidate(s.ReviewSeries, s.RunID, evidence.Action,
 		review.Dispatch{
 			ID:                  evidence.DispatchID,

@@ -15,12 +15,12 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/testkit"
+	definition "formal-gates/internal/engine/testkit/workflow"
 	"formal-gates/internal/validate"
 )
 
@@ -963,7 +963,11 @@ func TestQAPersistenceProtocolUnknownReceiptRequiresMatchingLifecycleEvidence(t 
 		t.Fatalf("PrepareReady: actions=%v err=%v", issued, err)
 	}
 	actionID := issued[0].ActionID
-	staged, err := fixture.Worker.ResultBeforeReceipt(actionID, protocol.OutcomePass, "sha256:waiting-result", "")
+	issuedState, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := fixture.Worker.ReviewResultBeforeReceipt(actionID, issuedState.State.PendingActions[actionID].ReviewSeries, "sha256:waiting-result")
 	if err != nil || staged.Status != "STAGED" {
 		t.Fatalf("result-before-receipt = %+v err=%v", staged, err)
 	}
@@ -1420,7 +1424,11 @@ func TestQAPersistenceProtocolResultBeforeReceiptSurvivesRestartAndSettlesOnce(t
 		t.Fatalf("PrepareReady: actions=%v err=%v", issued, err)
 	}
 	actionID := issued[0].ActionID
-	staged, err := fixture.Worker.ResultBeforeReceipt(actionID, protocol.OutcomePass, "sha256:restart-result", "")
+	issuedState, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := fixture.Worker.ReviewResultBeforeReceipt(actionID, issuedState.State.PendingActions[actionID].ReviewSeries, "sha256:restart-result")
 	if err != nil || staged.Status != "STAGED" {
 		t.Fatalf("result-before-receipt = %+v err=%v", staged, err)
 	}

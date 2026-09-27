@@ -12,8 +12,8 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // compileWorkflow 编译 definition 表（覆盖全部六变体的真实定义）。

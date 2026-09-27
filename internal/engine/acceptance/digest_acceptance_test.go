@@ -16,7 +16,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/definition"
+	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
 // TestAcceptanceDefinitionDigestSeparatedFromImplementationSide：handler ID
