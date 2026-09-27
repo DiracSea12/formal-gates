@@ -265,22 +265,12 @@ func invalidateResult(series *Series, runID string, candidate RawCandidate, inpu
 	}
 	receipt := newCorrectionReceipt(runID, candidate, input, nextRevision, "VALID_RESULT:"+candidate.RawStatus, "INVALID_RESULT:"+input.Invalidity)
 	series.Corrections = append(series.Corrections, receipt)
-	if invalidatesEffective {
-		series.Effective = EffectiveStatus{
-			Status:              statusPending,
-			RawStatus:           candidate.RawStatus,
-			ResultDigest:        candidate.ResultDigest,
-			RequirementRevision: candidate.RequirementRevision,
-			Source:              receipt.ID,
-			Revision:            nextRevision,
-			BlockingFindingIDs:  []string{},
-			AdvisoryFindingIDs:  []string{},
-			DownstreamImpact:    downstreamImpact(input.Action),
-		}
-	} else {
-		previous := series.Effective
-		series.Effective = Effective(*series, nextRevision)
-		carryDownstreamImpact(series, input.Action, EffectiveStatus{Status: previous.Status, DownstreamImpact: previous.DownstreamImpact})
+	previous := series.Effective
+	series.Effective = Effective(*series, nextRevision)
+	if series.UpstreamVoid {
+		holdUpstreamVoid(series)
+	} else if series.Effective.Status != statusPending {
+		carryDownstreamImpact(series, input.Action, previous)
 	}
 	refresh(series)
 	return receipt, invalidatesEffective, nil
@@ -395,6 +385,11 @@ func ReleaseUpstreamVoid(set *Set) {
 		return
 	}
 	series.UpstreamVoid = false
+	if series.FreshOwed {
+		// The upstream dependency recovered, but only a new downstream review
+		// can discharge its requirement-redo obligation.
+		return
+	}
 	if len(series.RawCandidates) == 0 {
 		// 无候选可重投影：解除失效标记后结论保持当前投影（PENDING——上
 		// 游结论重建不凭空制造本系列证据），只刷新容量投影。

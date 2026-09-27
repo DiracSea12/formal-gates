@@ -92,6 +92,8 @@ type Run struct {
 	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
 	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
 	Review ReviewFace `json:"review"`
+	// RequirementWork 是需求变更需逐项决定的当前工作身份，由协议层派生。
+	RequirementWork []protocol.RequirementWork `json:"requirementWork"`
 	// PendingRequirementAsk 是修订屏障在位时未决需求变化 Ask 的公开面：
 	// 其存在即 run 的当前外部边界（Next 投影为 ask 边界，等待用户而非
 	// 错误）。
@@ -122,10 +124,11 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
-	RequestID string               `json:"requestId"`
-	Control   protocol.ControlKind `json:"control"`
-	Options   []protocol.AskOption `json:"options"`
-	Token     string               `json:"token"`
+	RoundGrant *protocol.ReviewGrantRequest `json:"roundGrant,omitempty"`
+	RequestID  string                       `json:"requestId"`
+	Control    protocol.ControlKind         `json:"control"`
+	Options    []protocol.AskOption         `json:"options"`
+	Token      string                       `json:"token"`
 }
 
 // ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
@@ -149,13 +152,15 @@ type ReviewCandidateFace struct {
 }
 
 // ReviewFindingFace 是候选内一条 finding 的公开面：ID 与 digest 是绑定
-// 裁决的稳定身份，severity 为有效严重度，EffectiveDecision 空＝未裁决。
+// 裁决的稳定身份，severity 为有效严重度；EffectiveDecisionID 是后续纠正
+// 必须 supersede 的当前决定身份，空值表示未裁决。
 type ReviewFindingFace struct {
-	ID                string `json:"id"`
-	Digest            string `json:"digest"`
-	Severity          string `json:"severity"`
-	Message           string `json:"message"`
-	EffectiveDecision string `json:"effectiveDecision,omitempty"`
+	ID                  string `json:"id"`
+	Digest              string `json:"digest"`
+	Severity            string `json:"severity"`
+	Message             string `json:"message"`
+	EffectiveDecision   string `json:"effectiveDecision,omitempty"`
+	EffectiveDecisionID string `json:"effectiveDecisionId,omitempty"`
 }
 
 // ReviewActionFace 是单个审查动作的账本公开面：completed/base/extra(授
@@ -184,10 +189,11 @@ type ReviewActionFace struct {
 // 用户声明的含义分类与来源、勾选的重走范围。只读投影，内容与授权事实
 // 以 state 的确认账本为唯一权威。
 type RequirementChangeFace struct {
-	Revision       string   `json:"revision"`
-	Classification string   `json:"classification"`
-	Scope          []string `json:"scope"`
-	Source         string   `json:"source"`
+	Revision       string                             `json:"revision"`
+	Classification string                             `json:"classification"`
+	Scope          []string                           `json:"scope"`
+	Source         string                             `json:"source"`
+	WorkDecisions  []protocol.RequirementWorkDecision `json:"workDecisions"`
 }
 
 // ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定，以及当前
@@ -235,6 +241,7 @@ func requirementChangeFace(state *protocol.State) *RequirementChangeFace {
 			Classification: entry.Classification,
 			Scope:          scope,
 			Source:         entry.Source,
+			WorkDecisions:  append([]protocol.RequirementWorkDecision{}, entry.WorkDecisions...),
 		}
 	}
 	return nil
@@ -254,13 +261,14 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 	for _, candidate := range series.RawCandidates {
 		findings := make([]ReviewFindingFace, 0, len(candidate.Findings))
 		for _, finding := range candidate.Findings {
-			decision, severity, _ := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+			decision, severity, decisionID := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
 			findings = append(findings, ReviewFindingFace{
-				ID:                finding.ID,
-				Digest:            finding.Digest,
-				Severity:          severity,
-				Message:           finding.Message,
-				EffectiveDecision: decision,
+				ID:                  finding.ID,
+				Digest:              finding.Digest,
+				Severity:            severity,
+				Message:             finding.Message,
+				EffectiveDecision:   decision,
+				EffectiveDecisionID: decisionID,
 			})
 		}
 		candidates = append(candidates, ReviewCandidateFace{
@@ -762,6 +770,10 @@ func (f *Facade) project() (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	work, err := f.engine.RequirementWork()
+	if err != nil {
+		return Run{}, err
+	}
 	status := "ACTIVE"
 	if snap.State.Phase == runtime.PhaseTerminal || plan.Next.Kind == decision.KindComplete {
 		status = "COMPLETE"
@@ -778,14 +790,12 @@ func (f *Facade) project() (Run, error) {
 		}
 	}
 	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, Review: reviewFace(snap.State), SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
+	run.RequirementWork = work
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
-	// 修订屏障在位：未决需求变化 Ask 即当前外部边界——Next 投影为 ask
-	// 边界（等待用户，而非 READY/ENGINE_INTERNAL 等待），Ask 面携完整
-	// 确认包与基线 revision。
+	// The protocol plan owns the boundary; the facade adds the bound package
+	// and freshness token for the pending requirement confirmation.
 	if ask := f.pendingRequirementAskFace(snap); ask != nil {
-		plan.Next = decision.NextResult{Kind: decision.KindAsk, Ask: &decision.AskPayload{}}
-		run.Next = plan.Next
 		run.PendingRequirementAsk = ask
 	}
 	if faces := f.pendingAskFaces(snap); len(faces) > 0 {
@@ -841,10 +851,11 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
-			RequestID: id,
-			Control:   ask.Control,
-			Options:   append([]protocol.AskOption{}, ask.Options...),
-			Token:     token,
+			RequestID:  id,
+			RoundGrant: ask.RoundGrant,
+			Control:    ask.Control,
+			Options:    append([]protocol.AskOption{}, ask.Options...),
+			Token:      token,
 		})
 	}
 	return faces

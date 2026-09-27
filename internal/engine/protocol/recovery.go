@@ -165,19 +165,27 @@ func (s *State) appendRecovery(record RecoveryRecord) {
 	s.RecoveryRecords = append(s.RecoveryRecords, record)
 }
 
-// retireAction 把当前 action 从可接纳索引移到 obsolete 索引。已落账的
-// receipt/result 是审计事实，保留；未消费的 result-before-receipt 暂存
-// 结果属于失败/被替换的派发边界，随 action 一并清除——否则它没有正常
-// 消费路径，会在 state 中永久残留（审阅 P2）。
+// retireAction removes an execution from current acceptance indexes while
+// retaining its received evidence in the obsolete-result ledger.
 func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction, bool) {
 	pending, ok := s.PendingActions[actionID]
 	if !ok {
-		return PendingAction{}, false
+		if _, obsolete := s.ObsoleteActions[actionID]; obsolete {
+			return PendingAction{}, false
+		}
+		receipt, recorded := s.SpawnReceipts[actionID]
+		if !recorded {
+			return PendingAction{}, false
+		}
+		pending = PendingAction{ActionID: actionID, Task: receipt.Task, Step: string(receipt.Task.Step)}
 	}
 	attempt := s.Attempts[pending.Task]
 	delete(s.PendingActions, actionID)
 	delete(s.Attempts, pending.Task)
-	delete(s.StagedResults, actionID)
+	if result, staged := s.StagedResults[actionID]; staged {
+		s.archiveObsoleteResult(result)
+		delete(s.StagedResults, actionID)
+	}
 	s.ObsoleteActions[actionID] = ObsoleteAction{
 		ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
 		ReplacedBy: replacedBy, Reason: reason, Bindings: attempt.Bindings, Plan: attempt.Plan,

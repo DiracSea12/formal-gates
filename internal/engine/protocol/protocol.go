@@ -28,8 +28,11 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
@@ -186,7 +189,8 @@ type PendingAction struct {
 // ID、控制类型与选项集落账。freshness token 不静态存储——它确定性绑定
 // (当前 revision, requestID)，随 Freshness/Submit 即时求值，因此任何
 // 后续提交都自然使旧 token 失效。决定后仍保留 PendingAsks 条目并置
-// Resolved=true，审计同时保留在 Decisions 中，不允许二次决定。
+// Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
+// 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
 	RequestID string           `json:"requestId"`
 	Control   ControlKind      `json:"control"`
@@ -195,11 +199,17 @@ type PendingAsk struct {
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
+	// RoundGrant is the immutable offer for an engine-generated review Ask.
+	// The pending request owns it until decided or its bound facts are superseded.
+	RoundGrant *ReviewGrantRequest `json:"roundGrant,omitempty"`
 	// BaseRevision 是需求变化 Ask 创建时的权威基线 revision（引擎落账，
 	// 不随请求载荷）：DECIDE 必须三方相等——载荷基线＝Ask 基线＝当前权
 	// 威。任何后续确认都使 Ask 过期（可区分拒绝、零状态、须重建）。
 	BaseRevision string `json:"baseRevision,omitempty"`
-	Resolved     bool   `json:"resolved"`
+	// BaseGeneration binds the Ask to a confirmation occurrence, even when the
+	// same requirement content is confirmed again. It is immutable for this Ask.
+	BaseGeneration uint64 `json:"baseGeneration,omitempty"`
+	Resolved       bool   `json:"resolved"`
 }
 
 // RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。
@@ -249,27 +259,53 @@ type WorkerResult struct {
 	Digest        string                 `json:"digest"`
 }
 
-// ObsoleteAction 保留被替换 Attempt 的 action/attempt 关联，使迟到结果
-// 可被明确报告为 OBSOLETE_RESULT，而不是被误报成未知 action。
-// Deferred 非空表示替换派发因修订屏障在位而延迟：屏障解除的同一事务补
-// 签发（新派发代数≥floor）后清空。
-type ObsoleteAction struct {
-	ActionID   string               `json:"actionId"`
-	Task       runtime.TaskKey      `json:"task"`
-	AttemptID  string               `json:"attemptId"`
-	ReplacedBy string               `json:"replacedBy"`
-	Reason     string               `json:"reason"`
-	Bindings   AttemptBindings      `json:"bindings"`
-	Plan       PlanIdentity         `json:"plan"`
-	Deferred   *DeferredReplacement `json:"deferred,omitempty"`
+// WorkerResultHistory retains all distinct received result evidence for a
+// dispatch. Persisted values support a single result object or a result array;
+// newly written values use the array representation.
+type WorkerResultHistory []WorkerResult
+
+func (h *WorkerResultHistory) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) > 0 && data[0] == '{' {
+		var result WorkerResult
+		if err := json.Unmarshal(data, &result); err != nil {
+			return err
+		}
+		*h = WorkerResultHistory{result}
+		return nil
+	}
+	var results []WorkerResult
+	if err := json.Unmarshal(data, &results); err != nil {
+		return err
+	}
+	*h = results
+	return nil
 }
 
-// DeferredReplacement 记录延迟补发所需的退位派发事实：落账形态与瞬态
-// 重试计数。
-type DeferredReplacement struct {
-	Pending     PendingAction `json:"pending"`
-	Attempts    int           `json:"attempts,omitempty"`
-	MaxAttempts int           `json:"maxAttempts,omitempty"`
+// archiveObsoleteResult is the single obsolete-evidence writer. Ordering by
+// digest makes archival independent of arrival order and map iteration.
+func (s *State) archiveObsoleteResult(result WorkerResult) {
+	history := s.ObsoleteResults[result.ActionID]
+	for _, existing := range history {
+		if existing.Digest == result.Digest {
+			return
+		}
+	}
+	history = append(history, result)
+	slices.SortFunc(history, func(a, b WorkerResult) int { return strings.Compare(a.Digest, b.Digest) })
+	s.ObsoleteResults[result.ActionID] = history
+}
+
+// ObsoleteAction 保留被替换 Attempt 的 action/attempt 关联，使迟到结果
+// 可被明确报告为 OBSOLETE_RESULT，而不是被误报成未知 action。
+type ObsoleteAction struct {
+	ActionID   string          `json:"actionId"`
+	Task       runtime.TaskKey `json:"task"`
+	AttemptID  string          `json:"attemptId"`
+	ReplacedBy string          `json:"replacedBy"`
+	Reason     string          `json:"reason"`
+	Bindings   AttemptBindings `json:"bindings"`
+	Plan       PlanIdentity    `json:"plan"`
 }
 
 // RecoveryRecord 是一次恢复路由的 durable 记录。它只记录 engine 已经
@@ -455,11 +491,6 @@ type State struct {
 	// 本）：失败路由/FAIL 结果经终态化释放了派发容量，事务收尾单点读
 	// 取即复位，据此执行容量补位。
 	routingReleasedCapacity bool
-	// roundsIssuedTx 记录本提交事务内已提案或已签出轮的系列（非导出＝
-	// 不入账本；提案可能随后被闸，同计——同一事务内不重复提案）：同一
-	// 事务可能经多条补位路径多次进入 issueInto，欠轮提案只落在本事务尚
-	// 未得过轮的系列上，提交点清零。
-	roundsIssuedTx map[review.Action]bool
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`
 	// SpawnFailures 保留可恢复的 FAILED receipt 历史；它们不占用最终
@@ -492,7 +523,7 @@ type State struct {
 	// LifecycleVerified 按 identity 落账已验证的 start/stop 配对。
 	LifecycleVerified map[string]LifecycleVerification `json:"lifecycleVerified"`
 	ObsoleteActions   map[string]ObsoleteAction        `json:"obsoleteActions"`
-	ObsoleteResults   map[string]WorkerResult          `json:"obsoleteResults"`
+	ObsoleteResults   map[string]WorkerResultHistory   `json:"obsoleteResults"`
 	RecoveryRecords   []RecoveryRecord                 `json:"recoveryRecords"`
 	ReconciledEffects map[string]ReconciledEffect      `json:"reconciledEffects"`
 	// ReviewSeries 是本 run 的开发前审查账本（product-review 与
@@ -531,13 +562,14 @@ type TopologyBinding struct {
 // 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
 // 代数（单调，防篡改链的一环）。
 type ConfirmedRevision struct {
-	Revision       string   `json:"revision"`
-	DeltaDigest    string   `json:"deltaDigest,omitempty"`
-	BaseRevision   string   `json:"baseRevision,omitempty"`
-	Source         string   `json:"source"`
-	Classification string   `json:"classification"`
-	DecidedScope   []string `json:"decidedScope,omitempty"`
-	RequestID      string   `json:"requestId,omitempty"`
+	Revision       string                    `json:"revision"`
+	DeltaDigest    string                    `json:"deltaDigest,omitempty"`
+	BaseRevision   string                    `json:"baseRevision,omitempty"`
+	Source         string                    `json:"source"`
+	Classification string                    `json:"classification"`
+	DecidedScope   []string                  `json:"decidedScope,omitempty"`
+	WorkDecisions  []RequirementWorkDecision `json:"workDecisions,omitempty"`
+	RequestID      string                    `json:"requestId,omitempty"`
 	// Reason 是用户决定的理由原文（随确认落账持久化）：carry 留痕据此
 	// 携理由（§7.2.2:4 携原 revision、证据和理由）。
 	Reason        string `json:"reason,omitempty"`
@@ -683,7 +715,7 @@ func (s *State) normalizeCollections() {
 		s.ObsoleteActions = map[string]ObsoleteAction{}
 	}
 	if s.ObsoleteResults == nil {
-		s.ObsoleteResults = map[string]WorkerResult{}
+		s.ObsoleteResults = map[string]WorkerResultHistory{}
 	}
 	if s.RecoveryRecords == nil {
 		s.RecoveryRecords = []RecoveryRecord{}
@@ -691,10 +723,8 @@ func (s *State) normalizeCollections() {
 	if s.ReconciledEffects == nil {
 		s.ReconciledEffects = map[string]ReconciledEffect{}
 	}
-	// 审查账本缺字段补齐：本字段上线前的 run（如旧 lightweight run）解码
-	// 后两条 series 都没有动作绑定，补初始 NewSet 即向前兼容——它们不使用
-	// 审查面。只剩一条绑定的部分投影按篡改处理，交给加载/提交边界的
-	// review.Validate 拒绝。
+	// 两条 series 均无动作绑定的格式使用初始账本；只有一条绑定的部分
+	// 投影由加载/提交边界的 review.Validate 拒绝。
 	if s.ReviewSeries.ProductReview.Action == "" && s.ReviewSeries.StartReadiness.Action == "" {
 		s.ReviewSeries = review.NewSet()
 	}

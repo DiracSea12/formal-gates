@@ -16,11 +16,8 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// intersectionFixture 返回引擎与在途的目标步派发：目标步（第三步）按给定
-// 系列归属标记构造。非开发前标记走完双审与拓扑后在第三步上取目标；开发
-// 前系列在结论后不再签发任何轮（签发闸规则 a），带标记目标改为该系列的
-// 在途第二轮——首轮记录语义 FAIL（未裁决 P1 阻塞，系列未结论），账本欠轮
-// 提案签出第二轮。
+// intersectionFixture 返回引擎与在途的目标步派发：非开发前标记走完双审
+// 与拓扑后取目标；开发前系列通过整轮失效产生一条待补的新鲜评审。
 func intersectionFixture(t *testing.T, mark authoring.ReviewSeriesAction) (*Engine, string, string) {
 	t.Helper()
 	targetStep := "tail.gate"
@@ -49,11 +46,9 @@ func intersectionFixture(t *testing.T, mark authoring.ReviewSeriesAction) (*Engi
 	return engine, dir, walkToInFlightRound(t, engine, seriesEvidenceOf(mark))
 }
 
-// walkToInFlightRound 把带标记系列驱动到在途的第二轮：首轮记录语义 FAIL
-// （P1 阻塞——系列保持未结论），账本欠轮提案在容量内签出第二轮；在途
-// 第二轮不受影响，首轮 P1 由用户驳回（聚合按 draft §4.4 重算转 PASS，其
-// PASS 轮入账时完成结论）。readiness 系列先过产品审（顺序门前提）。返回
-// 在途第二轮的派发身份。
+// walkToInFlightRound 完成首轮 PASS 后，由用户明确判定整轮无效，取得
+// 弥补该证据缺口的在途轮。无效首轮保留原始证据但不占 completed 容量。
+// readiness 系列先通过产品审以满足顺序门。
 func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) string {
 	t.Helper()
 	if action == review.StartReadiness {
@@ -63,12 +58,20 @@ func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) str
 		issueReady(t, engine)
 	}
 	round1 := pendingActionID(t, engine)
-	submitReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "FAIL", "round one blocks", []review.Finding{
-		{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
-	}))
-	round2 := pendingActionID(t, engine)
-	dismissSeriesFinding(t, engine, "req-ix-dismiss", action, round1)
-	return round2
+	submitReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "PASS", "initial review", nil))
+	invalidateSeriesRoundOf(t, engine, "req-ix-invalidate", action, round1)
+	snap := engine.LoadMustSucceed(t)
+	series, _ := snap.State.ReviewSeries.Series(action)
+	if len(series.RawCandidates) != 1 || series.Completed != 0 || !review.ResultExcluded(series, series.RawCandidates[0].ResultDigest) {
+		t.Fatalf("the invalidated review must remain evidence without consuming capacity: %+v", series)
+	}
+	for id, pending := range snap.State.PendingActions {
+		if pending.ReviewSeries == action {
+			return id
+		}
+	}
+	t.Fatalf("no fresh review dispatch for %s after whole-result invalidation", action)
+	return ""
 }
 
 // intersectionChange 描述一组需求变化决定：redoProduct/redoReadiness 勾选
@@ -82,6 +85,7 @@ type intersectionChange struct {
 	deltaDigest    string
 	reason         string
 	decisionReason string
+	workDecisions  []RequirementWorkDecision
 }
 
 func (c intersectionChange) payload() *RequirementDecisionPayload {
@@ -94,6 +98,7 @@ func (c intersectionChange) payload() *RequirementDecisionPayload {
 		ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
 		Classification: classification, RedoProductReview: c.redoProduct,
 		RedoStartReadiness: c.redoReadiness, Reason: c.decisionReason,
+		WorkDecisions: c.workDecisions,
 	}
 }
 
@@ -142,14 +147,14 @@ func targetSeriesOf(t *testing.T, engine *Engine, mark authoring.ReviewSeriesAct
 }
 
 // TestPendingDispatchDispositionAcrossChangesAndMarks：在途派发 × 变化 ×
-// 标记。重走本系列→决定事务内退位＋替换（替换完成新鲜轮）；重走他系列、
+// 标记。重走本系列→决定事务内退位旧任务并签发新任务；重走他系列、
 // 续用、放弃→派发原样在途，其结果按原绑定接纳。
 func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 	redone := intersectionChange{name: "redo own series", redoProduct: true, deltaDigest: "sha256:ix-redo-product", decisionReason: "the product walk is redone"}
 	rows := []struct {
 		mark    authoring.ReviewSeriesAction
 		change  intersectionChange
-		freshOK bool // 重走本系列：替换派发完成新鲜轮
+		freshOK bool // 重走本系列：新任务完成新鲜轮
 		stays   bool // 派发原样在途：原派发直接完成
 	}{
 		{authoring.ReviewSeriesProductReview, redone, true, false},
@@ -162,6 +167,14 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.change.name+" on "+string(row.mark), func(t *testing.T) {
 			engine, _, target := intersectionFixture(t, row.mark)
+			originalTask := engine.LoadMustSucceed(t).State.PendingActions[target].Task
+			if row.mark == authoring.ReviewSeriesUnaffiliated {
+				work, err := engine.RequirementWork()
+				if err != nil || len(work) != 1 || work[0].ActionID != target {
+					t.Fatalf("the gate must have an explicit carry identity: %+v %v", work, err)
+				}
+				row.change.workDecisions = []RequirementWorkDecision{{Work: work[0], Disposition: RequirementWorkCarry, Reason: "the gate is unaffected by the predevelopment review redo"}}
+			}
 			readinessTarget := pendingActionOfStep(t, engine, "start.readiness")
 			row.change.drive(t, engine, "req-ix-pending")
 			snap := engine.LoadMustSucceed(t)
@@ -169,10 +182,15 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 				if _, still := snap.State.PendingActions[target]; still {
 					t.Fatal("the dispatch of the redone series must be retired by the decision")
 				}
-				if obsolete := snap.State.ObsoleteActions[target]; obsolete.ReplacedBy == "" {
-					t.Fatalf("the retired dispatch must carry its replacement: %+v", obsolete)
+				if _, retired := snap.State.ObsoleteActions[target]; !retired || snap.State.Tasks[originalTask] != runtime.TaskTerminal {
+					t.Fatal("the redone obligation must retire its dispatch and terminate its task")
 				}
-				freshRoundOnTheReplacement(t, engine, target, "result-ix-fresh", reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-fresh", "rev-2", "PASS", "fresh round after the redo", nil))
+				for _, pending := range snap.State.PendingActions {
+					if pending.ReviewSeries == seriesEvidenceOf(row.mark) && pending.Task == originalTask {
+						t.Fatal("a requirement redo must create a new task rather than retry the old task")
+					}
+				}
+				completeReviewAfterRedo(t, engine, target, "result-ix-fresh", reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-fresh", "rev-2", "PASS", "fresh round after the redo", nil))
 			} else if row.stays {
 				if _, still := snap.State.PendingActions[target]; !still {
 					t.Fatal("a dispatch outside the redo scope must stay in flight")
@@ -183,12 +201,11 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 				if row.mark == authoring.ReviewSeriesUnaffiliated {
 					submitPlainResult(t, engine, "result-ix-plain", target)
 				} else {
-					if row.change.redoReadiness {
-						// 夹具的驳回结论补发并派发了 readiness 在途派发；重走
-						// 决定替换它后，其新鲜轮照常在替换上完成（floor revision）。
-						freshRoundOnTheReplacement(t, engine, readinessTarget, "result-ix-fresh-other", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-fresh-other", "rev-2", "PASS", "fresh readiness round after the redo", nil))
-					}
 					submitReviewResult(t, engine, "result-ix-carry", target, reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-carry", "rev-1", "PASS", "carried binding", nil))
+					if row.change.redoReadiness {
+						// 产品审恢复 PASS 后，重走的 readiness 才满足顺序门。
+						completeReviewAfterRedo(t, engine, readinessTarget, "result-ix-fresh-other", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-fresh-other", "rev-2", "PASS", "fresh readiness round after the redo", nil))
+					}
 				}
 			}
 			snap = engine.LoadMustSucceed(t)
@@ -199,7 +216,7 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 				t.Fatal("an admitted result must not be voided")
 			}
 			if series := targetSeriesOf(t, engine, row.mark); series != nil {
-				if series.Completed != 2 || series.Effective.Status != "PASS" {
+				if series.Completed != 1 || series.Effective.Status != "PASS" {
 					t.Fatalf("the target series = completed %d %+v", series.Completed, series.Effective)
 				}
 			}
@@ -235,7 +252,7 @@ func submitPlainResult(t *testing.T, engine *Engine, event, actionID string) {
 }
 
 // TestStagedDispatchDispositionAcrossChanges：证据先到（暂存、回执未到）
-// × 变化。重走本系列→暂存被声明处置作废＋替换（新鲜轮在替换上完成）；
+// × 变化。重走本系列→暂存被声明处置作废，新鲜轮在新任务上完成；
 // 他系列重走、续用、放弃→暂存保留，迟到回执配对完成。
 func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 	rows := []struct {
@@ -274,10 +291,10 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 				if _, voided := snap.State.ObsoleteResults[target]; !voided {
 					t.Fatal("the staged evidence of the redone series must be voided")
 				}
-				if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
+				if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 {
 					t.Fatalf("the voided round must not count: completed=%d", series.Completed)
 				}
-				freshRoundOnTheReplacement(t, engine, target, "result-ix-staged-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-ix-staged-fresh", "rev-2", "PASS", "fresh round on the replacement", nil))
+				completeReviewAfterRedo(t, engine, target, "result-ix-staged-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-ix-staged-fresh", "rev-2", "PASS", "fresh round on the new task", nil))
 			} else if row.change.redoProduct {
 				// 顺序门在产品审重走期关闭：迟到回执照常落账，配对挂起、
 				// 暂存保留，计轮为零。
@@ -292,7 +309,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 				if _, kept := snap.State.StagedResults[target]; !kept {
 					t.Fatal("the suspended pairing must keep the staging")
 				}
-				if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 {
+				if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 0 {
 					t.Fatalf("a suspended round must not count: completed=%d", series.Completed)
 				}
 				suspended := false
@@ -312,7 +329,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 				if acceptance, err := engine.Submit(receipt, fp); err != nil || acceptance.Status != "ACCEPTED" {
 					t.Fatalf("late receipt pairing: %v %+v", err, acceptance)
 				}
-				if series := targetSeriesOf(t, engine, row.mark); series.Completed != 2 || series.Effective.Status != "PASS" {
+				if series := targetSeriesOf(t, engine, row.mark); series.Completed != 1 || series.Effective.Status != "PASS" {
 					t.Fatalf("the paired round = completed %d %+v", series.Completed, series.Effective)
 				}
 			}
@@ -373,10 +390,10 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, voided := snap.State.ObsoleteResults[target]; !voided {
 			t.Fatal("the quarantined evidence of the redone series must be voided")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 {
 			t.Fatalf("the voided round must not count: completed=%d", series.Completed)
 		}
-		freshRoundOnTheReplacement(t, engine, target, "result-ix-q-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-ix-q-fresh", "rev-2", "PASS", "fresh round on the replacement", nil))
+		completeReviewAfterRedo(t, engine, target, "result-ix-q-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-ix-q-fresh", "rev-2", "PASS", "fresh round on the new task", nil))
 		intersectionCheck(t, engine)
 	})
 	t.Run("preserved carry replays with the revision and the user reason", func(t *testing.T) {
@@ -402,7 +419,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the carried result must reach Results")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("the carried round = completed %d %+v", series.Completed, series.Effective)
 		}
 		carried := false
@@ -431,7 +448,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the replayed result must reach Results after the abort")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.RequirementRevision != "rev-1" {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("the replayed round = completed %d %+v", series.Completed, series.Effective)
 		}
 		intersectionCheck(t, engine)
@@ -457,13 +474,13 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, admitted := snap.State.Results[target]; admitted {
 			t.Fatal("no replay may run while the barrier holds")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 {
 			t.Fatalf("no round may complete while the barrier holds: completed=%d", series.Completed)
 		}
 		intersectionCheck(t, engine)
 		abortExistingAsk(t, engine, "req-ix-q-last")
 		snap = engine.LoadMustSucceed(t)
-		if len(snap.State.QuarantinedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 2 {
+		if len(snap.State.QuarantinedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 1 {
 			t.Fatalf("the last decision must replay the quarantine: held=%d completed=%d",
 				len(snap.State.QuarantinedResults), snap.State.ReviewSeries.ProductReview.Completed)
 		}
@@ -522,9 +539,8 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
 			Classification: RequirementClassificationChanged, RedoStartReadiness: true, Reason: "only the readiness walk is redone",
 		})
-		// 夹具的驳回结论补发并派发了 readiness 在途派发；重走决定替换它后，
-		// 其新鲜轮照常在替换上完成（floor revision）。
-		freshRoundOnTheReplacement(t, engine, readinessTarget, "result-ix-term-readiness", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-term-readiness", "rev-2", "PASS", "fresh readiness round after the redo", nil))
+		// readiness 原任务被重走决定终止，产品审恢复后以新任务完成新鲜轮。
+		completeReviewAfterRedo(t, engine, readinessTarget, "result-ix-term-readiness", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-term-readiness", "rev-2", "PASS", "fresh readiness round after the redo", nil))
 		snap := engine.LoadMustSucceed(t)
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the terminal task's record must reconcile into Results")
@@ -532,7 +548,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, voided := snap.State.ObsoleteResults[target]; voided {
 			t.Fatal("a reconciled record must not be voided")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
 			t.Fatalf("the reconciled round = completed %d %+v", series.Completed, series.Effective)
 		}
 		reconciled := false
@@ -584,7 +600,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, voided := snap.State.ObsoleteResults[target]; !voided {
 			t.Fatal("the quarantined evidence of the redone series must be voided by declaration")
 		}
-		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
+		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 {
 			t.Fatalf("the voided round must not count: completed=%d", series.Completed)
 		}
 		intersectionCheck(t, engine)

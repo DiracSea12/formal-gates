@@ -12,6 +12,7 @@ package decision
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"formal-gates/internal/engine/authoring"
@@ -29,6 +30,24 @@ type State struct {
 	Phase             runtime.RunPhase                       `json:"phase"`
 	Completed         []authoring.StepID                     `json:"completed"` // 有序去重，由 CompleteStep 维护
 	Tasks             map[runtime.TaskKey]runtime.TaskStatus `json:"tasks"`
+	// RequiredTasks is a read-only projection of authorized work still owed.
+	// Its owner supplies it with the view; it is not another persisted ledger.
+	RequiredTasks map[authoring.StepID][]RequiredTask `json:"-"`
+	// ControlRequests are unresolved protocol Ask identities. Suspension holds
+	// automatic progression until the controlling requirement Ask is resolved.
+	ControlRequests []string `json:"-"`
+	Suspended       bool     `json:"-"`
+}
+
+// RequiredTask carries an outstanding obligation and its policy eligibility.
+// An empty RequiredTasks entry suppresses the step's implicit default task.
+// Blocked work still holds dependencies and completion until its owner releases it.
+type RequiredTask struct {
+	Task      runtime.TaskKey `json:"task"`
+	BlockedBy WaitReason      `json:"blockedBy,omitempty"`
+	// Covers names the alternate carrier steps whose dependents share this
+	// obligation. It changes dependency satisfaction, never execution identity.
+	Covers []authoring.StepID `json:"covers,omitempty"`
 }
 
 // NewState 构造并校验初始 state：definition 版本与 phase 枚举必填。
@@ -130,10 +149,13 @@ func (s *State) TransitionTask(key runtime.TaskKey, to runtime.TaskStatus) error
 // stateWire 是 State 的 canonical wire 形态：任务按 TaskKey 字符串排序，
 // 不携带 map 遍历序；Completed 由 CompleteStep 维持有序。
 type stateWire struct {
-	DefinitionVersion string          `json:"definitionVersion"`
-	Phase             string          `json:"phase"`
-	Completed         []string        `json:"completed"`
-	Tasks             []stateTaskWire `json:"tasks"`
+	DefinitionVersion string                              `json:"definitionVersion"`
+	Phase             string                              `json:"phase"`
+	Completed         []string                            `json:"completed"`
+	Tasks             []stateTaskWire                     `json:"tasks"`
+	RequiredTasks     map[authoring.StepID][]RequiredTask `json:"requiredTasks,omitempty"`
+	ControlRequests   []string                            `json:"controlRequests,omitempty"`
+	Suspended         bool                                `json:"suspended,omitempty"`
 }
 
 type stateTaskWire struct {
@@ -151,8 +173,19 @@ func (s *State) CanonicalBytes() ([]byte, error) {
 		Completed:         make([]string, 0, len(s.Completed)),
 		Tasks:             make([]stateTaskWire, 0, len(s.Tasks)),
 	}
+	w.ControlRequests = append([]string(nil), s.ControlRequests...)
+	sort.Strings(w.ControlRequests)
+	w.Suspended = s.Suspended
 	for _, id := range s.Completed {
 		w.Completed = append(w.Completed, string(id))
+	}
+	if len(s.RequiredTasks) > 0 {
+		w.RequiredTasks = make(map[authoring.StepID][]RequiredTask, len(s.RequiredTasks))
+		for step, tasks := range s.RequiredTasks {
+			ordered := append([]RequiredTask{}, tasks...)
+			sort.Slice(ordered, func(i, j int) bool { return ordered[i].Task.String() < ordered[j].Task.String() })
+			w.RequiredTasks[step] = ordered
+		}
 	}
 	keys := make([]string, 0, len(s.Tasks))
 	byKey := make(map[string]runtime.TaskStatus, len(s.Tasks))
@@ -175,4 +208,31 @@ func (s *State) Digest() (string, error) {
 		return "", err
 	}
 	return encoder.Digest(data), nil
+}
+
+// StepSatisfied requires a completed step and no outstanding work in its
+// dependency ancestry. A carried descendant cannot conceal an upstream redo.
+func (s *State) StepSatisfied(id authoring.StepID, cd *compiler.CompiledDefinition) bool {
+	if !s.completedContains(id) {
+		return false
+	}
+	for owner, tasks := range s.RequiredTasks {
+		for _, task := range tasks {
+			if owner == id || slices.Contains(task.Covers, id) {
+				return false
+			}
+		}
+	}
+	for _, step := range cd.Steps {
+		if step.Header.ID != id {
+			continue
+		}
+		for _, dep := range step.Header.Dependencies {
+			if !s.StepSatisfied(dep, cd) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

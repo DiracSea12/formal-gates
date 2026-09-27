@@ -376,3 +376,13 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 主代理复核：build/vet/gofmt 净；全量（除 internal/harness 本机环境）零失败；验收探针五条（/tmp/audit-probe15/accept，F1–F5 翻转形状）全绿；原缺陷形状探针如期转红；anchor 下溢边界亲证安全。**probe14 七红逐一定性**：六个＝F1 同族旧世界期望（其走查正是"下一轮 PASS 覆盖未裁决阻塞"形状——N1 转储实证聚合生效：晚到阻塞 finding 使 effective=FAIL 而闩单向保持 true），一个（A3 伪造/删除完成态 bricking）＝第 60 轮已记账的载入边界篡改 P3 残余；不变量测试（首过单写/签发计数/并发独占槽/顺序门三向/迟到证据）全绿。probe14 红项属参考探针陈旧期望，迁移随下一轮。
 
 **外审五发现全部修复。R2 待重新送审。**
+
+## R2 审阅返修交接（2026-09-27）
+
+本会话继续完成需求变化与审查调度的结构修复：需求变化入口先建立屏障，同一请求后续绑定完整确认包；审查义务统一参与调度，系列内所有载体的依赖使用同一义务；审查额度耗尽生成 typed Ask；需求内容身份与确认/执行代次分别绑定，重走义务不被旧结果清偿。删除被替代的调度合并、重复签发判定及 facade Next 覆写路径。
+
+独立复核确认的缺陷全部返修后，最终审查为 PASS；代码要求一并检查，注释问题也已处理。末轮审查复用了独立审查代理会话，并非新零上下文审查。本记录不表示阶段 4 Seal，也不表示真实宿主完整 canary 已完成。
+
+验证证据：`go test ./internal/engine/... ./cmd/... -count=1`、8 项相关 CLI 回归、定向生命周期回归、`go vet ./internal/engine/... ./internal/cli/... ./cmd/...`、生成物新鲜度检查及 `git diff --check` 均通过；主代理另用临时独立探针验证屏障入口、原内容再次确认后的新鲜审查、额度耗尽和同系列多载体依赖，并检查负控。引擎、CLI 与生命周期输出分别留在 `/tmp/boundary-engine-tests.log`、`/tmp/boundary-cli-tests.log`、`/tmp/boundary-lifecycle-tests.log`。未重跑全仓长期 harness/validate 套件，未调用真实外部模型。
+
+用户已授权接续 R3：QA 覆盖契约接入、FROZEN/review-ready 屏障、验证 wave 与开发后 finding/problem 归并、有限重试、唯一返修。R4 guard 和 R5 Git provider/canary/route matrix 仍属后续单元。本地提交用于将本次已审阅修复交接给新的零上下文开发代理；不推送。

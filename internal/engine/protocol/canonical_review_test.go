@@ -121,126 +121,128 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	return engine, dir
 }
 
-// TestCanonicalProductFailReissuesTheSecondAutomaticRound：产品审语义
-// FAIL 不完成载体步——技术审不被签出（顺序门要守的越序面不再出现），
-// 载体步留在前沿、同事务补位签发第二轮产品审派发（轮派发身份）；第二
-// 轮 PASS 后聚合仍被首轮未处置 P1 阻塞（draft §4.4「未处置或已确认
-// P0/P1 阻塞」）——effective 保持 FAIL、不闩、技术审不签出；对首轮 P1
-// 的 DISMISS 驳回后聚合直接 PASS：闩置位、载体步完成、技术审步随即可
-// 达，不为改聚合状态另签发轮次。
-func TestCanonicalProductFailReissuesTheSecondAutomaticRound(t *testing.T) {
+// A failed round awaits disposition. Dismissing its only blocker concludes
+// the same round and opens readiness without consuming another review round.
+func TestCanonicalProductFailAwaitsDisposition(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
-
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "canonical-fail-1", product,
+	submitReviewResult(t, engine, "canonical-fail", product,
 		reviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
 			{Severity: "P1", Message: "core acceptance blocked"},
 		}))
 	snap := engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
-	if series.Completed != 1 || series.Effective.Status != "FAIL" || series.RemainingAutomatic != 2 {
-		t.Fatalf("product ledger after the FAIL round = %+v", series)
+	if series.Completed != 1 || series.Effective.Status != "FAIL" || series.Issued != 1 || len(snap.State.PendingActions) != 0 {
+		t.Fatalf("failed review must await disposition: %+v, pending=%+v", series, snap.State.PendingActions)
 	}
-	if snap.State.stepCompleted("review.worker") {
-		t.Fatal("a semantically-FAIL round must not complete the carrier step")
-	}
-	if snap.State.Phase != runtime.PhaseProductReview {
-		t.Fatalf("phase after the FAIL round = %s, want PRODUCT_REVIEW", snap.State.Phase)
-	}
-
-	// 第二轮在 FAIL 落账的同事务补位签出（账本欠轮提案）：同一载体步的
-	// 轮任务（scope＝轮号）派生新派发身份，与首轮规范身份互异。
-	second := pendingActionByStep(t, engine, "review.worker")
-	if second == product || !strings.HasPrefix(second, product+"/") {
-		t.Fatalf("second round dispatch = %q, want a scoped round identity of %q", second, product)
-	}
-	submitReviewResult(t, engine, "canonical-pass-2", second,
-		reviewEvidence(review.ProductReview, second, "", "PASS", "clean on the second sample", nil))
+	assertReviewIssuanceHeld(t, engine)
+	dismissSeriesFinding(t, engine, "canonical-dismiss", review.ProductReview, product)
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "FAIL" || series.FirstPass {
-		t.Fatalf("the unadjudicated blocker must survive the PASS round: %+v", series.Effective)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Completed != 1 || series.Issued != 1 || series.Effective.Status != "PASS" || !snap.State.stepCompleted("review.worker") {
+		t.Fatalf("dismissal must conclude the original round: %+v", series)
 	}
-	if snap.State.stepCompleted("review.worker") {
-		t.Fatal("the aggregated FAIL must not complete the product carrier step")
-	}
-	if readiness := pendingActionOfStep(t, engine, "review.readiness"); readiness != "" {
-		t.Fatalf("readiness must not be issued while the aggregate blocks: %q", readiness)
-	}
+	pendingActionByStep(t, engine, "review.readiness")
+}
 
-	// 对首轮 P1 的 DISMISS：全部 P0/P1 被驳回且无其他 blocker 时直接 PASS
-	//（draft §4.4）——闩置位、载体步完成、技术审签出。
-	dismissSeriesFinding(t, engine, "canonical-dismiss-1", review.ProductReview, product)
-	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || !series.FirstPass {
-		t.Fatalf("the dismissal must conclude the aggregate: %+v", series.Effective)
+func assertReviewIssuanceHeld(t *testing.T, engine *Engine) {
+	t.Helper()
+	plan, _, err := engine.Plan()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !snap.State.stepCompleted("review.worker") {
-		t.Fatal("the effective PASS must complete the product carrier step")
-	}
-	if readiness := pendingActionByStep(t, engine, "review.readiness"); readiness == "" {
-		t.Fatalf("pending actions after the effective PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
+	if plan.Next.Kind == decision.KindReady {
+		if issued := issueReady(t, engine); len(issued) != 0 {
+			t.Fatalf("review obligation issued extra work: %v", issued)
+		}
 	}
 }
 
-// TestCanonicalExhaustionThenGrantEndorsesTheFourthRound：三轮自动容量
-// 耗尽后签发闸关闭（无第四轮派发）；授权决定背书后第四轮以背书形签出
-// 并绑定授权槽，其 PASS 完成 effective 结论与载体步。
+// redoProductReview records an explicit requirement revision and the user's
+// decision to review that revision. It does not submit a review result.
+func redoProductReview(t *testing.T, engine *Engine, requestID string) {
+	t.Helper()
+	base := engine.LoadMustSucceed(t).State.RequirementRevision()
+	askAndDecideRequirement(t, engine, requestID+"-change", "proceed", &RequirementDecisionPayload{
+		BaseRevision: base, CandidateRevision: "rev-" + requestID,
+		DeltaDigest: "sha256:delta-" + requestID, ImpactDigest: "sha256:impact-" + requestID,
+		Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the revised requirement needs product review",
+	})
+}
+
+func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
+	engine, _ := canonicalReviewEngine(t)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "canonical-confirm-fail", product,
+		reviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
+			{Severity: "P1", Message: "core acceptance blocked"},
+		}))
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	candidate := series.RawCandidates[0]
+	choice := AskOption{ID: AskOptionID("CONFIRM:" + candidate.Findings[0].ID), Label: "confirm"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "canonical-confirm", []AskOption{choice}, choice.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: product, RequirementRevision: candidate.RequirementRevision,
+		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
+		Decision: "CONFIRM", Reason: "acceptance cannot succeed", ExpectedEffectiveRevision: series.Effective.Revision,
+	}})
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("confirmation alone must not create fresh work: %+v", pending)
+	}
+	redoProductReview(t, engine, "canonical-revised")
+	fresh := pendingActionByStep(t, engine, "review.worker")
+	if fresh == product || !strings.HasPrefix(fresh, product+"/") {
+		t.Fatalf("fresh round must have a distinct task: %q", fresh)
+	}
+	assertReviewIssuanceHeld(t, engine)
+	revision := engine.LoadMustSucceed(t).State.RequirementRevision()
+	submitReviewResult(t, engine, "canonical-revised-pass", fresh,
+		reviewEvidenceAt(review.ProductReview, fresh, revision, "PASS", "revised requirement is complete", nil))
+	pendingActionByStep(t, engine, "review.readiness")
+}
+
+// Three completed reviews consume the automatic allowance. Each subsequent
+// review requires a real redo decision; an extra grant only supplies capacity.
 func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
-
 	action := issueReady(t, engine)[0]
-	rounds := []string{action}
 	for round := 1; round <= 3; round++ {
-		submitReviewResult(t, engine, "canonical-exhaust-"+string(rune('0'+round)), action,
-			reviewEvidence(review.ProductReview, action, "", "FAIL", "still blocked", []review.Finding{
-				{Severity: "P1", Message: "blocking defect survives round " + string(rune('0'+round))},
+		name := "canonical-exhaust-" + string(rune('0'+round))
+		revision := engine.LoadMustSucceed(t).State.RequirementRevision()
+		submitReviewResult(t, engine, name, action,
+			reviewEvidenceAt(review.ProductReview, action, revision, "FAIL", "blocked", []review.Finding{
+				{Severity: "P1", Message: "acceptance needs a requirement correction"},
 			}))
 		if round < 3 {
+			redoProductReview(t, engine, name)
 			action = pendingActionByStep(t, engine, "review.worker")
-			rounds = append(rounds, action)
 		}
 	}
 	snap := engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 {
-		t.Fatalf("series at exhaustion = %+v", series)
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 || len(snap.State.PendingActions) != 0 {
+		t.Fatalf("series at exhaustion = %+v, pending=%+v", series, snap.State.PendingActions)
 	}
-	if len(snap.State.PendingActions) != 0 {
-		t.Fatalf("pending actions at exhaustion = %+v, want none", snap.State.PendingActions)
-	}
-
 	askAndDecide(t, engine, ControlReviewRoundGrant, "canonical-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the fourth sample must be endorsed",
+		Action: review.ProductReview, Reason: "reserve capacity for the corrected requirement",
 	}})
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("capacity grant must not bypass disposition: %+v", pending)
+	}
+	redoProductReview(t, engine, "canonical-fourth")
 	fourth := pendingActionByStep(t, engine, "review.worker")
 	snap = engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
 	if !slices.Contains(series.Authorizations[0].DispatchIDs, fourth) {
-		t.Fatalf("the fourth round must bind the granted slot: %+v", series.Authorizations[0])
+		t.Fatalf("fourth round must bind its grant: %+v", series.Authorizations[0])
 	}
-	authID := series.Authorizations[0].ID
-	submitReviewResult(t, engine, "canonical-pass-4", fourth,
-		reviewEvidence(review.ProductReview, fourth, authID, "PASS", "clean on the endorsed round", nil))
-	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "FAIL" {
-		t.Fatalf("the three unadjudicated blockers must survive the endorsed PASS: %+v", series.Effective)
+	evidence := reviewEvidenceAt(review.ProductReview, fourth, snap.State.RequirementRevision(), "PASS", "corrected requirement", nil)
+	evidence.AuthorizationID = series.Authorizations[0].ID
+	submitReviewResult(t, engine, "canonical-pass-fourth", fourth, evidence)
+	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	if series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("fourth round result = %+v", series)
 	}
-
-	// 逐轮驳回三轮的未裁决 P1（draft §4.4：全部 P0/P1 被驳回且无其他
-	// blocker 时直接 PASS，不为改聚合状态另签发轮次）——聚合收口在已
-	// 背书的第四轮证据上。
-	for index, roundDispatch := range rounds {
-		dismissSeriesFinding(t, engine, "canonical-exhaust-dismiss-"+string(rune('0'+index+1)), review.ProductReview, roundDispatch)
-	}
-	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" || !series.FirstPass {
-		t.Fatalf("series after the dismissals = %+v", series.Effective)
-	}
-	if !snap.State.stepCompleted("review.worker") {
-		t.Fatal("the effective PASS must complete the product carrier step")
-	}
-	if readiness := pendingActionByStep(t, engine, "review.readiness"); readiness == "" {
-		t.Fatalf("pending actions after the effective PASS = %+v, want the readiness dispatch", snap.State.PendingActions)
-	}
+	pendingActionByStep(t, engine, "review.readiness")
 }
 
 // TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched：双审通过、拓

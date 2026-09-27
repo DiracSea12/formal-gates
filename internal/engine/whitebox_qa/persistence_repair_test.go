@@ -1615,7 +1615,7 @@ func TestQAPersistenceProtocolReplacementAttemptQuarantinesLateResult(t *testing
 	if got := afterLate.State.Attempts[oldPending.Task]; got.ID != currentAttempt.ID || got.ActionID != currentAttempt.ActionID {
 		t.Fatalf("late result changed current Attempt: %+v", got)
 	}
-	if result, ok := afterLate.State.ObsoleteResults[oldActionID]; !ok || result.PayloadDigest != "sha256:late" {
+	if result, ok := afterLate.State.ObsoleteResults[oldActionID]; !ok || len(result) != 1 || result[0].PayloadDigest != "sha256:late" {
 		t.Fatalf("obsolete result = %+v present=%v", result, ok)
 	}
 	if _, ok := afterLate.State.Results[currentAttempt.ActionID]; ok {

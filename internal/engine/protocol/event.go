@@ -122,11 +122,14 @@ func (k EventKind) Valid() bool {
 	return false
 }
 
-// RequestPayload 是 REQUEST_CONTROL 的 payload：控制类型 + Ask 选项集 +
-// 按控制类型的 typed 决定包（先例＝HostAction/Review 的变体指针）。当前
-// 只有需求变化控制携包：用户在 Ask 上看到并确认的完整变更包，DECIDE 载
-// 荷必须与之逐字段相等——Ask 即用户确认边界，不存在 Ask 之外的变更内容。
+// RequestPayload starts a typed control Ask. A requirement request may start
+// without a package to freeze work during clarification. A later update binds
+// the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
+	// Request and Token bind a package update to an existing requirement Ask.
+	// Empty Request starts a new control request, including a package-free barrier.
+	Request RequestID
+	Token   string
 	Control ControlKind
 	Options []AskOption
 	Package *RequirementDecisionPackage
@@ -244,27 +247,20 @@ type RouteDecision struct {
 	Selected []string `json:"selected,omitempty"`
 }
 
-// RequirementDecisionPackage 是用户在 Ask 上看到并确认的完整变更包：
-// 候选 revision、review-delta 指纹、影响预览指纹、来源、含义分类、重走
-// 勾选（四项审查/拓扑/路线项与下游工作决定项）与发现绑定。BaseRevision
-// 不入包（Ask 的权威基线由引擎按请求时的权威 revision 持有）；Reason 随
-// DECIDE 落账。结构只含 string/bool，可直接做逐字段相等比较。
+// RequirementDecisionPackage binds the revision, impact preview and each
+// downstream work disposition shown on the requirement-change Ask.
 type RequirementDecisionPackage struct {
-	CandidateRevision  string `json:"candidateRevision"`
-	DeltaDigest        string `json:"deltaDigest"`
-	ImpactDigest       string `json:"impactDigest"`
-	Source             string `json:"source"`
-	Classification     string `json:"classification"`
-	RedoProductReview  bool   `json:"redoProductReview"`
-	RedoStartReadiness bool   `json:"redoStartReadiness"`
-	RedoTopology       bool   `json:"redoTopology"`
-	RedoRoute          bool   `json:"redoRoute"`
-	// RedoDownstreamWork 是非审查系列下游工作的重走决定项（总需求 §5
-	// 处理顺序 2/5/7 的机主修订：重走/续用逐项由用户确认后引擎机械执
-	// 行）：勾选＝未落定的下游派发按既有退位机制终止、已落账的下游结果
-	// 入既有迟到证据账；不勾＝用户明确续用，决定留痕、接纳行为不变。
-	RedoDownstreamWork bool   `json:"redoDownstreamWork,omitempty"`
-	FindingDigest      string `json:"findingDigest,omitempty"`
+	CandidateRevision  string                    `json:"candidateRevision"`
+	DeltaDigest        string                    `json:"deltaDigest"`
+	ImpactDigest       string                    `json:"impactDigest"`
+	Source             string                    `json:"source"`
+	Classification     string                    `json:"classification"`
+	RedoProductReview  bool                      `json:"redoProductReview"`
+	RedoStartReadiness bool                      `json:"redoStartReadiness"`
+	RedoTopology       bool                      `json:"redoTopology"`
+	RedoRoute          bool                      `json:"redoRoute"`
+	WorkDecisions      []RequirementWorkDecision `json:"workDecisions,omitempty"`
+	FindingDigest      string                    `json:"findingDigest,omitempty"`
 }
 
 // packageView 投影出 DECIDE 载荷中的包字段，供与 Ask 落账包的逐字段
@@ -280,7 +276,7 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 		RedoStartReadiness: p.RedoStartReadiness,
 		RedoTopology:       p.RedoTopology,
 		RedoRoute:          p.RedoRoute,
-		RedoDownstreamWork: p.RedoDownstreamWork,
+		WorkDecisions:      p.WorkDecisions,
 		FindingDigest:      p.FindingDigest,
 	}
 }
@@ -290,19 +286,19 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 // （CAS 基线，必须等于 Ask 落账基线与当前权威 revision）与 Reason（决定
 // 理由，随决定落账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
-	BaseRevision       string `json:"baseRevision"`
-	CandidateRevision  string `json:"candidateRevision"`
-	DeltaDigest        string `json:"deltaDigest"`
-	ImpactDigest       string `json:"impactDigest"`
-	Source             string `json:"source"`
-	Classification     string `json:"classification"`
-	RedoProductReview  bool   `json:"redoProductReview"`
-	RedoStartReadiness bool   `json:"redoStartReadiness"`
-	RedoTopology       bool   `json:"redoTopology"`
-	RedoRoute          bool   `json:"redoRoute"`
-	RedoDownstreamWork bool   `json:"redoDownstreamWork,omitempty"`
-	Reason             string `json:"reason"`
-	FindingDigest      string `json:"findingDigest,omitempty"`
+	BaseRevision       string                    `json:"baseRevision"`
+	CandidateRevision  string                    `json:"candidateRevision"`
+	DeltaDigest        string                    `json:"deltaDigest"`
+	ImpactDigest       string                    `json:"impactDigest"`
+	Source             string                    `json:"source"`
+	Classification     string                    `json:"classification"`
+	RedoProductReview  bool                      `json:"redoProductReview"`
+	RedoStartReadiness bool                      `json:"redoStartReadiness"`
+	RedoTopology       bool                      `json:"redoTopology"`
+	RedoRoute          bool                      `json:"redoRoute"`
+	WorkDecisions      []RequirementWorkDecision `json:"workDecisions,omitempty"`
+	Reason             string                    `json:"reason"`
+	FindingDigest      string                    `json:"findingDigest,omitempty"`
 }
 
 // worker result outcome 的封闭集合（runtime/task.go：结果分类不进入任务
@@ -393,6 +389,13 @@ func NewRequestEvent(id EventID, control ControlKind, options ...AskOption) (Eve
 // （proceed/abort）。
 func NewRequirementRequestEvent(id EventID, pkg RequirementDecisionPackage, options ...AskOption) (Event, error) {
 	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{Control: ControlRequestRequirementChange, Options: append([]AskOption(nil), options...), Package: &pkg}}
+	return ev, ev.Validate()
+}
+
+// NewRequirementPackageEvent binds the prepared package to the existing barrier
+// without resolving it. Its new token must be fetched before user confirmation.
+func NewRequirementPackageEvent(id EventID, request RequestID, token string, pkg RequirementDecisionPackage) (Event, error) {
+	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{Control: ControlRequestRequirementChange, Request: request, Token: token, Package: &pkg}}
 	return ev, ev.Validate()
 }
 
@@ -560,7 +563,7 @@ func (e Event) Validate() error {
 				ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 				ControlRequestRequirementChange)}
 		}
-		if len(e.Request.Options) == 0 {
+		if len(e.Request.Options) == 0 && e.Request.Request == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "request options are empty"}
 		}
 		seen := make(map[AskOptionID]bool, len(e.Request.Options))
@@ -577,14 +580,20 @@ func (e Event) Validate() error {
 			seen[option.ID] = true
 		}
 		if e.Request.Control == ControlRequestRequirementChange {
-			if e.Request.Package == nil {
-				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a requirement change request must carry the typed decision package the user confirms"}
+			if e.Request.Request != "" {
+				if e.Request.Token == "" || e.Request.Package == nil || len(e.Request.Options) != 0 {
+					return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a requirement package update needs its request, token and full package; options belong to the existing Ask"}
+				}
+			} else if e.Request.Token != "" {
+				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a new request does not take an update token"}
 			}
-			if err := validateRequirementPackage(e.Request.Package); err != nil {
-				return err
+			if e.Request.Package != nil {
+				if err := validateRequirementPackage(e.Request.Package); err != nil {
+					return err
+				}
 			}
-		} else if e.Request.Package != nil {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not carry a decision package", e.Request.Control)}
+		} else if e.Request.Package != nil || e.Request.Request != "" || e.Request.Token != "" {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not carry a requirement package update", e.Request.Control)}
 		}
 	case KindDecide:
 		if strings.TrimSpace(string(e.Decide.Request)) == "" {
@@ -783,6 +792,8 @@ type eventWire struct {
 }
 
 type requestWire struct {
+	Request string                      `json:"request,omitempty"`
+	Token   string                      `json:"token,omitempty"`
 	Control string                      `json:"control"`
 	Options []AskOption                 `json:"options"`
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
@@ -861,7 +872,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)
-		w.Request = &requestWire{Control: string(e.Request.Control), Options: options, Package: e.Request.Package}
+		w.Request = &requestWire{Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token}
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}

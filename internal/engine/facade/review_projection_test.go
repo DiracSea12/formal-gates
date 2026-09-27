@@ -5,8 +5,12 @@
 package facade
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
@@ -140,6 +144,83 @@ func TestReviewFaceComposesTheCorrectionInput(t *testing.T) {
 	}
 }
 
+func TestReviewFaceBindsSuccessiveCorrectionsToEachFinding(t *testing.T) {
+	const runID = "run-finding-decisions"
+	set, _, err := review.RecordCandidate(review.NewSet(), runID, review.ProductReview,
+		review.Dispatch{ID: "dispatch-findings", RequirementRevision: "rev-1"},
+		review.Result{Status: "FAIL", Findings: []review.Finding{
+			{Severity: "P1", Message: "first blocker"},
+			{Severity: "P1", Message: "second blocker"},
+		}},
+		review.OperatorVerification{
+			Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
+			Evidence: "operator verified both findings",
+		})
+	if err != nil {
+		t.Fatalf("record candidate: %v", err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	state := protocol.NewState(*view)
+	state.RunID = runID
+	state.ReviewSeries = set
+
+	// 纠正输入的绑定信息全部取自公开面；调用方只选择 finding 和决定。
+	decide := func(index int, decision, severity string) {
+		t.Helper()
+		product := reviewFace(state).Actions[0]
+		candidate := product.Candidates[0]
+		finding := candidate.Findings[index]
+		next, err := review.ApplyCorrection(state.ReviewSeries, runID, candidate.RequirementRevision, review.CorrectionInput{
+			Action: review.Action(product.Action), DispatchID: candidate.DispatchID,
+			RequirementRevision: candidate.RequirementRevision,
+			ResultDigest:        candidate.ResultDigest, FindingID: finding.ID,
+			Decision: decision, Severity: severity, Supersedes: finding.EffectiveDecisionID,
+			Reason: "user verified the finding", Source: "engine-decide:findings", UserAuthorized: true,
+			ExpectedEffectiveRevision: product.EffectiveRevision,
+		})
+		if err != nil {
+			t.Fatalf("finding %d %s from public projection: %v", index, decision, err)
+		}
+		state.ReviewSeries = next
+	}
+	for _, finding := range reviewFace(state).Actions[0].Candidates[0].Findings {
+		if finding.EffectiveDecisionID != "" {
+			t.Fatalf("unadjudicated finding has a decision identity: %+v", finding)
+		}
+	}
+	decide(0, "CONFIRM", "")
+	decide(1, "CONFIRM", "")
+	product := reviewFace(state).Actions[0]
+	first := product.Candidates[0].Findings[0]
+	second := product.Candidates[0].Findings[1]
+	if first.EffectiveDecisionID == "" || second.EffectiveDecisionID == "" || first.EffectiveDecisionID == second.EffectiveDecisionID {
+		t.Fatalf("findings need distinct decision identities: %+v", product.Candidates[0].Findings)
+	}
+
+	for _, change := range []struct{ decision, severity string }{
+		{"RESEVERITIZE", "P2"},
+		{"DISMISS", ""},
+	} {
+		decide(0, change.decision, change.severity)
+		product = reviewFace(state).Actions[0]
+		updated := product.Candidates[0].Findings[0]
+		if updated.EffectiveDecision != change.decision || updated.Severity != "P2" ||
+			updated.EffectiveDecisionID == "" || updated.EffectiveDecisionID == first.EffectiveDecisionID {
+			t.Fatalf("correction did not replace the projected decision: %+v", updated)
+		}
+		if untouched := product.Candidates[0].Findings[1]; untouched != second {
+			t.Fatalf("correction changed the other finding: got %+v, want %+v", untouched, second)
+		}
+		if product.EffectiveStatus != "FAIL" {
+			t.Fatalf("the other confirmed P1 must remain blocking: %s", product.EffectiveStatus)
+		}
+		first = updated
+	}
+}
+
 // TestReviewFaceProjectsRequirementState：当前权威需求 revision 与最近一次
 // 修订确认（revision/classification/scope/来源）进入只读投影；只有受理
 // 初始账目（或账本为空）时不带最近修订。
@@ -165,6 +246,14 @@ func TestReviewFaceProjectsRequirementState(t *testing.T) {
 			Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged,
 			DecidedScope: []string{"product-review", "topology"}, RequestID: "req-change-1", StateRevision: 5,
 		})
+	decisions := []protocol.RequirementWorkDecision{{
+		Work: protocol.RequirementWork{
+			ActionID: "development-worker", Task: runtime.TaskKey{Node: "development", Step: "development.worker"},
+			IssuedRevision: 3, RequirementRevision: "rev-1", ResultDigest: "sha256:development-result",
+		},
+		Disposition: protocol.RequirementWorkCarry, Reason: "the changed wording does not affect this result",
+	}}
+	state.RequirementRevisions[1].WorkDecisions = decisions
 	face := reviewFace(state)
 	if face.RequirementRevision != "rev-2" {
 		t.Fatalf("requirement revision = %q, want rev-2", face.RequirementRevision)
@@ -173,6 +262,68 @@ func TestReviewFaceProjectsRequirementState(t *testing.T) {
 	if change == nil || change.Revision != "rev-2" || change.Classification != protocol.RequirementClassificationChanged ||
 		change.Source != protocol.RequirementSourceUserInitiated || len(change.Scope) != 2 || change.Scope[0] != "product-review" || change.Scope[1] != "topology" {
 		t.Fatalf("last change face = %+v", change)
+	}
+	if !reflect.DeepEqual(change.WorkDecisions, decisions) {
+		t.Fatalf("confirmed per-work decisions = %+v, want %+v", change.WorkDecisions, decisions)
+	}
+	confirmedReason := decisions[0].Reason
+	change.WorkDecisions[0].Reason = "caller edit"
+	if state.RequirementRevisions[1].WorkDecisions[0].Reason != confirmedReason {
+		t.Fatal("editing the projection changed the confirmed decision ledger")
+	}
+}
+
+func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
+	f := newEngineRouteFacade(t, "work-decision-face")
+	registry := compiler.NewRegistry()
+	for _, err := range []error{
+		registry.RegisterHandler("development.worker", authoring.RunnerAgentWorker),
+		registry.RegisterCodec("work.input"), registry.RegisterCodec("work.output"),
+		registry.RegisterPredicate("work.complete"),
+	} {
+		if err != nil {
+			t.Fatalf("register worker: %v", err)
+		}
+	}
+	worker, err := authoring.NewAgentStep(
+		authoring.Header{ID: "development.worker", NodeID: "development", DefinitionVersion: definition.Version},
+		authoring.IO{InputCodec: "work.input", OutputCodec: "work.output", Postconditions: []authoring.PredicateRef{{ID: "work.complete"}}},
+		authoring.AgentSpec{Handler: "development.worker", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute})
+	if err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+	compiled, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "development", Steps: []authoring.Step{worker}}, registry)
+	if err != nil {
+		t.Fatalf("compile worker: %v", err)
+	}
+	f.engine, err = protocol.New(f.store, protocol.Config{Definition: compiled, Registry: registry, Capacity: 4}, nil)
+	if err != nil {
+		t.Fatalf("worker engine: %v", err)
+	}
+	plan, _, err := f.engine.Plan()
+	if err != nil {
+		t.Fatalf("worker plan: %v", err)
+	}
+	fingerprint, err := f.engine.ObserveFingerprint()
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	issued, _, err := f.engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprint)
+	if err != nil || len(issued) != 1 {
+		t.Fatalf("issue worker: %+v %v", issued, err)
+	}
+	for name, project := range map[string]func() (Run, error){"show": f.Show, "status": f.Status} {
+		run, err := project()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(run.RequirementWork) != 1 {
+			t.Fatalf("%s work = %+v", name, run.RequirementWork)
+		}
+		work := run.RequirementWork[0]
+		if work.ActionID != issued[0].ActionID || work.Task.Step != "development.worker" || work.RequirementRevision != "rev-1" || work.IssuedRevision == 0 || work.ResultDigest != "" {
+			t.Fatalf("%s work identity = %+v", name, work)
+		}
 	}
 }
 

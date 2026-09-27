@@ -1822,7 +1822,7 @@ func TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if got := afterLate.State.Attempts[oldPending.Task]; got.ID != currentAttempt.ID || got.ActionID != currentAttempt.ActionID {
 		t.Fatalf("late result replaced current Attempt: before=%+v after=%+v", currentAttempt, got)
 	}
-	if result, recorded := afterLate.State.ObsoleteResults[oldActionID]; !recorded || result.PayloadDigest != "sha256:late-result" {
+	if result, recorded := afterLate.State.ObsoleteResults[oldActionID]; !recorded || len(result) != 1 || result[0].PayloadDigest != "sha256:late-result" {
 		t.Fatalf("obsolete result = %+v recorded=%v", result, recorded)
 	}
 	if _, completed := afterLate.State.Results[currentAttempt.ActionID]; completed {

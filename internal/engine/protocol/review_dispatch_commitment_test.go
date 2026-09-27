@@ -1,10 +1,6 @@
-// review_dispatch_commitment_test.go 覆盖 terminal 化派发的承诺保持与落
-// 定：承诺始于签发、终于落定——任务经 TASK_PROGRESS 到 terminal 只收回簿
-// 记，签发闸的在途承诺不随之解除（回执 UNKNOWN 同样证明签出而计入，回执
-// 状态迁移不改变承诺集合）；迟到结果（直接对账与隔离重放）照常入账，且
-// 承诺账在任意兄弟入账序下全程自洽；永不回 PASS 的派发由宿主的失败结果
-// 经同一对账路径落定释放。状态级承诺 oracle（assertSeriesCommitmentHeld）
-// 同时在既有签发闸测试的关键事务后断言。
+// review_dispatch_commitment_test.go verifies that issued review work stays
+// recordable across terminal task reports, receipt reconciliation, staging and
+// requirement barriers. Each series has at most one unsettled dispatch.
 package protocol
 
 import (
@@ -18,12 +14,6 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// ---- 状态级承诺 oracle（自建断言，不复用实现的判定谓词） ----
-
-// unsettledDispatchIDs 枚举当前未落定的派发：PendingActions 成员，或回执
-// 证明派发真实签出去过（SPAWNED/ATTACHED/UNKNOWN，非 FAILED——承诺始于
-// 签发、终于落定，回执状态迁移不改变集合）且 Results 与 ObsoleteActions
-// 均无该派发的 terminal 派发——承诺账必须覆盖的完整在途集合。
 func unsettledDispatchIDs(st *State) []string {
 	ids := make([]string, 0, len(st.PendingActions)+len(st.SpawnReceipts))
 	for id := range st.PendingActions {
@@ -48,9 +38,6 @@ func unsettledDispatchIDs(st *State) []string {
 	return ids
 }
 
-// seriesOfDispatch 归属一条未落定派发的审查系列：签发标记为权威；簿记已
-// 收回的 terminal 派发先按授权槽绑定归属，再按回执固化任务步骤的系列标
-// 记推导。
 func seriesOfDispatch(st *State, engine *Engine, dispatchID string) review.Action {
 	if pending, ok := st.PendingActions[dispatchID]; ok && pending.ReviewSeries != "" {
 		return pending.ReviewSeries
@@ -64,65 +51,44 @@ func seriesOfDispatch(st *State, engine *Engine, dispatchID string) review.Actio
 	return engine.reviewSeriesOf(st.SpawnReceipts[dispatchID].Task.Step)
 }
 
-// seriesCommitmentViolations 扫描双 series 对"放行 ⇒ 可背书 ⇒ 可入账（任
-// 意兄弟序）"承诺的违背：
-//  1. 存在未持槽在途派发但 Completed+在途(未持槽+持槽) > AutomaticLimit
-//     ——某个排序下未持槽派发入账时 Completed 已达上限且无背书；
-//  2. 持槽在途派发的槽已被有效结果占用——其携槽入账必被
-//     "already endorses a valid result"拒绝；
-//  3. 同一授权承载多于一条在途派发，或同一派发绑两条授权——独占性破坏。
 func seriesCommitmentViolations(t *testing.T, engine *Engine) []string {
 	t.Helper()
-	st := engine.LoadMustSucceed(t).State
-	live := unsettledDispatchIDs(st)
+	state := engine.LoadMustSucceed(t).State
+	live := unsettledDispatchIDs(state)
 	var violations []string
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		series, _ := st.ReviewSeries.Series(action)
-		slotOf := map[string]string{}
+		series, _ := state.ReviewSeries.Series(action)
+		authorizationOf := map[string]string{}
 		for _, authorization := range series.Authorizations {
 			for _, dispatchID := range authorization.DispatchIDs {
-				if other, dup := slotOf[dispatchID]; dup {
-					violations = append(violations, fmt.Sprintf(
-						"dispatch %s is bound to both authorizations %s and %s", dispatchID, other, authorization.ID))
+				if other, duplicate := authorizationOf[dispatchID]; duplicate {
+					violations = append(violations, fmt.Sprintf("dispatch %s is bound more than once: %s and %s", dispatchID, other, authorization.ID))
 				}
-				slotOf[dispatchID] = authorization.ID
+				authorizationOf[dispatchID] = authorization.ID
 			}
-		}
-		unslotted, slotted := 0, 0
-		liveOnSlot := map[string][]string{}
-		for _, dispatchID := range live {
-			if seriesOfDispatch(st, engine, dispatchID) != action {
-				continue
-			}
-			authID := review.AuthorizationOfDispatch(series, dispatchID)
-			if authID == "" {
-				unslotted++
-				continue
-			}
-			slotted++
-			liveOnSlot[authID] = append(liveOnSlot[authID], dispatchID)
-		}
-		if unslotted > 0 && series.Completed+unslotted+slotted > series.AutomaticLimit {
-			violations = append(violations, fmt.Sprintf(
-				"unslotted in-flight dispatches exist but completed=%d + unslotted=%d + slotted=%d exceeds the automatic limit %d: some sibling order leaves an unslotted dispatch unrecordable",
-				series.Completed, unslotted, slotted, series.AutomaticLimit))
 		}
 		occupied := review.OccupiedAuthorizationIDs(series)
-		for authID, carriers := range liveOnSlot {
-			if len(carriers) > 1 {
-				violations = append(violations, fmt.Sprintf(
-					"authorization %s carries %d in-flight dispatches %v", authID, len(carriers), carriers))
+		liveInSeries := 0
+		for _, dispatchID := range live {
+			if seriesOfDispatch(state, engine, dispatchID) != action {
+				continue
 			}
-			if occupied[authID] {
-				violations = append(violations, fmt.Sprintf(
-					"in-flight dispatches %v hold authorization %s that already endorses a valid result", carriers, authID))
+			liveInSeries++
+			authorizationID := authorizationOf[dispatchID]
+			if series.Completed >= series.AutomaticLimit && authorizationID == "" {
+				violations = append(violations, fmt.Sprintf("over-limit dispatch %s has no authorization", dispatchID))
 			}
+			if authorizationID != "" && occupied[authorizationID] {
+				violations = append(violations, fmt.Sprintf("live dispatch %s holds consumed authorization %s", dispatchID, authorizationID))
+			}
+		}
+		if liveInSeries > 1 {
+			violations = append(violations, fmt.Sprintf("series %s has %d live dispatches for one review obligation", action, liveInSeries))
 		}
 	}
 	return violations
 }
 
-// assertSeriesCommitmentHeld 断言当前状态满足签发闸的承诺不变量。
 func assertSeriesCommitmentHeld(t *testing.T, engine *Engine) {
 	t.Helper()
 	if violations := seriesCommitmentViolations(t, engine); len(violations) != 0 {
@@ -130,12 +96,6 @@ func assertSeriesCommitmentHeld(t *testing.T, engine *Engine) {
 	}
 }
 
-// ---- terminal 化与迟到结果的驱动助手 ----
-
-// terminalizeDispatchTask 经公开 TASK_PROGRESS 把派发任务驱动到 TERMINAL
-// （ISSUED→RUNNING→VALIDATING→TERMINAL）：模拟宿主观察到的派发终止——
-// 派发簿记随终态收回、回执与签发代数保留，迟到结果的 terminal 对账以此
-// 为前提。
 func terminalizeDispatchTask(t *testing.T, engine *Engine, actionID string) {
 	t.Helper()
 	pending, known := engine.LoadMustSucceed(t).State.PendingActions[actionID]
@@ -156,7 +116,6 @@ func terminalizeDispatchTask(t *testing.T, engine *Engine, actionID string) {
 	}
 }
 
-// submitSpawnReceipt 落一条 SPAWNED 回执（不提交结果）。
 func submitSpawnReceipt(t *testing.T, engine *Engine, event, actionID string) {
 	t.Helper()
 	if _, err := engine.Submit(spawnReceipt(t, EventID(event), actionID, "agent-"+event), fingerprintOf(t, engine)); err != nil {
@@ -164,17 +123,12 @@ func submitSpawnReceipt(t *testing.T, engine *Engine, event, actionID string) {
 	}
 }
 
-// blockingReviewEvidence 构造记语义 FAIL 轮的审查证据（一条未裁决 P1 阻
-// 塞——计轮但不结论系列）：承诺与容量形状的中间轮用它，系列保持未结论
-// 时载体步不随首过闩完成、显式签发路径持续可走。
 func blockingReviewEvidence(action review.Action, dispatchID, message string) ReviewResultEvidence {
 	return reviewEvidence(action, dispatchID, "", "FAIL", message, []review.Finding{
 		{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
 	})
 }
 
-// submitLateDispatchResult 为已 terminal 化的派发提交迟到 worker result
-// （回执必须已在账），返回提交错误供拒绝断言。
 func submitLateDispatchResult(t *testing.T, engine *Engine, event, actionID string, evidence ReviewResultEvidence) error {
 	t.Helper()
 	evidence.DispatchID = actionID
@@ -186,274 +140,6 @@ func submitLateDispatchResult(t *testing.T, engine *Engine, event, actionID stri
 	return err
 }
 
-// ---- 三个违诺形状的修复期态与对照 ----
-
-// TestTerminalizedDispatchKeepsCapacityPromiseUntilItsResultRecords：自洽
-// 形承诺在 terminal 化后保持——四并行道前三条容量自洽放行、第四条被闸；
-// 一条落回执后被宿主置 terminal，腾空的在途计数不得放行第四条（迟到结果
-// 仍可对账入账）；迟到 PASS 入账后承诺集合如实收缩，兄弟任意序入账全部
-// 闭环，第四条经授权背书放行——不存在悬空派发。
-func TestTerminalizedDispatchKeepsCapacityPromiseUntilItsResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	// Completed=0：前三条容量自洽放行（0+2+1=3 达界）、不绑槽，第四条被闸。
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
-	for _, lane := range []string{laneA, laneB, laneC} {
-		if review.AuthorizationOfDispatch(series, lane) != "" {
-			t.Fatalf("capacity-consistent issuance must not bind a slot: %s", lane)
-		}
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// lane.a 落 SPAWNED 回执后被宿主置 terminal：簿记收回、承诺保持——
-	// 在途计数不因 terminal 化腾空，lane.d 不得被放行。
-	submitSpawnReceipt(t, engine, "spawn-terminal-lane-a", laneA)
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
-	}
-
-	// 迟到 FAIL 轮对账入账（Completed=1，未结论）：此刻在途 {b,c}，
-	// 1+2+1=4>3，lane.d 仍被闸。
-	if err := submitLateDispatchResult(t, engine, "late-terminal-lane-a", laneA,
-		blockingReviewEvidence(review.ProductReview, laneA, "late result of the terminalized lane")); err != nil {
-		t.Fatalf("the late result of the terminalized dispatch must reconcile: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
-		t.Fatalf("the late reconciliation must record a round: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated until the siblings settle: %v", reissued)
-	}
-
-	// 兄弟序走完：b、c 相继入账（任意序都在容量内），Completed=3。
-	submitReviewResult(t, engine, "result-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
-		t.Fatalf("completed = %d, want 3", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
-	}
-
-	// 授权后被闸的第四轮经背书形放行并独占绑槽，携槽入账闭环——无悬空派
-	// 发（背书轮落在系列当前开放的载体上）。
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-lane-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the gated fourth lane",
-	}})
-	laneD := pendingActionByStep(t, engine, "lane.b")
-	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
-	authID := review.AuthorizationOfDispatch(series, laneD)
-	if authID == "" {
-		t.Fatal("the gated lane must hold the granted slot")
-	}
-	submitReviewResult(t, engine, "result-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, authID, "PASS", "the gated lane records on its slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords：
-// 背书形承诺在 terminal 化后保持——三轮耗尽后授权放行的持槽派发被宿主
-// 置 terminal，其槽在迟到结果落账前不回"干净"，先前被闸的兄弟不得绑
-// 上；迟到携原授权入账消费该槽后，兄弟经再授权的新槽放行——不存在
-// "already endorses"悬空。
-func TestTerminalizedDispatchKeepsItsAuthorizationSlotUntilItsResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "round.one", deps: []string{"prep.parse"}},
-		dagStep{name: "round.two", deps: []string{"round.one"}},
-		dagStep{name: "round.three", deps: []string{"round.two"}},
-		dagStep{name: "pair.a", deps: []string{"round.three"}},
-		dagStep{name: "pair.b", deps: []string{"round.three"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	// 三轮自动容量走满（Completed=3，均记 FAIL 轮不结论），授权一轮：背
-	// 书形独占绑 auth[0]，并行对被闸。
-	action := issueReady(t, engine)[0]
-	for round := 1; round <= 3; round++ {
-		submitReviewResult(t, engine, fmt.Sprintf("result-slot-r%d", round), action, blockingReviewEvidence(review.ProductReview, action, fmt.Sprintf("round %d", round)))
-		if round < 3 {
-			action = pendingActionID(t, engine)
-		}
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-slot-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "one endorsed lane",
-	}})
-	pairA := pendingActionByStep(t, engine, "round.one")
-	authA := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairA)
-	if authA == "" {
-		t.Fatal("the endorsed dispatch must hold the granted slot")
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// pair.a 落回执后置 terminal：承诺保持——auth[0] 仍承载未落定派发，
-	// pair.b 不得绑上"看似干净"的原槽（载体步保持开放、其规范任务已终态，
-	// 无可签前沿——无新 pending 轮即被闸）。
-	submitSpawnReceipt(t, engine, "spawn-terminal-pair-a", pairA)
-	terminalizeDispatchTask(t, engine, pairA)
-	assertSeriesCommitmentHeld(t, engine)
-	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
-		t.Fatalf("pair.b must stay gated while the terminalized pair.a holds the slot: %+v", pending)
-	}
-
-	// 迟到携原授权 FAIL 轮对账入账：越限轮由槽背书，槽被有效结果消费。
-	if err := submitLateDispatchResult(t, engine, "late-terminal-pair-a", pairA,
-		reviewEvidence(review.ProductReview, pairA, authA, "FAIL", "late endorsed result of the terminalized lane", []review.Finding{
-			{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
-		})); err != nil {
-		t.Fatalf("the late endorsed result must reconcile: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("the late endorsed record must consume the slot: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// pair.b 仍闸（槽已背书有效结果）；再授权放行并独占绑新槽，携槽入账。
-	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
-		t.Fatalf("pair.b must stay gated while no clean slot exists: %+v", pending)
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-terminal-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
-	}})
-	pairB := pendingActionByStep(t, engine, "round.one")
-	authB := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairB)
-	if authB == "" || authB == authA {
-		t.Fatalf("the gated sibling must hold a distinct fresh slot: %q vs %q", authB, authA)
-	}
-	submitReviewResult(t, engine, "result-pair-b", pairB, reviewEvidence(review.ProductReview, pairB, authB, "PASS", "the gated sibling records on the fresh slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 5 || series.ExtraConsumed != 2 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestQuarantinedLateResultReplayKeepsCapacityPromise：同一承诺在隔离重
-// 放路径全程保持——terminal 化发生在修订屏障之前，迟到结果在屏障期被持
-// 久隔离，解除事务的重放经同一对账路径入账；屏障期与重放后腾空的计数都
-// 不放行被闸的第四条，入账后兄弟任意序闭环。
-func TestQuarantinedLateResultReplayKeepsCapacityPromise(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-	submitSpawnReceipt(t, engine, "spawn-quarantine-lane-a", laneA)
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
-	}
-
-	// 屏障期：迟到结果被隔离（QUARANTINED），签发面冻结。
-	request, err := NewRequirementRequestEvent(EventID("req-quarantine-promise"), requirementPackageOf(nil), requirementOptions()...)
-	if err != nil {
-		t.Fatalf("request event: %v", err)
-	}
-	if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("submit request: %v", err)
-	}
-	late, err := NewReviewWorkerResultEvent(EventID("quarantine-late-lane-a"), laneA, testProvider,
-		"sha256:payload-quarantine-late-lane-a",
-		blockingReviewEvidence(review.ProductReview, laneA, "quarantined late result of the terminalized lane"))
-	if err != nil {
-		t.Fatalf("late event: %v", err)
-	}
-	if acceptance, err := engine.Submit(late, fingerprintOf(t, engine)); err != nil || acceptance.Status != "QUARANTINED" {
-		t.Fatalf("barrier quarantine = %+v err=%v", acceptance, err)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 解除（放弃变更）：隔离账重放，terminal 对账入账（Completed=1）；
-	// 此刻在途 {b,c}，1+2+1=4>3，lane.d 仍被闸。
-	abortExistingAsk(t, engine, "req-quarantine-promise")
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
-		t.Fatalf("the quarantined late result must reconcile on lift: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated after the replay records the late round: %v", reissued)
-	}
-
-	// 兄弟序走完（Completed=3），第四轮经授权背书放行闭环。
-	submitReviewResult(t, engine, "result-quarantine-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-quarantine-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-quarantine-lane-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the gated fourth lane after the replay",
-	}})
-	laneD := pendingActionByStep(t, engine, "lane.b")
-	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
-	if authID == "" {
-		t.Fatal("the gated lane must hold the granted slot after the replay")
-	}
-	submitReviewResult(t, engine, "result-quarantine-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, authID, "PASS", "the gated lane records on its slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestUncontestedLateTerminalResultRecords：对照——系列无在途承诺承载
-// 时，terminal 迟到对账入账只是多记一轮：兄弟的容量承诺在签发时点计数了
-// 该派发，迟到入账是那一计数的兑现，全程无害。
-func TestUncontestedLateTerminalResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 2 {
-		t.Fatalf("batch admitted %d lanes, want both: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	submitSpawnReceipt(t, engine, "spawn-uncontested-lane-a", laneA)
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if err := submitLateDispatchResult(t, engine, "late-uncontested-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late but uncontended", nil)); err != nil {
-		t.Fatalf("uncontended late result: %v", err)
-	}
-	submitReviewResult(t, engine, "result-uncontested-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "PASS", "lane b", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 2 {
-		t.Fatalf("completed = %d, want 2", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// ---- 挂接回执（ATTACHED）形状的承诺与落定 ----
-
-// submitUnknownReceipt 落一条 UNKNOWN 回执（宿主不知派发结果是否产生的
-// 观察事实），留待对账。
 func submitUnknownReceipt(t *testing.T, engine *Engine, event, actionID, correlation string) {
 	t.Helper()
 	if _, err := engine.Submit(unknownSpawnReceipt(t, EventID(event), actionID, correlation), fingerprintOf(t, engine)); err != nil {
@@ -461,9 +147,6 @@ func submitUnknownReceipt(t *testing.T, engine *Engine, event, actionID, correla
 	}
 }
 
-// attachUnknownReceipt 补齐唯一 lifecycle 配对并把 UNKNOWN 回执升为
-// ATTACHED（对账把宿主的中断观察挂接到 lifecycle 身份；挂接不要求派发
-// 仍在途）。
 func attachUnknownReceipt(t *testing.T, engine *Engine, actionID, correlation, identity string) {
 	t.Helper()
 	for i, name := range []string{LifecycleStart, LifecycleStop} {
@@ -484,8 +167,6 @@ func attachUnknownReceipt(t *testing.T, engine *Engine, actionID, correlation, i
 	}
 }
 
-// submitFailureResult 为派发提交一条非 PASS 的宿主失败结果（不携审查证
-// 据），返回接纳回执与提交错误——永不回 PASS 派发的落定出口。
 func submitFailureResult(t *testing.T, engine *Engine, event, actionID string) (Acceptance, error) {
 	t.Helper()
 	ev, err := NewWorkerResultEvent(EventID(event), actionID, testProvider, OutcomeFail, "sha256:payload-"+event, authoring.FailureBusinessReject)
@@ -496,729 +177,6 @@ func submitFailureResult(t *testing.T, engine *Engine, event, actionID string) (
 	return acceptance, err
 }
 
-// TestAttachedTerminalDispatchKeepsPromiseUntilItsResultRecords：自洽形
-// 承诺在"回执 UNKNOWN→任务 terminal 化→对账挂接 ATTACHED"后保持——挂接
-// 是观察事实，terminal 化只收回簿记；持 ATTACHED 回执的 terminal 派发与
-// SPAWNED 同判计入在途，被闸的第四条不放行；迟到 PASS 经同一 terminal 对
-// 账入账后承诺落定，兄弟任意序走完，第四条经授权背书放行闭环。
-func TestAttachedTerminalDispatchKeepsPromiseUntilItsResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-
-	// 回执 UNKNOWN → 任务被宿主置 terminal → 对账把回执挂接为 ATTACHED。
-	submitUnknownReceipt(t, engine, "spawn-unknown-lane-a", laneA, "corr-unknown-lane-a")
-	terminalizeDispatchTask(t, engine, laneA)
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-lane-a", "worker-lane-a")
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the attached terminal dispatch holds its promise: %v", reissued)
-	}
-
-	// 迟到 FAIL 轮经 terminal 对账入账（Completed=1）：承诺随 Results 落定。
-	if err := submitLateDispatchResult(t, engine, "late-attached-lane-a", laneA,
-		blockingReviewEvidence(review.ProductReview, laneA, "late result of the attached terminal dispatch")); err != nil {
-		t.Fatalf("the late result of the attached terminal dispatch must reconcile: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
-		t.Fatalf("the late reconciliation must record a round: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated until the siblings settle: %v", reissued)
-	}
-
-	// 兄弟序走完（Completed=3），第四轮仍闸；授权背书放行并携槽入账闭环。
-	submitReviewResult(t, engine, "result-attached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-attached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the gated fourth lane",
-	}})
-	laneD := pendingActionByStep(t, engine, "lane.b")
-	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
-	if authID == "" {
-		t.Fatal("the gated lane must hold the granted slot")
-	}
-	submitReviewResult(t, engine, "result-attached-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, authID, "PASS", "the gated lane records on its slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestAttachedTerminalDispatchFailureResultSettlesTheHeldPromise：挂接为
-// ATTACHED 的 terminal 派发永不回 PASS 时（宿主丢失结果），由宿主提交失
-// 败结果经同一 terminal 对账落账——Results 有记录、不建候选、不占轮、步
-// 骤不完成——承诺随之落定释放，同事务的容量补位放行第四条，兄弟任意序
-// 入账闭环。
-func TestAttachedTerminalDispatchFailureResultSettlesTheHeldPromise(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-
-	submitUnknownReceipt(t, engine, "spawn-unknown-settle-lane-a", laneA, "corr-unknown-settle")
-	terminalizeDispatchTask(t, engine, laneA)
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-settle", "worker-settle")
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 失败结果经 terminal 对账落账：只进 Results 与对账留痕，不建候选。
-	if _, err := submitFailureResult(t, engine, "fail-attached-lane-a", laneA); err != nil {
-		t.Fatalf("the failure result of the attached terminal dispatch must settle it: %v", err)
-	}
-	snap := engine.LoadMustSucceed(t)
-	if _, recorded := snap.State.Results[laneA]; !recorded {
-		t.Fatal("the failure result must be recorded in Results")
-	}
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 || len(series.RawCandidates) != 0 {
-		t.Fatalf("a non-PASS result must not create a review round: %+v", series)
-	}
-	if containsStep(snap.State.Completed, "lane.a") {
-		t.Fatalf("a non-PASS result must not complete the step: %+v", snap.State.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界），兄弟任
-	// 意序入账全部闭环（补位轮落在系列当前开放的载体上）。
-	laneD := ""
-	for id := range engine.LoadMustSucceed(t).State.PendingActions {
-		if id != laneB && id != laneC {
-			laneD = id
-		}
-	}
-	if laneD == "" {
-		t.Fatal("the released promise must refill a fresh round beside the siblings")
-	}
-	if got := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, laneD); got != "" {
-		t.Fatalf("the refilled lane must stay unslotted: %q", got)
-	}
-	submitReviewResult(t, engine, "result-settle-attached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-settle-attached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	submitReviewResult(t, engine, "result-settle-attached-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
-		t.Fatalf("completed = %d, want 3", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestUnknownTerminalDispatchKeepsItsPromiseUntilItsResultRecords：回执
-// UNKNOWN 的派发被宿主置 terminal 后仍计入承诺（UNKNOWN 证明派发真实签出
-// 去过）——显式签发路径不得在"回执尚未挂接"时按算术腾空在途计数放行被
-// 闸兄弟，对账挂接（UNKNOWN→ATTACHED）也不改变承诺集合；迟到真实结果在
-// 挂接前被拒（观察事实未成立）、挂接后对账入账，四条结果按序全部闭环
-// ——承诺集合不因回执状态迁移事后增长，已放行派发的越限悬空结构性不可
-// 能。
-func TestUnknownTerminalDispatchKeepsItsPromiseUntilItsResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-
-	// lane.a 在途期落 UNKNOWN 回执后被宿主置 terminal：簿记收回、承诺保持
-	//——显式签发路径 0+3+1>3，lane.d 不得被放行。
-	submitUnknownReceipt(t, engine, "spawn-unknown-terminal-lane-a", laneA, "corr-unknown-terminal")
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the unknown terminal dispatch holds its promise: %v", reissued)
-	}
-
-	// 挂接前的迟到真实结果被拒：UNKNOWN 尚不构成在途观察事实（准入分层）。
-	if err := submitLateDispatchResult(t, engine, "late-unattached-lane-a", laneA,
-		reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result before the attach", nil)); err == nil || rejectionCode(t, err) != CodeUnknownAction {
-		t.Fatalf("a real result must wait for the observation fact: %v", err)
-	}
-
-	// 对账挂接（UNKNOWN→ATTACHED）不改变承诺集合：lane.d 仍被闸。
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-terminal", "worker-unknown-terminal")
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated across the attach migration: %v", reissued)
-	}
-
-	// 迟到 FAIL 轮对账入账（Completed=1）：承诺随 Results 落定，此刻在途
-	// {b,c}，1+2+1=4>3，lane.d 仍被闸。
-	if err := submitLateDispatchResult(t, engine, "late-unknown-terminal-lane-a", laneA,
-		blockingReviewEvidence(review.ProductReview, laneA, "late result of the unknown terminal dispatch")); err != nil {
-		t.Fatalf("the late result after the attach must reconcile: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
-		t.Fatalf("the late reconciliation must record a round: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated until the siblings settle: %v", reissued)
-	}
-
-	// 兄弟序走完（Completed=3），第四轮经授权背书放行并携槽入账——四条结
-	// 果全部闭环。
-	submitReviewResult(t, engine, "result-unknown-terminal-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-unknown-terminal-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-unknown-terminal-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the gated fourth lane",
-	}})
-	laneD := pendingActionByStep(t, engine, "lane.b")
-	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
-	if authID == "" {
-		t.Fatal("the gated lane must hold the granted slot")
-	}
-	submitReviewResult(t, engine, "result-unknown-terminal-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, authID, "PASS", "the gated lane records on its slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestUnknownTerminalDispatchFailureResultSettlesAndRefills：回执保持
-// UNKNOWN（未挂接）的 terminal 派发永不回 PASS 时，宿主失败结果经 terminal
-// 对账的失败准入落账——不建候选、不占轮、不完成步骤——承诺落定，同一事
-// 务的容量补位放行被闸兄弟（0+2+1=3 达界、不绑槽），兄弟任意序入账闭环；
-// 首条落账定格，不同的第二结果按结果级摘要冲突拒绝。
-func TestUnknownTerminalDispatchFailureResultSettlesAndRefills(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-
-	submitUnknownReceipt(t, engine, "spawn-unknown-unattached-lane-a", laneA, "corr-unknown-unattached")
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the unknown terminal dispatch holds its promise: %v", reissued)
-	}
-
-	// 失败结果（非 PASS、无审查证据）凭 UNKNOWN 签出证明落账：僵尸出口。
-	if _, err := submitFailureResult(t, engine, "fail-unknown-unattached-lane-a", laneA); err != nil {
-		t.Fatalf("the failure-result exit must settle the unknown terminal dispatch: %v", err)
-	}
-	snap := engine.LoadMustSucceed(t)
-	if _, recorded := snap.State.Results[laneA]; !recorded {
-		t.Fatal("the failure result must be recorded in Results")
-	}
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 || len(series.RawCandidates) != 0 {
-		t.Fatalf("a non-PASS result must not create a review round: %+v", series)
-	}
-	if containsStep(snap.State.Completed, "lane.a") {
-		t.Fatalf("a non-PASS result must not complete the step: %+v", snap.State.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界，落在系列
-	// 当前开放的载体上），不绑槽；兄弟任意序入账闭环。
-	laneD := ""
-	for id := range engine.LoadMustSucceed(t).State.PendingActions {
-		if id != laneB && id != laneC {
-			laneD = id
-		}
-	}
-	if laneD == "" {
-		t.Fatal("the released promise must refill a fresh round beside the siblings")
-	}
-	if got := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, laneD); got != "" {
-		t.Fatalf("the refilled lane must stay unslotted: %q", got)
-	}
-	submitReviewResult(t, engine, "result-unknown-unattached-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-unknown-unattached-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	submitReviewResult(t, engine, "result-unknown-unattached-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
-		t.Fatalf("completed = %d, want 3", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 首条落账定格：不同的第二结果按结果级摘要冲突拒绝。
-	if _, err := submitFailureResult(t, engine, "fail-unknown-unattached-lane-a-again", laneA); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
-		t.Fatalf("the first recorded result settles the dispatch; a different second result must conflict; actual: %v", err)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords：背书形独
-// 占绑槽的派发走到 ATTACHED+terminal 形状时，槽在迟到结果落账前保持承载
-// ——不回干净、不被被闸兄弟抢占，再授权因存在未消费授权被拒；迟到携原
-// 授权结果经 terminal 对账入账消费该槽后，兄弟经再授权的新槽放行闭环
-// ——授权容量不泄漏。
-func TestAttachedEndorsedCarrierHoldsItsSlotUntilItsResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "round.one", deps: []string{"prep.parse"}},
-		dagStep{name: "round.two", deps: []string{"round.one"}},
-		dagStep{name: "round.three", deps: []string{"round.two"}},
-		dagStep{name: "pair.a", deps: []string{"round.three"}},
-		dagStep{name: "pair.b", deps: []string{"round.three"}},
-	)
-	engine, dir := reviewEngine(t, cd, reg)
-
-	// 三轮自动容量走满（Completed=3，均记 FAIL 轮不结论），授权一轮：背
-	// 书形独占绑 auth[0]，被闸兄弟无轮可走。
-	action := issueReady(t, engine)[0]
-	for round := 1; round <= 3; round++ {
-		submitReviewResult(t, engine, fmt.Sprintf("result-attached-slot-r%d", round), action,
-			blockingReviewEvidence(review.ProductReview, action, fmt.Sprintf("round %d", round)))
-		if round < 3 {
-			action = pendingActionID(t, engine)
-		}
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-slot-grant-1", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the endorsed carrier",
-	}})
-	pairA := pendingActionByStep(t, engine, "round.one")
-	authA := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairA)
-	if authA == "" {
-		t.Fatal("the endorsed dispatch must hold the granted slot")
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 背书轮走到 ATTACHED+terminal：槽仍承载未落定派发——被闸兄弟无轮可
-	// 走（载体步保持开放、其规范任务已终态），再授权被"存在未消费授权"拒
-	// 绝（每次只授权恰好一轮）。
-	submitUnknownReceipt(t, engine, "spawn-unknown-pair-a", pairA, "corr-unknown-pair-a")
-	terminalizeDispatchTask(t, engine, pairA)
-	attachUnknownReceipt(t, engine, pairA, "corr-unknown-pair-a", "worker-pair-a")
-	assertSeriesCommitmentHeld(t, engine)
-	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
-		t.Fatalf("pair.b must stay gated while the attached carrier holds the slot: %+v", pending)
-	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "req-attached-slot-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
-	}}); err == nil {
-		t.Fatal("a second grant must not be creatable while the attached carrier holds the unconsumed slot")
-	}
-
-	// 迟到携原授权 FAIL 轮经 terminal 对账入账：越限轮由槽背书，槽被有效
-	// 结果消费。
-	if err := submitLateDispatchResult(t, engine, "late-attached-pair-a", pairA,
-		reviewEvidence(review.ProductReview, pairA, authA, "FAIL", "late endorsed result of the attached terminal carrier", []review.Finding{
-			{Severity: "P1", Message: "unconfirmed blocker keeps the series open"},
-		})); err != nil {
-		t.Fatalf("the late endorsed result must reconcile and consume the slot: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("the late endorsed record must consume the slot: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 被闸兄弟仍无轮（原槽已背书有效结果）；再授权放行并独占绑新槽，携槽
-	// 入账闭环。
-	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
-		t.Fatalf("pair.b must stay gated while no clean slot exists: %+v", pending)
-	}
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-attached-slot-grant-3", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "a fresh slot for the gated sibling",
-	}})
-	pairB := pendingActionByStep(t, engine, "round.one")
-	authB := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, pairB)
-	if authB == "" || authB == authA {
-		t.Fatalf("the gated sibling must hold a distinct fresh slot: %q vs %q", authB, authA)
-	}
-	submitReviewResult(t, engine, "result-attached-pair-b", pairB, reviewEvidence(review.ProductReview, pairB, authB, "PASS", "the gated sibling records on the fresh slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 5 || series.ExtraConsumed != 2 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestStagedResultOfAttachedTerminalDispatchPairsIntoResults：结果先到暂
-// 存、回执 UNKNOWN、任务 terminal 化、挂接 ATTACHED——挂接的同一事务收
-// 尾即完成配对（terminal 对账与配对候选集对 ATTACHED 同判）：暂存结果入
-// Results、承诺落定，不悬挂；lane.d 在兄弟走完前保持被闸。
-func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-
-	// 结果先到（无回执）：暂存并携证据过完整预检（记 FAIL 轮不结论——配
-	// 对后兄弟仍有可签载体与被闸前沿）。
-	evidence := blockingReviewEvidence(review.ProductReview, laneA, "staged before the unknown receipt")
-	staged, err := NewReviewWorkerResultEvent(EventID("staged-attached-lane-a"), laneA, testProvider, "sha256:payload-staged-attached", evidence)
-	if err != nil {
-		t.Fatalf("staged event: %v", err)
-	}
-	if acceptance, err := engine.Submit(staged, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
-		t.Fatalf("staging = %+v err=%v", acceptance, err)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	submitUnknownReceipt(t, engine, "spawn-unknown-staged-lane-a", laneA, "corr-unknown-staged")
-	terminalizeDispatchTask(t, engine, laneA)
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-staged", "worker-staged")
-
-	// 挂接事务的收尾即配对：暂存离开暂存账、入 Results、承诺落定。
-	snap := engine.LoadMustSucceed(t)
-	if _, recorded := snap.State.Results[laneA]; !recorded {
-		t.Fatalf("the staged result must pair in the attaching transaction: staged=%+v", snap.State.StagedResults[laneA])
-	}
-	if _, staged := snap.State.StagedResults[laneA]; staged {
-		t.Fatal("the paired result must leave staging")
-	}
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
-		t.Fatalf("the paired result must record its round: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 兄弟序走完（Completed=3）：lane.d 在承诺与兄弟全部落定前保持被闸。
-	for _, lane := range []string{laneB, laneC} {
-		submitReviewResult(t, engine, "result-staged-"+lane, lane, blockingReviewEvidence(review.ProductReview, lane, "sibling lane"))
-	}
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("the exhausted series must keep lane.d gated: %v", reissued)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestFailRouteAfterAttachKeepsTheDispatchRecordable：回执 UNKNOWN 在
-// pending 期挂接为 ATTACHED 后，宿主中断经 RecoverAttempt 的 FAIL 路由由
-// 引擎终态化并收回簿记——派发变为非 pending＋ATTACHED＋无结果，仍计入承
-// 诺（被闸兄弟不放行），迟到结果照常经 terminal 对账入账。
-func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-
-	// 挂接发生在派发仍在途时（回执对账的正常链路）。
-	submitUnknownReceipt(t, engine, "spawn-unknown-recovery-lane-a", laneA, "corr-unknown-recovery")
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-recovery", "worker-recovery")
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 宿主中断、FAIL 路由：引擎终态化任务并收回簿记。
-	plan, _, err := engine.RecoverAttempt(laneA, Interruption{Class: authoring.FailureBusinessReject, CauseKnown: true}, fingerprintOf(t, engine))
-	if err != nil || plan.Action != RecoveryFail {
-		t.Fatalf("recover %s = %+v err=%v", laneA, plan, err)
-	}
-	if _, still := engine.LoadMustSucceed(t).State.PendingActions[laneA]; still {
-		t.Fatal("the FAIL route must reclaim the dispatch bookkeeping")
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the recovered dispatch holds its promise: %v", reissued)
-	}
-
-	// 迟到 FAIL 轮经 terminal 对账入账：承诺随 Results 落定。
-	if err := submitLateDispatchResult(t, engine, "late-recovered-lane-a", laneA,
-		blockingReviewEvidence(review.ProductReview, laneA, "late result after the FAIL route")); err != nil {
-		t.Fatalf("the dispatch kept recordable after the FAIL route: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 {
-		t.Fatalf("the late result must record its round: %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestSuspendedPairingFailureLeavesItsTrail：暂存结果的收尾配对在接纳失
-// 败（非顺序门——此处为已确认阻塞 finding 的同 revision 新候选门槛）时不
-// 作废也不静默：每次尝试留痕、暂存保留、承诺保持，等待账本变化后的下一
-// 次收尾再试。
-func TestSuspendedPairingFailureLeavesItsTrail(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 2 {
-		t.Fatalf("batch admitted %d lanes, want both: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-
-	// lane.a 的 PASS 证据先到暂存（无回执）。
-	evidence := reviewEvidence(review.ProductReview, laneA, "", "PASS", "staged before the blocking round", nil)
-	staged, err := NewReviewWorkerResultEvent(EventID("staged-trail-lane-a"), laneA, testProvider, "sha256:payload-staged-trail", evidence)
-	if err != nil {
-		t.Fatalf("staged event: %v", err)
-	}
-	if acceptance, err := engine.Submit(staged, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
-		t.Fatalf("staging = %+v err=%v", acceptance, err)
-	}
-
-	// 兄弟 lane.b 的 FAIL 轮经用户确认形成已确认阻塞：同 revision 的新候
-	// 选被门槛拦下，lane.a 暂存结果的配对尝试将失败。
-	submitReviewResult(t, engine, "result-blocking-lane-b", laneB, reviewEvidence(review.ProductReview, laneB, "", "FAIL", "findings block the product", []review.Finding{
-		{Severity: "P1", Message: "normal path produces a wrong result"},
-	}))
-	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
-	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm-blocking", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: laneB, RequirementRevision: "rev-1",
-		ResultDigest: engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.RawCandidates[0].ResultDigest,
-		FindingID:    engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.RawCandidates[0].Findings[0].ID,
-		Decision:     "CONFIRM", Reason: "the user confirms the blocking finding", ExpectedEffectiveRevision: 1,
-	}})
-
-	// 挂接触发收尾配对：失败留痕、暂存保留、承诺保持。
-	submitUnknownReceipt(t, engine, "spawn-unknown-trail-lane-a", laneA, "corr-unknown-trail")
-	terminalizeDispatchTask(t, engine, laneA)
-	attachUnknownReceipt(t, engine, laneA, "corr-unknown-trail", "worker-trail")
-	snap := engine.LoadMustSucceed(t)
-	if _, recorded := snap.State.Results[laneA]; recorded {
-		t.Fatal("the pairing failure must not record the staged result")
-	}
-	if _, staged := snap.State.StagedResults[laneA]; !staged {
-		t.Fatal("the suspended result must stay staged")
-	}
-	suspended := false
-	for _, record := range snap.State.RecoveryRecords {
-		if record.ActionID == laneA && strings.Contains(record.Detail, "stays suspended") {
-			suspended = true
-		}
-	}
-	if !suspended {
-		t.Fatalf("the failed pairing attempt must leave its trail: %+v", snap.State.RecoveryRecords)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// 放被拒的记录消化入迟到证据账（ObsoleteResults＋"could not be readmitted"
-// 留痕），但派发本身不因此落定——terminal 对账路径对新结果保持开放，承
-// 诺继续成立；随后到达的可纳结果经同一对账路径落账，承诺才落定。
-// TestQuarantineReplayRejectionKeepsThePromiseUntilAResultRecords：隔离重
-// 放被拒的记录消化入迟到证据账（ObsoleteResults＋"could not be readmitted"
-// 留痕），但派发本身不因此落定——terminal 对账路径对新结果保持开放，承
-// 诺继续成立；随后到达的可纳结果经同一对账路径落账，承诺才落定。
-func TestQuarantineReplayRejectionKeepsThePromiseUntilAResultRecords(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA, laneB, laneC := pendingActionByStep(t, engine, "lane.a"), pendingActionByStep(t, engine, "lane.b"), pendingActionByStep(t, engine, "lane.c")
-	// 兄弟先入账（Completed=2），terminal 化的 lane.a 仍持承诺：2+1+1=4>3，
-	// lane.d 被闸。
-	submitSpawnReceipt(t, engine, "spawn-reject-lane-a", laneA)
-	terminalizeDispatchTask(t, engine, laneA)
-	submitReviewResult(t, engine, "result-reject-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-reject-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
-	}
-
-	// 屏障期隔离一条不可纳的迟到结果（Operator 核实缺项只在重放时被
-	// review 内核拒绝）。
-	request, err := NewRequirementRequestEvent(EventID("req-reject-quarantine"), requirementPackageOf(nil), requirementOptions()...)
-	if err != nil {
-		t.Fatalf("request event: %v", err)
-	}
-	if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("submit request: %v", err)
-	}
-	inadmissible := reviewEvidence(review.ProductReview, laneA, "", "PASS", "late result that cannot be readmitted", nil)
-	inadmissible.Verification = review.OperatorVerification{}
-	late, err := NewReviewWorkerResultEvent(EventID("quarantine-inadmissible-lane-a"), laneA, testProvider, "sha256:payload-inadmissible-lane-a", inadmissible)
-	if err != nil {
-		t.Fatalf("late event: %v", err)
-	}
-	if acceptance, err := engine.Submit(late, fingerprintOf(t, engine)); err != nil || acceptance.Status != "QUARANTINED" {
-		t.Fatalf("barrier quarantine = %+v err=%v", acceptance, err)
-	}
-
-	// 解除：重放拒绝——记录消化入 ObsoleteResults 并留痕；派发不落定，
-	// 承诺保持（terminal 对账路径对 lane.a 的新结果仍开放）。
-	abortExistingAsk(t, engine, "req-reject-quarantine")
-	snap := engine.LoadMustSucceed(t)
-	if _, digested := snap.State.ObsoleteResults[laneA]; !digested {
-		t.Fatal("the rejected replay must digest its record into the obsolete ledger")
-	}
-	readmittedTrail := false
-	for _, record := range snap.State.RecoveryRecords {
-		if record.ActionID == laneA && strings.Contains(record.Detail, "could not be readmitted") {
-			readmittedTrail = true
-		}
-	}
-	if !readmittedTrail {
-		t.Fatalf("the rejected replay must leave its trail: %+v", snap.State.RecoveryRecords)
-	}
-	if _, recorded := snap.State.Results[laneA]; recorded {
-		t.Fatal("the rejected record must not enter Results")
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated after the rejected replay: %v", reissued)
-	}
-
-	// 随后到达的可纳迟到结果经同一对账路径落账（Completed=3），承诺随
-	// Results 落定；lane.d 仍闸，经授权背书放行闭环。
-	if err := submitLateDispatchResult(t, engine, "late-admissible-lane-a", laneA,
-		blockingReviewEvidence(review.ProductReview, laneA, "the admissible late result")); err != nil {
-		t.Fatalf("the admissible late result must reconcile: %v", err)
-	}
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
-		t.Fatalf("completed = %d, want 3", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	askAndDecide(t, engine, ControlReviewRoundGrant, "req-reject-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
-		Action: review.ProductReview, Reason: "the gated fourth lane after the rejected replay",
-	}})
-	laneD := pendingActionByStep(t, engine, "lane.b")
-	authID := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD)
-	if authID == "" {
-		t.Fatal("the gated lane must hold the granted slot")
-	}
-	submitReviewResult(t, engine, "result-reject-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, authID, "PASS", "the gated lane records on its slot", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 4 || series.ExtraConsumed != 1 {
-		t.Fatalf("final series = %+v", series)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestTerminalDispatchFailureResultSettlesTheHeldPromise：terminal 化后
-// 永不回 PASS 结果的派发（宿主丢失结果）由宿主提交失败结果经同一对账路
-// 径落账——Results 有记录、不建候选、不占轮、步骤不完成——承诺随之落
-// 定释放，腾出的容量在同一事务补位放行，兄弟任意序入账闭环。
-func TestTerminalDispatchFailureResultSettlesTheHeldPromise(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-
-	lanes := issueReady(t, engine)
-	if len(lanes) != 3 {
-		t.Fatalf("batch admitted %d lanes, want the capacity-consistent three: %v", len(lanes), lanes)
-	}
-	laneA := pendingActionByStep(t, engine, "lane.a")
-	laneB := pendingActionByStep(t, engine, "lane.b")
-	laneC := pendingActionByStep(t, engine, "lane.c")
-	submitSpawnReceipt(t, engine, "spawn-settle-lane-a", laneA)
-	terminalizeDispatchTask(t, engine, laneA)
-	assertSeriesCommitmentHeld(t, engine)
-	if reissued := issueReady(t, engine); len(reissued) != 0 {
-		t.Fatalf("lane.d must stay gated while the terminalized lane holds its promise: %v", reissued)
-	}
-
-	// 宿主丢失结果后提交失败结果（非 PASS、无审查证据）：经 terminal 对
-	// 账路径落账——只进 Results 与对账留痕，不建候选、不占轮、步骤不完成。
-	fail, err := NewWorkerResultEvent(EventID("settle-fail-lane-a"), laneA, testProvider, OutcomeFail, "sha256:payload-settle-fail", authoring.FailureBusinessReject)
-	if err != nil {
-		t.Fatalf("failure event: %v", err)
-	}
-	if _, err := engine.Submit(fail, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("the failure result of the terminalized dispatch must reconcile: %v", err)
-	}
-	snap := engine.LoadMustSucceed(t)
-	if _, recorded := snap.State.Results[laneA]; !recorded {
-		t.Fatal("the failure result must be recorded in Results")
-	}
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 || len(series.RawCandidates) != 0 {
-		t.Fatalf("a non-PASS result must not create a review round: %+v", series)
-	}
-	if containsStep(snap.State.Completed, "lane.a") {
-		t.Fatalf("a non-PASS result must not complete the step: %+v", snap.State.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-
-	// 承诺已落定：同一事务的容量补位放行第四轮（0+2+1=3 达界，落在系列
-	// 当前开放的载体上），兄弟任意序入账全部闭环。
-	laneD := ""
-	for id := range engine.LoadMustSucceed(t).State.PendingActions {
-		if id != laneB && id != laneC {
-			laneD = id
-		}
-	}
-	if laneD == "" {
-		t.Fatal("the released promise must refill a fresh round beside the siblings")
-	}
-	if got := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, laneD); got != "" {
-		t.Fatalf("the refilled lane must stay unslotted: %q", got)
-	}
-	submitReviewResult(t, engine, "result-settle-lane-b", laneB, blockingReviewEvidence(review.ProductReview, laneB, "lane b"))
-	submitReviewResult(t, engine, "result-settle-lane-c", laneC, blockingReviewEvidence(review.ProductReview, laneC, "lane c"))
-	submitReviewResult(t, engine, "result-settle-lane-d", laneD, reviewEvidence(review.ProductReview, laneD, "", "PASS", "the refilled lane records under the released promise", nil))
-	if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 3 {
-		t.Fatalf("completed = %d, want 3", series.Completed)
-	}
-	assertSeriesCommitmentHeld(t, engine)
-}
-
-// TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces：回执状态
-// {无回执, SPAWNED, ATTACHED, UNKNOWN, FAILED} × 任务期 {pending, terminal}
-// 的状态空间表——每格断言承诺终点式（承诺始于签发、终于落定，计入 ⇔ 存在
-// 落定路径）：计入判定以独立枚举（unsettledDispatchIDs，不复用实现谓词）
-// 为准；落定出口以宿主失败结果（僵尸出口）为探针。terminal 行：计入 ⇔
-// 落账成功；pending 行：结果必被接纳——回执构成在途观察事实的直接落账，
-// 其余暂存挂起、承诺保持。UNKNOWN×terminal 格＝计入∧失败结果可落定（回
-// 执状态迁移不改变承诺集合；真实结果仍须观察事实回执，挂接为 ATTACHED 后
-// 才可入账）。新增回执状态必须在此表补行并保持分层。
 func TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces(t *testing.T) {
 	submitTransientFailureReceipt := func(t *testing.T, engine *Engine, lane string) {
 		t.Helper()
@@ -1315,10 +273,6 @@ func TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces(t *testing.
 	}
 }
 
-// TestUndefinedReceiptStatusStaysOutOfPromiseAndExits：未定义的回执状态既
-// 不证明派发签出去过、也不构成在途观察事实——承诺不计入、terminal 对账不
-// 接纳，两侧保守地保持分层；未来新增回执状态在补入判定的同时必须在上表
-// 补行。
 func TestUndefinedReceiptStatusStaysOutOfPromiseAndExits(t *testing.T) {
 	if issuedWitnessReceipt("SOME_UNDEFINED_STATUS") {
 		t.Fatal("an undefined receipt status must not prove the dispatch was issued")
@@ -1326,4 +280,348 @@ func TestUndefinedReceiptStatusStaysOutOfPromiseAndExits(t *testing.T) {
 	if inflightWitnessReceipt("SOME_UNDEFINED_STATUS") {
 		t.Fatal("an undefined receipt status must not count as an in-flight witness")
 	}
+}
+
+func TestTerminalReviewDispatchRemainsRecordableAcrossReceipts(t *testing.T) {
+	for _, receipt := range []string{"SPAWNED", "ATTACHED", "UNKNOWN"} {
+		for _, failure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failure=%t", receipt, failure), func(t *testing.T) {
+				cd, reg := productReviewDAGFixture(t,
+					dagStep{name: "review.primary", deps: []string{"prep.parse"}},
+					dagStep{name: "review.spare", deps: []string{"prep.parse"}},
+				)
+				engine, _ := reviewEngine(t, cd, reg)
+				issued := issueReady(t, engine)
+				if len(issued) != 1 {
+					t.Fatalf("one owed review must issue exactly once: %v", issued)
+				}
+				action := issued[0]
+				if slot := review.AuthorizationOfDispatch(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview, action); slot != "" {
+					t.Fatalf("initial automatic review must not consume extra authorization: %s", slot)
+				}
+				if receipt == "SPAWNED" {
+					submitSpawnReceipt(t, engine, "spawn-review", action)
+				} else {
+					submitUnknownReceipt(t, engine, "spawn-review", action, "correlation-review")
+				}
+				terminalizeDispatchTask(t, engine, action)
+				if receipt == "ATTACHED" {
+					attachUnknownReceipt(t, engine, action, "correlation-review", "worker-review")
+				}
+				assertSeriesCommitmentHeld(t, engine)
+				assertReviewIssuanceHeld(t, engine)
+				if !slices.Contains(unsettledDispatchIDs(engine.LoadMustSucceed(t).State), action) {
+					t.Fatal("the terminal dispatch must retain its result obligation")
+				}
+				if failure {
+					if _, err := submitFailureResult(t, engine, "failed-review", action); err != nil {
+						t.Fatalf("terminal failure result: %v", err)
+					}
+					snap := engine.LoadMustSucceed(t)
+					result, ok := snap.State.Results[action]
+					if !ok || result.Outcome != OutcomeFail || result.Review != nil || result.PayloadDigest != "sha256:payload-failed-review" {
+						t.Fatalf("failure evidence was not preserved: %+v", result)
+					}
+					if series := snap.State.ReviewSeries.ProductReview; series.Completed != 0 || len(series.RawCandidates) != 0 || containsStep(snap.State.Completed, "review.primary") {
+						t.Fatalf("execution failure must not complete a semantic review: %+v", series)
+					}
+					replacement := pendingActionID(t, engine)
+					if replacement == action || len(snap.State.PendingActions) != 1 {
+						t.Fatalf("only the unsettled review obligation may be retried: %+v", snap.State.PendingActions)
+					}
+					if slot := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, replacement); slot != "" {
+						t.Fatalf("retry under automatic capacity must not consume a slot: %s", slot)
+					}
+					submitReviewResult(t, engine, "replacement-review", replacement, reviewEvidence(review.ProductReview, replacement, "", "PASS", "the owed review completed", nil))
+					if _, err := submitFailureResult(t, engine, "different-failure", action); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
+						t.Fatalf("a distinct second result must conflict with the settled evidence: %v", err)
+					}
+				} else {
+					if receipt == "UNKNOWN" {
+						if err := submitLateDispatchResult(t, engine, "unobserved-review", action, reviewEvidence(review.ProductReview, action, "", "PASS", "unattached result", nil)); err == nil || rejectionCode(t, err) != CodeUnknownAction {
+							t.Fatalf("semantic evidence needs a witnessed receipt: %v", err)
+						}
+						attachUnknownReceipt(t, engine, action, "correlation-review", "worker-review")
+						assertSeriesCommitmentHeld(t, engine)
+						assertReviewIssuanceHeld(t, engine)
+					}
+					if err := submitLateDispatchResult(t, engine, "late-review", action, blockingReviewEvidence(review.ProductReview, action, "late review findings")); err != nil {
+						t.Fatalf("late review: %v", err)
+					}
+					if result := engine.LoadMustSucceed(t).State.Results[action]; result.Review == nil || result.PayloadDigest != "sha256:payload-late-review" {
+						t.Fatalf("late evidence was not retained: %+v", result)
+					}
+					assertReviewIssuanceHeld(t, engine)
+				}
+				snap := engine.LoadMustSucceed(t)
+				if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
+					t.Fatalf("exactly one semantic result must count: %+v", series)
+				}
+				if slices.Contains(unsettledDispatchIDs(snap.State), action) {
+					t.Fatal("recorded result did not settle its dispatch")
+				}
+				assertSeriesCommitmentHeld(t, engine)
+			})
+		}
+	}
+}
+
+func TestTerminalReviewAuthorizationRemainsExclusiveUntilSettlement(t *testing.T) {
+	for _, attached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attached=%t", attached), func(t *testing.T) {
+			cd, reg := singleCarrierFixture(t)
+			engine, dir := reviewEngine(t, cd, reg)
+			exhaustProductReviewCapacity(t, engine)
+			redoProductReview(t, engine, "authorized-review")
+			askAndDecide(t, engine, ControlReviewRoundGrant, "grant-review", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+				Action: review.ProductReview, Reason: "review the explicitly changed requirement",
+			}})
+			action := pendingActionID(t, engine)
+			series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+			authorization := review.AuthorizationOfDispatch(series, action)
+			if authorization == "" {
+				t.Fatal("over-limit review has no authorization")
+			}
+			if attached {
+				submitUnknownReceipt(t, engine, "spawn-authorized", action, "correlation-authorized")
+			} else {
+				submitSpawnReceipt(t, engine, "spawn-authorized", action)
+			}
+			terminalizeDispatchTask(t, engine, action)
+			if attached {
+				attachUnknownReceipt(t, engine, action, "correlation-authorized", "worker-authorized")
+			}
+			assertSeriesCommitmentHeld(t, engine)
+			assertReviewIssuanceHeld(t, engine)
+			if err := askAndDecideRejecting(t, engine, dir, ControlReviewRoundGrant, "grant-occupied", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+				Action: review.ProductReview, Reason: "another grant while the first is unsettled",
+			}}); err == nil {
+				t.Fatal("unconsumed authorization must prevent another grant")
+			}
+			revision := engine.LoadMustSucceed(t).State.RequirementRevision()
+			evidence := reviewEvidenceAt(review.ProductReview, action, revision, "PASS", "late authorized review", nil)
+			evidence.AuthorizationID = authorization
+			if err := submitLateDispatchResult(t, engine, "late-authorized", action, evidence); err != nil {
+				t.Fatalf("late authorized result: %v", err)
+			}
+			series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+			if series.Completed != 4 || series.ExtraConsumed != 1 || !review.OccupiedAuthorizationIDs(series)[authorization] {
+				t.Fatalf("recorded result must consume its original authorization: %+v", series)
+			}
+			redoProductReview(t, engine, "next-authorized-review")
+			assertReviewIssuanceHeld(t, engine)
+			askAndDecide(t, engine, ControlReviewRoundGrant, "grant-next-review", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
+				Action: review.ProductReview, Reason: "review the next explicitly changed requirement",
+			}})
+			next := pendingActionID(t, engine)
+			series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+			nextAuthorization := review.AuthorizationOfDispatch(series, next)
+			if nextAuthorization == "" || nextAuthorization == authorization {
+				t.Fatalf("the next obligation must have its own authorization: %q", nextAuthorization)
+			}
+			revision = engine.LoadMustSucceed(t).State.RequirementRevision()
+			evidence = reviewEvidenceAt(review.ProductReview, next, revision, "PASS", "next authorized result", nil)
+			evidence.AuthorizationID = nextAuthorization
+			submitReviewResult(t, engine, "next-authorized-result", next, evidence)
+			if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 5 || series.ExtraConsumed != 2 {
+				t.Fatalf("both distinct authorizations must be consumed: %+v", series)
+			}
+			assertSeriesCommitmentHeld(t, engine)
+		})
+	}
+}
+
+func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejected=%t", rejected), func(t *testing.T) {
+			cd, reg := productReviewDAGFixture(t,
+				dagStep{name: "review.primary", deps: []string{"prep.parse"}},
+				dagStep{name: "review.spare", deps: []string{"prep.parse"}},
+			)
+			engine, _ := reviewEngine(t, cd, reg)
+			action := issueReady(t, engine)[0]
+			submitSpawnReceipt(t, engine, "spawn-quarantined", action)
+			terminalizeDispatchTask(t, engine, action)
+			request, err := NewRequirementRequestEvent("request-quarantine", requirementPackageOf(nil), requirementOptions()...)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+				t.Fatalf("request submit: %v", err)
+			}
+			evidence := blockingReviewEvidence(review.ProductReview, action, "quarantined review")
+			if rejected {
+				evidence.Verification = review.OperatorVerification{}
+			}
+			event, err := NewReviewWorkerResultEvent("quarantined-review", action, testProvider, "sha256:quarantined-review", evidence)
+			if err != nil {
+				t.Fatalf("event: %v", err)
+			}
+			if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "QUARANTINED" {
+				t.Fatalf("quarantine: %+v %v", acceptance, err)
+			}
+			assertSeriesCommitmentHeld(t, engine)
+			abortExistingAsk(t, engine, "request-quarantine")
+			snap := engine.LoadMustSucceed(t)
+			if len(snap.State.QuarantinedResults) != 0 {
+				t.Fatal("replay did not consume quarantine")
+			}
+			if rejected {
+				if history := snap.State.ObsoleteResults[action]; len(history) != 1 || history[0].PayloadDigest != "sha256:quarantined-review" || history[0].Review == nil {
+					t.Fatalf("rejected replay did not retain its evidence: %+v", history)
+				}
+				if _, recorded := snap.State.Results[action]; recorded {
+					t.Fatal("rejected evidence must not settle the dispatch")
+				}
+				trail := false
+				for _, record := range snap.State.RecoveryRecords {
+					trail = trail || record.ActionID == action && strings.Contains(record.Detail, "could not be readmitted")
+				}
+				if !trail {
+					t.Fatal("rejected replay has no recovery trail")
+				}
+				assertSeriesCommitmentHeld(t, engine)
+				assertReviewIssuanceHeld(t, engine)
+				if err := submitLateDispatchResult(t, engine, "admissible-review", action, blockingReviewEvidence(review.ProductReview, action, "verified late review")); err != nil {
+					t.Fatalf("admissible late evidence: %v", err)
+				}
+			}
+			snap = engine.LoadMustSucceed(t)
+			if result := snap.State.Results[action]; result.Review == nil || result.ActionID != action {
+				t.Fatalf("accepted evidence did not settle the bound dispatch: %+v", result)
+			}
+			if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
+				t.Fatalf("replay must count exactly one valid review: %+v", series)
+			}
+			assertSeriesCommitmentHeld(t, engine)
+			assertReviewIssuanceHeld(t, engine)
+		})
+	}
+}
+
+func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
+	cd, reg := productReviewDAGFixture(t,
+		dagStep{name: "review.primary", deps: []string{"prep.parse"}},
+		dagStep{name: "review.spare", deps: []string{"prep.parse"}},
+	)
+	engine, _ := reviewEngine(t, cd, reg)
+	action := issueReady(t, engine)[0]
+	evidence := blockingReviewEvidence(review.ProductReview, action, "staged before the receipt")
+	event, err := NewReviewWorkerResultEvent("staged-review", action, testProvider, "sha256:staged-review", evidence)
+	if err != nil {
+		t.Fatalf("staged event: %v", err)
+	}
+	if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("staging: %+v %v", acceptance, err)
+	}
+	submitUnknownReceipt(t, engine, "spawn-staged", action, "correlation-staged")
+	terminalizeDispatchTask(t, engine, action)
+	assertSeriesCommitmentHeld(t, engine)
+	assertReviewIssuanceHeld(t, engine)
+	attachUnknownReceipt(t, engine, action, "correlation-staged", "worker-staged")
+	snap := engine.LoadMustSucceed(t)
+	if _, staged := snap.State.StagedResults[action]; staged {
+		t.Fatal("paired evidence must leave staging")
+	}
+	result := snap.State.Results[action]
+	if result.PayloadDigest != "sha256:staged-review" || result.Review == nil || result.Review.DispatchID != action {
+		t.Fatalf("attaching transaction did not preserve the paired evidence: %+v", result)
+	}
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
+		t.Fatalf("pairing must count one review: %+v", series)
+	}
+	assertSeriesCommitmentHeld(t, engine)
+	assertReviewIssuanceHeld(t, engine)
+}
+
+func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
+	cd, reg := productReviewDAGFixture(t,
+		dagStep{name: "review.primary", deps: []string{"prep.parse"}},
+		dagStep{name: "review.spare", deps: []string{"prep.parse"}},
+	)
+	engine, _ := reviewEngine(t, cd, reg)
+	action := issueReady(t, engine)[0]
+	submitUnknownReceipt(t, engine, "spawn-recovered", action, "correlation-recovered")
+	attachUnknownReceipt(t, engine, action, "correlation-recovered", "worker-recovered")
+	plan, _, err := engine.RecoverAttempt(action, Interruption{Class: authoring.FailureBusinessReject, CauseKnown: true}, fingerprintOf(t, engine))
+	if err != nil || plan.Action != RecoveryFail {
+		t.Fatalf("recover: %+v %v", plan, err)
+	}
+	if _, pending := engine.LoadMustSucceed(t).State.PendingActions[action]; pending {
+		t.Fatal("the failure route must finish the attempt")
+	}
+	assertSeriesCommitmentHeld(t, engine)
+	assertReviewIssuanceHeld(t, engine)
+	if err := submitLateDispatchResult(t, engine, "recovered-review", action, blockingReviewEvidence(review.ProductReview, action, "late review after recovery")); err != nil {
+		t.Fatalf("late recovered result: %v", err)
+	}
+	snap := engine.LoadMustSucceed(t)
+	if result := snap.State.Results[action]; result.Review == nil || result.PayloadDigest != "sha256:payload-recovered-review" {
+		t.Fatalf("recovery lost the original dispatch evidence: %+v", result)
+	}
+	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
+		t.Fatalf("recovered result must count once: %+v", series)
+	}
+	assertSeriesCommitmentHeld(t, engine)
+}
+
+func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, _ := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "product-advisory", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory finding", []review.Finding{{Severity: "P2", Message: "a documented path needs correction"}}))
+	readiness := pendingActionID(t, engine)
+	event, err := NewReviewWorkerResultEvent("staged-readiness", readiness, testProvider, "sha256:staged-readiness", reviewEvidence(review.StartReadiness, readiness, "", "PASS", "readiness evidence", nil))
+	if err != nil {
+		t.Fatalf("staged event: %v", err)
+	}
+	if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("staging: %+v %v", acceptance, err)
+	}
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	candidate := series.RawCandidates[0]
+	finding := candidate.Findings[0]
+	upgrade := AskOption{ID: AskOptionID("RESEVERITIZE:" + finding.ID), Label: "reseverity"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "upgrade-product", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision,
+		ResultDigest: candidate.ResultDigest, FindingID: finding.ID, Decision: "RESEVERITIZE", Severity: "P1",
+		SeverityRationale: "the defect blocks the documented acceptance path", Reason: "user verified the wider impact", ExpectedEffectiveRevision: series.Effective.Revision,
+	}})
+	submitUnknownReceipt(t, engine, "spawn-suspended", readiness, "correlation-suspended")
+	terminalizeDispatchTask(t, engine, readiness)
+	attachUnknownReceipt(t, engine, readiness, "correlation-suspended", "worker-suspended")
+	snap := engine.LoadMustSucceed(t)
+	if _, recorded := snap.State.Results[readiness]; recorded {
+		t.Fatal("readiness must wait for the product conclusion")
+	}
+	if staged := snap.State.StagedResults[readiness]; staged.PayloadDigest != "sha256:staged-readiness" || staged.Review == nil {
+		t.Fatalf("suspension lost the original evidence: %+v", staged)
+	}
+	trail := false
+	for _, record := range snap.State.RecoveryRecords {
+		trail = trail || record.ActionID == readiness && strings.Contains(record.Detail, "stays pending until the product-review conclusion re-passes")
+	}
+	if !trail {
+		t.Fatal("suspended pairing has no recovery trail")
+	}
+	assertSeriesCommitmentHeld(t, engine)
+	series = snap.State.ReviewSeries.ProductReview
+	dismiss := AskOption{ID: AskOptionID("dismiss:" + finding.ID), Label: "dismiss"}
+	askAndDecide(t, engine, ControlReviewFindingDecision, "dismiss-product", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision,
+		ResultDigest: candidate.ResultDigest, FindingID: finding.ID, Decision: "DISMISS",
+		Supersedes: review.LatestDecisionID(series, candidate.ResultDigest, finding.ID),
+		Reason:     "the reported blocking impact was disproved", ExpectedEffectiveRevision: series.Effective.Revision,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if _, staged := snap.State.StagedResults[readiness]; staged {
+		t.Fatal("restored product conclusion must resume pairing")
+	}
+	if result := snap.State.Results[readiness]; result.PayloadDigest != "sha256:staged-readiness" || result.Review == nil {
+		t.Fatalf("resumed pairing lost the original evidence: %+v", result)
+	}
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("readiness must finish once after product recovery: %+v", series)
+	}
+	assertSeriesCommitmentHeld(t, engine)
 }

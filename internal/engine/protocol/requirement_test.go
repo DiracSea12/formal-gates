@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"formal-gates/internal/engine/authoring"
-	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
@@ -129,22 +128,35 @@ func requirementDecideEvent(t *testing.T, requestID, token string, choice AskOpt
 	return ev
 }
 
-// freshRoundOnTheReplacement 完成重走新鲜轮的替换派发路径：重走决定已
-// 按签发标记退位旧派发并在同一事务装上替换（签发代数＝决定）；替换携
-// 新鲜证据接纳。
-func freshRoundOnTheReplacement(t *testing.T, engine *Engine, retiredActionID, eventID string, evidence ReviewResultEvidence) string {
+// freshReviewAfterRedo locates the one newly issued obligation for a retired
+// review, and checks that a requirement redo did not reuse its old task.
+func freshReviewAfterRedo(t *testing.T, engine *Engine, retiredActionID string) string {
 	t.Helper()
 	snap := engine.LoadMustSucceed(t)
 	obsolete, known := snap.State.ObsoleteActions[retiredActionID]
-	if !known || obsolete.ReplacedBy == "" {
-		t.Fatalf("the marked dispatch was not retired and replaced by the redo: %+v", obsolete)
+	if !known || snap.State.TaskStatusOf(obsolete.Task) != runtime.TaskTerminal {
+		t.Fatalf("the old review task was not retired and closed: %+v", obsolete)
 	}
-	replacement := obsolete.ReplacedBy
-	acceptance := submitReviewResult(t, engine, eventID, replacement, evidence)
-	if acceptance.Status != "ACCEPTED" {
-		t.Fatalf("the fresh round on the replacement = %+v", acceptance)
+	mark := engine.reviewSeriesOf(obsolete.Task.Step)
+	for actionID, pending := range snap.State.PendingActions {
+		if pending.ReviewSeries == mark {
+			if pending.Task == obsolete.Task {
+				t.Fatalf("requirement redo reused task %s", pending.Task)
+			}
+			return actionID
+		}
 	}
-	return replacement
+	t.Fatalf("no fresh %s review after the redo", mark)
+	return ""
+}
+
+func completeReviewAfterRedo(t *testing.T, engine *Engine, retiredActionID, eventID string, evidence ReviewResultEvidence) string {
+	t.Helper()
+	fresh := freshReviewAfterRedo(t, engine, retiredActionID)
+	if acceptance := submitReviewResult(t, engine, eventID, fresh, evidence); acceptance.Status != "ACCEPTED" {
+		t.Fatalf("fresh review = %+v", acceptance)
+	}
+	return fresh
 }
 
 // freshRoundFromTheLedgerProposal 完成账本欠轮提案签出的新鲜轮：决定事务
@@ -158,41 +170,6 @@ func freshRoundFromTheLedgerProposal(t *testing.T, engine *Engine, step string, 
 		t.Fatalf("the ledger-proposed fresh round = %+v", acceptance)
 	}
 	return fresh
-}
-
-// freshRoundAfterDeclaredTermination 完成重走新鲜轮的证据声明路径：步不
-// 带系列标记（语义判断步），系列身份由到达的证据声明——pre-floor 旧派
-// 发的证据按声明终止（OBSOLETE_DISPATCH），替换派发携同证据完成新鲜轮。
-func freshRoundAfterDeclaredTermination(t *testing.T, engine *Engine, oldActionID, eventID string, evidence ReviewResultEvidence) string {
-	t.Helper()
-	fp := fingerprintOf(t, engine)
-	evidence.DispatchID = oldActionID
-	evidence.DispatchID = oldActionID
-	superseded, err := NewReviewWorkerResultEvent(EventID(eventID+"-old"), oldActionID, testProvider, "sha256:payload-"+eventID+"-old", evidence)
-	if err != nil {
-		t.Fatalf("superseded event: %v", err)
-	}
-	acceptance, err := engine.Submit(superseded, fp)
-	if err != nil || acceptance.Status != "OBSOLETE_DISPATCH" {
-		t.Fatalf("the pre-floor dispatch must be terminated by declaration: %v %+v", err, acceptance)
-	}
-	snap := engine.LoadMustSucceed(t)
-	replacement := snap.State.ObsoleteActions[oldActionID].ReplacedBy
-	if replacement == "" || replacement == oldActionID {
-		t.Fatalf("the terminated dispatch was not replaced: %+v", snap.State.ObsoleteActions[oldActionID])
-	}
-	if _, err := engine.Submit(spawnReceipt(t, EventID(eventID+"-spawn"), replacement, "agent-"+eventID), fp); err != nil {
-		t.Fatalf("replacement spawn: %v", err)
-	}
-	evidence.DispatchID = replacement
-	fresh, err := NewReviewWorkerResultEvent(EventID(eventID), replacement, testProvider, "sha256:payload-"+eventID, evidence)
-	if err != nil {
-		t.Fatalf("fresh event: %v", err)
-	}
-	if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
-		t.Fatalf("fresh round on the replacement: %v %+v", err, acceptance)
-	}
-	return replacement
 }
 
 // walkToDevelopment 走完双审（rev-1 双 PASS）＋拓扑（no-split）＋路线
@@ -497,90 +474,57 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 		abortExistingAsk(t, engine, pending)
 	}
 
-	// 正确载荷：CHANGED＋重走 finding 所在 series。此后新 revision 的新
-	// 鲜轮放行（既有阻塞不再拦）——决定按签发标记退位在途轮并装上替换，
-	// 替换派发完成新鲜轮（CONFIRM 的事务已在容量内提案并发轮，任一在途
-	// 轮都由决定退位换新）。
-	preDecide := pendingActionByStep(t, engine, "review.p1.one")
+	// A confirmed blocker waits for the corrected requirement before a new round.
+	if pending := engine.LoadMustSucceed(t).State.PendingActions; len(pending) != 0 {
+		t.Fatalf("finding disposition issued premature review work: %+v", pending)
+	}
 	askAndDecideRequirement(t, engine, "req-p1-changed", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-p1",
 		ImpactDigest: "sha256:impact",
 		Source:       RequirementSourceReviewFindingP1, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "the confirmed blocker is repaired in the changed requirement", FindingDigest: digest,
 	})
-	freshRoundOnTheReplacement(t, engine, preDecide, "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh review of the changed requirement", nil))
+	freshRoundFromTheLedgerProposal(t, engine, "review.p1.one", "result-product-2", reviewEvidenceAt(review.ProductReview, "dispatch-product-2", "rev-2", "PASS", "fresh review of the changed requirement", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
 		t.Fatalf("fresh round under the new revision = completed %d %+v", series.Completed, series.Effective)
 	}
 }
 
-// TestConfirmedBlockingGateHoldsFreshRounds：同需求 revision 下已确认的
-// P0/P1 阻塞拒绝新候选；dismiss 清除阻塞后同 revision 新候选放行（纠正
-// 路径不受门槛约束）。
+// A confirmed blocker forbids a fresh round on unchanged input. A correction
+// dismissing it concludes that same review without consuming another round.
 func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "round.one", "round.two")
-	engine, dir := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
-
+	engine, _ := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "result-1", first, reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "blocked", []review.Finding{
+	submitReviewResult(t, engine, "confirmed-result", first, reviewEvidence(review.ProductReview, first, "", "FAIL", "blocked", []review.Finding{
 		{Severity: "P1", Message: "core path broken"},
 	}))
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	candidate := series.RawCandidates[0]
 	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
-	snap := engine.LoadMustSucceed(t)
-	candidate := snap.State.ReviewSeries.ProductReview.RawCandidates[0]
-	askAndDecide(t, engine, ControlReviewFindingDecision, "req-confirm", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
+	askAndDecide(t, engine, ControlReviewFindingDecision, "confirmed-finding", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: first, RequirementRevision: candidate.RequirementRevision,
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
-		Decision: "CONFIRM", Reason: "user confirms the blocker", ExpectedEffectiveRevision: 1,
+		Decision: "CONFIRM", Reason: "acceptance fails", ExpectedEffectiveRevision: series.Effective.Revision,
 	}})
-
-	// 同 revision 新候选被门槛拒绝（CONFIRM 的事务已在容量内提案并发轮，
-	// 按步定位在途者）。
-	second := pendingActionByStep(t, engine, "round.one")
-	if _, err := engine.Submit(spawnReceipt(t, "spawn-2", second, "agent-2"), fp); err != nil {
-		t.Fatalf("spawn: %v", err)
+	assertReviewIssuanceHeld(t, engine)
+	snap := engine.LoadMustSucceed(t)
+	series = snap.State.ReviewSeries.ProductReview
+	if len(snap.State.PendingActions) != 0 || series.Issued != 1 || !review.HasConfirmedBlocking(series) {
+		t.Fatalf("confirmed blocker must hold issuance: %+v", series)
 	}
-	blocked, err := NewReviewWorkerResultEvent("result-2", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, second, "", "PASS", "resample the same inputs", nil))
-	if err != nil {
-		t.Fatalf("event: %v", err)
-	}
-	before := stateBytesOf(t, dir)
-	if _, err := engine.Submit(blocked, fp); err == nil {
-		t.Fatal("fresh round accepted while a confirmed P1 blocks at the same revision")
-	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected || !strings.Contains(err.Error(), "changed and reconfirmed") {
-		t.Fatalf("blocking gate code = %q (%v)", code, err)
-	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("rejected blocked round changed state bytes")
-	}
-
-	// dismiss 清除阻塞：同 revision 新候选放行。Supersedes 与 CAS 代数都从
-	// 账本读取当前最新决定。
-	snap = engine.LoadMustSucceed(t)
-	series := snap.State.ReviewSeries.ProductReview
 	dismiss := AskOption{ID: AskOptionID("dismiss:" + candidate.Findings[0].ID), Label: "dismiss"}
-	askAndDecide(t, engine, ControlReviewFindingDecision, "req-dismiss", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
+	askAndDecide(t, engine, ControlReviewFindingDecision, "correct-confirmed-finding", []AskOption{dismiss}, dismiss.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: first, RequirementRevision: candidate.RequirementRevision,
 		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
 		Decision: "DISMISS", Supersedes: series.Adjudications[0].ID,
-		Reason: "user rejects the finding after re-verification", ExpectedEffectiveRevision: series.Effective.Revision,
+		Reason: "reproduction disproves the finding", ExpectedEffectiveRevision: series.Effective.Revision,
 	}})
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Effective.Status != "PASS" {
-		t.Fatalf("dismiss must clear the block: %+v", series.Effective)
-	}
-	retry, err := NewReviewWorkerResultEvent("result-2-retry", second, testProvider, "sha256:payload-2", reviewEvidence(review.ProductReview, second, "", "PASS", "round after the dismissal", nil))
-	if err != nil {
-		t.Fatalf("event: %v", err)
-	}
-	if _, err := engine.Submit(retry, fp); err != nil {
-		t.Fatalf("round after dismissal rejected: %v", err)
-	}
-	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 {
-		t.Fatalf("completed = %d, want 2", series.Completed)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.Effective.Status != "PASS" || series.Completed != 1 || series.Issued != 1 || len(snap.State.PendingActions) != 0 {
+		t.Fatalf("dismissal must conclude the original review: %+v", series)
 	}
 }
 
@@ -727,12 +671,10 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if _, voided := snap.State.ObsoleteResults[product]; !voided {
 			t.Fatalf("in-scope quarantined evidence must be voided: %+v", snap.State.ObsoleteResults)
 		}
-		if replacement := snap.State.ObsoleteActions[product].ReplacedBy; replacement == "" {
-			t.Fatalf("the in-scope dispatch must be replaced for the fresh round: %+v", snap.State.ObsoleteActions[product])
-		}
+		freshReviewAfterRedo(t, engine, product)
 		voided := false
 		for _, record := range snap.State.RecoveryRecords {
-			if record.ActionID == product && strings.Contains(record.Detail, "terminated by declaration") {
+			if record.ActionID == product && strings.Contains(record.Detail, "terminated by the redo declared") {
 				voided = true
 			}
 		}
@@ -1181,7 +1123,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 			t.Fatalf("closed gate code = %q", code)
 		}
 
-		// 死锁修复点：rev-2 的新一轮 readiness 证据被顺序守卫放行（续用的
+		// rev-2 的新一轮 readiness 证据被顺序守卫放行（续用的
 		// 产品审 PASS 绑 rev-1 同样有效）；决定事务的欠轮提案已签出新鲜
 		// 轮，直接提交证据完成。
 		freshRoundFromTheLedgerProposal(t, engine, "start.readiness", "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
@@ -1542,16 +1484,13 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 		if len(snap.State.StagedResults) != 0 {
 			t.Fatalf("in-scope staging must be disposed: %+v", snap.State.StagedResults)
 		}
-		replacement := snap.State.ObsoleteActions[product].ReplacedBy
-		if replacement == "" {
-			t.Fatalf("the terminated dispatch must be replaced: %+v", snap.State.ObsoleteActions[product])
-		}
+		replacement := freshReviewAfterRedo(t, engine, product)
 		if _, voided := snap.State.ObsoleteResults[product]; !voided {
 			t.Fatalf("the terminated staging must be kept as late evidence: %+v", snap.State.ObsoleteResults)
 		}
 		terminated := false
 		for _, record := range snap.State.RecoveryRecords {
-			if record.ActionID == product && strings.Contains(record.Detail, "terminated by declaration") {
+			if record.ActionID == product && strings.Contains(record.Detail, "terminated by the redo declared") {
 				terminated = true
 			}
 		}
@@ -1681,7 +1620,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 
 // TestRequirementPackageBindsTheAsk：Ask 持久化用户确认的变更包，DECIDE 载
 // 荷必须与之逐字段相等——同一 Ask 不可登记单字段之差的另一个包（冲突拒
-// 绝零状态）；请求缺包在构造层即拒。
+// 绝零状态）；未准备包的请求只建立屏障。
 func TestRequirementPackageBindsTheAsk(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
@@ -1737,11 +1676,10 @@ func TestRequirementPackageBindsTheAsk(t *testing.T) {
 		t.Fatalf("package-bound registration = %+v", entry)
 	}
 
-	// 请求缺包在构造层拒绝。
-	if _, err := NewRequestEvent("req-no-package", ControlRequestRequirementChange, requirementOptions()...); err == nil {
-		t.Fatal("package-less requirement request constructed")
-	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
-		t.Fatalf("package-less request code = %q", code)
+	// A package-free request starts the barrier; proceeding still requires
+	// a complete package bound to this same Ask before confirmation.
+	if _, err := NewRequestEvent("req-no-package", ControlRequestRequirementChange, requirementOptions()...); err != nil {
+		t.Fatalf("package-free barrier request: %v", err)
 	}
 	// 非需求控制不得携包。
 	misplaced := Event{ID: "req-misplaced", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlReset, Options: requirementOptions(), Package: &confirmed}}
@@ -1835,11 +1773,16 @@ func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
 
+	work, err := engine.RequirementWork()
+	if err != nil {
+		t.Fatal(err)
+	}
 	askAndDecideRequirement(t, engine, "req-redo-floor", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-floor",
 		ImpactDigest: "sha256:impact",
 		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "redo the product review",
+		WorkDecisions: []RequirementWorkDecision{{Work: work[0], Disposition: RequirementWorkCarry, Reason: "the semantic worker remains applicable"}},
 	})
 	snap := engine.LoadMustSucceed(t)
 	if _, pending := snap.State.PendingActions[product]; !pending {
@@ -1981,11 +1924,8 @@ func TestQuarantineHeldUntilTheLastPendingAskResolves(t *testing.T) {
 	}
 }
 
-// TestDualAskRedoDefersTheReplacementUntilTheBarrierLifts：重走决定落在
-// 双 Ask 屏障期时，被终止派发的替换不即签——屏障期内账面不出现任何新
-// 派发身份（无 retry: 条目），退位条目携延迟标记与留痕；最后一个 Ask
-// 解决的同一事务里补发替换，补发派发的签发代数不早于重走新鲜底线。
-func TestDualAskRedoDefersTheReplacementUntilTheBarrierLifts(t *testing.T) {
+// FreshOwed keeps a redo pending through overlapping requirement-change asks.
+func TestDualAskRedoIssuesFreshWorkOnlyAfterTheBarrierLifts(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2016,53 +1956,18 @@ func TestDualAskRedoDefersTheReplacementUntilTheBarrierLifts(t *testing.T) {
 	if _, stillPending := snap.State.PendingActions[product]; stillPending {
 		t.Fatal("the redone dispatch must be retired by the decision")
 	}
-	for actionID := range snap.State.PendingActions {
-		if strings.HasPrefix(actionID, "retry:") {
-			t.Fatalf("a replacement identity appeared while the barrier held: %s", actionID)
-		}
+	if len(snap.State.PendingActions) != 0 || !snap.State.ReviewSeries.ProductReview.FreshOwed {
+		t.Fatalf("the barrier must retain only the review obligation: %+v", snap.State.PendingActions)
 	}
-	obsolete, known := snap.State.ObsoleteActions[product]
-	if !known || obsolete.Deferred == nil {
-		t.Fatalf("the retired dispatch must carry a deferred replacement: %+v", obsolete)
+	if _, known := snap.State.ObsoleteActions[product]; !known {
+		t.Fatal("the old dispatch must be retired while the barrier holds")
 	}
-	if obsolete.ReplacedBy != "" {
-		t.Fatalf("no replacement may be named while the barrier holds: %s", obsolete.ReplacedBy)
-	}
-	deferred := false
-	for _, record := range snap.State.RecoveryRecords {
-		if record.ActionID == product && strings.Contains(record.Detail, "deferred until the barrier lifts") {
-			deferred = true
-		}
-	}
-	if !deferred {
-		t.Fatalf("no deferral trail: %+v", snap.State.RecoveryRecords)
-	}
-
-	// 最后一个 Ask 解决：同一事务补发替换。
 	abortExistingAsk(t, engine, "req-defer-second")
+	fresh := freshReviewAfterRedo(t, engine, product)
 	snap = engine.LoadMustSucceed(t)
-	obsolete = snap.State.ObsoleteActions[product]
-	if obsolete.Deferred != nil || !strings.HasPrefix(obsolete.ReplacedBy, "retry:") {
-		t.Fatalf("the lift must install the deferred replacement: %+v", obsolete)
-	}
-	if _, replaced := snap.State.PendingActions[obsolete.ReplacedBy]; !replaced {
-		t.Fatal("the deferred replacement must be a pending dispatch after the lift")
-	}
-	series, _ := snap.State.ReviewSeries.Series(review.ProductReview)
-	if issued := snap.State.DispatchIssueRevisions[obsolete.ReplacedBy]; issued < series.FreshFloor {
-		t.Fatalf("the deferred replacement predates the fresh floor: issued=%d floor=%d", issued, series.FreshFloor)
-	}
-	issued := false
-	for _, record := range snap.State.RecoveryRecords {
-		if strings.Contains(record.Detail, "after the barrier lifted") {
-			issued = true
-		}
-	}
-	if !issued {
-		t.Fatalf("no post-lift issuance trail: %+v", snap.State.RecoveryRecords)
-	}
-	if _, err := engine.Load(); err != nil {
-		t.Fatalf("load after the lift: %v", err)
+	series := snap.State.ReviewSeries.ProductReview
+	if series.Issued != 2 || len(snap.State.PendingActions) != 1 || snap.State.DispatchIssueRevisions[fresh] < series.FreshFloor {
+		t.Fatalf("barrier lift must issue one fresh task at the floor: %+v", series)
 	}
 }
 
@@ -2303,19 +2208,16 @@ func TestMarkedReviewDispatchIsTerminatedByTheRedoDecision(t *testing.T) {
 		if _, stillPending := snap.State.PendingActions[product]; stillPending {
 			t.Fatal("the marked dispatch was not terminated by the decide")
 		}
-		obsolete := snap.State.ObsoleteActions[product]
-		if obsolete.ReplacedBy == "" {
-			t.Fatalf("the terminated dispatch was not replaced: %+v", obsolete)
-		}
+		freshID := freshReviewAfterRedo(t, engine, product)
 		if len(snap.State.ObsoleteResults) != 0 {
 			t.Fatalf("a dispatch without any result must not void results: %+v", snap.State.ObsoleteResults)
 		}
-		replacementPending, ok := snap.State.PendingActions[obsolete.ReplacedBy]
+		replacementPending, ok := snap.State.PendingActions[freshID]
 		if !ok || replacementPending.ReviewSeries != review.ProductReview {
 			t.Fatalf("the replacement must inherit the series mark: %+v", replacementPending)
 		}
 		decide := snap.State.RequirementRevisions[len(snap.State.RequirementRevisions)-1]
-		if issued := snap.State.DispatchIssueRevisions[obsolete.ReplacedBy]; issued != decide.StateRevision {
+		if issued := snap.State.DispatchIssueRevisions[freshID]; issued != decide.StateRevision {
 			t.Fatalf("the replacement must be issued at the decide (state revision %d): issued=%d", decide.StateRevision, issued)
 		}
 		terminated := false
@@ -2328,13 +2230,13 @@ func TestMarkedReviewDispatchIsTerminatedByTheRedoDecision(t *testing.T) {
 			t.Fatalf("no termination trail: %+v", snap.State.RecoveryRecords)
 		}
 		// 替换派发（≥floor、携标记）完成新鲜轮。
-		fresh, err := NewReviewWorkerResultEvent("result-marked-fresh", obsolete.ReplacedBy, testProvider, "sha256:payload-marked-fresh",
-			reviewEvidenceAt(review.ProductReview, obsolete.ReplacedBy, "rev-2", "PASS", "fresh round on the marked replacement", nil))
+		fresh, err := NewReviewWorkerResultEvent("result-marked-fresh", freshID, testProvider, "sha256:payload-marked-fresh",
+			reviewEvidenceAt(review.ProductReview, freshID, "rev-2", "PASS", "fresh round on the marked replacement", nil))
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
 		fp := fingerprintOf(t, engine)
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-marked-fresh", obsolete.ReplacedBy, "agent-marked-fresh"), fp); err != nil {
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-marked-fresh", freshID, "agent-marked-fresh"), fp); err != nil {
 			t.Fatalf("spawn: %v", err)
 		}
 		if acceptance, err := engine.Submit(fresh, fp); err != nil || acceptance.Status != "ACCEPTED" {
@@ -2453,11 +2355,16 @@ func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
 	}
 
 	// 非开发前系列不属于重走范围：产品审重走决定不终止该派发。
+	work, err := engine.RequirementWork()
+	if err != nil {
+		t.Fatal(err)
+	}
 	askAndDecideRequirement(t, engine, "req-unaffiliated-redo", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-unaffiliated",
 		ImpactDigest: "sha256:impact",
 		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "the product review is redone",
+		WorkDecisions: []RequirementWorkDecision{{Work: work[0], Disposition: RequirementWorkCarry, Reason: "the gate is unaffected by the changed product review"}},
 	})
 	snap = engine.LoadMustSucceed(t)
 	if pending, ok := snap.State.PendingActions[gate]; !ok || pending.ReviewSeries != review.Action(authoring.ReviewSeriesUnaffiliated) {
@@ -2468,58 +2375,6 @@ func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
 	}
 }
 
-// parallelTailFixture 构造双审（canonical 两步带标记）后并列两个 agent
-// 派发槽（就绪轮槽携技术审标记、产品新鲜轮槽携产品审标记）的定义：
-// 挂起配对（回执＋暂存占一槽）与开门补配对（另一槽完成产品审新鲜轮）
-// 需要两个同时在途的 action。
-func parallelTailFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
-	t.Helper()
-	reg := compiler.NewRegistry()
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatalf("fixture: %v", err)
-		}
-	}
-	must(reg.RegisterHandler("engine.test.prep", authoring.RunnerEngineLocal))
-	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
-	must(reg.RegisterCodec("codec.any.in"))
-	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
-	header := func(id string, deps ...string) authoring.Header {
-		ds := make([]authoring.StepID, 0, len(deps))
-		for _, d := range deps {
-			ds = append(ds, authoring.StepID(d))
-		}
-		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
-	}
-	io := func(from string) authoring.IO {
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-			Inputs:         []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}},
-			Postconditions: []authoring.PredicateRef{{ID: "pred.test.post"}}}
-	}
-	agent := func(id, dep string, mark authoring.ReviewSeriesAction) authoring.Step {
-		step, err := authoring.NewAgentStep(header(id, dep), io(dep), authoring.AgentSpec{
-			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
-			ReviewSeries: mark, Timeout: time.Minute,
-		})
-		must(err)
-		return step
-	}
-	prep, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.test.prep"})
-	must(err)
-	steps := []authoring.Step{
-		prep,
-		agent("product.review", "prep.parse", authoring.ReviewSeriesProductReview),
-		agent("start.readiness", "product.review", authoring.ReviewSeriesStartReadiness),
-		agent("tail.readiness", "product.review", authoring.ReviewSeriesStartReadiness),
-		agent("tail.product", "start.readiness", authoring.ReviewSeriesProductReview),
-	}
-	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review", Steps: steps}, reg)
-	must(err)
-	return cd, reg
-}
-
 // TestLateReceiptPairsWhenTheProductGateReopens：回执是无条件观察事实、
 // 配对是惰性业务动作——只勾重走产品审时，就绪系列的暂存结果其迟到回执
 // 在产品审重走期照常 ACCEPTED 落账（配对挂起、暂存保留、无重试请求）；
@@ -2527,24 +2382,13 @@ func parallelTailFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 // 对自动完成（completed+1、Results 在账）；同回执重发判 DUPLICATE、不
 // 双计。
 func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
-	cd, reg := parallelTailFixture(t)
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	fp := fingerprintOf(t, engine)
-
-	// 双审走完＋拓扑＋路线：就绪系列的两条并行载体步（start.readiness 与
-	// tail.readiness）在产品审 PASS 的同批补位里各得一轮（批内轮号 1、2），
-	// 就绪轮入账结论后并发轮保持同时在途——就绪系列的暂存槽。
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
-	readiness := pendingActionByStep(t, engine, "start.readiness")
-	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
-	askAndDecide(t, engine, ControlConfirmTopology, "req-pair-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single unit"}})
-	askAndDecide(t, engine, ControlSelectRoute, "req-pair-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
-	snap := engine.LoadMustSucceed(t)
-	stagedSlot := pendingActionByStep(t, engine, "tail.readiness")
-	if stagedSlot == "" {
-		t.Fatalf("the concurrent readiness round must stay in flight: %+v", snap.State.PendingActions)
-	}
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+	stagedSlot := pendingActionByStep(t, engine, "start.readiness")
+	var snap Snapshot
 
 	// 就绪系列的下一轮证据先到（暂存，回执未到）。
 	staged, err := NewReviewWorkerResultEvent("result-pair-staged", stagedSlot, testProvider, "sha256:payload-pair-staged",
@@ -2576,7 +2420,7 @@ func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
 	if _, admitted := snap.State.Results[stagedSlot]; admitted {
 		t.Fatal("the suspended round must not be admitted yet")
 	}
-	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 {
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 0 {
 		t.Fatalf("the suspended round must not count yet: completed=%d", series.Completed)
 	}
 	suspended := false
@@ -2597,7 +2441,7 @@ func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
 		t.Fatalf("product fresh round = completed %d %+v", series.Completed, series.Effective)
 	}
-	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 2 || series.Effective.Status != "PASS" {
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("the suspended pairing did not complete in the same transaction: completed=%d %+v", series.Completed, series.Effective)
 	}
 	if _, admitted := snap.State.Results[stagedSlot]; !admitted {
@@ -2613,7 +2457,7 @@ func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
 		t.Fatalf("same-bytes receipt under a new event id = %v %+v", err, acceptance)
 	}
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 2 {
+	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 {
 		t.Fatalf("the replayed receipt double-counted: completed=%d", series.Completed)
 	}
 }
@@ -2770,227 +2614,114 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 	}
 }
 
-// TestCarriedEvidenceBelowTheRedoFloorIsRejected：重走系列的 revision 下界
-// ＝最后一次覆盖它的重走决定（FreshFloor）——义务期只认绑当前权威 revision
-// 且签发不早于 floor 的新鲜轮（旧 revision 拒、pre-floor 派发拒）；义务清偿
-// 后 FreshFloor 留存，重走前的 terminal 僵尸旧 revision 迟到证据与新签发派
-// 发携旧 revision 的证据同样拒绝——已确认阻塞保持 effective、phase 不推
-// 进，全部拒绝零状态。
+// Redo retires a terminal dispatch and sets a persistent evidence floor. Late
+// obsolete evidence stays evidence only; a fresh dispatch cannot use an older revision.
 func TestCarriedEvidenceBelowTheRedoFloorIsRejected(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.c", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.d", deps: []string{"prep.parse"}},
-	)
+	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
-	lanes := issueReady(t, engine)
-	laneA, laneB := lanes[0], lanes[1]
-
-	// lane.a 失败落定（不占轮）；lane.b 收 SPAWNED 回执后 terminal 化成为
-	// 僵尸——承诺凭回执计入、派发簿记已收回、签发代数保留。
-	submitSpawnReceipt(t, engine, "spawn-floor-a", laneA)
-	fail, err := NewWorkerResultEvent(EventID("result-floor-a-fail"), laneA, testProvider, OutcomeFail, "sha256:payload-floor-a-fail", authoring.FailureBusinessReject)
-	if err != nil {
-		t.Fatalf("failure event: %v", err)
-	}
-	if _, err := engine.Submit(fail, fp); err != nil {
-		t.Fatalf("lane.a failure settle: %v", err)
-	}
-	submitSpawnReceipt(t, engine, "spawn-floor-b", laneB)
-	terminalizeDispatchTask(t, engine, laneB)
-
-	// 确认重走产品审系列：pre-floor 在途派发按声明终止换新、账本欠轮提案
-	// 在腾出的容量内签出新一轮（系列首载体）——僵尸不在在途账上，保持计入。
-	askAndDecideRequirement(t, engine, "req-floor-redo", "proceed", &RequirementDecisionPayload{
-		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-floor",
-		ImpactDigest: "sha256:impact",
-		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
-		RedoProductReview: true, Reason: "the product series is redone",
-	})
+	old := issueReady(t, engine)[0]
+	submitSpawnReceipt(t, engine, "floor-old-spawn", old)
+	terminalizeDispatchTask(t, engine, old)
+	redoProductReview(t, engine, "floor-change")
 	snap := engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
-	if !series.FreshOwed || series.FreshFloor == 0 {
-		t.Fatalf("the redo must owe a fresh round at a positive floor: %+v", series)
+	if !series.FreshOwed || series.FreshFloor == 0 || snap.State.DispatchIssueRevisions[old] >= series.FreshFloor {
+		t.Fatalf("redo must establish a fresh evidence floor: %+v", series)
 	}
-	if issued := snap.State.DispatchIssueRevisions[laneB]; issued >= series.FreshFloor {
-		t.Fatalf("the zombie must predate the redo floor: issued=%d floor=%d", issued, series.FreshFloor)
+	if _, obsolete := snap.State.ObsoleteActions[old]; !obsolete {
+		t.Fatal("redo must retire a terminal dispatch before issuing replacement review")
 	}
-	freshLane := pendingActionByStep(t, engine, "lane.b")
-	if freshLane == "" {
-		t.Fatal("the redo transaction must leave a fresh carrier for the product series")
+	fresh := pendingActionID(t, engine)
+	if fresh == old || snap.State.DispatchIssueRevisions[fresh] < series.FreshFloor {
+		t.Fatalf("replacement must be issued at or after the floor: %q", fresh)
 	}
-	if issued := snap.State.DispatchIssueRevisions[freshLane]; issued < series.FreshFloor {
-		t.Fatalf("the fresh carrier must be issued at or after the floor: issued=%d floor=%d", issued, series.FreshFloor)
-	}
-
-	// 义务期纪律不变：僵尸的旧 revision 证据与 pre-floor 派发的新 revision
-	// 证据都拒绝。
-	zombieCarried := reviewEvidence(review.ProductReview, laneB, "", "PASS", "pre-redo zombie pass", nil)
-	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev1", laneB, zombieCarried); err == nil {
-		t.Fatal("the pre-redo evidence must be rejected while the redo obligation holds")
-	}
-	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev2", laneB,
-		reviewEvidenceAt(review.ProductReview, laneB, "rev-2", "PASS", "fresh bound to a pre-floor dispatch", nil)); err == nil {
-		t.Fatal("evidence from a dispatch issued before the redo decision must be rejected while the obligation holds")
-	}
-
-	// 新鲜轮：携带者记一轮 FAIL（P1 finding）并经用户 CONFIRM 升为已确认
-	// 阻塞——义务清偿、effective=FAIL@rev-2、phase 保持。
-	submitSpawnReceipt(t, engine, "spawn-floor-fresh", freshLane)
-	freshFail, err := NewReviewWorkerResultEvent(EventID("result-floor-fresh-fail"), freshLane, testProvider, "sha256:payload-floor-fresh-fail",
-		reviewEvidenceAt(review.ProductReview, freshLane, "rev-2", "FAIL", "fresh round blocks", []review.Finding{
-			{Severity: "P1", Message: "the changed requirement is violated on the normal path"},
-		}))
-	if err != nil {
-		t.Fatalf("fresh round event: %v", err)
-	}
-	if _, err := engine.Submit(freshFail, fp); err != nil {
-		t.Fatalf("fresh round: %v", err)
-	}
-	snap = engine.LoadMustSucceed(t)
-	series = snap.State.ReviewSeries.ProductReview
-	if series.FreshOwed || series.Effective.Status != "FAIL" || series.Effective.RequirementRevision != "rev-2" {
-		t.Fatalf("the fresh round must discharge the obligation and block: %+v", series.Effective)
-	}
-	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
-	candidate := series.RawCandidates[len(series.RawCandidates)-1]
-	askAndDecide(t, engine, ControlReviewFindingDecision, "req-floor-confirm", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
-		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-2",
-		ResultDigest: candidate.ResultDigest, FindingID: series.Effective.BlockingFindingIDs[0],
-		Decision: "CONFIRM", Reason: "the blocking finding is real", ExpectedEffectiveRevision: series.Effective.Revision,
-	}})
-	if !review.HasConfirmedBlocking(engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview) {
-		t.Fatal("the finding must be confirmed blocking")
-	}
-	if phase := engine.LoadMustSucceed(t).State.Phase; phase != runtime.PhaseProductReview {
-		t.Fatalf("phase = %s, want PRODUCT_REVIEW while the fresh round blocks", phase)
-	}
-
-	// 义务清偿后的窗口：同一僵尸的同一旧 revision 证据拒绝（确认代数早于
-	// floor）——零状态、已确认阻塞保持、phase 不推进。
-	before := stateBytesOf(t, dir)
-	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-late", laneB, zombieCarried); err == nil {
-		t.Fatal("the post-discharge zombie evidence must be rejected below the redo floor")
-	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("the rejected zombie evidence changed state bytes")
-	}
-	// 同一僵尸改携新 revision 同样拒绝（pre-floor 派发：签发代数早于
-	// floor）。
-	if err := submitLateDispatchResult(t, engine, "result-floor-zombie-rev2-late", laneB,
-		reviewEvidenceAt(review.ProductReview, laneB, "rev-2", "PASS", "fresh bound to a pre-floor dispatch", nil)); err == nil {
-		t.Fatal("evidence from a dispatch issued before the redo decision must stay rejected after the discharge")
-	}
-	// 重走后签发的派发（floor 代数）携旧 revision 也拒绝（确认代数早于
-	// floor）——回执未到，拒绝发生在暂存预检、零状态。
-	floorLane := pendingActionByStep(t, engine, "lane.c")
-	if floorLane == "" {
-		t.Fatal("the redo must leave a floor-issued carrier at lane.c")
-	}
-	newCarried, err := NewReviewWorkerResultEvent(EventID("result-floor-newcar-rev1"), floorLane, testProvider, "sha256:payload-floor-newcar-rev1",
-		reviewEvidence(review.ProductReview, floorLane, "", "PASS", "old revision on a floor-issued dispatch", nil))
-	if err != nil {
-		t.Fatalf("floor-issued carrier event: %v", err)
-	}
-	if _, err := engine.Submit(newCarried, fingerprintOf(t, engine)); err == nil {
-		t.Fatal("pre-redo revision evidence on a floor-issued dispatch must be rejected after the discharge")
-	}
-	snap = engine.LoadMustSucceed(t)
-	series = snap.State.ReviewSeries.ProductReview
-	if series.Completed != 1 || series.Effective.Status != "FAIL" || series.Effective.RequirementRevision != "rev-2" || !review.HasConfirmedBlocking(series) {
-		t.Fatalf("the confirmed blocking conclusion must hold: completed=%d %+v", series.Completed, series.Effective)
-	}
-	if phase := snap.State.Phase; phase != runtime.PhaseProductReview {
-		t.Fatalf("phase = %s, want PRODUCT_REVIEW (the confirmed blocking must gate the phase)", phase)
-	}
-	if _, admitted := snap.State.Results[laneB]; admitted {
-		t.Fatal("the zombie dispatch must not settle from rejected evidence")
-	}
-	if _, staged := snap.State.StagedResults[floorLane]; staged {
-		t.Fatal("the rejected evidence must not poison the staging slot")
-	}
-	assertSeriesCommitmentHeld(t, engine)
-	if _, err := engine.Load(); err != nil {
-		t.Fatalf("load: %v", err)
-	}
-}
-
-// TestCarriedEvidenceAtTheRedoFloorIsAdmitted：正控——重走系列清偿后，满足
-// revision 下界的证据照常经 carry 分支入账：floor 代数签发的派发携重走决
-// 定所确认 revision 的新一轮正常完成（completed 递增、effective 重投影
-// PASS、phase 推进）。
-func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
-	cd, reg := productReviewDAGFixture(t,
-		dagStep{name: "lane.a", deps: []string{"prep.parse"}},
-		dagStep{name: "lane.b", deps: []string{"prep.parse"}},
-	)
-	engine, _ := reviewEngine(t, cd, reg)
-	issueReady(t, engine)
-
-	// 重走产品审系列：两条 pre-floor 派发按声明终止，替换派发的签发代数
-	// ＝重走决定（floor）。
-	askAndDecideRequirement(t, engine, "req-atfloor-redo", "proceed", &RequirementDecisionPayload{
-		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-atfloor",
-		ImpactDigest: "sha256:impact",
-		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
-		RedoProductReview: true, Reason: "the product series is redone",
-	})
-	snap := engine.LoadMustSucceed(t)
-	floor := snap.State.ReviewSeries.ProductReview.FreshFloor
-	carriers := []string{pendingActionByStep(t, engine, "lane.a"), pendingActionByStep(t, engine, "lane.b")}
-	for _, carrier := range carriers {
-		if carrier == "" || snap.State.DispatchIssueRevisions[carrier] < floor {
-			t.Fatalf("the replacement carriers must be issued at or after the floor: %v floor=%d", carriers, floor)
+	rejectOldRevision := func(eventID, action string) {
+		t.Helper()
+		before := stateBytesOf(t, dir)
+		event, err := NewReviewWorkerResultEvent(EventID(eventID), action, testProvider, "sha256:"+eventID,
+			reviewEvidence(review.ProductReview, action, "", "PASS", "obsolete requirement revision", nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.Submit(event, fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeReviewEvidenceRejected {
+			t.Fatalf("pre-floor requirement accepted: %v", err)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("rejected evidence changed state")
 		}
 	}
-
-	// 新鲜轮 FAIL@rev-2（P1 finding 未确认）清偿义务。
-	submitSpawnReceipt(t, engine, "spawn-atfloor-fresh", carriers[0])
-	freshFail, err := NewReviewWorkerResultEvent(EventID("result-atfloor-fresh-fail"), carriers[0], testProvider, "sha256:payload-atfloor-fresh-fail",
-		reviewEvidenceAt(review.ProductReview, carriers[0], "rev-2", "FAIL", "fresh round blocks", []review.Finding{
-			{Severity: "P1", Message: "the changed requirement is violated on the normal path"},
+	rejectOldRevision("floor-stale-during-redo", fresh)
+	revision := snap.State.RequirementRevision()
+	submitReviewResult(t, engine, "floor-fresh-result", fresh,
+		reviewEvidenceAt(review.ProductReview, fresh, revision, "FAIL", "fresh review blocks", []review.Finding{
+			{Severity: "P1", Message: "changed requirement omits core acceptance"},
 		}))
+	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	candidate := series.RawCandidates[0]
+	confirm := findingOption(t, engine, review.ProductReview, 0, "confirm")
+	askAndDecide(t, engine, ControlReviewFindingDecision, "floor-confirm", []AskOption{confirm}, confirm.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+		Action: review.ProductReview, DispatchID: fresh, RequirementRevision: revision,
+		ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID,
+		Decision: "CONFIRM", Reason: "acceptance cannot succeed", ExpectedEffectiveRevision: series.Effective.Revision,
+	}})
+	late, err := NewReviewWorkerResultEvent("floor-late-obsolete", old, testProvider, "sha256:floor-late-obsolete",
+		reviewEvidence(review.ProductReview, old, "", "PASS", "late old conclusion", nil))
 	if err != nil {
-		t.Fatalf("fresh round event: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := engine.Submit(freshFail, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("fresh round: %v", err)
+	acceptance, err := engine.Submit(late, fingerprintOf(t, engine))
+	if err != nil || acceptance.Status != "OBSOLETE_RESULT" {
+		t.Fatalf("late obsolete result = %+v, %v", acceptance, err)
 	}
 	snap = engine.LoadMustSucceed(t)
-	if series := snap.State.ReviewSeries.ProductReview; series.FreshOwed || series.Effective.Status != "FAIL" {
-		t.Fatalf("the fresh round must discharge the obligation and block: %+v", series.Effective)
+	series = snap.State.ReviewSeries.ProductReview
+	if series.FreshOwed || !review.HasConfirmedBlocking(series) || series.Completed != 1 || len(snap.State.PendingActions) != 0 {
+		t.Fatalf("late evidence changed the confirmed conclusion: %+v", series)
 	}
+	if _, authoritative := snap.State.Results[old]; authoritative || len(snap.State.ObsoleteResults[old]) != 1 || snap.State.ObsoleteResults[old][0].Review == nil {
+		t.Fatal("late evidence must be retained only in the obsolete ledger")
+	}
+	// Invalidating the current result owes a new review after the redo obligation
+	// was discharged. Its persistent floor still rejects the old revision.
+	invalidateRoundOf(t, engine, "floor-invalid-current", fresh)
+	if engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.FreshOwed {
+		t.Fatal("result invalidation must not recreate a requirement-redo obligation")
+	}
+	rejectOldRevision("floor-stale-after-discharge", pendingActionID(t, engine))
+	assertSeriesCommitmentHeld(t, engine)
+}
 
-	// 新鲜轮的未裁决 P1 跨候选阻塞聚合（refactor-plan/final-implementation-
-	// draft.md §4.4）：用户驳回后聚合在 rev-2 上直接 PASS，其后的 floor 轮
-	// 照常入账。
-	dismissSeriesFinding(t, engine, "req-atfloor-dismiss", review.ProductReview, carriers[0])
-
-	// 清偿后的 carry 新一轮：floor 派发携 rev-2 正常入账——effective 重投影
-	// PASS@rev-2、phase 推进 TECHNICAL_REVIEW。
-	submitSpawnReceipt(t, engine, "spawn-atfloor-second", carriers[1])
-	second, err := NewReviewWorkerResultEvent(EventID("result-atfloor-second"), carriers[1], testProvider, "sha256:payload-atfloor-second",
-		reviewEvidenceAt(review.ProductReview, carriers[1], "rev-2", "PASS", "second round at the floor", nil))
-	if err != nil {
-		t.Fatalf("second round event: %v", err)
+// A review at the floor clears the redo obligation. A subsequent replacement
+// for an invalid result may carry that confirmed revision after discharge.
+func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review")
+	engine, _ := reviewEngine(t, cd, reg)
+	issueReady(t, engine)
+	redoProductReview(t, engine, "atfloor-change")
+	snap := engine.LoadMustSucceed(t)
+	floor := snap.State.ReviewSeries.ProductReview.FreshFloor
+	first := pendingActionID(t, engine)
+	if snap.State.DispatchIssueRevisions[first] < floor {
+		t.Fatal("fresh review predates redo floor")
 	}
-	if _, err := engine.Submit(second, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("the floor-issued rev-2 round must be admitted after the discharge: %v", err)
+	revision := snap.State.RequirementRevision()
+	submitReviewResult(t, engine, "atfloor-first", first, reviewEvidenceAt(review.ProductReview, first, revision, "PASS", "reviewed changed revision", nil))
+	invalidateRoundOf(t, engine, "atfloor-invalid", first)
+	second := pendingActionID(t, engine)
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	if series.FreshOwed || series.FreshFloor != floor {
+		t.Fatalf("result replacement must retain the discharged floor: %+v", series)
 	}
+	submitReviewResult(t, engine, "atfloor-second", second, reviewEvidenceAt(review.ProductReview, second, revision, "PASS", "replacement review at confirmed revision", nil))
 	snap = engine.LoadMustSucceed(t)
-	series := snap.State.ReviewSeries.ProductReview
-	if series.Completed != 2 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" {
-		t.Fatalf("the floor round = completed %d %+v", series.Completed, series.Effective)
+	series = snap.State.ReviewSeries.ProductReview
+	if len(series.RawCandidates) != 2 || series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != revision {
+		t.Fatalf("replacement review was not accepted after discharge: %+v", series)
 	}
-	if phase := snap.State.Phase; phase != runtime.PhaseTechnicalReview {
-		t.Fatalf("phase = %s, want TECHNICAL_REVIEW after the floor round re-passes", phase)
+	if snap.State.Phase != runtime.PhaseTechnicalReview {
+		t.Fatalf("phase = %s, want TECHNICAL_REVIEW", snap.State.Phase)
 	}
 	assertSeriesCommitmentHeld(t, engine)
-	if _, err := engine.Load(); err != nil {
-		t.Fatalf("load: %v", err)
-	}
 }
 
 // TestBarrierHoldsTheReceiptPairingUntilTheDecision：屏障前暂存而屏障内收
@@ -3082,7 +2813,7 @@ func TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision(t *testing.T) {
 		RedoProductReview: true, Reason: "the product walk is redone",
 	})
 	snap := engine.LoadMustSucceed(t)
-	replacement := snap.State.ObsoleteActions[product].ReplacedBy
+	replacement := freshReviewAfterRedo(t, engine, product)
 	series, _ := snap.State.ReviewSeries.Series(review.ProductReview)
 	if issued := snap.State.DispatchIssueRevisions[replacement]; issued < series.FreshFloor {
 		t.Fatalf("the replacement must be issued at or after the floor: issued=%d floor=%d", issued, series.FreshFloor)
@@ -3144,23 +2875,14 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 		quarantine         int
 	}
 	drive := func(t *testing.T, resultFirst bool) completionFacts {
-		cd, reg := parallelTailFixture(t)
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
 
 		product := issueReady(t, engine)[0]
 		submitReviewResult(t, engine, "result-order-product-1", product, reviewEvidence(review.ProductReview, "dispatch-order-product-1", "", "PASS", "clean", nil))
-		// 就绪系列首载体得第 1 轮，并发载体（tail.readiness）同批得第 2 轮
-		// 并保持同时在途。
-		readiness := pendingActionByStep(t, engine, "start.readiness")
-		submitReviewResult(t, engine, "result-order-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-order-readiness-1", "", "PASS", "ready", nil))
-		askAndDecide(t, engine, ControlConfirmTopology, "req-order-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single unit"}})
-		askAndDecide(t, engine, ControlSelectRoute, "req-order-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
-		snap := engine.LoadMustSucceed(t)
-		stagedSlot := pendingActionByStep(t, engine, "tail.readiness")
-		if pending := snap.State.PendingActions; len(pending) != 1 {
-			t.Fatalf("only the concurrent readiness round may stay in flight (the concluded product series gates tail.product): %+v", pending)
-		}
+		stagedSlot := pendingActionByStep(t, engine, "start.readiness")
+		var snap Snapshot
 
 		// 技术审下一轮证据先到（暂存、回执未到）。
 		staged, err := NewReviewWorkerResultEvent("result-order-readiness-2", stagedSlot, testProvider, "sha256:payload-order-readiness-2",
@@ -3242,18 +2964,18 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 		t.Fatalf("the two completion orders reached different terminal states: %+v vs %+v", stagedFirst, receiptFirst)
 	}
 	if stagedFirst.productCompleted != 2 || stagedFirst.productEffective != "PASS" || stagedFirst.productBound != "rev-2" ||
-		stagedFirst.readinessCompleted != 2 || stagedFirst.readinessEffective != "PASS" || stagedFirst.readinessBound != "rev-1" ||
+		stagedFirst.readinessCompleted != 1 || stagedFirst.readinessEffective != "PASS" || stagedFirst.readinessBound != "rev-1" ||
 		stagedFirst.staging != 0 || stagedFirst.quarantine != 0 {
-		t.Fatalf("terminal state = %+v (want product 2/PASS@rev-2, readiness 2/PASS@rev-1, no staging or quarantine)", stagedFirst)
+		t.Fatalf("terminal state = %+v (want product 2/PASS@rev-2, readiness 1/PASS@rev-1, no staging or quarantine)", stagedFirst)
 	}
-	if stagedFirst.resultsEntries != 4 {
-		t.Fatalf("the ledger must hold all four admitted results (two review rounds and two tail completions): %d", stagedFirst.resultsEntries)
+	if stagedFirst.resultsEntries != 3 {
+		t.Fatalf("the ledger must hold two product reviews and one readiness review: %d", stagedFirst.resultsEntries)
 	}
 }
 
 // TestUpstreamVoidReleaseCoversTheRequirementRedoPath：解除的触发是"上游
 // 重新 PASS"的任何事务——不只纠正路径：产品审升级项把技术审置上游失效
-// 后，需求变化（PRESERVED）只重走产品审，其替换派发完成新鲜轮 PASS 的
+// 后，需求变化（CHANGED）只重走产品审，其新鲜轮 PASS 的
 // 同一事务内解除失效：技术审按自身账本重投影（rev-1 carry 续用），无技
 // 术审槽也不卡死，路线门开放推进 DEVELOPMENT_PARALLEL。
 func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
@@ -3268,8 +2990,7 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 	submitReviewResult(t, engine, "result-redo-release-readiness", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-redo-release-topo", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single"}})
 
-	// 产品审升级：技术审置上游失效（无 readiness 备用槽——fixture 到此
-	// 为止只有 product.again 在途）。
+	// 产品审升级使技术审结论失效；finding 处置前没有新轮。
 	snap := engine.LoadMustSucceed(t)
 	productSeries := snap.State.ReviewSeries.ProductReview
 	finding := productSeries.RawCandidates[0].Findings[0]
@@ -3289,16 +3010,14 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 		t.Fatal("route accepted while the void holds")
 	}
 
-	// 需求变化（PRESERVED）只重走产品审：标记派发退位换替换，新鲜轮
-	// PASS@rev-2 的同一事务内解除失效。
-	slot := pendingActionID(t, engine)
+	// Changed requirements create a fresh product-review obligation.
 	askAndDecideRequirement(t, engine, "req-redo-release-change", "proceed", &RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-redo-release",
 		ImpactDigest: "sha256:impact",
-		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved,
-		RedoProductReview: true, Reason: "redo the product walk only, meaning preserved",
+		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
+		RedoProductReview: true, Reason: "the revised requirement addresses the confirmed defect",
 	})
-	freshRoundOnTheReplacement(t, engine, slot, "result-redo-release-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-redo-release", "rev-2", "PASS", "fresh product round", nil))
+	freshRoundFromTheLedgerProposal(t, engine, "product.review", "result-redo-release-fresh", reviewEvidenceAt(review.ProductReview, "dispatch-redo-release", "rev-2", "PASS", "fresh product round", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-2" || series.FreshOwed {
 		t.Fatalf("the fresh product round = %+v owed=%v", series.Effective, series.FreshOwed)
@@ -3322,23 +3041,14 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 	}
 }
 
-// TestBarrierLiftInstallsDeferredReplacementBeforeRefill：重走决定在双 Ask
-// 屏障下延迟替换（退位不签发）后，解除屏障的决定事务先补发替换（继承原
-// 授权槽）、再做投影与补位——补位不得把替换将继承的槽当干净槽绑走（同
-// 槽双载）；替换携槽新鲜轮入账清偿义务，链尾后继经再授权放行。
-func TestBarrierLiftInstallsDeferredReplacementBeforeRefill(t *testing.T) {
+// A granted slot stays available while a fresh obligation waits for the barrier.
+// Normal issuance binds it exactly once when the final ask resolves.
+func TestBarrierLiftBindsTheFreshReviewAuthorizationOnce(t *testing.T) {
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 
-	// 三轮语义 FAIL 走满（系列不结论），再授权一轮：第四轮持槽在途。
-	action := issueReady(t, engine)[0]
-	for round := 1; round <= 3; round++ {
-		submitReviewResult(t, engine, "result-deferred-pair-"+string(rune('0'+round)), action,
-			blockingReviewEvidence(review.ProductReview, action, "round "+string(rune('0'+round))))
-		if round < 3 {
-			action = pendingActionID(t, engine)
-		}
-	}
+	exhaustProductReviewCapacity(t, engine)
+	redoProductReview(t, engine, "deferred-extra")
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-deferred-pair-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the endorsed round",
 	}})
@@ -3348,10 +3058,12 @@ func TestBarrierLiftInstallsDeferredReplacementBeforeRefill(t *testing.T) {
 		t.Fatal("the endorsed dispatch must hold the granted slot")
 	}
 
+	baseRevision := engine.LoadMustSucceed(t).State.RequirementRevision()
+
 	// 两个需求 Ask 同时未决：重走决定只退位、替换延迟（另一 Ask 持屏障）。
 	for _, requestID := range []string{"req-deferred-pair-ask1", "req-deferred-pair-ask2"} {
 		request, err := NewRequirementRequestEvent(EventID(requestID), requirementPackageOf(&RequirementDecisionPayload{
-			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:deferred-pair-delta",
+			BaseRevision: baseRevision, CandidateRevision: "rev-2", DeltaDigest: "sha256:deferred-pair-delta",
 			ImpactDigest: "sha256:impact",
 			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoProductReview: true, Reason: "redo the product series",
@@ -3368,7 +3080,7 @@ func TestBarrierLiftInstallsDeferredReplacementBeforeRefill(t *testing.T) {
 		t.Fatalf("freshness: %v", err)
 	}
 	redoPayload := &RequirementDecisionPayload{
-		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:deferred-pair-delta",
+		BaseRevision: baseRevision, CandidateRevision: "rev-2", DeltaDigest: "sha256:deferred-pair-delta",
 		ImpactDigest: "sha256:impact",
 		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "redo the product series",
@@ -3377,8 +3089,8 @@ func TestBarrierLiftInstallsDeferredReplacementBeforeRefill(t *testing.T) {
 		t.Fatalf("decide the redo: %v", err)
 	}
 	state := engine.LoadMustSucceed(t).State
-	if obsolete := state.ObsoleteActions[fourth]; obsolete.Deferred == nil {
-		t.Fatalf("the replacement must be deferred while the second ask holds the barrier: %+v", obsolete)
+	if _, obsolete := state.ObsoleteActions[fourth]; !obsolete || !state.ReviewSeries.ProductReview.FreshOwed {
+		t.Fatal("the old dispatch must retire while its new obligation remains owed")
 	}
 	for id, pending := range state.PendingActions {
 		if pending.ReviewSeries == review.ProductReview {
@@ -3390,11 +3102,7 @@ func TestBarrierLiftInstallsDeferredReplacementBeforeRefill(t *testing.T) {
 	// 当干净槽绑走，槽上只有替换一条在途派发。
 	abortExistingAsk(t, engine, "req-deferred-pair-ask2")
 	state = engine.LoadMustSucceed(t).State
-	obsolete := state.ObsoleteActions[fourth]
-	if obsolete.Deferred != nil || obsolete.ReplacedBy == "" {
-		t.Fatalf("the lift must install the deferred replacement: %+v", obsolete)
-	}
-	replacement := obsolete.ReplacedBy
+	replacement := freshReviewAfterRedo(t, engine, fourth)
 	if got := review.AuthorizationOfDispatch(state.ReviewSeries.ProductReview, replacement); got != authID {
 		t.Fatalf("the replacement must inherit the original slot: %q", got)
 	}

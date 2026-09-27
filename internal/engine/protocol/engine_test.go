@@ -94,15 +94,15 @@ func preparedEngine(t *testing.T) (*Engine, string, *decision.Plan, *compiler.Co
 			t.Fatalf("complete %s: %v", step, err)
 		}
 	}
-	plan, err := decision.Decide(view, decision.Observation{}, cd)
+	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	plan, _, err := engine.Plan()
 	if err != nil {
-		t.Fatalf("decide: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	if plan.Next.Kind != decision.KindReady {
 		t.Fatalf("plan kind = %s, want READY", plan.Next.Kind)
-	}
-	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
-		t.Fatalf("init: %v", err)
 	}
 	return engine, dir, plan, cd
 }
@@ -301,6 +301,10 @@ func TestIssueNegativePaths(t *testing.T) {
 	// 初始化后同一非 Ready 计划：SelectIssued 的派生拒绝原样上抛。
 	if err := fresh.Init(view, testProvider, fingerprintOf(t, fresh)); err != nil {
 		t.Fatalf("init: %v", err)
+	}
+	waitPlan, _, err = fresh.Plan()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, _, err := fresh.IssueFromPlan(waitPlan, decision.Admission{Capacity: 1}, "fp"); err == nil {
 		t.Fatal("non-ready plan accepted")

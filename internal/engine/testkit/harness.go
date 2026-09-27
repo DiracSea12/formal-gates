@@ -543,7 +543,7 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 		if len(ready) > 0 {
 			report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
 		} else {
-			plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+			plan, _, decideErr := fixture.Engine.Plan()
 			if decideErr != nil {
 				return decideErr
 			}
@@ -601,11 +601,7 @@ func runSubmitWorker(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		}
 		report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
 	} else {
-		snapshot, loadErr := fixture.Engine.Load()
-		if loadErr != nil {
-			return loadErr
-		}
-		plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+		plan, _, decideErr := fixture.Engine.Plan()
 		if decideErr != nil {
 			return decideErr
 		}
@@ -1470,7 +1466,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 		if loadErr != nil {
 			return loadErr
 		}
-		plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+		plan, _, decideErr := fixture.Engine.Plan()
 		if decideErr != nil {
 			return decideErr
 		}
@@ -1500,24 +1496,6 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 				return loadErr
 			}
 			if final.State.Phase != runtime.PhaseTerminal && len(final.State.Expected) != 0 {
-				// 步集已 COMPLETE 而账本欠轮提案仍在途（跨事务并发轮，
-				// 与在途无关）：先驱动在途轮落定（与 WAIT 分支同一驱动
-				// 面），全部落定后才是干净的终态。
-				if actionID := drivablePendingAction(final.State.PendingActions, final.State.SpawnReceipts); actionID != "" {
-					if _, receipted := final.State.SpawnReceipts[actionID]; !receipted {
-						spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("wait-spawn"), actionID, "full-agent-wait", protocol.SpawnStatusSpawned)
-						if spawnErr != nil {
-							return spawnErr
-						}
-						report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-					}
-					result, resultErr := fixture.Worker.ResultEventFor(nextEventID("wait-result"), actionID, final.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
-					if resultErr != nil {
-						return resultErr
-					}
-					report.Acceptances = append(report.Acceptances, result)
-					continue
-				}
 				return fmt.Errorf("full scenario reached COMPLETE with %d unsettled tasks", len(final.State.Expected))
 			}
 			hostReceiptDigest := ""
@@ -1896,7 +1874,7 @@ func runFullRecoveryFault(report *HarnessReport, fixture *ProtocolFixture, plan 
 		if err := fixture.Initialize(view, plan.Provider); err != nil {
 			return err
 		}
-		decisionPlan, decideErr := decision.Decide(view, decision.Observation{}, compiled)
+		decisionPlan, _, decideErr := fixture.Engine.Plan()
 		if decideErr != nil {
 			return decideErr
 		}
@@ -2268,13 +2246,7 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 	if err := fixture.Initialize(view, "fake-host"); err != nil {
 		return report, err
 	}
-	// 计划从提交后的权威状态推导：受理回执落账改变了状态摘要，本地 view
-	// 只是 Init 的输入，不再代表权威状态。
-	initialized, err := fixture.Engine.Load()
-	if err != nil {
-		return report, err
-	}
-	plan, err := decision.Decide(&initialized.State.State, decision.Observation{}, compiled)
+	plan, _, err := fixture.Engine.Plan()
 	if err != nil {
 		return report, err
 	}

@@ -70,8 +70,7 @@ func availableAuthorization(s Series) (int, bool) {
 // bindableAuthorization 返回第一个可承载背书绑定的授权下标；没有时第二
 // 返回值为 false。可承载的槽是干净槽：既无有效结果占用，也不承载任何
 // 在途派发（"在途"＝未落定，判定谓词由协议层传入——见协议层 liveDispatch）。
-// 绑定只发生在需要背书的放行上（签发闸的背书形与换新继承），一条派发与
-// 在途兄弟共享槽的形状不存在——闭环论证见协议层签发闸的承诺注释。
+// 超额轮签发与换新继承共用此选槽规则：每个在途派发独占其授权槽。
 func bindableAuthorization(s Series, live func(dispatchID string) bool) (int, bool) {
 	occupied := OccupiedAuthorizationIDs(s)
 	for index, authorization := range s.Authorizations {
@@ -118,13 +117,10 @@ func nextRoundRequirement(s Series) string {
 	return nextRequirementUser
 }
 
-// refresh 依据四本账重算 Series 的全部缓存投影。任何接纳路径之后必须调用，
-// 使容量字段与账本保持一致。RemainingCapacity 与准入规则精确对齐：下一轮
-// 可立即记录 iff completed<automaticLimit 或存在空槽授权，因此它等于
-// 自动剩余轮数加未占用授权数（CurrentLimit 语义不变＝AutomaticLimit+授权
-// 总数）。它的消费点是审查公开面与入账侧的容量投影；签发闸不经它放行
-// ——放行承诺直接读账本事实（见协议层 admitReviewIssuance）。首过闩在同
-// 一点置位：effective 首次投影为 PASS 即写 FirstPass，只写一次、永不回退。
+// refresh derives capacity from the review ledgers. RemainingCapacity counts
+// automatic slots plus unoccupied authorizations; protocol planning combines
+// it with the outstanding obligation and live dispatches to decide readiness.
+// FirstPass latches the first effective PASS and never rolls back.
 func refresh(s *Series) {
 	s.Completed = completedRounds(*s)
 	s.CurrentLimit = s.AutomaticLimit + len(s.Authorizations)
@@ -148,16 +144,26 @@ func refresh(s *Series) {
 // （refactor-plan/final-implementation-draft.md §4.4）。绑定字段（RawStatus/
 // ResultDigest/RequirementRevision）锚最新候选：旧 revision 的证据随
 // revision 前移不再拦新轮，与 HasConfirmedBlocking 同一 revision 界；
-// DownstreamImpact 恒为空表，由接纳路径按状态迁移另行标记。
+// 最新候选整轮失效时投影为 PENDING 并携带下游影响；其余状态的
+// DownstreamImpact 由接纳路径按状态迁移标记。
 func Effective(s Series, revision int) EffectiveStatus {
 	blocking, advisory := []string{}, []string{}
-	// 绑定锚是最新未被整轮排除的候选：整轮失效的 PENDING 投影保留指向被
-	// 排除者的绑定、不经本函数落账（由失效路径直接写入）。
-	anchorIndex := len(s.RawCandidates) - 1
-	for ResultExcluded(s, s.RawCandidates[anchorIndex].ResultDigest) {
-		anchorIndex--
+	// The latest candidate owns the conclusion. Invalidating it requires a new
+	// review; an older PASS cannot replace its missing evidence.
+	if len(s.RawCandidates) == 0 {
+		return EffectiveStatus{Status: statusPending, Source: s.Effective.Source, Revision: revision,
+			BlockingFindingIDs: blocking, AdvisoryFindingIDs: advisory, DownstreamImpact: []string{}}
 	}
-	anchor := s.RawCandidates[anchorIndex]
+	anchor := s.RawCandidates[len(s.RawCandidates)-1]
+	for _, correction := range s.Corrections {
+		if correction.ResultDigest == anchor.ResultDigest && correction.Decision == decisionInvalidateResult {
+			return EffectiveStatus{
+				Status: statusPending, RawStatus: anchor.RawStatus, ResultDigest: anchor.ResultDigest,
+				RequirementRevision: anchor.RequirementRevision, Source: correction.ID, Revision: revision,
+				BlockingFindingIDs: blocking, AdvisoryFindingIDs: advisory, DownstreamImpact: downstreamImpact(s.Action),
+			}
+		}
+	}
 	source := anchor.ResultDigest
 	for _, candidate := range s.RawCandidates {
 		if candidate.RequirementRevision != anchor.RequirementRevision || ResultExcluded(s, candidate.ResultDigest) {

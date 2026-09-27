@@ -169,12 +169,12 @@ func validateRouteDecision(route *RouteDecision) error {
 
 // ---- 审查证据接纳（WORKER_RESULT 同事务） ----
 
-// confirmedRevisionGeneration 报告给定需求 revision 在确认账本内的确认
-// 代数（登记落账时的 state 代数）：属于账本返回其代数与 true，账本为空时
-// 受理回退值按代数零确认（与从未重走的 floor 同判，不收窄）。成员判定
-// （结论 carry 有效性）与重走系列的 revision 下界都读它。
+// confirmedRevisionGeneration finds the latest confirmation of this content.
+// Content may recur; execution freshness is checked separately against the
+// dispatch's issuance generation, so reconfirmation cannot refresh old work.
 func (s *State) confirmedRevisionGeneration(revision string) (uint64, bool) {
-	for _, entry := range s.RequirementRevisions {
+	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
+		entry := s.RequirementRevisions[i]
 		if entry.Revision == revision {
 			return entry.StateRevision, true
 		}
@@ -182,20 +182,14 @@ func (s *State) confirmedRevisionGeneration(revision string) (uint64, bool) {
 	return 0, len(s.RequirementRevisions) == 0 && revision != "" && revision == s.RequirementRevision()
 }
 
-// confirmedRequirementRevision 报告给定需求 revision 是否属于确认账本
-// （账本为空时即受理回退值）。
 func (s *State) confirmedRequirementRevision(revision string) bool {
 	_, confirmed := s.confirmedRevisionGeneration(revision)
 	return confirmed
 }
 
-// effectivePass 报告 series 的 effective 结论是否为携带已确认 revision 的
-// PASS（carry 感知，§7.2.4 机主修订）：revision 只前进，每个新确认 revision
-// 要么勾选重走了该 series（stale 后非 PASS，或在新 revision 上重新 PASS），
-// 要么用户决定携原结论续用——因此 PASS 只要在确认账本内的 revision 上
-// 成立即有效。双审顺序守卫、双审门、拓扑双条件与 phase 推进都以它为准；
-// 勾选重走置 PENDING 或升阻塞自然关门。新轮证据的 F3 绑定不在此处——
-// 证据仍必须绑当前权威 revision。
+// effectivePass accepts a PASS at confirmed content only after any fresh-round
+// obligation is discharged. Requirement confirmations either request redo or
+// carry the existing conclusion; the content hash need not be unique in history.
 func (s *State) effectivePass(series review.Series) bool {
 	// FreshOwed 在则该系列不算 PASS：重走义务未清偿时，即便投影被纠正
 	// 刷成携已确认 revision 的 PASS，门也不开。
@@ -262,9 +256,8 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID str
 				evidence.RequirementRevision, s.RequirementRevision()),
 		}
 	} else if generation < series.FreshFloor || issuedRevision < series.FreshFloor {
-		// 重走系列的 revision 下界＝最后一次覆盖它的重走决定：revision 只前
-		// 进，每个新确认 revision 要么勾选重走了该 series，要么用户决定携
-		// 原结论续用——早于该决定的 revision 或派发都不再是合法的续用对象。
+		// 重走系列的下界为最后一次重走确认代次；内容确认和派发签发
+		// 都不得早于它。内容 hash 的重复确认不改变历史派发的签发代次。
 		// floor 为零（从未重走）的系列两个比较恒假，carry 语义原样。
 		return review.Set{}, &RejectedError{
 			Code: CodeReviewEvidenceRejected,
@@ -358,6 +351,14 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 	// payload（拒绝授权也是有效决定），grant 必携 roundGrant 分支，其余
 	// 审查控制的决定必携对应分支。
 	if ask.Control == ControlReviewRoundGrant {
+		if offer := ask.RoundGrant; offer != nil {
+			if *offer != state.reviewGrantBinding(offer.Action) || !state.reviewRoundOwed(offer.Action) {
+				return &RejectedError{Code: CodeReviewDecisionRejected, Detail: "the review authorization offer is no longer current"}
+			}
+			if payload != nil && payload.RoundGrant != nil && payload.RoundGrant.Action != offer.Action {
+				return &RejectedError{Code: CodeReviewDecisionRejected, Detail: "the review grant action does not match its offer"}
+			}
+		}
 		if decide.Choice == AskOptionID(declineOption) {
 			if payload != nil {
 				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "declining a round grant cannot carry a review decision payload"}
@@ -672,21 +673,19 @@ func verifyReviewIntegrity(state *State) error {
 		}
 		return floor
 	}
-	// FreshOwed ⇔ 确认账本最近覆盖该 series 的重走决定尚未被满足：满足
-	// ＝ series 记录过绑定"该决定所确认 revision 或其后继确认 revision"
-	// 的候选（完成接纳即计轮；整轮失效只除投影与计轮，不复活重走义务）。
+	// A redo is discharged only by a candidate from an execution authorized
+	// at or after its confirmation generation. Exclusion changes capacity,
+	// but does not erase the fact that this fresh execution completed.
 	expectedOwed := func(action review.Action, series review.Series) bool {
-		if expectedFloor(action) == 0 {
+		floor := expectedFloor(action)
+		if floor == 0 {
 			return false
 		}
-		for _, entry := range state.RequirementRevisions {
-			if entry.StateRevision < expectedFloor(action) {
-				continue
-			}
-			for _, candidate := range series.RawCandidates {
-				if candidate.RequirementRevision == entry.Revision {
-					return false
-				}
+		for _, candidate := range series.RawCandidates {
+			issued := state.issuedRevisionOf(candidate.DispatchID)
+			generation, confirmed := state.confirmedRevisionGeneration(candidate.RequirementRevision)
+			if confirmed && issued >= floor && generation >= floor {
+				return false
 			}
 		}
 		return true

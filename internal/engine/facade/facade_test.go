@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -477,7 +478,7 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 		t.Fatal("the pending requirement ask was not projected")
 	}
 	face := run.PendingRequirementAsk
-	if face.RequestID != "req-face-ask" || face.Package == nil || *face.Package != pkg ||
+	if face.RequestID != "req-face-ask" || face.Package == nil || !reflect.DeepEqual(*face.Package, pkg) ||
 		len(face.Options) != 2 || face.BaseRevision != "rev-1" {
 		t.Fatalf("ask face = %+v", face)
 	}

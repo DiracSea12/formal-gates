@@ -56,6 +56,11 @@ const (
 	// WaitTasksInFlight：frontier 含外部边界步骤，但全部已签发在途（或
 	// 已终态待处置），无可签发项；receipt/result 到达后 submit 立即补位。
 	WaitTasksInFlight WaitReason = "TASKS_IN_FLIGHT"
+	// WaitCapacity reports exhausted admission capacity, including a declined
+	// offer for an extra review round. No unanswered Ask is hidden by this reason.
+	WaitCapacity WaitReason = "CAPACITY"
+	// WaitDependencies reports an outstanding obligation held by its prerequisites.
+	WaitDependencies WaitReason = "DEPENDENCIES_UNSATISFIED"
 )
 
 // ReadyTask 是 Ready 集的单个待签发任务：薄指针（TaskKey + step），不携
@@ -77,7 +82,8 @@ type HostActionPayload struct {
 
 // AskPayload 是 Ask 的 payload：待用户决定的步骤引用（schema 在定义中）。
 type AskPayload struct {
-	Steps []authoring.StepID `json:"steps"`
+	Steps    []authoring.StepID `json:"steps"`
+	Requests []string           `json:"requests,omitempty"`
 }
 
 // WaitPayload 是 Wait 的 payload：封闭原因。
@@ -209,15 +215,32 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 		}
 	}
 
+	required := make(map[authoring.StepID][]RequiredTask, len(state.RequiredTasks))
+	requiredCount := 0
+	for id, tasks := range state.RequiredTasks {
+		step, exists := index[id]
+		if !exists {
+			return nil, fmt.Errorf("decision: required step %q is not in the definition", id)
+		}
+		for _, task := range tasks {
+			key := task.Task
+			if key.Step != id || step.Header.NodeID != key.Node || !key.Valid() {
+				return nil, fmt.Errorf("decision: required task %s is not in the definition", key.String())
+			}
+		}
+		required[id] = append([]RequiredTask{}, tasks...)
+		sort.Slice(required[id], func(i, j int) bool { return required[id][i].Task.String() < required[id][j].Task.String() })
+		requiredCount += len(tasks)
+	}
 	var frontier []*compiler.CompiledStep
 	for i := range cd.Steps {
 		cs := &cd.Steps[i]
-		if completedSet[cs.Header.ID] {
+		if completedSet[cs.Header.ID] && len(required[cs.Header.ID]) == 0 {
 			continue
 		}
 		ready := true
 		for _, dep := range cs.Header.Dependencies {
-			if !completedSet[dep] {
+			if !state.StepSatisfied(dep, cd) {
 				ready = false
 				break
 			}
@@ -233,6 +256,7 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 	// HUMAN_ASK→Ask 为外部边界；LOCAL/DURABLE/PARALLEL 由 Controller
 	// 内部执行。已签发在途（或已终态待处置）的任务不再进入可签发集。
 	externalPresent := false
+	var blockedBy WaitReason
 	var agentTasks []ReadyTask
 	var hostSteps, askSteps []authoring.StepID
 	for _, cs := range frontier {
@@ -246,7 +270,17 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 		switch cs.Header.Kind {
 		case compiler.KindAgent:
 			externalPresent = true
-			if queued {
+			if tasks, managed := required[cs.Header.ID]; managed {
+				for _, task := range tasks {
+					if task.BlockedBy != "" {
+						if blockedBy == "" || task.BlockedBy == WaitCapacity {
+							blockedBy = task.BlockedBy
+						}
+					} else if state.TaskStatusOf(task.Task) == runtime.TaskQueued {
+						agentTasks = append(agentTasks, ReadyTask{Task: task.Task, Step: cs.Header.ID})
+					}
+				}
+			} else if queued {
 				agentTasks = append(agentTasks, ReadyTask{Task: key, Step: cs.Header.ID})
 			}
 		case compiler.KindHostAction:
@@ -264,14 +298,20 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 
 	var next NextResult
 	switch {
-	case state.Phase == runtime.PhaseTerminal || len(state.Completed) == len(cd.Steps):
+	case state.Phase == runtime.PhaseTerminal:
+		next = NextResult{Kind: KindComplete, Complete: &CompletePayload{}}
+	case state.Suspended && len(state.ControlRequests) > 0:
+		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Requests: state.ControlRequests}}
+	case len(state.Completed) == len(cd.Steps) && requiredCount == 0 && len(state.ControlRequests) == 0:
 		next = NextResult{Kind: KindComplete, Complete: &CompletePayload{}}
 	case len(agentTasks) > 0:
 		next = NextResult{Kind: KindReady, Ready: &ReadyPayload{Tasks: agentTasks}}
 	case len(hostSteps) > 0:
 		next = NextResult{Kind: KindHostAction, HostAction: &HostActionPayload{Steps: hostSteps}}
-	case len(askSteps) > 0:
-		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Steps: askSteps}}
+	case len(askSteps) > 0 || len(state.ControlRequests) > 0:
+		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Steps: askSteps, Requests: state.ControlRequests}}
+	case blockedBy != "":
+		next = NextResult{Kind: KindWait, Wait: &WaitPayload{Reason: blockedBy}}
 	case externalPresent:
 		next = NextResult{Kind: KindWait, Wait: &WaitPayload{Reason: WaitTasksInFlight}}
 	default:
@@ -365,7 +405,8 @@ type hostActionWire struct {
 }
 
 type askWire struct {
-	Steps []string `json:"steps"`
+	Steps    []string `json:"steps"`
+	Requests []string `json:"requests,omitempty"`
 }
 
 type waitWire struct {
@@ -406,7 +447,7 @@ func (p *Plan) CanonicalBytes() ([]byte, error) {
 		nw.HostAction = &hostActionWire{Steps: idStrings(p.Next.HostAction.Steps)}
 	}
 	if p.Next.Ask != nil {
-		nw.Ask = &askWire{Steps: idStrings(p.Next.Ask.Steps)}
+		nw.Ask = &askWire{Steps: idStrings(p.Next.Ask.Steps), Requests: p.Next.Ask.Requests}
 	}
 	if p.Next.Wait != nil {
 		nw.Wait = &waitWire{Reason: string(p.Next.Wait.Reason)}

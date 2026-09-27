@@ -43,7 +43,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			if completedSet[step.Header.ID] {
 				continue
 			}
-			if !s.dependenciesSatisfied(step) {
+			if !s.dependenciesSatisfied(step, compiled) {
 				continue
 			}
 			settle := false
@@ -103,7 +103,7 @@ func (s *State) passResultCompletesStep(stepID authoring.StepID, seriesOf func(a
 func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authoring.StepID {
 	for i := range compiled.Steps {
 		step := &compiled.Steps[i]
-		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step) {
+		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step, compiled) {
 			continue
 		}
 		if _, ok := step.Payload.(compiler.CompiledHumanAskStep); !ok || s.askStepBound(step.Header.ID) {
@@ -117,7 +117,7 @@ func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authorin
 func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operation authoring.OperationID) authoring.StepID {
 	for i := range compiled.Steps {
 		step := &compiled.Steps[i]
-		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step) {
+		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step, compiled) {
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
@@ -179,16 +179,10 @@ func (s *State) stepCompleted(stepID authoring.StepID) bool {
 	return false
 }
 
-func (s *State) dependenciesSatisfied(step *compiler.CompiledStep) bool {
+func (s *State) dependenciesSatisfied(step *compiler.CompiledStep, compiled *compiler.CompiledDefinition) bool {
+	view := s.decisionView(compiled)
 	for _, dep := range step.Header.Dependencies {
-		done := false
-		for _, id := range s.Completed {
-			if id == dep {
-				done = true
-				break
-			}
-		}
-		if !done {
+		if !view.StepSatisfied(dep, compiled) {
 			return false
 		}
 	}

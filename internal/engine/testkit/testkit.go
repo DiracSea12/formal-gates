@@ -935,13 +935,7 @@ func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
 	if err := f.Initialize(view, "fake-host"); err != nil {
 		return nil, err
 	}
-	// 计划从提交后的权威状态推导：受理回执落账改变了状态摘要，本地 view
-	// 只是 Init 的输入，不再代表权威状态。
-	snapshot, err := f.Engine.Load()
-	if err != nil {
-		return nil, err
-	}
-	plan, err := decision.Decide(&snapshot.State.State, decision.Observation{}, compiled)
+	plan, _, err := f.Engine.Plan()
 	if err != nil {
 		return nil, err
 	}
