@@ -164,7 +164,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		}
 	case "REPAIR":
 		w := s.currentValidationWave()
-		if w == nil || w.ID != r.Target || w.Status != "REPAIR" || w.ExtraAuthorized {
+		if w == nil || w.ID != r.Target || !s.validationRepairPending(w) || w.ExtraAuthorized {
 			return validationError("repair offer is no longer current")
 		}
 		w.ExtraAuthorized = true
@@ -212,8 +212,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			s.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Options: []AskOption{{ID: requirementProceedOption, Label: "Confirm revised requirement"}, {ID: requirementAbortOption, Label: "Keep current requirement"}}}
 		case "DISMISS":
 			for _, finding := range s.Validation.Findings {
-				if finding.WaveID == w.ID {
-					target := w.Targets[finding.Target]
+				if target := s.validationFindingTarget(w, finding); target != nil {
 					target.Status = "DISPOSED"
 					target.DispositionReason = d.Reason
 				}
@@ -231,7 +230,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 func (e *Engine) retireValidationWave(s *State, id, reason string) {
 	for action, b := range s.DispatchBindings {
 		if b.WaveID == id {
-			if _, active := s.PendingActions[action]; active {
+			if s.liveDispatch(action) {
 				s.retireAction(action, "", reason)
 			}
 			delete(s.EndedAttempts, b.Task)

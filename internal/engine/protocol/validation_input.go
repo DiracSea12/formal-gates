@@ -37,7 +37,11 @@ func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]Val
 		input := ValidationInput{Binding: binding, Handler: role}
 		c := s.coverageContract(s.Validation.Candidate)
 		switch role {
-		case "engine.qa.design", "engine.qa.review", "engine.qa.execution", "engine.repair":
+		case "engine.qa.design", "engine.qa.review":
+			contract := modeCoverageContract(c, mode)
+			contract.Candidate = nil
+			input.Contract = &contract
+		case "engine.repair":
 			input.Contract = &c
 		}
 		_, input.SourcePoints = s.coveragePoints()
@@ -51,6 +55,12 @@ func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]Val
 		if set := s.Validation.Sets[mode]; set != nil {
 			input.Manifest = set.Manifest
 			input.InheritableCases = s.inheritableCases(set)
+		}
+		if (role == "engine.qa.design" || role == "engine.qa.review") && binding.RouteScope != "" {
+			input.Manifest = manifestAtRoute(input.Manifest, binding.RouteScope)
+			for i := range input.Contract.Manifests {
+				input.Contract.Manifests[i] = manifestAtRoute(input.Contract.Manifests[i], binding.RouteScope)
+			}
 		}
 		if role == "engine.qa.execution" {
 			wave := s.validationWave(binding.WaveID)

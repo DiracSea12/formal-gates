@@ -91,6 +91,7 @@ type ValidationResult struct {
 // WorkBinding accompanies every issued business task and its result. Revision
 // is the confirmed content identity; Generation distinguishes its occurrence.
 type WorkBinding struct {
+	RouteScope          string          `json:"routeScope,omitempty"`
 	RequirementRevision string          `json:"requirementRevision"`
 	Generation          uint64          `json:"generation"`
 	Candidate           string          `json:"candidate,omitempty"`
@@ -185,6 +186,7 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	RouteScope          string                                    `json:"routeScope,omitempty"`
 	QAArtifacts         map[coverage.ReviewKind]CandidateArtifact `json:"qaArtifacts,omitempty"`
 	Stage               string                                    `json:"stage"`
 	RequirementRevision string                                    `json:"requirementRevision"`
@@ -305,7 +307,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if v == nil {
 		return WorkBinding{Task: key}
 	}
-	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, Task: key}
+	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), Task: key}
 	role := s.validationRole(key, cd)
 	mode := s.validationMode(key)
 	if set := v.Sets[mode]; set != nil {
@@ -402,7 +404,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			}
 		}
 	}
-	if wave.Status == "REPAIR" && wave.Repair != nil && wave.Repair.Evidence == nil {
+	if s.validationRepairPending(wave) && wave.Repair.Evidence == nil {
 		add("engine.repair", wave.Repair.Task.Scope, s.completedValidationWaves() >= 3 && !wave.ExtraAuthorized && !wave.Repair.PureP2)
 	}
 }
@@ -440,11 +442,13 @@ func (s *State) validationWhitelist() (coverage.ApprovedWhitelist, error) {
 	return s.coverageContract(s.Validation.Candidate).ValidateReviews(reviews)
 }
 func (s *State) validationRouteDigest() string {
+	gates := slices.Clone(s.SelectedGates)
+	slices.Sort(gates)
 	return digestOfCanonical(struct {
 		Route    string
 		Gates    []string
 		Topology *TopologyBinding
-	}{s.RouteMode, s.SelectedGates, s.Topology})
+	}{s.RouteMode, gates, s.Topology})
 }
 func (s *State) completedValidationWaves() int {
 	n := 0

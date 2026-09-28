@@ -73,6 +73,10 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return changed, nil
 	}
 	v := s.Validation
+	if w := s.currentValidationWave(); w != nil && w.RouteDigest != s.validationRouteDigest() && w.Status != "INVALIDATED" && w.Status != "REPAIRED" {
+		e.rebindValidationRoute(s)
+		changed = true
+	}
 	for _, mode := range s.validationKinds() {
 		set := v.Sets[mode]
 		if set != nil && set.Status == "REVIEW" && len(set.ReviewHistory) >= s.qaReviewLimit(mode) {
@@ -93,7 +97,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			e.settleValidationWave(s)
 		}
 	}
-	if w != nil && w.Status == "REPAIR" && w.Repair != nil {
+	if s.validationRepairPending(w) {
 		if w.Repair.Evidence != nil {
 			v.Development = w.Repair.Evidence
 			v.DevelopmentSnapshot = ""
@@ -117,7 +121,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			return changed, nil
 		}
 	}
-	params := CandidateParameters{RequirementRevision: v.RequirementRevision, Generation: v.Generation, Paths: slices.Clone(v.Development.Paths)}
+	params := CandidateParameters{RouteScope: s.validationRouteDigest(), RequirementRevision: v.RequirementRevision, Generation: v.Generation, Paths: slices.Clone(v.Development.Paths)}
 	switch {
 	case v.DevelopmentSnapshot == "":
 		params.Stage = "DEVELOPMENT"
@@ -256,7 +260,7 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 			return validationError("whitebox changes must be proved test-owned and production-equivalent; submit production edits through development/repair")
 		}
 		set := v.Sets[coverage.ReviewWhitebox]
-		if set == nil || params.CaseVersions[coverage.ReviewWhitebox] != set.Version {
+		if set == nil || params.CaseVersions[coverage.ReviewWhitebox] != digestOfCanonical(manifestAtRoute(set.Manifest, params.RouteScope)) {
 			return validationError("whitebox case version changed")
 		}
 		set.Candidate = evidence.Identity
@@ -268,7 +272,7 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 			return validationReject(err)
 		}
 		for mode, set := range v.Sets {
-			if params.CaseVersions[mode] != set.Version {
+			if params.CaseVersions[mode] != digestOfCanonical(manifestAtRoute(set.Manifest, params.RouteScope)) {
 				return validationError("case version changed while materializing candidate")
 			}
 			set.Candidate = evidence.Identity
@@ -334,8 +338,12 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode) {
 			target.Gate = ""
 		}
 		target.Task = s.validationRequiredTask(pipelineTask(e.cfg.Definition, handler, w.ID+":"+part), e.cfg.Definition)
-		if prior != nil && mode == "" {
-			s.carryGateResult(target, prior, w.Candidate)
+		if prior != nil {
+			if prior.Candidate == w.Candidate && prior.RouteDigest != w.RouteDigest {
+				s.carryRouteTarget(target, prior, &w)
+			} else if mode == "" {
+				s.carryGateResult(target, prior, w.Candidate)
+			}
 		}
 		w.Targets[target.Task.String()] = target
 	}
@@ -374,7 +382,7 @@ func (s *State) carryGateResult(target *ValidationTarget, prior *ValidationWave,
 			return
 		}
 		for _, finding := range s.Validation.Findings {
-			if finding.WaveID != prior.ID || finding.Target != previous.Task.String() || len(finding.History) == 0 {
+			if s.validationFindingTarget(prior, finding) != previous || len(finding.History) == 0 {
 				continue
 			}
 			resolution := finding.History[len(finding.History)-1]
@@ -396,7 +404,7 @@ func (e *Engine) adjudicateValidation(s *State, subject string, items []FindingR
 	seen := map[string]bool{}
 	for _, item := range items {
 		f := s.Validation.Findings[item.FindingID]
-		if f == nil || f.WaveID != w.ID || seen[item.FindingID] {
+		if f == nil || s.validationFindingTarget(w, f) == nil || seen[item.FindingID] {
 			return validationError("unknown or duplicate finding")
 		}
 		seen[item.FindingID] = true
@@ -450,7 +458,7 @@ func (w *ValidationWave) hasFailedQA() bool {
 
 func (s *State) validationFindingsAdjudicated(w *ValidationWave) bool {
 	for _, finding := range s.Validation.Findings {
-		if finding.WaveID == w.ID && len(finding.History) == 0 {
+		if s.validationFindingTarget(w, finding) != nil && len(finding.History) == 0 {
 			return false
 		}
 	}
@@ -458,7 +466,7 @@ func (s *State) validationFindingsAdjudicated(w *ValidationWave) bool {
 }
 
 func (s *State) validationDispositionReady(w *ValidationWave) bool {
-	return w != nil && (w.Status == "REPAIR" || w.Status == "ADJUDICATING" && w.hasFailedQA() && s.validationFindingsAdjudicated(w))
+	return w != nil && (s.validationRepairPending(w) || w.Status == "ADJUDICATING" && w.hasFailedQA() && s.validationFindingsAdjudicated(w))
 }
 
 func (e *Engine) settleValidationWave(s *State) {
@@ -469,14 +477,14 @@ func (e *Engine) settleValidationWave(s *State) {
 	problems := []string{}
 	pureP2 := true
 	for _, f := range s.Validation.Findings {
-		if f.WaveID != w.ID {
+		target := s.validationFindingTarget(w, f)
+		if target == nil {
 			continue
 		}
 		a := f.History[len(f.History)-1]
 		if a.Decision == "DISMISSED" {
 			continue
 		}
-		target := w.Targets[f.Target]
 		if target.Status == "DISPOSED" {
 			continue
 		}

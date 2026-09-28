@@ -487,3 +487,52 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 测试与范围：全仓 `go test ./... -count=1` 已退出 0（CLI 127.781s、harness 420.231s、validate 431.302s），原始日志 `/tmp/validation-obligation-oracle/full-suite.log`。该命令在最初四项修订冻结时启动，之后新增集合/继承/carry修正另做最终受影响包验证，不把较早全仓执行冒充最终所有源码的同次执行。最终 14 个变更 Go 文件 gofmt 检查和 git diff --check 通过。最终受影响包与 vet 完成结果接下条记录。没有 push，没有真实模型/宿主 canary，没有实际 provider/promotion 或整阶段 Seal 声明。
 
 最终冻结后的受影响包 `go test ./internal/engine/protocol ./internal/engine/facade ./internal/engine/whitebox_qa ./internal/cli -count=1` 全 PASS（63.177s / 39.791s / 17.723s / 105.100s），日志 `/tmp/validation-obligation-oracle/final-affected-packages.log`。最终 `go vet ./internal/engine/... ./internal/validate/... ./cmd/...` 退出 0（`final-vet.log`）；历史记录单测由主代理独立复跑 PASS（`stage-records-verified.log`）。本次验收所发现的范围内缺陷和工程准则违反均已闭合；此结论保留上述明确的交付及验证范围。
+
+
+## 模式隔离、路线变更与跨候选继承返修
+
+2026-09-28 用户要求重新派子代理返修，并重申全部工程准则是硬标准。普通授权范围继续，不启动 formal-gates，不调用真实模型或宿主，不 push。起点 `9122eec`，工作区干净。
+
+前条“范围内缺陷和工程准则违反均已闭合”被随后独立公开反例推翻，不再作为当前验收结论。零上下文审查 `7eb32e8..9122eec` 得到两项 P1（黑盒 design/review 收到白盒材料、追加普通门遗漏新目标）与一项 P2（继承只查来源候选紧邻返修，遗漏中间影响）。主代理亲读需求、源码、探针并独立重跑三项，均复现；checkpoint/retry 保留 FAIL 对照通过。原始报告 `/tmp/independent-validation-audit/report.md`，主代理执行日志 `root-recheck.log`。
+
+返修单独派给 `validation_invariants_repair`（零会话历史，完整提供需求、硬准则、失败证据）；主代理不写业务实现。实施前要求并审核 `/tmp/validation-invariants-repair/design.md`，按真实 owner、入口、跨接缝字段及正负对照决定修改。
+
+方案依据先于实现：
+
+- 3.5c REQ-001/AC-002：“黑盒输入中没有本次实现、白盒测试或开发者解释”；现有 `executionContract` 已按 mode 裁剪。统一复用局部契约投影，设计/审查/执行各自只接本 mode 所需材料；repair 继续获得必要完整契约。
+- master §6.3.1：“开发后只可追加普通门”；§8.3.6：“route/case-set/目标集变化使旧 wave 失效，不能中途修改集合制造收齐”。RouteMode/SelectedGates 仍是唯一路线控制事实；Wave 保留原冻结目标和证据。以已有 ResultAction 查原 finding owner，不复制 finding/history；已形成合法唯一 repair 保留原 owner/TaskKey/预算，修后候选运行新增门。
+- AGENTS：“跨接缝传递的上下文必须显式列出携带者”。WorkBinding 与 CandidateParameters 分别承载 worker 与 adapter 已签发输入；当前签发记录没有 route scope，新增签发路线快照用于核对旧 case version，不能无条件接纳旧载荷。它们是既有签发证据字段，不另建控制账本。
+- 3.5c AC-008 的受影响进度失效与 master §8.3.7 的 AFFECTED 执行，要求沿实际 candidate/RepairSource 变化链核全部影响。复用原 wave/repair evidence，不新增累计影响状态，不一律禁止合法历史继承。
+
+主代理实施前/过程正向对照：普通门追加不打断已签发 QA review；重复同路线决定不变更冻结 wave；两次都只影响 invalid 时 normal 可跨两次返修继承；已签发 repair 在路线追加后仍完成并向新候选派新增门。另独立确认已收齐 FAIL 未裁决时追加 gate 缺口。材料 `/tmp/validation-root-oracle/`；尚无最终完成声明，后续记录仅依据冻结后实际验收。
+
+
+### 返修结果与有界验收
+
+本次实际实施集中于 `protocol` 原归属：`modeCoverageContract` 合并输入/审查/执行的模式契约裁剪；`rebindValidationRoute` 在路线确认事务及既有推进路径重绑，保留原冻结目标/证据；`validationFindingTarget` 用 ResultAction/DispatchBindings 定位唯一原 finding；`validationRepairPending` 区分仍有效的 route-only 返修与 THAW/需求 REDO；`validInheritance` 核完整 candidate/RepairSource 变化链。WorkBinding 与 CandidateParameters 各携 RouteScope，`manifestAtRoute` 共用签发版本核对。原重复裁剪正文、直接按当前 wave ID 判断 finding 的相关业务入口、只核紧邻一次 repair 的继承路径已替换，没有平行控制账本。
+
+过程中的错误据实记录：主代理同意的首版 route 重冻方案使用 FULL，开发者自查与零上下文独立审查均发现，它会把已经终结的 AFFECTED/INHERITED QA 错当最终 FULL 通过。这是本轮修改引入的回归，不能归为原 `9122eec` 缺陷。主代理另写公开探针，在恢复错误行的负控中复现 FAIL（`/tmp/validation-root-oracle/scope-negative-control.log`）。修复为保留原 `w.Scope`，沿用既有 AFFECTED 完成后创建 FULL 的路径；不增加旁路。审查者实跑确认最终 FULL 先 COLLECTING，提交当前候选全部实际执行后才 COMPLETE。其原失败和修后日志分别为 `/tmp/validation-change-review/original.log`、`final.log`。主代理首次 scope 探针运行与开发者一行修改交错，取得的是修后 PASS，单独保存 `scope-first-run.log`，不冒充负控。
+
+另有新增测试准备错误：退役 action 的 SpawnReceipt 应按既有协议拒绝，不能用默认成功 helper；runtime-error fixture 必须携 FailureClass。均修正测试准备并继续断言旧结果仅入 ObsoleteResults、新 wave 不受其影响。既有测试期望未降低。临时 oracle 入树按行为重命名，去掉来源前缀和不必要匿名函数；重复复制的对照删除，原验收断言保留。
+
+| 硬标准 | 主代理核验与证据；结论仅限本次返修及直接影响面 |
+|---|---|
+| 正确性、需求完整性、实现质量 | 三原反例修后通过；追加门覆盖设计/审查/候选装配在途、COLLECTING、原FAIL裁决、REPAIR/retry、COMPLETE及late result；最终FULL不得借继承绕过的独立负控修后通过。已证实问题已解决。 |
+| 简洁性、耦合、单一权威 | 复用已有State、wave、repair、DispatchBindings、ResultAction、Attempt；模式裁剪/原finding归属各一处；无新规则框架、缓存、累计影响表或副本finding账本。静态逐处检查未发现范围内违反。 |
+| 可维护性、可读性、设计一致性 | 新函数按业务行为命名；路线只变验证义务集合，不改旧ExpectedDigest、不把DISPOSED变PASS、不撤销已签发合法repair；签发上下文显式携带，原历史签名保留。对应正负执行通过。 |
+| 无不当硬编码、窄逻辑、过拟合 | 生产未出现特定caseID/测试名/候选ID放行；QA模式沿既有封闭业务枚举；跨多次repair首边/末边受影响拒绝，全部未影响及中途普通门追加仍接受。 |
+| 无过度设计、防御、抽象 | 两个RouteScope字段分别补worker与adapter签发上下文；直接小函数复用既有能力，没有通用兼容层或第二状态机。未为未要求的provider/数据库迁移加实现。 |
+| 测试隔离与夹具诚实 | 新增四个行为测试文件；生产无测试开关/fixture依赖。模拟adapter只建立typed前置，实际Submit/Drive/Open、接纳与obsolete持久证据被核内容。未将模拟回执声称为真实provider验证。 |
+| 正常/恢复、重复/并行边界 | 重复同路线不变wave/预算；普通门追加保留在途review和已签发repair；staged/receipted/terminal晚到只审计；THAW取消不复活旧repair；worker/adapter仍经原共同接纳函数。相关测试通过。 |
+| 轮次分离、旧路径清理 | 未改变设计/语义review计数；repair保留原TaskKey、1/2预算和extra授权；同candidate重冻不重复Counted；被替代的三类局部路径已删除，静态检查未见平行实现。 |
+
+最终证据：
+
+- 开发者原始复现 `/tmp/validation-invariants-repair/baseline.log` 三FAIL、一正向PASS；最终原四探针、主代理七项对照各PASS，见 `frozen-original-probes.log`、`frozen-root-controls.log`。
+- 主代理合并11个独立公开探针重新执行全部PASS，25.395s，`/tmp/validation-root-oracle/final-probes.log`。包含未影响case跨两次repair合法继承、原finding唯一归属、既有repair不丢以及已终结增量结果不得升级FULL。
+- 最终生产源码 `go test ./internal/engine/facade ./internal/engine/protocol -count=1` PASS，82.608s/80.407s，`/tmp/validation-invariants-repair/frozen-core-regression.log`。此后仅测试匿名函数改局部值并删除一段重复对照；相应目标单测另跑PASS（`test-cleanup.log`），没有再改生产源码。
+- 零上下文独立代理 `validation_change_review` 未读先前报告/交接/问题清单，从当前需求与本次diff独立审查，最终PASS、无未解决范围内P0/P1/P2；含两条独立scope探针的一次针对性回归PASS，51.116s。报告 `/tmp/validation-change-review/report.md`。
+- 补充回归：八个有测试核心包以-count=1通过、requirement无测试（`/tmp/validation-invariants-repair/final-regression.log`）；CLI/已有whitebox_qa包分别109.555s/23.325s通过（`/tmp/validation-root-oracle/integration-regression.log`）。这些命令在scope单行修正前启动，记为中间态补充证据，不冒充最终全仓执行；scope修正后的核心与针对性测试见上。
+- 最终 `go vet ./internal/engine/... ./internal/cli/...` 退出0（`/tmp/validation-root-oracle/vet.log`）；变更Go文件格式与git diff --check通过。
+
+本次验收完成的是三个已证实缺陷及其直接状态/证据衔接，包含本轮引入回归的修复。没有执行全仓go test ./...、race、真实provider/模型/宿主canary、guard/cost bridge、数据库迁移、完整Seal或安装切换，不为这些范围背书；不把“检查范围未发现违规”扩大为代码永久无缺陷。无push。

@@ -493,19 +493,24 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		route := payload.Route
-		state.RouteMode = route.Mode
-		if route.Mode == routeModeFull {
-			state.SelectedGates = append([]string{}, route.Gates...)
-			return nil
-		}
-		// custom：按候选全集顺序归一存储，选择集与全集的派生顺序无关。
-		selected := make([]string, 0, len(route.Selected))
-		for _, gate := range route.Gates {
-			if slices.Contains(route.Selected, gate) {
-				selected = append(selected, gate)
+		selected := slices.Clone(route.Gates)
+		if route.Mode == routeModeCustom {
+			selected = nil
+			for _, gate := range route.Gates {
+				if slices.Contains(route.Selected, gate) {
+					selected = append(selected, gate)
+				}
 			}
 		}
+		if err := e.validateRouteChange(state, selected); err != nil {
+			return err
+		}
+		before := state.validationRouteDigest()
+		state.RouteMode = route.Mode
 		state.SelectedGates = selected
+		if before != state.validationRouteDigest() {
+			e.rebindValidationRoute(state)
+		}
 		return nil
 	}
 	return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s is not a review control", ask.Control)}

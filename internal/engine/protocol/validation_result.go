@@ -187,18 +187,7 @@ func (s *State) validateManifest(mode coverage.ReviewKind, m coverage.Acceptance
 	return nil
 }
 func (s *State) validateCaseReview(mode coverage.ReviewKind, r coverage.ReviewResult) error {
-	set := s.Validation.Sets[mode]
-	c := s.coverageContract(nil)
-	c.Manifests = []coverage.AcceptanceManifest{set.Manifest}
-	c.SelectedKinds = []coverage.ReviewKind{mode}
-	sources := c.RequiredSources.Sources[:0]
-	for _, src := range c.RequiredSources.Sources {
-		if slices.Contains(c.Manifests[0].Sources, src.SourceID) {
-			sources = append(sources, src)
-		}
-	}
-	c.RequiredSources.Sources = sources
-	c.AlternativeVerifications = nil
+	c := modeCoverageContract(s.coverageContract(nil), mode)
 	if err := c.ValidateReviewEvidence([]coverage.ReviewResult{r}); err != nil {
 		return validationReject(err)
 	}
@@ -236,8 +225,10 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 	if s.Validation == nil {
 		return validationError("requirement inventory is missing")
 	}
-	if b.Generation != s.Validation.Generation {
-		if !s.validationCarryAuthorized(record.ActionID) {
+	requirementCarry := b.Generation != s.Validation.Generation
+	routeCarry := b.RouteScope != "" && b.RouteScope != s.validationRouteDigest()
+	if requirementCarry || routeCarry {
+		if requirementCarry && !s.validationCarryAuthorized(record.ActionID) {
 			return validationError("result has no current requirement carry authorization")
 		}
 		projected := *p
@@ -245,6 +236,9 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		binding := coverage.ManifestBinding{SourceBinding: s.coverageContract(nil).RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
 		if p.Manifest != nil {
 			m := *p.Manifest
+			if routeCarry && m.Binding.RouteScope != b.RouteScope {
+				return validationError("design differs from its issued route scope")
+			}
 			m.Binding = binding
 			projected.Manifest = &m
 		}
@@ -255,9 +249,9 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		}
 		if set := s.Validation.Sets[mode]; set != nil && p.Review != nil {
 			original := set.Manifest
-			original.Binding.RequirementRevision = b.RequirementRevision
+			original.Binding = record.Validation.Review.Binding
 			if digestOfCanonical(original) != b.CaseVersion {
-				return validationError("carried review differs from its original signed case-set version")
+				return validationError("carried review differs from its signed case-set version")
 			}
 			b.CaseVersion = set.Version
 		}
@@ -412,33 +406,39 @@ func validateRawFinding(f review.Finding) error {
 	return nil
 }
 
-func (s *State) executionContract(mode coverage.ReviewKind, wave *ValidationWave) (coverage.CoverageContract, coverage.ApprovedWhitelist, error) {
-	c := wave.Coverage
+// modeCoverageContract projects the QA-owned portion without sharing other
+// modes' cases or non-QA verification evidence with the recipient.
+func modeCoverageContract(c coverage.CoverageContract, mode coverage.ReviewKind) coverage.CoverageContract {
 	manifests := []coverage.AcceptanceManifest{}
-	var approved coverage.ReviewResult
 	for _, m := range c.Manifests {
 		if m.Binding.ReviewKind == mode {
 			manifests = append(manifests, m)
 		}
 	}
-	for _, r := range wave.Reviews {
-		if r.Binding.ReviewKind == mode {
-			approved = r
-		}
-	}
-	if len(manifests) != 1 {
-		return c, coverage.ApprovedWhitelist{}, validationError("frozen wave has no mode contract")
-	}
 	c.Manifests = manifests
 	c.SelectedKinds = []coverage.ReviewKind{mode}
 	sources := []coverage.RequiredSource{}
 	for _, src := range c.RequiredSources.Sources {
-		if slices.Contains(c.Manifests[0].Sources, src.SourceID) {
+		if len(manifests) == 0 && src.Applicability == coverage.QAApplicability || len(manifests) == 1 && slices.Contains(manifests[0].Sources, src.SourceID) {
 			sources = append(sources, src)
 		}
 	}
 	c.RequiredSources.Sources = sources
 	c.AlternativeVerifications = nil
+	return c
+}
+
+func (s *State) executionContract(mode coverage.ReviewKind, wave *ValidationWave) (coverage.CoverageContract, coverage.ApprovedWhitelist, error) {
+	c := modeCoverageContract(wave.Coverage, mode)
+	var approved coverage.ReviewResult
+	for _, r := range wave.Reviews {
+		if r.Binding.ReviewKind == mode {
+			approved = r
+		}
+	}
+	if len(c.Manifests) != 1 {
+		return c, coverage.ApprovedWhitelist{}, validationError("frozen wave has no mode contract")
+	}
 	w, err := c.ValidateReviews([]coverage.ReviewResult{approved})
 	return c, w, err
 }
@@ -515,7 +515,7 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 			if err := coverage.ValidateEvidence(r.CaseID, r.Procedure, r.Observation, r.Comparison); err != nil {
 				return validationReject(err)
 			}
-		} else if r.Provenance != coverage.ProvenanceInherited || !s.validInheritance(target.Mode, r) {
+		} else if r.Provenance != coverage.ProvenanceInherited || !s.validInheritance(wave, target.Mode, r) {
 			return validationError("inheritance has no exact prior evidence or is affected")
 		}
 		rows[k] = r
@@ -546,29 +546,50 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 	target.Environment = environment
 	return nil
 }
-func (s *State) validInheritance(mode coverage.ReviewKind, row coverage.ExecutionRecord) bool {
-	if row.Result != coverage.ExecutedPass || row.ReuseEvidence == "" {
+func (s *State) validInheritance(current *ValidationWave, mode coverage.ReviewKind, row coverage.ExecutionRecord) bool {
+	if row.Result != coverage.ExecutedPass || row.ReuseEvidence == "" || current.Scope != coverage.ScopeAffected {
 		return false
 	}
-	current := s.currentValidationWave()
-	if current == nil || current.Scope != coverage.ScopeAffected {
-		return false
-	}
-	for i := len(s.Validation.Waves) - 2; i >= 0; i-- {
-		old := s.Validation.Waves[i]
-		if old.Candidate.Identity != row.InheritedFromCandidate || old.Versions[mode] != current.Versions[mode] {
-			continue
-		}
-		if old.Repair == nil || old.Repair.Evidence == nil || slices.Contains(old.Repair.Evidence.AffectedCases, row.CaseID) {
+	index := slices.IndexFunc(s.Validation.Waves, func(w ValidationWave) bool { return w.ID == current.ID })
+	next := current
+	for i := index - 1; i >= 0; i-- {
+		old := &s.Validation.Waves[i]
+		if old.RequirementRevision != current.RequirementRevision || old.Generation != current.Generation || !sameWaveCases(old, current, mode) {
 			return false
 		}
-		for _, target := range old.Targets {
-			if target.Execution != nil && target.Mode == mode {
+		if old.Candidate != next.Candidate {
+			if old.Repair == nil || old.Repair.Evidence == nil || next.RepairSource != old.Repair.Task.String() || slices.Contains(old.Repair.Evidence.AffectedCases, row.CaseID) {
+				return false
+			}
+		}
+		if old.Candidate.Identity == row.InheritedFromCandidate {
+			for _, target := range old.Targets {
+				if target.Execution == nil || target.Mode != mode || target.Execution.Binding.Candidate != old.Candidate {
+					continue
+				}
 				for _, r := range target.Execution.Records {
-					if r.CaseID == row.CaseID && r.PointID == row.PointID && r.SourceID == row.SourceID && r.Result == coverage.ExecutedPass {
+					if r.ReviewKind == mode && r.CaseID == row.CaseID && r.PointID == row.PointID && r.SourceID == row.SourceID && r.Result == coverage.ExecutedPass {
 						return true
 					}
 				}
+			}
+		}
+		next = old
+	}
+	return false
+}
+
+func sameWaveCases(a, b *ValidationWave, mode coverage.ReviewKind) bool {
+	if a.Versions[mode] == b.Versions[mode] {
+		return true
+	}
+	for _, first := range a.Coverage.Manifests {
+		if first.Binding.ReviewKind != mode {
+			continue
+		}
+		for _, second := range b.Coverage.Manifests {
+			if second.Binding.ReviewKind == mode {
+				return digestOfCanonical(manifestAtRoute(first, second.Binding.RouteScope)) == digestOfCanonical(second)
 			}
 		}
 	}
