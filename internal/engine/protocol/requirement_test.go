@@ -185,7 +185,7 @@ func walkToDevelopment(t *testing.T, engine *Engine) {
 		Decision: "no-split", Note: "建议不拆：模块边界清晰",
 	}})
 	askAndDecide(t, engine, ControlSelectRoute, "req-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 	}})
 	snap := engine.LoadMustSucceed(t)
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -241,7 +241,7 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 		Decision: "no-split", Note: "建议不拆：模块边界清晰",
 	}})
 	askAndDecide(t, engine, ControlSelectRoute, "req-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 	}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -348,7 +348,7 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 		if readiness.Effective.Status != "PASS" || readiness.UpstreamVoid || readiness.Completed != 1 || readiness.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("an unchecked readiness must be carried untouched: %+v void=%v completed=%d", readiness.Effective, readiness.UpstreamVoid, readiness.Completed)
 		}
-		if snap.State.Topology == nil || snap.State.RouteMode != "full" || len(snap.State.SelectedGates) != 2 {
+		if snap.State.Topology == nil || snap.State.RouteMode != "full" || len(snap.State.SelectedGates) != 4 {
 			t.Fatalf("unchecked topology/route must stay bound: %+v %q", snap.State.Topology, snap.State.RouteMode)
 		}
 		if snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -401,7 +401,7 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 			Decision: "no-split", Note: "建议不拆：重走后仍整体推进",
 		}})
 		askAndDecide(t, engine, ControlSelectRoute, "req-route-2", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+			Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 		}})
 		snap = engine.LoadMustSucceed(t)
 		if snap.State.Topology == nil || snap.State.RouteMode != "full" {
@@ -753,7 +753,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if _, err := engine.Submit(request, fp); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
-		if _, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp); err == nil {
+		if _, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp); err == nil {
 			t.Fatal("host action intent persisted while the change ask is pending")
 		} else if code := rejectionCode(t, err); code != CodeChangeBarrierActive {
 			t.Fatalf("frozen host action code = %q", code)
@@ -770,7 +770,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if _, err := engine.Submit(decline, fp); err != nil {
 			t.Fatalf("abort decide: %v", err)
 		}
-		if _, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp); err != nil {
+		if _, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp); err != nil {
 			t.Fatalf("host action after the decide: %v", err)
 		}
 	})
@@ -779,7 +779,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, _ := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
-		request, err := NewRequestEvent("req-reset-idle", ControlReset, AskOption{ID: "proceed", Label: "重置"})
+		request, err := NewRequestEvent("req-abort-idle", ControlAbort, AskOption{ID: "cancel", Label: "取消终止"})
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
@@ -1116,7 +1116,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 		}
 		// 门关：readiness 重走期间路线选择拒绝。
 		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-closed-1", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+			Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 		}}); err == nil {
 			t.Fatal("route accepted while the redone readiness series is PENDING")
 		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
@@ -1133,7 +1133,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 		}
 		// 门重开：路线选择接纳并推进 DEVELOPMENT_PARALLEL。
 		askAndDecide(t, engine, ControlSelectRoute, "req-route-reopen", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+			Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 		}})
 		snap = engine.LoadMustSucceed(t)
 		if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -1184,7 +1184,7 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 		RedoProductReview: true, Reason: "only the product walk is affected",
 	})
 	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-pending-1", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 	}}); err == nil {
 		t.Fatal("route accepted while the redone product series is PENDING")
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
@@ -1200,7 +1200,7 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 		t.Fatalf("the carried readiness must open the gate without a fresh round: %+v void=%v completed=%d", readiness.Effective, readiness.UpstreamVoid, readiness.Completed)
 	}
 	askAndDecide(t, engine, ControlSelectRoute, "req-route-reopened", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 	}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -1353,7 +1353,7 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 		Decision: "no-split", Note: "建议不拆",
 	}})
 	askAndDecide(t, engine, ControlSelectRoute, "req-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"},
 	}})
 
 	// 只重走产品审：readiness 携用（绑 rev-1、带一条建议项）。
@@ -1724,7 +1724,7 @@ func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
 	// 轮，直接提交证据完成），门重新打开（路线接纳）。
 	freshRoundFromTheLedgerProposal(t, engine, "start.readiness", "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 	askAndDecide(t, engine, ControlSelectRoute, "req-route-after-preserved-scope", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
 	}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
@@ -2571,7 +2571,7 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 		t.Fatal("a correction of the old round must not discharge the redo obligation")
 	}
 	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-owed-route-closed", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"g1", "g2"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "g1", "g2"},
 	}}); err == nil {
 		t.Fatal("the development gate opened on a corrected projection while the redo obligation stands")
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
@@ -2607,7 +2607,7 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 		t.Fatal("the satisfied fresh round must discharge the obligation")
 	}
 	askAndDecide(t, engine, ControlSelectRoute, "req-owed-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"g1", "g2"},
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "g1", "g2"},
 	}})
 	if snap = engine.LoadMustSucceed(t); snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL after the obligation cleared", snap.State.Phase)
@@ -3006,7 +3006,7 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 	if voided.Effective.Status != "PENDING" || !voided.UpstreamVoid {
 		t.Fatalf("upgrade did not void start-readiness: %+v", voided.Effective)
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-redo-release-blocked", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1"}}}); err == nil {
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-redo-release-blocked", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "g1"}}}); err == nil {
 		t.Fatal("route accepted while the void holds")
 	}
 
@@ -3031,7 +3031,7 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 	}
 
 	// 路线门开放：无需任何技术审新轮。
-	askAndDecide(t, engine, ControlSelectRoute, "req-redo-release-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"g1", "g2"}}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-redo-release-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "g1", "g2"}}})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL", snap.State.RouteMode, snap.State.Phase)

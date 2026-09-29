@@ -15,11 +15,11 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
 	assertValidationInputModes(t, d)
-	id, in = d.action("engine.qa.review")
+	id, in = d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-	id, in = d.action("engine.development")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implement input validation", Build: []string{"build succeeds"}, Tests: []string{"input tests succeed"}}})
+	id, in = d.action("engine.development.batch")
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input validation", Build: []string{"build succeeds"}, Tests: []string{"input tests succeed"}}})
 	d.materialize()
 	d.materialize()
 	assertValidationInputModes(t, d)
@@ -32,7 +32,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.materialize()
 	assertValidationInputModes(t, d)
-	id, in = d.action("engine.qa.review")
+	id, in = d.action("engine.qa.review.rationale")
 	r = approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 	d.materialize()
@@ -54,7 +54,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	m.Cases[0].Preconditions += "; initialize a clean input history"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	_, in = d.action("engine.qa.review")
+	_, in = d.action("engine.qa.review.rationale")
 	for _, manifest := range in.Contract.Manifests {
 		if manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 			t.Errorf("blackbox review after reopen received %d whitebox cases", len(manifest.Cases))
@@ -67,7 +67,7 @@ func assertValidationInputModes(t *testing.T, d *validationDriver) {
 	t.Helper()
 	for _, input := range d.run.ValidationInputs {
 		switch input.Handler {
-		case "engine.qa.design", "engine.qa.review", "engine.qa.execution":
+		case "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution":
 			mode := input.Manifest.Binding.ReviewKind
 			if input.Contract == nil || len(input.Contract.SelectedKinds) != 1 || input.Contract.SelectedKinds[0] != mode || len(input.Contract.RequiredSources.Sources) != 1 || len(input.Manifest.Points) != 1 || input.Manifest.Points[0].PointID != "AC-001" {
 				t.Fatalf("QA lost its mode/source/point contract: %+v", input)
@@ -77,13 +77,13 @@ func assertValidationInputModes(t *testing.T, d *validationDriver) {
 					t.Fatalf("%s received %s manifest", mode, manifest.Binding.ReviewKind)
 				}
 			}
-			if input.Handler == "engine.qa.review" && (len(input.Contract.Manifests) != 1 || len(input.Contract.Manifests[0].Cases) != 2) {
+			if input.Handler == "engine.qa.review.rationale" && (len(input.Contract.Manifests) != 1 || len(input.Contract.Manifests[0].Cases) != 2) {
 				t.Fatal("review lost own cases")
 			}
 			if input.Handler == "engine.qa.execution" && (input.Execution == nil || input.Whitelist == nil || len(input.Execution.ExpectedCaseIDs) != 2) {
 				t.Fatal("execution lost approved cases")
 			}
-		case "engine.gate", "engine.development":
+		case "engine.gate", "engine.development.batch":
 			if input.Contract != nil || len(input.Manifest.Cases) != 0 || len(input.Completed) != 0 || input.Execution != nil {
 				t.Fatal("non-QA role received QA materials")
 			}

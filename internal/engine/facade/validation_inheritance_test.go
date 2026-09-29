@@ -54,20 +54,36 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 				wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 				var finding string
 				for id, f := range d.run.Validation.Findings {
-					if f.WaveID == wave.ID {
+					if f.WaveID == wave.ID && f.Raw != nil {
 						finding = id
 					}
 				}
 				resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run", Module: "input", RootCause: "output formatting", Consequence: "wrong returned output", Severity: "P2", SeverityRationale: "limited output mismatch", Verification: review.FindingVerification{Scope: "confirmed input behavior", Severity: "limited mismatch", Causality: "input formatter", Reproduction: "app run", Classification: "implementation"}, Reason: "observed wrong output"}
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
+				if round == 1 {
+					for id, f := range d.run.Validation.Findings {
+						if f.WaveID == wave.ID && f.ExecutionFailure != nil {
+							caseResolution := resolution
+							caseResolution.FindingID, caseResolution.Decision = id, "SAME_AS"
+							caseResolution.ProblemID = d.run.Validation.Findings[finding].History[0].ProblemID
+							caseResolution.Severity, caseResolution.SeverityRationale, caseResolution.Verification.Severity = "", "", ""
+							d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{caseResolution}}}})
+						}
+					}
+				}
 				d.drive()
 				id, in = d.action("engine.repair")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", Build: []string{"full build succeeds"}, Tests: []string{"full tests succeed"}, AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}})
 
 				d.materialize()
 				d.materialize()
+				if round == 0 {
+					d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
+				} else {
+					d.recordExecutionScope(coverage.ReviewBlackbox, affected)
+				}
 				if example.addGate && round == 0 {
-					d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+					d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 					d.reopen()
 					d.drive()
 				}

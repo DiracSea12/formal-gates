@@ -59,14 +59,16 @@ func RouteFailure(class authoring.FailureClass) FailureRoute {
 // Interruption 描述一次没有可靠终态的中断。CauseKnown=false 且绑定不变
 // 时，engine 无法安全猜测恢复语义，必须产生 Ask。
 type Interruption struct {
-	Class            authoring.FailureClass
-	CauseKnown       bool
-	ReceiptUnknown   bool
-	LifecycleMatches int
+	InterruptionReason string
+	Class              authoring.FailureClass
+	CauseKnown         bool
+	ReceiptUnknown     bool
+	LifecycleMatches   int
 }
 
-// RecoveryPlan 是恢复决策的持久化前结果。RequestID 只在 ASK 路由生成，
-// LifecycleMatches 用于让 receipt UNKNOWN 的 Operator 结果可观察。
+// RecoveryPlan carries the original recovery request identity. ASK exposes it
+// for user decisions; automatic recovery uses it for its native host effect.
+// LifecycleMatches makes unknown receipt reconciliation observable.
 type RecoveryPlan struct {
 	Class            authoring.FailureClass
 	Action           RecoveryAction
@@ -179,7 +181,10 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 		}
 		pending = PendingAction{ActionID: actionID, Task: receipt.Task, Step: string(receipt.Task.Step)}
 	}
-	attempt := s.Attempts[pending.Task]
+	attempt, current := s.Attempts[pending.Task]
+	if !current {
+		attempt = s.EndedAttempts[pending.Task]
+	}
 	delete(s.PendingActions, actionID)
 	delete(s.Attempts, pending.Task)
 	if result, staged := s.StagedResults[actionID]; staged {
@@ -236,8 +241,8 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 
 // RecoverAttempt applies the durable part of a recovery decision for a
 // current Attempt. Resume/reconcile/operator/agent decisions retain the old
-// action until their declared next protocol step; NEW_ATTEMPT retires the old
-// action before installing a fresh one; ASK persists resume/fresh/abort.
+// action until its declared protocol step. Fresh execution reconciles the old
+// session before replacement; ASK persists resume/fresh/abort.
 func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expectedFingerprint string) (RecoveryPlan, uint64, error) {
 	revision, state, err := e.load()
 	if err != nil {
@@ -248,6 +253,9 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 	}
 	// 屏障闸（FA）：恢复决定是权威写入——重试派发、terminalize 与恢复
 	// Ask 的创建在未决需求变化期间冻结（解除后照常）。
+	if state.abortRequested() {
+		return RecoveryPlan{}, revision, validationError("abort does not permit a replacement attempt")
+	}
 	if err := state.errWriteBarrier("attempt recovery"); err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -263,57 +271,36 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 		Task: pending.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider,
 	}
 	plan := decideRecovery(interruption, !attempt.Bindings.Equal(currentBindings))
-	if interruption.Class == authoring.FailureTransientEngine && attempt.RetryExhausted {
-		plan = RecoveryPlan{
-			Class:  interruption.Class,
-			Action: RecoveryWait,
-			Detail: fmt.Sprintf("transient retry attempts exhausted (%d/%d); wait for terminal handling", attempt.Attempts, attempt.MaxAttempts),
+	for _, record := range state.RecoveryRecords {
+		if record.ActionID != actionID || record.AttemptID != attempt.ID || record.RequestID == "" {
+			continue
+		}
+		if record.Action == RecoveryAsk && !state.PendingAsks[record.RequestID].Resolved {
+			return RecoveryPlan{Action: RecoveryAsk, RequestID: record.RequestID, Options: recoveryAskOptions(), Detail: record.Detail}, revision, nil
+		}
+		completed := false
+		for _, receipt := range state.HostActionReceipts {
+			if receipt.Correlation == record.RequestID && receipt.Status == HostActionStatusExecuted {
+				completed = true
+			}
+		}
+		if !completed && (record.Action == RecoveryAsk || record.Action == RecoveryResumeAttempt || record.Action == RecoveryNewAttempt) {
+			return RecoveryPlan{Action: RecoveryWait, RequestID: record.RequestID, Detail: "original recovery awaits its native effect receipt"}, revision, nil
 		}
 	}
 	nextRevision := revision + 1
+	plan.RequestID = "recover:" + actionID + ":" + strconv.FormatUint(nextRevision, 10)
 	if plan.Action == RecoveryAsk {
-		plan.RequestID = "recover:" + actionID + ":" + strconv.FormatUint(nextRevision, 10)
 		plan.Options = recoveryAskOptions()
 		state.PendingAsks[plan.RequestID] = PendingAsk{RequestID: plan.RequestID, Control: ControlRecovery, Options: append([]AskOption(nil), plan.Options...)}
 	}
-	if plan.Action == RecoveryNewAttempt && attempt.Business {
-		if err := state.endInvalidAttempt(actionID, OutcomeRuntimeError, "identified interrupted business execution", WorkerResult{ActionID: actionID, Outcome: OutcomeRuntimeError, FailureClass: interruption.Class}, nextRevision); err != nil {
-			return RecoveryPlan{}, 0, err
-		}
-		ended := state.EndedAttempts[pending.Task]
-		if ended.RetryExhausted {
-			plan.Action = RecoveryWait
-			plan.Detail = "business attempt exhausted; explicit one-attempt authorization required"
-		} else {
-			issued, err := state.issueInto(decision.IssuedSet{{ActionID: "retry:" + actionID + ":" + strconv.FormatUint(nextRevision, 10), Task: pending.Task, Step: authoring.StepID(pending.Step)}}, nextRevision, expectedFingerprint, state.RunProvider, attempt.Plan, e.retryMaxAttempts, e.reviewSeriesOf)
-			if err != nil {
-				return RecoveryPlan{}, 0, err
-			}
-			e.bindBusinessAttempt(state, issued[0].Task)
-		}
-	} else if plan.Action == RecoveryNewAttempt {
-		retired, _ := state.retireAction(actionID, "", "recovery replaced the interrupted Attempt")
-		replacement, err := state.installReplacement(retired, nextRevision, currentBindings, attempt.Plan, attempt.Attempts+1, attempt.MaxAttempts)
-		if err != nil {
-			return RecoveryPlan{}, 0, err
-		}
-		replacement.Work = attempt.Work
-		replacement.PreviousAction = attempt.ActionID
-		state.Attempts[pending.Task] = replacement
-		e.bindBusinessAttempt(state, pending.Task)
-		plan.Detail = plan.Detail + "; replacement attempt " + replacement.ID
-		obsolete := state.ObsoleteActions[actionID]
-		obsolete.ReplacedBy = replacement.ActionID
-		state.ObsoleteActions[actionID] = obsolete
-	}
 	if plan.Action == RecoveryFail {
-		if err := state.TransitionTask(pending.Task, runtime.TaskTerminal); err != nil {
-			return RecoveryPlan{}, 0, &RejectedError{Code: CodeIllegalTransition, Detail: fmt.Sprintf("recover %s: %v", pending.Task.String(), err)}
+		if err := state.terminalizeTask(pending.Task); err != nil {
+			return RecoveryPlan{}, 0, err
 		}
-		state.removeTaskBookkeeping(pending.Task)
 	}
-	state.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: plan.Class, Action: plan.Action, RequestID: plan.RequestID, Detail: plan.Detail, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision})
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
+	state.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: plan.Class, Action: plan.Action, RequestID: plan.RequestID, Detail: plan.Detail, InterruptionReason: interruption.InterruptionReason, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision})
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -368,7 +355,7 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 		plan.Detail = fmt.Sprintf("unknown receipt has %d lifecycle matches; operator reconciliation required", len(matches))
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: authoring.FailureSideEffectUnknown, Action: plan.Action, Detail: plan.Detail, LifecycleMatches: len(matches), Revision: nextRevision})
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -412,6 +399,9 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 	if conflict {
 		plan.Action = RecoveryOperator
 		plan.Detail = "external observation conflicts with the pending host action intent"
+	} else if fulfilled && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		plan.Action = RecoveryWait
+		plan.Detail = "candidate completion requires the original typed adapter evidence; submit its EXECUTED receipt"
 	} else if fulfilled {
 		plan.Detail = "external observation already satisfies the intent; result committed without re-execution"
 		var adapterOperation authoring.OperationID
@@ -431,7 +421,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		plan.Detail = "external observation does not yet satisfy the intent; keep pending and wait"
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: plan.Class, Action: plan.Action, Detail: plan.Detail, Revision: nextRevision})
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint)
+	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}

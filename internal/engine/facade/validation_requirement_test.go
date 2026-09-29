@@ -1,0 +1,263 @@
+package facade
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"testing"
+
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
+)
+
+// confirmValidationWork submits the same semantic document with a formatting
+// revision and the caller's explicit per-dispatch decisions.
+func confirmValidationWork(d *validationDriver, redo string) {
+	confirmValidationCoverage(d, redo, nil)
+}
+func confirmValidationCoverage(d *validationDriver, redo string, inventory *protocol.CoverageInventory) {
+	d.t.Helper()
+	confirmValidationDocument(d, redo, inventory, validationDocument+"\n")
+}
+func confirmValidationDocument(d *validationDriver, redo string, inventory *protocol.CoverageInventory, document string) {
+	d.t.Helper()
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	var choices []protocol.RequirementWorkDecision
+	for _, item := range d.run.RequirementWork {
+		disposition := protocol.RequirementWorkCarry
+		if item.ActionID == redo {
+			disposition = protocol.RequirementWorkRedo
+		}
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "confirmed unchanged inputs except the selected fresh review"})
+	}
+	pkg := protocol.RequirementDecisionPackage{Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(event)
+	ask := d.run.PendingRequirementAsk
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}})
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+}
+
+func materializeUnchangedCandidate(d *validationDriver, candidate coverage.ValidationCandidate) {
+	d.t.Helper()
+	d.drive()
+	if len(d.run.AdapterIntents) != 1 {
+		d.t.Fatalf("expected one final candidate intent: %+v", d.run.AdapterIntents)
+	}
+	for id, intent := range d.run.AdapterIntents {
+		if intent.Adapter.Operation != "op.candidate" {
+			d.t.Fatal("unexpected adapter method")
+		}
+		var params protocol.CandidateParameters
+		data, _ := json.Marshal(intent.Adapter.Params)
+		if err := json.Unmarshal(data, &params); err != nil {
+			d.t.Fatal(err)
+		}
+		if params.Stage != "REVIEW_READY" || params.Base != d.run.Validation.DevelopmentSnapshot || !params.Finalize {
+			d.t.Fatalf("unexpected materialization inputs: %+v", params)
+		}
+		// The development tree and approved artifacts were not edited. A native
+		// immutable candidate therefore retains its exact identity and digest.
+		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: candidate.Identity, Digest: candidate.Digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+		evidence.GateView = gateReviewView(params)
+		data, _ = json.Marshal(evidence)
+		var values map[string]any
+		_ = json.Unmarshal(data, &values)
+		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		d.submit(event)
+	}
+}
+
+func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
+	for _, delivery := range []string{"completed", "in-flight", "staged", "retry", "terminal-first"} {
+		t.Run(delivery, func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox", "quality")
+			d.reviewReady()
+			qa, qi := d.action("engine.qa.execution")
+			gate, gi := d.gateAction("quality")
+			report := executionFor(qi)
+			result := protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
+			if delivery == "completed" {
+				d.receipt(qa)
+				d.submit(event)
+			}
+			if delivery == "staged" {
+				d.submit(event)
+			}
+			if delivery == "terminal-first" {
+				attempt := d.run.PendingActions[qa].AttemptID
+				d.receipt(qa)
+				for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+					progress, err := protocol.NewTaskEvent(d.eventID(), qi.Binding.Task, attempt, status)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(progress)
+				}
+			}
+			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+			candidate := *d.run.Validation.Candidate
+			confirmValidationWork(d, gate)
+			materializeUnchangedCandidate(d, candidate)
+			d.reopen()
+			d.drive()
+			if delivery != "completed" {
+				if delivery != "terminal-first" {
+					d.receipt(qa)
+				}
+				if delivery == "retry" {
+					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "environment-interrupted"}})
+					d.drive()
+					qa, qi = d.action("engine.qa.execution")
+					report = executionFor(qi)
+					result = protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+					event = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
+					d.receipt(qa)
+				}
+				if delivery != "staged" {
+					if a := d.submit(event); a.Status != "ACCEPTED" {
+						t.Fatalf("carried evidence rejected: %+v %+v", a, d.run.RejectedResults)
+					}
+				}
+			}
+			d.reopen()
+			d.drive()
+			wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			for _, target := range wave.Targets {
+				if target.Kind == "QA" && (target.Status != "PASS" || target.ResultAction != qa || target.Execution == nil || len(target.Execution.Records) != len(report.Records) || target.Execution.Records[0].Observation != report.Records[0].Observation) {
+					t.Fatalf("carried QA lost evidence: %+v", target)
+				}
+				if target.Kind == "GATE" && (target.Status != "PENDING" || target.ResultAction != "" || target.Task == gi.Binding.Task) {
+					t.Fatalf("redo inherited old gate: %+v", target)
+				}
+			}
+			if wave.Status == "COMPLETE" {
+				t.Fatal("fresh gate requirement was bypassed")
+			}
+			fresh, input := d.gateAction("quality")
+			d.business(fresh, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+			d.reopen()
+			d.drive()
+			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
+				t.Fatal("carried QA and fresh gate failed to join")
+			}
+			if delivery != "completed" && d.run.Validation.Waves[0].Status != "INVALIDATED" {
+				t.Fatal("old wave revived")
+			}
+		})
+	}
+}
+
+func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
+	d, finding, wave := validationWithGateFinding(t)
+	original := d.run.Validation.Waves[0].Candidate.Identity
+	resolveGateFinding(d, finding, wave)
+	id, in := d.action("engine.repair")
+	repair := gateRepairResult(in)
+	repair.Development.AffectedCases = []string{"invalid"}
+	repair.Development.CaseRuns[0].CaseID = "invalid"
+	d.business(id, repair)
+	d.materialize()
+	d.materialize()
+	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+	d.drive()
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
+	d.reopen()
+	d.drive()
+	id, in = d.action("engine.qa.execution")
+	if in.Execution.Scope != coverage.ScopeAffected {
+		t.Fatal("setup needs AFFECTED")
+	}
+	report := executionFor(in)
+	for i := range report.Records {
+		if report.Records[i].CaseID == "normal" {
+			report.Records[i].Provenance = coverage.ProvenanceInherited
+			report.Records[i].InheritedFromCandidate = original
+			report.Records[i].ReuseEvidence = "unchanged normal input verified against original candidate"
+			report.Records[i].Procedure = ""
+			report.Records[i].Observation = ""
+			report.Records[i].Comparison = ""
+		}
+	}
+	carriedAction := id
+	interruptedWave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1].ID
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	gate, _ := d.gateAction("security")
+	candidate := *d.run.Validation.Candidate
+	confirmValidationWork(d, gate)
+	materializeUnchangedCandidate(d, candidate)
+	d.reopen()
+	d.drive()
+	carriedWave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if carriedWave.Scope != coverage.ScopeAffected {
+		t.Fatal("requirement carry changed execution scope")
+	}
+	for _, target := range carriedWave.Targets {
+		if target.Kind == "QA" && (target.ResultAction != carriedAction || target.Execution == nil || target.Execution.Binding.Scope != coverage.ScopeAffected || !reflect.DeepEqual(target.Execution.Records, report.Records)) {
+			t.Fatal("current projection lost original affected evidence")
+		}
+	}
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.State.Results[carriedAction].Validation.Execution, &report) {
+		t.Fatal("raw carried execution was rewritten")
+	}
+	for _, prior := range d.run.Validation.Waves {
+		if prior.ID == interruptedWave && (prior.Status != "INVALIDATED" || prior.Counted) {
+			t.Fatal("interrupted wave was revived or counted")
+		}
+	}
+	id, in = d.gateAction("security")
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
+	d.drive()
+	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	for _, target := range current.Targets {
+		if current.Scope == coverage.ScopeFull && target.Kind == "QA" && target.Status == "PASS" && target.Execution != nil {
+			for _, r := range target.Execution.Records {
+				if r.Provenance == coverage.ProvenanceInherited {
+					t.Fatalf("current %s wave claimed FULL PASS from inherited record: %+v", current.Status, r)
+				}
+			}
+		}
+	}
+	if current.Status == "COMPLETE" {
+		t.Fatal("final FULL completed without executing all cases on current candidate")
+	}
+	id, in = d.action("engine.qa.execution")
+	if in.Execution.Scope != coverage.ScopeFull {
+		t.Fatal("final verification did not require FULL")
+	}
+	full := executionFor(in)
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &full, Tool: "app-v1", Environment: "isolated"})
+	d.reopen()
+	d.drive()
+	current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if current.Status != "COMPLETE" || current.Candidate != candidate {
+		t.Fatal("actual final FULL did not complete the same candidate")
+	}
+	for _, target := range current.Targets {
+		if target.Kind == "QA" && (target.ResultAction != id || target.Execution == nil || !reflect.DeepEqual(target.Execution.Records, full.Records)) {
+			t.Fatal("FULL did not retain actual complete execution")
+		}
+	}
+	counted := 0
+	for _, completed := range d.run.Validation.Waves {
+		if completed.Counted {
+			counted++
+		}
+	}
+	if counted != 1 {
+		t.Fatalf("pure P2 repair or final FULL consumed extra business waves: %d", counted)
+	}
+}

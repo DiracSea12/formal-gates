@@ -42,7 +42,7 @@ func gateRepairResult(in protocol.ValidationInput) protocol.ValidationResult {
 func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
 	oldDigest := d.run.Validation.Waves[0].ExpectedDigest
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	id, in := d.gateAction("security")
@@ -69,7 +69,7 @@ func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	resolveGateFinding(d, finding, oldID)
 	repairID, repairInput := d.action("engine.repair")
 	d.receipt(repairID)
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	id, in := d.action("engine.repair")
@@ -96,18 +96,31 @@ func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 }
 
 func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
-	d, finding, oldID := validationWithGateFinding(t)
-	resolveGateFinding(d, finding, oldID)
-	oldRepair, _ := d.action("engine.repair")
-	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
-	d.reopen()
-	d.drive()
-	for action, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair" {
-			t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
-		}
+	for _, replacement := range []bool{false, true} {
+		t.Run(map[bool]string{false: "original", true: "replacement"}[replacement], func(t *testing.T) {
+			d, finding, oldID := validationWithGateFinding(t)
+			resolveGateFinding(d, finding, oldID)
+			oldRepair, _ := d.action("engine.repair")
+			if replacement {
+				confirmValidationWork(d, oldRepair)
+				d.materialize()
+				current, _ := d.action("engine.repair")
+				if current == oldRepair {
+					t.Fatal("REDO retained original dispatch")
+				}
+				oldRepair = current
+			}
+			d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
+			d.reopen()
+			d.drive()
+			for action, input := range d.run.ValidationInputs {
+				if input.Handler == "engine.repair" {
+					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
+				}
+			}
+			d.action("engine.qa.design")
+		})
 	}
-	d.action("engine.qa.design")
 }
 
 func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
@@ -116,17 +129,17 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	reviewID, reviewInput := d.action("engine.qa.review")
+	reviewID, reviewInput := d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.receipt(reviewID)
 	a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: reviewID, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "same-approved-cases", Validation: &protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &r}}})
 	if a.Status != "ACCEPTED" {
 		t.Fatalf("ordinary gate addition rejected unchanged in-flight QA review: %s", a.Status)
 	}
-	id, in = d.action("engine.development")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "validate inputs", Build: []string{"build complete"}, Tests: []string{"valid and invalid input checks complete"}}})
+	id, in = d.action("engine.development.batch")
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate inputs", Build: []string{"build complete"}, Tests: []string{"valid and invalid input checks complete"}}})
 	d.materialize()
 	d.materialize()
 	d.drive()
@@ -138,7 +151,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 	d.reviewReady()
 	original := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	for i := 0; i < 2; i++ {
-		d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality"}}})
+		d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 		d.reopen()
 		d.drive()
 	}
@@ -160,7 +173,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	id, in := d.action("engine.qa.execution")
@@ -186,7 +199,7 @@ func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design")
 	manifest := simpleManifest(in)
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	currentID, current := d.action("engine.qa.design")
 	if currentID != id || current.Binding != in.Binding || current.Manifest.Binding != in.Manifest.Binding {
@@ -194,7 +207,7 @@ func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
-	id, in = d.action("engine.qa.review")
+	id, in = d.action("engine.qa.review.rationale")
 	if in.Manifest.Binding.RouteScope == manifest.Binding.RouteScope {
 		t.Fatal("accepted design was not projected to the new route")
 	}
@@ -218,7 +231,7 @@ func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
 	if original.Status != "COMPLETE" || !original.Counted {
 		t.Fatal("setup did not complete")
 	}
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -257,7 +270,7 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 					}
 				}
 			}
-			d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 			d.reopen()
 			d.drive()
 			newID, newInput := d.action("engine.qa.execution")
@@ -299,8 +312,8 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newValidationDriver(t, "whitebox", "quality")
-			id, in := d.action("engine.development")
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "validate input", Build: []string{"full build passed"}, Tests: []string{"input tests passed"}}})
+			id, in := d.action("engine.development.batch")
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input", Build: []string{"full build passed"}, Tests: []string{"input tests passed"}}})
 			d.materialize()
 			d.materialize()
 			id, in = d.action("engine.qa.design")
@@ -312,7 +325,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 			if stage == "REVIEW_READY" {
 				d.materialize()
-				id, in = d.action("engine.qa.review")
+				id, in = d.action("engine.qa.review.rationale")
 				approved := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 			}
@@ -323,14 +336,14 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 			if original.Adapter == nil || original.Adapter.Operation != "op.candidate" || original.Adapter.Params["stage"] != stage {
 				t.Fatal("fixture did not issue exact candidate stage")
 			}
-			d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"whitebox", "quality", "security"}}})
+			d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality", "security"}))
 			d.reopen()
 			if d.run.AdapterIntents[original.ActionID].PayloadDigest != original.PayloadDigest {
 				t.Fatal("route addition rewrote candidate intent")
 			}
 			d.materialize()
 			if stage == "QA_ARTIFACT" {
-				id, in = d.action("engine.qa.review")
+				id, in = d.action("engine.qa.review.rationale")
 				approved := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 				d.materialize()
@@ -356,7 +369,7 @@ func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	if before.Attempts != 1 || before.MaxAttempts != 2 || retry.Binding.Task != task {
 		t.Fatal("setup did not retain first failure")
 	}
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	after := d.run.Attempts[task]
@@ -380,7 +393,7 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 	if old.Status != "DISPOSED" || old.DispositionReason == "" {
 		t.Fatal("setup did not explicitly dispose gate")
 	}
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -393,11 +406,15 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 }
 
 func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
-	for _, selected := range [][]string{{"blackbox", "quality", "whitebox"}, {"blackbox", "security"}} {
+	changedRoutes := []protocol.RouteDecision{
+		{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality"}},
+		{Mode: "custom", Gates: []string{"blackbox", "whitebox", "security"}, Selected: []string{"blackbox", "security"}},
+	}
+	for _, route := range changedRoutes {
 		d := newValidationDriver(t, "blackbox", "quality")
 		d.reviewReady()
 		requestID := d.eventID()
-		request, err := protocol.NewRequestEvent(requestID, protocol.ControlSelectRoute, protocol.AskOption{ID: "full", Label: "Select route"})
+		request, err := protocol.NewRequestEvent(requestID, protocol.ControlSelectRoute, protocol.AskOption{ID: protocol.AskOptionID(route.Mode), Label: "Select route"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -408,12 +425,12 @@ func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
 				token = ask.Token
 			}
 		}
-		event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(requestID), token, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: selected}})
+		event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(requestID), token, protocol.AskOptionID(route.Mode), protocol.ReviewDecisionPayload{Route: &route})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err = d.f.Submit(event); err == nil {
-			t.Fatalf("accepted post-development route %v", selected)
+			t.Fatalf("accepted post-development route %s %v", route.Mode, route.Gates)
 		}
 		d.reopen()
 		if len(d.run.Validation.Waves) != 1 || len(d.run.Review.SelectedGates) != 2 {
@@ -430,7 +447,8 @@ func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
 	d.business(id, gateRepairResult(in))
 	d.materialize()
 	d.materialize()
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	id, in = d.action("engine.qa.execution")
@@ -481,6 +499,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	d.business(id, gateRepairResult(in))
 	d.materialize()
 	d.materialize()
+	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 	id, in = d.action("engine.qa.execution")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("expected affected repair validation")
@@ -501,7 +520,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	if wave.Status != "COLLECTING" {
 		t.Fatalf("expected pending quality gate, got %s", wave.Status)
 	}
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "quality", "security"}}})
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
 	for _, gate := range []string{"quality", "security"} {

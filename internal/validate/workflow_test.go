@@ -2236,6 +2236,36 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	}
 }
 
+// TestCustomRouteAcceptsWholeCandidateList：custom 的集合约束是至少选一项
+// 且逐项属于候选表（master-requirements 需求9：可任意组合、可省略任一，
+// 不允许空路线），无真子集要求——全选候选表被接纳且 SelectedGates 与候选
+// 表一致；空选仍被拒。
+func TestCustomRouteAcceptsWholeCandidateList(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	routeReady := func(runID string) RunState {
+		state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, runID))
+		state = recordProductReview(t, root, pkg, state)
+		state = recordReadiness(t, root, pkg, state)
+		return recordSlicing(t, root, pkg, state, "no-split")
+	}
+	whole := routeReady("route-custom-all")
+	candidates, err := RouteCandidates(root, pkg, whole.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole, err = SetRoute(root, pkg, whole.RunID, "custom", candidates)
+	if err != nil {
+		t.Fatalf("custom whole-list selection rejected: %v", err)
+	}
+	if whole.RouteMode != "custom" || !reflect.DeepEqual(whole.SelectedGates, candidates) {
+		t.Fatalf("custom whole-list route = %q %v, want candidates %v", whole.RouteMode, whole.SelectedGates, candidates)
+	}
+	empty := routeReady("route-custom-empty")
+	if _, err := SetRoute(root, pkg, empty.RunID, "custom", nil); err == nil || !strings.Contains(err.Error(), "custom route must select at least one gate") {
+		t.Fatalf("empty custom selection accepted: %v", err)
+	}
+}
+
 // TestTwoSpeedSchedulingBothPathsReachDevelopment verifies both scheduling
 // paths: the fast path records a no-split decision and runs as a single run, and
 // the split path records a split decision then confirms the route per slice.

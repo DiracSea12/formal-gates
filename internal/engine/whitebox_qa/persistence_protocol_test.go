@@ -357,7 +357,7 @@ func TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 		t.Fatalf("ObserveFingerprint host action: %v", err)
 	}
 	intent, _, err := fixture.Engine.ExecuteHostAction(
-		"op.fan.transport", map[string]any{"target": "protocol"}, fingerprint)
+		"op.fan.transport", map[string]any{"stage": "protocol"}, fingerprint)
 	if err != nil {
 		t.Fatalf("ExecuteHostAction: %v", err)
 	}
@@ -631,8 +631,8 @@ func TestPhase2WhiteboxReplaySkipsFingerprintRevalidation(t *testing.T) {
 		}
 		return protocolFingerprint, nil
 	})
-	request, err := protocol.NewRequestEvent("protocol-replay-request", protocol.ControlReset,
-		protocol.AskOption{ID: "confirm", Label: "confirm"})
+	request, err := protocol.NewRequestEvent("protocol-replay-request", protocol.ControlAbort,
+		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
@@ -1134,8 +1134,8 @@ func TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 		collectCalls++
 		return protocolFingerprint, nil
 	})
-	first, err := protocol.NewRequestEvent("protocol-digest-key", protocol.ControlReset,
-		protocol.AskOption{ID: "confirm", Label: "confirm"})
+	first, err := protocol.NewRequestEvent("protocol-digest-key", protocol.ControlAbort,
+		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent first: %v", err)
 	}
@@ -1146,7 +1146,7 @@ func TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	}
 	callsBeforeConflict := collectCalls
 	conflicting, err := protocol.NewRequestEvent("protocol-digest-key", protocol.ControlAbort,
-		protocol.AskOption{ID: "confirm", Label: "different-payload"})
+		protocol.AskOption{ID: "cancel", Label: "different-payload"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent conflicting: %v", err)
 	}
@@ -1172,8 +1172,8 @@ func TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 // decision using the re-fetched token is accepted.
 func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	engine := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
-	request, err := protocol.NewRequestEvent("protocol-stale-request", protocol.ControlReset,
-		protocol.AskOption{ID: "proceed", Label: "proceed"})
+	request, err := protocol.NewRequestEvent("protocol-stale-request", protocol.ControlAbort,
+		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
@@ -1197,7 +1197,7 @@ func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) 
 		t.Fatalf("intervening lifecycle observation not recorded: %+v", beforeStale.State.LifecycleEvents)
 	}
 	staleDecision, err := protocol.NewDecideEvent(
-		"protocol-stale-decision", "protocol-stale-request", staleToken, "proceed")
+		"protocol-stale-decision", "protocol-stale-request", staleToken, "cancel")
 	if err != nil {
 		t.Fatalf("NewDecideEvent stale: %v", err)
 	}
@@ -1222,7 +1222,7 @@ func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) 
 		t.Fatal("intervening commit did not rotate freshness token")
 	}
 	freshDecision, err := protocol.NewDecideEvent(
-		"protocol-fresh-decision", "protocol-stale-request", currentToken, "proceed")
+		"protocol-fresh-decision", "protocol-stale-request", currentToken, "cancel")
 	if err != nil {
 		t.Fatalf("NewDecideEvent fresh: %v", err)
 	}
@@ -1246,13 +1246,13 @@ func TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Load baseline: %v", err)
 	}
-	first, err := protocol.NewRequestEvent("protocol-concurrent-first", protocol.ControlReset,
-		protocol.AskOption{ID: "yes", Label: "yes"})
+	first, err := protocol.NewRequestEvent("protocol-concurrent-first", protocol.ControlAbort,
+		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent first: %v", err)
 	}
 	second, err := protocol.NewRequestEvent("protocol-concurrent-second", protocol.ControlAbort,
-		protocol.AskOption{ID: "yes", Label: "yes"})
+		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent second: %v", err)
 	}
@@ -1398,7 +1398,7 @@ func TestPhase2WhiteboxHostActionUnknownReconcilesWithoutReexecution(t *testing.
 	}
 	fixture.Faults.Arm(persistence.FaultHostCommitAfter)
 	intent, err := fixture.Host.Execute(
-		"op.fan.transport", map[string]any{"target": "protocol-host-action"})
+		"op.fan.transport", map[string]any{"stage": "protocol-host-action"})
 	if !errors.Is(err, testkit.ErrInjected) || intent.ActionID == "" {
 		t.Fatalf("Host.Execute response loss intent=%+v err=%v", intent, err)
 	}
@@ -1495,7 +1495,7 @@ func protocolConcreteBindingDefinition(t *testing.T) *compiler.CompiledDefinitio
 	newHost := func(id string) authoring.HostActionStep {
 		step, err := authoring.NewHostActionStep(header(id, "entry.parse"), input(), authoring.HostActionSpec{
 			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: time.Minute,
+			Operation: "op.fan.transport", Schema: "schema.candidate.review-range", Timeout: time.Minute,
 		})
 		if err != nil {
 			t.Fatalf("binding host step %s: %v", id, err)
@@ -1552,7 +1552,7 @@ func TestPhase2WhiteboxReconciledHostActionAdvancesFrontier(t *testing.T) {
 	if err := fixture.Initialize(view, "fake-host"); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "reconciled"})
+	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "reconciled"})
 	if err != nil {
 		t.Fatalf("execute HostAction: %v", err)
 	}
@@ -1612,12 +1612,12 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 		}
 		return acceptance
 	}
-	requestOne, err := protocol.NewRequestEvent("binding-request-one", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	requestOne, err := protocol.NewRequestEvent("binding-request-one", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("request one: %v", err)
 	}
 	submit(requestOne)
-	requestTwo, err := protocol.NewRequestEvent("binding-request-two", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	requestTwo, err := protocol.NewRequestEvent("binding-request-two", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("request two: %v", err)
 	}
@@ -1633,7 +1633,7 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("freshness one: %v", err)
 	}
-	decideOne, err := protocol.NewDecideEvent("binding-decision-one", protocol.RequestID(requestOne.ID), tokenOne, "confirm")
+	decideOne, err := protocol.NewDecideEvent("binding-decision-one", protocol.RequestID(requestOne.ID), tokenOne, "cancel")
 	if err != nil {
 		t.Fatalf("decision one: %v", err)
 	}
@@ -1660,7 +1660,7 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("freshness two: %v", err)
 	}
-	decideTwo, err := protocol.NewDecideEvent("binding-decision-two", protocol.RequestID(requestTwo.ID), tokenTwo, "confirm")
+	decideTwo, err := protocol.NewDecideEvent("binding-decision-two", protocol.RequestID(requestTwo.ID), tokenTwo, "cancel")
 	if err != nil {
 		t.Fatalf("decision two: %v", err)
 	}
@@ -1690,7 +1690,7 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 		}
 	}
 
-	firstIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "first"})
+	firstIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "first"})
 	if err != nil {
 		t.Fatalf("first repeated operation: %v", err)
 	}
@@ -1715,7 +1715,7 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 	if !isCompleted("host.one") || isCompleted("host.two") {
 		t.Fatalf("first operation settled wrong HostAction steps: %v", snapshot.State.Completed)
 	}
-	secondIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "second"})
+	secondIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "second"})
 	if err != nil {
 		t.Fatalf("second repeated operation: %v", err)
 	}
@@ -1759,6 +1759,21 @@ func TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult(t *testing.T) {
 		t.Fatalf("issued actions = %d, want 1", len(issued))
 	}
 	oldActionID := issued[0].ActionID
+	if _, err := fixture.Host.Spawn(oldActionID, "replacement-session", protocol.SpawnStatusSpawned); err != nil {
+		t.Fatal(err)
+	}
+	start, err := protocol.NewLifecycleEventEvent("replacement-start", "fake-host", "replacement-session", protocol.LifecycleStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startFingerprint, err := fixture.Engine.ObserveFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.Engine.Submit(start, startFingerprint); err != nil {
+		t.Fatal(err)
+	}
+
 	before, err := fixture.Engine.Load()
 	if err != nil {
 		t.Fatalf("Load before replacement: %v", err)
@@ -1780,6 +1795,37 @@ func TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	}
 	if plan.Action != protocol.RecoveryNewAttempt {
 		t.Fatalf("binding-change recovery plan = %+v", plan)
+	}
+	termination, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := termination.State.Attempts[oldPending.Task]; got.ID != oldAttempt.ID || got.ActionID != oldActionID {
+		t.Fatal("attempt replaced before native termination receipt")
+	}
+	terminations := 0
+	for _, intent := range termination.State.PendingHostActions {
+		if intent.Operation != protocol.HostActionTerminateAgent {
+			continue
+		}
+		terminations++
+		if intent.Terminate == nil || intent.Terminate.WorkerActionID != oldActionID || intent.Terminate.AttemptID != oldAttempt.ID || intent.Terminate.Identity != "replacement-session" {
+			t.Fatal("termination does not bind the original spawned attempt")
+		}
+		stop, err := protocol.NewLifecycleEventEvent("replacement-stop", "fake-host", "replacement-session", protocol.LifecycleStop)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.Engine.Submit(stop, fingerprint); err != nil {
+			t.Fatal(err)
+		}
+		event := protocol.Event{ID: "replacement-terminated", Kind: protocol.KindHostActionReceipt, HostAction: &protocol.HostActionReceiptPayload{ActionID: intent.ActionID, Operation: intent.Operation, Provider: "fake-host", Correlation: intent.Correlation, PayloadDigest: intent.PayloadDigest, Status: protocol.HostActionStatusExecuted, LifecycleEvidence: &protocol.LifecycleEvidence{Identity: "replacement-session", Event: protocol.LifecycleStop}}}
+		if _, err := fixture.Engine.Submit(event, fingerprint); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if terminations != 1 {
+		t.Fatalf("native termination intents = %d, want exactly one", terminations)
 	}
 	replaced, err := fixture.Engine.Load()
 	if err != nil {

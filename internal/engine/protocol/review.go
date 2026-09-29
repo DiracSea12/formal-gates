@@ -121,20 +121,23 @@ func validateTopologyDecision(topology *TopologyDecision) error {
 	return nil
 }
 
-// validateRouteDecision 校验路线决定的形状：full 携带显式完整门全集且
-// Selected 为空；custom 携带非空、无重复、属于全集的真子集。
+// validateRouteDecision 校验路线决定的形状：候选列表不得含合并验证（合并
+// 验证只在拆分运行中自动附加）；full 携带显式完整门全集、必含内建黑盒与
+// 白盒 QA 且 Selected 为空；custom 携带非空、无重复、逐项属于候选列表的
+// 选择，可选全集（sliced-runs-confirmation-and-qa-refactor 需求9：至少选
+// 一项，可省略任一）。
 func validateRouteDecision(route *RouteDecision) error {
 	switch route.Mode {
 	case routeModeFull:
 		if len(route.Selected) != 0 {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route selects the complete gate list without a subset"}
 		}
+		if !slices.Contains(route.Gates, "blackbox") || !slices.Contains(route.Gates, "whitebox") {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route must carry both built-in QA modes (blackbox and whitebox) alongside every discovered gate"}
+		}
 	case routeModeCustom:
 		if len(route.Selected) == 0 {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "custom route must select a non-empty proper subset"}
-		}
-		if len(route.Selected) >= len(route.Gates) {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "custom route must select a proper subset; use full for the complete list"}
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "custom route must select at least one candidate"}
 		}
 		seen := make(map[string]bool, len(route.Selected))
 		for _, gate := range route.Selected {
@@ -163,6 +166,9 @@ func validateRouteDecision(route *RouteDecision) error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route candidate gate %q listed twice", gate)}
 		}
 		seen[gate] = true
+	}
+	if slices.Contains(route.Gates, "merge") {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "merge verification is attached automatically for split runs and is not a route candidate"}
 	}
 	return nil
 }
@@ -203,26 +209,10 @@ func (s *State) dualReviewPass() bool {
 	return s.effectivePass(s.ReviewSeries.ProductReview) && s.effectivePass(s.ReviewSeries.StartReadiness)
 }
 
-// admitReviewEvidence 对一条审查证据执行完整可接纳性判定并返回记账后的
-// Set。revision 绑定按 series 的重走态分两支（处置只认用户勾选的重走范
-// 围，§7.2.2:4）：
-//
-//	重走态（用户确认重走、尚待新鲜轮）：只认绑当前权威 revision 的新鲜轮，
-//	  且所在派发的签发代数不得早于该次决定的 fresh floor——pre-floor 派
-//	  发的证据一律拒绝（由接纳核心按声明终止并重签发）。
-//	其余（未勾选即续用）：绑任一已确认 revision 的证据按 carry 语义可纳
-//	  （用户不勾重走即 carry 授权，携原 revision 接纳）——但重走系列的
-//	  revision 下界＝最后一次覆盖它的重走决定：义务清偿后 FreshFloor 留
-//	  存（该系列被重走过的持久事实），确认代数或签发代数早于它的证据仍
-//	  拒（重走前的旧轮证据不得经 carry 翻回结论）；从未重走的系列无此
-//	  下界。
-//
-// 另受理 start-readiness 的双审顺序守卫（product-review 须携已确认
-// revision 的 effective PASS）、review 内核的记录变换（重复摘要、越限无
-// 授权、核实缺项、finding 形状）。非空错误即 CodeReviewEvidenceRejected
-// 且零状态变化。暂存预检与回执配对后的权威接纳共用本函数（单一事实源）：
-// 预检丢弃返回值只取错误——内核变换不改写调用方输入（包契约并有回归测
-// 试），账本在暂存与回执之间可能变化，落账仍以配对时的接纳为准。
+// reviewAdmission checks the signed dispatch, authorization, confirmed revision
+// and redo floor before any worker content can consume an attempt. A carried
+// dispatch keeps its original confirmed revision; a redo requires fresh input.
+// The product-review sequence gate is temporary and can suspend result pairing.
 func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
 	// 派发身份唯一事实：证据的 DispatchID 必须就是提交结果的 actionID
 	//（授权占用按真实派发判）。
@@ -320,16 +310,19 @@ func isSequenceGate(err error) bool {
 	return errors.As(err, &rejected) && rejected.Code == CodeReviewSequenceGate
 }
 
-// recordReviewCandidate 把审查证据经完整可接纳性判定后记账落回 state；
-// floor 比对读该结果所属派发的签发代数。RecordCandidate 的错误（重复摘
-// 要、越限无授权、核实不全）拒绝整个事件。
-func (e *Engine) recordReviewCandidate(state *State, evidence *ReviewResultEvidence, actionID string) error {
+// prepareReviewResult validates the complete worker content without mutating its
+// review series. Dispatch admission remains separate from invalid result handling.
+func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidence, actionID string) (review.Set, error) {
 	updated, err := state.admitReviewEvidence(evidence, actionID, state.issuedRevisionOf(actionID))
 	if err != nil {
-		return err
+		return review.Set{}, err
 	}
-	state.ReviewSeries = updated
-	return nil
+	if pipelineEnabled(state, e.cfg.Definition) && evidence.Action == review.StartReadiness && evidence.Status == "PASS" {
+		if err := validateGranularity(evidence.GranularityReview); err != nil {
+			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+		}
+	}
+	return updated, nil
 }
 
 // ---- 审查类决定的账目变换（DECIDE 接纳路径） ----
@@ -493,6 +486,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		route := payload.Route
+		if err := e.validatePlanConfirmation(state, route); err != nil {
+			return err
+		}
 		selected := slices.Clone(route.Gates)
 		if route.Mode == routeModeCustom {
 			selected = nil

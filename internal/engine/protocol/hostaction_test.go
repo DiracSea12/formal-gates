@@ -43,7 +43,7 @@ func unknownHostReceipt(t *testing.T, id EventID, intent HostActionIntent) Event
 func TestHostActionIntentPersistedBeforeExecute(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	params := map[string]any{"target": "fan.slice", "retries": float64(2)}
+	params := map[string]any{"stage": "fan.slice", "generation": float64(2)}
 	intent, revision, err := engine.ExecuteHostAction(opTransport, params, fp)
 	if err != nil {
 		t.Fatalf("execute host action: %v", err)
@@ -92,7 +92,7 @@ func TestHostActionIntentPersistedBeforeExecute(t *testing.T) {
 func TestHostActionReconcileRequiresDurableUnknownReceipt(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestHostActionUnregisteredOperationAndFreeCommand(t *testing.T) {
 func TestHostActionReceiptNegatives(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "v"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "v"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestHostActionReceiptNegatives(t *testing.T) {
 func TestHostActionReconciliationReplay(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "v"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "v"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAdapterOperationSchemaRejectsUndeclaredData(t *testing.T) {
 	before := engine.LoadMustSucceed(t)
 	for _, params := range []map[string]any{
 		{"command": "free-form"},
-		{"target": true},
+		{"stage": true},
 	} {
 		if _, _, err := engine.ExecuteHostAction(opTransport, params, fp); err == nil {
 			t.Fatalf("undeclared/ill-typed parameters accepted: %+v", params)
@@ -301,7 +301,7 @@ func TestAdapterOperationSchemaRejectsUndeclaredData(t *testing.T) {
 		t.Fatal("rejected adapter parameters changed state")
 	}
 
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
 	if err != nil {
 		t.Fatalf("valid adapter intent: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestAdapterOperationSchemaRejectsUndeclaredData(t *testing.T) {
 func TestFailedHostActionReceiptRoutesAndAllowsRetry(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}

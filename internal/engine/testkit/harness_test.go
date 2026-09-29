@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
@@ -361,9 +365,10 @@ func TestHarnessInvalidEventsPreserveRevisionAndBytesOracle(t *testing.T) {
 	}
 }
 
-func TestHarnessFailureRoutingTransientExhaustionWaits(t *testing.T) {
+func TestHarnessFailureRoutingTransientExhaustionOffersDecision(t *testing.T) {
+	root := t.TempDir()
 	report, err := RunHarness(HarnessOptions{
-		ProjectRoot:  t.TempDir(),
+		ProjectRoot:  root,
 		Scenario:     "failure-routing",
 		FailureClass: string(authoring.FailureTransientEngine),
 	})
@@ -379,11 +384,49 @@ func TestHarnessFailureRoutingTransientExhaustionWaits(t *testing.T) {
 	if len(report.RecoveryPlan) != 1 || report.RecoveryPlan[0].Action != protocol.RecoveryWait {
 		t.Fatalf("transient recovery plan = %+v, want one WAIT plan", report.RecoveryPlan)
 	}
-	if len(report.Next) != 1 || report.Next[0].Kind != decision.KindWait {
-		t.Fatalf("transient Next records = %+v, want one WAIT record", report.Next)
+	if len(report.Next) != 1 || report.Next[0].Kind != decision.KindAsk {
+		t.Fatalf("transient Next records = %+v, want one ASK record", report.Next)
 	}
 	if report.SideEffects["spawn"] != 2 || report.SideEffects["initialSpawn"] != 1 || report.Metadata["newSpawns"] != 2 {
 		t.Fatalf("transient spawn accounting = sideEffects=%+v metadata=%+v", report.SideEffects, report.Metadata)
+	}
+	registry := definition.Registry()
+	step, err := authoring.NewAgentStep(authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version}, authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}}, authoring.AgentSpec{Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "retry", Steps: []authoring.Step{step}}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := NewProtocolFixtureWithDefinition(root, compiled, registry, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := fixture.Engine.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(plan.Next.Ask)
+	got, _ := json.Marshal(report.Next[0].Payload)
+	if plan.Next.Ask == nil || !bytes.Equal(want, got) {
+		t.Fatalf("reported Ask=%s actual=%s", got, want)
+	}
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.State, report.Snapshot.State) {
+		t.Fatal("report did not retain the actual persisted state")
+	}
+	ended := snapshot.State.EndedAttempts[runtime.TaskKey{Node: "retry", Step: "retry.worker"}]
+	if ended.Attempts != 3 || ended.MaxAttempts != 3 || !ended.RetryExhausted || len(snapshot.State.RejectedResults) != 3 {
+		t.Fatal("retry report disagrees with the original attempt/results")
+	}
+	for _, rejected := range snapshot.State.RejectedResults {
+		if rejected.Payload.FailureClass != authoring.FailureTransientEngine || rejected.Payload.Outcome != protocol.OutcomeRuntimeError {
+			t.Fatal("retry report lost original failure content")
+		}
 	}
 }
 

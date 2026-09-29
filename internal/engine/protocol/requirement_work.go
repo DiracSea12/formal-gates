@@ -62,6 +62,13 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 			tasks[id] = history[len(history)-1].Task
 		}
 	}
+	ended := map[string]Attempt{}
+	for _, attempt := range state.EndedAttempts {
+		if state.endedWorkCurrent(attempt, e.cfg.Definition) {
+			tasks[attempt.ActionID] = attempt.Task
+			ended[attempt.ActionID] = attempt
+		}
+	}
 	ids := make([]string, 0, len(tasks))
 	for id := range tasks {
 		ids = append(ids, id)
@@ -71,7 +78,9 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 	for _, id := range ids {
 		task := tasks[id]
 		if _, obsolete := state.ObsoleteActions[id]; obsolete {
-			continue
+			if _, owed := ended[id]; !owed {
+				continue
+			}
 		}
 		series := e.reviewSeriesOf(task.Step)
 		if series == review.ProductReview || series == review.StartReadiness {
@@ -87,9 +96,14 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 		if revision == "" && state.IntakeConfirmationReceipt != nil {
 			revision = state.IntakeConfirmationReceipt.RequirementRevision
 		}
+		if binding, known := state.DispatchBindings[id]; known {
+			revision = binding.RequirementRevision
+		}
 		item := RequirementWork{ActionID: id, Task: task, IssuedRevision: issued, RequirementRevision: revision}
 		if result, ok := state.Results[id]; ok {
 			item.ResultDigest = result.Digest
+		} else if result, ok := state.RejectedResults[id]; ok {
+			item.ResultDigest = result.Payload.Digest
 		} else if result, ok := state.StagedResults[id]; ok {
 			item.ResultDigest = result.Digest
 		} else {
@@ -106,15 +120,24 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 		}
 		work = append(work, item)
 	}
-	for _, key := range state.requiredWorkTasks() {
-		if state.TaskStatusOf(key) != runtime.TaskQueued {
+	queued := state.requiredWorkTasks()
+	for _, key := range state.planTasks(e.cfg.Definition) {
+		if !slices.Contains(queued, key) && state.developmentResult(key) == nil {
+			queued = append(queued, key)
+		}
+	}
+	for _, key := range queued {
+		if state.TaskStatusOf(key) != runtime.TaskQueued && state.TaskStatusOf(key) != "" {
 			continue
 		}
 		actionID := "act:" + key.String()
-		if _, known := tasks[actionID]; known {
+		if _, known := tasks[actionID]; known || slices.ContainsFunc(work, func(w RequirementWork) bool { return w.Task == key }) {
 			continue
 		}
 		revision := state.requirementRevisionForTask(key)
+		if revision == "" {
+			_, _, revision = state.confirmedDevelopmentPlan()
+		}
 		work = append(work, RequirementWork{ActionID: actionID, Task: key, RequirementRevision: revision})
 	}
 	slices.SortFunc(work, func(a, b RequirementWork) int { return strings.Compare(a.ActionID, b.ActionID) })
@@ -252,15 +275,14 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 			continue
 		}
 		work := choice.Work
+		delete(state.EndedAttempts, work.Task)
 		state.archiveDispatchResults(work.ActionID)
 		if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
-			state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
-		}
-		if state.TaskStatusOf(work.Task) == runtime.TaskQueued {
-			if err := state.TransitionTask(work.Task, runtime.TaskTerminal); err != nil {
-				return err
+			if _, recorded := state.ObsoleteActions[work.ActionID]; !recorded {
+				state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
 			}
-		} else if err := state.terminalizeTask(work.Task); err != nil {
+		}
+		if err := state.terminalizeTask(work.Task); err != nil {
 			return err
 		}
 		key := replacementWorkTask(entry, i)
@@ -269,5 +291,6 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 		obsolete.ReplacedBy = "act:" + key.String()
 		state.ObsoleteActions[work.ActionID] = obsolete
 	}
+	e.reconcileWorkerRetryAsks(state)
 	return nil
 }

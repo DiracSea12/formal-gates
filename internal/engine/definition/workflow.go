@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "4"
+const Version authoring.DefinitionVersion = "6"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -37,19 +37,20 @@ var (
 		{"engine.entry.parse", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
 		{"engine.review.worker", authoring.RunnerAgentWorker},
+		{"engine.readiness.plan", authoring.RunnerAgentWorker},
 
-		{"engine.development", authoring.RunnerAgentWorker},
+		{"engine.development.batch", authoring.RunnerAgentWorker},
 		{"engine.qa.design", authoring.RunnerAgentWorker},
-		{"engine.qa.review", authoring.RunnerAgentWorker},
+		{"engine.qa.review.rationale", authoring.RunnerAgentWorker},
 		{"engine.qa.execution", authoring.RunnerAgentWorker},
 		{"engine.gate", authoring.RunnerAgentWorker},
 		{"engine.repair", authoring.RunnerAgentWorker},
-		{"engine.candidate", authoring.RunnerHostAdapter},
+		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
 	}
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	workflowSchemas    = []authoring.SchemaID{"schema.candidate"}
+	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range"}
 	workflowOperations = []authoring.OperationID{"op.candidate"}
 	workflowAskKinds   = []authoring.AskKindID{}
 )
@@ -101,11 +102,10 @@ func Workflow() *compiler.Definition {
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	must("review.worker", err)
-	// 技术审（开工就绪）系列的派发载体：与产品审步复用同一 handler、
-	// 后置谓词与超时，只以系列标记与依赖位置区分（见上面的拓扑注释）。
+	// Readiness includes the structured granularity proposal for route confirmation.
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
 		reviewIOWith("review.worker"), authoring.AgentSpec{
-			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.readiness.plan", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
 		})
 	must("review.readiness", err)
@@ -114,9 +114,9 @@ func Workflow() *compiler.Definition {
 		id, handler string
 		reason      authoring.NonProgrammableReason
 	}{
-		{"development.worker", "engine.development", authoring.ReasonCreativeImplementation},
+		{"development.worker", "engine.development.batch", authoring.ReasonCreativeImplementation},
 		{"qa.design", "engine.qa.design", authoring.ReasonSemanticJudgment},
-		{"qa.review", "engine.qa.review", authoring.ReasonIndependentReview},
+		{"qa.review", "engine.qa.review.rationale", authoring.ReasonIndependentReview},
 		{"qa.execution", "engine.qa.execution", authoring.ReasonSemanticJudgment},
 		{"validation.gate", "engine.gate", authoring.ReasonIndependentReview},
 		{"development.repair", "engine.repair", authoring.ReasonCreativeImplementation},
@@ -129,7 +129,7 @@ func Workflow() *compiler.Definition {
 		must(spec.id, err)
 		steps = append(steps, step)
 	}
-	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate", Boundary: authoring.BoundaryAgentDispatchAPI, Operation: "op.candidate", Schema: "schema.candidate", Timeout: time.Minute})
+	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryAgentDispatchAPI, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: time.Minute})
 	must("candidate.materialize", err)
 	steps = append(steps, candidate)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}

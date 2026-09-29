@@ -60,6 +60,7 @@ const (
 // selects the candidate engine.  Runtime is retained as a read-only projection
 // for diagnostics and is always set to "engine" by Start.
 type StartRequest struct {
+	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
 	Route                     string                    `json:"route"`
 	Provider                  string                    `json:"provider,omitempty"`
@@ -79,6 +80,12 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	RecoveryRecords           []protocol.RecoveryRecord `json:"recoveryRecords,omitempty"`
+	lastEvent                 *protocol.EventRecord
+	Termination               *protocol.State                      `json:"termination,omitempty"`
+	ValidationDecisions       map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
+	ValidationRequests        map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
+	NotGuaranteed             bool                                 `json:"notGuaranteed,omitempty"`
 	ValidationInputs          map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
 	Attempts                  map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
 	PendingActions            map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
@@ -308,20 +315,24 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 	}
 }
 
-// TerminalSummary is retained after the engine reaches Complete.  It is
-// immutable for normal callers and supports terminal replay without reopening
-// the active state writer.
+// TerminalSummary is immutable and supports terminal replay without reopening
+// the active writer. An aborted run retains its original State here after cleanup.
 type TerminalSummary struct {
-	RunID         string              `json:"runId"`
-	Runtime       string              `json:"runtime"`
-	Route         string              `json:"route"`
-	Status        string              `json:"status"`
-	Revision      uint64              `json:"revision"`
-	Envelope      Envelope            `json:"envelope"`
-	IntakeReceipt *IntakeReceipt      `json:"intakeReceipt,omitempty"`
-	Next          decision.NextResult `json:"next"`
-	Unverified    bool                `json:"unverified,omitempty"`
-	CompletedAt   string              `json:"completedAt"`
+	LastEvent           *protocol.EventRecord                `json:"lastEvent,omitempty"`
+	Termination         *protocol.State                      `json:"termination,omitempty"`
+	ValidationDecisions map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
+	ValidationRequests  map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
+	NotGuaranteed       bool                                 `json:"notGuaranteed,omitempty"`
+	RunID               string                               `json:"runId"`
+	Runtime             string                               `json:"runtime"`
+	Route               string                               `json:"route"`
+	Status              string                               `json:"status"`
+	Revision            uint64                               `json:"revision"`
+	Envelope            Envelope                             `json:"envelope"`
+	IntakeReceipt       *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
+	Next                decision.NextResult                  `json:"next"`
+	Unverified          bool                                 `json:"unverified,omitempty"`
+	CompletedAt         string                               `json:"completedAt"`
 }
 
 type startIntent struct {
@@ -428,6 +439,9 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	if req.Route != "lightweight" && req.Route != "regular" {
 		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
+	}
+	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
+		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
 	}
 	if strings.TrimSpace(req.Provider) == "" {
 		req.Provider = DefaultProvider
@@ -549,7 +563,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt); err != nil {
+	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot); err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
@@ -701,8 +715,8 @@ func (f *Facade) Drive() (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	if run.Status == "COMPLETE" {
-		if run.Route == "lightweight" {
+	if run.Status == "COMPLETE" || run.Status == "ABORTED" {
+		if run.Route == "lightweight" || run.Status == "ABORTED" {
 			if err := f.finalizeTerminal(run); err != nil {
 				return Run{}, err
 			}
@@ -722,21 +736,49 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
-		return protocol.Acceptance{}, Run{}, err
+		var rejected *protocol.RejectedError
+		if !errors.As(err, &rejected) || rejected.Code != protocol.CodeNotInitialized {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		acceptance, err = f.replayTerminalEvent(event)
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
 	}
-	run, err := f.project()
+	run, err := f.projectOrSummary()
 	return acceptance, run, err
 }
 
-func (f *Facade) Next() (decision.NextResult, error) {
-	run, err := f.project()
+// replayTerminalEvent reads the last stable receipt while cleanup is pending
+// or complete. Only Drive may finish the terminal intent.
+func (f *Facade) replayTerminalEvent(event protocol.Event) (protocol.Acceptance, error) {
+	summary, err := f.readTerminalIntent()
+	if errors.Is(err, fs.ErrNotExist) {
+		summary, err = f.readSummary()
+	}
 	if err != nil {
-		if !isMissingEngineState(err) {
-			return decision.NextResult{}, err
+		if errors.Is(err, fs.ErrNotExist) {
+			return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeNotInitialized, Detail: "engine state and terminal receipt do not exist"}
 		}
-		if summary, sumErr := f.readSummary(); sumErr == nil {
-			return summary.Next, nil
-		}
+		return protocol.Acceptance{}, err
+	}
+	record := summary.LastEvent
+	if record == nil || record.Acceptance.EventID != string(event.ID) {
+		return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeNotInitialized, Detail: "event is not the final recorded terminal event"}
+	}
+	digest, err := event.Digest()
+	if err != nil {
+		return protocol.Acceptance{}, err
+	}
+	if digest != record.Digest {
+		return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeDuplicateEventMismatch, Detail: fmt.Sprintf("event %q replayed with different payload digest (recorded %s, submitted %s)", event.ID, record.Digest, digest)}
+	}
+	return record.Acceptance, nil
+}
+
+func (f *Facade) Next() (decision.NextResult, error) {
+	run, err := f.projectOrSummary()
+	if err != nil {
 		return decision.NextResult{}, err
 	}
 	return run.Next, nil
@@ -747,18 +789,39 @@ func (f *Facade) Status() (Run, error) { return f.projectOrSummary() }
 
 func (f *Facade) projectOrSummary() (Run, error) {
 	run, err := f.project()
-	if err == nil {
+	if err != nil && !isMissingEngineState(err) {
+		return Run{}, err
+	}
+	intent, intentErr := f.readTerminalIntent()
+	if intentErr != nil && !errors.Is(intentErr, fs.ErrNotExist) {
+		return Run{}, intentErr
+	}
+	if intentErr == nil {
+		if err != nil {
+			run = runFromSummary(intent)
+		}
+		run.Status = "FINALIZING_CLEANUP"
+		run.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
+		run.SummaryPath = filepath.Join(f.stateDir, "terminal-summary.json")
 		return run, nil
 	}
-	if !isMissingEngineState(err) {
-		return Run{}, err
+	if err == nil && run.Status != "COMPLETE" && run.Status != "ABORTED" {
+		return run, nil
 	}
 	summary, summaryErr := f.readSummary()
-	if summaryErr != nil {
+	if summaryErr == nil {
+		run = runFromSummary(summary)
+		run.SummaryPath = filepath.Join(f.stateDir, "terminal-summary.json")
+		return run, nil
+	}
+	if !errors.Is(summaryErr, fs.ErrNotExist) {
+		return Run{}, summaryErr
+	}
+	if err != nil {
 		return Run{}, err
 	}
-	run = runFromSummary(summary)
-	run.SummaryPath = filepath.Join(f.stateDir, "terminal-summary.json")
+	run.Status = "FINALIZING_CLEANUP"
+	run.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
 	return run, nil
 }
 
@@ -787,25 +850,23 @@ func (f *Facade) project() (Run, error) {
 	if snap.State.Phase == runtime.PhaseTerminal || plan.Next.Kind == decision.KindComplete {
 		status = "COMPLETE"
 	}
-	if status == "COMPLETE" {
-		if _, intentErr := os.Stat(terminalIntentPath(f.stateDir)); intentErr == nil {
-			// A terminal intent means cleanup is in progress. Keep the read
-			// projection non-terminal until Drive reconciles the intent and the
-			// immutable summary is committed.
-			status = "FINALIZING_CLEANUP"
-			plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
-		} else if !errors.Is(intentErr, fs.ErrNotExist) {
-			return Run{}, intentErr
+	if _, aborted := snap.State.AbortDecision(); aborted {
+		status = "ABORTING"
+		if snap.State.Phase == runtime.PhaseTerminal {
+			status = "ABORTED"
 		}
 	}
+
 	run := Run{
+
 		ValidationInputs: snap.State.ValidationInputs(f.definition),
 		Attempts:         snap.State.Attempts,
 		PendingActions:   snap.State.PendingActions,
 		RejectedResults:  snap.State.RejectedResults,
+		RecoveryRecords:  snap.State.RecoveryRecords,
 		Validation:       snap.State.Validation,
 		DispatchBindings: snap.State.DispatchBindings,
-		AdapterIntents:   snap.State.PendingHostActions,
+		AdapterIntents:   snap.State.ExecutableHostActions(),
 		EndedAttempts:    snap.State.EndedAttempts,
 		RunID:            f.runID,
 		Runtime:          RuntimeEngine,
@@ -819,6 +880,24 @@ func (f *Facade) project() (Run, error) {
 		Unverified:       snap.State.Route == "lightweight",
 	}
 
+	for _, event := range snap.State.Events {
+		if run.lastEvent == nil || event.Acceptance.Revision > run.lastEvent.Acceptance.Revision {
+			record := event
+			run.lastEvent = &record
+		}
+	}
+	if _, aborted := snap.State.AbortDecision(); aborted {
+		run.Termination = snap.State
+	}
+	run.ValidationDecisions = map[string]protocol.RecordedDecision{}
+	run.ValidationRequests = map[string]protocol.PendingAsk{}
+	for id, d := range snap.State.Decisions {
+		if d.Control == protocol.ControlValidation {
+			run.ValidationDecisions[id] = d
+			run.ValidationRequests[id] = snap.State.PendingAsks[id]
+		}
+	}
+	run.NotGuaranteed = snap.State.ValidationNotGuaranteed()
 	run.RequirementWork = work
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
@@ -909,7 +988,7 @@ func terminalIntentPath(stateDir string) string {
 }
 
 func summaryForRun(run Run) TerminalSummary {
-	return TerminalSummary{RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: "COMPLETE", Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -921,7 +1000,7 @@ func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
 		}
 		// A terminal summary is immutable. Repeated drive/replay calls return
 		// the already committed bytes and never refresh CompletedAt.
-		if existing.RunID == summary.RunID && existing.Status == "COMPLETE" && existing.Revision == summary.Revision && existing.Envelope == summary.Envelope && existing.Unverified == summary.Unverified {
+		if existing.RunID == summary.RunID && existing.Status == summary.Status && existing.Revision == summary.Revision && existing.Envelope == summary.Envelope && existing.Unverified == summary.Unverified {
 			return nil
 		}
 		return fmt.Errorf("engine terminal summary conflicts with completed run")
@@ -940,7 +1019,7 @@ func (f *Facade) readTerminalIntent() (TerminalSummary, error) {
 	if err := json.Unmarshal(data, &summary); err != nil {
 		return TerminalSummary{}, err
 	}
-	if summary.Status != "COMPLETE" || summary.RunID != f.runID {
+	if (summary.Status != "COMPLETE" && summary.Status != "ABORTED") || summary.RunID != f.runID {
 		return TerminalSummary{}, fmt.Errorf("engine terminal intent is not a complete summary")
 	}
 	if err := persistence.ValidateEnvelopeWithIdentity(summary.Envelope, f.envelope.PackageDigest, f.envelope.DefinitionSource, f.envelope.InstalledTargetIdentity); err != nil {
@@ -1003,7 +1082,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	return Run{RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Unverified: summary.Unverified, SummaryPath: ""}
+	return Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Unverified: summary.Unverified, SummaryPath: ""}
 }
 
 // Diagnose is deliberately raw and read-only.  It reports malformed/old
@@ -1359,4 +1438,9 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// DevelopmentPlan projects the exact proposal and bindings for route confirmation.
+func (f *Facade) DevelopmentPlan(route protocol.RouteDecision) (*protocol.DevelopmentPlanPreview, error) {
+	return f.engine.DevelopmentPlan(route)
 }

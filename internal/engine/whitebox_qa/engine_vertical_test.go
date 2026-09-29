@@ -147,7 +147,7 @@ func TestPhase3ProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("observe fingerprint: %v", err)
 	}
-	if err := engine.InitWithMetadata(view, "engine", fp, "vertical-receipt", "lightweight", &confirmation); err != nil {
+	if err := engine.InitWithMetadata(view, "engine", fp, "vertical-receipt", "lightweight", &confirmation, ""); err != nil {
 		t.Fatalf("init with confirmation: %v", err)
 	}
 	digest, err := facade.IntakeDigest(confirmation)

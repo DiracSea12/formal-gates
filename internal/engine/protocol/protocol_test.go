@@ -74,7 +74,7 @@ func richState(t *testing.T) *State {
 	}}
 	state.PendingHostActions["hact:op:5"] = HostActionIntent{
 		ActionID: "hact:op:5", Operation: HostActionExecuteAdapterOperation,
-		Adapter:       &AdapterHostAction{Operation: "op.fan.transport", Params: map[string]any{"target": "b"}},
+		Adapter:       &AdapterHostAction{Operation: "op.fan.transport", Params: map[string]any{"stage": "b"}},
 		PayloadDigest: "sha256:params", Revision: 5,
 	}
 	state.HostActionReceipts["hact:op:4"] = HostActionReceipt{

@@ -10,9 +10,9 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 	if !pipelineEnabled(s, e.cfg.Definition) || s.Validation == nil {
 		return nil
 	}
-	started := s.Validation.Development != nil
+	started := false
 	for _, binding := range s.DispatchBindings {
-		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development" {
+		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch" {
 			started = true
 		}
 	}
@@ -32,10 +32,28 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 	return nil
 }
 
-// A route change invalidates validation completion, not a repair already
-// derived from collected and adjudicated evidence on that candidate.
+// Validation invalidation does not itself retire the unique repair duty.
+// Route continuity or explicit requirement carry may retain its signed Attempt;
+// THAW, replacement and disposition retire that Attempt through their owners.
 func (s *State) validationRepairPending(w *ValidationWave) bool {
-	return w != nil && w.Repair != nil && (w.Status == "REPAIR" || w.Status == "INVALIDATED" && s.Validation.Candidate != nil && *s.Validation.Candidate == w.Candidate && w.RouteDigest != s.validationRouteDigest())
+	if w == nil || w.Repair == nil {
+		return false
+	}
+	if s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
+		return false
+	}
+	if w.Status == "REPAIR" {
+		return true
+	}
+	if w.Status != "INVALIDATED" {
+		return false
+	}
+	if s.Validation.Candidate != nil && *s.Validation.Candidate == w.Candidate && w.RouteDigest != s.validationRouteDigest() {
+		return true
+	}
+	_, running := s.Attempts[w.Repair.Task]
+	_, ended := s.EndedAttempts[w.Repair.Task]
+	return (running || ended) && s.validationWorkCarryAuthorized("", w.Repair.Task)
 }
 
 func (e *Engine) rebindValidationRoute(s *State) {
@@ -56,7 +74,7 @@ func (e *Engine) rebindValidationRoute(s *State) {
 	}
 	e.retireValidationWave(s, w.ID, "confirmed route changed the validation obligation")
 	if s.Validation.Candidate != nil {
-		e.freezeValidationWave(s, w.Scope)
+		e.freezeValidationWave(s, w.Scope, "", w.SourceTasks)
 	}
 }
 
@@ -80,25 +98,10 @@ func (s *State) validationFindingTarget(w *ValidationWave, finding *ValidationFi
 
 func (s *State) carryRouteTarget(target *ValidationTarget, prior, current *ValidationWave) {
 	for _, previous := range prior.Targets {
-		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED"}, previous.Status) {
+		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
 			continue
 		}
-		carried := *previous
-		carried.Task = target.Task
-		if previous.Execution != nil {
-			report := *previous.Execution
-			_, whitelist, err := s.executionContract(target.Mode, current)
-			if err != nil {
-				return
-			}
-			report.Binding.RequiredSourcesDigest = whitelist.RequiredSourcesDigest
-			report.Binding.ManifestDigest = whitelist.ManifestDigest
-			report.Binding.MapDigest = whitelist.MapDigest
-			report.Binding.WhitelistDigest = whitelist.Digest
-			report.Binding.Scope = current.Scope
-			carried.Execution = &report
-		}
-		*target = carried
+		s.carryValidationTarget(target, previous, current)
 		return
 	}
 }
@@ -110,4 +113,63 @@ func manifestAtRoute(manifest coverage.AcceptanceManifest, route string) coverag
 		manifest.Binding.RouteScope = route
 	}
 	return manifest
+}
+
+// The current target is a projection; original result and wave bindings remain
+// untouched in their evidence records.
+func (s *State) carryValidationTarget(target, previous *ValidationTarget, current *ValidationWave) bool {
+	carried := *previous
+	if previous.GateImpact != nil {
+		impact := *previous.GateImpact
+		carried.GateImpact = &impact
+	}
+	carried.Task = target.Task
+	if previous.Execution != nil {
+		report := *previous.Execution
+		contract, whitelist, err := s.executionContract(target.Mode, current)
+		if err != nil || report.Binding.Scope != current.Scope {
+			return false
+		}
+		report.Binding.RequiredSourcesDigest = whitelist.RequiredSourcesDigest
+		report.Binding.ManifestDigest = whitelist.ManifestDigest
+		report.Binding.MapDigest = whitelist.MapDigest
+		report.Binding.WhitelistDigest = whitelist.Digest
+		if err := contract.ValidateResults(whitelist, report); err != nil {
+			return false
+		}
+		carried.Execution = &report
+	}
+	*target = carried
+	return true
+}
+
+// targetResponsibility follows a repair-derived verdict back to the original
+// gate duty. The frozen reference identifies responsibility; it grants no reuse.
+func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTarget) (*ValidationWave, *ValidationTarget) {
+	if target.GateImpact != nil {
+		if source := s.validationWave(target.GateImpact.SourceWave); source != nil {
+			for _, original := range source.Targets {
+				if original.Gate == target.Gate && original.Kind == target.Kind {
+					return s.targetResponsibility(source, original)
+				}
+			}
+		}
+	}
+	binding, known := s.DispatchBindings[target.ResultAction]
+	if !known {
+		return wave, target
+	}
+	source := s.sourceValidationTask(binding.Task)
+	for i := range s.Validation.Waves {
+		original := &s.Validation.Waves[i]
+		if original.Repair == nil || original.Repair.Task != source {
+			continue
+		}
+		for _, prior := range original.Targets {
+			if prior.Kind == target.Kind && prior.Gate == target.Gate && prior.Mode == target.Mode && prior.ResultAction != target.ResultAction {
+				return s.targetResponsibility(original, prior)
+			}
+		}
+	}
+	return wave, target
 }

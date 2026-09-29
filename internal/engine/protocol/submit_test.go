@@ -8,11 +8,11 @@ import (
 	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
-// resetRequest 是两阶段测试的标准受限请求事件构造器。
-func resetRequest(t *testing.T, id EventID) Event {
+// cancelAbortRequest 是两阶段测试的标准受限请求事件构造器。
+func cancelAbortRequest(t *testing.T, id EventID) Event {
 	t.Helper()
-	ev, err := NewRequestEvent(id, ControlReset,
-		AskOption{ID: "proceed", Label: "确认重置"}, AskOption{ID: "cancel", Label: "取消"})
+	ev, err := NewRequestEvent(id, ControlAbort,
+		AskOption{ID: "cancel", Label: "取消终止"}, AskOption{ID: "abort", Label: "终止"})
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
@@ -25,18 +25,18 @@ func resetRequest(t *testing.T, id EventID) Event {
 func TestRequestCreatesPendingAsk(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	acceptance, err := engine.Submit(resetRequest(t, "req-reset-1"), fp)
+	acceptance, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
 	if err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
-	if acceptance.EventID != "req-reset-1" || acceptance.Kind != string(KindRequestControl) ||
-		acceptance.Status != "ACCEPTED" || acceptance.RequestID != "req-reset-1" {
+	if acceptance.EventID != "req-abort-1" || acceptance.Kind != string(KindRequestControl) ||
+		acceptance.Status != "ACCEPTED" || acceptance.RequestID != "req-abort-1" {
 		t.Fatalf("acceptance = %+v", acceptance)
 	}
 	if acceptance.Revision != 2 {
 		t.Fatalf("acceptance revision = %d, want 2", acceptance.Revision)
 	}
-	token, err := engine.Freshness("req-reset-1")
+	token, err := engine.Freshness("req-abort-1")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
@@ -44,11 +44,11 @@ func TestRequestCreatesPendingAsk(t *testing.T) {
 		t.Fatalf("acceptance token %q != current freshness %q", acceptance.FreshnessToken, token)
 	}
 	snap := engine.LoadMustSucceed(t)
-	ask, ok := snap.State.PendingAsks["req-reset-1"]
-	if !ok || ask.Resolved || ask.Control != ControlReset || len(ask.Options) != 2 {
+	ask, ok := snap.State.PendingAsks["req-abort-1"]
+	if !ok || ask.Resolved || ask.Control != ControlAbort || len(ask.Options) != 2 {
 		t.Fatalf("pending ask = %+v ok=%v", ask, ok)
 	}
-	if ask.Options[0].ID != "proceed" || ask.Options[1].ID != "cancel" {
+	if ask.Options[0].ID != "cancel" || ask.Options[1].ID != "abort" {
 		t.Fatalf("options not recorded verbatim: %+v", ask.Options)
 	}
 }
@@ -58,11 +58,11 @@ func TestRequestCreatesPendingAsk(t *testing.T) {
 func TestRequestIdempotentReplay(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	first, err := engine.Submit(resetRequest(t, "req-reset-1"), fp)
+	first, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
 	if err != nil {
 		t.Fatalf("first submit: %v", err)
 	}
-	second, err := engine.Submit(resetRequest(t, "req-reset-1"), fp)
+	second, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
 	if err != nil {
 		t.Fatalf("replay submit: %v", err)
 	}
@@ -83,12 +83,12 @@ func TestRequestIdempotentReplay(t *testing.T) {
 func TestSameIDDifferentDigestHardReject(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(resetRequest(t, "req-reset-1"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
 		t.Fatalf("first submit: %v", err)
 	}
 	// 同 ID、不同选项集 → 不同 digest。
-	conflicting, err := NewRequestEvent("req-reset-1", ControlReset,
-		AskOption{ID: "proceed", Label: "另一种选项"})
+	conflicting, err := NewRequestEvent("req-abort-1", ControlAbort,
+		AskOption{ID: "cancel", Label: "另一种选项"})
 	if err != nil {
 		t.Fatalf("conflicting event: %v", err)
 	}
@@ -110,14 +110,14 @@ func TestSameIDDifferentDigestHardReject(t *testing.T) {
 func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(resetRequest(t, "req-reset-1"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	token, err := engine.Freshness("req-reset-1")
+	token, err := engine.Freshness("req-abort-1")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
-	decide, err := NewDecideEvent("evt-decide-1", "req-reset-1", token, "proceed")
+	decide, err := NewDecideEvent("evt-decide-1", "req-abort-1", token, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -125,15 +125,15 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit decide: %v", err)
 	}
-	if acceptance.RequestID != "req-reset-1" || acceptance.Revision != 3 {
+	if acceptance.RequestID != "req-abort-1" || acceptance.Revision != 3 {
 		t.Fatalf("decide acceptance = %+v", acceptance)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if ask, pending := snap.State.PendingAsks["req-reset-1"]; !pending || !ask.Resolved {
+	if ask, pending := snap.State.PendingAsks["req-abort-1"]; !pending || !ask.Resolved {
 		t.Fatalf("resolved ask = %+v pending=%v", ask, pending)
 	}
-	decision := snap.State.Decisions["req-reset-1"]
-	if decision.Choice != "proceed" || decision.Control != ControlReset ||
+	decision := snap.State.Decisions["req-abort-1"]
+	if decision.Choice != "cancel" || decision.Control != ControlAbort ||
 		decision.EventID != "evt-decide-1" || decision.Revision != 3 {
 		t.Fatalf("recorded decision = %+v", decision)
 	}
@@ -158,20 +158,20 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(resetRequest(t, "req-reset-1"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
-	staleToken, err := engine.Freshness("req-reset-1")
+	staleToken, err := engine.Freshness("req-abort-1")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
 	// 另一个受限请求提交成功：revision 前进，旧 token 被取代。
-	if _, err := engine.Submit(resetRequest(t, "req-reset-2"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-2"), fp); err != nil {
 		t.Fatalf("request 2: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
 
-	decide, err := NewDecideEvent("evt-decide-stale", "req-reset-1", staleToken, "proceed")
+	decide, err := NewDecideEvent("evt-decide-stale", "req-abort-1", staleToken, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -186,14 +186,14 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 	}
 
 	// 当前 token 放行。
-	currentToken, err := engine.Freshness("req-reset-1")
+	currentToken, err := engine.Freshness("req-abort-1")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
 	if currentToken == staleToken {
 		t.Fatal("token not rotated after later commit")
 	}
-	decideFresh, err := NewDecideEvent("evt-decide-fresh", "req-reset-1", currentToken, "cancel")
+	decideFresh, err := NewDecideEvent("evt-decide-fresh", "req-abort-1", currentToken, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 		t.Fatalf("current token rejected: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if ask, pending := snap.State.PendingAsks["req-reset-1"]; !pending || !ask.Resolved || snap.State.Decisions["req-reset-1"].Choice != "cancel" {
+	if ask, pending := snap.State.PendingAsks["req-abort-1"]; !pending || !ask.Resolved || snap.State.Decisions["req-abort-1"].Choice != "cancel" {
 		t.Fatalf("decision not recorded: %+v", snap.State.Decisions)
 	}
 }
@@ -210,15 +210,15 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 func TestDecideNegatives(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(resetRequest(t, "req-reset-1"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	token, err := engine.Freshness("req-reset-1")
+	token, err := engine.Freshness("req-abort-1")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
 
-	unknown, err := NewDecideEvent("evt-d-unknown", "req-ghost", token, "proceed")
+	unknown, err := NewDecideEvent("evt-d-unknown", "req-ghost", token, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestDecideNegatives(t *testing.T) {
 		t.Fatalf("unknown request code = %q", code)
 	}
 
-	badChoice, err := NewDecideEvent("evt-d-choice", "req-reset-1", token, "nuke-everything")
+	badChoice, err := NewDecideEvent("evt-d-choice", "req-abort-1", token, "nuke-everything")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -238,18 +238,18 @@ func TestDecideNegatives(t *testing.T) {
 		t.Fatalf("invalid choice code = %q", code)
 	}
 
-	ok, err := NewDecideEvent("evt-d-ok", "req-reset-1", token, "proceed")
+	ok, err := NewDecideEvent("evt-d-ok", "req-abort-1", token, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
 	if _, err := engine.Submit(ok, fp); err != nil {
 		t.Fatalf("valid decide: %v", err)
 	}
-	newToken, err := engine.Freshness("req-reset-1")
+	newToken, err := engine.Freshness("req-abort-1")
 	if err == nil || newToken != "" {
 		t.Fatalf("freshness on resolved request should fail, got %q %v", newToken, err)
 	}
-	again, err := NewDecideEvent("evt-d-again", "req-reset-1", "any-token", "proceed")
+	again, err := NewDecideEvent("evt-d-again", "req-abort-1", "any-token", "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestReplayAcrossEngineRestart(t *testing.T) {
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	request := resetRequest(t, "req-reset-1")
+	request := cancelAbortRequest(t, "req-abort-1")
 	acceptance, err := engine.Submit(request, fp)
 	if err != nil {
 		t.Fatalf("request: %v", err)

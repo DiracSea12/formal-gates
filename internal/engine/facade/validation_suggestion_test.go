@@ -24,7 +24,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 			manifest := simpleManifest(input)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 			d.drive()
-			id, input = d.action("engine.qa.review")
+			id, input = d.action("engine.qa.review.rationale")
 			approved := approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved, Suggestions: []protocol.QASuggestion{{Severity: "P3", Message: "Clarify invalid input preparation"}, {Severity: "P3", Message: "Clarify successful input preparation"}}})
 			suggestions := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions
@@ -69,7 +69,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 			}
 			id, input = d.action("engine.qa.design")
 			for _, caseID := range expected {
-				if slices.Contains(input.InheritableCases, caseID) {
+				if slices.ContainsFunc(input.InheritableReviews, func(d coverage.ReviewDecision) bool { return d.ID == caseID }) {
 					t.Fatalf("affected case %s inherited old approval", caseID)
 				}
 			}
@@ -84,7 +84,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 			if d.run.Validation.Sets[coverage.ReviewBlackbox].Status != "REVIEW" {
 				t.Fatal("redesign froze without fresh review")
 			}
-			id, input = d.action("engine.qa.review")
+			id, input = d.action("engine.qa.review.rationale")
 			approved = approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved})
 			d.drive()

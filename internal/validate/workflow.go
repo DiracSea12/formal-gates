@@ -1260,8 +1260,8 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 			if err != nil {
 				return err
 			}
-			if len(selected) == 0 || len(selected) == len(candidates) {
-				return fmt.Errorf("custom route must select a non-empty proper subset; use full for the complete list")
+			if len(selected) == 0 {
+				return fmt.Errorf("custom route must select at least one gate")
 			}
 		}
 		if err := requireExplicitGuaranteeForQASelection(*state, selected); err != nil {

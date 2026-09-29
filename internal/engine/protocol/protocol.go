@@ -21,10 +21,11 @@
 //     与选项集落账），用户以 request ID + 当前 freshness token submit 决定；
 //     封闭 kind 集合中不存在自由 USER_* 直写。
 //
-// 边界：SpawnReceipt/worker result/Ask/Operator/HostAction receipt/
-// lifecycle event 的统一接纳与失败分类路由不在本包内核内；reset/abort
-// 等控制决定只落账、不执行控制。全部写入经 persistence 的四段协议落盘
-// （信封/摘要/CAS/指纹），不改公开 CLI 面。
+// SpawnReceipt、worker result、用户决定、lifecycle 与 HostAction receipt
+// 共用本包的接纳、失败路由和事务收尾。恢复与终止消费原 attempt 和外部
+// effect 事实；不支持的主动控制在写入前拒绝。全部状态写入经 persistence
+// 的信封、摘要、CAS 与指纹校验落盘。
+
 package protocol
 
 import (
@@ -217,14 +218,16 @@ type PendingAsk struct {
 	Resolved       bool   `json:"resolved"`
 }
 
-// RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。
+// RecordedDecision preserves the user decision and its typed action.
 type RecordedDecision struct {
-	RequestID string           `json:"requestId"`
-	Control   ControlKind      `json:"control"`
-	Step      authoring.StepID `json:"step,omitempty"`
-	Choice    AskOptionID      `json:"choice"`
-	EventID   string           `json:"eventId"`
-	Revision  uint64           `json:"revision"`
+	Review     *ReviewDecisionPayload `json:"review,omitempty"`
+	Validation *ValidationDecision    `json:"validation,omitempty"`
+	RequestID  string                 `json:"requestId"`
+	Control    ControlKind            `json:"control"`
+	Step       authoring.StepID       `json:"step,omitempty"`
+	Choice     AskOptionID            `json:"choice"`
+	EventID    string                 `json:"eventId"`
+	Revision   uint64                 `json:"revision"`
 }
 
 // EventRecord 是事件台账的单条记录：accepted 事件的 payload digest 与
@@ -255,14 +258,15 @@ type SpawnReceipt struct {
 // 暂存复用同一形态）。Review 非空时是审查派发的语义证据：随结果接纳交
 // review 内核记账，并随回执字节一并参与幂等/冲突判定。
 type WorkerResult struct {
-	Validation    *ValidationResult      `json:"validation,omitempty"`
-	ActionID      string                 `json:"actionId"`
-	Provider      string                 `json:"provider"`
-	Outcome       string                 `json:"outcome"`
-	PayloadDigest string                 `json:"payloadDigest"`
-	FailureClass  authoring.FailureClass `json:"failureClass,omitempty"`
-	Review        *ReviewResultEvidence  `json:"review,omitempty"`
-	Digest        string                 `json:"digest"`
+	InterruptionReason string                 `json:"interruptionReason,omitempty"`
+	Validation         *ValidationResult      `json:"validation,omitempty"`
+	ActionID           string                 `json:"actionId"`
+	Provider           string                 `json:"provider"`
+	Outcome            string                 `json:"outcome"`
+	PayloadDigest      string                 `json:"payloadDigest"`
+	FailureClass       authoring.FailureClass `json:"failureClass,omitempty"`
+	Review             *ReviewResultEvidence  `json:"review,omitempty"`
+	Digest             string                 `json:"digest"`
 }
 
 // WorkerResultHistory retains all distinct received result evidence for a
@@ -314,23 +318,28 @@ type ObsoleteAction struct {
 	Plan       PlanIdentity    `json:"plan"`
 }
 
-// RecoveryRecord 是一次恢复路由的 durable 记录。它只记录 engine 已经
-// 机械决定的事实，不冒充宿主动作或用户授权已经完成。
+// RecoveryRecord retains the recovery route and its original interruption evidence.
+// It does not establish completion of a host effect or user authorization.
+// RequestID binds a RecoverAttempt duty; failure-admission records have no request.
 type RecoveryRecord struct {
-	ActionID         string                 `json:"actionId"`
-	Task             runtime.TaskKey        `json:"task,omitempty"`
-	AttemptID        string                 `json:"attemptId"`
-	Class            authoring.FailureClass `json:"class,omitempty"`
-	Action           RecoveryAction         `json:"action"`
-	RequestID        string                 `json:"requestId,omitempty"`
-	Detail           string                 `json:"detail"`
-	LifecycleMatches int                    `json:"lifecycleMatches,omitempty"`
-	Revision         uint64                 `json:"revision"`
+	// InterruptionReason is the host/worker's exact cause evidence; Detail is
+	// the engine's routing explanation. An empty cause remains unknown.
+	InterruptionReason string                 `json:"interruptionReason,omitempty"`
+	ActionID           string                 `json:"actionId"`
+	Task               runtime.TaskKey        `json:"task,omitempty"`
+	AttemptID          string                 `json:"attemptId"`
+	Class              authoring.FailureClass `json:"class,omitempty"`
+	Action             RecoveryAction         `json:"action"`
+	RequestID          string                 `json:"requestId,omitempty"`
+	Detail             string                 `json:"detail"`
+	LifecycleMatches   int                    `json:"lifecycleMatches,omitempty"`
+	Revision           uint64                 `json:"revision"`
 }
 
 // ReconciledEffect 记录 UNKNOWN 本地副作用已由外部事实满足后的结算。
 // 结算只提交结果，不再次执行原动作。
 type ReconciledEffect struct {
+	UnknownReceipt    *HostActionReceipt    `json:"unknownReceipt,omitempty"`
 	ActionID          string                `json:"actionId"`
 	Operation         HostActionOperation   `json:"operation"`
 	AdapterOperation  authoring.OperationID `json:"adapterOperation,omitempty"`
@@ -372,10 +381,11 @@ func (o HostActionOperation) Valid() bool {
 // AttemptID 把宿主动作绑定到当前 durable Attempt；Identity 是宿主 lifecycle
 // identity，不允许宿主通过任意参数对象改写目标。
 type AgentHostAction struct {
-	WorkerActionID string `json:"workerActionId"`
-	AttemptID      string `json:"attemptId"`
-	Identity       string `json:"identity"`
-	Reason         string `json:"reason,omitempty"`
+	Input          *ValidationInput `json:"input,omitempty"`
+	WorkerActionID string           `json:"workerActionId"`
+	AttemptID      string           `json:"attemptId"`
+	Identity       string           `json:"identity"`
+	Reason         string           `json:"reason,omitempty"`
 }
 
 // AdapterHostAction 是 EXECUTE_ADAPTER_OPERATION 的唯一 payload。Schema
@@ -457,6 +467,7 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	BaseSnapshot     string                      `json:"baseSnapshot,omitempty"`
 	Validation       *Validation                 `json:"validation,omitempty"`
 	DispatchBindings map[string]WorkBinding      `json:"dispatchBindings,omitempty"`
 	EndedAttempts    map[runtime.TaskKey]Attempt `json:"endedAttempts,omitempty"`
@@ -490,16 +501,15 @@ type State struct {
 	//（暂存删除、重试记账、terminalize、intent 清算）挂起至此，屏障解
 	// 除事务的收尾单点按既定规则统一执行。
 	HeldFailureRoutes []string `json:"heldFailureRoutes,omitempty"`
-	// HeldHostSettles 记录屏障期内 EXECUTED host action 回执的 actionID：
-	// 回执已落账，intent 清算与 frontier settle 挂起至此，解除事务统一
-	// 执行。
+	// HeldHostSettles holds completed host action IDs until transaction settlement.
+	// Their receipts are durable facts; a requirement barrier defers settlement.
 	HeldHostSettles []string `json:"heldHostSettles,omitempty"`
 	// FrontierSettleHeld 标记屏障期内有决定/回执的 frontier settle 被挂
 	// 起：解除事务统一补 settle。
 	FrontierSettleHeld bool `json:"frontierSettleHeld,omitempty"`
-	// routingReleasedCapacity 是当前提交事务的瞬态事实（非导出＝不入账
-	// 本）：失败路由/FAIL 结果经终态化释放了派发容量，事务收尾单点读
-	// 取即复位，据此执行容量补位。
+	// routingReleasedCapacity 是当前提交事务的瞬态补位标记（不入账）：
+	// 失败路由/终态化释放容量，或 host 固定执行范围使等待任务可派。
+	// 事务收尾单点读取即复位。
 	routingReleasedCapacity bool
 	// SpawnReceipts 按 actionID 落账宿主回执（声明签发态）。
 	SpawnReceipts map[string]SpawnReceipt `json:"spawnReceipts"`

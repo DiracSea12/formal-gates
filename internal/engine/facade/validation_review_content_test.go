@@ -80,6 +80,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 				identity := fmt.Sprintf("candidate-%d", len(trees)+1)
 				trees[identity] = tree
 				evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: fmt.Sprintf("sha256:%x", sum), Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+				evidence.GateView = gateReviewView(params)
 				if params.Stage == "QA_ARTIFACT" && tree["app.go"] != trees[params.Base]["app.go"] {
 					t.Fatal("production bytes changed")
 				}
@@ -93,8 +94,8 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 				d.submit(event)
 				d.drive()
 			}
-			id, input := d.action("engine.development")
-			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "input validation", Build: []string{"go build passed"}, Tests: []string{"input rejection passed"}}})
+			id, input := d.action("engine.development.batch")
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation", Build: []string{"go build passed"}, Tests: []string{"input rejection passed"}}})
 			materialize()
 			materialize()
 			id, input = d.action("engine.qa.design")
@@ -105,7 +106,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 			materialize()
-			id, input = d.action("engine.qa.review")
+			id, input = d.action("engine.qa.review.rationale")
 			oldCandidate := input.Binding.Candidate
 			r := approvedReview(m)
 			r.SetStatus = coverage.StatusFail
@@ -120,12 +121,12 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			id, input = d.action("engine.qa.design")
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "Changed shared setup in app_test.go used by both tests"}})
 			materialize()
-			id, input = d.action("engine.qa.review")
+			id, input = d.action("engine.qa.review.rationale")
 			if (trees[oldCandidate]["app_test.go"] == trees[input.Binding.Candidate]["app_test.go"]) == changed || trees[oldCandidate]["app.go"] != trees[input.Binding.Candidate]["app.go"] {
 				t.Fatal("fixture did not isolate a real test-only shared-helper content change")
 			}
 			t.Logf("test content before=%q after=%q", trees[oldCandidate]["app_test.go"], trees[input.Binding.Candidate]["app_test.go"])
-			t.Logf("old candidate=%s new=%s inheritable=%v modified=%v", oldCandidate, input.Binding.Candidate, input.InheritableCases, d.run.Validation.Sets[coverage.ReviewWhitebox].Paths)
+			t.Logf("old candidate=%s new=%s inheritable=%v modified=%v", oldCandidate, input.Binding.Candidate, input.InheritableReviews, d.run.Validation.Sets[coverage.ReviewWhitebox].Paths)
 			r = approvedReview(m)
 			r.CaseDecisions[1].Inherited = true
 			if !changed {
@@ -142,7 +143,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 					t.Fatal("changed test implementation inherited stale approval")
 				}
 				d.drive()
-				id, input = d.action("engine.qa.review")
+				id, input = d.action("engine.qa.review.rationale")
 				fresh := approvedReview(m)
 				fresh.SetStatus = coverage.StatusFail
 				fresh.SourceDecisions[0].Status = coverage.StatusFail

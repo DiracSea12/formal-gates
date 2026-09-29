@@ -95,7 +95,7 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 		{name: "unregistered operation", operation: "op.not.registered", params: map[string]any{}, code: protocol.CodeOperationNotRegistered},
 		{name: "free command params", operation: "op.fan.transport", params: "rm -rf delivery", code: protocol.CodeFreeCommandForm},
 		{name: "undeclared parameter", operation: "op.fan.transport", params: map[string]any{"command": "echo bypass"}, code: protocol.CodeOperationSchemaInvalid},
-		{name: "wrong parameter type", operation: "op.fan.transport", params: map[string]any{"target": 42}, code: protocol.CodeOperationSchemaInvalid},
+		{name: "wrong parameter type", operation: "op.fan.transport", params: map[string]any{"stage": 42}, code: protocol.CodeOperationSchemaInvalid},
 	}
 	for _, tc := range invalidIntents {
 		t.Run(tc.name, func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 
 	intent, revision, err := fixture.Engine.ExecuteHostAction(
 		"op.fan.transport",
-		map[string]any{"target": "protocol-fixture", "retries": 2},
+		map[string]any{"stage": "protocol-fixture", "generation": 2},
 		fingerprint,
 	)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 	if got, ok := afterIntent.State.PendingHostActions[intent.ActionID]; !ok ||
 		got.ActionID != intent.ActionID || got.Operation != intent.Operation || got.PayloadDigest != intent.PayloadDigest ||
 		got.Resume != nil || got.Terminate != nil || got.Adapter == nil || got.Adapter.Operation != intent.Adapter.Operation ||
-		got.Adapter.Params["target"] != "protocol-fixture" || got.Adapter.Params["retries"] != float64(2) {
+		got.Adapter.Params["stage"] != "protocol-fixture" || got.Adapter.Params["generation"] != float64(2) {
 		t.Fatalf("pending HostAction = %+v present=%v, want durable adapter intent %+v", got, ok, intent)
 	}
 
@@ -138,9 +138,9 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 		protocol.HostActionStatusExecuted,
 		"",
 		map[string]any{
-			"identity":          "protocol-host",
-			"observationDigest": "sha256:observed",
-			"undeclared":        true,
+			"identity":   "protocol-host",
+			"digest":     "sha256:observed",
+			"undeclared": true,
 		},
 	)
 	if err != nil {
@@ -157,8 +157,8 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 	validCorrelation := "receipt-correlation-exact"
 	validStatus := protocol.HostActionStatusExecuted
 	wantEvidence := map[string]any{
-		"identity":          "receipt-evidence-identity",
-		"observationDigest": "sha256:receipt-evidence",
+		"identity": "receipt-evidence-identity",
+		"digest":   "sha256:receipt-evidence",
 	}
 	validReceipt, err := protocol.NewAdapterHostActionReceiptEvent(
 		"protocol-host-schema-valid",
@@ -340,11 +340,11 @@ func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) 
 		WorkflowDefinitionVersion: summary.WorkflowDefinitionVersion,
 		DefinitionDigest:          summary.DefinitionDigest, PackageDigest: summary.PackageDigest,
 	}
-	if gotEnvelope != wantEnvelope || summary.Next.Kind != decision.KindComplete || summary.Status != "COMPLETE" {
+	if gotEnvelope != wantEnvelope || summary.Next.Kind != decision.KindComplete || summary.Status != "ABORTED" {
 		t.Fatalf("terminal identity/status = envelope %+v next %s status %s", gotEnvelope, summary.Next.Kind, summary.Status)
 	}
 	request, err := protocol.NewRequestEvent(
-		"terminal-request", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+		"terminal-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) 
 		t.Fatalf("request digest: %v", err)
 	}
 	decisionEvent, err := protocol.NewDecideEvent(
-		"terminal-decision", "terminal-request", summary.LastRequestReceipt.FreshnessToken, "confirm")
+		"terminal-decision", "terminal-request", summary.LastRequestReceipt.FreshnessToken, "abort")
 	if err != nil {
 		t.Fatalf("NewDecideEvent: %v", err)
 	}

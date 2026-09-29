@@ -124,7 +124,7 @@ func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operat
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Handler != "engine.candidate") {
+		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate") {
 			continue
 		}
 		return step.Header.ID

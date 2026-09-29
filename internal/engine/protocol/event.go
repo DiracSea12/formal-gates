@@ -188,13 +188,14 @@ const (
 // 结果上携带，RUNTIME_ERROR/FAIL 的审查结果是普通失败结果、不建
 // candidate。
 type WorkerResultPayload struct {
-	Validation    *ValidationResult
-	ActionID      string
-	Provider      string
-	Outcome       string
-	PayloadDigest string
-	FailureClass  authoring.FailureClass
-	Review        *ReviewResultEvidence
+	InterruptionReason string
+	Validation         *ValidationResult
+	ActionID           string
+	Provider           string
+	Outcome            string
+	PayloadDigest      string
+	FailureClass       authoring.FailureClass
+	Review             *ReviewResultEvidence
 }
 
 // ReviewResultEvidence 是审查结果的完整语义证据：绑定动作、派发身份、
@@ -202,6 +203,7 @@ type WorkerResultPayload struct {
 // Operator 八项核实记录。只有 PASS/FAIL 是可接纳的语义状态；身份与
 // 摘要由 review 内核在接纳时派生。
 type ReviewResultEvidence struct {
+	GranularityReview   *GranularityReview          `json:"granularityReview,omitempty"`
 	Action              review.Action               `json:"action"`
 	DispatchID          string                      `json:"dispatchId"`
 	RequirementRevision string                      `json:"requirementRevision"`
@@ -242,13 +244,16 @@ type TopologyDecision struct {
 	Parallel   string   `json:"parallel,omitempty"`
 }
 
-// RouteDecision 是 SELECT_ROUTE 的显式门列表决定：full 携带完整候选
-// 全集（Selected 必须为空），custom 携带非空真子集。门目录发现不在
-// 协议层——全集与子集都由 payload 显式给出，引擎只做集合约束校验。
+// RouteDecision 是 SELECT_ROUTE 的显式门列表决定：候选列表不得含合并验证
+// （合并验证只在拆分运行中自动附加）；full 携带完整候选全集且必含内建黑盒
+// 与白盒 QA（Selected 必须为空），custom 携带非空、逐项属于候选列表的选
+// 择（可选全集）。门目录发现不在协议层——全集与选择都由 payload 显式给
+// 出，引擎只做集合约束校验。
 type RouteDecision struct {
-	Mode     string   `json:"mode"`
-	Gates    []string `json:"gates"`
-	Selected []string `json:"selected,omitempty"`
+	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`
+	Mode            string                       `json:"mode"`
+	Gates           []string                     `json:"gates"`
+	Selected        []string                     `json:"selected,omitempty"`
 }
 
 // RequirementDecisionPackage binds the revision, impact preview and each
@@ -662,6 +667,9 @@ func (e Event) Validate() error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "non-FAILED spawn receipt cannot carry a failure class"}
 		}
 	case KindWorkerResult:
+		if e.Result.InterruptionReason != "" && e.Result.Outcome != OutcomeRuntimeError {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "interruption reason requires a runtime error"}
+		}
 		if strings.TrimSpace(e.Result.ActionID) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "worker result action id is empty"}
 		}
@@ -828,13 +836,14 @@ type spawnReceiptEventWire struct {
 }
 
 type workerResultEventWire struct {
-	Validation    *ValidationResult     `json:"validation,omitempty"`
-	ActionID      string                `json:"actionId"`
-	Provider      string                `json:"provider"`
-	Outcome       string                `json:"outcome"`
-	PayloadDigest string                `json:"payloadDigest"`
-	FailureClass  string                `json:"failureClass,omitempty"`
-	Review        *ReviewResultEvidence `json:"review,omitempty"`
+	InterruptionReason string                `json:"interruptionReason,omitempty"`
+	Validation         *ValidationResult     `json:"validation,omitempty"`
+	ActionID           string                `json:"actionId"`
+	Provider           string                `json:"provider"`
+	Outcome            string                `json:"outcome"`
+	PayloadDigest      string                `json:"payloadDigest"`
+	FailureClass       string                `json:"failureClass,omitempty"`
+	Review             *ReviewResultEvidence `json:"review,omitempty"`
 }
 
 type operatorObsWire struct {
@@ -898,7 +907,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Result = &workerResultEventWire{
 			ActionID: e.Result.ActionID, Provider: e.Result.Provider,
 			Outcome: e.Result.Outcome, PayloadDigest: e.Result.PayloadDigest,
-			FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
+			InterruptionReason: e.Result.InterruptionReason, FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
 		}
 	}
 	if e.Observation != nil {

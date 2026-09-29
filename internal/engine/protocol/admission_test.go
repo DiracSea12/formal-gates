@@ -789,6 +789,7 @@ func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
 	if receipt := engine.LoadMustSucceed(t).State.SpawnReceipts[reviewAction]; receipt.Status != SpawnStatusUnknown {
 		t.Fatalf("failed side-effect receipt = %+v", receipt)
 	}
+	observedStoppedWorker(t, engine, reviewAction)
 	recovery, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine, CauseKnown: true}, fp)
 	if err != nil || recovery.Action != RecoveryNewAttempt {
 		t.Fatalf("retry replacement = %+v err=%v", recovery, err)
@@ -899,14 +900,14 @@ func TestOperatorObservationAdmits(t *testing.T) {
 	}
 
 	// Ask 决定关账生效（衔接 1b）。
-	if _, err := engine.Submit(resetRequest(t, "req-reset-9"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-9"), fp); err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	token, err := engine.Freshness("req-reset-9")
+	token, err := engine.Freshness("req-abort-9")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
-	decide, err := NewDecideEvent("evt-decide-9", "req-reset-9", token, "proceed")
+	decide, err := NewDecideEvent("evt-decide-9", "req-abort-9", token, "cancel")
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
@@ -914,7 +915,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 		t.Fatalf("decide: %v", err)
 	}
 	final := engine.LoadMustSucceed(t)
-	if ask, pending := final.State.PendingAsks["req-reset-9"]; !pending || !ask.Resolved || final.State.Decisions["req-reset-9"].Choice != "proceed" {
+	if ask, pending := final.State.PendingAsks["req-abort-9"]; !pending || !ask.Resolved || final.State.Decisions["req-abort-9"].Choice != "cancel" {
 		t.Fatalf("ask not closed: ask=%+v pending=%v decisions=%+v", ask, pending, final.State.Decisions)
 	}
 

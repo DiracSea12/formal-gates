@@ -8,13 +8,11 @@ import (
 // ValidateScenarios requires each acceptance point to have an explicit normal
 // failure, misuse or boundary exercise. Reviewers judge whether it is sufficient.
 func ValidateScenarios(manifest AcceptanceManifest) error {
+	if err := ValidateRecordedScenarios(manifest); err != nil {
+		return err
+	}
 	scenarios := map[string]string{}
 	for _, c := range manifest.Cases {
-		switch c.Scenario {
-		case "SUCCESS", "FAILURE", "MISUSE", "BOUNDARY":
-		default:
-			return fmt.Errorf("case %s needs a scenario (SUCCESS, FAILURE, MISUSE, BOUNDARY)", c.CaseID)
-		}
 		scenarios[c.CaseID] = c.Scenario
 	}
 	covered := map[string]bool{}
@@ -26,6 +24,19 @@ func ValidateScenarios(manifest AcceptanceManifest) error {
 	for _, point := range manifest.Points {
 		if !covered[point.PointID] {
 			return fmt.Errorf("point %s has no failure, misuse or boundary case", point.PointID)
+		}
+	}
+	return nil
+}
+
+// ValidateRecordedScenarios validates the cases recorded so far without declaring
+// the design's scenario coverage complete.
+func ValidateRecordedScenarios(manifest AcceptanceManifest) error {
+	for _, c := range manifest.Cases {
+		switch c.Scenario {
+		case "SUCCESS", "FAILURE", "MISUSE", "BOUNDARY":
+		default:
+			return fmt.Errorf("case %s needs a scenario (SUCCESS, FAILURE, MISUSE, BOUNDARY)", c.CaseID)
 		}
 	}
 	return nil

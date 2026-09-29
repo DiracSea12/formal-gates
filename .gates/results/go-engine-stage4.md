@@ -1,5 +1,11 @@
 # go-engine 阶段 4 记录：Git 非分片 regular 全流程（轻装）
 
+## 当前交付状态（2026-09-28）
+
+119 份累计内容于 `2026-09-28T14:56:10.161075Z` 冻结，主代理逐份核对摘要一致。当前为**完整验收未通过，独立全审继续，源码保持冻结**。真正 `fork_turns:none` 的审查者已从原始规范独立审累计代码与相交流程，另发现full路线可漏白盒QA却被接纳，主代理复制公开反例独立复现。完整engine/cmd执行另因一条旧提示名称测试断言失败；真实两处置路径已独立通过，原失败仍保留。实施者仅只读核路线的全集、选择、发现与相交入口设计，尚未开始下一次源码返工。不能以此前套件通过或已修问题宣称交付完成。
+
+当前证据索引：`/tmp/validation-root-acceptance/current-verification.md`；内容身份：`/tmp/validation-independent-freeze/frozen-hashes.json`。当前仍是 Git no-split regular typed 交付，不表示完整阶段 4、真实 provider 或安装切换完成。
+
 基线＝K5 冻结态 `dedb3fa`（G4 十审 PASS）。机主 2026-09-23 新窗口令"继续接手开发"（交接
 `.harness/HANDOFF-K5-STAGE4.md` 指向阶段 4；对齐提问未获答，按既定红线取轻装、五单元框
 架 R1–R5 开工，机主可随时纠偏）。批次：R1 审查系列迁移（拆 R1a 纯内核＋R1b 接线）→ R2
@@ -536,3 +542,158 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 - 最终 `go vet ./internal/engine/... ./internal/cli/...` 退出0（`/tmp/validation-root-oracle/vet.log`）；变更Go文件格式与git diff --check通过。
 
 本次验收完成的是三个已证实缺陷及其直接状态/证据衔接，包含本轮引入回归的修复。没有执行全仓go test ./...、race、真实provider/模型/宿主canary、guard/cost bridge、数据库迁移、完整Seal或安装切换，不为这些范围背书；不把“检查范围未发现违规”扩大为代码永久无缺陷。无push。
+
+### 完整当前阶段复核与语义返工验收
+
+用户质疑上段验收范围过窄。主代理重新派发零上下文完整审查，比较 `7eb32e8..3f15055`；结论为两项 P1、两项 P2，主代理全部经公开 facade 路径独立复现。上段局部验收不能证明整个当前阶段达标。完整初审原文与证据：`/tmp/typed-delivery-review.p8FKPb/report.md`、`root-recheck.log`、`root-control-recheck.log`、`root-barrier-recheck.log`。
+
+返工前引用 AGENTS 的单一事实归属、正常/恢复共用接纳、四类计数分离及 start-readiness 的最简既有归属者判据。实施代理先提交 `/tmp/validation-semantics-design.md`，主代理核查后实施。修后独立审查范围固定为 `7eb32e8` 到最终工作树，包含本次全部未提交修改；没有缩为最后返修 diff。仍是已授权的 Git 非拆分 regular typed QA/validation 交付。
+
+| 已证实问题 | 最终处理与证据 |
+|---|---|
+| P1：PASS 门附 P2，完成修复仍再生成同一问题返修 | PASS/FAIL 共用原 Repair.Problems/Evidence 完成依据，ResultAction 携 repair 身份；保留原 findings/history。原独立反例及另一门 PASS/DISPOSED、AFFECTED→FULL 对照通过。 |
+| P1：需求变化屏障内裁决观察仍结算旧 wave、增加 Counted | typed 观察只保存原事实；case 重开/冻结、绑定投影与 wave 结算集中于既有 advanceValidation，签发前也经同一路径。两重屏障、取消后一次恢复、确认 redo、建议和 inventory 观察均有实际对照。 |
+| P2：累计审查历史误作连续 FAIL 额度 | 从 ReviewHistory 尾部派生连续失败；历史长度只用于身份；额外授权绑定当前语义审查，签发后由原 dispatch/carry 保留权利。成功重置、第二段失败、已授权审查需求续用及重复事件通过。 |
+| P2：DISPOSE 被迟到 retry 结果撤销 | 精确 TaskKey 下调用既有 retireAction，清理重试资格；staged/receipted/terminal/runtime-error 四种交付顺序均留原结果审计，目标保持 DISPOSED，其他并行 QA 可完成。 |
+| P2：多对多 checkpoint 只完成部分 edge，却隐藏整个待完成 case | 完整交付审查新增发现，主代理独立复现；PendingCases 直接按冻结 whitelist 的 ReviewKind/SourceID/PointID/CaseID 与原 records 对账。独立反例及三段提交、PASS/FAIL、重复事件和 Open 对照通过。 |
+
+过程记录：将冻结移至统一推进后曾出现 refill 早于收尾而重复签发 review，已改为 refill 在签发前调用同一 advanceValidation，并验证实际 FROZEN/history，而非只检查没有 Ask。实施中曾新增“已退役 action 首个迟到 spawn receipt 接纳为 OBSOLETE”，核需求后确认非必要，完整撤回生产分支及旧 route 测试期望变更。最终协议仍以 UNKNOWN_ACTION 拒绝该 receipt 且零写入，迟到 WorkerResult 独立入原 ObsoleteResults。主代理探针据既有协议修正便捷 helper 假设，保留并加强处置、原载荷唯一审计、不重派断言。另一个跨候选工具/环境继承候选经需求及参考实现核对撤回：3.5c 新绑定规则只针对同次进度，不能扩大为跨轮新限制；未为它修改生产。
+
+| 用户代码要求 | 主代理核验及完整独立审查结论 |
+|---|---|
+| 正确性、质量 | 五项有修前公开复现与修后执行；无剩余范围内 P0/P1/P2。 |
+| 需求完整性 | 独立审查按 15 组核对整个当前交付，从 inventory、逐项审批、候选、并行、wave、问题归并、返修、重试、需求/route 控制至恢复，非仅五项反例。 |
+| 简洁性 | 复用原 State、ReviewHistory、Repair、DispatchBindings、Attempt、whitelist/records；未新增持久字段、完成账本、框架或依赖。 |
+| 耦合、事实归属 | 观察与推进分离；授权在签发处判定，接纳核原 dispatch/carry；退役复用已有执行生命周期。 |
+| 可维护性 | 正常、配对、重开/恢复沿同一接纳与推进路径；删除接纳阶段重复上限算法和观察内嵌业务推进。 |
+| 可读性、注释 | 业务行为命名，无修复编号或测试来源；重试默认值注释已改为与当前 agent 默认两次的实现一致。 |
+| 优雅、设计一致性 | 保持既有 typed events、事务、TaskKey/Ask/receipt，不引平行机制；无必要的回执公开扩展已撤回。 |
+| 不当硬编码 | 无 case ID、探针名、候选 ID 特判；三次连续失败来自需求。 |
+| 窄逻辑、过拟合 | PASS/FAIL 同类语义合并；全部 typed 观察入口、真实交付顺序、连续成功/失败及多对多映射均核对，未只在复现行兜底。 |
+| 过度设计、防御、抽象 | 不增加通用框架、历史完成缓存或未来平台加固；撤回未获需求支持的跨轮限制候选。 |
+| 测试期望与夹具 | 原 route 测试最终未改；测试实际 FROZEN/历史、精确绑定、原始持久记录、重复事件与副作用；不把模拟 adapter 说成真实 provider 验证。 |
+| 测试不污染业务 | 新测试均在 facade 的行为测试文件；生产不依赖 fixture、测试目录、临时路径或专用开关。 |
+| 被替代路径删除 | 删除 qaReviewLimit、以历史总数判失败额度、freezeReviewed、观察直接 settle/reopen/freeze/carry、按任一 CaseID 记录删除 pending 的错误路径；没有并存的替代账本。 |
+
+最终证据与实际边界：
+
+- 主代理最终 12 组公开入口独立探针全部 PASS，10.263s：`/tmp/validation-semantics-oracle/root-delivery.log`；组合 overlay 和测试源位于同目录。新增 checkpoint 独立修前/修后为 `root-checkpoint-before.log`、`root-checkpoint-final.log`。最后仅修改重试默认值注释，不改变执行结果。
+- 原四项最终 facade/protocol 全包 PASS，80.140s/62.283s：`/tmp/validation-semantics-final-packages.log`。执行早于最后 checkpoint 投影改动，后者追加已核的定向独立反例及分段 PASS/FAIL 回归，不冒称最终全仓运行。
+- 实施报告 `/tmp/validation-semantics-delivery.md` 逐项列正常/重复/并行/恢复覆盖、原始日志、中间版本与范围限制。
+- 零上下文完整交付审查 `/tmp/typed-validation-acceptance-fyp_ugmq/acceptance-report.md` 最终 PASS，含 15 组需求与全部工程要求逐项证据。其相关 facade/protocol/coverage/definition/decision/encoder/acceptance/testkit/parser 执行及最后 checkpoint 独立复核均保存原始日志；已撤回候选的需求依据单列。
+- 主代理核对审查记录中 33 个文件与工作树身份一致；收尾注释由实施代理修改并交审查者核对。`git diff --check` 通过。
+
+当前验收覆盖整个已授权 typed 阶段。真实 provider/promotion、guard/cost bridge、真实宿主 canary、完整 Seal、数据库迁移、split/retained merge 属后续交付；本次未执行全仓/race/安装切换或真实模型调用。工作区保留修改，未 commit/push。
+
+### 验收结论撤回与重新返工
+
+2026-09-28：撤回上一节“无剩余范围内 P0/P1/P2”和完整当前阶段验收通过的结论。后续独立审查发现两个正常公开路径缺陷，主代理已独立复现：未决的 VALIDATION_DETAIL_DISPOSITION 仍允许返修结果接纳和候选推进；需求确认指定 gate REDO、QA CARRY 时，同一候选的旧 gate PASS 抵消 REDO，QA 则被重复派发。此前测试通过和审查者 PASS 均不足以支持该验收结论。
+
+审查原证据位于 `/tmp/validation-review.1mKxjm/`。主代理另建公开入口对照，覆盖两次连续需求变更中的全部 QA/gate REDO/CARRY 选择及重开，原始失败日志为 `/tmp/validation-root-acceptance/before.log`。返修进行中的处置交付顺序结果保存为同目录 `disposition-during.log`，不冒充修前基线或最终验收。
+
+重新返工以 `7eb32e8` 到当前工作树的完整已授权 typed QA/validation 交付及全部工程准则为边界；上述反例仅为已证实失败，不能代替完整需求核对。实施由独立子代理承担；完成后另派零上下文审查，主代理独立核实失败、修后结果及逐项工程证据。此记录不表示返工已完成，不启动正式流程，不改变后续阶段的排除范围。
+
+首次返工后已冻结源码，主代理启动 `independent_delivery_review`，实际参数 `fork_turns: none`。派发仅含完整当前需求、工程标准、累积比较范围与结果契约，未提供历史问题、修复说明、通过预期或指定关注点。主代理同时独立执行 engine 全包和 validate 回归，全部退出 0；记录在 `/tmp/validation-root-acceptance/frozen-regression-before-review-rework.log`，其中 validate 为 477.636s。该快照仍有以下公开路径失败，因此不予验收：
+
+- 独立审查提出、主代理另写探针复现：全部逐项 PASS、省略可选诊断字段 SetStatus 后仍重复派审。`review-status-before.log`。
+- 主代理自行设计跨流程探针复现：AFFECTED 中有继承结果，追加门后进行需求确认，QA CARRY / gate REDO 被投影成 FULL，未全量执行即 COMPLETE。`scope-before.log`。
+- 独立审查提出、主代理核公开前置并独立执行复现：REVIEW_READY 在途时授权 THAW、修改并审查新用例，旧候选回执被拒且永久阻塞新候选。`thaw-before.log`。
+
+上述日志和主代理探针均在 `/tmp/validation-root-acceptance/`。实施代理已亲跑三条失败，当前只读分析事实归属、scope 语义和过时副作用接纳；审查尚未收尾，源码仍冻结。绿测没有覆盖并消除这些反例，不能替代需求与代码工程验收。
+
+
+后续完整审查还确认合法 gate-only custom 路线会卡住；主代理独立执行完整完成路径复现，并在白盒相同 manifest/路径但测试实现已换的场景独立复现旧产物误用。连同 optional review verdict、AFFECTED carry、候选过时回执，实施已按原事实归属统一返工。设计/实施报告 `/tmp/validation-rework-design.md`、`/tmp/validation-rework-delivery.md` 保留原始失败与本次变更。
+
+第二次冻结后实际新建 `final_independent_delivery_review`，`fork_turns: none`，未向其提供旧问题、修复结论、探针或旧报告，范围仍 `7eb32e8` 到整个工作树及全部工程准则。主代理 22 组独立 oracle、engine 全包、CLI、vet 均通过；但该新审查提出 master §6.3.5 pre-wave 三 FAIL 后精确 waiver/skip 的控制入口缺失，主代理读原文和 handler 并独立执行公开路径再次证实。日志 `/tmp/validation-root-acceptance/independent-control-surface-before.log`。此时继续不予验收，完整审查仍在进行，实施代理先只读核完整用户处置义务、事实归属和最简设计；没有宣称第二次冻结已经完成。汇总工作报告 `/tmp/validation-root-acceptance/acceptance-report.md` 明确标为不予验收。
+
+### 完整控制返工冻结后的再次独立审查：仍拒收
+
+- 新审查者 `whole_delivery_zero_context_review` 以 `fork_turns: none` 创建，审查 `7eb32e8..HEAD` 加整个工作树及未跟踪开发者测试。只提供完整需求、工程标准和当前交付边界，不提供旧发现或通过结论。
+- 主代理冻结正文核对 83 文件；合并独立 oracle 29 组通过（203.852s），engine 全包及 CLI 通过，vet/gofmt/diff-check 通过。这些不是完整交付通过的证据。
+- 新审查发现且主代理已独立复现四项失败：在途白盒旧审查可冻结新测试产物；candidate 的 BLOCKED_BUG 终止失败后自动重发；业务 spawn 瞬态耗尽无 typed 处置 Ask；testkit failure-routing 手造 WAIT 报告而实际 Plan 为 ASK。
+- 当前不予验收；正确性、需求完整性、跨接缝责任归属和夹具/报告诚实仍有已证实违反。源码保持冻结，实施代理只读完善统一根因方案，完整复核和最终报告后返工。未 commit/push，未真实模型/provider调用，未启动新 formal-gates run。
+- 原始日志、逐项工程表与所有中间状态记录：`/tmp/validation-root-acceptance/acceptance-report.md`。新审查证据目录：`/tmp/whole-delivery-review.iJzlbk/`。
+
+
+### 后续返工及当前完整审查：尚未验收
+
+主代理持续拒收有范围内功能/工程缺口的版本。第四次冻结的新零上下文审查确认首次review范围、candidate完成补位、逐case白盒内容复用证据表达及终态提前发布四项P2；全部经主代理公开路径独立复现，再按现有归属统一返工。终态保留Drive唯一清理写归属、公共发布共用summary判据；candidate效果统一走原held清算；review复用原历史/receipt，没有新增平行账本。详细原始日志及设计在 `/tmp/validation-root-acceptance/acceptance-report.md`、`/tmp/validation-rework-design.md`。
+
+第五次冻结核对91文件正文不变。主代理40组组合oracle、engine/CLI相关整包、真实Ask载荷及TestRef绑定对照通过，vet/格式检查通过。新审查 `whole_scope_independent_audit` 用 `fork_turns: none` 创建，范围仍为完整 `7eb32e8..HEAD` 加整个工作树/开发者测试，未提供旧问题或通过预期。该审查仍在进行；确认source-point关系被遗漏却生成白名单已由主代理独立执行复现，尚未修复，因此不能宣称当前交付通过。跨轮继承额外工具/环境限制候选因缺乏需求依据撤回，没有为它添加代码。
+
+用户再次强调禁止粗暴叠补丁。实施者当前仅只读分析完整映射链与执行子集规则；源码保持冻结，待完整审查及最简方案核定后继续返工。原执行证据：`/tmp/validation-root-acceptance/publication-frozen-oracles.log`、`publication-frozen-packages.log`、`audit-candidates-before.log`；新审查证据目录 `/tmp/independent-delivery-audit.J4dJ2f`。未commit/push，未调用真实provider/模型，未启动正式流程。
+
+### 当前94文件冻结复核：未通过，继续按业务责任归属返工
+
+确认关系与AFFECTED宿主固定执行子集已由实施代理按原owner修复，旧point-only校验与孤立继承查询删除。主代理核对94份正文不变、17文件完整差异，engine/CLI整包与vet/格式/diff-check均通过。42组独立oracle首跑有1组缺新host确认前置，临时副本只补显式业务步骤、断言不变后该组通过；首跑失败及重跑分别保留，不能改写成一次全绿。
+
+新完整审查`fresh_complete_delivery_audit`实际`fork_turns:none`，没有收到旧问题/结论，当前又确认跨流程P2：开发有限重试耗尽后的未完成责任漏出RequirementWork，用户无法逐项CARRY/REDO；需求修订自动新开开发，完成后旧RETRY Ask仍残留。主代理独立复现`/tmp/validation-root-acceptance/exhausted-requirement-before.log`；另自建正常/重开×CARRY/REDO完整合同oracle，修前四分支都因责任漏项失败，`exhausted-work-contract-before.log`。旧Ask可decline规避，未夸为完全不可继续。
+
+当前正确性、需求完整性、业务责任与attempt生命周期接缝仍未验收。实施代理仅获只读根因定案授权：原EndedAttempts/WorkDecisions应共同保有未完成业务责任；续用不重置额度与身份，重做关闭旧控制归属且保原始证据；不能只清提示或按generation打补丁。完整审查仍收尾，源码保持冻结。汇总及原始执行路径见`/tmp/validation-root-acceptance/acceptance-report.md`，新审查证据`/tmp/complete-delivery-audit.aeAjiF/`。未commit/push、未调用真实provider/模型、未新启正式流程。
+
+
+### 当前95文件冻结复核：未通过，继续完整合同返工
+
+需求修订中的耗尽欠责已按原Attempt/WorkDecision/role归属统一修订，未新增控制字段；删除分散retry筛法、重复Queued退休和手工progress路径。主代理完成14文件最终差异复核，44组组合oracle、engine全包/CLI和vet退出0，日志保存在`/tmp/validation-root-acceptance/obligation-frozen-*`。
+
+新代理`whole_contract_fresh_audit`以`fork_turns: none`启动，仅获原始完整需求、代码准则和累计交付边界；新全审发现终态最后相同事件清理后无法replay，以及缺少确认的granularity/Batch计划仍派开发。主代理独立复制公开入口probe亲跑，两项均失败（`terminal-plan-before.log`）。当前未通过，完整审查继续，实施代理先只读核统一归属及最简设计。绿测与前序根因修复不替代遗漏需求；尚未重新宣称交付完成。
+
+### 当前持续返工：未冻结，未通过
+
+完整原合同复核后，实施正在接通确认的 Batch/Subtask 计划及共同责任查询、原生恢复输入、稳定事件收据与终态重放、QA 逐项理由和 R11 累计设计。主代理已独立复现、核最简设计并分别验证正常/需求变更/重开/原生恢复等相关边界；中途绿测不构成完整交付结论。完整过程证据、失败与setup纠正分别记录于 `/tmp/validation-root-acceptance/current-verification.md`。
+
+最新尚未解决的问题：多个历史 repair 明确 REDO 后分别完成、实际物化，单值 RepairSource 只记录最后 P2，使之前新完成的 P1 也被错误免去门审。实施者自建公开流程，主代理独立执行确认失败：`/tmp/validation-root-acceptance/mixed-repair-source-before.log`。批准从数据归属修正：以候选已有的完整 SourceTasks 引用集合替换冻结波的单值字段；原 Results 持证据、WorkDecisions 持授权，全部消费者按实际新增来源共同核继承/计数/影响范围，删除单值及旧推断，不新增平行账本。尚未宣称修复完成。
+
+新独立审查者 `independent_contract_audit` 实际以 `fork_turns: none` 创建，仅收到原始需求、完整累积交付边界及所有工程准则，未收到旧问题/探针/通过结论。已独立整理35组业务要求与12项工程核验，尚未读取变化中的实现；冻结后开始完整审查。正确性、需求完整性、简洁性、耦合、可维护/可读性、设计一致、硬编码/窄逻辑/过拟合、过度设计/防御/抽象、测试隔离及不叠补丁均仍是验收条件，未以局部测试通过替代逐项核验。
+
+工作区保留返工，未commit/push、未调用真实模型/provider，未启动新正式流程。
+
+### 107文件冻结后的完整独立审查：未通过
+
+`independent_contract_audit`已完成35业务组和12工程项，报告`/tmp/independent-contract-audit.xPBk54/final-audit.md`。实际以零历史上下文启动，原始需求先独立成图，源码冻结后全审；未给旧finding或通过预期。主代理全文核读并亲跑四条正常公开反例，确认：接受后裁决无法按版本纠正（P1）；已解决problem的SAME_AS重复返修（P2）；未变shared审批禁止继承（P2）；纯P2生产修复对其他已过gate缺影响判定仍自动carry（P2）。另完整回归发现acceptance注册夹具和15个whitebox测试前置/版本预期未完成合同迁移（P2）。
+
+主代理62组独立组合oracle PASS221.946s、每事件完整收据/零写对照PASS28.889s、vet通过；engine+CLI完整回归exit1，facade419.323s/protocol151.171s等通过不能覆盖失败项。各项主代理原始复现与正确/错误fixture修法的反向验证保存在`/tmp/validation-root-acceptance/current-verification.md`，没有把编译、局部绿测或临时overlay当作仓库修复完成。
+
+当前E1正确性/适用需求完整、E3跨接缝设计完整、E4问题解决事实归属、E7无窄逻辑、E9测试期望与执行、E11契约回归均未通过。完整报告（包括全部工程未过项与未验证边界）已交实施者，只读设计统一finding/problem/repair生命周期、shared审批投影与独立gate影响事实，并按真实协议迁移夹具；不准只放宽一个状态条件、无证据carry或恢复测试专用业务旁路。源码维持冻结，待最简方案核准再返工；尚未验收完成。
+
+
+## 115 文件冻结独立验收：仍未通过，统一返工待实施
+
+冻结时间2026-09-28T13:13:11.338340Z。主代理核对115文件正文/内容身份无差异；完整范围仍为7eb32e8至HEAD及全部工作树/未跟踪修改和相交流程。新的零历史审查者实际fork_turns=none，只读原始需求与准则建图，未接收历史问题列表；完整地图仍在收口，不提前报告全审通过。
+
+主代理已独立验证三条业务根因：
+
+1. 完整逐用例EXECUTED_FAIL被强制要求额外severity finding，否则形成REJECTED_INVALID_RESULT/RUNTIME_ERROR并机械重试。3.5b AC081明确QA逐例FAIL不是severity finding；无finding合法QA失败同时缺少核实→canonical problem→repair输入通道。原公开四对照日志 `/tmp/validation-root-acceptance/execution-fail-current/before.log` FAIL5.988s。
+2. 用户明确DISMISS已签repair后，当前义务已取消但波次停ADJUDICATING；暂存结果保审计，决定后迟到结果却被拒为invalid且缺obsolete原文。共同settlement的issued早退混淆签发输入冻结与当前义务关闭。Root三交付顺序原oracle及新四对照均复现；`current-semantic-regressions/late-disposition-before.log` FAIL5.421s。
+3. 已完成纯P2修复被需求逐项REDO后，旧最终FULL的Counted被当前Results/repairWork重新解释而由false变true；新候选本身仍false，提前消耗共享轮数。`current-semantic-regressions/before.log`两类最小回归组合FAIL14.058s并保存完整State，`final-wave-facts.json`为摘要。
+
+执行事实：
+
+- 53份加法overlay、72个顶层独立组整体退出1，245.974s；两条真实回归及一个Root旧白盒收据夹具缺新必需GateView。后者单独复制补实际测试工件的归属证明、保所有原断言后PASS6.010s，原整套FAIL不能改记PASS。
+- `go test ./internal/engine/... ./cmd/... -count=1`退出1：facade399.798s，仓库原DISMISS及mixed-severity多repair redo测试失败；protocol130.214s、acceptance38.413s、whitebox37.454s、testkit37.635s及其余包通过。
+- CLI完整PASS176.955s；相交validate用例PASS60.565s；重复Acceptance/原State完整内容4组PASS24.740s；vet及diff--check退出0。它们不替代上述失败或工程逐项验收。
+
+返工方案先核原文与既有实现，方向已核定：原ValidationFinding具名原始证据变体引用实际QA execution失败，复用同一History/Problem/Repair；不伪造P0–P3、不另建target裁决账本。共同settlement区分签发输入、现存授权义务、已发生计数，删除全函数issued早退及COMPLETE反复改写历史的混同路径。全部正常/重复/并行/held/recovery相交入口须同行核查，原断言不削弱；仍待完整新审查收齐后统一解冻实施。
+
+工程结论当前不能通过：正确性与完整性存在上列明确失败；设计一致性、跨流程义务处理、历史事实维护、四类计数要求尚未满足。简洁性、耦合、可维护/可读、硬编码/窄逻辑/过拟合、过度设计/防御/抽象、替代删除、测试真实性和业务隔离仍须对最终返修内容逐项复核，不由已绿测试代签。真实provider/host、regular installed CLI、guard/cost bridge、Seal/install、DB、split/retained/merge的既定后续状态不变，当前typed失败不能借这些边界豁免。没有commit、push、真实模型/网络调用或新formal run。
+
+## 路线语义收口与全交付独立审查处置（2026-09-25）
+
+机主令确认其他 AI 多轮处理后的状态再继续。核对结论：交付冻结于 119 文件身份，两项未决（facade 旧提示断言、full 缺白盒仍被接纳），完整独立验收未收口；/tmp 证据止于 09-28 23:14，其后无活动。
+
+主代理独立复现两项未决并核实规格出处（sliced-runs master-requirements 需求9、formal-flow:124-127）后派发实施代理：
+
+1. validateRouteDecision 补全约束：full 必含 blackbox+whitebox 内建 QA；merge 不进正常选择（拒绝零写）。实施代理对缺 QA 的 full 夹具采"转 custom、义务集不变"策略（偏离合同字面、保真测试主题；单一 helper routeDecisionForGates，回退路径明确）。
+2. facade 旧提示断言迁移到 VALIDATION_DETAIL_DISPOSITION 共同入口（生产无改动；两 remedy 全旅程断言保留）。
+3. 独立审查 F2：删除 custom"真子集"规格外限制（规格只要求非空、⊆候选、不含 merge），引擎层与 legacy validate 层（workflow.go 同源规则）贯穿同修；1 元候选表无合法路线的死端消除。
+
+主代理独立复核：自建路线 oracle 双向通过（完备 full 接纳且 SelectedGates 恰为双 QA＋门；缺白盒/含 merge 载荷在 Submit 边界拒绝零写、pending 请求存活可再决定）；engine+cmd 全量 exit 0（facade 318s）；cli 91.6s、validate 421.6s；vet/gofmt/diff-check 通过。
+
+零上下文全交付独立审查（未接收任何旧发现）：15 组工程核验 13 组全过，关键不变量（门输入隔离、处置后迟到结果、AFFECTED 强制重跑、路线删减、retry 一次性、canonical 制品）均未击穿。发现处置：
+
+- F1（P2）SELECT_ROUTE 候选门全集由 DECIDE 载荷自带，引擎无"已发现门"权威。主代理裁定为已定架构边界的残余：pending Ask 的 Options 同样来自客户端 REQUEST_CONTROL（engine.go 落账处），门目录发现按 event.go 契约在协议层外，绑定清单只增加两份客户端载荷间的一致性检查而非独立权威。留机主裁决是否在宿主/provider 接入时以 catalog digest 交叉核验。
+- F2 已修（上第 3 项）。F3 记账滞后由本条补齐。F4 promotion 未装（豁免范围、如实投影）、F5 AFFECTED 后无条件最终 FULL（过严非违规）、F6 RedoRoute 清空 SelectedGates 走用户授权通道（与 validateRouteChange"不可移除"意图存在张力，特此明示）——作边界/观察项入账。审查报告 /tmp/independent-full-delivery-review-20260925/report.md。
+
+预存问题入账：qastructure tagged 套件 TestStableHelpAndDocsRejectFutureCommandTokens 因 .dogfood/closeout-20260915-0844 快照内 venv 符号链接失败（09-15 起存在、与本轮无关），快照卫生留待处置。
+
+边界不变：未 push、未真实模型/provider/宿主 canary、Seal/安装切换/DB/split-merge 仍属后续交付。

@@ -1,6 +1,10 @@
 package protocol
 
-import "formal-gates/internal/engine/coverage"
+import (
+	"fmt"
+
+	"formal-gates/internal/engine/coverage"
+)
 
 // CoverageInventory registers only confirmed solution obligations and links.
 // Product REQ/AC facts are always derived from the confirmed requirement text.
@@ -78,6 +82,27 @@ func (s *State) validateConfirmedCoverage() error {
 	for id := range seen {
 		if !covered[id] {
 			return validationError("confirmed point has no source: " + id)
+		}
+	}
+	return nil
+}
+
+// validateCoverageRelations checks the selected modes' union against the
+// confirmed obligations; each mode may provide only part of that coverage.
+func (s *State) validateCoverageRelations() error {
+	if s.Validation == nil || s.RouteMode == "custom" && len(s.validationKinds()) == 0 {
+		return nil
+	}
+	covered := map[SourcePoint]bool{}
+	for _, manifest := range s.coverageContract(nil).Manifests {
+		for _, edge := range manifest.Edges {
+			covered[SourcePoint{edge.SourceID, edge.PointID}] = true
+		}
+	}
+	_, links := s.coveragePoints()
+	for _, link := range links {
+		if !covered[link] {
+			return fmt.Errorf("confirmed relation %s/%s has no case in selected manifests", link.SourceID, link.PointID)
 		}
 	}
 	return nil

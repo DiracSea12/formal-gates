@@ -41,13 +41,21 @@ func (s *State) endInvalidAttempt(actionID, status, reason string, record Worker
 	s.RejectedResults[actionID] = RejectedResult{ActionID: actionID, AttemptID: attempt.ID, Task: pending.Task, Status: status, Reason: reason, Payload: record}
 	attempt.Attempts++
 	attempt.RetryExhausted = attempt.Attempts >= attempt.MaxAttempts
+	s.endBusinessAttempt(pending, attempt, status+": "+reason, nextRevision)
+	return nil
+}
+
+// endBusinessAttempt owns finite execution completion; wire evidence stays in
+// its receipt or worker-result owner. The caller accounts for this failure once.
+func (s *State) endBusinessAttempt(pending PendingAction, attempt Attempt, reason string, nextRevision uint64) {
+	actionID := pending.ActionID
 	s.retireAction(actionID, "", reason)
 	s.EndedAttempts[pending.Task] = attempt
 	// Tasks projects the scheduling position of the current execution. The old
 	// execution is immutable in EndedAttempts/ObsoleteActions before re-queuing.
 	s.Tasks[pending.Task] = runtime.TaskQueued
 	s.routingReleasedCapacity = true
-	s.RecoveryRecords = append(s.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: attempt.ID, Class: authoring.FailureTransientEngine, Action: RecoveryWait, Detail: fmt.Sprintf("%s: %s; attempts %d/%d", status, reason, attempt.Attempts, attempt.MaxAttempts), Revision: nextRevision})
+	s.RecoveryRecords = append(s.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: attempt.ID, Class: authoring.FailureTransientEngine, Action: RecoveryWait, InterruptionReason: s.RejectedResults[actionID].Payload.InterruptionReason, Detail: fmt.Sprintf("%s; attempts %d/%d", reason, attempt.Attempts, attempt.MaxAttempts), Revision: nextRevision})
 	if wave := s.currentValidationWave(); wave != nil && wave.Status == "COLLECTING" {
 		for _, target := range wave.Targets {
 			if target.Task == pending.Task {
@@ -58,18 +66,40 @@ func (s *State) endInvalidAttempt(actionID, status, reason string, record Worker
 			}
 		}
 	}
-	return nil
+}
+
+// endedWorkCurrent separates an ended execution from its unfinished duty.
+// Task replacement and each business owner decide applicability; temporary
+// barriers and dispatch capacity do not terminate the duty.
+func (s *State) endedWorkCurrent(a Attempt, cd *compiler.CompiledDefinition) bool {
+	if !a.Business || s.ObsoleteActions[a.ActionID].ReplacedBy != "" {
+		return false
+	}
+	if result, ok := s.Results[a.ActionID]; ok && result.Outcome == OutcomePass {
+		return false
+	}
+	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
+		for _, choice := range s.RequirementRevisions[i].WorkDecisions {
+			if choice.Work.Task == a.Task && choice.Disposition == RequirementWorkRedo {
+				return false
+			}
+		}
+	}
+	if series, ok := s.ReviewSeries.Series(s.PendingReviewSeries(a.Task, cd)); ok && s.issuedRevisionOf(a.ActionID) < series.FreshFloor {
+		return false
+	}
+	if a.Work == nil {
+		return true
+	}
+	if !s.prewaveWorkCurrent(*a.Work, cd) || s.caseSetWaiver(s.validationMode(a.Task)) != "" {
+		return false
+	}
+	return s.validationWorkOwed(*a.Work, cd)
 }
 
 func (s *State) projectRetryTasks(view *decision.State, cd *compiler.CompiledDefinition) {
 	for key, attempt := range s.EndedAttempts {
-		if !attempt.Business || attempt.AwaitingResult {
-			continue
-		}
-		if result, ok := s.Results[attempt.ActionID]; ok && result.Outcome == OutcomePass {
-			continue
-		}
-		if wave := s.currentValidationWave(); attempt.Work != nil && attempt.Work.WaveID != "" && (wave == nil || wave.ID != attempt.Work.WaveID || wave.Status != "COLLECTING" && s.validationRole(key, cd) != "engine.repair") {
+		if !s.endedWorkCurrent(attempt, cd) || attempt.AwaitingResult || s.validationDispatchBlocked(attempt.ActionID) {
 			continue
 		}
 		blocked := decision.WaitReason("")

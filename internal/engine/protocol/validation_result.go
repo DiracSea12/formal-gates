@@ -46,13 +46,16 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 		if err := s.validateConfirmedCoverage(); err != nil {
 			return err
 		}
-		s.carryCaseBindings()
 		return nil
 	}
 	if s.Validation == nil {
 		return validationError("confirmed requirement inventory is missing")
 	}
 	switch o.Kind {
+	case "GATE_IMPACT":
+		return s.acceptGateImpact(p.Subject, o)
+	case "EXECUTION_SCOPE":
+		return s.acceptExecutionScope(p.Subject, o)
 	case "SUGGESTION":
 		set := s.Validation.Sets[o.Mode]
 		if set == nil {
@@ -80,20 +83,18 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 			if o.Decision != "ACCEPT" {
 				return validationError("only accepted suggestions can revise cases")
 			}
-			if err := reopenCases(set, o.AffectedCases); err != nil {
+			if err := recordAffectedCases(set, o.AffectedCases); err != nil {
 				return err
 			}
-		} else {
-			freezeReviewed(set)
 		}
 	case "ADJUDICATE":
-		return e.adjudicateValidation(s, p.Subject, o.Findings)
+		return e.adjudicateValidation(s, p.Subject, o.Findings, nextRevision)
 	default:
 		return validationError("unknown validation observation kind")
 	}
 	return nil
 }
-func reopenCases(set *CaseSet, ids []string) error {
+func recordAffectedCases(set *CaseSet, ids []string) error {
 	for _, id := range ids {
 		found := false
 		for _, c := range set.Manifest.Cases {
@@ -105,7 +106,19 @@ func reopenCases(set *CaseSet, ids []string) error {
 			return validationError("affected case is not in the manifest: " + id)
 		}
 	}
-	set.reopen(ids)
+	for _, id := range ids {
+		if !slices.Contains(set.AffectedCases, id) {
+			set.AffectedCases = append(set.AffectedCases, id)
+		}
+	}
+	return nil
+}
+
+func reopenCases(set *CaseSet, ids []string) error {
+	if err := recordAffectedCases(set, ids); err != nil {
+		return err
+	}
+	set.reopen(nil)
 	return nil
 }
 
@@ -121,20 +134,31 @@ func (set *CaseSet) reopen(ids []string) {
 	set.Candidate = ""
 }
 
-func freezeReviewed(set *CaseSet) {
-	if (set.Status != "REVIEW" && set.Status != "SUGGESTIONS") || set.Review == nil || set.Review.SetStatus != coverage.StatusPass {
-		return
+func advanceCaseReview(set *CaseSet) bool {
+	if (set.Status != "REVIEW" && set.Status != "SUGGESTIONS") || set.Review == nil || set.Review.Verdict() != coverage.StatusPass {
+		return false
 	}
+	if len(set.AffectedCases) > 0 {
+		set.reopen(nil)
+		return true
+	}
+	status := "FROZEN"
 	for _, sg := range set.Suggestions {
 		if sg.Decision == "" || sg.Reason == "" {
-			set.Status = "SUGGESTIONS"
-			return
+			status = "SUGGESTIONS"
+			break
 		}
 	}
-	set.Status = "FROZEN"
+	changed := set.Status != status
+	set.Status = status
+	return changed
 }
 
 func (s *State) validateManifest(mode coverage.ReviewKind, m coverage.AcceptanceManifest) error {
+	return s.validateDesignManifest(mode, m, true)
+}
+
+func (s *State) validateDesignManifest(mode coverage.ReviewKind, m coverage.AcceptanceManifest, complete bool) error {
 	contract := s.coverageContract(nil)
 	want := coverage.ManifestBinding{SourceBinding: contract.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
 	if m.Binding != want {
@@ -181,8 +205,13 @@ func (s *State) validateManifest(mode coverage.ReviewKind, m coverage.Acceptance
 	if err := contract.Validate(); err != nil {
 		return validationReject(err)
 	}
-	if err := coverage.ValidateScenarios(m); err != nil {
+	if err := coverage.ValidateRecordedScenarios(m); err != nil {
 		return validationReject(err)
+	}
+	if complete {
+		if err := coverage.ValidateScenarios(m); err != nil {
+			return validationReject(err)
+		}
 	}
 	return nil
 }
@@ -258,8 +287,11 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
+	if p.Checkpoint && role != "engine.qa.design" && role != "engine.qa.execution" {
+		return validationError("only QA design and execution can record a checkpoint")
+	}
 	mode := s.validationMode(b.Task)
-	if record.Outcome != OutcomePass {
+	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution" && p.Checkpoint && p.Execution != nil) {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
@@ -269,36 +301,68 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		}
 	}
 	switch role {
-	case "engine.development", "engine.repair":
+	case "engine.development.batch", "engine.repair":
 		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" || len(p.Development.Build) == 0 || len(p.Development.Tests) == 0 {
 			return validationError("development requires declared paths, summary, build and test evidence")
 		}
-		if role == "engine.development" {
-			s.Validation.Development = p.Development
-		} else {
-			w := s.currentValidationWave()
-			if w == nil || w.ID != b.WaveID || w.Repair == nil || w.Repair.Task != b.Task || w.Repair.Evidence != nil {
-				return validationError("repair is not the current unique obligation")
+		if role == "engine.development.batch" {
+			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
+			if !ok {
+				return validationError("development task is not a confirmed batch")
 			}
+			if err := validateDevelopmentCompletion(batch, p.Development); err != nil {
+				return err
+			}
+			if s.Validation.DevelopmentSnapshot != "" {
+				s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""
+				s.Validation.Candidate = nil
+				if set := s.Validation.Sets[coverage.ReviewWhitebox]; set != nil {
+					set.reopen(nil)
+				}
+			}
+		} else {
+			work := s.nextRepairWork()
+			if work == nil || work.wave.ID != b.WaveID || work.task != b.Task {
+				return validationError("repair result is not the current authorized repair obligation")
+			}
+			w := work.wave
 			if err := s.validateRepairEvidence(*p.Development, w.Repair.PureP2); err != nil {
 				return err
 			}
-			w.Repair.Evidence = p.Development
-			w.Repair.ResultAction = record.ActionID
+			if work.task == w.Repair.Task {
+				w.Repair.Evidence = p.Development
+				w.Repair.ResultAction = record.ActionID
+				w.Status = "REPAIR"
+			}
+			s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""
+			s.Validation.Candidate = nil
 		}
 	case "engine.qa.design":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}
-		if err := s.validateManifest(mode, *p.Manifest); err != nil {
+		if err := s.validateDesignManifest(mode, *p.Manifest, !p.Checkpoint); err != nil {
 			return err
 		}
 		old := s.Validation.Sets[mode]
-		set := &CaseSet{Manifest: *p.Manifest, Status: "REVIEW", Version: digestOfCanonical(p.Manifest)}
+		set := &CaseSet{DesignTask: b.Task, Manifest: *p.Manifest, Status: "REVIEW", Version: digestOfCanonical(p.Manifest)}
+		if p.Checkpoint {
+			set.Status = "DRAFT"
+		}
 		if p.Development != nil {
 			set.Paths = slices.Clone(p.Development.Paths)
 		}
 		if old != nil {
+			for _, prior := range old.ReviewHistory {
+				for _, approved := range prior.Review.CaseDecisions {
+					if p.Checkpoint && approved.Status == coverage.StatusPass && slices.ContainsFunc(old.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == approved.ID }) && !slices.ContainsFunc(set.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == approved.ID }) {
+						return validationError("design must retain previously approved case responsibility: " + approved.ID)
+					}
+				}
+			}
+			if p.Checkpoint && old.Status == "THAWED" {
+				set.Status = "THAWED"
+			}
 			set.AffectedCases = old.AffectedCases
 			set.Suggestions = old.Suggestions
 			set.ReviewHistory = old.ReviewHistory
@@ -307,19 +371,16 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 			}
 		}
 		s.Validation.Sets[mode] = set
-	case "engine.qa.review":
+	case "engine.qa.review.rationale":
 		set := s.Validation.Sets[mode]
 		if set == nil || count != 1 || p.Review == nil || set.Status != "REVIEW" || b.CaseVersion != set.Version {
 			return validationError("review does not bind an open case-set version")
 		}
-		if err := s.validateReviewInheritance(set, *p.Review); err != nil {
+		if err := s.validateReviewPolicy(set, *p.Review); err != nil {
 			return err
 		}
 		if err := s.validateCaseReview(mode, *p.Review); err != nil {
 			return err
-		}
-		if len(set.ReviewHistory) >= s.qaReviewLimit(mode) {
-			return validationError("QA review semantic rounds exhausted")
 		}
 		for i := range p.Suggestions {
 			sg := p.Suggestions[i]
@@ -338,14 +399,12 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		rawManifest := set.Manifest
 		rawManifest.Binding = record.Validation.Review.Binding
 		set.ReviewHistory = append(set.ReviewHistory, CaseReviewEvidence{Candidate: record.Validation.Binding.Candidate, Manifest: rawManifest, Review: *record.Validation.Review})
-		if p.Review.SetStatus == coverage.StatusFail {
+		if p.Review.Verdict() == coverage.StatusFail {
 			set.reopen(nil)
-		} else {
-			freezeReviewed(set)
 		}
 	case "engine.qa.execution", "engine.gate":
 		w := s.validationWave(b.WaveID)
-		if w == nil || w.Status != "COLLECTING" {
+		if w == nil || w.Status != "COLLECTING" && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
 			return validationError("validation wave is not collecting this result")
 		}
 		target := w.Targets[b.Task.String()]
@@ -384,9 +443,18 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 				Index        int
 				Raw          review.Finding
 			}{w.ID, b.Task.String(), i, raw})
-			s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), Raw: raw}
+			s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), Raw: &raw}
 		}
-		if target.Status == "FAIL" && len(p.Findings) == 0 {
+		if role == "engine.qa.execution" {
+			for _, row := range target.Execution.Records {
+				if row.Result != coverage.ExecutedFail {
+					continue
+				}
+				failure := ExecutionFailure{ResultAction: record.ActionID, CaseID: row.CaseID}
+				id := digestOfCanonical(failure)
+				s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), ExecutionFailure: &failure}
+			}
+		} else if target.Status == "FAIL" && len(p.Findings) == 0 {
 			return validationError("a failed validation target needs a finding for Operator adjudication")
 		}
 	default:
@@ -460,13 +528,15 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 	if report.Binding.Scope != wave.Scope {
 		return validationError("execution scope differs from the frozen wave")
 	}
-	expected := []string{}
-	for _, edge := range w.Entries {
-		if !slices.Contains(expected, edge.CaseID) {
-			expected = append(expected, edge.CaseID)
-		}
+	expected := executionCaseIDs(w)
+	required := requiredExecutionCases(wave, target, w)
+	if len(required) == 0 {
+		return validationError("execution has no fixed host scope")
 	}
-	slices.Sort(expected)
+	_, err = s.executionInheritance(wave, target.Mode, w, required, target.ScopeReason)
+	if err != nil {
+		return err
+	}
 	ids := slices.Clone(report.Binding.ExpectedCaseIDs)
 	slices.Sort(ids)
 	if !slices.Equal(ids, expected) {
@@ -512,11 +582,20 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 			return validationError("unfinished/skipped cases cannot supply completed evidence")
 		}
 		if r.Provenance == coverage.ProvenanceExecuted {
+			if !slices.Contains(required, r.CaseID) {
+				return validationError("executed case is outside the fixed host scope: " + r.CaseID)
+			}
 			if err := coverage.ValidateEvidence(r.CaseID, r.Procedure, r.Observation, r.Comparison); err != nil {
 				return validationReject(err)
 			}
-		} else if r.Provenance != coverage.ProvenanceInherited || !s.validInheritance(wave, target.Mode, r) {
-			return validationError("inheritance has no exact prior evidence or is affected")
+		} else {
+			if r.Provenance != coverage.ProvenanceInherited || r.Result != coverage.ExecutedPass || r.ReuseEvidence == "" || r.InheritedFromCandidate == "" || slices.Contains(required, r.CaseID) {
+				return validationError("inheritance is outside the fixed partition")
+			}
+			edge := coverage.WhitelistEntry{ReviewKind: r.ReviewKind, SourceID: r.SourceID, PointID: r.PointID, CaseID: r.CaseID}
+			if _, err := s.inheritedExecutionRecord(wave, target.Mode, edge, r.InheritedFromCandidate, r.ReuseEvidence); err != nil {
+				return err
+			}
 		}
 		rows[k] = r
 	}
@@ -546,39 +625,6 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 	target.Environment = environment
 	return nil
 }
-func (s *State) validInheritance(current *ValidationWave, mode coverage.ReviewKind, row coverage.ExecutionRecord) bool {
-	if row.Result != coverage.ExecutedPass || row.ReuseEvidence == "" || current.Scope != coverage.ScopeAffected {
-		return false
-	}
-	index := slices.IndexFunc(s.Validation.Waves, func(w ValidationWave) bool { return w.ID == current.ID })
-	next := current
-	for i := index - 1; i >= 0; i-- {
-		old := &s.Validation.Waves[i]
-		if old.RequirementRevision != current.RequirementRevision || old.Generation != current.Generation || !sameWaveCases(old, current, mode) {
-			return false
-		}
-		if old.Candidate != next.Candidate {
-			if old.Repair == nil || old.Repair.Evidence == nil || next.RepairSource != old.Repair.Task.String() || slices.Contains(old.Repair.Evidence.AffectedCases, row.CaseID) {
-				return false
-			}
-		}
-		if old.Candidate.Identity == row.InheritedFromCandidate {
-			for _, target := range old.Targets {
-				if target.Execution == nil || target.Mode != mode || target.Execution.Binding.Candidate != old.Candidate {
-					continue
-				}
-				for _, r := range target.Execution.Records {
-					if r.ReviewKind == mode && r.CaseID == row.CaseID && r.PointID == row.PointID && r.SourceID == row.SourceID && r.Result == coverage.ExecutedPass {
-						return true
-					}
-				}
-			}
-		}
-		next = old
-	}
-	return false
-}
-
 func sameWaveCases(a, b *ValidationWave, mode coverage.ReviewKind) bool {
 	if a.Versions[mode] == b.Versions[mode] {
 		return true
@@ -589,7 +635,8 @@ func sameWaveCases(a, b *ValidationWave, mode coverage.ReviewKind) bool {
 		}
 		for _, second := range b.Coverage.Manifests {
 			if second.Binding.ReviewKind == mode {
-				return digestOfCanonical(manifestAtRoute(first, second.Binding.RouteScope)) == digestOfCanonical(second)
+				first.Binding = second.Binding
+				return digestOfCanonical(first) == digestOfCanonical(second)
 			}
 		}
 	}

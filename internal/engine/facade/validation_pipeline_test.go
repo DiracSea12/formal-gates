@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -88,7 +89,7 @@ func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) 
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := Start(StartOptions{Capacity: 16, Root: t.TempDir(), Request: StartRequest{RunID: "validation", Route: "regular", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, r, err := Start(StartOptions{Capacity: 16, Root: t.TempDir(), Request: StartRequest{RunID: "validation", Route: "regular", BaseSnapshot: "native-run-base", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +101,27 @@ func newValidationDriver(t *testing.T, gates ...string) *validationDriver {
 	return configuredValidationDriver(t, nil, gates...)
 }
 func configuredValidationDriver(t *testing.T, inventory *protocol.CoverageInventory, gates ...string) *validationDriver {
+	return plannedValidationDriver(t, inventory, commandPlan(), gates...)
+}
+
+// routeDecisionForGates builds the route fixture from the obligation gates a
+// test asks for: the candidate list always carries both built-in QA modes, and
+// a list that selects both keeps the spec-complete full route while any other
+// combination pins those exact obligations as a custom selection.
+func routeDecisionForGates(gates []string) protocol.RouteDecision {
+	candidates := []string{"blackbox", "whitebox"}
+	for _, gate := range gates {
+		if !slices.Contains(candidates, gate) {
+			candidates = append(candidates, gate)
+		}
+	}
+	route := protocol.RouteDecision{Mode: "custom", Gates: candidates, Selected: gates}
+	if slices.Contains(gates, "blackbox") && slices.Contains(gates, "whitebox") && slices.Equal(gates, candidates) {
+		route = protocol.RouteDecision{Mode: "full", Gates: candidates}
+	}
+	return route
+}
+func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
 	t.Helper()
 	d := startValidationDriver(t, inventory)
 	revision := d.revision
@@ -114,7 +136,12 @@ func configuredValidationDriver(t *testing.T, inventory *protocol.CoverageInvent
 			t.Fatalf("missing %s dispatch: %+v", action, d.run)
 		}
 		d.receipt(id)
-		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: revision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"}})
+		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{GranularityReview: func() *protocol.GranularityReview {
+			if action == review.StartReadiness {
+				return plan
+			}
+			return nil
+		}(), Action: action, DispatchID: id, RequirementRevision: revision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +149,7 @@ func configuredValidationDriver(t *testing.T, inventory *protocol.CoverageInvent
 		d.drive()
 	}
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
-	d.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{Mode: "full", Gates: gates}})
+	d.confirmRoute(routeDecisionForGates(gates))
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
 	d.drive()
 	return d
@@ -143,6 +170,7 @@ func (d *validationDriver) materialize() {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
 			continue
 		}
+		assertCandidateStep(d.t, d, intent)
 		data, _ := json.Marshal(intent.Adapter.Params)
 		var p protocol.CandidateParameters
 		if err := json.Unmarshal(data, &p); err != nil {
@@ -150,6 +178,7 @@ func (d *validationDriver) materialize() {
 		}
 		identity := fmt.Sprintf("native-%d", d.seq)
 		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: "sha256:" + identity, Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
+		evidence.GateView = gateReviewView(p)
 		data, _ = json.Marshal(evidence)
 		fields := map[string]any{}
 		_ = json.Unmarshal(data, &fields)
@@ -159,6 +188,13 @@ func (d *validationDriver) materialize() {
 		}
 		d.submit(e)
 		d.drive()
+		snapshot, err := d.f.engine.Load()
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		if snapshot.State.HostActionReceipts[id].Step != intent.Step {
+			d.t.Fatal("candidate completion lost its original compiled step")
+		}
 		return
 	}
 	d.t.Fatalf("missing candidate intent: %+v", d.run)
@@ -180,7 +216,7 @@ func approvedReview(m coverage.AcceptanceManifest) coverage.ReviewResult {
 		r.PointDecisions = append(r.PointDecisions, coverage.ReviewDecision{ID: p.PointID, Status: coverage.StatusPass})
 	}
 	for _, c := range m.Cases {
-		r.CaseDecisions = append(r.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID, Status: coverage.StatusPass})
+		r.CaseDecisions = append(r.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID, Status: coverage.StatusPass, Reason: fmt.Sprintf("Public entry and parameters, setup order and environment support %s; procedure %v records its evidence; oracle %v directly verifies the declared case scope.", c.CaseID, c.Steps, c.Oracle)})
 	}
 	return r
 }
@@ -191,21 +227,21 @@ func (d *validationDriver) reviewReady() {
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
-	dev, di := d.action("engine.development")
+	dev, di := d.action("engine.development.batch")
 	design, qi := d.action("engine.qa.design")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
 	}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	reviewID, ri := d.action("engine.qa.review")
+	reviewID, ri := d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
 	d.business(reviewID, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 	d.drive()
 	if _, ok := d.run.ValidationInputs[dev]; !ok {
 		d.t.Fatal("QA review disturbed development")
 	}
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implemented input checks", Build: []string{"go build succeeded"}, Tests: []string{"input rejection test succeeded"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks", Build: []string{"go build succeeded"}, Tests: []string{"input rejection test succeeded"}}})
 	d.drive()
 	d.materialize()
 	d.materialize()
@@ -213,7 +249,14 @@ func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest
 func executionFor(input protocol.ValidationInput) coverage.ExecutionReport {
 	r := coverage.ExecutionReport{Binding: *input.Execution}
 	for _, edge := range input.Whitelist.Entries {
-		r.Records = append(r.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "executed app run with the case input", Observation: "recorded exit status and command output", Comparison: "exit status and output match the specified oracle"})
+		inherited := slices.IndexFunc(input.Inherited, func(row coverage.ExecutionRecord) bool {
+			return row.ReviewKind == edge.ReviewKind && row.SourceID == edge.SourceID && row.PointID == edge.PointID && row.CaseID == edge.CaseID
+		})
+		if inherited >= 0 {
+			r.Records = append(r.Records, input.Inherited[inherited])
+		} else {
+			r.Records = append(r.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "executed app run with the case input", Observation: "recorded exit status and command output", Comparison: "exit status and output match the specified oracle"})
+		}
 		if !slices.Contains(r.Binding.ActualCaseIDs, edge.CaseID) {
 			r.Binding.ActualCaseIDs = append(r.Binding.ActualCaseIDs, edge.CaseID)
 		}
@@ -282,8 +325,14 @@ func TestMissingReviewClosesFiniteAttemptsAndAllowsOneBoundExtra(t *testing.T) {
 			d.drive()
 		}
 	}
-	if len(d.run.PendingActions) != 0 || len(d.run.PendingAsks) != 0 {
+	if len(d.run.PendingActions) != 0 {
 		t.Fatal("extra attempt expanded after exhaustion")
+	}
+	ask := d.validationAsk("RETRY")
+	for _, option := range ask.Options {
+		if option.ID == "approve" {
+			t.Fatal("extra attempt authorization expanded after exhaustion")
+		}
 	}
 	for _, a := range d.run.EndedAttempts {
 		if a.Attempts != 3 || a.MaxAttempts != 3 || !a.RetryExhausted {
@@ -301,7 +350,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
 	design, qi := d.action("engine.qa.design")
-	dev, di := d.action("engine.development")
+	dev, di := d.action("engine.development.batch")
 	m := simpleManifest(qi)
 	m.Edges = nil
 	for _, link := range qi.SourcePoints {
@@ -311,10 +360,10 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	id, ri := d.action("engine.qa.review")
+	id, ri := d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implemented records", Build: []string{"build succeeded"}, Tests: []string{"record test passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented records", Build: []string{"build succeeded"}, Tests: []string{"record test passed"}}})
 	d.materialize()
 	d.materialize()
 	_, input := d.action("engine.qa.execution")
@@ -378,11 +427,11 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	id, input = d.action("engine.qa.review")
+	id, input = d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
-	id, input = d.action("engine.development")
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests", Build: []string{"build passed"}, Tests: []string{"baseline passed"}}})
+	id, input = d.action("engine.development.batch")
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests", Build: []string{"build passed"}, Tests: []string{"baseline passed"}}})
 	trees := map[string]map[string]string{}
 	materialize := func() (string, protocol.CandidateParameters) {
 		t.Helper()
@@ -426,6 +475,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		trees[identity] = tree
 		treeBytes, _ := json.Marshal(tree)
 		e := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(treeBytes)), Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
+		e.GateView = gateReviewView(p)
 		data, _ = json.Marshal(e)
 		values := map[string]any{}
 		_ = json.Unmarshal(data, &values)
@@ -447,7 +497,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	}
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go", "old_test.go"}}})
 	materialize()
-	id, input = d.action("engine.qa.review")
+	id, input = d.action("engine.qa.review.rationale")
 	r = approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
 	final, p := materialize()
@@ -457,19 +507,26 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	if _, exists := trees[final]["old_test.go"]; exists {
 		t.Fatal("reviewed deletion disappeared during assembly")
 	}
+	_, gate := d.gateAction("quality")
+	if p.ReviewBase != "native-run-base" || p.Base == p.ReviewBase || gate.Gate == nil || gate.Gate.Gate != "quality" || gate.Gate.BaseSnapshot != p.ReviewBase || gate.Gate.Candidate != d.run.Validation.Waves[0].Candidate || !reflect.DeepEqual(gate.Gate.TestOwnedPaths, []string{"app_test.go", "old_test.go"}) {
+		t.Fatalf("gate range lost native base, candidate, or explicit artifact ownership: %+v", gate.Gate)
+	}
+	if len(gate.Manifest.Cases) != 0 || len(gate.Completed) != 0 || gate.Whitelist != nil {
+		t.Fatal("gate received QA case content")
+	}
 	if len(d.run.Validation.Waves) != 1 || len(d.run.Validation.Waves[0].Targets) != 3 {
 		t.Fatalf("shared AC did not reach dual-QA validation: %+v", d.run.Validation.Waves)
 	}
 }
 
 func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
-	for _, handler := range []string{"engine.qa.review", "engine.qa.execution", "engine.gate"} {
+	for _, handler := range []string{"engine.qa.review.rationale", "engine.qa.execution", "engine.gate"} {
 		t.Run(handler, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			var action string
 			var input protocol.ValidationInput
 			var result protocol.ValidationResult
-			if handler == "engine.qa.review" {
+			if handler == "engine.qa.review.rationale" {
 				design, designed := d.action("engine.qa.design")
 				manifest := simpleManifest(designed)
 				d.business(design, protocol.ValidationResult{Binding: designed.Binding, Status: "PASS", Manifest: &manifest})
@@ -511,7 +568,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 			if accepted.Status != "ACCEPTED" || len(d.run.RejectedResults) != 0 {
 				t.Fatalf("carried result rejected: %+v %+v", accepted, d.run.RejectedResults)
 			}
-			if handler == "engine.qa.review" {
+			if handler == "engine.qa.review.rationale" {
 				set := d.run.Validation.Sets[coverage.ReviewBlackbox]
 				if set.Status != "FROZEN" || set.Review.Binding.RequirementRevision != revision {
 					t.Fatal("carried review did not fulfill current obligation")
@@ -604,4 +661,22 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 			t.Logf("resolved %s; current requirement=%s; repair resumed", choice, expected)
 		})
 	}
+}
+
+// The adapter fixture classifies the explicitly declared QA artifacts. It does
+// not infer ownership from path spelling or provide evidence in Submit/Drive.
+func gateReviewView(params protocol.CandidateParameters) *protocol.GateReviewView {
+	if params.Stage != "REVIEW_READY" {
+		return nil
+	}
+	view := &protocol.GateReviewView{TestOwnedPaths: []string{}}
+	for _, artifact := range params.QAArtifacts {
+		for _, path := range artifact.Paths {
+			if !slices.Contains(view.TestOwnedPaths, path) {
+				view.TestOwnedPaths = append(view.TestOwnedPaths, path)
+			}
+		}
+	}
+	slices.Sort(view.TestOwnedPaths)
+	return view
 }

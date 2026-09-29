@@ -29,7 +29,7 @@ func TestBarrierRejectsRecoveryAndReconciliationUntilTheAskResolves(t *testing.T
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -110,7 +110,7 @@ func hostAskStepsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 	must(err)
 	host, err := authoring.NewHostActionStep(header("fan.transport", "prep.parse"), io("prep.parse"), authoring.HostActionSpec{
 		Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-		Operation: opTransport, Schema: "schema.host.fan.transport", Timeout: 10 * time.Second,
+		Operation: opTransport, Schema: "schema.candidate.review-range", Timeout: 10 * time.Second,
 	})
 	must(err)
 	join, err := authoring.NewLocalStep(header("after.join", "gate.confirm", "fan.transport"),
@@ -123,22 +123,22 @@ func hostAskStepsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 }
 
 // TestBarrierHoldsSettlementsUntilTheAskResolves：EXECUTED 回执与
-// RESET/ABORT 决定在屏障期只落观察与决定事实——intent 清算、frontier
+// 取消终止决定在屏障期只落观察与决定事实——intent 清算、frontier
 // settle 与汇合步全部挂起，Ask 解除的同一事务统一收尾完成。
 func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
 	cd, reg := hostAskStepsFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	fp := fingerprintOf(t, engine)
 
-	// ABORT Ask 先建（绑定 gate.confirm），host intent 随后，最后立屏障。
-	abortAsk, err := NewRequestEvent("req-hold-abort", ControlAbort, AskOption{ID: "abort", Label: "终止"})
+	// 取消终止 Ask 先建（绑定 gate.confirm），host intent 随后，最后立屏障。
+	abortAsk, err := NewRequestEvent("req-hold-abort", ControlAbort, AskOption{ID: "cancel", Label: "取消终止"})
 	if err != nil {
 		t.Fatalf("abort ask event: %v", err)
 	}
 	if _, err := engine.Submit(abortAsk, fp); err != nil {
 		t.Fatalf("submit abort ask: %v", err)
 	}
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"target": "fan.slice"}, fp)
+	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -180,21 +180,21 @@ func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
 		t.Fatalf("no held-settlement trail: %+v", snap.State.RecoveryRecords)
 	}
 
-	// ABORT 决定（处置表放行）：决定落账，settle 挂起。
+	// 取消终止决定（处置表放行）：决定落账，settle 挂起。
 	token, err := engine.Freshness("req-hold-abort")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)
 	}
-	abort, err := NewDecideEvent("evt-hold-abort", "req-hold-abort", token, "abort")
+	cancel, err := NewDecideEvent("evt-hold-abort", "req-hold-abort", token, "cancel")
 	if err != nil {
-		t.Fatalf("abort decide event: %v", err)
+		t.Fatalf("cancel decide event: %v", err)
 	}
-	if _, err := engine.Submit(abort, fp); err != nil {
-		t.Fatalf("abort decide during the barrier: %v", err)
+	if _, err := engine.Submit(cancel, fp); err != nil {
+		t.Fatalf("cancel decide during the barrier: %v", err)
 	}
 	snap = engine.LoadMustSucceed(t)
 	if _, decided := snap.State.Decisions["req-hold-abort"]; !decided {
-		t.Fatal("the abort decision was not recorded")
+		t.Fatal("the cancel decision was not recorded")
 	}
 	if !snap.State.FrontierSettleHeld {
 		t.Fatal("the decide settle must be held while the barrier holds")

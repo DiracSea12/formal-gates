@@ -37,7 +37,7 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 		t.Fatalf("product review dispatch series = %q, want %s", product.ReviewSeries, review.ProductReview)
 	}
 	submitReviewResult(t, engine, "canonical-product-1", actions[0],
-		reviewEvidence(review.ProductReview, "canonical-product-1", "", "PASS", "clean", nil))
+		plannedReviewEvidence(review.ProductReview, "canonical-product-1", "", "PASS", "clean", nil))
 	snap := engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("canonical product ledger = %+v", series)
@@ -57,7 +57,7 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 		t.Fatalf("canonical readiness dispatch = %+v", readiness)
 	}
 	submitReviewResult(t, engine, "canonical-readiness-1", readinessAction,
-		reviewEvidence(review.StartReadiness, "canonical-readiness-1", "", "PASS", "ready to start", nil))
+		plannedReviewEvidence(review.StartReadiness, "canonical-readiness-1", "", "PASS", "ready to start", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("canonical readiness ledger = %+v", series)
@@ -78,9 +78,9 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 	}
 
 	// 路线选择读取双审门：full 绑定后进入 DEVELOPMENT_PARALLEL。
-	askAndDecide(t, engine, ControlSelectRoute, "canonical-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
-	}})
+	confirmPlannedRoute(t, engine, "canonical-route", RouteDecision{
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
+	})
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != "full" {
 		t.Fatalf("canonical route binding = %q", snap.State.RouteMode)
@@ -113,7 +113,7 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	}
 	fp := fingerprintOf(t, engine)
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-canonical", "", confirmation); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, fp, "run-canonical", "", confirmation, ""); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
@@ -128,7 +128,7 @@ func TestCanonicalProductFailAwaitsDisposition(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "canonical-fail", product,
-		reviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
+		plannedReviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
 			{Severity: "P1", Message: "core acceptance blocked"},
 		}))
 	snap := engine.LoadMustSucceed(t)
@@ -176,7 +176,7 @@ func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "canonical-confirm-fail", product,
-		reviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
+		plannedReviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
 			{Severity: "P1", Message: "core acceptance blocked"},
 		}))
 	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
@@ -256,17 +256,25 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "canonical-redo-product-1", product,
-		reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+		plannedReviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
 	submitReviewResult(t, engine, "canonical-redo-ready-1", pendingActionByStep(t, engine, "review.readiness"),
-		reviewEvidence(review.StartReadiness, pendingActionByStep(t, engine, "review.readiness"), "", "PASS", "ready", nil))
+		plannedReviewEvidence(review.StartReadiness, pendingActionByStep(t, engine, "review.readiness"), "", "PASS", "ready", nil))
 	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-1", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "single lane",
 	}})
-	askAndDecide(t, engine, ControlSelectRoute, "canonical-redo-route-1", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
-	}})
+	confirmPlannedRoute(t, engine, "canonical-redo-route-1", RouteDecision{
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
+	})
 
-	askAndDecideRequirement(t, engine, "canonical-redo-change", "proceed", &RequirementDecisionPayload{
+	work, err := engine.RequirementWork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := []RequirementWorkDecision{}
+	for _, item := range work {
+		choices = append(choices, RequirementWorkDecision{Work: item, Disposition: RequirementWorkRedo, Reason: "The changed requirement replaces the confirmed implementation obligation"})
+	}
+	askAndDecideRequirement(t, engine, "canonical-redo-change", "proceed", &RequirementDecisionPayload{WorkDecisions: choices,
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-redo",
 		ImpactDigest: "sha256:impact",
 		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
@@ -297,7 +305,7 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	}
 	freshReadiness := pendingActionByStep(t, engine, "review.readiness")
 	submitReviewResult(t, engine, "canonical-redo-ready-2", freshReadiness,
-		reviewEvidenceAt(review.StartReadiness, freshReadiness, "rev-2", "PASS", "fresh round ready", nil))
+		plannedReviewEvidenceAt(review.StartReadiness, freshReadiness, "rev-2", "PASS", "fresh round ready", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.FreshOwed {
 		t.Fatalf("the fresh readiness round must discharge the obligation: %+v", series)
@@ -310,9 +318,9 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-2", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "reconfirmed after the redo",
 	}})
-	askAndDecide(t, engine, ControlSelectRoute, "canonical-redo-route-2", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
-	}})
+	confirmPlannedRoute(t, engine, "canonical-redo-route-2", RouteDecision{
+		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
+	})
 	if snap := engine.LoadMustSucceed(t); snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after the redone walk = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
@@ -327,10 +335,10 @@ func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
 
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "canonical-void-product-1", product,
-		reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+		plannedReviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
 	readiness := pendingActionByStep(t, engine, "review.readiness")
 	submitReviewResult(t, engine, "canonical-void-ready-1", readiness,
-		reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+		plannedReviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
 	snap := engine.LoadMustSucceed(t)
 	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
 		t.Fatalf("phase after dual PASS = %s, want TOPOLOGY_AND_ROUTE", snap.State.Phase)
@@ -356,7 +364,7 @@ func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
 	// 调），技术审载体不被重新派发（携结论续用，不产生第二条技术审派发）。
 	second := pendingActionByStep(t, engine, "review.worker")
 	submitReviewResult(t, engine, "canonical-void-product-2", second,
-		reviewEvidence(review.ProductReview, second, "", "PASS", "clean again", nil))
+		plannedReviewEvidence(review.ProductReview, second, "", "PASS", "clean again", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.UpstreamVoid || series.Effective.Status != "PASS" || series.Completed != 1 {
 		t.Fatalf("the re-pass must release the void and re-project the carried conclusion: %+v", series)
@@ -376,4 +384,27 @@ func compiledCanonicalWorkflow(t *testing.T) *compiler.CompiledDefinition {
 		t.Fatal(err)
 	}
 	return cd
+}
+
+func plannedReviewEvidence(action review.Action, dispatch, authorization, status, message string, findings []review.Finding) ReviewResultEvidence {
+	e := reviewEvidence(action, dispatch, authorization, status, message, findings)
+	if action == review.StartReadiness {
+		e.GranularityReview = &GranularityReview{Reason: "One cohesive implementation", VerificationTier: "FINAL", Batches: []DevelopmentBatch{{ID: "implementation", Subtasks: []DevelopmentSubtask{{ID: "body", Description: "Implement the confirmed requirement"}}, Deliverable: "Working public command", PublicEntry: "app run", Artifacts: []string{"app.go"}, Interfaces: "Existing command", StateBoundary: "No persistent state", Risk: "Input validation", DoD: []DevelopmentCriterion{{ID: "outcome", Description: "Expected command outcome"}}, Checks: []DevelopmentCheck{{ID: "test", Command: "go test ./..."}}, Rollback: "Revert implementation", Recovery: "Repeat from clean state", Handoff: "Build and test outcomes", ContextCost: "One command fits context"}}}
+	}
+	return e
+}
+func confirmPlannedRoute(t *testing.T, e *Engine, id string, route RouteDecision) {
+	t.Helper()
+	p, err := e.DevelopmentPlan(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route.DevelopmentPlan = &p.Confirmation
+	askAndDecide(t, e, ControlSelectRoute, id, routeOptions(), "full", &ReviewDecisionPayload{Route: &route})
+}
+
+func plannedReviewEvidenceAt(action review.Action, dispatch, revision, status, message string, findings []review.Finding) ReviewResultEvidence {
+	e := plannedReviewEvidence(action, dispatch, "", status, message, findings)
+	e.RequirementRevision = revision
+	return e
 }

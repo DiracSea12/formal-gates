@@ -110,14 +110,14 @@ func (e *Engine) load() (uint64, *State, error) {
 // PROVIDER_MISMATCH 硬拒绝、不降级 default。已存在状态时
 // 拒绝且零变化。
 func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
-	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil)
+	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "")
 }
 
 // InitWithMetadata is the façade bootstrap variant.  It preserves Init's
 // original signature for protocol callers while persisting run identity and
 // the typed pre-start intake confirmation in the same authoritative state
 // write.
-func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt) error {
+func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot string) error {
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
 	}
@@ -133,6 +133,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.RunProvider = provider
 	state.RunID = runID
 	state.Route = route
+	state.BaseSnapshot = baseSnapshot
 	state.IntakeConfirmationReceipt = confirmation
 	_, err := e.commit(state, 0, expectedFingerprint)
 	return err
@@ -194,14 +195,14 @@ func equalIntakeArtifacts(a, b []IntakeArtifact) bool {
 // phase 门控（条件可从持久账本重算）并做账本完整性校验——条件不满足
 // 时静默留置，账本/phase 与投影不一致则拒绝写入。
 func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, error) {
-	revision, _, err := e.commitEffects(state, expectedRevision, expectedFingerprint)
+	revision, _, err := e.commitEffects(state, expectedRevision, expectedFingerprint, nil)
 	return revision, err
 }
 
 // commitEffects 是一切携业务后果事务的唯一提交点：落账前先过事务收尾
 // 单点（transactionEpilogue），并把收尾补位签发的 action ID 回传给调用方。
-// commit 复用本入口，并丢弃补位 action ID 返回值。
-func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, []string, error) {
+// 提交事件的完整 acceptance 随同一事务保存；非事件调用传 nil。
+func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFingerprint string, event *EventRecord) (uint64, []string, error) {
 	refill, err := e.transactionEpilogue(state, expectedRevision+1, expectedFingerprint)
 	if err != nil {
 		return 0, nil, err
@@ -211,6 +212,10 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	}
 	if err := verifyReviewIntegrity(state); err != nil {
 		return 0, nil, err
+	}
+	if event != nil {
+		event.Acceptance.Refill = append(event.Acceptance.Refill, refill...)
+		state.Events[event.Acceptance.EventID] = *event
 	}
 	res, err := e.store.Save(persistence.Transaction{
 		ExpectedRevision:    expectedRevision,
@@ -249,6 +254,10 @@ func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) error {
 // 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、挂
 // 起配对扫描与容量补位。返回补位签发的 action ID。
 func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if state.abortRequested() {
+		_, err := e.advanceAbort(state, nextRevision)
+		return nil, err
+	}
 	if state.requirementChangePending() {
 		state.routingReleasedCapacity = false
 		return nil, nil
@@ -260,10 +269,13 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
 	heldSettled := e.executeHeldSettles(state, nextRevision)
 	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
+	if err := e.advanceRecoveries(state, nextRevision); err != nil {
+		return nil, err
+	}
 	// 容量补位只在收尾真正做了改变派发面的工作时执行：观察类事务（回执
 	// 落账等）不得自动签发——否则调用方持有的 Plan（Plan→Submit→
 	// IssueFromPlan 驱动形态）会被收尾失效。业务工作＝挂起路由/清算/配
-	// 对，或本事务经失败路由/终态化释放了容量（§8.2.3：释放即补位）。
+	// 对，或本事务释放容量、固定 host 执行范围使已有容量可用于待执行任务。
 	// 结果完成与决定事务的补位在各自完成路径（completeResult／DECIDE
 	// settle）照常执行。
 	releasedCapacity := state.routingReleasedCapacity
@@ -293,7 +305,7 @@ func (e *Engine) executeHeldFailureRoutes(state *State, nextRevision uint64) boo
 	state.HeldFailureRoutes = nil
 	for _, actionID := range held {
 		if receipts, ok := state.SpawnFailures[actionID]; ok && len(receipts) > 0 {
-			state.applyFailedSpawnRouting(actionID, receipts[len(receipts)-1], nextRevision)
+			e.applyFailedSpawnRouting(state, actionID, receipts[len(receipts)-1], nextRevision)
 			continue
 		}
 		if receipts, ok := state.HostActionFailures[actionID]; ok && len(receipts) > 0 {
@@ -303,9 +315,8 @@ func (e *Engine) executeHeldFailureRoutes(state *State, nextRevision uint64) boo
 	return true
 }
 
-// executeHeldSettles 执行清算账上的 intent 清算与 frontier settle：屏障
-// 期挂起的 EXECUTED 回执结算与 fulfilled 对账的立即清算共用本执行路径
-// （同一提交的事务收尾）。
+// executeHeldSettles applies completed effects and settles their frontier at
+// the transaction boundary, after any requirement barrier has been resolved.
 func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) bool {
 	if len(state.HeldHostSettles) == 0 && !state.FrontierSettleHeld {
 		return false
@@ -481,7 +492,11 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 
 func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	view := state.decisionView(e.cfg.Definition)
-	return decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
+	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
+	if err == nil {
+		state.abortPlan(plan)
+	}
+	return plan, err
 }
 
 // Plan returns the deterministic next boundary for the current state without
@@ -744,10 +759,8 @@ func (s *State) reviewSeriesBooked(mark review.Action) bool {
 	return ok
 }
 
-// retryMaxAttempts returns the retry bound declared on a compiled step. The
-// protocol does not invent a retry bound when the step declares no retry
-// policy: zero leaves every transient result resumable through the recovery
-// contract, because no exhaustion edge exists for a step without a bound.
+// retryMaxAttempts uses the compiled step's declared policy when present.
+// Agent steps default to two attempts; other steps without a policy return zero.
 func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 	for _, step := range e.cfg.Definition.Steps {
 		if step.Header.ID != stepID {
@@ -976,31 +989,24 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		}
 		return record.Acceptance, nil
 	}
+	if state.Phase == runtime.PhaseTerminal {
+		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
+	}
 	nextRevision := revision + 1
 	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, expectedFingerprint)
 	if reject != nil {
 		return Acceptance{}, reject
 	}
 	if !wrote {
-		// Payload-level duplicate under a new event ID still consumes that ID.
-		// Otherwise the same ID could later carry different bytes and bypass the
-		// hard event identity invariant. 重放零状态变化：纯台账落账不经
-		// 事务收尾。
+		// A payload duplicate under a new event ID also binds that ID and digest.
 		acceptance.Revision = nextRevision
-		state.Events[string(ev.ID)] = EventRecord{Digest: digest, Acceptance: acceptance}
-		if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
-			return Acceptance{}, err
-		}
-		return acceptance, nil
+		mutated = state
 	}
-	state.Events[string(ev.ID)] = EventRecord{Digest: digest, Acceptance: acceptance}
-	_, refill, err := e.commitEffects(mutated, revision, expectedFingerprint)
-	if err != nil {
+	record := EventRecord{Digest: digest, Acceptance: acceptance}
+	if _, _, err := e.commitEffects(mutated, revision, expectedFingerprint, &record); err != nil {
 		return Acceptance{}, err
 	}
-	acceptance.Refill = append(acceptance.Refill, refill...)
-	// CAS 语义保证提交恰好落在 nextRevision；acceptance.Revision 即它。
-	return acceptance, nil
+	return record.Acceptance, nil
 }
 
 // admit 按事件 kind 做接纳校验并落账变更，返回接纳回执。nextRevision
@@ -1030,8 +1036,14 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 // admitEvent 按事件 kind 做接纳校验与落账（屏障处置表之后）。补配对属
 // 事务收尾（见 admit），各分支不做。
 func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
+	if state.abortRequested() && (ev.Kind == KindRequestControl || ev.Kind == KindDecide || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil) {
+		return Acceptance{}, nil, false, validationError("run abort has stopped business controls")
+	}
 	switch ev.Kind {
 	case KindRequestControl:
+		if ev.Request.Control == ControlReset || ev.Request.Control == ControlRecovery {
+			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "control is not supported as a public request: " + string(ev.Request.Control)}
+		}
 		if ev.Request.Request != "" {
 			return e.bindRequirementPackage(state, ev, revision, nextRevision)
 		}
@@ -1043,10 +1055,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		if _, exists := state.PendingAsks[requestID]; exists {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("pending ask %q already exists", requestID)}
 		}
-		step := authoring.StepID("")
-		if ev.Request.Control != ControlRecovery {
-			step = state.nextHumanAskStep(e.cfg.Definition)
-		}
+		step := state.nextHumanAskStep(e.cfg.Definition)
 		ask := PendingAsk{
 			RequestID: requestID, Control: ev.Request.Control, Step: step, Options: ev.Request.Options, Package: ev.Request.Package,
 		}
@@ -1067,7 +1076,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, err
 			}
 			ask.Validation = value
-			ask.Options = []AskOption{{ID: "approve", Label: "Approve the described action"}, {ID: "decline", Label: "Keep current state"}}
+			_, ask.Options = state.validationOffer(*value)
 		}
 		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
@@ -1087,6 +1096,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", requestID)}
 			}
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeUnknownRequest, Detail: fmt.Sprintf("request %q does not exist", requestID)}
+		}
+		if ask.Control == ControlReset {
+			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "RESET is not supported"}
 		}
 		if ask.Resolved {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", requestID)}
@@ -1124,11 +1136,17 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, err
 			}
 		}
+		if ask.Control == ControlRecovery {
+			record, known := state.recoveryRequest(requestID)
+			if _, _, current := e.recoveryAttempt(state, record); !known || !current {
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeEventNotCurrent, Detail: "recovery request no longer owns the original attempt"}
+			}
+		}
 		ask.Resolved = true
 		state.PendingAsks[requestID] = ask
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
-			EventID: string(ev.ID), Revision: nextRevision,
+			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review,
 		}
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
@@ -1264,7 +1282,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				})
 				return acceptance, state, true, nil
 			}
-			route := state.applyFailedSpawnRouting(actionID, receipt, nextRevision)
+			route := e.applyFailedSpawnRouting(state, actionID, receipt, nextRevision)
 			acceptance.FailureClass = string(route.Class)
 			acceptance.RecoveryAction = string(route.Action)
 			return acceptance, state, true, nil
@@ -1378,17 +1396,16 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				}, nil, false, nil
 			}
 		}
+		if reconciled, ok := state.ReconciledEffects[actionID]; ok && reconciled.UnknownReceipt != nil && reconciled.UnknownReceipt.Digest == payloadDigest {
+			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, nil, false, nil
+		}
 		if existing, seen := state.HostActionReceipts[actionID]; seen {
-			if existing.Digest != payloadDigest {
-				return Acceptance{}, nil, false, &RejectedError{
-					Code:   CodeReceiptConflict,
-					Detail: fmt.Sprintf("action %q host action receipt replayed with different bytes (recorded %s, submitted %s)", actionID, existing.Digest, payloadDigest),
-				}
+			if existing.Digest == payloadDigest {
+				return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, nil, false, nil
 			}
-			return Acceptance{
-				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE",
-				Revision: revision, ActionID: actionID,
-			}, nil, false, nil
+			if existing.Status != HostActionStatusUnknown || ev.HostAction.Status != HostActionStatusExecuted {
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q host action receipt conflicts with recorded completion", actionID)}
+			}
 		}
 		intent, pending := state.PendingHostActions[actionID]
 		if !pending {
@@ -1444,6 +1461,14 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				ActionID: actionID, FailureClass: string(route.Class), RecoveryAction: string(route.Action),
 			}, state, true, nil
 		}
+		if ev.HostAction.Status == HostActionStatusExecuted && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+			if _, _, err := validateCandidateReceipt(intent, receipt); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
+		if previous, ok := state.HostActionReceipts[actionID]; ok && previous.Status == HostActionStatusUnknown && receipt.Status == HostActionStatusExecuted {
+			state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: receipt.AdapterOperation, ObservationDigest: receipt.Digest, Status: "FULFILLED", Revision: nextRevision, UnknownReceipt: &previous}
+		}
 		state.HostActionReceipts[actionID] = receipt
 		if ev.HostAction.Status == HostActionStatusUnknown {
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
@@ -1453,29 +1478,19 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			})
 			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision, ActionID: actionID, RecoveryAction: string(RecoveryReconcile)}, state, true, nil
 		}
-		// EXECUTED 回执是观察事实照常落账；intent 清算与 frontier settle
-		// 是机械后果——屏障期挂起至解除事务统一执行。
+		// Completed effects settle at the transaction boundary, including while
+		// held behind a requirement barrier.
+		if !slices.Contains(state.HeldHostSettles, actionID) {
+			state.HeldHostSettles = append(state.HeldHostSettles, actionID)
+		}
 		if state.requirementChangePending() {
-			if !slices.Contains(state.HeldHostSettles, actionID) {
-				state.HeldHostSettles = append(state.HeldHostSettles, actionID)
-			}
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 				ActionID: actionID,
 				Detail:   "executed host action receipt recorded; its intent settlement and frontier settle are held while the requirement change barrier holds",
 				Revision: nextRevision,
 			})
-			return Acceptance{
-				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-				Revision: nextRevision, ActionID: actionID,
-			}, state, true, nil
 		}
-		if err := e.applyCandidateReceipt(state, intent, receipt); err != nil {
-			return Acceptance{}, nil, false, err
-		}
-		delete(state.PendingHostActions, actionID)
-		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
-			return Acceptance{}, nil, false, err
-		}
+
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
 			Revision: nextRevision, ActionID: actionID,
@@ -1535,7 +1550,7 @@ func resultPayloadDigest(payload *WorkerResultPayload) string {
 	return digestOfCanonical(workerResultEventWire{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
+		InterruptionReason: payload.InterruptionReason, FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
 	})
 }
 
@@ -1545,7 +1560,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 	return WorkerResult{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
+		InterruptionReason: payload.InterruptionReason, FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
 		Digest: resultPayloadDigest(payload),
 	}
 }
@@ -1554,7 +1569,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	return &WorkerResultPayload{
 		ActionID: record.ActionID, Provider: record.Provider, Outcome: record.Outcome,
-		PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
+		InterruptionReason: record.InterruptionReason, PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
 	}
 }
 
@@ -1568,7 +1583,7 @@ func (s *State) issuedRevisionOf(actionID string) uint64 {
 // admitWorkerResultRecord 是 typed worker result 的唯一接纳核心（Submit 与
 // 隔离重放共用）：结果级摘要幂等/冲突判定、obsolete 认领、重走态的
 // floor 比对（pre-floor 派发按声明终止并重签发）、result-before-receipt
-// 暂存（携审查证据先过完整预检）与回执配对后的完成。返回接纳回执与是
+// 暂存（先校验审查身份与授权）与回执配对后的完整内容接纳。返回接纳回执与是
 // 否落账变更。
 func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID, requestID string, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
 	payloadDigest := resultPayloadDigest(result)
@@ -1623,6 +1638,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			return Acceptance{}, false, err
 		}
 	}
+	if state.validationDispatchBlocked(actionID) || state.abortRequested() {
+		return state.stageWorkerResult(workerResultRecord(result), eventID, revision, nextRevision, false)
+	}
 	if _, pending := state.PendingActions[actionID]; !pending {
 		// terminal 对账路径：派发簿记已随任务终态收回，准入按结果类别分层
 		// （§7.2.2:4 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
@@ -1666,9 +1684,11 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 		record := workerResultRecord(result)
 		if record.Review != nil {
-			if err := e.recordReviewCandidate(state, record.Review, actionID); err != nil {
+			updated, err := e.prepareReviewResult(state, record.Review, actionID)
+			if err != nil {
 				return Acceptance{}, false, err
 			}
+			state.ReviewSeries = updated
 		}
 		state.Results[actionID] = record
 		detail := "late result reconciled against the terminal task"
@@ -1710,29 +1730,10 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	}
 	record := workerResultRecord(result)
 	if receipt, receipted := state.SpawnReceipts[actionID]; !receipted || receipt.Status == SpawnStatusUnknown {
-		// 携审查证据的结果在暂存前先过与完成路径相同的完整可接纳性
-		// 预检（revision 绑定、双审顺序、证据结构与完整性）：不可接纳
-		// 的审查结果直接拒绝、绝不进暂存——否则它会毒化暂存槽，把回
-		// 执配对后的正确结果挤成冲突。非 Review 结果暂存语义不变。
+		// Identity and authorization are checked before staging. Worker content
+		// is completed through the same finite-attempt path once paired.
 
-		if staged, exists := state.StagedResults[actionID]; exists {
-			if staged.Digest == payloadDigest {
-				return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
-			}
-			return Acceptance{}, false, &RejectedError{
-				Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q already has a different staged worker result", actionID),
-			}
-		}
-		state.StagedResults[actionID] = record
-		return Acceptance{
-			EventID: eventID, Kind: string(KindWorkerResult), Status: "STAGED",
-			Revision: nextRevision, ActionID: actionID, RecoveryAction: func() string {
-				if receipted {
-					return string(RecoveryReconcile)
-				}
-				return ""
-			}(),
-		}, true, nil
+		return state.stageWorkerResult(record, eventID, revision, nextRevision, receipted)
 	}
 	refill, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
 	if err != nil {
@@ -1745,6 +1746,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	if rejected, ok := state.RejectedResults[actionID]; ok {
 		acceptance.Status = rejected.Status
 	}
+	if _, obsolete := state.ObsoleteActions[actionID]; obsolete && len(state.ObsoleteResults[actionID]) > 0 {
+		acceptance.Status = "OBSOLETE_RESULT"
+	}
 	if class := record.FailureClass; class != "" {
 		recoveryAction := RouteFailure(class).Action
 		if len(state.RecoveryRecords) > 0 {
@@ -1755,6 +1759,23 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 		acceptance.FailureClass = string(class)
 		acceptance.RecoveryAction = string(recoveryAction)
+	}
+	return acceptance, true, nil
+}
+
+// Staging preserves delivered evidence until its receipt and execution
+// authorization both allow the common result acceptance path to run.
+func (s *State) stageWorkerResult(record WorkerResult, eventID string, revision, nextRevision uint64, reconcile bool) (Acceptance, bool, error) {
+	if staged, exists := s.StagedResults[record.ActionID]; exists {
+		if staged.Digest == record.Digest {
+			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: record.ActionID}, false, nil
+		}
+		return Acceptance{}, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q already has a different staged worker result", record.ActionID)}
+	}
+	s.StagedResults[record.ActionID] = record
+	acceptance := Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "STAGED", Revision: nextRevision, ActionID: record.ActionID}
+	if reconcile {
+		acceptance.RecoveryAction = string(RecoveryReconcile)
 	}
 	return acceptance, true, nil
 }
@@ -1788,6 +1809,9 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 	for {
 		ids := make([]string, 0, len(state.StagedResults))
 		for actionID := range state.StagedResults {
+			if state.validationDispatchBlocked(actionID) {
+				continue
+			}
 			receipt, receipted := state.SpawnReceipts[actionID]
 			if !receipted || !inflightWitnessReceipt(receipt.Status) {
 				continue
@@ -1840,17 +1864,33 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 }
 
 func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if !state.prewaveDispatchCurrent(record.ActionID, e.cfg.Definition) {
+		return nil, e.retirePrewaveResult(state, record)
+	}
 	pending := state.PendingActions[record.ActionID]
 	key := pending.Task
 	class := record.FailureClass
 	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && (class == "" || class == authoring.FailureTransientEngine) {
+		if record.Validation != nil {
+			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
+				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "runtime progress requires a QA execution checkpoint", record, nextRevision)
+			}
+			next, err := e.prepareValidationResult(state, record)
+			if err != nil {
+				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", err.Error(), record, nextRevision)
+			}
+			state.Validation = next
+		}
 		return nil, state.endInvalidAttempt(record.ActionID, OutcomeRuntimeError, "worker reported runtime error", record, nextRevision)
 	}
 	if record.Outcome == OutcomePass && state.reviewSeriesBooked(pending.ReviewSeries) && record.Review == nil {
 		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "signed review duty requires review evidence", record, nextRevision)
 	}
+	var preparedReview review.Set
 	if record.Review != nil {
-		if _, err := state.admitReviewEvidence(record.Review, record.ActionID, state.issuedRevisionOf(record.ActionID)); err != nil {
+		var err error
+		preparedReview, err = e.prepareReviewResult(state, record.Review, record.ActionID)
+		if err != nil {
 			if rejected, ok := err.(*RejectedError); ok && rejected.Code == CodeReviewEvidenceRejected {
 				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", rejected.Detail, record, nextRevision)
 			}
@@ -1889,19 +1929,15 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		}
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 			ActionID: record.ActionID, Task: key, AttemptID: pending.AttemptID,
-			Class: class, Action: plan.Action, Detail: plan.Detail, Revision: nextRevision,
+			Class: class, Action: plan.Action, Detail: plan.Detail, InterruptionReason: record.InterruptionReason, Revision: nextRevision,
 		})
 		if plan.Action != RecoveryFail {
 			state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], record)
 			return nil, nil
 		}
 	}
-	// 审查证据与 worker 结果身份绑定后在同一事务内交 review 内核记账：
-	// RecordCandidate 的错误拒绝整个事件（调用方不提交，零状态变化）。
 	if record.Review != nil {
-		if err := e.recordReviewCandidate(state, record.Review, record.ActionID); err != nil {
-			return nil, err
-		}
+		state.ReviewSeries = preparedReview
 	}
 	if err := state.terminalizeTask(key); err != nil {
 		return nil, err
@@ -1928,11 +1964,20 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 }
 
 // applyFailedSpawnRouting 执行一条 FAILED spawn 回执的失败路由：瞬态重试
-// 记账（耗尽即 WAIT）、暂存结果删除（失败派发边界的结果不能由它结算）、
+// 记账（业务耗尽交 EndedAttempts 产生 typed Ask）、暂存结果删除（失败派发边界的结果不能由它结算）、
 // FAIL 路由 terminalize、RECOVER 路由的 UNKNOWN 账面桥接。立即接纳与屏
 // 障解除的统一执行共用本函数。
-func (s *State) applyFailedSpawnRouting(actionID string, receipt SpawnReceipt, nextRevision uint64) FailureRoute {
+func (e *Engine) applyFailedSpawnRouting(s *State, actionID string, receipt SpawnReceipt, nextRevision uint64) FailureRoute {
 	route := RouteFailure(receipt.FailureClass)
+	if (s.abortRequested() || !s.prewaveDispatchCurrent(actionID, e.cfg.Definition)) && route.Action != RecoveryReconcile {
+		pending, retired := s.retireAction(actionID, "", "failed spawn no longer has a current business responsibility")
+		if retired {
+			_ = s.terminalizeTask(pending.Task)
+			delete(s.EndedAttempts, pending.Task)
+			s.routingReleasedCapacity = true
+		}
+		return route
+	}
 	pending, known := s.PendingActions[actionID]
 	if !known {
 		// 派发簿记已被收回（如任务先到 terminal）：只落路由留痕。
@@ -1952,6 +1997,10 @@ func (s *State) applyFailedSpawnRouting(actionID string, receipt SpawnReceipt, n
 			s.Attempts[pending.Task] = attempt
 			if attempt.RetryExhausted {
 				route.Action = RecoveryWait
+				if attempt.Business {
+					s.endBusinessAttempt(pending, attempt, "spawn transport attempts exhausted", nextRevision)
+					return route
+				}
 				s.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
 					Class: route.Class, Action: route.Action,
 					Detail:   fmt.Sprintf("transient retry attempts exhausted (%d/%d); wait for terminal handling", attempt.Attempts, attempt.MaxAttempts),
@@ -2008,25 +2057,19 @@ func (s *State) applyFailedHostActionRouting(actionID string, receipt HostAction
 		s.HostActionReceipts[actionID] = unknown
 	}
 	if route.Action == RecoveryFail {
-		delete(s.PendingHostActions, actionID)
+		intent := s.PendingHostActions[actionID]
+		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+			delete(s.PendingHostActions, actionID)
+		}
 	}
 	return route
 }
 
-// terminalizeTask advances a current task along every missing legal progress
-// edge before removing its Attempt bookkeeping. Result and receipt admission
-// share it so terminal failure cannot leave a permanently pending action.
+// terminalizeTask uses the legal terminal edge and releases task bookkeeping.
+// Result admission, replacement and termination share this completion boundary.
 func (s *State) terminalizeTask(key runtime.TaskKey) error {
-	progress := []runtime.TaskStatus{runtime.TaskIssued, runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal}
-	start := 0
-	for i, status := range progress {
-		if s.TaskStatusOf(key) == status {
-			start = i
-			break
-		}
-	}
-	for i := start + 1; i < len(progress); i++ {
-		if err := s.TransitionTask(key, progress[i]); err != nil {
+	if s.TaskStatusOf(key) != runtime.TaskTerminal {
+		if err := s.TransitionTask(key, runtime.TaskTerminal); err != nil {
 			return &RejectedError{Code: CodeIllegalTransition, Detail: fmt.Sprintf("complete %s: %v", key.String(), err)}
 		}
 	}
@@ -2040,8 +2083,14 @@ func (s *State) terminalizeTask(key runtime.TaskKey) error {
 // 触发本函数的回执/结果/决定事件本身合法且必须接纳，被冻结的只是"从中
 // 继续签发新任务"这一步——屏障解除后的下一次提交会补进。
 func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if state.abortRequested() {
+		return nil, nil
+	}
 	if state.requirementChangePending() {
 		return nil, nil
+	}
+	if _, err := e.advanceValidation(state, nextRevision); err != nil {
+		return nil, err
 	}
 	if err := e.releaseUpstreamVoidIfReleasable(state); err != nil {
 		return nil, err
@@ -2145,36 +2194,17 @@ func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActio
 	if state == nil {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	pending, ok := state.PendingActions[workerActionID]
-	if !ok {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("agent host action references unknown worker action %q", workerActionID)}
-	}
-	attempt, ok := state.Attempts[pending.Task]
-	if !ok || attempt.ID != pending.AttemptID {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeStaleAttempt, Detail: fmt.Sprintf("worker action %q has no matching current Attempt", workerActionID)}
-	}
-	receipt, ok := state.SpawnReceipts[workerActionID]
-	if !ok || receipt.Correlation != identity {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeIntentMismatch, Detail: fmt.Sprintf("agent identity %q is not bound to worker action %q", identity, workerActionID)}
-	}
-	payload := &AgentHostAction{WorkerActionID: workerActionID, AttemptID: attempt.ID, Identity: identity, Reason: reason}
-	nextRevision := revision + 1
-	intent := HostActionIntent{
-		ActionID:      "hact:" + string(operation) + ":" + strconv.FormatUint(nextRevision, 10),
-		Operation:     operation,
-		PayloadDigest: digestOfCanonical(payload),
-		Correlation:   strings.TrimSpace(correlation),
-		Revision:      nextRevision,
-	}
-	if operation == HostActionResumeAgent {
-		intent.Resume = payload
-	} else {
-		intent.Terminate = payload
+	intent, err := e.agentHostIntent(state, operation, workerActionID, identity, reason, correlation, revision+1)
+	if err != nil {
+		return HostActionIntent{}, 0, err
 	}
 	return e.persistHostAction(state, revision, intent, expectedFingerprint)
 }
 
 func (e *Engine) persistHostAction(state *State, revision uint64, intent HostActionIntent, expectedFingerprint string) (HostActionIntent, uint64, error) {
+	if state.abortRequested() && intent.Operation != HostActionTerminateAgent {
+		return HostActionIntent{}, 0, validationError("run abort permits only outstanding effect reconciliation")
+	}
 	// Submit 之外的落账路径同样只经处置表：屏障在位时新的 HostAction
 	// intent 属"停止新的权威写入"而被拒绝。
 	if state.requirementChangePending() {
@@ -2184,6 +2214,13 @@ func (e *Engine) persistHostAction(state *State, revision uint64, intent HostAct
 	}
 	if _, exists := state.PendingHostActions[intent.ActionID]; exists {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("host action %q already exists", intent.ActionID)}
+	}
+	if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		for _, existing := range state.PendingHostActions {
+			if existing.Adapter != nil && existing.Adapter.Operation == "op.candidate" && existing.Correlation == intent.Correlation {
+				return HostActionIntent{}, 0, validationError("candidate responsibility already has a pending execution or failure disposition")
+			}
+		}
 	}
 	state.PendingHostActions[intent.ActionID] = intent
 	commitRevision, err := e.commit(state, revision, expectedFingerprint)
@@ -2271,19 +2308,6 @@ func (e *Engine) validateHostActionEvidence(state *State, intent HostActionInten
 	return nil
 }
 
-// The canonical definition names the concrete adapter contract. These Go
-// structs are the contract implementation; there is deliberately no runtime
-// map/reflection schema interpreter.
-type fanTransportParams struct {
-	Target  string   `json:"target,omitempty"`
-	Retries *float64 `json:"retries,omitempty"`
-}
-
-type fanTransportEvidence struct {
-	Identity          string `json:"identity,omitempty"`
-	ObservationDigest string `json:"observationDigest,omitempty"`
-}
-
 func validateAdapterPayload(schema authoring.SchemaID, label string, value map[string]any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -2305,18 +2329,13 @@ func validateAdapterPayload(schema authoring.SchemaID, label string, value map[s
 	}
 	var decodeErr error
 	switch schema {
-	case authoring.SchemaID("schema.candidate"):
+	case authoring.SchemaID("schema.candidate.review-range"):
 		if label == "adapter parameters" {
 			decodeErr = decode(&CandidateParameters{})
 		} else {
 			decodeErr = decode(&CandidateEvidence{})
 		}
-	case authoring.SchemaID("schema.host.fan.transport"):
-		if label == "adapter parameters" {
-			decodeErr = decode(&fanTransportParams{})
-		} else {
-			decodeErr = decode(&fanTransportEvidence{})
-		}
+
 	default:
 		return &RejectedError{Code: CodeOperationSchemaInvalid, Detail: fmt.Sprintf("%s has no typed implementation for canonical schema %q", label, schema)}
 	}
@@ -2484,6 +2503,25 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 	}
 	if err := validateAdapterPayload(schema, "adapter parameters", normalized); err != nil {
 		return HostActionIntent{}, err
+	}
+	if operation == "op.candidate" && state.Validation != nil {
+		var p CandidateParameters
+		raw, _ := json.Marshal(normalized)
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return HostActionIntent{}, err
+		}
+		expected, ready, err := state.currentCandidateParameters(e.cfg.Definition)
+		if err != nil || !ready {
+			return HostActionIntent{}, validationError("no current candidate effect is ready")
+		}
+		if digestOfCanonical(p) != digestOfCanonical(expected) {
+			return HostActionIntent{}, validationError("candidate parameters differ from current effect inputs")
+		}
+		normalized, err = normalizeHostActionParams(expected)
+		if err != nil {
+			return HostActionIntent{}, err
+		}
+		correlation = candidateCorrelation(p)
 	}
 	step := state.nextHostActionStep(e.cfg.Definition, operation)
 	adapter := &AdapterHostAction{Operation: operation, Schema: schema, Params: normalized}

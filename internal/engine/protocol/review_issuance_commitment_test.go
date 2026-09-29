@@ -176,6 +176,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		// 作废第四轮：auth[0] 释放为首条干净槽——换新 round.five 不得改绑
 		// 它，必须继承承载旧派发的 auth[1]。
 		invalidateRoundOf(t, engine, "req-inherit-inv-4", fourth)
+		observedStoppedWorker(t, engine, fifth)
 		plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, fingerprintOf(t, engine))
 		if err != nil || plan.Action != RecoveryNewAttempt {
 			t.Fatalf("recovery = %+v err=%v", plan, err)
@@ -207,6 +208,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		cd, reg := singleCarrierFixture(t)
 		engine, _ := reviewEngine(t, cd, reg)
 		first := issueReady(t, engine)[0]
+		observedStoppedWorker(t, engine, first)
 		plan, _, err := engine.RecoverAttempt(first, Interruption{CauseKnown: true}, fingerprintOf(t, engine))
 		if err != nil || plan.Action != RecoveryNewAttempt {
 			t.Fatalf("recovery = %+v err=%v", plan, err)

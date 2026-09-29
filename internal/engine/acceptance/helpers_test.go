@@ -1,5 +1,5 @@
 // helpers_test.go 是验收套件的共用夹具：仓库根定位、真实
-// 定义的编译/编码通道、封闭 registry 的可裁剪复刻，以及对 authoring 值类型
+// shared workflow fixture 的编译/编码通道、封闭 registry 的可裁剪复刻，以及对 authoring 值类型
 // 变体的公共头读写工具。变异类用例需要按条目控制注册表与绕过 constructor
 // 改写步骤，definition/authoring 包不为测试提供这些入口，故在此复刻。
 package acceptance_test
@@ -54,11 +54,11 @@ func compileWorkflow(t *testing.T, def *compiler.Definition, reg *compiler.Regis
 	return cd, data, encoder.Digest(data)
 }
 
-// workflowFixtureHandlers 复刻 definition/workflow.go 的 handler 注册表
+// workflowFixtureHandlers 复刻 testkit/workflow 的 handler 注册表
 // （同 ID、同 runner）。registry 完备性用例需要按条目移除/错位注册，
-// definition.Registry 不提供裁剪入口；复刻与真实注册表的等价性由
+// workflow.Registry 不提供裁剪入口；复刻与夹具注册表的等价性由
 // TestAcceptanceRegistryCompleteness 的完整行钉死（无 skip 时产物 digest
-// 必须等于 checked-in 身份常量），两处不会静默漂移。
+// 必须等于该图完整 registry 的编译结果）。
 var workflowFixtureHandlers = []struct {
 	id     authoring.HandlerID
 	runner authoring.RunnerKind
@@ -110,7 +110,7 @@ func workflowRegistry(t *testing.T, skip ...string) *compiler.Registry {
 			}
 		}
 	}
-	for _, id := range []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.host.fan.transport"} {
+	for _, id := range []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.candidate.review-range"} {
 		if !skipSet[string(id)] {
 			if err := reg.RegisterSchema(id); err != nil {
 				t.Fatalf("register schema %q: %v", id, err)

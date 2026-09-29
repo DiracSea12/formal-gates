@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -88,5 +89,52 @@ func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRequirementRedoRetiresExhaustedReviewDuty(t *testing.T) {
+	cd, reg := agentStepsDefinition(t, func(string) authoring.AgentSpec {
+		return authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
+	}, "product.review")
+	e, _ := reviewEngine(t, cd, reg)
+	id := issueReady(t, e)[0]
+	original := e.LoadMustSucceed(t).State.PendingActions[id].Task
+	for i := 0; i < 2; i++ {
+		id = pendingActionID(t, e)
+		submitSpawnReceipt(t, e, fmt.Sprintf("spawn-%d", i), id)
+		event, err := NewWorkerResultEvent(EventID(fmt.Sprintf("runtime-%d", i)), id, testProvider, OutcomeRuntimeError, fmt.Sprintf("sha256:failure-%d", i), authoring.FailureTransientEngine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Submit(event, fingerprintOf(t, e)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := e.LoadMustSucceed(t)
+	if !before.State.EndedAttempts[original].RetryExhausted {
+		t.Fatal("review did not exhaust original policy")
+	}
+	raw := before.State.RejectedResults
+	redoProductReview(t, e, "new-review-responsibility")
+	fresh := freshReviewAfterRedo(t, e, id)
+	after := e.LoadMustSucceed(t)
+	if _, old := after.State.EndedAttempts[original]; old {
+		t.Fatal("series REDO retained exhausted attempt control")
+	}
+	for _, ask := range after.State.PendingAsks {
+		if !ask.Resolved && ask.Validation != nil && ask.Validation.Target == original.String() {
+			t.Fatal("series REDO left old retry actionable")
+		}
+	}
+	if !reflect.DeepEqual(raw, after.State.RejectedResults) {
+		t.Fatal("series REDO changed original rejection evidence")
+	}
+	pending := after.State.PendingActions[fresh]
+	if pending.Task == original || after.State.Attempts[pending.Task].Attempts != 0 {
+		t.Fatal("new series duty reused old retry allowance")
+	}
+	submitReviewResult(t, e, "fresh-review-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, after.State.RequirementRevision(), "PASS", "new revision reviewed", nil))
+	if got := e.LoadMustSucceed(t).State.ReviewSeries.ProductReview; got.Completed != 1 || got.FreshOwed {
+		t.Fatalf("new duty failed to settle once: %+v", got)
 	}
 }

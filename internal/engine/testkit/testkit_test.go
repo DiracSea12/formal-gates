@@ -174,11 +174,11 @@ func TestSubmitResponseLossIsIdempotent(t *testing.T) {
 func TestHostActionUnknownReconcileDoesNotExecuteAgain(t *testing.T) {
 	fixture, _ := fixtureWithAction(t)
 	fixture.Faults.Arm(persistence.FaultHostCommitBefore)
-	if _, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "blocked"}); !errors.Is(err, ErrInjected) {
+	if _, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "blocked"}); !errors.Is(err, ErrInjected) {
 		t.Fatalf("host commit-before error = %v", err)
 	}
 	fixture.Faults.Arm(persistence.FaultHostCommitAfter)
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fan.slice"})
+	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fan.slice"})
 	if !errors.Is(err, ErrInjected) || intent.ActionID == "" {
 		t.Fatalf("host action response loss intent=%+v err=%v", intent, err)
 	}
@@ -206,7 +206,7 @@ func TestHostActionUnknownReconcileDoesNotExecuteAgain(t *testing.T) {
 	}
 
 	fixture2, _ := fixtureWithAction(t)
-	intent2, err := fixture2.Host.Execute("op.fan.transport", map[string]any{"target": "fan.slice"})
+	intent2, err := fixture2.Host.Execute("op.fan.transport", map[string]any{"stage": "fan.slice"})
 	if err != nil {
 		t.Fatalf("duplicate receipt intent: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestHostActionUnknownReconcileDoesNotExecuteAgain(t *testing.T) {
 
 func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 	fixture, _ := fixtureWithAction(t)
-	requestA, err := protocol.NewRequestEvent("request-a", protocol.ControlReset, protocol.AskOption{ID: "yes", Label: "yes"})
+	requestA, err := protocol.NewRequestEvent("request-a", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 	if err != nil {
 		t.Fatalf("request A: %v", err)
 	}
@@ -292,6 +292,23 @@ func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 
 func TestLateAttemptResultIsRecordedObsolete(t *testing.T) {
 	fixture, actionID := fixtureWithAction(t)
+	if _, err := fixture.Host.SpawnEvent("interrupted-spawn", actionID, "interrupted-agent", protocol.SpawnStatusSpawned); err != nil {
+		t.Fatal(err)
+	}
+	started, err := protocol.NewLifecycleEventEvent("interrupted-start", "fake-host", "interrupted-agent", protocol.LifecycleStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := submit(fixture.Engine, started); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := protocol.NewLifecycleEventEvent("interrupted-stop", "fake-host", "interrupted-agent", protocol.LifecycleStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := submit(fixture.Engine, stopped); err != nil {
+		t.Fatal(err)
+	}
 	fingerprint, err := fixture.Engine.ObserveFingerprint()
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
@@ -342,7 +359,7 @@ func TestExternalFingerprintRecheckBeforeAndAfterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load before fingerprint rejection: %v", err)
 	}
-	if _, _, err := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"target": "fan.slice"}, old); err == nil {
+	if _, _, err := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"stage": "fan.slice"}, old); err == nil {
 		t.Fatal("changed-before fingerprint was accepted")
 	} else {
 		var changed *persistence.FingerprintChangedError

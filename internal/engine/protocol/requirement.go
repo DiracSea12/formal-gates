@@ -370,7 +370,11 @@ func cloneState(state *State) (*State, error) {
 // requirement's review obligation; normal issuance assigns its TaskKey, plan,
 // and retry budget after every requirement-change barrier has cleared.
 func (s *State) retireReviewDispatch(actionID string, mark review.Action, requestID string, nextRevision uint64) error {
-	if _, retired := s.ObsoleteActions[actionID]; retired {
+	if retired, exists := s.ObsoleteActions[actionID]; exists {
+		if ended, owed := s.EndedAttempts[retired.Task]; owed && ended.ActionID == actionID {
+			delete(s.EndedAttempts, retired.Task)
+			return s.terminalizeTask(retired.Task)
+		}
 		return nil
 	}
 	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
@@ -543,6 +547,11 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	marked := map[string]review.Action{}
 	state.eachSeriesLiveDispatch(e.reviewSeriesOf, func(actionID string, mark review.Action) { marked[actionID] = mark })
+	for _, attempt := range state.EndedAttempts {
+		if mark := e.reviewSeriesOf(attempt.Task.Step); inScope(mark) {
+			marked[attempt.ActionID] = mark
+		}
+	}
 	pendingIDs := make([]string, 0, len(marked))
 	for actionID := range marked {
 		pendingIDs = append(pendingIDs, actionID)

@@ -2,7 +2,9 @@ package protocol
 
 import (
 	"formal-gates/internal/engine/coverage"
+	"maps"
 	"slices"
+	"strings"
 )
 
 // caseReviewIdentity includes every referenced shared instruction and mapping.
@@ -35,34 +37,91 @@ func caseReviewIdentity(m coverage.AcceptanceManifest, id string) string {
 		Edges []coverage.CoverageEdge
 	}{*item, steps, edges})
 }
-func (s *State) inheritableCases(set *CaseSet) []string {
+func (s *State) inheritableReviews(set *CaseSet) []coverage.ReviewDecision {
 	if len(set.ReviewHistory) == 0 {
 		return nil
 	}
 	prior := set.ReviewHistory[len(set.ReviewHistory)-1]
-	if set.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && !s.sameCandidateContent(prior.Candidate, set.Candidate) {
+
+	decisions := []coverage.ReviewDecision{}
+	for _, d := range prior.Review.CaseDecisions {
+		if set.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			testRef := ""
+			for _, item := range set.Manifest.Cases {
+				if item.CaseID == d.ID {
+					testRef = item.TestRef
+					break
+				}
+			}
+			if !s.sameCaseReviewContent(prior.Candidate, set.Candidate, d.ID, testRef) {
+				continue
+			}
+		}
+		if !slices.Contains(set.AffectedCases, d.ID) && d.Status == coverage.StatusPass && caseReviewIdentity(prior.Manifest, d.ID) == caseReviewIdentity(set.Manifest, d.ID) && caseReviewIdentity(set.Manifest, d.ID) != "" {
+			decisions = append(decisions, d)
+		}
+	}
+	return decisions
+}
+func inheritableSharedReviews(set *CaseSet) []coverage.ReviewDecision {
+	if len(set.ReviewHistory) == 0 {
 		return nil
 	}
-	ids := []string{}
-	for _, d := range prior.Review.CaseDecisions {
-		if !slices.Contains(set.AffectedCases, d.ID) && d.Status == coverage.StatusPass && caseReviewIdentity(prior.Manifest, d.ID) == caseReviewIdentity(set.Manifest, d.ID) && caseReviewIdentity(set.Manifest, d.ID) != "" {
-			ids = append(ids, d.ID)
+	prior := set.ReviewHistory[len(set.ReviewHistory)-1]
+	var decisions []coverage.ReviewDecision
+	for _, d := range prior.Review.SharedStepDecisions {
+		if d.Status != coverage.StatusPass {
+			continue
+		}
+		for _, current := range set.Manifest.SharedSteps {
+			if current.ID == d.ID && slices.Contains(prior.Manifest.SharedSteps, current) {
+				decisions = append(decisions, d)
+			}
 		}
 	}
-	return ids
+	return decisions
 }
-func (s *State) validateReviewInheritance(set *CaseSet, result coverage.ReviewResult) error {
-	allowed := s.inheritableCases(set)
-	for _, d := range result.CaseDecisions {
-		if d.Inherited && (d.Status != coverage.StatusPass || !slices.Contains(allowed, d.ID)) {
-			return validationError("case approval cannot be inherited after an affected change: " + d.ID)
+
+func (s *State) validateReviewPolicy(set *CaseSet, result coverage.ReviewResult) error {
+	if result.Scope == coverage.ScopeAffected {
+		baseline := false
+		for _, prior := range set.ReviewHistory {
+			if prior.Review.Scope == coverage.ScopeFull && prior.Manifest.Binding.ReviewKind == set.Manifest.Binding.ReviewKind {
+				baseline = true
+				break
+			}
+		}
+		if !baseline {
+			return validationError("first case-set review must establish a FULL baseline")
 		}
 	}
-	// Aggregate and shared-step decisions remain explicit for this manifest.
-	for _, list := range [][]coverage.ReviewDecision{result.SourceDecisions, result.PointDecisions, result.SharedStepDecisions} {
+	for _, list := range [][]coverage.ReviewDecision{result.CaseDecisions, result.SharedStepDecisions} {
+		for _, d := range list {
+			if strings.TrimSpace(d.Reason) == "" {
+				return validationError("case and shared-step reviews require their actual rationale: " + d.ID)
+			}
+		}
+	}
+	allowed := s.inheritableReviews(set)
+	for _, d := range result.CaseDecisions {
+		if d.Inherited && !slices.ContainsFunc(allowed, func(prior coverage.ReviewDecision) bool {
+			return prior.ID == d.ID && d.Status == coverage.StatusPass && d.Reason == prior.Reason
+		}) {
+			return validationError("inherited approval requires unchanged responsibility and its original rationale: " + d.ID)
+		}
+	}
+	shared := inheritableSharedReviews(set)
+	for _, d := range result.SharedStepDecisions {
+		if d.Inherited && !slices.ContainsFunc(shared, func(prior coverage.ReviewDecision) bool {
+			return prior.ID == d.ID && d.Status == coverage.StatusPass && d.Reason == prior.Reason
+		}) {
+			return validationError("inherited shared approval requires unchanged instructions and original rationale: " + d.ID)
+		}
+	}
+	for _, list := range [][]coverage.ReviewDecision{result.SourceDecisions, result.PointDecisions} {
 		for _, d := range list {
 			if d.Inherited {
-				return validationError("aggregate and shared-step decisions require current review")
+				return validationError("aggregate decisions require current review")
 			}
 		}
 	}
@@ -95,4 +154,27 @@ func (s *State) sameCandidateContent(previous, current string) bool {
 		}
 	}
 	return previousDigest != "" && previousDigest == currentDigest
+}
+
+func (s *State) sameCaseReviewContent(previous, current, caseID, testRef string) bool {
+	if s.sameCandidateContent(previous, current) {
+		return true
+	}
+	var before, after CaseReviewView
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.candidate" || (receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled) {
+			continue
+		}
+		evidence, err := decodeCandidateEvidence(receipt)
+		if err != nil {
+			continue
+		}
+		if view, ok := evidence.ReviewViews[caseID]; ok && view.TestRef == testRef && evidence.Identity == previous {
+			before = view
+		}
+		if view, ok := evidence.ReviewViews[caseID]; ok && view.TestRef == testRef && evidence.Identity == current {
+			after = view
+		}
+	}
+	return before.TestRef != "" && before.TestRef == after.TestRef && len(before.Inputs) > 0 && maps.Equal(before.Inputs, after.Inputs)
 }

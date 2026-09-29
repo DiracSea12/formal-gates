@@ -47,8 +47,8 @@ func (d *validationDriver) chooseValidation(req protocol.ValidationRequest, reme
 // Accepted design work, semantic reviews and execution retries retain separate identities.
 func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 	d := newValidationDriver(t, "whitebox", "quality")
-	dev, input := d.action("engine.development")
-	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implemented input rejection", Build: []string{"build succeeded"}, Tests: []string{"input rejection succeeded"}}})
+	dev, input := d.action("engine.development.batch")
+	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input rejection", Build: []string{"build succeeded"}, Tests: []string{"input rejection succeeded"}}})
 	d.materialize()
 	d.materialize()
 	var priorManifest, priorCandidate string
@@ -83,7 +83,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 		event.ID = d.eventID()
 		d.submit(event)
 		d.materialize()
-		id, input = d.action("engine.qa.review")
+		id, input = d.action("engine.qa.review.rationale")
 		if input.Binding.Candidate == "" || input.Binding.Candidate == priorCandidate {
 			t.Fatal("review did not bind a new immutable test candidate")
 		}
@@ -116,7 +116,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	var task string
 	for i := 0; i < 2; i++ {
-		id, input := d.action("engine.development")
+		id, input := d.action("engine.development.batch")
 		task = input.Binding.Task.String()
 		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		d.drive()
@@ -126,7 +126,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
-	id, input = d.action("engine.qa.review")
+	id, input = d.action("engine.qa.review.rationale")
 	reviewed := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &reviewed})
 	d.reopen()
@@ -143,7 +143,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	}
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "approve", Validation: &protocol.ValidationDecision{Reason: "one corrected execution", Digest: ask.Validation.Digest, StateRevision: d.run.Revision}}})
 	d.drive()
-	id, input = d.action("engine.development")
+	id, input = d.action("engine.development.batch")
 	if input.Binding.Task.String() != task {
 		t.Fatal("extra attempt changed the obligation")
 	}
@@ -153,7 +153,14 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	d.drive()
 	for _, ask := range d.run.PendingAsks {
 		if ask.Validation != nil && ask.Validation.Kind == "RETRY" {
-			t.Fatal("one extra attempt expanded again")
+			for _, option := range ask.Options {
+				if option.ID == "approve" {
+					t.Fatal("one extra attempt expanded again")
+				}
+			}
+			if len(ask.Options) == 0 {
+				t.Fatal("exhausted obligation lost its explicit disposition choices")
+			}
 		}
 	}
 	for key, a := range d.run.EndedAttempts {
@@ -196,18 +203,28 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 				t.Fatal("disposition bypassed unadjudicated findings")
 			}
 			var findingID string
-			for id := range d.run.Validation.Findings {
-				findingID = id
+			for id, f := range d.run.Validation.Findings {
+				if f.Raw != nil {
+					findingID = id
+				}
 			}
 			resolution := protocol.FindingResolution{FindingID: findingID, Decision: "DISMISSED", Requirement: "AC-001", NormalPath: "app run", Module: "input", RootCause: "incorrect case oracle", Consequence: "false QA failure", Severity: "P2", SeverityRationale: "implementation satisfies input rejection", Verification: review.FindingVerification{Scope: "confirmed requirement", Severity: "limited mismatch", Causality: "oracle requires an unspecified exit code", Reproduction: "invalid input exits 2", Classification: "QA artifact"}, Reason: "Requirement mandates rejection, not exit 1"}
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: qi.Binding.WaveID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
+			for id, f := range d.run.Validation.Findings {
+				if f.ExecutionFailure != nil {
+					caseResolution := resolution
+					caseResolution.FindingID = id
+					caseResolution.Severity, caseResolution.SeverityRationale, caseResolution.Verification.Severity = "", "", ""
+					d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: qi.Binding.WaveID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{caseResolution}}}})
+				}
+			}
 			d.reopen()
 			d.drive()
 			wave := d.run.Validation.Waves[0]
 			if wave.Status == "COMPLETE" || wave.Repair != nil || len(d.run.PendingActions) != 0 {
 				t.Fatal("finding dismissal erased QA failure or invented production repair")
 			}
-			if d.run.Next.Operator == nil || !strings.Contains(fmt.Sprint(d.run.Next.Operator), "QA_ARTIFACT_REPAIR") {
+			if d.run.Next.Operator == nil || !strings.Contains(fmt.Sprint(d.run.Next.Operator), "VALIDATION_DETAIL_DISPOSITION") {
 				t.Fatalf("missing actionable QA disposition: %+v", d.run.Next)
 			}
 			event := d.chooseValidation(req, remedy)
@@ -223,7 +240,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 				}
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
-				id, input = d.action("engine.qa.review")
+				id, input = d.action("engine.qa.review.rationale")
 				reviewed := approvedReview(manifest)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &reviewed})
 				d.materialize()

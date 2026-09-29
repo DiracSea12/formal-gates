@@ -259,6 +259,23 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	if err != nil {
 		t.Fatalf("project complete run: %v", err)
 	}
+	checkWaiting := func(reader *Facade) {
+		t.Helper()
+		for _, read := range []func() (Run, error){reader.Show, reader.Status} {
+			current, err := read()
+			if err != nil || current.Status != "FINALIZING_CLEANUP" || current.Next.Kind != decision.KindWait {
+				t.Fatalf("unpublished terminal: %+v %v", current, err)
+			}
+		}
+		next, err := reader.Next()
+		if err != nil || next.Kind != decision.KindWait {
+			t.Fatalf("unpublished Next: %+v %v", next, err)
+		}
+	}
+	checkWaiting(f)
+	if _, err := os.Stat(terminalIntentPath(f.stateDir)); !os.IsNotExist(err) {
+		t.Fatal("read created cleanup intent")
+	}
 	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run)); err != nil {
 		t.Fatalf("write terminal intent: %v", err)
 	}
@@ -275,6 +292,13 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	opened, err := Open(root, runID)
 	if err != nil {
 		t.Fatalf("open terminal intent: %v", err)
+	}
+	checkWaiting(opened)
+	if _, err := os.Stat(terminalSummaryPath(f.stateDir)); !os.IsNotExist(err) {
+		t.Fatal("read published terminal summary")
+	}
+	if _, err := os.Stat(filepath.Join(f.stateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatal("read recreated active state")
 	}
 	recovered, err := opened.Drive()
 	if err != nil || recovered.Status != "COMPLETE" || recovered.Next.Kind != decision.KindComplete {
@@ -440,7 +464,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
-	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation); err != nil {
+	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation, ""); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {

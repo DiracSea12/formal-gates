@@ -42,9 +42,8 @@ const (
 	ReviewMerge    ReviewKind = "MERGE"
 )
 
-// ScopeMode describes the review/execution scope.  The first baseline is
-// normally FULL; AFFECTED may be used only when the caller supplies explicit
-// execution accounting for the remainder.
+// ScopeMode describes review/execution scope. A workflow establishes its first
+// review baseline with FULL; AFFECTED retains explicit accounting for all items.
 type ScopeMode string
 
 const (
@@ -321,6 +320,7 @@ type CoverageContract struct {
 
 // ReviewDecision is a decision over a source, point, or case ID.
 type ReviewDecision struct {
+	Reason    string         `json:"reason,omitempty"`
 	Inherited bool           `json:"inherited,omitempty"`
 	ID        string         `json:"id"`
 	Status    DecisionStatus `json:"status"`
@@ -874,6 +874,18 @@ func CanonicalJSON(value any) ([]byte, error) { return json.Marshal(value) }
 // for already-validated, map-free contract projections.
 func CanonicalDigest(value any) (string, error) { return canonicalDigest(value) }
 
+// Verdict derives the outcome of a structurally validated review from its item decisions.
+func (r ReviewResult) Verdict() DecisionStatus {
+	for _, rows := range [][]ReviewDecision{r.SourceDecisions, r.PointDecisions, r.CaseDecisions, r.SharedStepDecisions} {
+		for _, row := range rows {
+			if row.Status == StatusFail {
+				return StatusFail
+			}
+		}
+	}
+	return StatusPass
+}
+
 // ValidateReviews verifies complete item-level PASS decisions and projects
 // the approved whitelist.  Reviews must contain exactly one result for every
 // manifest in the contract.
@@ -945,17 +957,15 @@ func (c CoverageContract) validateReviews(reviews []ReviewResult, requirePass bo
 		}
 		if !requirePass {
 			values := map[string]DecisionStatus{}
-			failed := false
 			for _, group := range []struct {
 				prefix string
 				rows   []ReviewDecision
 			}{{"s", review.SourceDecisions}, {"p", review.PointDecisions}, {"c", review.CaseDecisions}, {"h", review.SharedStepDecisions}} {
 				for _, row := range group.rows {
 					values[group.prefix+row.ID] = row.Status
-					failed = failed || row.Status == StatusFail
 				}
 			}
-			if (review.SetStatus == StatusFail) != failed {
+			if review.SetStatus != "" && review.SetStatus != review.Verdict() {
 				return ApprovedWhitelist{}, invalid(CodeIncompleteReview, path, "set verdict contradicts item decisions")
 			}
 			for _, edge := range manifest.Edges {

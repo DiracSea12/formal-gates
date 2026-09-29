@@ -21,7 +21,6 @@ type Validation struct {
 	Document            requirement.FrozenRequirementProjection `json:"document"`
 	RequirementRevision string                                  `json:"requirementRevision"`
 	Generation          uint64                                  `json:"generation"`
-	Development         *DevelopmentEvidence                    `json:"development,omitempty"`
 	Candidate           *coverage.ValidationCandidate           `json:"candidate,omitempty"`
 	AuthoringWorkspace  string                                  `json:"authoringWorkspace,omitempty"`
 	DevelopmentSnapshot string                                  `json:"developmentSnapshot,omitempty"`
@@ -31,7 +30,9 @@ type Validation struct {
 	Problems            map[string]*ValidationProblem           `json:"problems"`
 }
 
+// DesignTask refers to the accepted design result supplying the artifact inputs.
 type CaseSet struct {
+	DesignTask    runtime.TaskKey             `json:"designTask"`
 	AffectedCases []string                    `json:"affectedCases,omitempty"`
 	Paths         []string                    `json:"paths,omitempty"`
 	Manifest      coverage.AcceptanceManifest `json:"manifest"`
@@ -64,12 +65,13 @@ type RepairCaseEvidence struct {
 	Result      coverage.ExecutionStatus `json:"result"`
 }
 type DevelopmentEvidence struct {
-	CaseRuns      []RepairCaseEvidence `json:"caseRuns,omitempty"`
-	Paths         []string             `json:"paths"`
-	Summary       string               `json:"summary"`
-	Build         []string             `json:"build"`
-	Tests         []string             `json:"tests"`
-	AffectedCases []string             `json:"affectedCases,omitempty"`
+	Completion    *DevelopmentCompletion `json:"completion,omitempty"`
+	CaseRuns      []RepairCaseEvidence   `json:"caseRuns,omitempty"`
+	Paths         []string               `json:"paths"`
+	Summary       string                 `json:"summary"`
+	Build         []string               `json:"build"`
+	Tests         []string               `json:"tests"`
+	AffectedCases []string               `json:"affectedCases,omitempty"`
 }
 
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
@@ -91,6 +93,8 @@ type ValidationResult struct {
 // WorkBinding accompanies every issued business task and its result. Revision
 // is the confirmed content identity; Generation distinguishes its occurrence.
 type WorkBinding struct {
+	PlanRequest         string          `json:"planRequest,omitempty"`
+	BatchID             string          `json:"batchId,omitempty"`
 	RouteScope          string          `json:"routeScope,omitempty"`
 	RequirementRevision string          `json:"requirementRevision"`
 	Generation          uint64          `json:"generation"`
@@ -101,24 +105,39 @@ type WorkBinding struct {
 }
 
 type ValidationWave struct {
-	Coverage            coverage.CoverageContract      `json:"coverage"`
-	Reviews             []coverage.ReviewResult        `json:"reviews"`
-	ID                  string                         `json:"id"`
-	Candidate           coverage.ValidationCandidate   `json:"candidate"`
-	RequirementRevision string                         `json:"requirementRevision"`
-	Generation          uint64                         `json:"generation"`
-	RouteDigest         string                         `json:"routeDigest"`
-	Versions            map[coverage.ReviewKind]string `json:"versions"`
-	ExpectedDigest      string                         `json:"expectedDigest"`
-	Targets             map[string]*ValidationTarget   `json:"targets"`
-	Status              string                         `json:"status"`
-	RepairSource        string                         `json:"repairSource,omitempty"`
-	Counted             bool                           `json:"counted"`
-	Scope               coverage.ScopeMode             `json:"scope"`
-	Repair              *ValidationRepair              `json:"repair,omitempty"`
-	ExtraAuthorized     bool                           `json:"extraAuthorized,omitempty"`
+	CheckpointTasks      []runtime.TaskKey              `json:"checkpointTasks,omitempty"`
+	AuthorizationRequest string                         `json:"authorizationRequest,omitempty"`
+	Coverage             coverage.CoverageContract      `json:"coverage"`
+	Reviews              []coverage.ReviewResult        `json:"reviews"`
+	ID                   string                         `json:"id"`
+	Candidate            coverage.ValidationCandidate   `json:"candidate"`
+	RequirementRevision  string                         `json:"requirementRevision"`
+	Generation           uint64                         `json:"generation"`
+	RouteDigest          string                         `json:"routeDigest"`
+	Versions             map[coverage.ReviewKind]string `json:"versions"`
+	ExpectedDigest       string                         `json:"expectedDigest"`
+	Targets              map[string]*ValidationTarget   `json:"targets"`
+	Status               string                         `json:"status"`
+	SourceTasks          []runtime.TaskKey              `json:"sourceTasks"`
+	Counted              bool                           `json:"counted"`
+	Scope                coverage.ScopeMode             `json:"scope"`
+	Repair               *ValidationRepair              `json:"repair,omitempty"`
+	ExtraAuthorized      bool                           `json:"extraAuthorized,omitempty"`
 }
+
+// GateImpact binds the host's impact judgment to the original frozen passing
+// gate boundary. The source wave owns its candidate, result and responsibility.
+type GateImpact struct {
+	SourceWave string `json:"sourceWave"`
+	Decision   string `json:"decision,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
 type ValidationTarget struct {
+	GateImpact *GateImpact `json:"gateImpact,omitempty"`
+	// RequiredCases and ScopeReason are the host's immutable AFFECTED execution decision.
+	RequiredCases     []string                  `json:"requiredCases,omitempty"`
+	ScopeReason       string                    `json:"scopeReason,omitempty"`
 	Task              runtime.TaskKey           `json:"task"`
 	Kind              string                    `json:"kind"`
 	Mode              coverage.ReviewKind       `json:"mode,omitempty"`
@@ -137,14 +156,25 @@ type ValidationRepair struct {
 	Evidence     *DevelopmentEvidence `json:"evidence,omitempty"`
 	ResultAction string               `json:"resultAction,omitempty"`
 }
+
+// A finding owns exactly one original evidence domain and one adjudication history.
+// ExecutionFailure references the completed target's cumulative report, including
+// records accepted through checkpoints; it never assigns a severity to case FAIL.
 type ValidationFinding struct {
-	ID      string              `json:"id"`
-	WaveID  string              `json:"waveId"`
-	Target  string              `json:"target"`
-	Raw     review.Finding      `json:"raw"`
-	History []FindingResolution `json:"history"`
+	ID               string              `json:"id"`
+	WaveID           string              `json:"waveId"`
+	Target           string              `json:"target"`
+	Raw              *review.Finding     `json:"raw,omitempty"`
+	ExecutionFailure *ExecutionFailure   `json:"executionFailure,omitempty"`
+	History          []FindingResolution `json:"history"`
+}
+type ExecutionFailure struct {
+	ResultAction string `json:"resultAction"`
+	CaseID       string `json:"caseId"`
 }
 type FindingResolution struct {
+	// AcceptedRevision is assigned by the engine when this historical fact is accepted.
+	AcceptedRevision  uint64                     `json:"acceptedRevision"`
 	FindingID         string                     `json:"findingId"`
 	Decision          string                     `json:"decision"`
 	ProblemID         string                     `json:"problemId,omitempty"`
@@ -160,13 +190,15 @@ type FindingResolution struct {
 	Supersedes        int                        `json:"supersedes"`
 }
 type ValidationProblem struct {
-	ID         string   `json:"id"`
-	FindingIDs []string `json:"findingIds"`
+	ResolvedWave string   `json:"resolvedWave,omitempty"`
+	ID           string   `json:"id"`
+	FindingIDs   []string `json:"findingIds"`
 }
 
 // ValidationObservation carries semantic facts. It cannot authorize a retry,
 // extra review or repair, a THAW, or an error disposition on the user's behalf.
 type ValidationObservation struct {
+	Gate                string              `json:"gate,omitempty"`
 	Kind                string              `json:"kind"`
 	RequirementRevision string              `json:"requirementRevision,omitempty"`
 	Document            string              `json:"document,omitempty"`
@@ -186,6 +218,10 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	ReviewBase          string                                    `json:"reviewBase,omitempty"`
+	ReviewCases         map[string]string                         `json:"reviewCases,omitempty"`
+	SourceTasks         []runtime.TaskKey                         `json:"sourceTasks,omitempty"`
+	DesignTasks         map[coverage.ReviewKind]runtime.TaskKey   `json:"designTasks,omitempty"`
 	RouteScope          string                                    `json:"routeScope,omitempty"`
 	QAArtifacts         map[coverage.ReviewKind]CandidateArtifact `json:"qaArtifacts,omitempty"`
 	Stage               string                                    `json:"stage"`
@@ -196,16 +232,39 @@ type CandidateParameters struct {
 	CaseVersions        map[coverage.ReviewKind]string            `json:"caseVersions,omitempty"`
 	Finalize            bool                                      `json:"finalize"`
 }
+
+// CaseReviewView is the trusted adapter's complete native input closure for
+// one test: its implementation, production sources, shared fixtures/helpers,
+// configuration, build inputs and other sources affecting reviewability.
+// Inputs maps each path to its content digest. An unavailable or UNKNOWN
+// closure is omitted from ReviewViews; a complete single-input view is valid.
+type CaseReviewView struct {
+	TestRef string            `json:"testRef"`
+	Inputs  map[string]string `json:"inputs"`
+}
+
+// GateReviewView is the trusted adapter's ownership evidence for the entire
+// issued ReviewBase-to-candidate range. Only proved test-owned paths appear;
+// UNKNOWN ownership remains visible. A nil view means evidence is unavailable,
+// while an empty list confirms that the complete range has no exclusions.
+type GateReviewView struct {
+	TestOwnedPaths []string `json:"testOwnedPaths"`
+}
+
 type CandidateEvidence struct {
-	ParametersDigest    string   `json:"parametersDigest"`
-	Identity            string   `json:"identity"`
-	Digest              string   `json:"digest"`
-	Paths               []string `json:"paths"`
-	TestOnly            bool     `json:"testOnly"`
-	ProductionViewEqual bool     `json:"productionViewEqual"`
+	GateView            *GateReviewView           `json:"gateView,omitempty"`
+	ReviewViews         map[string]CaseReviewView `json:"reviewViews,omitempty"`
+	ParametersDigest    string                    `json:"parametersDigest"`
+	Identity            string                    `json:"identity"`
+	Digest              string                    `json:"digest"`
+	Paths               []string                  `json:"paths"`
+	TestOnly            bool                      `json:"testOnly"`
+	ProductionViewEqual bool                      `json:"productionViewEqual"`
 }
 
 type ValidationRequest struct {
+	Binding       WorkBinding         `json:"binding"`
+	Obligations   []string            `json:"obligations,omitempty"`
 	Remedies      []string            `json:"remedies,omitempty"`
 	Kind          string              `json:"kind"`
 	Target        string              `json:"target"`
@@ -217,10 +276,11 @@ type ValidationRequest struct {
 	Summary       json.RawMessage     `json:"summary,omitempty"`
 }
 type ValidationDecision struct {
-	Remedy        string `json:"remedy,omitempty"`
-	Reason        string `json:"reason"`
-	Digest        string `json:"digest"`
-	StateRevision uint64 `json:"stateRevision"`
+	Obligations   []string `json:"obligations,omitempty"`
+	Remedy        string   `json:"remedy,omitempty"`
+	Reason        string   `json:"reason"`
+	Digest        string   `json:"digest"`
+	StateRevision uint64   `json:"stateRevision"`
 }
 
 func validationHandler(step compiler.CompiledStep) string {
@@ -229,7 +289,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development", "engine.qa.design", "engine.qa.review", "engine.qa.execution", "engine.gate", "engine.repair":
+	case "engine.development.batch", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair":
 		return string(p.Handler)
 	}
 	return ""
@@ -243,7 +303,7 @@ func pipelineStep(cd *compiler.CompiledDefinition, handler string) (compiler.Com
 	return compiler.CompiledStep{}, false
 }
 func pipelineEnabled(s *State, cd *compiler.CompiledDefinition) bool {
-	_, ok := pipelineStep(cd, "engine.development")
+	_, ok := pipelineStep(cd, "engine.development.batch")
 	return ok && s.Route != "lightweight"
 }
 func pipelineTask(cd *compiler.CompiledDefinition, handler, scope string) runtime.TaskKey {
@@ -291,15 +351,60 @@ func (s *State) validationMode(key runtime.TaskKey) coverage.ReviewKind {
 	}
 	return ""
 }
-func (s *State) qaReviewLimit(mode coverage.ReviewKind) int {
-	limit := 3
-	for id, d := range s.Decisions {
-		a := s.PendingAsks[id]
-		if d.Choice == "approve" && a.Validation != nil && a.Validation.Kind == "QA_REVIEW" && a.Validation.Mode == mode {
-			limit++
+func (s *State) qaReviewTarget(mode coverage.ReviewKind) string {
+	return fmt.Sprintf("%d:%s:%d", s.Validation.Generation, mode, len(s.Validation.Sets[mode].ReviewHistory))
+}
+
+// Review history owns the failure streak; an issued review owns its authority
+// through receipt pairing, retries and an explicitly carried requirement change.
+func (s *State) prewaveBlocked(mode coverage.ReviewKind, role string, cd *compiler.CompiledDefinition) bool {
+	set := s.Validation.Sets[mode]
+	failures := 0
+	for i := len(set.ReviewHistory) - 1; i >= 0 && set.ReviewHistory[i].Review.Verdict() == coverage.StatusFail; i-- {
+		failures++
+	}
+	if failures < 3 {
+		return false
+	}
+	for action, binding := range s.DispatchBindings {
+		if s.liveDispatch(action) && s.prewaveWorkCurrent(binding, cd) && s.validationRole(binding.Task, cd) == "engine.qa.review.rationale" && s.validationMode(binding.Task) == mode {
+			return false
 		}
 	}
-	return limit
+	for task, attempt := range s.EndedAttempts {
+		if s.endedWorkCurrent(attempt, cd) && s.validationRole(task, cd) == "engine.qa.review.rationale" && s.validationMode(task) == mode {
+			return false
+		}
+	}
+	for id, d := range s.Decisions {
+		r := s.PendingAsks[id].Validation
+		if r == nil || r.Mode != mode {
+			continue
+		}
+		original := requestCaseSet(r)
+		if original == nil || len(original.ReviewHistory) != len(set.ReviewHistory) {
+			continue
+		}
+		switch r.Kind {
+		case "QA_REVIEW":
+			if r.Target == s.qaReviewTarget(mode) && (d.Choice == "redesign" || d.Choice == "approve" && role == "engine.qa.review.rationale") {
+				return false
+			}
+		case "RETRY":
+			if d.Choice == "redesign" {
+				return false
+			}
+		case "THAW", "QA_ARTIFACT_REPAIR":
+			if d.Choice == "approve" {
+				return false
+			}
+		case "VALIDATION_DETAIL_DISPOSITION":
+			if d.Choice == "approve" && d.Validation != nil && d.Validation.Remedy == "QA_ARTIFACT_REPAIR" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefinition) WorkBinding {
@@ -309,22 +414,42 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	}
 	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), Task: key}
 	role := s.validationRole(key, cd)
+	if role == "engine.development.batch" {
+		if request, _, batch, ok := s.developmentBatch(key, cd); ok {
+			b.PlanRequest, b.BatchID = request, batch.ID
+			_, _, revision := s.confirmedDevelopmentPlan()
+			b.RequirementRevision = revision
+			if revised := s.requirementRevisionForTask(key); revised != "" {
+				b.RequirementRevision = revised
+			}
+		}
+	}
 	mode := s.validationMode(key)
 	if set := v.Sets[mode]; set != nil {
 		b.CaseVersion = set.Version
 	}
-	if role != "engine.development" && !(role == "engine.qa.design" && mode == coverage.ReviewBlackbox) {
+	if role != "engine.development.batch" && !(role == "engine.qa.design" && mode == coverage.ReviewBlackbox) {
 		b.Candidate = v.DevelopmentSnapshot
 		if v.Candidate != nil {
 			b.Candidate = v.Candidate.Identity
 		}
 	}
-	if role == "engine.qa.review" {
+	if role == "engine.qa.review.rationale" {
 		if set := v.Sets[mode]; set != nil && set.Candidate != "" {
 			b.Candidate = set.Candidate
 		}
 	}
-	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution" || role == "engine.gate" || role == "engine.repair") {
+	if role == "engine.repair" {
+		for _, work := range s.repairWork() {
+			if work.task == key {
+				b.WaveID, b.Candidate = work.wave.ID, work.wave.Candidate.Identity
+				if key != work.wave.Repair.Task {
+					b.Candidate = v.DevelopmentSnapshot
+				}
+			}
+		}
+	}
+	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution" || role == "engine.gate") {
 		b.WaveID = wave.ID
 		b.Candidate = wave.Candidate.Identity
 	}
@@ -344,7 +469,7 @@ func (s *State) nextDesignScope(mode coverage.ReviewKind, cd *compiler.CompiledD
 			completed++
 		}
 	}
-	return fmt.Sprintf("%d:%s:%d", s.Validation.Generation, mode, completed+1)
+	return fmt.Sprintf("%d:%s:%d:%s", s.Validation.Generation, mode, completed+1, s.prewaveScope(mode))
 }
 
 func (s *State) projectValidationTasks(view *decision.State, cd *compiler.CompiledDefinition) {
@@ -371,11 +496,12 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 		view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: reason})
 	}
-	if v.Development == nil {
-		add("engine.development", fmt.Sprintf("generation:%d", v.Generation), false)
-	}
+	s.projectDevelopmentTasks(view, cd)
 	for _, mode := range s.validationKinds() {
 		set := v.Sets[mode]
+		if s.caseSetWaiver(mode) != "" {
+			continue
+		}
 		if set == nil {
 			if mode == coverage.ReviewBlackbox || v.AuthoringWorkspace != "" {
 				add("engine.qa.design", s.nextDesignScope(mode, cd), false)
@@ -384,28 +510,33 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 		switch set.Status {
 		case "DRAFT", "THAWED":
-			add("engine.qa.design", s.nextDesignScope(mode, cd), false)
+			add("engine.qa.design", s.nextDesignScope(mode, cd), s.prewaveBlocked(mode, "engine.qa.design", cd))
 		case "REVIEW":
-			add("engine.qa.review", fmt.Sprintf("%d:%s:%s:%d", v.Generation, mode, set.Version, len(set.ReviewHistory)+1), len(set.ReviewHistory) >= s.qaReviewLimit(mode) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
+			add("engine.qa.review.rationale", s.reviewTask(mode, v.Generation, set.Version, cd).Scope, s.prewaveBlocked(mode, "engine.qa.review.rationale", cd) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
 		}
 	}
 	wave := s.currentValidationWave()
 	if wave == nil {
 		return
 	}
-	if wave.Status == "COLLECTING" {
+	if wave.Status == "COLLECTING" && s.validateCoverageRelations() == nil {
 		for _, target := range wave.Targets {
 			if target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED" {
 				handler := "engine.gate"
 				if target.Kind == "QA" {
 					handler = "engine.qa.execution"
 				}
-				add(handler, target.Task.Scope, false)
+				add(handler, target.Task.Scope, (target.Kind == "QA" && wave.Scope == coverage.ScopeAffected && len(target.RequiredCases) == 0) || target.GateImpact != nil && target.GateImpact.Decision == "")
 			}
 		}
 	}
-	if s.validationRepairPending(wave) && wave.Repair.Evidence == nil {
-		add("engine.repair", wave.Repair.Task.Scope, s.completedValidationWaves() >= 3 && !wave.ExtraAuthorized && !wave.Repair.PureP2)
+	if work := s.nextRepairWork(); work != nil {
+		blocked := !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= 3 && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
+		reason := decision.WaitReason("")
+		if blocked {
+			reason = decision.WaitDependencies
+		}
+		view.RequiredTasks[work.task.Step] = append(view.RequiredTasks[work.task.Step], decision.RequiredTask{Task: work.task, BlockedBy: reason})
 	}
 }
 
@@ -429,17 +560,6 @@ func (s *State) coverageContract(candidate *coverage.ValidationCandidate) covera
 		}
 	}
 	return c
-}
-func (s *State) validationWhitelist() (coverage.ApprovedWhitelist, error) {
-	var reviews []coverage.ReviewResult
-	for _, mode := range s.validationKinds() {
-		set := s.Validation.Sets[mode]
-		if set == nil || set.Review == nil {
-			return coverage.ApprovedWhitelist{}, fmt.Errorf("QA %s has no complete review", mode)
-		}
-		reviews = append(reviews, *set.Review)
-	}
-	return s.coverageContract(s.Validation.Candidate).ValidateReviews(reviews)
 }
 func (s *State) validationRouteDigest() string {
 	gates := slices.Clone(s.SelectedGates)

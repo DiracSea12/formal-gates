@@ -21,13 +21,34 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	return key
 }
 func (s *State) validationRequiredTask(key runtime.TaskKey, cd *compiler.CompiledDefinition) runtime.TaskKey {
-	for _, pending := range s.PendingActions {
+	if s.validationRole(key, cd) == "engine.development.batch" {
+		return key
+	}
+	for action, pending := range s.PendingActions {
+		if !s.prewaveDispatchCurrent(action, cd) {
+			continue
+		}
 		if pending.Task.Step == key.Step && s.validationMode(pending.Task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(pending.Task).Scope) == lastScopePart(key.Scope)) {
 			return pending.Task
 		}
 	}
+	for task, attempt := range s.EndedAttempts {
+		if !s.endedWorkCurrent(attempt, cd) {
+			continue
+		}
+		if task.Step == key.Step && s.validationMode(task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(task).Scope) == lastScopePart(key.Scope)) {
+			return task
+		}
+	}
 	for _, required := range s.requiredWorkTasks() {
-		if required.Step != key.Step {
+		current := true
+		for _, binding := range s.DispatchBindings {
+			if binding.Task == required {
+				current = s.prewaveWorkCurrent(binding, cd)
+				break
+			}
+		}
+		if !current || required.Step != key.Step {
 			continue
 		}
 		source := s.sourceValidationTask(required)
@@ -64,11 +85,10 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development", "engine.repair":
-			v.Development = nil
+		case "engine.development.batch", "engine.repair":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
-		case "engine.qa.design", "engine.qa.review":
+		case "engine.qa.design", "engine.qa.review.rationale":
 			if set := v.Sets[s.validationMode(key)]; set != nil {
 				var affected []string
 				for _, c := range set.Manifest.Cases {
@@ -89,10 +109,16 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 
 // carryCaseBindings changes the projection only; prior review records retain
 // their original revision. Invalidated or semantically changed cases reopen.
-func (s *State) carryCaseBindings() {
+func (s *State) carryCaseBindings() bool {
 	contract := s.coverageContract(nil)
+	changed := false
 	for mode, set := range s.Validation.Sets {
-		set.Manifest.Binding = coverage.ManifestBinding{SourceBinding: contract.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
+		binding := coverage.ManifestBinding{SourceBinding: contract.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
+		if set.Manifest.Binding == binding {
+			continue
+		}
+		changed = true
+		set.Manifest.Binding = binding
 		if err := s.validateManifest(mode, set.Manifest); err != nil {
 			var affected []string
 			for _, c := range set.Manifest.Cases {
@@ -108,15 +134,66 @@ func (s *State) carryCaseBindings() {
 		}
 		set.Paths = slices.Clone(set.Paths)
 	}
+	return changed
 }
 
+// A retry preserves the confirmed logical work and its signed binding.
 func (s *State) validationCarryAuthorized(action string) bool {
+	binding := s.DispatchBindings[action]
+	return s.validationWorkCarryAuthorized(action, binding.Task)
+}
+func (s *State) validationWorkCarryAuthorized(action string, task runtime.TaskKey) bool {
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
 		for _, choice := range s.RequirementRevisions[i].WorkDecisions {
-			if choice.Work.ActionID == action {
+			if action != "" && choice.Work.ActionID == action || task != (runtime.TaskKey{}) && choice.Work.Task == task {
 				return choice.Disposition == RequirementWorkCarry
 			}
 		}
 	}
 	return false
+}
+
+// Cross-revision reuse follows the confirmed per-dispatch decisions. Candidate
+// equality cannot discharge a replacement task explicitly authorized as REDO.
+func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current *ValidationWave) bool {
+	if prior.Candidate != current.Candidate || slices.Contains(s.requiredWorkTasks(), target.Task) {
+		return false
+	}
+	for _, previous := range prior.Targets {
+		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) || !s.validationWorkCarryAuthorized(previous.ResultAction, previous.Task) {
+			continue
+		}
+		if target.Kind == "QA" && !sameWaveCases(prior, current, target.Mode) {
+			return false
+		}
+		return s.carryValidationTarget(target, previous, current)
+	}
+	return false
+}
+
+func (s *State) carryRequirementTargets(current *ValidationWave) bool {
+	changed := false
+	for _, target := range current.Targets {
+		if target.Status != "PENDING" && target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
+			continue
+		}
+		for i := len(s.Validation.Waves) - 1; i >= 0; i-- {
+			prior := &s.Validation.Waves[i]
+			if prior.ID == current.ID {
+				continue
+			}
+			if prior.Generation == current.Generation {
+				if previous := prior.Targets[target.Task.String()]; previous != nil && prior.Candidate == current.Candidate && (previous.Status == "PASS" || previous.Status == "FAIL" || previous.Status == "AUTHORIZED_SKIP") {
+					changed = s.carryValidationTarget(target, previous, current) || changed
+				}
+				continue
+			}
+
+			if s.carryRequirementTarget(target, prior, current) {
+				changed = true
+			}
+			break
+		}
+	}
+	return changed
 }

@@ -459,8 +459,8 @@ func runRevisionSequence(report *HarnessReport, fixture *ProtocolFixture) error 
 	}
 	report.Revisions = append(report.Revisions, snapshot.Revision)
 	for index := 1; index <= 5; index++ {
-		event, err := protocol.NewRequestEvent(protocol.EventID(fmt.Sprintf("revision-event-%d", index)), protocol.ControlReset,
-			protocol.AskOption{ID: protocol.AskOptionID(fmt.Sprintf("choice-%d", index)), Label: fmt.Sprintf("choice %d", index)})
+		event, err := protocol.NewRequestEvent(protocol.EventID(fmt.Sprintf("revision-event-%d", index)), protocol.ControlAbort,
+			protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 		if err != nil {
 			return err
 		}
@@ -481,12 +481,12 @@ func runSubmitRequest(report *HarnessReport, fixture *ProtocolFixture, options H
 	}
 	eventID := valueOr(options.EventID, "request-event")
 	requestID := eventID
-	control, err := controlKind(valueOr(options.Control, string(protocol.ControlReset)))
+	control, err := controlKind(valueOr(options.Control, string(protocol.ControlAbort)))
 	if err != nil {
 		return err
 	}
 	event, err := protocol.NewRequestEvent(protocol.EventID(eventID), control,
-		protocol.AskOption{ID: protocol.AskOptionID(valueOr(options.Choice, "confirm")), Label: "confirm"})
+		protocol.AskOption{ID: protocol.AskOptionID(valueOr(options.Choice, "cancel")), Label: "Cancel abort"})
 	if err != nil {
 		return err
 	}
@@ -509,11 +509,7 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 		return err
 	}
 	requestID := valueOr(options.RequestID, "request-event")
-	before, err := fixture.Engine.Load()
-	if err != nil {
-		return err
-	}
-	ask, hasAsk := before.State.PendingAsks[requestID]
+	var err error
 	token := strings.TrimSpace(options.PayloadDigest)
 	if token == "" {
 		token, err = fixture.Engine.Freshness(protocol.RequestID(requestID))
@@ -521,7 +517,7 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 			return err
 		}
 	}
-	event, err := protocol.NewDecideEvent(protocol.EventID(valueOr(options.EventID, "decision-event")), protocol.RequestID(requestID), token, protocol.AskOptionID(valueOr(options.Choice, "confirm")))
+	event, err := protocol.NewDecideEvent(protocol.EventID(valueOr(options.EventID, "decision-event")), protocol.RequestID(requestID), token, protocol.AskOptionID(valueOr(options.Choice, "cancel")))
 	if err != nil {
 		return err
 	}
@@ -530,28 +526,7 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 		return err
 	}
 	report.Acceptances = append(report.Acceptances, acceptance)
-	if hasAsk && ask.Control == protocol.ControlRecovery {
-		snapshot, loadErr := fixture.Engine.Load()
-		if loadErr != nil {
-			return loadErr
-		}
-		ready := make([]decision.IssuedAction, 0, len(snapshot.State.PendingActions))
-		for _, pending := range snapshot.State.PendingActions {
-			ready = append(ready, decision.IssuedAction{ActionID: pending.ActionID, Task: pending.Task, Step: authoring.StepID(pending.Step)})
-		}
-		sort.Slice(ready, func(i, j int) bool { return ready[i].ActionID < ready[j].ActionID })
-		if len(ready) > 0 {
-			report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
-		} else {
-			plan, _, decideErr := fixture.Engine.Plan()
-			if decideErr != nil {
-				return decideErr
-			}
-			if plan.Next.Kind != decision.KindWait {
-				report.Next = append(report.Next, nextRecord(plan.Next))
-			}
-		}
-	}
+
 	return nil
 }
 
@@ -728,7 +703,7 @@ func runIdempotency(report *HarnessReport, fixture *ProtocolFixture) error {
 	if _, err := ensureReady(report, fixture); err != nil {
 		return err
 	}
-	event, err := protocol.NewRequestEvent("idempotent-event", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	event, err := protocol.NewRequestEvent("idempotent-event", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 	if err != nil {
 		return err
 	}
@@ -741,7 +716,7 @@ func runIdempotency(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	report.Acceptances = append(report.Acceptances, firstAcceptance, secondAcceptance)
-	mismatch, _ := protocol.NewRequestEvent("idempotent-event", protocol.ControlAbort, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	mismatch, _ := protocol.NewRequestEvent("idempotent-event", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	_, mismatchErr := submit(fixture.Engine, mismatch)
 	if mismatchErr == nil {
 		return fmt.Errorf("same event ID with different payload was accepted")
@@ -755,7 +730,7 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 	if _, err := ensureReady(report, fixture); err != nil {
 		return err
 	}
-	request, _ := protocol.NewRequestEvent("freshness-request", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	request, _ := protocol.NewRequestEvent("freshness-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 	requestAcceptance, err := submit(fixture.Engine, request)
 	if err != nil {
 		return err
@@ -774,13 +749,13 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	stale, _ := protocol.NewDecideEvent("freshness-stale", "freshness-request", t1, "confirm")
+	stale, _ := protocol.NewDecideEvent("freshness-stale", "freshness-request", t1, "cancel")
 	if _, staleErr := submit(fixture.Engine, stale); staleErr == nil {
 		return fmt.Errorf("stale freshness token was accepted")
 	} else {
 		report.addError(staleErr)
 	}
-	fresh, _ := protocol.NewDecideEvent("freshness-current", "freshness-request", t2, "confirm")
+	fresh, _ := protocol.NewDecideEvent("freshness-current", "freshness-request", t2, "cancel")
 	freshAcceptance, err := submit(fixture.Engine, fresh)
 	if err != nil {
 		return err
@@ -798,8 +773,8 @@ func runConcurrent(report *HarnessReport, fixture *ProtocolFixture) error {
 	for _, item := range []struct {
 		id      protocol.EventID
 		control protocol.ControlKind
-	}{{"concurrent-a", protocol.ControlReset}, {"concurrent-b", protocol.ControlAbort}} {
-		event, err := protocol.NewRequestEvent(item.id, item.control, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	}{{"concurrent-a", protocol.ControlAbort}, {"concurrent-b", protocol.ControlAbort}} {
+		event, err := protocol.NewRequestEvent(item.id, item.control, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 		if err != nil {
 			return err
 		}
@@ -885,7 +860,7 @@ func runFingerprint(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	if _, _, driftErr := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"target": "old-head"}, oldFingerprint); driftErr == nil {
+	if _, _, driftErr := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"stage": "old-head"}, oldFingerprint); driftErr == nil {
 		return fmt.Errorf("stale external fingerprint was accepted")
 	} else {
 		report.addError(driftErr)
@@ -894,7 +869,7 @@ func runFingerprint(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "new-head"})
+	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "new-head"})
 	if err != nil {
 		return err
 	}
@@ -955,27 +930,27 @@ func runFault(report *HarnessReport, fixture *ProtocolFixture, options HarnessOp
 		_, err = fixture.Worker.ResultEvent("fault-result", first(actions), protocol.OutcomePass, "sha256:fault-result", "")
 		report.SideEffects = map[string]int{"fakeHost.spawn": fixture.Host.SpawnCalls(first(actions))}
 	case persistence.FaultHostCommitBefore, persistence.FaultHostCommitAfter:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fault"})
+		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
 		err = executeErr
 		if intent.ActionID != "" {
 			report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
 		}
 	case persistence.FaultHostObserveBefore:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fault"})
+		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
 		if executeErr != nil {
 			return executeErr
 		}
 		report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
 		_, err = fixture.Host.Observe(intent.ActionID, "sha256:observed")
 	case persistence.FaultHostReconcileBefore:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fault"})
+		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
 		if executeErr != nil {
 			return executeErr
 		}
 		report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
 		_, err = fixture.Host.Reconcile(intent.ActionID, "sha256:observed", false, false)
 	default:
-		event, eventErr := protocol.NewRequestEvent("fault-request", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+		event, eventErr := protocol.NewRequestEvent("fault-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 		if eventErr != nil {
 			return eventErr
 		}
@@ -995,7 +970,7 @@ func runLockRecovery(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err := os.WriteFile(lockPath, []byte("pid=999999999 token=crashed\n"), 0o600); err != nil {
 		return err
 	}
-	event, _ := protocol.NewRequestEvent("after-crashed-lock", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	event, _ := protocol.NewRequestEvent("after-crashed-lock", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 	acceptance, err := submit(fixture.Engine, event)
 	if err != nil {
 		return err
@@ -1050,7 +1025,7 @@ func runHostAction(report *HarnessReport, fixture *ProtocolFixture, options Harn
 		return err
 	}
 	operation := valueOr(options.Operation, "op.fan.transport")
-	var params any = map[string]any{"target": "fixture", "retries": 1}
+	var params any = map[string]any{"stage": "fixture", "generation": 1}
 	if strings.TrimSpace(options.Params) != "" {
 		if err := json.Unmarshal([]byte(options.Params), &params); err != nil {
 			return fmt.Errorf("testkit: --params must be valid JSON: %w", err)
@@ -1182,6 +1157,26 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 	if err != nil {
 		return err
 	}
+	if mode == "transient" || mode == "nontransient" {
+		spawn, spawnErr := fixture.Host.SpawnEvent("interruption-spawn", actionID, "interruption-agent", protocol.SpawnStatusSpawned)
+		if spawnErr != nil {
+			return spawnErr
+		}
+		report.Acceptances = append(report.Acceptances, spawn.Acceptance)
+		started, eventErr := protocol.NewLifecycleEventEvent("interruption-start", fixture.Host.Provider, "interruption-agent", protocol.LifecycleStart)
+		if eventErr != nil {
+			return eventErr
+		}
+		accepted, submitErr := submit(fixture.Engine, started)
+		if submitErr != nil {
+			return submitErr
+		}
+		report.Acceptances = append(report.Acceptances, accepted)
+	}
+	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	if err != nil {
+		return err
+	}
 	var plan protocol.RecoveryPlan
 	switch mode {
 	case "transient":
@@ -1237,6 +1232,39 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 	if err != nil {
 		return err
 	}
+	if mode == "transient" || mode == "nontransient" {
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		for _, intent := range snapshot.State.PendingHostActions {
+			target, kind := intent.Resume, protocol.LifecycleStart
+			if intent.Terminate != nil {
+				target, kind = intent.Terminate, protocol.LifecycleStop
+			}
+			if target == nil || target.WorkerActionID != actionID {
+				continue
+			}
+			observed, eventErr := protocol.NewLifecycleEventEvent(protocol.EventID(intent.ActionID+":lifecycle"), fixture.Host.Provider, target.Identity, kind)
+			if eventErr != nil {
+				return eventErr
+			}
+			accepted, submitErr := submit(fixture.Engine, observed)
+			if submitErr != nil {
+				return submitErr
+			}
+			report.Acceptances = append(report.Acceptances, accepted)
+			receipt, eventErr := protocol.NewAgentHostActionReceiptEvent(protocol.EventID(intent.ActionID+":receipt"), intent.ActionID, intent.Operation, fixture.Host.Provider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: target.Identity, Event: kind})
+			if eventErr != nil {
+				return eventErr
+			}
+			accepted, submitErr = submit(fixture.Engine, receipt)
+			if submitErr != nil {
+				return submitErr
+			}
+			report.Acceptances = append(report.Acceptances, accepted)
+		}
+	}
 	report.RecoveryPlan = append(report.RecoveryPlan, plan)
 	report.Metadata["lifecycleMatches"] = plan.LifecycleMatches
 	if raw := strings.TrimSpace(options.LifecycleMatches); raw != "" {
@@ -1248,15 +1276,11 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: map[string]any{"matches": plan.LifecycleMatches}})
 	}
 	if mode == "transient" && plan.Action == protocol.RecoveryResumeAttempt {
-		spawn, spawnErr := fixture.Host.SpawnEvent("interruption-resume-spawn", actionID, "resumed-agent", protocol.SpawnStatusSpawned)
-		if spawnErr != nil {
-			return spawnErr
-		}
 		accepted, resultErr := fixture.Worker.ResultEvent("interruption-resume-result", actionID, protocol.OutcomePass, "sha256:resumed", "")
 		if resultErr != nil {
 			return resultErr
 		}
-		report.Acceptances = append(report.Acceptances, spawn.Acceptance, accepted)
+		report.Acceptances = append(report.Acceptances, accepted)
 	}
 	if mode == "nontransient" && plan.Action == protocol.RecoveryNewAttempt {
 		late, eventErr := protocol.NewWorkerResultEvent("interruption-late-result", actionID, "fake-host", protocol.OutcomePass, "sha256:late", "")
@@ -1364,14 +1388,14 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 	if _, err := os.Stat(report.StatePath); err == nil {
 		return fmt.Errorf("testkit: terminal scenario requires a fresh project")
 	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseTerminal)
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		return err
 	}
 	if err := fixture.Initialize(view, "fake-host"); err != nil {
 		return err
 	}
-	request, _ := protocol.NewRequestEvent("terminal-request", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	request, _ := protocol.NewRequestEvent("terminal-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	requestAcceptance, err := submit(fixture.Engine, request)
 	if err != nil {
 		return err
@@ -1380,7 +1404,7 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	decisionEvent, _ := protocol.NewDecideEvent("terminal-decision", "terminal-request", token, "confirm")
+	decisionEvent, _ := protocol.NewDecideEvent("terminal-decision", "terminal-request", token, "abort")
 	eventAcceptance, err := submit(fixture.Engine, decisionEvent)
 	if err != nil {
 		return err
@@ -1391,7 +1415,7 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 	}
 	requestDigest, _ := request.Digest()
 	eventDigest, _ := decisionEvent.Digest()
-	summary, err := WriteTerminalSummary(fixture.Root, snapshot.Revision, requestAcceptance, requestDigest, eventAcceptance, eventDigest, "COMPLETE")
+	summary, err := WriteTerminalSummary(fixture.Root, snapshot.Revision, requestAcceptance, requestDigest, eventAcceptance, eventDigest, "ABORTED")
 	if err != nil {
 		return err
 	}
@@ -1566,7 +1590,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 				requestAcceptance = record.Acceptance
 				requestDigest = record.Digest
 			} else {
-				request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+				request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 				if reqErr != nil {
 					return reqErr
 				}
@@ -1586,7 +1610,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			if tokenErr != nil {
 				return tokenErr
 			}
-			decideEvent, decErr := protocol.NewDecideEvent(nextEventID("decision"), protocol.RequestID(requestID), token, "confirm")
+			decideEvent, decErr := protocol.NewDecideEvent(nextEventID("decision"), protocol.RequestID(requestID), token, "cancel")
 			if decErr != nil {
 				return decErr
 			}
@@ -1602,7 +1626,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			}
 			vcsCount = count
 		case decision.KindHostAction:
-			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "fixture", "retries": float64(1)})
+			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fixture", "generation": float64(1)})
 			if execErr != nil {
 				return execErr
 			}
@@ -1848,11 +1872,11 @@ func validateFullRecoveryPlan(fixture fullRecoveryFixture) error {
 		fixture.AdapterOperation != "op.fan.transport" || fixture.Fault.Point != string(persistence.FaultExecuteAfter) || !fixture.Fault.Once {
 		return fmt.Errorf("testkit: full recovery fixture does not match the registered plan")
 	}
-	if len(fixture.AdapterParams) != 2 || fixture.AdapterParams["target"] != "fixture" {
+	if len(fixture.AdapterParams) != 2 || fixture.AdapterParams["stage"] != "fixture" {
 		return fmt.Errorf("testkit: full recovery fixture adapter params are invalid")
 	}
-	if retries, ok := fixture.AdapterParams["retries"].(float64); !ok || retries != 1 {
-		return fmt.Errorf("testkit: full recovery fixture retries must be 1")
+	if generation, ok := fixture.AdapterParams["generation"].(float64); !ok || generation != 1 {
+		return fmt.Errorf("testkit: full recovery fixture generation must be 1")
 	}
 	return nil
 }
@@ -1896,8 +1920,8 @@ func runFullRecoveryFault(report *HarnessReport, fixture *ProtocolFixture, plan 
 	}
 	report.CompletedTasksBeforeFault = append([]string(nil), plan.Tasks[:2]...)
 	fixture.Faults.ArmCrash(persistence.FaultExecuteAfter)
-	event, err := protocol.NewRequestEvent("full-recovery-fault-request", protocol.ControlReset,
-		protocol.AskOption{ID: "confirm", Label: "confirm"})
+	event, err := protocol.NewRequestEvent("full-recovery-fault-request", protocol.ControlAbort,
+		protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 	if err != nil {
 		return err
 	}
@@ -2027,7 +2051,7 @@ func prepareReceiptTemplate(report *HarnessReport, fixture *ProtocolFixture, kin
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "adapter":
 		intent, _, err = fixture.Engine.ExecuteHostActionWithCorrelation(
-			"op.fan.transport", map[string]any{"target": "fixture", "retries": float64(1)},
+			"op.fan.transport", map[string]any{"stage": "fixture", "generation": float64(1)},
 			"host-action-correlation", fingerprint)
 		if err == nil {
 			digest := strings.TrimPrefix(encoder.Digest([]byte(intent.ActionID)), "sha256:")
@@ -2106,7 +2130,7 @@ func receiptTemplate(intent protocol.HostActionIntent, provider string) map[stri
 		template["operation"] = string(intent.Operation)
 		template["adapterOperation"] = string(intent.Adapter.Operation)
 		template["params"] = intent.Adapter.Params
-		template["adapterEvidence"] = map[string]any{"identity": "fixture", "observationDigest": "sha256:fixture"}
+		template["adapterEvidence"] = map[string]any{"identity": "fixture", "digest": "sha256:fixture"}
 	case protocol.HostActionTerminateAgent:
 		template["operation"] = string(intent.Operation)
 		template["lifecycleEvidence"] = map[string]any{"identity": intent.Terminate.Identity, "event": protocol.LifecycleStop}
@@ -2427,7 +2451,11 @@ func runTransientRetryRouting(report *HarnessReport, options HarnessOptions) err
 		if attempt.RetryExhausted {
 			latest := current.State.RecoveryRecords[len(current.State.RecoveryRecords)-1]
 			report.RecoveryPlan = []protocol.RecoveryPlan{{Class: latest.Class, Action: latest.Action, Detail: latest.Detail}}
-			report.Next = append(report.Next, NextRecord{Kind: decision.KindWait, Payload: decision.WaitPayload{Reason: decision.WaitCapacity}})
+			plan, _, err := fixture.Engine.Plan()
+			if err != nil {
+				return err
+			}
+			report.Next = append(report.Next, nextRecord(plan.Next))
 			report.Metadata["retryPolicyMaxAttempts"] = attempt.MaxAttempts
 			report.Metadata["retryAttemptsExhausted"] = attempt.Attempts
 			report.Metadata["retryAttemptSequence"] = retrySequence
@@ -2451,9 +2479,14 @@ func runTransientRetryRouting(report *HarnessReport, options HarnessOptions) err
 	report.Metadata["newSpawns"] = newSpawns
 	report.SideEffects = map[string]int{"spawn": newSpawns, "initialSpawn": initialSpawnCalls}
 
-	if snapshot, loadErr := fixture.Engine.Load(); loadErr == nil {
-		report.Snapshot = &snapshot
-		report.Summary, _ = Summarize(fixture.Engine)
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return err
+	}
+	report.Snapshot = &snapshot
+	report.Summary, err = Summarize(fixture.Engine)
+	if err != nil {
+		return err
 	}
 	report.Phase = "failure-routing"
 	report.Paths, _ = harnessPaths(fixture.Root)
@@ -2688,7 +2721,7 @@ func ReadTerminalSummary(root string) (TerminalSummary, error) {
 	}
 	if summary.Status == "FINALIZING_CLEANUP" {
 		summary.Next = NextRecord{Kind: decision.KindWait, Payload: decision.WaitPayload{Reason: decision.WaitEngineInternal}}
-	} else if summary.Status != "COMPLETE" {
+	} else if summary.Status != "COMPLETE" && summary.Status != "ABORTED" {
 		return TerminalSummary{}, fmt.Errorf("testkit: terminal summary status %q is not queryable", summary.Status)
 	}
 	return summary, nil

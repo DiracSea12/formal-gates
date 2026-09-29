@@ -10,85 +10,124 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
-	SourcePoints     []SourcePoint               `json:"sourcePoints,omitempty"`
-	Binding          WorkBinding                 `json:"binding"`
-	Handler          string                      `json:"handler"`
-	Manifest         coverage.AcceptanceManifest `json:"manifest"`
-	Contract         *coverage.CoverageContract  `json:"contract,omitempty"`
-	Whitelist        *coverage.ApprovedWhitelist `json:"whitelist,omitempty"`
-	Execution        *coverage.ExecutionBinding  `json:"execution,omitempty"`
-	Completed        []coverage.ExecutionRecord  `json:"completed,omitempty"`
-	InheritableCases []string                    `json:"inheritableCases,omitempty"`
-	PendingCases     []string                    `json:"pendingCases,omitempty"`
+	Interruption             *RecoveryRecord             `json:"interruption,omitempty"`
+	Gate                     *GateInput                  `json:"gate,omitempty"`
+	InheritableSharedReviews []coverage.ReviewDecision   `json:"inheritableSharedReviews,omitempty"`
+	Repair                   *RepairInput                `json:"repair,omitempty"`
+	Development              *DevelopmentInput           `json:"development,omitempty"`
+	RequiredCases            []string                    `json:"requiredCases,omitempty"`
+	Inherited                []coverage.ExecutionRecord  `json:"inherited,omitempty"`
+	SourcePoints             []SourcePoint               `json:"sourcePoints,omitempty"`
+	Binding                  WorkBinding                 `json:"binding"`
+	Handler                  string                      `json:"handler"`
+	Manifest                 coverage.AcceptanceManifest `json:"manifest"`
+	Contract                 *coverage.CoverageContract  `json:"contract,omitempty"`
+	Whitelist                *coverage.ApprovedWhitelist `json:"whitelist,omitempty"`
+	Execution                *coverage.ExecutionBinding  `json:"execution,omitempty"`
+	Completed                []coverage.ExecutionRecord  `json:"completed,omitempty"`
+	InheritableReviews       []coverage.ReviewDecision   `json:"inheritableReviews,omitempty"`
+	PendingCases             []string                    `json:"pendingCases,omitempty"`
 }
 
 func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]ValidationInput {
 	values := map[string]ValidationInput{}
-	if s.Validation == nil {
+	if s.Validation == nil || s.abortRequested() {
 		return values
 	}
 	for id, pending := range s.PendingActions {
-		binding, ok := s.DispatchBindings[id]
-		if !ok {
+		if s.validationDispatchBlocked(id) || !s.prewaveDispatchCurrent(id, cd) {
 			continue
 		}
-		mode := s.validationMode(pending.Task)
-		role := s.validationRole(pending.Task, cd)
-		input := ValidationInput{Binding: binding, Handler: role}
-		c := s.coverageContract(s.Validation.Candidate)
-		switch role {
-		case "engine.qa.design", "engine.qa.review":
-			contract := modeCoverageContract(c, mode)
-			contract.Candidate = nil
-			input.Contract = &contract
-		case "engine.repair":
-			input.Contract = &c
+		if _, ok := s.DispatchBindings[id]; !ok {
+			continue
 		}
-		_, input.SourcePoints = s.coveragePoints()
-		input.Manifest.Binding = coverage.ManifestBinding{SourceBinding: c.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
-		for _, src := range c.RequiredSources.Sources {
-			if src.Applicability == coverage.QAApplicability {
-				input.Manifest.Sources = append(input.Manifest.Sources, src.SourceID)
-			}
+		values[id] = s.validationInput(pending, cd)
+	}
+	return values
+}
+
+func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefinition) ValidationInput {
+	binding := s.DispatchBindings[pending.ActionID]
+	mode := s.validationMode(pending.Task)
+	role := s.validationRole(pending.Task, cd)
+	input := ValidationInput{Binding: binding, Handler: role}
+	for i := len(s.RecoveryRecords) - 1; i >= 0; i-- {
+		record := s.RecoveryRecords[i]
+		if record.Task == pending.Task && (record.RequestID != "" || s.RejectedResults[record.ActionID].Payload.Outcome == OutcomeRuntimeError) {
+			input.Interruption = &record
+			break
 		}
-		input.Manifest.Points, _ = s.coveragePoints()
-		if set := s.Validation.Sets[mode]; set != nil {
-			input.Manifest = set.Manifest
-			input.InheritableCases = s.inheritableCases(set)
+	}
+	if role == "engine.gate" {
+		input.Gate = s.gateInput(binding, pending.Task)
+	}
+	if role == "engine.development.batch" {
+		input.Development = s.developmentInput(pending.Task, cd)
+	}
+	c := s.coverageContract(s.Validation.Candidate)
+	switch role {
+	case "engine.qa.design", "engine.qa.review.rationale":
+		contract := modeCoverageContract(c, mode)
+		contract.Candidate = nil
+		input.Contract = &contract
+	case "engine.repair":
+		input.Contract = &c
+		input.Repair = s.repairInput(pending.Task)
+	}
+	_, input.SourcePoints = s.coveragePoints()
+	input.Manifest.Binding = coverage.ManifestBinding{SourceBinding: c.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
+	for _, src := range c.RequiredSources.Sources {
+		if src.Applicability == coverage.QAApplicability {
+			input.Manifest.Sources = append(input.Manifest.Sources, src.SourceID)
 		}
-		if (role == "engine.qa.design" || role == "engine.qa.review") && binding.RouteScope != "" {
+	}
+	input.Manifest.Points, _ = s.coveragePoints()
+	if set := s.Validation.Sets[mode]; set != nil {
+		input.Manifest = set.Manifest
+		input.InheritableReviews = s.inheritableReviews(set)
+		input.InheritableSharedReviews = inheritableSharedReviews(set)
+	}
+	if role == "engine.qa.design" || role == "engine.qa.review.rationale" {
+		input.Manifest.Binding.RequirementRevision = binding.RequirementRevision
+		input.Contract.RequiredSources.Binding.RequirementRevision = binding.RequirementRevision
+		if binding.RouteScope != "" {
 			input.Manifest = manifestAtRoute(input.Manifest, binding.RouteScope)
-			for i := range input.Contract.Manifests {
+		}
+		for i := range input.Contract.Manifests {
+			input.Contract.Manifests[i].Binding.RequirementRevision = binding.RequirementRevision
+			if binding.RouteScope != "" {
 				input.Contract.Manifests[i] = manifestAtRoute(input.Contract.Manifests[i], binding.RouteScope)
 			}
 		}
-		if role == "engine.qa.execution" {
-			wave := s.validationWave(binding.WaveID)
-			if wave == nil {
-				values[id] = input
-				continue
-			}
-			contract, whitelist, err := s.executionContract(mode, wave)
-			if err == nil {
-				input.Contract = &contract
-				input.Whitelist = &whitelist
-				input.Execution = &coverage.ExecutionBinding{RequiredSourcesDigest: whitelist.RequiredSourcesDigest, ManifestDigest: whitelist.ManifestDigest, MapDigest: whitelist.MapDigest, WhitelistDigest: whitelist.Digest, Candidate: wave.Candidate, Scope: wave.Scope}
-				for _, edge := range whitelist.Entries {
-					if !slices.Contains(input.Execution.ExpectedCaseIDs, edge.CaseID) {
-						input.Execution.ExpectedCaseIDs = append(input.Execution.ExpectedCaseIDs, edge.CaseID)
-					}
-				}
-				slices.Sort(input.Execution.ExpectedCaseIDs)
-				input.PendingCases = slices.Clone(input.Execution.ExpectedCaseIDs)
-				if target := wave.Targets[pending.Task.String()]; target != nil && target.Execution != nil {
-					input.Completed = target.Execution.Records
-					for _, record := range input.Completed {
-						input.PendingCases = slices.DeleteFunc(input.PendingCases, func(id string) bool { return id == record.CaseID })
-					}
-				}
-			}
-		}
-		values[id] = input
 	}
-	return values
+	if role == "engine.qa.execution" {
+		wave := s.validationWave(binding.WaveID)
+		if wave == nil {
+			return input
+		}
+		contract, whitelist, err := s.executionContract(mode, wave)
+		if err == nil {
+			input.Contract = &contract
+			input.Whitelist = &whitelist
+			input.Execution = &coverage.ExecutionBinding{RequiredSourcesDigest: whitelist.RequiredSourcesDigest, ManifestDigest: whitelist.ManifestDigest, MapDigest: whitelist.MapDigest, WhitelistDigest: whitelist.Digest, Candidate: wave.Candidate, Scope: wave.Scope}
+			input.Execution.ExpectedCaseIDs = executionCaseIDs(whitelist)
+			if target := wave.Targets[pending.Task.String()]; target != nil {
+				input.RequiredCases = slices.Clone(requiredExecutionCases(wave, target, whitelist))
+				input.Inherited, _ = s.executionInheritance(wave, mode, whitelist, input.RequiredCases, target.ScopeReason)
+				if target.Execution != nil {
+					input.Completed = target.Execution.Records
+				}
+			}
+			for _, edge := range whitelist.Entries {
+				complete := slices.ContainsFunc(input.Completed, func(record coverage.ExecutionRecord) bool {
+					return record.ReviewKind == edge.ReviewKind && record.SourceID == edge.SourceID && record.PointID == edge.PointID && record.CaseID == edge.CaseID
+				})
+				if !complete && !slices.Contains(input.PendingCases, edge.CaseID) {
+					input.PendingCases = append(input.PendingCases, edge.CaseID)
+				}
+			}
+			slices.Sort(input.PendingCases)
+		}
+	}
+	return input
 }

@@ -1,0 +1,187 @@
+package protocol
+
+import (
+	"fmt"
+	"strings"
+
+	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/runtime"
+)
+
+// prewaveScope identifies the actual requested design inputs and the explicit
+// reopening responsibility. Reading or driving the same facts preserves it.
+func (s *State) prewaveScope(mode coverage.ReviewKind) string {
+	set := s.Validation.Sets[mode]
+	if set == nil {
+		return ""
+	}
+	request, _ := s.designReopening(mode)
+	manifest := set.Manifest
+	manifest.Binding = coverage.ManifestBinding{}
+	return strings.TrimPrefix(digestOfCanonical(struct {
+		Design   runtime.TaskKey
+		Manifest coverage.AcceptanceManifest
+		Request  string
+	}{set.DesignTask, manifest, request}), "sha256:")
+}
+
+func (s *State) designReopening(mode coverage.ReviewKind) (string, uint64) {
+	var request string
+	var revision uint64
+	for id, d := range s.Decisions {
+		r := s.PendingAsks[id].Validation
+		if r == nil || r.Mode != mode || d.Revision <= revision {
+			continue
+		}
+		redesign := d.Choice == "redesign" || d.Choice == "approve" && (r.Kind == "THAW" || r.Kind == "QA_ARTIFACT_REPAIR" || r.Kind == "VALIDATION_DETAIL_DISPOSITION" && d.Validation != nil && d.Validation.Remedy == "QA_ARTIFACT_REPAIR")
+		if redesign {
+			request, revision = id, d.Revision
+		}
+	}
+	return request, revision
+}
+
+func (s *State) reviewTask(mode coverage.ReviewKind, generation uint64, version string, cd *compiler.CompiledDefinition) runtime.TaskKey {
+	set := s.Validation.Sets[mode]
+	return pipelineTask(cd, "engine.qa.review.rationale", fmt.Sprintf("%d:%s:%s:%s:%d", generation, mode, version, strings.TrimPrefix(digestOfCanonical(set.DesignTask), "sha256:"), len(set.ReviewHistory)+1))
+}
+
+// prewaveWorkCurrent decides applicability, not transport completion. An
+// inapplicable dispatch keeps its receipt/identity bookkeeping until observed.
+func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinition) bool {
+	role := s.validationRole(b.Task, cd)
+	if role != "engine.qa.design" && role != "engine.qa.review.rationale" {
+		return true
+	}
+	if s.Validation == nil {
+		return false
+	}
+	if b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
+		return false
+	}
+	mode := s.validationMode(b.Task)
+	set := s.Validation.Sets[mode]
+	source := s.sourceValidationTask(b.Task)
+	if role == "engine.qa.design" {
+		if set != nil && set.Status != "DRAFT" && set.Status != "THAWED" {
+			return false
+		}
+		if set != nil && set.DesignTask == b.Task {
+			return s.prewaveInputsCurrent(b)
+		}
+		expected := pipelineTask(cd, role, s.nextDesignScope(mode, cd))
+		// Requirement carry retains the original generation in the signed task.
+		parts := strings.SplitN(expected.Scope, ":", 2)
+		if len(parts) == 2 {
+			expected.Scope = fmt.Sprintf("%d:%s", b.Generation, parts[1])
+		}
+		return source == expected || s.requirementTaskOwnsPrewave(b)
+	}
+	if set == nil || set.Status != "REVIEW" {
+		return false
+	}
+	original := set.Manifest
+	original.Binding.RequirementRevision = b.RequirementRevision
+	original = manifestAtRoute(original, b.RouteScope)
+	if digestOfCanonical(original) != b.CaseVersion {
+		return false
+	}
+	if source != s.reviewTask(mode, b.Generation, b.CaseVersion, cd) && !s.requirementTaskOwnsPrewave(b) {
+		return false
+	}
+	return mode != coverage.ReviewWhitebox || s.sameCandidateContent(b.Candidate, set.Candidate)
+}
+
+func (s *State) prewaveDispatchCurrent(action string, cd *compiler.CompiledDefinition) bool {
+	b, ok := s.DispatchBindings[action]
+	return !ok || s.prewaveWorkCurrent(b, cd)
+}
+
+func (e *Engine) retirePrewaveResult(s *State, record WorkerResult) error {
+	b := s.DispatchBindings[record.ActionID]
+	s.retireAction(record.ActionID, "", "pre-wave responsibility was superseded")
+	delete(s.EndedAttempts, b.Task)
+	if err := s.terminalizeTask(b.Task); err != nil {
+		return err
+	}
+	s.archiveObsoleteResult(record)
+	s.routingReleasedCapacity = true
+	return nil
+}
+
+// A requirement replacement retains the original duty in WorkDecisions, while
+// its issuance revision binds which accepted design and reopening it observed.
+func (s *State) requirementTaskOwnsPrewave(b WorkBinding) bool {
+	if s.requirementRevisionForTask(b.Task) == "" {
+		return false
+	}
+	return s.prewaveInputsCurrent(b)
+}
+
+func (s *State) prewaveInputsCurrent(b WorkBinding) bool {
+	var issued uint64
+	for action, binding := range s.DispatchBindings {
+		if binding.Task == b.Task && s.DispatchIssueRevisions[action] > issued {
+			issued = s.DispatchIssueRevisions[action]
+		}
+	}
+	if issued == 0 {
+		return false
+	}
+	mode := s.validationMode(b.Task)
+	set := s.Validation.Sets[mode]
+	if set != nil {
+		for action, result := range s.Results {
+			if result.Validation != nil && result.Validation.Binding.Task == set.DesignTask && s.DispatchIssueRevisions[action] > issued {
+				return false
+			}
+		}
+	}
+	if _, reopened := s.designReopening(mode); reopened > issued {
+		return false
+	}
+	return true
+}
+
+// validationWorkOwed reads the existing development, target and repair owners.
+// A carried target retains its original wave binding while the current wave
+// may project that exact Task; candidate equality alone grants no authority.
+func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinition) bool {
+	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
+		return false
+	}
+	if s.validationRole(b.Task, cd) == "engine.development.batch" {
+		_, _, _, current := s.developmentBatch(b.Task, cd)
+		return current && s.developmentResult(b.Task) == nil
+	}
+	if b.WaveID == "" {
+		return true
+	}
+	wave := s.validationWave(b.WaveID)
+	current := s.currentValidationWave()
+	if s.validationRole(b.Task, cd) == "engine.repair" {
+		for _, work := range s.repairWork() {
+			if work.task == b.Task && work.wave.ID == b.WaveID {
+				return work.result == nil
+			}
+		}
+		return false
+	}
+	if wave == nil {
+		return false
+	}
+	target := wave.Targets[b.Task.String()]
+	if wave != current || wave.Status != "COLLECTING" {
+		if !s.validationWorkCarryAuthorized("", b.Task) || wave.Status != "INVALIDATED" {
+			return false
+		}
+		if wave != current {
+			if current == nil || current.Status != "COLLECTING" {
+				return false
+			}
+			target = current.Targets[b.Task.String()]
+		}
+	}
+	return target != nil && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
+}
