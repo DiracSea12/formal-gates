@@ -705,3 +705,20 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 - 验证：engine+cli+validate 全量（前节）＋三处定向负控＋vet/gofmt/diff-check 全过。
 
 下一单元：R4 guard 接入与三处权威切换（合同 /tmp/r4-contract.md，原文出处已核：incremental-seal-plan 阶段 4 节、draft §7:372-392、REQ-013 AC-059、REQ-015 AC-068/069、cost-metering 设计）。
+
+## R4：guard 接入与三处权威切换（2026-09-25，实施→零上下文审查→返修收口）
+
+合同 /tmp/r4-contract.md（原文出处：incremental-seal-plan 阶段 4 节、draft §7:372-392、REQ-013 AC-055/058/059、REQ-015 AC-068/069、cost-metering design.md）。零上下文开发代理实施，设计文档 /tmp/r4-implementation-design.md。
+
+交付：guard 运行时集成（guardBasis 构造单点从权威 State——closed-world definition/确认 requirement/Batch/route/topology/批准 QA/所选门/established obligations+repairs（adjudication 完成＋wave 收齐准入）/预授权 repair 机械加入；签发闸在 issueInto；GUARD_ALLOWANCE_BLOCKED 与 BLOCKED_BUG 三形；GuardBudget 投影提交点单一 writer＋加载边界重算校验）；cost source 三值桥（protocol typed 引用＋Config 注入，facade 桥做 lifecycle-sidecar 查找、解析归 internal/cost；PENDING 滞留复用 StagedResults＋COST_PENDING acceptance，来源落定同配对路径补齐；UNAVAILABLE 零数字条目照常完成；nil bridge 行为不变）；三处权威切换（GuardRuntimeIntegration 常量权威化、EngineAllowance 读 Guard 投影且 OwnerCost/TokenCap 独立判定、engine run 对 legacy writer 不可达负控）；REPAIR Ask 摘要按 draft:372-375 补全（专用 repairAskFace）。State 增 Guard/Cost 投影，façade Run/TerminalSummary 透出。
+
+零上下文独立审查（/tmp/r4-independent-review-20260925/report.md）判不通过：1 P1＋2 P2＋7 P3，三项主发现主代理亲跑探针复现坐实。返修（同实施代理，根因收敛）：
+- F1/P1 闸位移到 issueInto 一切写账之前（原在 TransitionTask 写 s.Tasks 之后，拒绝留幽灵 ISSUED、epilogue 吞错落盘、自环迁移致永久死锁）；补公开漏斗负控（IssueFromPlan 拒绝→重开 store 字节不变）。
+- F2/P2 UsedRetries=Σ max(0, 执行数−1)（AC-055 同口径；原 ΣAttempts 把 request 槽计入，耗尽态显示 2/1 超额、欠账态显示满额而闸放行）。
+- F3/P3 bridge 三值映射补完整（VerifyDispatch Outcome=Unavailable（LifecycleRequired=false 的 lenient provider）→UNAVAILABLE；原一律 PENDING 致 COST_PENDING 永久滞留）。
+- P3 四修：预授权未签发 repair 槽计入额度（显示余量）；AllowanceSummary 单一格式化者；automaticValidationWaveLimit 常量单点；BatchSource 核 scope∈确认计划批次任务集。
+- P3 三记账不修：删除式篡改绕过 verifyGuardBudget（对抗性编辑类，外层 store 摘要已挡）；COST_PENDING 无显式 Wait 信号（计划原文即「返回 Wait」，已满足）；终止/隔离路径漏记计量（语义待定，随 owner 源接线一并定）。
+
+主代理复核：评审三探针修后全绿零 FINDING；自建探针（cost 两态＋guard 篡改 BLOCKED_BUG＋路线全集钉绑×4）全过；全量 engine+cli+validate+cmd 17 包 exit 0；vet/gofmt/diff-check 过。实施代理如实披露：owner 终态差值未接线测量（engine intake 无 owner transcript 绑定字段，合同未定义该 wire，投影位就位、UNAVAILABLE 独立判定）——留机主裁定是否定义 owner 源字段（建议随 R5 宿主接线定）。
+
+R4 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion＋cleanup＋真实 canary＋route matrix）。

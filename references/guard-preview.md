@@ -12,12 +12,14 @@ invalid field or JSON diagnostic on stderr. It never creates or changes run stat
 
 This is a **non-authoritative calculation preview**: success only means the supplied
 declarations are self-consistent. It does not authenticate a real run, confirmation
-or task's legitimacy. `runtimeIntegration` is always `NOT_INSTALLED` at stage 3.5b;
-IssueFromPlan, refill and recovery are not guarded by this command. Stage 4 will
-construct the same basis from authoritative engine state and report that integration.
+or task's legitimacy. `runtimeIntegration` reports the authoritative engine
+integration state: the engine constructs the same basis from authoritative state and
+enforces guard at its issuance funnel inside the same commit transaction (zero
+issuance at the allowance edge, BLOCKED_BUG when the accounts do not align).
 
-中文：本命令只预览有限派发额度；输入自洽不等于真实确认或合法任务认证。阶段 3.5b 固定
-输出 `NOT_INSTALLED`，不代表运行时止损已接入。文件不可读、JSON/schema 错误、缺身份、
+中文：本命令只预览有限派发额度；输入自洽不等于真实确认或合法任务认证。
+`runtimeIntegration` 报告权威 engine 集成状态（engine 签发漏斗已在提交事务内执行
+guard 判断）。文件不可读、JSON/schema 错误、缺身份、
 确认 revision 不匹配、非法 retry 或冲突 TaskKey 均返回非零，且不写流程状态。
 
 ## Input schema, version 1

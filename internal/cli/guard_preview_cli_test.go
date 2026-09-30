@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/guard"
+	"formal-gates/internal/engine/protocol"
 )
 
 const previewCLIInput = `{"schemaVersion":1,"requirement":{"id":"r","revision":"1","confirmedRevision":"1"},"batch":{"id":"b","revision":"1","confirmedRevision":"1"},"route":{"id":"route","revision":"1","confirmedRevision":"1"},"topology":{"id":"topology","revision":"1","confirmedRevision":"1"},"definition":{"id":"d","revision":"1","externalSteps":["review/agent"]},"externalTasks":[{"taskKey":"review/agent/a","provenance":{"kind":"DEFINITION","id":"d","revision":"1"}},{"taskKey":"review/agent/b","provenance":{"kind":"DEFINITION","id":"d","revision":"1"},"maxAttempts":4}]}`
@@ -44,7 +45,7 @@ func TestPreviewDelegatesAndReadsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Result, production) || got.RequestAllowance != 2 || got.RetryAllowance != 4 || got.TotalAllowance != 6 || got.RuntimeIntegration != "NOT_INSTALLED" {
+	if !reflect.DeepEqual(got.Result, production) || got.RequestAllowance != 2 || got.RetryAllowance != 4 || got.TotalAllowance != 6 || got.RuntimeIntegration != protocol.GuardRuntimeIntegration {
 		t.Fatalf("output %+v", got)
 	}
 	after, err := os.ReadDir(dir)

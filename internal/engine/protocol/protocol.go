@@ -35,6 +35,7 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
@@ -129,6 +130,14 @@ const (
 	// CodeChangeBarrierActive：存在未决的需求变化 Ask（修订屏障 Phase A），
 	// 新的业务任务签发被拒绝；既有 Ask、回执与结果类事件不受阻。
 	CodeChangeBarrierActive = "CHANGE_BARRIER_ACTIVE"
+	// CodeGuardAllowanceBlocked：候选派发在 guard 额度包络之外（无授权 basis
+	// source 或该 TaskKey 的有限 retry 已耗尽）——零签发；额度扩张只经既有
+	// typed Ask 通道（新有效义务/经确认新计划/一次性 attempt 追加）。
+	CodeGuardAllowanceBlocked = "GUARD_ALLOWANCE_BLOCKED"
+	// CodeGuardBlockedBug：签发额度账目与权威事实无法对齐（重算 digest 与持
+	// 久投影不一致、已签发事实无来源、或将要超发而账本未记）——以
+	// BLOCKED_BUG 终止该次签发，零派发。
+	CodeGuardBlockedBug = "BLOCKED_BUG"
 )
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
@@ -566,6 +575,13 @@ type State struct {
 	// lightweight 是 run 级路线、start 时已定，不经这两个字段。
 	RouteMode     string   `json:"routeMode,omitempty"`
 	SelectedGates []string `json:"selectedGates,omitempty"`
+	// Guard 是从签发/结果账本派生的额度投影（requestAllowance/retryAllowance/
+	// totalAllowance/budgetBasisDigest＋used 事实）。事实源是账本本身，本投影
+	// 只在提交点重derive写入，加载边界重算比对；受理前的 run（包络未就位）为 nil。
+	Guard *GuardBudget `json:"guard,omitempty"`
+	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计；owner 项缺源时
+	// 缺席）。engine run 的 cost 只由引擎事务写入，不从 legacy validate 补账。
+	Cost *cost.RunCost `json:"cost,omitempty"`
 }
 
 // TopologyBinding 是拓扑确认的持久形态：no-split 必有理由 note（建议不拆

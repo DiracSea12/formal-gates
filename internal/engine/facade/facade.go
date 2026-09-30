@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
@@ -118,8 +119,14 @@ type Run struct {
 	//——完成路径与可见性对称：grant/topology/route/finding-decision 同样
 	// 可见。
 	PendingAsks []PendingAskFace `json:"pendingAsks,omitempty"`
-	SummaryPath string           `json:"summaryPath,omitempty"`
-	Unverified  bool             `json:"unverified,omitempty"`
+	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计）；owner 项缺源
+	// 时缺席。engine run 的 cost 只来自引擎权威 State。
+	Cost *cost.RunCost `json:"cost,omitempty"`
+	// GuardBudget 是 dispatch 额度投影（额度数字、basis digest 与已用事实）；
+	// 受理前（包络未就位）为 nil。
+	GuardBudget *protocol.GuardBudget `json:"guardBudget,omitempty"`
+	SummaryPath string                `json:"summaryPath,omitempty"`
+	Unverified  bool                  `json:"unverified,omitempty"`
 }
 
 // PendingRequirementAskFace 是未决需求变化 Ask 的公开面：请求身份、选项、
@@ -334,6 +341,8 @@ type TerminalSummary struct {
 	Envelope            Envelope                             `json:"envelope"`
 	IntakeReceipt       *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
 	Next                decision.NextResult                  `json:"next"`
+	Cost                *cost.RunCost                        `json:"cost,omitempty"`
+	GuardBudget         *protocol.GuardBudget                `json:"guardBudget,omitempty"`
 	Unverified          bool                                 `json:"unverified,omitempty"`
 	CompletedAt         string                               `json:"completedAt"`
 }
@@ -556,7 +565,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity}, nil)
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID)}, nil)
 	if err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
@@ -648,7 +657,7 @@ func Open(root, runID string) (*Facade, error) {
 			}
 		}
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16}, nil)
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID)}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -879,6 +888,8 @@ func (f *Facade) project() (Run, error) {
 		Envelope:         f.envelope,
 		Next:             plan.Next,
 		Review:           reviewFace(snap.State),
+		Cost:             snap.State.Cost,
+		GuardBudget:      snap.State.Guard,
 		SummaryPath:      filepath.Join(f.stateDir, "terminal-summary.json"),
 		Unverified:       snap.State.Route == "lightweight",
 	}
@@ -992,7 +1003,7 @@ func terminalIntentPath(stateDir string) string {
 }
 
 func summaryForRun(run Run) TerminalSummary {
-	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -1086,7 +1097,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	return Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Unverified: summary.Unverified, SummaryPath: ""}
+	return Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 }
 
 // Diagnose is deliberately raw and read-only.  It reports malformed/old

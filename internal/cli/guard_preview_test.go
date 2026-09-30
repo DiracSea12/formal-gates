@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/protocol"
 )
 
 func TestGuardPreviewBinary(t *testing.T) {
@@ -55,7 +57,7 @@ func TestGuardPreviewBinary(t *testing.T) {
 	if err := json.Unmarshal(first, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.RequestAllowance != 3 || result.RetryAllowance != 4 || result.TotalAllowance != 7 || result.DistinctExternalTaskKeys != 3 || result.RuntimeIntegration != "NOT_INSTALLED" || len(result.Basis) == 0 || !strings.HasPrefix(result.BudgetBasisDigest, "sha256:") {
+	if result.RequestAllowance != 3 || result.RetryAllowance != 4 || result.TotalAllowance != 7 || result.DistinctExternalTaskKeys != 3 || result.RuntimeIntegration != protocol.GuardRuntimeIntegration || len(result.Basis) == 0 || !strings.HasPrefix(result.BudgetBasisDigest, "sha256:") {
 		t.Fatalf("result: %s", first)
 	}
 	if entries, err := os.ReadDir(work); err != nil || len(entries) != 0 {

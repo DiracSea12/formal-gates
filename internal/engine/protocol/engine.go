@@ -30,11 +30,13 @@ func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
 // step 完成（CompleteStep）与补位签发（Decide/SelectIssued）使用；
 // Registry 保留为编译期绑定的注册表输入；HostAction 的 operation
 // 与 schema 以 Definition 中的 compiled payload 为唯一运行时来源。Capacity
-// 是补位签发的固定容量（真实容量收集器属后续批次）。
+// 是补位签发的固定容量（真实容量收集器属后续批次）。CostSource 是派发计量
+// 来源的 sidecar 解析器（nil＝无宿主计量集成，cost 维度不参与判定）。
 type Config struct {
 	Definition *compiler.CompiledDefinition
 	Registry   *compiler.Registry
 	Capacity   int
+	CostSource CostSourceResolver
 }
 
 // Engine 是提交协议内核：每个方法一次完整的「读 state → 变更 →
@@ -99,6 +101,11 @@ func (e *Engine) load() (uint64, *State, error) {
 	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的
 	// phase 在读取侧即可区分拒绝。
 	if err := verifyReviewIntegrity(&state); err != nil {
+		return 0, nil, err
+	}
+	// 额度投影同一加载边界重算比对：持久投影与事实重算不一致（篡改投影或
+	// 改写 basis 事实）＝BLOCKED_BUG，拒绝读取。
+	if err := e.verifyGuardBudget(&state); err != nil {
 		return 0, nil, err
 	}
 	return snap.Revision, &state, nil
@@ -207,6 +214,10 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	if err != nil {
 		return 0, nil, err
 	}
+	if err := e.refreshGuardBudget(state); err != nil {
+		return 0, nil, err
+	}
+	rebindValidationAskSummaries(state)
 	if err := state.advanceReviewPhases(); err != nil {
 		return 0, nil, err
 	}
@@ -676,7 +687,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	}
 	expectedCount := len(state.Expected)
 	state.retainExpected(plan.Next.Ready)
-	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}
@@ -862,7 +873,15 @@ func (s *State) liveDispatch(dispatchID string) bool {
 // issueInto persists the capacity-selected Ready set without changing its
 // membership or task identities. Extra review authorization binds here to the
 // selected action, and issuance advances the series' round ledger atomically.
-func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action) (decision.IssuedSet, error) {
+// guardGate is the dispatch-budget judgment at this funnel: it runs before the
+// duplicate/transition checks and every ledger write (it only reads the
+// ledgers), so a refusal leaves zero state change.
+func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action, guardGate func(decision.IssuedSet) error) (decision.IssuedSet, error) {
+	if guardGate != nil {
+		if err := guardGate(issued); err != nil {
+			return nil, err
+		}
+	}
 	for i := range issued {
 		if prior, ok := s.EndedAttempts[issued[i].Task]; ok {
 			if prior.RetryExhausted {
@@ -1650,7 +1669,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 	}
 	if state.validationDispatchBlocked(actionID) || state.abortRequested() {
-		return state.stageWorkerResult(workerResultRecord(result), eventID, revision, nextRevision, false)
+		return state.stageWorkerResult(workerResultRecord(result), eventID, revision, nextRevision, false, "STAGED")
 	}
 	if _, pending := state.PendingActions[actionID]; !pending {
 		// terminal 对账路径：派发簿记已随任务终态收回，准入按结果类别分层
@@ -1672,6 +1691,11 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 				Code:   CodeUnknownAction,
 				Detail: fmt.Sprintf("worker result references unknown or completed action %q", actionID),
 			}
+		}
+		// 计量来源未决（lifecycle stop 未到）时迟到结果同样留在回执边界：
+		// COST_PENDING，配对扫描在来源落定后经同一接纳路径补齐。
+		if e.dispatchCostHeld(state, actionID) {
+			return state.stageWorkerResult(workerResultRecord(result), eventID, revision, nextRevision, false, StatusCostPending)
 		}
 		if retained, ok := state.EndedAttempts[receipt.Task]; ok && retained.ActionID == actionID && retained.AwaitingResult {
 			retained.AwaitingResult = false
@@ -1744,7 +1768,12 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		// Identity and authorization are checked before staging. Worker content
 		// is completed through the same finite-attempt path once paired.
 
-		return state.stageWorkerResult(record, eventID, revision, nextRevision, receipted)
+		return state.stageWorkerResult(record, eventID, revision, nextRevision, receipted, "STAGED")
+	}
+	// 计量来源未决（lifecycle stop 未到）时结果留在回执边界：COST_PENDING，
+	// 事务收尾的配对扫描在来源落定后同一接纳路径补齐。
+	if e.dispatchCostHeld(state, actionID) {
+		return state.stageWorkerResult(record, eventID, revision, nextRevision, false, StatusCostPending)
 	}
 	refill, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
 	if err != nil {
@@ -1776,7 +1805,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 
 // Staging preserves delivered evidence until its receipt and execution
 // authorization both allow the common result acceptance path to run.
-func (s *State) stageWorkerResult(record WorkerResult, eventID string, revision, nextRevision uint64, reconcile bool) (Acceptance, bool, error) {
+// status is the acceptance boundary the result is held at (STAGED for a
+// missing/unknown receipt; COST_PENDING while the metering source is pending).
+func (s *State) stageWorkerResult(record WorkerResult, eventID string, revision, nextRevision uint64, reconcile bool, status string) (Acceptance, bool, error) {
 	if staged, exists := s.StagedResults[record.ActionID]; exists {
 		if staged.Digest == record.Digest {
 			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: record.ActionID}, false, nil
@@ -1784,7 +1815,7 @@ func (s *State) stageWorkerResult(record WorkerResult, eventID string, revision,
 		return Acceptance{}, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q already has a different staged worker result", record.ActionID)}
 	}
 	s.StagedResults[record.ActionID] = record
-	acceptance := Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "STAGED", Revision: nextRevision, ActionID: record.ActionID}
+	acceptance := Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: status, Revision: nextRevision, ActionID: record.ActionID}
 	if reconcile {
 		acceptance.RecoveryAction = string(RecoveryReconcile)
 	}
@@ -1825,6 +1856,11 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 			}
 			receipt, receipted := state.SpawnReceipts[actionID]
 			if !receipted || !inflightWitnessReceipt(receipt.Status) {
+				continue
+			}
+			// 计量来源仍 PENDING 的暂存结果保持挂起：lifecycle stop 证据落定
+			// 的下一事务在同一配对路径补齐。
+			if e.dispatchCostHeld(state, actionID) {
 				continue
 			}
 			if _, admitted := state.Results[actionID]; admitted {
@@ -2123,7 +2159,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
-	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf)
+	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}

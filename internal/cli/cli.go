@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/facade"
@@ -1264,6 +1265,8 @@ func repairEstimate(buildTargets, testTargets stringListFlag, qaInputs map[strin
 
 // runWorkflowRepairPreview is read-only by contract.  It exposes the bound
 // authorization summary without creating a receipt, revision or repair wave.
+// Engine runs project their authoritative repair asks and cost/guard state; a
+// legacy run keeps its legacy preview.
 func runWorkflowRepairPreview(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow repair-preview", streams)
 	root, pkg := rootFlags(fs)
@@ -1272,8 +1275,64 @@ func runWorkflowRepairPreview(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if f, ok, err := openEngineIfPresent(*root, *runID); ok {
+		if err != nil {
+			return 1, err
+		}
+		run, err := f.Show()
+		if err != nil {
+			return 1, err
+		}
+		return printJSON(streams.Stdout, newEngineRepairPreview(run))
+	}
 	preview, err := validate.PreviewRepairAuthorization(*root, *pkg, *runID, repairEstimate(*buildTargets, *testTargets, qaInputs))
 	return printValue(streams.Stdout, preview, err)
+}
+
+// engineRepairPreviewFace is the engine-run repair preview face: the
+// authoritative pending REPAIR ask (summary digest and state revision binding
+// included) plus the run's cost and guard-budget projections. It is read-only.
+type engineRepairPreviewFace struct {
+	RunID           string                `json:"runId"`
+	Runtime         string                `json:"runtime"`
+	StateRevision   uint64                `json:"stateRevision"`
+	RepairAsks      []engineRepairAskFace `json:"repairAsks"`
+	Cost            *cost.RunCost         `json:"cost,omitempty"`
+	GuardBudget     *protocol.GuardBudget `json:"guardBudget,omitempty"`
+	EngineAllowance string                `json:"engineAllowance"`
+	OwnerCost       string                `json:"ownerCost"`
+	TokenCap        string                `json:"tokenCap"`
+}
+
+type engineRepairAskFace struct {
+	RequestID     string          `json:"requestId"`
+	Kind          string          `json:"kind"`
+	Target        string          `json:"target"`
+	StateRevision uint64          `json:"stateRevision"`
+	Digest        string          `json:"digest"`
+	Summary       json.RawMessage `json:"summary"`
+}
+
+func newEngineRepairPreview(run facade.Run) engineRepairPreviewFace {
+	face := engineRepairPreviewFace{
+		RunID: run.RunID, Runtime: facade.RuntimeEngine, StateRevision: run.Revision,
+		Cost: run.Cost, GuardBudget: run.GuardBudget,
+		EngineAllowance: "UNAVAILABLE", OwnerCost: "UNAVAILABLE", TokenCap: "UNAVAILABLE",
+	}
+	if run.Cost != nil && run.Cost.Owner != nil {
+		face.OwnerCost = "AVAILABLE"
+	}
+	face.EngineAllowance = run.GuardBudget.AllowanceSummary()
+	for _, ask := range run.PendingAsks {
+		if ask.Control != protocol.ControlValidation || ask.Validation == nil || ask.Validation.Kind != "REPAIR" {
+			continue
+		}
+		face.RepairAsks = append(face.RepairAsks, engineRepairAskFace{
+			RequestID: ask.RequestID, Kind: ask.Validation.Kind, Target: ask.Validation.Target,
+			StateRevision: ask.Validation.StateRevision, Digest: ask.Validation.Digest, Summary: ask.Validation.Summary,
+		})
+	}
+	return face
 }
 
 func runWorkflowCompleteP2Repair(args []string, streams IO) (int, error) {

@@ -296,8 +296,10 @@ The `formal-gates workflow ...` commands are run by the flow driver (your AI age
 calculator and prints the normalized basis, request/retry/total allowances and stable
 digest. See the [input schema and runnable example](references/guard-preview.md).
 It creates no run and writes no state; success only means internally consistent input,
-not authenticated confirmations or legitimate tasks. Stage 3.5b always reports
-`runtimeIntegration=NOT_INSTALLED`; runtime enforcement belongs to stage 4.
+not authenticated confirmations or legitimate tasks. `runtimeIntegration` reports the
+authoritative engine integration state: the engine issuance funnel enforces guard inside
+the same commit transaction (zero issuance at the allowance edge, BLOCKED_BUG on misaligned
+accounts).
 
 ## FAQ
 

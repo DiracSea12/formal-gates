@@ -531,7 +531,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 	}
 	if work := s.nextRepairWork(); work != nil {
-		blocked := !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= 3 && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
+		blocked := !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies
@@ -570,6 +570,12 @@ func (s *State) validationRouteDigest() string {
 		Topology *TopologyBinding
 	}{s.RouteMode, gates, s.Topology})
 }
+
+// automaticValidationWaveLimit 是不经逐次授权的返修轮数上限：计满后每轮
+// 返修都需 REPAIR Ask 显式授权（授权闸与 REPAIR Ask 摘要的剩余轮数共用
+// 本常量）。
+const automaticValidationWaveLimit = 3
+
 func (s *State) completedValidationWaves() int {
 	n := 0
 	if s.Validation != nil {

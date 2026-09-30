@@ -9,6 +9,43 @@ import (
 	"formal-gates/internal/engine/coverage"
 )
 
+// allowanceFace 把三值可用性投影成摘要字段值：engine allowance 读权威
+// Guard 投影（AllowanceSummary，nil＝包络未就位）；owner cost 与 token cap
+// 按各自来源/配置独立判定（engine intake 无 owner transcript 绑定、无 cap
+// 配置时各自独立为 UNAVAILABLE，不随 engine allowance 联动）。
+func (s *State) allowanceFaces() (engineAllowance, ownerCost, tokenCap string) {
+	ownerCost, tokenCap = "UNAVAILABLE", "UNAVAILABLE"
+	if s.Cost != nil && s.Cost.Owner != nil {
+		ownerCost = "AVAILABLE"
+	}
+	return s.Guard.AllowanceSummary(), ownerCost, tokenCap
+}
+
+// repairAskFace 是 REPAIR Ask 摘要的专用 Detail：完整 findings/problems（含
+// 逐条理由/归并与历史裁决）、执行失败、QA scope（当前 wave 的逐 target 状态与
+// 必跑用例）、已用/剩余轮数、dispatch signature/TaskKey 与需求/快照/wave 上下文。
+type repairAskFace struct {
+	RequirementRevision string
+	DevelopmentSnapshot string
+	Wave                string
+	WaveScope           string
+	Repair              *RepairInput
+	Targets             []repairAskTarget
+	WavesUsed           int
+	RemainingAutomatic  int
+	TaskKey             string
+	DispatchActionID    string
+}
+
+type repairAskTarget struct {
+	Task          string
+	Kind          string
+	Mode          string
+	Gate          string
+	Status        string
+	RequiredCases []string
+}
+
 func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 	var detail any
 	switch r.Kind {
@@ -39,20 +76,78 @@ func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 		if s.Validation != nil {
 			detail = s.Validation.Sets[r.Mode]
 		}
+	case "REPAIR":
+		detail = s.repairAskDetail(r)
 	default:
 		detail = s.Validation
 	}
 	r.Digest = ""
 	r.StateRevision = 0
 	r.Summary = nil
+	engineAllowance, ownerCost, tokenCap := s.allowanceFaces()
 	value, _ := json.Marshal(struct {
 		Request                              ValidationRequest
 		Kind, Target                         string
 		Mode                                 coverage.ReviewKind
 		Detail                               any
 		EngineAllowance, OwnerCost, TokenCap string
-	}{r, r.Kind, r.Target, r.Mode, detail, "UNAVAILABLE", "UNAVAILABLE", "UNAVAILABLE"})
+	}{r, r.Kind, r.Target, r.Mode, detail, engineAllowance, ownerCost, tokenCap})
 	return value
+}
+
+// repairAskDetail 按 wave 定位返修义务并展开授权摘要所需的全部事实；目标
+// wave 不在账时返回 nil（Detail 为空即无当前义务，Ask 不可授权）。
+func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
+	work := s.nextRepairWork()
+	if work == nil || work.wave.ID != r.Target {
+		return nil
+	}
+	remaining := automaticValidationWaveLimit - s.completedValidationWaves()
+	if remaining < 0 {
+		remaining = 0
+	}
+	face := &repairAskFace{
+		RequirementRevision: s.RequirementRevision(),
+		Wave:                work.wave.ID,
+		WaveScope:           string(work.wave.Scope),
+		Repair:              s.repairInput(work.task),
+		WavesUsed:           s.completedValidationWaves(),
+		RemainingAutomatic:  remaining,
+		TaskKey:             work.task.String(),
+	}
+	if s.Validation != nil {
+		face.DevelopmentSnapshot = s.Validation.DevelopmentSnapshot
+		for _, key := range sortedTargetKeys(work.wave) {
+			target := work.wave.Targets[key]
+			face.Targets = append(face.Targets, repairAskTarget{
+				Task: target.Task.String(), Kind: target.Kind, Mode: string(target.Mode),
+				Gate: target.Gate, Status: target.Status, RequiredCases: target.RequiredCases,
+			})
+		}
+	}
+	if attempt, ok := s.Attempts[work.task]; ok {
+		face.DispatchActionID = attempt.ActionID
+	}
+	if attempt, ok := s.EndedAttempts[work.task]; ok && face.DispatchActionID == "" {
+		face.DispatchActionID = attempt.ActionID
+	}
+	return face
+}
+
+// rebindValidationAskSummaries 在提交点把一切未决 validation Ask 的摘要与
+// digest 重算为「已提交状态」：同事务内的签发/额度投影更新会改变摘要内容，
+// 不重算会使 DECIDE 的摘要 digest 重核（acceptValidationDecision）与落账
+// digest 永不匹配。StateRevision 语义不变（仍为 Ask 落账代数）。
+func rebindValidationAskSummaries(s *State) {
+	for id, ask := range s.PendingAsks {
+		if ask.Resolved || ask.Validation == nil {
+			continue
+		}
+		summary := s.validationRequestBasis(*ask.Validation)
+		ask.Validation.Summary = summary
+		ask.Validation.Digest = digestOfCanonical(summary)
+		s.PendingAsks[id] = ask
+	}
 }
 func (s *State) ensureValidationAsk(r ValidationRequest, nextRevision uint64) bool {
 	var options []AskOption
