@@ -346,6 +346,12 @@ type TerminalSummary struct {
 	GuardBudget         *protocol.GuardBudget                `json:"guardBudget,omitempty"`
 	Unverified          bool                                 `json:"unverified,omitempty"`
 	CompletedAt         string                               `json:"completedAt"`
+	// Owner 区间端点是跨代协调的终态载荷：legacy 终态只读重扫据此判定与
+	// engine run 的区间相交（本 run 状态目录随终态清理，摘要是留存的区间
+	// 事实）。endedAt 在终态 owner 协调锁段内与量取同时点盖下。
+	OwnerTranscript string `json:"ownerTranscript,omitempty"`
+	OwnerStartedAt  string `json:"ownerStartedAt,omitempty"`
+	OwnerEndedAt    string `json:"ownerEndedAt,omitempty"`
 }
 
 type startIntent struct {
@@ -565,6 +571,14 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		}
 		return nil, Run{}, err
 	}
+	// 启动身份先于任何 state 落盘（D 系不变量：任何有 state.json 的 engine run
+	// 必有 request.json）——peer 的区间标记经 facade.Open 读它，bootstrap 期的
+	// peer 永远合法可开，并行启动不因身份未就绪失败。失败清理 RemoveAll 覆盖
+	// 同目录文件，不变量双向成立。
+	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {
+		_ = os.RemoveAll(stateDir)
+		return nil, Run{}, err
+	}
 	env := Envelope{
 		Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion,
 		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
@@ -593,20 +607,32 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	// owner 计量绑定与 token cap 经引擎既有提交点一次持久化（单一 writer）；
-	// lifecycle run 标记是宿主 capture 事件归 run 的前提。
-	if err := eng.BindCostSources(captureOwnerBinding(root, req.RunID, options.Owner), tokenCap, emptyFingerprint()); err != nil {
+	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
+	// lockOwnerCost（与 legacy 同路径＝两代共同的区间协调能力）内执行：锁内
+	// 的绑定提交使后到者的扫描必见先到者的 owner 来源，并行启动的区间判定因
+	// 此闭合。锁序＝协调锁→run store 锁（与 legacy mutateRun 同序）。无 owner
+	// 来源时无区间操作，不取锁。
+	bindOwnerCost := func() error {
+		if strings.TrimSpace(options.Owner.Transcript) == "" || strings.TrimSpace(options.Owner.Provider) == "" {
+			return eng.BindCostSources(captureOwnerBinding(root, req.RunID, options.Owner), tokenCap, emptyFingerprint())
+		}
+		release, err := lockOwnerCost(root)
+		if err != nil {
+			return err
+		}
+		defer release()
+		binding := captureOwnerBinding(root, req.RunID, options.Owner)
+		if err := eng.BindCostSources(binding, tokenCap, emptyFingerprint()); err != nil {
+			return err
+		}
+		// 区间重叠事实双边持久：把重叠补写进每个共享 owner transcript 的活动
+		// engine peer（幂等；失败即中止启动——静默跳过会让 peer 终态记出精确
+		// 的假数字，与 legacy beginOwnerCost 同一形状）。
+		return markOverlappingEnginePeers(root, req.RunID, binding.Transcript)
+	}
+	if err := bindOwnerCost(); err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
-	}
-	// 区间重叠事实双边持久：自身来源在账后，把重叠补写进每个共享 owner
-	// transcript 的活动 engine peer（幂等；失败即中止启动——静默跳过会让
-	// peer 终态记出精确的假数字，与 legacy beginOwnerCost 同一形状）。
-	if strings.TrimSpace(options.Owner.Transcript) != "" && strings.TrimSpace(options.Owner.Provider) != "" {
-		if err := markOverlappingEnginePeers(root, req.RunID, strings.TrimSpace(options.Owner.Transcript)); err != nil {
-			_ = os.RemoveAll(stateDir)
-			return nil, Run{}, err
-		}
 	}
 	if err := lifecycle.BeginRun(root, req.RunID); err != nil {
 		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
@@ -615,14 +641,11 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity}
 	// BeginRun 之后失败的清理同时移除 lifecycle run 标记（active 标记会截获
-	// 宿主 capture 事件，失败的 run 不得残留）。
+	// 宿主 capture 事件，失败的 run 不得残留）。request.json 已随不变量先行
+	// 落盘，随目录一并清理。
 	cleanupFailedStart := func() {
 		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
 		_ = os.RemoveAll(stateDir)
-	}
-	if err := writeJSONAtomic(f.metadata, req); err != nil {
-		cleanupFailedStart()
-		return nil, Run{}, err
 	}
 	run, err := f.project()
 	if err != nil {
@@ -768,18 +791,21 @@ func (f *Facade) Drive() (Run, error) {
 		return Run{}, err
 	}
 	if run.Status == "COMPLETE" || run.Status == "ABORTED" {
-		// 终态发布前量取 owner 终态差值（幂等；只作报告）并重投影 cost。
-		if err := f.finishOwnerCost(); err != nil {
+		// 终态发布前在 owner 协调锁内重扫区间并量取 owner 终态差值（幂等；
+		// 只作报告），区间端点随终态摘要留存。摘要不可变：重入的 Drive 不改写
+		// 已落盘字节。
+		interval, err := f.finishOwnerCost()
+		if err != nil {
 			return Run{}, err
 		}
 		if run, err = f.project(); err != nil {
 			return Run{}, err
 		}
 		if run.Route == "lightweight" || run.Status == "ABORTED" {
-			if err := f.finalizeTerminal(run); err != nil {
+			if err := f.finalizeTerminal(run, interval); err != nil {
 				return Run{}, err
 			}
-		} else if err := f.writeSummaryValue(summaryForRun(run)); err != nil {
+		} else if err := f.writeSummaryValue(summaryForRun(run, interval)); err != nil {
 			return Run{}, err
 		}
 		// 终态收口：移除 lifecycle active 标记（幂等）——终态后晚到的宿主
@@ -1054,8 +1080,8 @@ func terminalIntentPath(stateDir string) string {
 	return filepath.Join(stateDir, terminalIntentName)
 }
 
-func summaryForRun(run Run) TerminalSummary {
-	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+func summaryForRun(run Run, interval ownerInterval) TerminalSummary {
+	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerTranscript: interval.transcript, OwnerStartedAt: interval.startedAt, OwnerEndedAt: interval.endedAt}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -1121,10 +1147,10 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 	return nil
 }
 
-func (f *Facade) finalizeTerminal(run Run) error {
+func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
-		summary = summaryForRun(run)
+		summary = summaryForRun(run, interval)
 		err = writeJSONAtomic(terminalIntentPath(f.stateDir), summary)
 	}
 	if err != nil {

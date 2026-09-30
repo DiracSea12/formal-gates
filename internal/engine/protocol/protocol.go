@@ -587,11 +587,13 @@ type State struct {
 	// 用；只统计 engine 派发用量，不含 owner 终态报告）。受理 bootstrap 一次写
 	// 入，run 期间不可变。
 	TokenCapMaxTokens *int64 `json:"tokenCapMaxTokens,omitempty"`
-	// Owner 投影是主代理（owner）计量的持久绑定与启动基线（REQ-012 AC-050）：
-	// 来源稳定时由 facade 在 bootstrap 一次写入；缺源不承诺 owner 计量
+	// Owner 投影是主代理（owner）计量的持久绑定、启动时点与启动基线（REQ-012
+	// AC-050）：来源稳定时由 facade 在 bootstrap 一次写入（OwnerStartedAt 是
+	// 区间事实的本方端点，终态重扫与终态摘要消费它）；缺源不承诺 owner 计量
 	//（AC-051 零数字）。终态差值只作报告（Cost.Owner），不参与 in-flight guard。
 	OwnerTranscript string                   `json:"ownerTranscript,omitempty"`
 	OwnerProvider   string                   `json:"ownerProvider,omitempty"`
+	OwnerStartedAt  string                   `json:"ownerStartedAt,omitempty"`
 	OwnerBaseline   *cost.TranscriptSnapshot `json:"ownerBaseline,omitempty"`
 	OwnerOverlapped bool                     `json:"ownerOverlapped,omitempty"`
 }

@@ -66,3 +66,29 @@ type LockHeldError struct {
 func (e *LockHeldError) Error() string {
 	return fmt.Sprintf("%s lock is held: %s", e.Operation, e.Path)
 }
+
+// AcquirePathWaiting 获取与 AcquirePath 同一路径、同一内核对象的独占锁，但
+// 持锁冲突时等待而不是立即失败（flock 阻塞模式／LockFileEx 去掉
+// FAIL_IMMEDIATELY）。持有者死亡由内核释放，等待者随之取得锁。用于需要互斥
+// 而不是快速失败的临界段（owner 区间协调：并行启动的扫描＋标记段必须串行闭
+// 合，不能把并发竞争当失败上抛）。诊断记录与 AcquirePath 相同。
+func AcquirePathWaiting(path, description string) (func(), error) {
+	path = filepath.Clean(path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFileBlocking(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// 诊断记录：锁内容只标明当前持有者，便于人工排障；不参与任何判
+	// 定，写失败不影响持锁。
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))), 0)
+	return func() { _ = f.Close() }, nil
+}

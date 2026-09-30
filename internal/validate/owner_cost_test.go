@@ -2,7 +2,9 @@ package validate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,8 @@ import (
 	"testing"
 
 	"formal-gates/internal/cost"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/host"
 )
 
@@ -214,6 +218,216 @@ func TestOwnerSeparateTranscriptsDoNotOverlap(t *testing.T) {
 		if err != nil || summary.Cost.Owner.Source != cost.SourceTranscript || summary.Cost.TotalInputTokens != 60 {
 			t.Fatalf("independent source was not metered: %+v, %v", summary.Cost, err)
 		}
+	}
+}
+
+// 跨代区间协调（迁移期 legacy validate 与 engine 并存）：共享 owner transcript
+// 的两代 run 区间相交时双方 UNAVAILABLE，消失交错经留存摘要/终态重扫闭合，
+// 各自的工件只由各自合法 writer 落盘。
+
+func startEngineOwnerRun(t *testing.T, root, id, transcript string) *facade.Facade {
+	t.Helper()
+	f, _, err := facade.Start(facade.StartOptions{
+		Root:  root,
+		Owner: facade.OwnerBinding{Transcript: transcript, Provider: "codex"},
+		Request: facade.StartRequest{
+			RunID: id, Route: "lightweight",
+			DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
+			IntakeConfirmationReceipt: facade.IntakeConfirmationReceipt{
+				Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport,
+				RequirementSource: "requirements.md", RequirementRevision: "req",
+				Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: "req"}},
+				SolutionRevision: "sol", SolutionDigest: "sha256:sol",
+			},
+		},
+		Admission: &facade.Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// snapshotIntervalTree 固定目录内全部文件的字节（相对路径→内容），用于断言
+// 跨代操作不改写对方工件。
+func snapshotIntervalTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return relErr
+		}
+		files[rel] = string(data)
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func requireEngineOwnerUnavailable(t *testing.T, owner *cost.OwnerCost) {
+	t.Helper()
+	if owner == nil || owner.Source != cost.SourceUnavailable || owner.TotalInputTokens != 0 || owner.OutputTokens != 0 {
+		t.Fatalf("want unavailable engine owner with zero numbers, got %+v", owner)
+	}
+}
+
+// TestCrossGenerationOwnerOverlapBothOrdersReportUnavailable：两代两顺序——共享
+// transcript 的 engine 与 legacy run 区间相交，双方终态都报 UNAVAILABLE；
+// engine 终态不改写 legacy ACTIVE state 字节，legacy 终态不改写 engine 文件集。
+func TestCrossGenerationOwnerOverlapBothOrdersReportUnavailable(t *testing.T) {
+	for _, engineFirst := range []bool{true, false} {
+		name := "legacy-first"
+		if engineFirst {
+			name = "engine-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			transcript := writeCostFixture(t)
+			var engine *facade.Facade
+			var legacy RunState
+			if engineFirst {
+				engine = startEngineOwnerRun(t, root, "engine-owner", transcript)
+				legacy = startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+			} else {
+				legacy = startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+				engine = startEngineOwnerRun(t, root, "engine-owner", transcript)
+			}
+			appendOwnerUsage(t, transcript)
+			legacyStateBefore, err := os.ReadFile(RunStatePath(root, legacy.RunID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			engineRun, err := engine.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireEngineOwnerUnavailable(t, engineRun.Cost.Owner)
+			legacyStateAfter, err := os.ReadFile(RunStatePath(root, legacy.RunID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(legacyStateBefore) != string(legacyStateAfter) {
+				t.Fatal("engine terminal rewrote legacy state bytes")
+			}
+			engineDir := filepath.Join(root, ".gates", "engine")
+			engineTreeBefore := snapshotIntervalTree(t, engineDir)
+			legacySummary, err := Abort(root, legacy.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireOwnerUnavailable(t, legacySummary.Cost)
+			if engineTree := snapshotIntervalTree(t, engineDir); !reflect.DeepEqual(engineTreeBefore, engineTree) {
+				t.Fatal("legacy terminal rewrote engine files")
+			}
+		})
+	}
+}
+
+// TestVanishingLegacyOwnerIntervalMarksEngineUnavailable：legacy 在 engine 启动
+// 后启动、先于 engine 终态消失（run 目录随完成清理，留存摘要是唯一区间事实）—
+// —engine 终态重扫经摘要 StartedAt 检出并报 UNAVAILABLE，且不改写摘要字节。
+func TestVanishingLegacyOwnerIntervalMarksEngineUnavailable(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	transcript := writeCostFixture(t)
+	engine := startEngineOwnerRun(t, root, "engine-owner", transcript)
+	startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+	appendOwnerUsage(t, transcript)
+	legacySummary, err := Abort(root, "legacy-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOwnerUnavailable(t, legacySummary.Cost)
+	summaryBefore, err := os.ReadFile(RunSummaryPath(root, "legacy-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engineRun, err := engine.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEngineOwnerUnavailable(t, engineRun.Cost.Owner)
+	summaryAfter, err := os.ReadFile(RunSummaryPath(root, "legacy-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(summaryBefore) != string(summaryAfter) {
+		t.Fatal("engine terminal rewrote the retained legacy summary bytes")
+	}
+}
+
+// TestVanishingEngineOwnerIntervalMarksLegacyUnavailable：engine 在 legacy 启动
+// 后启动、先于 legacy 终态消失——engine 终态摘要携带区间端点，legacy 终态重扫
+// 判定区间相交报 UNAVAILABLE，且不改写 engine 文件集。
+func TestVanishingEngineOwnerIntervalMarksLegacyUnavailable(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	transcript := writeCostFixture(t)
+	startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+	engine := startEngineOwnerRun(t, root, "engine-owner", transcript)
+	appendOwnerUsage(t, transcript)
+	engineRun, err := engine.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEngineOwnerUnavailable(t, engineRun.Cost.Owner)
+	engineDir := filepath.Join(root, ".gates", "engine")
+	engineTreeBefore := snapshotIntervalTree(t, engineDir)
+	legacySummary, err := Abort(root, "legacy-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOwnerUnavailable(t, legacySummary.Cost)
+	if engineTree := snapshotIntervalTree(t, engineDir); !reflect.DeepEqual(engineTreeBefore, engineTree) {
+		t.Fatal("legacy terminal rewrote engine files")
+	}
+}
+
+// TestSequentialCrossGenerationOwnersStayPrecise：精确性负控（两代）——对端先于
+// 我启动且已终态（同 transcript），双方的 owner 都报精确差值（后者基线含前者
+// 用量，差值为零也是精确）。
+func TestSequentialCrossGenerationOwnersStayPrecise(t *testing.T) {
+	during := cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 60, InputCacheHitTokens: 5, InputCacheMissTokens: 55, OutputTokens: 4}
+	for _, name := range []string{"legacy then engine", "engine then legacy"} {
+		t.Run(name, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			transcript := writeCostFixture(t)
+			if name == "legacy then engine" {
+				startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+				appendOwnerUsage(t, transcript)
+				summary, err := Abort(root, "legacy-owner")
+				if err != nil || summary.Cost.Owner == nil || *summary.Cost.Owner != during {
+					t.Fatalf("earlier legacy owner = %+v, %v", summary.Cost, err)
+				}
+				engine := startEngineOwnerRun(t, root, "engine-owner", transcript)
+				appendOwnerUsage(t, transcript)
+				engineRun, err := engine.Drive()
+				if err != nil || engineRun.Cost.Owner == nil || *engineRun.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript}) {
+					t.Fatalf("later engine owner = %+v, %v", engineRun.Cost.Owner, err)
+				}
+				return
+			}
+			engine := startEngineOwnerRun(t, root, "engine-owner", transcript)
+			appendOwnerUsage(t, transcript)
+			engineRun, err := engine.Drive()
+			if err != nil || engineRun.Cost.Owner == nil || *engineRun.Cost.Owner != during {
+				t.Fatalf("earlier engine owner = %+v, %v", engineRun.Cost.Owner, err)
+			}
+			startMeteredOwner(t, root, pkg, "legacy-owner", "codex", transcript, "")
+			appendOwnerUsage(t, transcript)
+			summary, err := Abort(root, "legacy-owner")
+			if err != nil || summary.Cost.Owner == nil || *summary.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript}) {
+				t.Fatalf("later legacy owner = %+v, %v", summary.Cost.Owner, err)
+			}
+		})
 	}
 }
 

@@ -780,3 +780,18 @@ R4c 收口。下一单元：R5（Git provider status/diff/track/commit/snapshot/
 主代理独立复核全绿：自建四探针（/tmp/r4d-verify overlay，红态先行——ended 计数 0→1＋拒绝后账本不变、跨通道两方向〔RETRY 先授→预算 retry 决定被拒〕、双边重叠〔peer 补写持久化＋first 先终态也 unavailable〕、cap 可信度两态〔已知<上限不闸＋混合可靠性不宣称 AVAILABLE〕）＋复审五探针全绿＋树内五组跨状态/跨入口测试亲跑绿＋R4c 六探针无回归＋全量 23 包 rc=0。关键 diff 亲读：workerActionTarget/retryExtensionGranted 调用点清单与报告一致、无第三判重口。实施代理披露：TestTokenCapConfigurationStates 一个子测试的夹具由 DefaultProvider（不可计量，旧实现宣称 EXCEEDED）改 meteredProvider 零用量 transcript（已知总量真实达 cap）——断言不变、夹具诚实化。
 
 R4d 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion＋cleanup＋真实 canary［须机主逐次授权真实模型调用］＋route matrix）。
+
+## R4 判三（2026-09-30 机主复核 b856a8b：两项 P2，owner 区间协调根因）
+
+机主复核（含零上下文子代理）判 b856a8b 两项 P2，均亲跑复现、主代理坐实：
+- 回归 P2：共享 owner 的并行启动失败——Start 先落 state（对 peer 可见）再开 peer 标记、最后才写 request.json；peer 处 bootstrap 时 facade.Open 读不到 request.json 报 INVALID_INTAKE_CONFIRMATION，己方 Start 失败（探针 8 对 7 败）。
+- 累计 P2：legacy↔engine 重叠区间仍报精确——engine 对 legacy 只启动时单向读；legacy beginOwnerCost 只扫 .gates/tmp；两侧终态均不重扫。legacy 先启动：legacy 错报 60/4；engine 先启动：双边重复归属同一笔 60/4。
+机主约束原文：「修复应明确区间协调归属，覆盖初始化、活动和终态生命周期；不宜在 Open 失败处简单忽略或补重试」「不得为修此问题直接跨 writer 写另一 runtime 的控制文件；应复用共同协调能力并由各自合法 writer 接纳事实」。判词：owner 的局部互标机制没有实现完整区间不变量；R4d 记账的「legacy 冻结侧盲区不属本刀」被推翻。
+
+返修合同 /tmp/r4e-repair-contract.md（D1 身份就绪先于 state 可见／D2 区间操作统一进 lockOwnerCost 共同协调锁／D3 engine 启动＋终态双观察点／D4 TerminalSummary 增区间载荷／D5 legacy 由其合法 writer 只读接纳），同实施代理落地。两处如实偏差（核可）：
+- coordination.AcquirePathWaiting（阻塞模式，同路径同一内核锁对象）——legacy 锁是 try-lock，同锁串行必须等待式；归 coordination 内核所有，legacy 快速失败语义不变。
+- legacy 终态 state 是不可见瞬态（completeTerminalRun→DeleteRun 删 run 目录），留存工件＝.gates/results/<run-id>.json——validate.RunSummary 增 OwnerTranscript＋StartedAt（D4 的 legacy 对称半边），engine 终态重扫经留存摘要判定区间相交。
+
+主代理独立复核全绿：自建四探针（红态先行——并行 6 对全成＋双方终态 UNAVAILABLE；精确性负控〔留存终态 peer 不阻断，基线排除前段用量，差值恰 5/2〕保持绿；两向 vanish 交错〔legacy 先消失经 StartedAt 规则、engine 先消失经摘要相交〕＋双向跨 writer 字节守卫）＋机主三探针（并行 8/8、mixed 两顺序双方 unavailable、cross-namespace）＋R4c 六探针＋R4d 四探针（一处自建探针 map 迭代选 action 的 flake 为探针缺陷，按任务身份定位后 6/6 稳定）＋树内跨入口五组＋全量 23 包 rc=0＋vet/gofmt 净。关键 diff 亲读：request.json 先行落盘、锁段归属、终态重扫（检出先经引擎事务持久再量取）、摘要载荷、legacy 双扫只读。
+
+边界如实：留存摘要被手工删除则消失 peer 不可检出（留存边界）；peer 处非 owner 事务时 store 锁快速失败＝可重试错误；不可解析端点按相交处理（只假 UNAVAILABLE 不假精确）。R4e 收口；机主已令开下一阶段（R5）。

@@ -29,3 +29,14 @@ func lockFile(f *os.File) error {
 func isLockHeld(err error) bool {
 	return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
 }
+
+// lockFileBlocking 与 lockFile 同一范围，但去掉 FAIL_IMMEDIATELY：冲突时由
+// 内核排队，持有者释放后取得锁。
+func lockFileBlocking(f *os.File) error {
+	if _, err := f.WriteAt([]byte("0"), 0); err != nil {
+		return err
+	}
+	return windows.LockFileEx(windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK,
+		0, 1, 0, &windows.Overlapped{})
+}

@@ -42,7 +42,7 @@ func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				summary := summaryForRun(run)
+				summary := summaryForRun(run, ownerInterval{})
 				if err := writeJSONAtomic(terminalIntentPath(d.f.stateDir), summary); err != nil {
 					t.Fatal(err)
 				}

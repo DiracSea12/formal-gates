@@ -914,9 +914,9 @@ func TestOwnerTerminalProjectionDoesNotTouchResults(t *testing.T) {
 	s.Cost = &cost.RunCost{}
 	cost.Record(s.Cost, "dispatch", cost.DispatchCost{TotalInputTokens: 10, OutputTokens: 4, Source: cost.SourceTranscript})
 	results := qaJSON(t, []any{s.Actions, s.Gates, s.QAExecutionByMode, s.Dispatches})
-	finishOwnerCost(&s)
+	finishOwnerCost(t.TempDir(), &s)
 	before := qaJSON(t, s)
-	finishOwnerCost(&s)
+	finishOwnerCost(t.TempDir(), &s)
 	if qaJSON(t, s) != before || qaJSON(t, []any{s.Actions, s.Gates, s.QAExecutionByMode, s.Dispatches}) != results || !s.OwnerCostCompleted || s.Cost.Owner.Source != cost.SourceUnavailable || s.Cost.Owner.TotalInputTokens != 0 || s.Cost.TotalInputTokens != 10 {
 		t.Fatal("owner terminal affected results or doubled cost")
 	}
@@ -925,7 +925,7 @@ func TestOwnerTerminalProjectionDoesNotTouchResults(t *testing.T) {
 func TestOwnerOverlapProducesUnavailable(t *testing.T) {
 	s := qaState()
 	s.OwnerCostOverlapped = true
-	finishOwnerCost(&s)
+	finishOwnerCost(t.TempDir(), &s)
 	if !s.OwnerCostCompleted || s.Cost.Owner.Source != cost.SourceUnavailable || s.Cost.TotalInputTokens != 0 || s.Cost.OutputTokens != 0 {
 		t.Fatalf("overlap estimated: %+v", s.Cost)
 	}

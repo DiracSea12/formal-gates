@@ -276,7 +276,7 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	if _, err := os.Stat(terminalIntentPath(f.stateDir)); !os.IsNotExist(err) {
 		t.Fatal("read created cleanup intent")
 	}
-	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run)); err != nil {
+	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run, ownerInterval{})); err != nil {
 		t.Fatalf("write terminal intent: %v", err)
 	}
 	pending, err := f.Show()

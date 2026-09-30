@@ -340,6 +340,11 @@ func startRegular(options StartOptions) (RunState, error) {
 		return RunState{}, err
 	}
 	defer ownerUnlock()
+	// StartedAt 是 owner 区间协调的启动端点，在协调锁段内取值（覆盖 NewRunState
+	// 的进程到达时点）：锁内端点保证他方观察到的 StartedAt 必落在本 run 的锁段
+	// 内，engine 的终态重扫才能依时序闭合「先启动后消失」的交错。首盘前无任何
+	// 消费者，重盖不产生两个事实源。
+	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := beginOwnerCost(root, &state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
 		return RunState{}, err

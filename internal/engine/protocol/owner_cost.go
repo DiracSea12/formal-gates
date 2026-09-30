@@ -7,12 +7,14 @@ import (
 )
 
 // OwnerCostBinding 是受理 bootstrap 一次写入的 owner 计量绑定：来源稳定
-// （transcript＋provider）时携带启动基线（REQ-012 AC-050）；缺源不承诺 owner
-// 计量（AC-051 零数字）。基线捕获与重叠检测的 I/O 归 facade（与
-// CostSourceResolver 同一注入边界），本结构只承载持久值。
+// （transcript＋provider）时携带启动基线与绑定时点（REQ-012 AC-050；缺源不
+// 承诺 owner 计量，AC-051 零数字）。基线捕获与重叠检测的 I/O 归 facade（与
+// CostSourceResolver 同一注入边界），本结构只承载持久值。StartedAt 是区间事实
+// 的本方端点（wall clock，观察点在协调锁内写入），终态重扫与终态摘要消费它。
 type OwnerCostBinding struct {
 	Transcript string                   `json:"transcript"`
 	Provider   string                   `json:"provider"`
+	StartedAt  string                   `json:"startedAt,omitempty"`
 	Baseline   *cost.TranscriptSnapshot `json:"baseline,omitempty"`
 	Overlapped bool                     `json:"overlapped,omitempty"`
 }
@@ -37,6 +39,7 @@ func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expect
 	if strings.TrimSpace(owner.Transcript) != "" {
 		state.OwnerTranscript = owner.Transcript
 		state.OwnerProvider = owner.Provider
+		state.OwnerStartedAt = owner.StartedAt
 		state.OwnerBaseline = owner.Baseline
 		state.OwnerOverlapped = owner.Overlapped
 	}
@@ -90,12 +93,12 @@ func (e *Engine) RecordOwnerCost(entry cost.OwnerCost, expectedFingerprint strin
 	return err
 }
 
-// OwnerCostFacts 导出 owner 终态差值量取所需的持久绑定事实（facade 据此调
-// cost.MeasureOwner；缺绑定时 ok=false）。
-func (e *Engine) OwnerCostFacts() (transcript, provider string, baseline *cost.TranscriptSnapshot, overlapped, ok bool) {
+// OwnerCostFacts 导出 owner 终态差值量取与区间重扫所需的持久绑定事实（facade
+// 据此调 cost.MeasureOwner／区间观察；缺绑定时 ok=false）。
+func (e *Engine) OwnerCostFacts() (transcript, provider string, startedAt string, baseline *cost.TranscriptSnapshot, overlapped, ok bool) {
 	_, state, err := e.load()
 	if err != nil || state == nil || state.OwnerTranscript == "" {
-		return "", "", nil, false, false
+		return "", "", "", nil, false, false
 	}
-	return state.OwnerTranscript, state.OwnerProvider, state.OwnerBaseline, state.OwnerOverlapped, true
+	return state.OwnerTranscript, state.OwnerProvider, state.OwnerStartedAt, state.OwnerBaseline, state.OwnerOverlapped, true
 }

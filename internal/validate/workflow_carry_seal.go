@@ -418,7 +418,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	// Freeze the owner interval only after materialization succeeds. A failed
 	// pre-terminal Seal can be retried with a later end snapshot; a durable
 	// terminal checkpoint never meters again during summary/cleanup recovery.
-	finishOwnerCost(&state)
+	finishOwnerCost(root, &state)
 	if sliceInstance {
 		if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
 			return RunSummary{}, err
@@ -543,7 +543,7 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
 	}
-	finishOwnerCost(&state)
+	finishOwnerCost(root, &state)
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance && state.Cost != nil {
 		// 分片实例：中止同样不产出独立封板文件；已记录的成本投影写入 sidecar，

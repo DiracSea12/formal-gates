@@ -464,6 +464,11 @@ type RunSummary struct {
 	// 只留记录，封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。非轻量
 	// run 为空（omitempty 不输出）。
 	Unverified string `json:"unverified,omitempty"`
+	// OwnerTranscript/StartedAt 是 owner 区间协调的终态载荷：run 目录随完成清理
+	// （DeleteRun），留存摘要是唯一的终态区间事实，engine 的终态只读重扫据此判定
+	// 与 legacy run 的区间相交。StartedAt 取启动 owner 协调锁段内的绑定时点。
+	OwnerTranscript string `json:"ownerTranscript,omitempty"`
+	StartedAt       string `json:"startedAt,omitempty"`
 }
 
 // QAOnlyRerunRecord is the audit record for a user-requested QA/gate-only
@@ -1227,7 +1232,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DevelopmentBatches: developmentBatchSummary(state), DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state)}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DevelopmentBatches: developmentBatchSummary(state), DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state), OwnerTranscript: state.OwnerTranscript, StartedAt: state.StartedAt}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"
