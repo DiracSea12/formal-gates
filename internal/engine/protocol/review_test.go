@@ -217,15 +217,34 @@ func submitReviewResult(t *testing.T, engine *Engine, event, actionID string, ev
 	return acceptance
 }
 
+// controlRequestEvent 构造受限控制请求：SELECT_ROUTE 以决定载荷的候选表
+// 声明 Ask 的门全集（用户所见与所批一致的正路径形态），其余控制走通用
+// 构造器。
+func controlRequestEvent(t *testing.T, control ControlKind, requestID string, payload *ReviewDecisionPayload, options []AskOption) Event {
+	t.Helper()
+	if control == ControlSelectRoute {
+		if payload == nil || payload.Route == nil {
+			t.Fatalf("route ask %s needs the gate list its decide will carry", requestID)
+		}
+		ev, err := NewRouteRequestEvent(EventID(requestID), payload.Route.Gates, options...)
+		if err != nil {
+			t.Fatalf("route request event: %v", err)
+		}
+		return ev
+	}
+	ev, err := NewRequestEvent(EventID(requestID), control, options...)
+	if err != nil {
+		t.Fatalf("request event: %v", err)
+	}
+	return ev
+}
+
 // askAndDecide 走完整两段：创建受限 Ask，取当前 freshness token 后提交
 // 决定（payload 为 nil 时是普通决定事件）。
 func askAndDecide(t *testing.T, engine *Engine, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) Acceptance {
 	t.Helper()
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent(EventID(requestID), control, options...)
-	if err != nil {
-		t.Fatalf("request event: %v", err)
-	}
+	request := controlRequestEvent(t, control, requestID, payload, options)
 	if _, err := engine.Submit(request, fp); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
@@ -436,6 +455,119 @@ func TestCustomRouteBindsWholeCandidateList(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRouteGateSetPinnedOnAskBindsRequestAndDecision：SELECT_ROUTE 请求声
+// 明的候选门全集钉进 Ask 后是决定的确认边界。请求缺全集或全集含
+// merge/重复在接纳处可区分拒绝、零写；决定的候选表少列或多列一门（vs
+// Ask 钉住的全集）可区分拒绝、零写且 Ask 存活，携带完整全集（顺序无关）
+// 的修正决定照常绑定。
+func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
+	t.Run("request without the gate list is rejected without state writes", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		// 字面构造事件绕开构造器前置校验，让引擎在接纳处拒绝。
+		request := Event{ID: EventID("req-route-nogates"), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions()}}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(request, fp); err == nil {
+			t.Fatal("route request without the gate list accepted")
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("gate-less request code = %q (%v)", code, err)
+		}
+		if after := stateBytesOf(t, dir); string(before) != string(after) {
+			t.Fatal("rejected route request changed state bytes")
+		}
+	})
+
+	t.Run("request gate list carrying merge or a duplicate is rejected without state writes", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		fp := fingerprintOf(t, engine)
+		for name, gates := range map[string][]string{
+			"request-with-merge":     {"blackbox", "whitebox", "merge"},
+			"request-with-duplicate": {"blackbox", "whitebox", "gate.quality", "gate.quality"},
+		} {
+			request := Event{ID: EventID("req-" + name), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions(), RouteGates: gates}}
+			before := stateBytesOf(t, dir)
+			if _, err := engine.Submit(request, fp); err == nil {
+				t.Fatalf("%s accepted", name)
+			} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+				t.Fatalf("%s code = %q (%v)", name, code, err)
+			}
+			if after := stateBytesOf(t, dir); string(before) != string(after) {
+				t.Fatalf("rejected %s changed state bytes", name)
+			}
+		}
+	})
+
+	t.Run("decide diverging from the pinned set is rejected, the ask survives and a corrected decide binds", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		product := issueReady(t, engine)[0]
+		submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+		askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "no-split", Note: "建议不拆",
+		}})
+		pinned := []string{"blackbox", "whitebox", "gate.security"}
+		request, err := NewRouteRequestEvent("req-route-diverging", pinned, routeOptions()...)
+		if err != nil {
+			t.Fatalf("route request: %v", err)
+		}
+		fp := fingerprintOf(t, engine)
+		if _, err := engine.Submit(request, fp); err != nil {
+			t.Fatalf("submit route request: %v", err)
+		}
+		for name, gates := range map[string][]string{
+			"decide-missing-one-gate": {"blackbox", "whitebox"},
+			"decide-with-extra-gate":  {"blackbox", "whitebox", "gate.security", "gate.extra"},
+		} {
+			token, err := engine.Freshness("req-route-diverging")
+			if err != nil {
+				t.Fatalf("freshness for %s: %v", name, err)
+			}
+			ev, err := NewReviewDecideEvent(EventID("evt-"+name), "req-route-diverging", token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+			if err != nil {
+				t.Fatalf("decide %s: %v", name, err)
+			}
+			before := stateBytesOf(t, dir)
+			if _, err := engine.Submit(ev, fp); err == nil {
+				t.Fatalf("%s accepted", name)
+			} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+				t.Fatalf("%s code = %q (%v)", name, code, err)
+			}
+			if after := stateBytesOf(t, dir); string(before) != string(after) {
+				t.Fatalf("rejected %s changed state bytes", name)
+			}
+			ask := engine.LoadMustSucceed(t).State.PendingAsks["req-route-diverging"]
+			if ask.Resolved || !slices.Equal(ask.RouteGates, pinned) {
+				t.Fatalf("after rejecting %s the ask = %+v, want unresolved with pinned gates %v", name, ask, pinned)
+			}
+		}
+		// 修正决定：完整全集且顺序与 Ask 钉住的不同——集合相等即接纳。
+		token, err := engine.Freshness("req-route-diverging")
+		if err != nil {
+			t.Fatalf("freshness for corrected decide: %v", err)
+		}
+		corrected, err := NewReviewDecideEvent(EventID("evt-route-corrected"), "req-route-diverging", token, "full", ReviewDecisionPayload{Route: &RouteDecision{
+			Mode: "full", Gates: []string{"gate.security", "blackbox", "whitebox"},
+		}})
+		if err != nil {
+			t.Fatalf("corrected decide: %v", err)
+		}
+		if _, err := engine.Submit(corrected, fp); err != nil {
+			t.Fatalf("corrected decide rejected: %v", err)
+		}
+		snap := engine.LoadMustSucceed(t)
+		if snap.State.RouteMode != "full" || !sameGateSet(snap.State.SelectedGates, pinned) {
+			t.Fatalf("route binding = %q %v, want the pinned set %v", snap.State.RouteMode, snap.State.SelectedGates, pinned)
+		}
+		if !snap.State.PendingAsks["req-route-diverging"].Resolved {
+			t.Fatal("corrected decide left the ask unresolved")
+		}
+	})
 }
 
 // Confirming and downgrading a finding changes its conclusion without adding a review.
@@ -1333,10 +1465,7 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) error {
 	t.Helper()
 	fp := fingerprintOf(t, engine)
-	request, err := NewRequestEvent(EventID(requestID), control, options...)
-	if err != nil {
-		t.Fatalf("request event: %v", err)
-	}
+	request := controlRequestEvent(t, control, requestID, payload, options)
 	if _, err := engine.Submit(request, fp); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}

@@ -1078,6 +1078,17 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			ask.Validation = value
 			_, ask.Options = state.validationOffer(*value)
 		}
+		// SELECT_ROUTE 的候选门全集必填且形状合法（与决定侧候选表同一定义
+		// 点），通过后钉进 Ask：用户确认边界以此为唯一权威，DECIDE 的候选
+		// 表必须与之集合相等（admitReviewDecision 核对）。schema 层不校验
+		// 该字段——事件 schema 判定先于幂等台账，已接纳事件的重放不得因
+		// 此字段被拒。
+		if ev.Request.Control == ControlSelectRoute {
+			if err := validateRouteGateCandidates(ev.Request.RouteGates); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			ask.RouteGates = slices.Clone(ev.Request.RouteGates)
+		}
 		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
 		return Acceptance{

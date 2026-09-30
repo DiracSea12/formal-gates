@@ -135,6 +135,10 @@ type RequestPayload struct {
 	Control ControlKind
 	Options []AskOption
 	Package *RequirementDecisionPackage
+	// RouteGates 是 SELECT_ROUTE 请求创建时声明的候选门全集，接纳落账时
+	// 钉进 pending Ask：用户确认边界以此为唯一权威，DECIDE 载荷的候选表
+	// 必须与之集合相等。
+	RouteGates []string
 }
 
 // DecidePayload 是 DECIDE 的 payload：目标 request、freshness token 与
@@ -408,6 +412,19 @@ func NewRequirementRequestEvent(id EventID, pkg RequirementDecisionPackage, opti
 // without resolving it. Its new token must be fetched before user confirmation.
 func NewRequirementPackageEvent(id EventID, request RequestID, token string, pkg RequirementDecisionPackage) (Event, error) {
 	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{Control: ControlRequestRequirementChange, Request: request, Token: token, Package: &pkg}}
+	return ev, ev.Validate()
+}
+
+// NewRouteRequestEvent 构造 SELECT_ROUTE 请求：候选门全集随请求声明并在
+// 此校验形状（非空、无重复、不含合并验证）；全集在接纳落账时钉进
+// pending Ask，决定的候选表必须与之集合相等。
+func NewRouteRequestEvent(id EventID, gates []string, options ...AskOption) (Event, error) {
+	if err := validateRouteGateCandidates(gates); err != nil {
+		return Event{}, err
+	}
+	ev := Event{ID: id, Kind: KindRequestControl, Request: &RequestPayload{
+		Control: ControlSelectRoute, Options: append([]AskOption(nil), options...), RouteGates: append([]string(nil), gates...),
+	}}
 	return ev, ev.Validate()
 }
 
@@ -810,6 +827,7 @@ type requestWire struct {
 	Control    string                      `json:"control"`
 	Options    []AskOption                 `json:"options"`
 	Package    *RequirementDecisionPackage `json:"package,omitempty"`
+	RouteGates []string                    `json:"routeGates,omitempty"`
 }
 
 type decideEventWire struct {
@@ -889,7 +907,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)
-		w.Request = &requestWire{Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token}
+		w.Request = &requestWire{Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}

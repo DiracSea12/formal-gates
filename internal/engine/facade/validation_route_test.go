@@ -414,7 +414,7 @@ func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
 		d := newValidationDriver(t, "blackbox", "quality")
 		d.reviewReady()
 		requestID := d.eventID()
-		request, err := protocol.NewRequestEvent(requestID, protocol.ControlSelectRoute, protocol.AskOption{ID: protocol.AskOptionID(route.Mode), Label: "Select route"})
+		request, err := protocol.NewRouteRequestEvent(requestID, route.Gates, protocol.AskOption{ID: protocol.AskOptionID(route.Mode), Label: "Select route"})
 		if err != nil {
 			t.Fatal(err)
 		}

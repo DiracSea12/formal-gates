@@ -477,7 +477,8 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	_, ready := finish(d, review.StartReadiness, commandPlan())
 	d.submit(ready)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
-	req, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlSelectRoute, protocol.AskOption{ID: "custom", Label: "Custom"})
+	route := routeDecisionForGates([]string{"blackbox", "quality"})
+	req, err := protocol.NewRouteRequestEvent(d.eventID(), route.Gates, protocol.AskOption{ID: "custom", Label: "Custom"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +487,6 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := routeDecisionForGates([]string{"blackbox", "quality"})
 	event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(req.ID), token, "custom", protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		t.Fatal(err)

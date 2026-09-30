@@ -64,7 +64,13 @@ func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
 	id := d.eventID()
-	e, err := protocol.NewRequestEvent(id, kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+	var e protocol.Event
+	var err error
+	if kind == protocol.ControlSelectRoute && p.Route != nil {
+		e, err = protocol.NewRouteRequestEvent(id, p.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+	} else {
+		e, err = protocol.NewRequestEvent(id, kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+	}
 	if err != nil {
 		d.t.Fatal(err)
 	}

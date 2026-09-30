@@ -4,7 +4,6 @@ package validate
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,43 +57,44 @@ func faultRepoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
 }
 
+// faultCopyPackage 按生产的包输入口径把源仓库复制成无 .git 的包夹具：
+// Git 是输入集的唯一权威——tracked 文件（即使命中 ignore 规则）与未跟踪
+// 且未被 ignore 的文件都是包输入；生产 PackageReceipt 无条件排除的本地
+// 运行根 .git/.gates/.harness 同样排除。逐条目复制并要求常规文件，夹具
+// 因此不会携带符号链接等执行器工件。
 func faultCopyPackage(t *testing.T, source, target string) {
 	t.Helper()
-	err := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if relative == "." {
-			return os.MkdirAll(target, 0o700)
-		}
-		// .git/.gates/.harness 是本地运行数据（生产 PackageReceipt 同样排
-		// 除），.harness 里有 venv 符号链接等执行器工件，都不是包输入；
-		// $tmp 是历史本地临时目录，同属运行期输出。
-		if info.IsDir() && (relative == ".git" || relative == ".gates" || relative == ".harness" || relative == "$tmp") {
-			return filepath.SkipDir
-		}
-		destination := filepath.Join(target, relative)
-		if info.IsDir() {
-			return os.MkdirAll(destination, info.Mode().Perm())
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("package fixture entry is not a regular file: %s", relative)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-			return err
-		}
-		return os.WriteFile(destination, data, info.Mode().Perm())
-	})
+	command := exec.Command("git", "-C", source, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	out, err := command.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v", strings.Join(command.Args, " "), err)
+	}
+	for _, relative := range strings.Split(string(out), "\x00") {
+		if relative == "" {
+			continue
+		}
+		if root, _, _ := strings.Cut(relative, "/"); root == ".git" || root == ".gates" || root == ".harness" {
+			continue
+		}
+		sourcePath := filepath.Join(source, filepath.FromSlash(relative))
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("package fixture entry is not a regular file: %s", relative)
+		}
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destination := filepath.Join(target, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(destination, data, info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

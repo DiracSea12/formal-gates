@@ -144,7 +144,10 @@ type PendingAskFace struct {
 	RequestID  string                       `json:"requestId"`
 	Control    protocol.ControlKind         `json:"control"`
 	Options    []protocol.AskOption         `json:"options"`
-	Token      string                       `json:"token"`
+	// RouteGates 是 SELECT_ROUTE Ask 钉住的候选门全集的只读投影（其余
+	// 控制为空）：用户据此所见全集提交决定。
+	RouteGates []string `json:"routeGates,omitempty"`
+	Token      string   `json:"token"`
 }
 
 // ReviewGrantFace 是一条额外语义轮授权的公开面：身份、理由与占用态（该授
@@ -964,6 +967,7 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			RoundGrant: ask.RoundGrant,
 			Control:    ask.Control,
 			Options:    append([]protocol.AskOption{}, ask.Options...),
+			RouteGates: ask.RouteGates,
 			Token:      token,
 		})
 	}

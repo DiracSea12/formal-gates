@@ -121,6 +121,43 @@ func validateTopologyDecision(topology *TopologyDecision) error {
 	return nil
 }
 
+// validateRouteGateCandidates 校验候选门全集的形状：非空、逐项非空、无重
+// 复、不含合并验证（合并验证只在拆分运行中自动附加）。SELECT_ROUTE 请求
+// 声明的全集与路线决定的候选表共用本定义点。
+func validateRouteGateCandidates(gates []string) error {
+	if len(gates) == 0 {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "SELECT_ROUTE requires the explicit candidate gate list"}
+	}
+	seen := make(map[string]bool, len(gates))
+	for _, gate := range gates {
+		if strings.TrimSpace(gate) == "" {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "route candidate gates cannot be empty"}
+		}
+		if seen[gate] {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route candidate gate %q listed twice", gate)}
+		}
+		seen[gate] = true
+	}
+	if slices.Contains(gates, "merge") {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "merge verification is attached automatically for split runs and is not a route candidate"}
+	}
+	return nil
+}
+
+// sameGateSet 报告两个候选门列表是否为同一集合（顺序无关）。两侧均已经
+// 过 validateRouteGateCandidates（无重复），长度相等加逐项包含即集合相等。
+func sameGateSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, gate := range a {
+		if !slices.Contains(b, gate) {
+			return false
+		}
+	}
+	return true
+}
+
 // validateRouteDecision 校验路线决定的形状：候选列表不得含合并验证（合并
 // 验证只在拆分运行中自动附加）；full 携带显式完整门全集、必含内建黑盒与
 // 白盒 QA 且 Selected 为空；custom 携带非空、无重复、逐项属于候选列表的
@@ -154,23 +191,7 @@ func validateRouteDecision(route *RouteDecision) error {
 	default:
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route mode %q invalid for SELECT_ROUTE (closed set: full, custom)", route.Mode)}
 	}
-	if len(route.Gates) == 0 {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "route decision requires the explicit candidate gate list"}
-	}
-	seen := make(map[string]bool, len(route.Gates))
-	for _, gate := range route.Gates {
-		if strings.TrimSpace(gate) == "" {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "route candidate gates cannot be empty"}
-		}
-		if seen[gate] {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route candidate gate %q listed twice", gate)}
-		}
-		seen[gate] = true
-	}
-	if slices.Contains(route.Gates, "merge") {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "merge verification is attached automatically for split runs and is not a route candidate"}
-	}
-	return nil
+	return validateRouteGateCandidates(route.Gates)
 }
 
 // ---- 审查证据接纳（WORKER_RESULT 同事务） ----
@@ -473,6 +494,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				Code:   CodeEventSchemaInvalid,
 				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: full, custom)", payload.Route.Mode, decide.Choice),
 			}
+		}
+		// 候选表必须与 Ask 钉住的全集集合相等（顺序无关）：少列或多列任一
+		// 门，决定声称的候选表就不再是用户所见并批准的全集——可区分拒
+		// 绝、零写，Ask 保持未决，修正后的决定仍可提交。
+		if !sameGateSet(payload.Route.Gates, ask.RouteGates) {
+			return reviewReject(fmt.Errorf("route candidate gates %v do not match the gate list pinned on ask %s (%v); the decide must repeat exactly the list the user approved", payload.Route.Gates, requestID, ask.RouteGates))
 		}
 		if state.Topology == nil {
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))

@@ -205,6 +205,10 @@ type PendingAsk struct {
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
+	// RouteGates 是 SELECT_ROUTE Ask 创建时声明的候选门全集（请求方钉
+	// 住、引擎落账，门目录发现仍在协议层外）：用户所见与所批一致的确认
+	// 边界落账于此，DECIDE 载荷的候选表必须与之集合相等（顺序无关）。
+	RouteGates []string `json:"routeGates,omitempty"`
 	// RoundGrant is the immutable offer for an engine-generated review Ask.
 	// The pending request owns it until decided or its bound facts are superseded.
 	RoundGrant *ReviewGrantRequest `json:"roundGrant,omitempty"`
