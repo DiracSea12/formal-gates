@@ -77,27 +77,29 @@ func (e *Engine) advanceRecoveries(s *State, revision uint64) error {
 
 // accountResumeExecution 把一次恢复执行计入目标任务的 Attempt 账本：resumed
 // execution 的唯一计数点（公开 ResumeAgent 与恢复决定共用），Attempts 达到
-// MaxAttempts 时置耗尽标记——与瞬态结果/FAILED spawn 的计数同一形状。目标无当
-// 前账本条目时不计（账本已被换新或终态收回的执行不改写新条目）。
+// MaxAttempts 时置耗尽标记——与瞬态结果/FAILED spawn 的计数同一形状。目标身
+// 份用与恢复准入同一个解析（workerActionTarget）；计数写进承载该条目的账本
+// （当前账或已终待果账，按条目身份定位，TASK_PROGRESS TERMINAL 清理后的执行
+// 照常计数）。
 func (s *State) accountResumeExecution(workerActionID string) {
-	pending, ok := s.PendingActions[workerActionID]
+	pending, attempt, ok := s.workerActionTarget(workerActionID)
 	if !ok {
 		return
 	}
-	if attempt, ok := s.Attempts[pending.Task]; ok {
-		attempt.Attempts++
-		if attempt.MaxAttempts > 0 && attempt.Attempts >= attempt.MaxAttempts {
-			attempt.RetryExhausted = true
+	if current, held := s.Attempts[pending.Task]; held && current.ID == attempt.ID {
+		current.Attempts++
+		if current.MaxAttempts > 0 && current.Attempts >= current.MaxAttempts {
+			current.RetryExhausted = true
 		}
-		s.Attempts[pending.Task] = attempt
+		s.Attempts[pending.Task] = current
 		return
 	}
-	if attempt, ok := s.EndedAttempts[pending.Task]; ok {
-		attempt.Attempts++
-		if attempt.MaxAttempts > 0 && attempt.Attempts >= attempt.MaxAttempts {
-			attempt.RetryExhausted = true
+	if ended, held := s.EndedAttempts[pending.Task]; held && ended.ID == attempt.ID {
+		ended.Attempts++
+		if ended.MaxAttempts > 0 && ended.Attempts >= ended.MaxAttempts {
+			ended.RetryExhausted = true
 		}
-		s.EndedAttempts[pending.Task] = attempt
+		s.EndedAttempts[pending.Task] = ended
 	}
 }
 

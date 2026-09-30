@@ -112,15 +112,16 @@ func (s *State) issuedTaskOf(actionID string) (runtime.TaskKey, bool) {
 
 // extendBudgetRetry 对预算处置 Ask 的目标逻辑动作一次性追加一个 retry slot
 // （MaxAttempts+1、解除耗尽标记；镜像 RETRY Ask 的既有处置，不累积、不改基础
-// 槽位）。目标不是逻辑动作（run 级边界）、账本已不在、或该通道对同 target 的
-// retry 授权已用过一次（validationGrantUsed）时拒绝。
+// 槽位）。目标不是逻辑动作（run 级边界）、账本已不在、或该逻辑任务的一次追加
+// 已被任一通道授予（retryExtensionGranted——RETRY approve 与本通道授出同一
+// 个 slot）时拒绝。
 func (s *State) extendBudgetRetry(target string) error {
 	var key runtime.TaskKey
 	if err := key.UnmarshalText([]byte(target)); err != nil {
 		return validationError("budget retry requires the boundary's logical action target")
 	}
-	if s.validationGrantUsed(KindDispatchBudgetDisposition, "retry", target) {
-		return validationError("budget retry already extended this boundary action")
+	if s.retryExtensionGranted(target) {
+		return validationError("the boundary action's single retry extension was already granted")
 	}
 	found := false
 	if attempt, ok := s.Attempts[key]; ok {

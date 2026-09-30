@@ -53,26 +53,24 @@ func readTokenCap(root string) (*int64, error) {
 	return doc.EngineDispatchMaxTotalTokens, nil
 }
 
-// ownerOverlap 镜像 legacy beginOwnerCost 的重叠检测：同一 owner transcript 上
-// 存在其他活动 run 时，区间无法精确拆分，owner 记 UNAVAILABLE。扫描两个命名空
-// 间（迁移期两代并存是产品支持形态）：engine run 的 persistence 信封形状与
-// legacy validate run 的平坦形状（判定语义逐字镜像 internal/validate/cost.go 的
-// beginOwnerCost：跳过自身、读失败＝重叠、status/ownerTranscript/canonical 路径
-// 相等）。engine 侧只读检测，不跨代互写。
-func ownerOverlap(root, runID, transcript string) bool {
+// engineOverlapPeers 返回同 root 下与本 run 共享 owner transcript 的活动
+// engine peer runID（persistence 信封形状：非终态 phase、owner transcript 经
+// canonical 相等）。resolvable=false 表示存在无法排除的读取失败（Glob 错误/
+// 读失败/坏信封——重叠不可否定），调用方按重叠处理。
+func engineOverlapPeers(root, runID, transcript string) (peers []string, resolvable bool) {
 	canonical := filepath.Clean(transcript)
-	// engine 命名空间：state.json 是 persistence 信封，权威状态嵌套 content 下。
-	enginePaths, err := filepath.Glob(filepath.Join(root, EngineNamespace, "*", "state.json"))
+	paths, err := filepath.Glob(filepath.Join(root, EngineNamespace, "*", "state.json"))
 	if err != nil {
-		return true // 不可排除的重叠区间按无法精确核对处理
+		return nil, false
 	}
-	for _, path := range enginePaths {
+	resolvable = true
+	for _, path := range paths {
 		if other := filepath.Base(filepath.Dir(path)); other == runID {
 			continue
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return true
+			return nil, false
 		}
 		var envelope struct {
 			Content struct {
@@ -81,15 +79,24 @@ func ownerOverlap(root, runID, transcript string) bool {
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
-			return true
+			return nil, false
 		}
 		projection := envelope.Content
 		if projection.Phase != string(runtime.PhaseTerminal) && strings.TrimSpace(projection.OwnerTranscript) != "" &&
 			filepath.Clean(projection.OwnerTranscript) == canonical {
-			return true
+			peers = append(peers, filepath.Base(filepath.Dir(path)))
 		}
 	}
-	// legacy 命名空间：validate run 的平坦形状 state.json。
+	return peers, true
+}
+
+// legacyOwnerOverlap 镜像 legacy beginOwnerCost 的 legacy 命名空间检测：同一
+// owner transcript 上存在 ACTIVE legacy run（.gates/tmp 平坦形状 state.json）
+// 时区间无法精确拆分。判定语义逐字镜像 internal/validate/cost.go 的
+// beginOwnerCost：跳过自身、读失败＝重叠、status/ownerTranscript/canonical 路
+// 径相等。legacy 侧不可写（engine 不跨代互写），其双向标记是注册表内部行为。
+func legacyOwnerOverlap(root, runID, transcript string) bool {
+	canonical := filepath.Clean(transcript)
 	legacyPaths, err := filepath.Glob(filepath.Join(root, ".gates", "tmp", "*", "state.json"))
 	if err != nil {
 		return true
@@ -116,6 +123,38 @@ func ownerOverlap(root, runID, transcript string) bool {
 		}
 	}
 	return false
+}
+
+// ownerOverlap 报告本 run 的 owner 区间是否与活动 peer 重叠（两个命名空间：
+// engine run 与 legacy validate run，迁移期两代并存是产品支持形态）。
+func ownerOverlap(root, runID, transcript string) bool {
+	peers, resolvable := engineOverlapPeers(root, runID, transcript)
+	if len(peers) > 0 || !resolvable {
+		return true
+	}
+	return legacyOwnerOverlap(root, runID, transcript)
+}
+
+// markOverlappingEnginePeers 在自身来源绑定后把重叠事实补写进每个重叠 engine
+// peer 的 owner 投影（区间事实双边持久：先启动 run 的启动布尔不随后续重叠更
+// 新，其终态报告也必须携带重叠）。写失败上抛——重叠事实是 peer 终态成本报告
+// 正确性的保证，静默跳过会让 peer 记出精确的假数字；与 legacy beginOwnerCost
+// 失败即中止启动同一形状。peer 标记幂等（无绑定＝无操作、已标记＝零变化）。
+func markOverlappingEnginePeers(root, runID, transcript string) error {
+	peers, resolvable := engineOverlapPeers(root, runID, transcript)
+	if !resolvable {
+		return fmt.Errorf("engine start: owner overlap peers at %s are unreadable; the shared interval cannot be attributed", filepath.Join(root, EngineNamespace))
+	}
+	for _, peer := range peers {
+		peerFacade, err := Open(root, peer)
+		if err != nil {
+			return fmt.Errorf("engine start: open overlapping peer run %q: %w", peer, err)
+		}
+		if err := peerFacade.engine.MarkOwnerOverlapped(emptyFingerprint()); err != nil {
+			return fmt.Errorf("engine start: mark overlapping peer run %q: %w", peer, err)
+		}
+	}
+	return nil
 }
 
 // captureOwnerBinding 在来源稳定时取 owner 启动基线（无法建立精确基线时不承

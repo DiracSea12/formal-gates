@@ -13,20 +13,13 @@ import (
 // allowanceFace 把三值可用性投影成摘要字段值：engine allowance 读权威
 // Guard 投影（AllowanceSummary，nil＝包络未就位）；owner cost 与 token cap
 // 按各自来源/配置独立判定（owner 终态差值只有可核对来源才 AVAILABLE；token
-// cap 由配置在账与派发用量独立决定，不随 engine allowance 联动）。
+// cap 三值读 tokenCapStatus 单点派生，不在此重述规则）。
 func (s *State) allowanceFaces() (engineAllowance, ownerCost, tokenCap string) {
 	ownerCost = "UNAVAILABLE"
 	if s.Cost != nil && s.Cost.Owner != nil && s.Cost.Owner.Source == cost.SourceTranscript {
 		ownerCost = "AVAILABLE"
 	}
-	tokenCap = TokenCapUnavailable
-	if s.TokenCapMaxTokens != nil {
-		tokenCap = TokenCapAvailable
-		if s.dispatchTokenTotal() >= *s.TokenCapMaxTokens {
-			tokenCap = TokenCapExceeded
-		}
-	}
-	return s.Guard.AllowanceSummary(), ownerCost, tokenCap
+	return s.Guard.AllowanceSummary(), ownerCost, s.tokenCapStatus()
 }
 
 // repairAskFace 是 REPAIR Ask 摘要的专用 Detail：完整 findings/problems（含
@@ -412,7 +405,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		found := false
 		for key, a := range s.EndedAttempts {
 			if key.String() == r.Target {
-				if !s.endedWorkCurrent(a, e.cfg.Definition) || !a.RetryExhausted || s.validationGrantUsed("RETRY", "approve", key.String()) {
+				if !s.endedWorkCurrent(a, e.cfg.Definition) || !a.RetryExhausted || s.retryExtensionGranted(key.String()) {
 					return validationError("retry already extended or not exhausted")
 				}
 				a.MaxAttempts++

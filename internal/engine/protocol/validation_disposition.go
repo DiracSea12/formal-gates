@@ -62,7 +62,7 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 				if a.Work != nil {
 					r.Binding = *a.Work
 				}
-				if s.validationGrantUsed("RETRY", "approve", key.String()) {
+				if s.retryExtensionGranted(key.String()) {
 					options = nil
 				}
 				if a.Work != nil && a.Work.WaveID != "" {

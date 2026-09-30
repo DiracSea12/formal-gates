@@ -45,6 +45,29 @@ func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expect
 	return err
 }
 
+// MarkOwnerOverlapped 把 owner 区间重叠事实持久写进本 run 的 owner 投影（幂
+// 等：无 owner 绑定＝无操作；已标记＝零变化，AC-052 同形状的幂等记账）。重叠
+// 是区间事实、双边持久（legacy beginOwnerCost 的双边标记语义——任一方可能先
+// 终态并清理状态，先启动 run 的启动布尔不随后续重叠更新）：后启动 run 检测到
+// 共享 owner transcript 的活动 engine peer 时，facade 经本入口补写 peer。
+// 写入走 engine 自有事务＋CAS；直改 peer 的 state.json 文件会破坏持久化完整
+// 性，禁止。
+func (e *Engine) MarkOwnerOverlapped(expectedFingerprint string) error {
+	revision, state, err := e.load()
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if state.OwnerTranscript == "" || state.OwnerOverlapped {
+		return nil
+	}
+	state.OwnerOverlapped = true
+	_, err = e.commit(state, revision, expectedFingerprint)
+	return err
+}
+
 // RecordOwnerCost 把 owner 终态差值记入 cost 投影（幂等：Owner 已在即零变化返
 // 回，AC-052）。差值的量取（transcript I/O）归 facade，本入口只落账；只作终态
 // 报告，不参与 in-flight guard。

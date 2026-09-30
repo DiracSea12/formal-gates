@@ -599,6 +599,15 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
+	// 区间重叠事实双边持久：自身来源在账后，把重叠补写进每个共享 owner
+	// transcript 的活动 engine peer（幂等；失败即中止启动——静默跳过会让
+	// peer 终态记出精确的假数字，与 legacy beginOwnerCost 同一形状）。
+	if strings.TrimSpace(options.Owner.Transcript) != "" && strings.TrimSpace(options.Owner.Provider) != "" {
+		if err := markOverlappingEnginePeers(root, req.RunID, strings.TrimSpace(options.Owner.Transcript)); err != nil {
+			_ = os.RemoveAll(stateDir)
+			return nil, Run{}, err
+		}
+	}
 	if err := lifecycle.BeginRun(root, req.RunID); err != nil {
 		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
 		_ = os.RemoveAll(stateDir)

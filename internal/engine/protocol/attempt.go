@@ -128,10 +128,27 @@ func (s *State) projectRetryTasks(view *decision.State, cd *compiler.CompiledDef
 	}
 }
 
-// validationGrantUsed 报告某验证 Ask 通道对 target 的一次性授权决定是否已用
-// （同 kind＋choice＋target 扫已落决定）。RETRY Ask（approve）与预算处置 Ask
-// （retry）两通道各自一次性；跨通道先后两次都是用户显式授权的独立一次性增量，
-// 非预先累积。
+// workerActionTarget 是恢复面的唯一任务身份解析：按 workerActionID 解析目标
+// PendingAction 与 Attempt——PendingActions 命中用其任务与当前账条目；否则在
+// EndedAttempts 按 ActionID 且 AwaitingResult 命中（TASK_PROGRESS TERMINAL 清
+// 理后仍在等待结果的执行）。恢复准入（guardEffectBudget）、宿主效果构造
+// （agentHostIntent）与恢复记账（accountResumeExecution）都只用这一个解析；
+// 任何一处不得保留第二条查找路径。
+func (s *State) workerActionTarget(workerActionID string) (PendingAction, Attempt, bool) {
+	pending, ok := s.PendingActions[workerActionID]
+	if ok {
+		return pending, s.Attempts[pending.Task], true
+	}
+	for task, ended := range s.EndedAttempts {
+		if ended.ActionID == workerActionID && ended.AwaitingResult {
+			return PendingAction{ActionID: workerActionID, Task: task, AttemptID: ended.ID}, ended, true
+		}
+	}
+	return PendingAction{}, Attempt{}, false
+}
+
+// validationGrantUsed 是判重的底层扫描：同 kind＋choice＋target 的已落决定是
+// 否存在。统一谓词 retryExtensionGranted 是它唯一的业务组合归属。
 func (s *State) validationGrantUsed(kind, choice, target string) bool {
 	for id, d := range s.Decisions {
 		a := s.PendingAsks[id]
@@ -140,6 +157,16 @@ func (s *State) validationGrantUsed(kind, choice, target string) bool {
 		}
 	}
 	return false
+}
+
+// retryExtensionGranted 报告一个逻辑任务的一次追加工期是否已被授予：RETRY
+// approve 与 DISPATCH_BUDGET_DISPOSITION retry 两个入口授出的是同一逻辑任务
+// 的同一个 retry slot——任一通道已落决定即已授予（stage-3-5b:169-173
+// 「『重试』固定增加当前逻辑动作的一个 retry slot……不能预先累积」；约束对
+// 象是逻辑任务，不是 Ask 名称）。两个扩展入口都只查本谓词。
+func (s *State) retryExtensionGranted(target string) bool {
+	return s.validationGrantUsed("RETRY", "approve", target) ||
+		s.validationGrantUsed(KindDispatchBudgetDisposition, "retry", target)
 }
 func retryReason(record RejectedResult) string { return strings.TrimSpace(record.Reason) }
 

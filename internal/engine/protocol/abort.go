@@ -120,18 +120,7 @@ func (e *Engine) agentHostIntent(s *State, operation HostActionOperation, worker
 	if strings.TrimSpace(identity) == "" {
 		return HostActionIntent{}, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "agent host action identity is empty"}
 	}
-	pending, ok := s.PendingActions[workerActionID]
-	attempt := s.Attempts[pending.Task]
-	if !ok {
-		for task, ended := range s.EndedAttempts {
-			if ended.ActionID == workerActionID && ended.AwaitingResult {
-				pending = PendingAction{ActionID: workerActionID, Task: task, AttemptID: ended.ID}
-				attempt = ended
-				ok = true
-				break
-			}
-		}
-	}
+	pending, attempt, ok := s.workerActionTarget(workerActionID)
 	if !ok {
 		return HostActionIntent{}, &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("unknown worker action %q", workerActionID)}
 	}

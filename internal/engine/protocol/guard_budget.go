@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
@@ -57,8 +58,32 @@ func (s *State) dispatchTokenTotal() int64 {
 	return total
 }
 
-// tokenCapExceeded 报告 engine 派发用量是否已达配置的 token cap（达到即禁止后
-// 续自动派发）。无配置恒为 false（cap 维度不参与判定）。
+// tokenCapStatus 是 token cap 可信度三值的单一派生：配置缺失＝UNAVAILABLE；
+// 配置在账但任一派发来源不可计量（存在未知用量——不可计量的派发以零占位，
+// 已知总量不能再宣称可靠余量）＝UNAVAILABLE；否则按已知总量判定
+// AVAILABLE/EXCEEDED。本函数与 tokenCapExceeded 分工：状态回答"cap 数字是否
+// 可信"，闸回答"已知总量是否已达上限"——两者各自单点陈述，不得在第三处重述。
+func (s *State) tokenCapStatus() string {
+	if s.TokenCapMaxTokens == nil {
+		return TokenCapUnavailable
+	}
+	if s.Cost != nil {
+		for _, entry := range s.Cost.Dispatches {
+			if entry.Source == cost.SourceUnavailable {
+				return TokenCapUnavailable
+			}
+		}
+	}
+	if s.dispatchTokenTotal() >= *s.TokenCapMaxTokens {
+		return TokenCapExceeded
+	}
+	return TokenCapAvailable
+}
+
+// tokenCapExceeded 报告 engine 派发的已知用量是否已达配置的 token cap（已知
+// 量达上限即超——未知用量只会更多，已知总量是下界闸）。无配置恒 false；已知
+// 量未达而存在未知用量＝不闸（cap 维度不可信时不拦截，request/attempt 止损
+// 照常）。可信度判定归 tokenCapStatus 单点。
 func (e *Engine) tokenCapExceeded(state *State) bool {
 	if state.TokenCapMaxTokens == nil {
 		return false
@@ -473,15 +498,14 @@ func (e *Engine) deriveGuardBudget(state *State) (*GuardBudget, error) {
 		TotalAllowance:    result.TotalAllowance,
 		BudgetBasisDigest: result.BudgetBasisDigest,
 		UsedRequests:      len(issued),
-		TokenCapStatus:    TokenCapUnavailable,
 	}
+	// token cap 投影：状态是可信度三值（tokenCapStatus 单点派生——配置缺失或
+	// 存在不可计量派发＝UNAVAILABLE）；Max/Dispatch 是配置与已记录（已知）总量
+	// 的事实值，UNAVAILABLE 下不作余量承诺展示。
+	budget.TokenCapStatus = state.tokenCapStatus()
 	if state.TokenCapMaxTokens != nil {
-		budget.TokenCapStatus = TokenCapAvailable
 		budget.TokenCapMax = *state.TokenCapMaxTokens
 		budget.TokenCapDispatch = state.dispatchTokenTotal()
-		if budget.TokenCapDispatch >= budget.TokenCapMax {
-			budget.TokenCapStatus = TokenCapExceeded
-		}
 	}
 	// 已用 retry 与 guard 自身算术同口径（AC-055：retryAllowance=Σ max(0,
 	// MaxAttempts−1)）：每个 TaskKey 的首个执行占用 request 槽，其余执行才是
@@ -601,18 +625,7 @@ func (e *Engine) guardTaskAuthorized(state *State, basis guard.Basis, task runti
 // 提交并拒绝返回；事务收尾内的恢复路径直接跳过效果创建）。workerActionID 解
 // 析失败不在此拒（交给 agentHostIntent 以 UNKNOWN_ACTION 拒绝）。
 func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision uint64) *RejectedError {
-	pending, ok := s.PendingActions[workerActionID]
-	attempt := s.Attempts[pending.Task]
-	if !ok {
-		for task, ended := range s.EndedAttempts {
-			if ended.ActionID == workerActionID && ended.AwaitingResult {
-				pending = PendingAction{ActionID: workerActionID, Task: task, AttemptID: ended.ID}
-				attempt = ended
-				ok = true
-				break
-			}
-		}
-	}
+	pending, attempt, ok := s.workerActionTarget(workerActionID)
 	if !ok {
 		return nil
 	}

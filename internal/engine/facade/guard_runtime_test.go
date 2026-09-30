@@ -337,8 +337,12 @@ func TestTokenCapConfigurationStates(t *testing.T) {
 
 	t.Run("reached cap blocks governed dispatch and one continue unlocks once", func(t *testing.T) {
 		root := t.TempDir()
+		// 可计量 provider：派发用量真实入账（来源 transcript、已知总量 0），
+		// cap=0 被已知总量真实达到。不可计量来源（存在未知用量）下 cap 状态是
+		// UNAVAILABLE、闸不拦截，由 dispatch_budget_boundary_test 的未知用量
+		// 对照组覆盖。
 		writeCap(root, `{"engineDispatchMaxTotalTokens":0}`)
-		d := plannedValidationDriverAt(t, root, DefaultProvider, nil, commandPlan(), "blackbox")
+		d := plannedValidationDriverAt(t, root, meteredProvider, nil, commandPlan(), "blackbox")
 		if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapExceeded {
 			t.Fatalf("reached cap status = %+v", d.run.GuardBudget)
 		}

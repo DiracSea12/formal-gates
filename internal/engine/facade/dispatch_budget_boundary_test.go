@@ -13,6 +13,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -448,5 +449,368 @@ func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
 	}
 	if len(captured.Roots) != 0 {
 		t.Fatalf("late host event was attributed to the terminal run: %+v", captured)
+	}
+}
+
+// submitDecide 提交一条 DECIDE 决定并返回提交错误（判拒断言用：零状态变化由
+// 调用方核对账本）。
+func submitDecide(d *validationDriver, ask PendingAskFace, choice, reason string) error {
+	d.t.Helper()
+	_, _, err := d.f.Submit(protocol.Event{ID: d.eventID(), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{
+		Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: protocol.AskOptionID(choice),
+		Validation: &protocol.ValidationDecision{Reason: reason, Digest: ask.Validation.Digest, StateRevision: d.run.Revision},
+	}})
+	return err
+}
+
+// budgetAsk 返回当前投影里未决的预算处置 Ask 面。
+func budgetAsk(d *validationDriver) PendingAskFace {
+	d.t.Helper()
+	for _, face := range d.run.PendingAsks {
+		if face.Validation != nil && face.Validation.Kind == protocol.KindDispatchBudgetDisposition {
+			return face
+		}
+	}
+	d.t.Fatalf("no pending budget disposition ask: %+v", d.run.PendingAsks)
+	return PendingAskFace{}
+}
+
+// resumeAndComplete 执行一次公开 ResumeAgent 并提交其 EXECUTED 回执（恢复执
+// 行经 accountResumeExecution 计入承载账本）。
+func resumeAndComplete(d *validationDriver, action string) error {
+	d.t.Helper()
+	intent, _, err := d.f.engine.ResumeAgent(action, action, emptyFingerprint())
+	if err != nil {
+		return err
+	}
+	ev, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, d.host(), "resume-"+intent.ActionID, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: action, Event: protocol.LifecycleStart})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(ev)
+	return nil
+}
+
+// TestEndedAwaitingResumeCountsAndExhaustsBudget：TASK_PROGRESS TERMINAL 后仍
+// 等待结果的执行（EndedAttempts，PendingActions 已清理）走恢复——EXECUTED 回
+// 执在承载条目的账本计数（Attempts 0→1），有限余量耗尽后第二次恢复被拒并落预
+// 算处置 Ask（恢复准入与恢复记账共用同一任务身份解析）。
+func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
+	d := newValidationDriver(t, "blackbox")
+	id, input := d.action("engine.qa.design")
+	d.receipt(id)
+	start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(start)
+	progress, err := protocol.NewTaskEvent(d.eventID(), input.Binding.Task, d.run.PendingActions[id].AttemptID, runtime.TaskTerminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(progress)
+	ended := d.run.EndedAttempts[input.Binding.Task]
+	if !ended.AwaitingResult || ended.Attempts != 0 {
+		t.Fatalf("precondition: ended attempt = %+v", ended)
+	}
+	if err := resumeAndComplete(d, id); err != nil {
+		t.Fatalf("first resume of the ended-awaiting execution blocked: %v", err)
+	}
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := snap.State.EndedAttempts[input.Binding.Task]
+	if counted.Attempts != 1 || !counted.AwaitingResult {
+		t.Fatalf("resume execution not counted in the holding ledger: %+v", counted)
+	}
+	if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
+		t.Fatal("second resume accepted after the finite budget was consumed")
+	}
+	shown, err := d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.run = shown
+	if ask := budgetAsk(d); ask.RequestID == "" {
+		t.Fatal("exhaustion boundary did not land a budget disposition ask")
+	}
+	snap, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := snap.State.EndedAttempts[input.Binding.Task]
+	if final.Attempts != 1 || final.MaxAttempts != 2 {
+		t.Fatalf("rejection changed the attempt ledger: %+v", final)
+	}
+}
+
+// TestSingleRetryExtensionAcrossBudgetAndRetryAsks：同一逻辑任务的一次追加
+// retry slot 是一个授权事实——预算处置 retry 与 RETRY approve 任一通道行使后，
+// 另一通道对同任务的追加即被拒（两个方向都要；max 不得被推到 4）。
+func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
+	t.Run("budget retry first blocks the RETRY extension", func(t *testing.T) {
+		d := newValidationDriver(t, "blackbox")
+		id, _ := d.action("engine.qa.design")
+		d.receipt(id)
+		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.submit(start)
+		if err := resumeAndComplete(d, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
+			t.Fatal("missing exhaustion boundary")
+		}
+		d.run, err = d.f.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := submitDecide(d, budgetAsk(d), "retry", "one bounded retry slot for this task"); err != nil {
+			t.Fatal(err)
+		}
+		if err := resumeAndComplete(d, id); err != nil {
+			t.Fatal(err)
+		}
+		// 授权的恢复执行入账（2/3）后提交瞬态运行错误：余量耗尽，引擎生成
+		// RETRY Ask——offer 侧不再提供 approve（一次追加已被预算通道授予）。
+		d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "runtime-failure", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
+		retryAsk := d.validationAsk("RETRY")
+		for _, option := range retryAsk.Options {
+			if option.ID == "approve" {
+				t.Fatalf("RETRY offer still advertises an extension after the budget channel granted it: %+v", retryAsk.Options)
+			}
+		}
+		// accept 侧同一谓词兜底：直接提交 approve 仍被拒（零状态变化）。
+		if err := submitDecide(d, retryAsk, "approve", "a second extension of the same task"); err == nil {
+			t.Fatal("RETRY approve accepted after the budget channel already extended the same task")
+		}
+		snap, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ended := snap.State.EndedAttempts[snap.State.DispatchBindings[id].Task]
+		if ended.MaxAttempts != 3 || ended.Attempts != 3 {
+			t.Fatalf("rejected extension changed the ledger: %+v", ended)
+		}
+	})
+
+	t.Run("RETRY extension first blocks the budget retry", func(t *testing.T) {
+		d := newValidationDriver(t, "blackbox")
+		id, input := d.action("engine.qa.design")
+		d.receipt(id)
+		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.submit(start)
+		if err := resumeAndComplete(d, id); err != nil {
+			t.Fatal(err)
+		}
+		// 一次执行入账（1/2）后提交瞬态运行错误：余量耗尽 → RETRY Ask。
+		d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "runtime-failure", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
+		decideValidation(d, d.validationAsk("RETRY"), "approve")
+		d.drive()
+		reissued, reinput := d.action("engine.qa.design")
+		if reissued == id || reinput.Binding.Task != input.Binding.Task {
+			t.Fatalf("retry extension re-signed a different task: %s %+v", reissued, reinput.Binding)
+		}
+		d.receipt(reissued)
+		start2, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), reissued, reissued, protocol.LifecycleStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.submit(start2)
+		// 换新携带已计执行（2/3）：恢复即触达预算边界，落预算 Ask。
+		if _, _, err := d.f.engine.ResumeAgent(reissued, reissued, emptyFingerprint()); err == nil {
+			t.Fatal("resume of the carried ledger was expected to hit the boundary")
+		}
+		d.run, err = d.f.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := submitDecide(d, budgetAsk(d), "retry", "a second extension via the budget channel"); err == nil {
+			t.Fatal("budget retry accepted after the RETRY channel already extended the same task")
+		}
+		snap, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept := snap.State.Attempts[input.Binding.Task]; kept.MaxAttempts != 3 || kept.Attempts != 2 {
+			t.Fatalf("rejected extension changed the ledger: %+v", kept)
+		}
+	})
+}
+
+// TestOwnerOverlapMarksBothRunsUnavailable：owner 区间重叠是双边持久事实——后
+// 启动 run 经协议幂等入口把重叠补写进先启动 run 的 owner 投影（其启动布尔不随
+// 后续重叠更新），双方终态都记 UNAVAILABLE 零数字（legacy beginOwnerCost 的双
+// 边标记语义）。
+func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, "shared.jsonl")
+	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"base","message":{"usage":{"input_tokens":9,"output_tokens":4}}}`})
+	start := func(id string) *Facade {
+		f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	first := start("first")
+	second := start("second")
+	writeTranscript(t, transcript, []string{
+		`{"type":"assistant","uuid":"base","message":{"usage":{"input_tokens":9,"output_tokens":4}}}`,
+		`{"type":"assistant","uuid":"during-both","message":{"usage":{"input_tokens":15,"output_tokens":8}}}`,
+	})
+	// second 先终态：自身检测＝UNAVAILABLE。
+	secondRun, err := second.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Cost.Owner == nil || secondRun.Cost.Owner.Source != "unavailable" || secondRun.Cost.Owner.TotalInputTokens != 0 {
+		t.Fatalf("second owner interval = %+v, want UNAVAILABLE with zero numbers", secondRun.Cost.Owner)
+	}
+	// first 后终态：重叠事实由 second 启动时经协议入口补写，不得报精确区间。
+	firstRun, err := first.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Cost.Owner == nil || firstRun.Cost.Owner.Source != "unavailable" || firstRun.Cost.Owner.TotalInputTokens != 0 || firstRun.Cost.Owner.OutputTokens != 0 {
+		t.Fatalf("first owner interval = %+v, want UNAVAILABLE with zero numbers", firstRun.Cost.Owner)
+	}
+	// first 终态的 UNAVAILABLE 即 peer 侧持久事实的证明：其启动布尔已定，
+	// 只有 second 启动时经协议入口补写的 Overlapped 能改变终态报告。
+}
+
+// TestUnreliableUsageMarksCapUnavailableAndKeepsIssuing：存在不可计量派发（未
+// 知用量）且已知总量未达 cap——cap 状态诚实 UNAVAILABLE，闸不拦截（已知总量
+// 未达下界），后续治理派发照常签出。
+func TestUnreliableUsageMarksCapUnavailableAndKeepsIssuing(t *testing.T) {
+	root := t.TempDir()
+	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":100}`)
+	p := commandPlan()
+	base := p.Batches[0]
+	p.Batches = nil
+	for _, id := range []string{"parser", "command"} {
+		b := base
+		b.ID = id
+		b.Subtasks = []protocol.DevelopmentSubtask{{ID: id + "-body", Description: "implement " + id}}
+		b.Artifacts = []string{id + ".go"}
+		if id == "command" {
+			b.DependsOn = []string{"parser"}
+		}
+		p.Batches = append(p.Batches, b)
+	}
+	d := plannedValidationDriverAt(t, root, meteredProvider, nil, p, "blackbox")
+	first, input := planBatchAction(d, "parser")
+	// 可计量 provider 下构造不可计量派发：stop 携带无法解析的 transcript。
+	spawned, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn-parser"), first, d.host(), "agent-parser", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = d.f.Submit(spawned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"agent-parser"}`)); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(root, "agent-parser.jsonl")
+	writeTranscript(t, garbage, []string{"not a transcript line"})
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"agent-parser","agent_transcript_path":"`+garbage+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: first, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "parser-digest", Validation: &protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"}}})
+	if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {
+		t.Fatalf("unreliable usage advertised cap = %+v", d.run.GuardBudget)
+	}
+	if got := d.run.Cost.Dispatches[first].Source; got != "unavailable" {
+		t.Fatalf("precondition: parser dispatch source = %s", got)
+	}
+	// 已知总量（0）未达 cap：闸不拦截，依赖批次照常签出。
+	d.drive()
+	commandID, _ := planBatchAction(d, "command")
+	if commandID == "" || commandID == first {
+		t.Fatalf("dependent batch not issued although the known total was below the cap: %q", commandID)
+	}
+}
+
+// TestKnownTotalAtCapStillGatesWhenUsageUnreliable：存在不可计量派发且已知总
+// 量已达 cap——状态 UNAVAILABLE（余量不可信），但闸保持已知总量下界语义：已
+// 知量达上限仍零签发＋落预算处置 Ask（未知用量只会更多）。
+func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
+	root := t.TempDir()
+	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":21}`)
+	p := commandPlan()
+	base := p.Batches[0]
+	p.Batches = nil
+	for _, id := range []string{"parser", "command"} {
+		b := base
+		b.ID = id
+		b.Subtasks = []protocol.DevelopmentSubtask{{ID: id + "-body", Description: "implement " + id}}
+		b.Artifacts = []string{id + ".go"}
+		if id == "command" {
+			b.DependsOn = []string{"parser"}
+		}
+		p.Batches = append(p.Batches, b)
+	}
+	d := plannedValidationDriverAt(t, root, meteredProvider, nil, p, "blackbox")
+	first, input := planBatchAction(d, "parser")
+	completeMeteredDispatch(t, d, root, first, "agent-parser", []string{
+		`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3}}}`,
+	}, &protocol.WorkerResultPayload{ActionID: first, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "parser-digest", Validation: &protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"}})
+	// 第二条派发以不可解析 transcript 完成：来源 unavailable（未知用量）、
+	// 已知总量停在被真实计量的 21。
+	qa := ""
+	for pendingID := range d.run.PendingActions {
+		qa = pendingID
+		break
+	}
+	if qa == "" {
+		t.Fatal("no second dispatch in flight")
+	}
+	spawned, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn-qa"), qa, d.host(), "agent-qa", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = d.f.Submit(spawned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"agent-qa"}`)); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(root, "agent-qa.jsonl")
+	writeTranscript(t, garbage, []string{"not a transcript line"})
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"agent-qa","agent_transcript_path":"`+garbage+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "qa-digest"}})
+	if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {
+		t.Fatalf("unreliable usage advertised cap = %+v", d.run.GuardBudget)
+	}
+	if got := d.run.Cost.Dispatches[qa].Source; got != "unavailable" {
+		t.Fatalf("precondition: qa dispatch source = %s", got)
+	}
+	// 已知总量 21 已达 cap：下界闸仍零签发（依赖批次不得签出）＋Ask 在地。
+	d.drive()
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pending := range snap.State.PendingActions {
+		if pending.Task == snap.State.DispatchBindings[qa].Task {
+			t.Fatalf("dependent batch issued while the known total was at the cap: %+v", pending)
+		}
+	}
+	asked := false
+	for _, ask := range snap.State.PendingAsks {
+		if ask.Validation != nil && ask.Validation.Kind == protocol.KindDispatchBudgetDisposition && !ask.Resolved {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Fatal("the known-total gate at the cap did not land a budget disposition ask")
 	}
 }

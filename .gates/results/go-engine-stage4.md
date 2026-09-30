@@ -761,3 +761,22 @@ R4b 按 /tmp/r4b-rework-contract.md 七面落地（完整授权全集五桶单�
 主代理独立复核（全部亲跑）：自建六探针（/tmp/r4c-verify，overlay 真仓库）全绿——wedge（cost=21 落账＋零签发＋Ask）、公开 ResumeAgent cap（拒＋Ask＋零 intent；continue 解锁恰一）、continue 一次性（两个被阻恢复一次授权只放行一个）、budget retry 一次性（二次授权拒且额度不变）、EndRun（标记移除＋晚到事件无归属）、attach 后计量（ACCEPTED 精确 5/1/2）；复审三探针二绿＋F3 载荷 unavailable 零数字（断言写反无绿路径，同 ReservedRoute 型）；机主六探针用例五绿＋ReservedRoute admission 拒绝与 R4b 基线逐字一致；guard_runtime 六项、dispatch_budget_boundary 六项、F5 回归全绿；全量 internal+cmd 23 包 exit 0。关键面 diff 亲读（统一判定、三凭据消耗、refill 降级、attach claim、双命名空间、validationGrantUsed、establishedRepairWaves、EndRun）无分离路径回潮。
 
 R4c 收口。下一单元：R5（Git provider status/diff/track/commit/snapshot/squash＋whitebox workspace＋promotion＋cleanup＋真实 canary FAIL→repair→重验→Seal［须机主逐次授权真实模型调用］＋route matrix）。
+
+## R4 判二（2026-09-30 机主复核 e356598：2 P1＋2 P2，跨状态/跨入口规则未闭合）
+
+机主复核（含零上下文独立子代理）判 e356598 不通过，四项均机主亲跑复现、主代理 overlay 五探针亲跑坐实（/tmp/r4d-repro-overlay.json 四红组）：
+- F1/P1 恢复记账与准入用两套任务查找：guardEffectBudget/agentHostIntent 能在 EndedAttempts（AwaitingResult）找到目标任务，accountResumeExecution 却先查 PendingActions——TERMINAL 清理后 EXECUTED 回执不计数，Attempts 恒 0，第二次恢复放行（有限止损在受支持正常状态失效）。
+- F2/P1 同任务一次追加拆两通道各一次：预算 retry 与 RETRY/approve 各自按 kind 判重，先后行使 Max 2→4；R4c 合同把"两通道各自一次性"写成合理设计（错误），被机主以 3.5b:169-173 原文否定——约束对象是逻辑任务不是 Ask 名称。
+- F3/P2 owner 重叠只标后启动者：first 启动布尔已定，second 启动只标自己，first 终态报精确 15/8（legacy beginOwnerCost 的双边持久标记语义在移植中丢失）。
+- F4/P2 不可靠用量下 cap 宣称 AVAILABLE：deriveGuardBudget 只看配置在否，unavailable 条目零占位参与 dispatchTokenTotal（seal-plan:280/3.5b:112-114「来源不可用 token cap 不可用但派发次数上限仍生效」未贯穿）。
+机主判词：增加共同函数不等于统一业务规则——统一的是"查哪份事实"，不是"都有个函数"；恢复准入/记账不同查找规则、两种重试入口各自维护一次性限制是关键证据。
+
+返修合同 /tmp/r4d-repair-contract.md，同实施代理落地：
+- **F1**：State.workerActionTarget 单一任务身份解析（PendingActions→EndedAttempts by ActionID+AwaitingResult），guardEffectBudget/agentHostIntent/accountResumeExecution 三消费者共用，原双段内联扫描与记账短路径删净；记账按条目 ID 定位写进承载账本。
+- **F2**：State.retryExtensionGranted 统一谓词（RETRY/approve ∨ 预算/retry 任一通道已授即拒），extendBudgetRetry、RETRY approve 扩展分支、RETRY offer 选项裁剪三入口收敛，validationGrantUsed 降为底层扫描；attempt.go 注释按需求原文改写。
+- **F3**：Engine.MarkOwnerOverlapped 幂等入口（engine 自有事务＋CAS、无绑定无操作）＋facade markOverlappingEnginePeers（engineOverlapPeers/legacyOwnerOverlap 拆分组合）；写失败上抛并清理自身 stateDir（镜像 legacy beginOwnerCost 失败即中止启动；CAS 重试被否——掩盖争用且不保证成功）。禁直改 peer state.json（破坏 contentDigest）。
+- **F4**：State.tokenCapStatus 单点（配置缺失∨任一条目 unavailable＝UNAVAILABLE，否则按已知总量 AVAILABLE/EXCEEDED）；tokenCapExceeded 保持已知总量下界闸语义（已知达 cap 即超；未达不闸）；两函数分工各单点陈述，allowanceFaces 第三处重述改为消费 tokenCapStatus。
+
+主代理独立复核全绿：自建四探针（/tmp/r4d-verify overlay，红态先行——ended 计数 0→1＋拒绝后账本不变、跨通道两方向〔RETRY 先授→预算 retry 决定被拒〕、双边重叠〔peer 补写持久化＋first 先终态也 unavailable〕、cap 可信度两态〔已知<上限不闸＋混合可靠性不宣称 AVAILABLE〕）＋复审五探针全绿＋树内五组跨状态/跨入口测试亲跑绿＋R4c 六探针无回归＋全量 23 包 rc=0。关键 diff 亲读：workerActionTarget/retryExtensionGranted 调用点清单与报告一致、无第三判重口。实施代理披露：TestTokenCapConfigurationStates 一个子测试的夹具由 DefaultProvider（不可计量，旧实现宣称 EXCEEDED）改 meteredProvider 零用量 transcript（已知总量真实达 cap）——断言不变、夹具诚实化。
+
+R4d 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion＋cleanup＋真实 canary［须机主逐次授权真实模型调用］＋route matrix）。
