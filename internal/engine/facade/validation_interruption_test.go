@@ -111,21 +111,47 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 		if cause == "" {
 			d.reopen()
 			latest := d.run.ValidationInputs[id].Interruption
-			if intent.Terminate == nil || latest == nil || latest.RequestID != plan.RequestID || latest.InterruptionReason != "" {
-				t.Fatal("latest unknown cause was replaced or exhausted attempt resumed")
+			if intent.Resume != nil || intent.Terminate != nil {
+				t.Fatal("exhausted boundary resumed or silently replaced the attempt")
 			}
-			stop, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStop)
-			d.submit(stop)
-			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStop})
+			if latest == nil || latest.RequestID != plan.RequestID || latest.InterruptionReason != "" {
+				t.Fatal("latest unknown cause was replaced")
+			}
+			var ask PendingAskFace
+			for _, face := range d.run.PendingAsks {
+				if face.Validation != nil && face.Validation.Kind == protocol.KindDispatchBudgetDisposition {
+					ask = face
+				}
+			}
+			if ask.RequestID == "" {
+				t.Fatal("finite recovery boundary did not land a budget disposition ask")
+			}
+			// 「retry」一次性追加一个槽位：授权后的 resume 继续原逻辑执行，
+			// 输入仍携带最新（未知）中断事实。
+			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{
+				Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "retry",
+				Validation: &protocol.ValidationDecision{Reason: "one more resume for the unknown interruption", Digest: ask.Validation.Digest, StateRevision: d.run.Revision},
+			}})
+			snap, _ = d.f.engine.Load()
+			intent = protocol.HostActionIntent{}
+			for _, candidate := range snap.State.PendingHostActions {
+				if candidate.Correlation == plan.RequestID {
+					intent = candidate
+				}
+			}
+			if intent.Resume == nil || intent.Resume.Input == nil || intent.Resume.Input.Interruption == nil || intent.Resume.Input.Interruption.InterruptionReason != "" || intent.Resume.Input.Interruption.RequestID != plan.RequestID {
+				t.Fatal("authorized retry lost the latest unknown cause")
+			}
+			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
+			d.submit(start)
+			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(receipt)
-			d.drive()
-			if !d.run.EndedAttempts[input.Binding.Task].RetryExhausted {
-				t.Fatal("unknown cause bypassed finite recovery allowance")
+			if d.run.Attempts[input.Binding.Task].ID != original.ID {
+				t.Fatal("cause metadata created a new logical execution")
 			}
-			d.validationAsk("RETRY")
 			return
 		}
 		if intent.Resume == nil || intent.Resume.Input == nil || intent.Resume.Input.Interruption == nil || intent.Resume.Input.Interruption.InterruptionReason != cause || intent.Resume.Input.Interruption.RequestID != plan.RequestID {

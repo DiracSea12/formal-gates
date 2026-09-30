@@ -484,9 +484,13 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
 		fp := fingerprintOf(t, engine)
+		// 保留字全集（merge/merge-gate/merge-qa，命名权威 internal/validate/
+		// catalog.go:28-31）一律拒绝零写。
 		for name, gates := range map[string][]string{
-			"request-with-merge":     {"blackbox", "whitebox", "merge"},
-			"request-with-duplicate": {"blackbox", "whitebox", "gate.quality", "gate.quality"},
+			"request-with-merge":      {"blackbox", "whitebox", "merge"},
+			"request-with-merge-gate": {"blackbox", "whitebox", "merge-gate"},
+			"request-with-merge-qa":   {"blackbox", "whitebox", "merge-qa"},
+			"request-with-duplicate":  {"blackbox", "whitebox", "gate.quality", "gate.quality"},
 		} {
 			request := Event{ID: EventID("req-" + name), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions(), RouteGates: gates}}
 			before := stateBytesOf(t, dir)
@@ -795,6 +799,8 @@ func TestReviewGatingNegatives(t *testing.T) {
 			"full-without-blackbox": {Mode: "full", Gates: []string{"whitebox", "gate.quality"}},
 			"full-with-merge":       {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
 			"custom-with-merge":     {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
+			"full-with-merge-gate":  {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge-gate", "gate.quality"}},
+			"custom-with-merge-qa":  {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge-qa", "gate.quality"}, Selected: []string{"gate.quality"}},
 		} {
 			// 字面构造事件绕开构造器前置校验，让引擎在 Submit 边界拒绝；
 			// 拒绝必须零状态写入。

@@ -26,6 +26,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/lifecycle"
 )
 
 const (
@@ -370,6 +371,9 @@ type StartOptions struct {
 	Definition   *compiler.CompiledDefinition
 	Registry     *compiler.Registry
 	Capacity     int
+	// Owner 是主代理（owner）计量来源声明（transcript＋provider，两者同
+	// 时非空才承诺 owner 计量；REQ-012）。
+	Owner OwnerBinding
 }
 
 // Admission is a launcher-derived runtime binding.  It is intentionally
@@ -504,6 +508,16 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if options.Capacity < 0 {
 		return nil, Run{}, fmt.Errorf("engine start: capacity must be non-negative")
 	}
+	// 项目级 token cap 配置在首个状态写入前读取：非法配置立即明确报错，缺
+	// 文件＝不可用（request/attempt 硬止损继续生效）。
+	tokenCap, err := readTokenCap(root)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	if strings.TrimSpace(options.Owner.Transcript) == "" && strings.TrimSpace(options.Owner.Provider) != "" ||
+		strings.TrimSpace(options.Owner.Transcript) != "" && strings.TrimSpace(options.Owner.Provider) == "" {
+		return nil, Run{}, fmt.Errorf("engine start: owner binding requires both transcript and provider")
+	}
 	cd := options.Definition
 	reg := options.Registry
 	if cd == nil {
@@ -565,7 +579,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID)}, nil)
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: DispatchClaimBridge(root)}, nil)
 	if err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
@@ -579,14 +593,31 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity}
-	if err := writeJSONAtomic(f.metadata, req); err != nil {
+	// owner 计量绑定与 token cap 经引擎既有提交点一次持久化（单一 writer）；
+	// lifecycle run 标记是宿主 capture 事件归 run 的前提。
+	if err := eng.BindCostSources(captureOwnerBinding(root, req.RunID, options.Owner), tokenCap, emptyFingerprint()); err != nil {
 		_ = os.RemoveAll(stateDir)
+		return nil, Run{}, err
+	}
+	if err := lifecycle.BeginRun(root, req.RunID); err != nil {
+		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
+		_ = os.RemoveAll(stateDir)
+		return nil, Run{}, err
+	}
+	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity}
+	// BeginRun 之后失败的清理同时移除 lifecycle run 标记（active 标记会截获
+	// 宿主 capture 事件，失败的 run 不得残留）。
+	cleanupFailedStart := func() {
+		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
+		_ = os.RemoveAll(stateDir)
+	}
+	if err := writeJSONAtomic(f.metadata, req); err != nil {
+		cleanupFailedStart()
 		return nil, Run{}, err
 	}
 	run, err := f.project()
 	if err != nil {
-		_ = os.RemoveAll(stateDir)
+		cleanupFailedStart()
 		return nil, Run{}, err
 	}
 	intentWritten = false
@@ -657,7 +688,7 @@ func Open(root, runID string) (*Facade, error) {
 			}
 		}
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID)}, nil)
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: DispatchClaimBridge(root)}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -728,11 +759,23 @@ func (f *Facade) Drive() (Run, error) {
 		return Run{}, err
 	}
 	if run.Status == "COMPLETE" || run.Status == "ABORTED" {
+		// 终态发布前量取 owner 终态差值（幂等；只作报告）并重投影 cost。
+		if err := f.finishOwnerCost(); err != nil {
+			return Run{}, err
+		}
+		if run, err = f.project(); err != nil {
+			return Run{}, err
+		}
 		if run.Route == "lightweight" || run.Status == "ABORTED" {
 			if err := f.finalizeTerminal(run); err != nil {
 				return Run{}, err
 			}
 		} else if err := f.writeSummaryValue(summaryForRun(run)); err != nil {
+			return Run{}, err
+		}
+		// 终态收口：移除 lifecycle active 标记（幂等）——终态后晚到的宿主
+		// 事件归属无 run，与终态语义一致。
+		if err := lifecycle.EndRun(f.root, f.runID); err != nil {
 			return Run{}, err
 		}
 	}

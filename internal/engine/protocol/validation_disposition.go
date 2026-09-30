@@ -20,6 +20,8 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 		}
 	}
 	switch r.Kind {
+	case KindDispatchBudgetDisposition:
+		return r, dispatchBudgetOptions()
 	case "QA_REVIEW":
 		options[0].Label = "Fresh review of this case-set"
 		options = append(options, AskOption{ID: "redesign", Label: "Redesign and review once"})
@@ -60,7 +62,7 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 				if a.Work != nil {
 					r.Binding = *a.Work
 				}
-				if s.retryGrantUsed(key) {
+				if s.validationGrantUsed("RETRY", "approve", key.String()) {
 					options = nil
 				}
 				if a.Work != nil && a.Work.WaveID != "" {

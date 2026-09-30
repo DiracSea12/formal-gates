@@ -6,17 +6,25 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/coverage"
 )
 
 // allowanceFace 把三值可用性投影成摘要字段值：engine allowance 读权威
 // Guard 投影（AllowanceSummary，nil＝包络未就位）；owner cost 与 token cap
-// 按各自来源/配置独立判定（engine intake 无 owner transcript 绑定、无 cap
-// 配置时各自独立为 UNAVAILABLE，不随 engine allowance 联动）。
+// 按各自来源/配置独立判定（owner 终态差值只有可核对来源才 AVAILABLE；token
+// cap 由配置在账与派发用量独立决定，不随 engine allowance 联动）。
 func (s *State) allowanceFaces() (engineAllowance, ownerCost, tokenCap string) {
-	ownerCost, tokenCap = "UNAVAILABLE", "UNAVAILABLE"
-	if s.Cost != nil && s.Cost.Owner != nil {
+	ownerCost = "UNAVAILABLE"
+	if s.Cost != nil && s.Cost.Owner != nil && s.Cost.Owner.Source == cost.SourceTranscript {
 		ownerCost = "AVAILABLE"
+	}
+	tokenCap = TokenCapUnavailable
+	if s.TokenCapMaxTokens != nil {
+		tokenCap = TokenCapAvailable
+		if s.dispatchTokenTotal() >= *s.TokenCapMaxTokens {
+			tokenCap = TokenCapExceeded
+		}
 	}
 	return s.Guard.AllowanceSummary(), ownerCost, tokenCap
 }
@@ -78,6 +86,18 @@ func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 		}
 	case "REPAIR":
 		detail = s.repairAskDetail(r)
+	case KindDispatchBudgetDisposition:
+		// 预算处置摘要：绑定 basis digest 与额度/owner/token cap 三面（各自
+		// 来源独立判定）；state revision 绑定由 Ask 自身的 StateRevision 与
+		// DECIDE 三方相等校验持有，不进内容摘要。
+		engineAllowance, ownerCost, tokenCap := s.allowanceFaces()
+		detail = struct {
+			Kind                       string
+			Target                     string
+			BasisDigest                string
+			EngineAllowance, OwnerCost string
+			TokenCap                   string
+		}{r.Kind, r.Target, s.Guard.AllowanceSummary(), engineAllowance, ownerCost, tokenCap}
 	default:
 		detail = s.Validation
 	}
@@ -357,6 +377,17 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		return e.waiveValidation(s, ask, d)
 	}
 	switch r.Kind {
+	case KindDispatchBudgetDisposition:
+		// 固定四选项（decline/abort 已在通用分支处理）：continue＝一次有限
+		// 继续授权（budgetContinueGranted 从本决定账目推导，不累积）；retry＝
+		// 目标逻辑动作一次性追加一个 retry slot；skip＝仅留痕不解锁。
+		switch p.Choice {
+		case "continue", "skip":
+			return nil
+		case "retry":
+			return s.extendBudgetRetry(r.Target)
+		}
+		return validationError("budget disposition accepts only continue, retry, skip or abort")
 	case "RETRY":
 		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
 			route, used, max := s.candidateFailureRoute(intent)
@@ -381,7 +412,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		found := false
 		for key, a := range s.EndedAttempts {
 			if key.String() == r.Target {
-				if !s.endedWorkCurrent(a, e.cfg.Definition) || !a.RetryExhausted || s.retryGrantUsed(key) {
+				if !s.endedWorkCurrent(a, e.cfg.Definition) || !a.RetryExhausted || s.validationGrantUsed("RETRY", "approve", key.String()) {
 					return validationError("retry already extended or not exhausted")
 				}
 				a.MaxAttempts++

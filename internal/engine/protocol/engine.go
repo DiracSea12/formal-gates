@@ -26,17 +26,25 @@ type ackStore struct{}
 
 func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
 
+// DispatchClaim 在派发签出落账时建立宿主侧 lifecycle 绑定（runID/actionID/
+// identity/provider）：identity 是回执声明的宿主 agent 相关性（实际派发身份，
+// legacy 语义），宿主 lifecycle 事件按它配对。nil＝本引擎无宿主计量集成。
+type DispatchClaim func(runID, actionID, identity, provider string) error
+
 // Config 是 Engine 的定义绑定与容量输入：CompiledDefinition 供结果接纳的
 // step 完成（CompleteStep）与补位签发（Decide/SelectIssued）使用；
 // Registry 保留为编译期绑定的注册表输入；HostAction 的 operation
 // 与 schema 以 Definition 中的 compiled payload 为唯一运行时来源。Capacity
 // 是补位签发的固定容量（真实容量收集器属后续批次）。CostSource 是派发计量
-// 来源的 sidecar 解析器（nil＝无宿主计量集成，cost 维度不参与判定）。
+// 来源的 sidecar 解析器（nil＝无宿主计量集成，cost 维度不参与判定）；
+// ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
+// 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
-	Definition *compiler.CompiledDefinition
-	Registry   *compiler.Registry
-	Capacity   int
-	CostSource CostSourceResolver
+	Definition    *compiler.CompiledDefinition
+	Registry      *compiler.Registry
+	Capacity      int
+	CostSource    CostSourceResolver
+	ClaimDispatch DispatchClaim
 }
 
 // Engine 是提交协议内核：每个方法一次完整的「读 state → 变更 →
@@ -585,6 +593,12 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		case decision.KindReady:
 			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: e.cfg.Capacity}, expectedFingerprint)
 			if err != nil {
+				var rejected *RejectedError
+				if errors.As(err, &rejected) && rejected.Code == CodeGuardAllowanceBlocked && state.hasPendingBudgetAsk() {
+					// 预算边界以未决 typed Ask 为外部边界（本次零签发），
+					// Drive 返回当前计划而非错误；投影面经未决 Ask 呈现。
+					return plan, revision, nil
+				}
 				return nil, revision, err
 			}
 			if len(issued) == 0 {
@@ -1318,6 +1332,21 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			return acceptance, state, true, nil
 		}
 		state.SpawnReceipts[actionID] = receipt
+		// 派发签出即建立 lifecycle dispatch 绑定（注入 claim 回调）：SPAWNED 回
+		// 执的 correlation 即宿主报告的 agent 身份（host 事件按它配对——绑定
+		// identity 不可变，须以真实身份绑定）。UNKNOWN 回执的 correlation 只是
+		// 追踪键，claim 延后至 ReconcileUnknownReceipt 唯一匹配 attach 时以解析
+		// 出的真实身份建立；零/多匹配不 claim（计量来源诚实 UNAVAILABLE）。
+		// sidecar 写失败只降级该派发的计量来源，不否决回执落账。
+		if e.cfg.ClaimDispatch != nil && ev.Spawn.Status == SpawnStatusSpawned {
+			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, ev.Spawn.Correlation, state.RunProvider); claimErr != nil {
+				state.appendRecovery(RecoveryRecord{
+					ActionID: actionID,
+					Detail:   fmt.Sprintf("lifecycle dispatch claim failed; the dispatch cost source degrades to unavailable: %v", claimErr),
+					Revision: nextRevision,
+				})
+			}
+		}
 		state.verifyLifecycleCorrelation(ev.Spawn.Correlation, nextRevision)
 		if ev.Spawn.Status == SpawnStatusUnknown {
 			plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(state.lifecycleMatches(ev.Spawn.Correlation))})
@@ -1500,6 +1529,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: receipt.AdapterOperation, ObservationDigest: receipt.Digest, Status: "FULFILLED", Revision: nextRevision, UnknownReceipt: &previous}
 		}
 		state.HostActionReceipts[actionID] = receipt
+		// 恢复执行的 EXECUTED 回执是执行证据：在目标任务的 Attempt 账本同点
+		// 位计入一次执行（公开 ResumeAgent 与恢复决定共用本计数点）。
+		if receipt.Status == HostActionStatusExecuted && intent.Operation == HostActionResumeAgent && intent.Resume != nil {
+			state.accountResumeExecution(intent.Resume.WorkerActionID)
+		}
 		if ev.HostAction.Status == HostActionStatusUnknown {
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 				ActionID: actionID, Class: authoring.FailureSideEffectUnknown,
@@ -2164,6 +2198,14 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 		e.bindBusinessAttempt(state, action.Task)
 	}
 	if err != nil {
+		var rejected *RejectedError
+		if errors.As(err, &rejected) && rejected.Code == CodeGuardAllowanceBlocked {
+			// 派发预算边界＝零签发，不是错误：触发本函数的回执/结果/决定事件
+			// 本身合法且必须接纳（Ask 已由 advanceValidation 落账，随本事务提
+			// 交）——与修订屏障的静默扣发同一形状。账目错位（BLOCKED_BUG）
+			// 仍否决提交。
+			return nil, nil
+		}
 		return nil, err
 	}
 	var ids []string
@@ -2240,6 +2282,15 @@ func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActio
 	}
 	if state == nil {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if operation == HostActionResumeAgent {
+		if blocked := e.guardEffectBudget(state, workerActionID, revision+1); blocked != nil {
+			// 落 Ask 后提交（Ask 即进展），再以可区分错误拒绝本次效果创建。
+			if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+				return HostActionIntent{}, 0, err
+			}
+			return HostActionIntent{}, 0, blocked
+		}
 	}
 	intent, err := e.agentHostIntent(state, operation, workerActionID, identity, reason, correlation, revision+1)
 	if err != nil {

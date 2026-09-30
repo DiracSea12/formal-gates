@@ -62,6 +62,10 @@ func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
 	})
 	if resolved.State != CostSourcePending {
 		e.recordDispatchCost(state, actionID, resolved)
+	} else {
+		// 持留中的派发先建空 cost 投影（零数字、不预记条目）——该派发的精
+		// 确用量在 stop 证据落定的下一事务回填，持留期投影可见为零值。
+		state.costLedger()
 	}
 	return resolved.State == CostSourcePending
 }

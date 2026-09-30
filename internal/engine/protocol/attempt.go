@@ -127,10 +127,15 @@ func (s *State) projectRetryTasks(view *decision.State, cd *compiler.CompiledDef
 		view.RequiredTasks[key.Step] = tasks
 	}
 }
-func (s *State) retryGrantUsed(key runtime.TaskKey) bool {
+
+// validationGrantUsed 报告某验证 Ask 通道对 target 的一次性授权决定是否已用
+// （同 kind＋choice＋target 扫已落决定）。RETRY Ask（approve）与预算处置 Ask
+// （retry）两通道各自一次性；跨通道先后两次都是用户显式授权的独立一次性增量，
+// 非预先累积。
+func (s *State) validationGrantUsed(kind, choice, target string) bool {
 	for id, d := range s.Decisions {
 		a := s.PendingAsks[id]
-		if d.Choice == "approve" && a.Validation != nil && a.Validation.Kind == "RETRY" && a.Validation.Target == key.String() {
+		if d.Choice == AskOptionID(choice) && a.Validation != nil && a.Validation.Kind == kind && a.Validation.Target == target {
 			return true
 		}
 	}

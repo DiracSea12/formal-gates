@@ -576,12 +576,24 @@ type State struct {
 	RouteMode     string   `json:"routeMode,omitempty"`
 	SelectedGates []string `json:"selectedGates,omitempty"`
 	// Guard 是从签发/结果账本派生的额度投影（requestAllowance/retryAllowance/
-	// totalAllowance/budgetBasisDigest＋used 事实）。事实源是账本本身，本投影
-	// 只在提交点重derive写入，加载边界重算比对；受理前的 run（包络未就位）为 nil。
+	// totalAllowance/budgetBasisDigest＋used 事实与 token cap 面）。事实源是账本
+	// 本身，本投影只在提交点重derive写入，加载边界重算比对；受理前的 run（包络
+	// 未就位）为 nil。
 	Guard *GuardBudget `json:"guard,omitempty"`
 	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计；owner 项缺源时
 	// 缺席）。engine run 的 cost 只由引擎事务写入，不从 legacy validate 补账。
 	Cost *cost.RunCost `json:"cost,omitempty"`
+	// TokenCapMaxTokens 是项目级 token cap 配置的引擎持久化（nil＝未配置/不可
+	// 用；只统计 engine 派发用量，不含 owner 终态报告）。受理 bootstrap 一次写
+	// 入，run 期间不可变。
+	TokenCapMaxTokens *int64 `json:"tokenCapMaxTokens,omitempty"`
+	// Owner 投影是主代理（owner）计量的持久绑定与启动基线（REQ-012 AC-050）：
+	// 来源稳定时由 facade 在 bootstrap 一次写入；缺源不承诺 owner 计量
+	//（AC-051 零数字）。终态差值只作报告（Cost.Owner），不参与 in-flight guard。
+	OwnerTranscript string                   `json:"ownerTranscript,omitempty"`
+	OwnerProvider   string                   `json:"ownerProvider,omitempty"`
+	OwnerBaseline   *cost.TranscriptSnapshot `json:"ownerBaseline,omitempty"`
+	OwnerOverlapped bool                     `json:"ownerOverlapped,omitempty"`
 }
 
 // TopologyBinding 是拓扑确认的持久形态：no-split 必有理由 note（建议不拆
@@ -788,5 +800,10 @@ func (s *State) normalizeCollections() {
 			Classification: RequirementClassificationIntake,
 			StateRevision:  s.IntakeReceipt.Revision,
 		}}
+	}
+	// 支持 token cap 面之前持久化的 Guard 投影：缺省值归一为 UNAVAILABLE，
+	// 与重算结果可比（无配置 run 的 cap 面恒为 UNAVAILABLE）。
+	if s.Guard != nil && s.Guard.TokenCapStatus == "" {
+		s.Guard.TokenCapStatus = TokenCapUnavailable
 	}
 }

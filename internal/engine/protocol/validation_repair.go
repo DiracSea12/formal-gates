@@ -25,14 +25,7 @@ func (s *State) repairWork() []repairWork {
 		if w.Repair == nil {
 			continue
 		}
-		task := w.Repair.Task
-		for _, revision := range s.RequirementRevisions {
-			for j, choice := range revision.WorkDecisions {
-				if choice.Work.Task == task && choice.Disposition == RequirementWorkRedo {
-					task = replacementWorkTask(revision, j)
-				}
-			}
-		}
+		task := s.replacementFold(w.Repair.Task)
 		record := s.developmentResultRecord(task)
 		if record != nil {
 			b := record.Validation.Binding

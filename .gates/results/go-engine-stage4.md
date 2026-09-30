@@ -722,3 +722,42 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 主代理复核：评审三探针修后全绿零 FINDING；自建探针（cost 两态＋guard 篡改 BLOCKED_BUG＋路线全集钉绑×4）全过；全量 engine+cli+validate+cmd 17 包 exit 0；vet/gofmt/diff-check 过。实施代理如实披露：owner 终态差值未接线测量（engine intake 无 owner transcript 绑定字段，合同未定义该 wire，投影位就位、UNAVAILABLE 独立判定）——留机主裁定是否定义 owner 源字段（建议随 R5 宿主接线定）。
 
 R4 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion＋cleanup＋真实 canary＋route matrix）。
+
+## R4 判不返回修（2026-09-25 机主审查：1 P1＋1 P1＋2 P2＋需求未完成项）
+
+机主接手审查（含零上下文独立子代理）判 ccd1b15 不通过，四项均机主亲复现、主代理随后亲跑坐实：
+- F1/P1 ResumeAgent 直通 persistHostAction，不经 issueInto 闸不耗 attempt——同一 QA 任务连续四次恢复均接纳、UsedRetries 恒 0（3.5b:114 五入口共用 guard/Attempt 原文）。
+- F2/P1 成本链路未接通：engine 正常路径从不建立 bridge 所读的 lifecycle sidecar（BeginRun/BindDispatch 无 engine 调用点），宿主 start 事件 Capture roots=[]、结果未等 stop 即 ACCEPTED 记 UNAVAILABLE——COST_PENDING 真实不可达；现有 cost_source_test 手写 sidecar 绕过了缺失的生产边界（夹具不诚实）。正控（显式 BindDispatchWithProvider）证明桥本身可用。
+- F3/P2 预计额度按已签发事实计算，漏已确认未签发批次（三批只计两批，完成前驱后额度静默 2→3）；**根因在原 R4 实施合同（§3.A5 把额度事实源定为已签发现存事实，与 3.5b §C「额度来自已确认 canonical expected external TaskKey 集，Ready 只决定本次可签发子集」相反）**。
+- F4/P2 路线校验只拒字面 "merge"，实际合并目标 merge-gate/merge-qa（catalog.go:28-31 命名权威）均可入选。
+- 需求未完成项：owner 启动基线与终态差值、token cap 配置读取与拦截均未接线，固定 UNAVAILABLE 不能证明能力完成（3.5b:35/:207-208、REQ-012）。
+
+机主代码要求判词：正确性/需求完整性/设计一致性/耦合与事实归属/窄逻辑/测试忠实性/「不粗暴摞补丁」不通过——普通签发加了 guard 而恢复入口分离、额度以 repair 特例补槽而非完整授权全集、额度偏差在实施合同里就已出现。
+
+主代理验收教训（本条核心）：**R4 收口结论被推翻的根因是主代理复核探针为注入式机制验证（自造 resolver/手写绑定），未打真实接链条——机制单元绿≠链路通**。此前"facade 测试因无 sidecar 而走 UNAVAILABLE 分支"被当作测试环境差异合理化，恰恰掩盖了生产写入入口缺失。此后凡"接线/集成"类交付，验收探针必须走公开链（Start→Drive→receipt→真实 sidecar 写入→事件），注入式夹具只作单元补充。
+
+返修合同 /tmp/r4b-rework-contract.md（A 完整授权全集模型重建／B 统一执行入口＋唯一 DISPATCH_BUDGET_DISPOSITION／C claim 回调接通 lifecycle sidecar／D 保留字全集／E owner 基线终态差值／F token cap 配置与拦截／G replacementFold 收敛），已派实施代理。报告 /tmp/current-review-report.md、/tmp/current-independent-review.md。
+
+## R4b 返修交付与零上下文复审（2026-09-25）
+
+R4b 按 /tmp/r4b-rework-contract.md 七面落地（完整授权全集五桶单一枚举／统一执行入口＋唯一 DISPATCH_BUDGET_DISPOSITION／claim 回调接通 lifecycle sidecar／保留字全集三值／owner 基线终态差值／token cap 配置与漏斗拦截／replacementFold 收敛），guard_runtime_test.go 六项公开链测试入树。机主四探针亲验：三绿＋ReservedRoute 正确翻转（admission 拒绝零写入，探针自身无绿路径）。主代理旧探针全绿，全量 17 包 exit 0。
+
+零上下文复审（/tmp/r4b-independent-review/report.md）：**有条件通过**——范围内无 P0/P1，四修复面与两需求项真实落地；3 P2（F1 恢复 resume/换新不经 token cap；F2 UNKNOWN 回执 claim 以 Correlation 猜测身份且 attach 不回写→永久 PENDING；F3 owner 重叠只扫 engine 命名空间漏 legacy ACTIVE）＋6 P3（F4 extendBudgetRetry 无一次性；F5 桶 3 裁决过滤不一致假阳性 BLOCKED_BUG 待核；F6 桶 4 枚举镜像重复；F7 恢复边界静默转 terminate；F8 无终态 EndRun；F9 advanceRecoveries 错误 wedge 待核）。三探针（/tmp/r4b-probe-repo）主代理亲跑全部失败于所证断言＝复现坐实。
+
+## R4c 返修（三 P2＋同面收口＋边界补刀，2026-09-25）
+
+按机主标准 P2 不留账过夜，三 P2 立即开刀（合同 /tmp/r4c-repair-contract.md）。主代理派发前事实核验另坐实一项**新发现（同族根因）**：结果提交的同事务 refill 撞 cap 时整个 Submit 以 GUARD_ALLOWANCE_BLOCKED 拒绝——观察事实丢弃（cost=0、结果未落账、无 Ask 落地、重投必再拒＝永久 wedge；TokenCap 运行中不可变无逃生口），探针 TestProbeResultSurvivesCapRefillBlock 复现后并入合同（补充合同当日送达实施代理）。另一时序疑点排除：复审探针 1 中 qa.design 系 cap 越界前已签发的在途派发（要求提交事务即签发），漏斗无时序缺陷。
+
+实施（同 R4b 代理，报告要点）：
+- **F1＋F7＋wedge**：新增单一判定 guardEffectBudget（retry 余量＋token cap 两维），公开 ResumeAgent、恢复 resume、换新 install 三执行创建点共用；被阻＝幂等落 Ask＋不创建效果（事务收尾内返回 nil，不嵌套 commit）；显式 fresh 决定保持 terminate（用户路线非预算边界）；resume 类边界不再静默转 terminate。refill 内 GUARD_ALLOWANCE_BLOCKED 降级为零签发（与修订屏障扣发同形，观察事实必须接纳；BLOCKED_BUG 仍否决提交）。continue 一次性消耗推导扩为三凭据族（治理签发代数/resume intent 建立代数/EXECUTED 回执接纳代数），全从既有持久账本派生、仍收 budgetContinueGranted 单点；含一处 off-by-one 修正（`<=`→`<`：授权同事务的签发也消耗，原边界可一次 continue 解锁两批）。旧 guardResumeBudget 删净。
+- **F2**：UNKNOWN 回执不在回执接纳时 claim；ReconcileUnknownReceipt 唯一匹配 attach 同事务内以解析身份调同一 ClaimDispatch 回调（legacy resolveClaimIdentity「以观察到的身份解析、拒绝绑错」先例）；零/多匹配不 claim＝诚实 UNAVAILABLE；SPAWNED 维持回执时 claim。
+- **F3**：ownerOverlap 补扫 legacy 平坦形状（status/ownerTranscript/canonical 相等、读失败＝重叠），逐字镜像 validate/cost.go beginOwnerCost；不跨代互写。已知边界：legacy run 后启动时 legacy 侧看不见 engine run（冻结侧盲区）。
+- **F4**：retryGrantUsed 一般化为 validationGrantUsed(kind, choice, target) 单一定义点，预算 retry 与 RETRY 两通道各自一次性（跨通道先后为用户显式授权非预累积，注释写明）。
+- **F5（证实可达→修）**：构造性证明 wave 带已签返修→路线重绑 INVALIDATED→carry 未裁决 finding 下 deriveGuardBudget 假阳性 BLOCKED_BUG（修复前树上实测复现）；修法＝「已成立返修」判定收敛 establishedRepairWaves 单一归属（Repair 经裁决定案即持久授权事实，回归不解散），回归测试入树。
+- **F8**：lifecycle.EndRun（幂等移除 active 标记）＋facade 终态收口调用；终态后晚到事件归属无 run。
+- **F6/F9（排除，未改码）**：桶 4 与 projectValidationTasks 合一需让 guard 依赖 decision view 或改 Ready 语义（大改记账不动刀；镜像漂移 fail-closed）；F9 wedge 需恢复记录 current 且任务出 basis 同时成立，公开链上治理签发必经漏斗、重走使旧工作非 current，未找到公开可达序列（手工改写已有单测覆盖）。
+- 树内新增 dispatch_budget_boundary_test.go 六项公开链测试（cap 后恢复落 Ask、结果跨 cap 边界存活、continue 一次性负控、attach 后按解析身份精确计量、legacy 重叠 unavailable、终态 EndRun）；两项既有测试按 F7 边界模型重塑（保留各自命名不变量，非打表）。
+
+主代理独立复核（全部亲跑）：自建六探针（/tmp/r4c-verify，overlay 真仓库）全绿——wedge（cost=21 落账＋零签发＋Ask）、公开 ResumeAgent cap（拒＋Ask＋零 intent；continue 解锁恰一）、continue 一次性（两个被阻恢复一次授权只放行一个）、budget retry 一次性（二次授权拒且额度不变）、EndRun（标记移除＋晚到事件无归属）、attach 后计量（ACCEPTED 精确 5/1/2）；复审三探针二绿＋F3 载荷 unavailable 零数字（断言写反无绿路径，同 ReservedRoute 型）；机主六探针用例五绿＋ReservedRoute admission 拒绝与 R4b 基线逐字一致；guard_runtime 六项、dispatch_budget_boundary 六项、F5 回归全绿；全量 internal+cmd 23 包 exit 0。关键面 diff 亲读（统一判定、三凭据消耗、refill 降级、attach claim、双命名空间、validationGrantUsed、establishedRepairWaves、EndRun）无分离路径回潮。
+
+R4c 收口。下一单元：R5（Git provider status/diff/track/commit/snapshot/squash＋whitebox workspace＋promotion＋cleanup＋真实 canary FAIL→repair→重验→Seal［须机主逐次授权真实模型调用］＋route matrix）。

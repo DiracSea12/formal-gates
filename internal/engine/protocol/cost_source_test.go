@@ -158,8 +158,10 @@ func TestWorkerResultHeldAtCostPending(t *testing.T) {
 	if len(snap.State.Completed) != 1 {
 		t.Fatalf("pending-cost result completed steps: %+v", snap.State.Completed)
 	}
-	if snap.State.Cost != nil {
-		t.Fatalf("pending source wrote a cost entry: %+v", snap.State.Cost)
+	// 持留期只建空投影（零数字），不预记任何派发条目——精确用量在来源落
+	// 定的下一事务回填。
+	if snap.State.Cost == nil || len(snap.State.Cost.Dispatches) != 0 {
+		t.Fatalf("pending source pre-recorded a cost entry: %+v", snap.State.Cost)
 	}
 	// stop 证据到达：来源转 READY（精确用量），同一配对路径完成并记录用量。
 	probe.state, probe.usage = CostSourceReady, cost.Usage{InputCacheMissTokens: 120, OutputTokens: 30}

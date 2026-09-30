@@ -57,6 +57,20 @@ func BeginRun(root, runID string) error {
 	return file.Close()
 }
 
+// EndRun removes the run's lifecycle active marker (idempotent: a missing marker
+// is success). After a run reaches its terminal state, late host hook events
+// belong to no run, matching terminal semantics.
+func EndRun(root, runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run id is required")
+	}
+	if err := os.Remove(filepath.Join(runLifecycleRoot(root, runID), "active")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func Capture(root, provider, eventName string, payload []byte) (CaptureResult, error) {
 	adapter, err := adapterFor(provider)
 	if err != nil {

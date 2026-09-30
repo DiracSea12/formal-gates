@@ -43,3 +43,13 @@ func CostSourceBridge(root, runID string) protocol.CostSourceResolver {
 		return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
 	}
 }
+
+// DispatchClaimBridge 是 engine 派发的 lifecycle 认领实现：派发签出落账时以
+// 实际派发身份（宿主回执声明的相关性）建立 sidecar 绑定——绑定 identity 不可
+// 变且宿主 start/stop 事件按它配对，claim 语义与 legacy 的实际身份绑定一致
+// （internal/validate/workflow.go 的 resolveClaimIdentity/bindClaimDispatch 先例）。
+func DispatchClaimBridge(root string) protocol.DispatchClaim {
+	return func(runID, actionID, identity, provider string) error {
+		return lifecycle.BindDispatchWithProvider(root, runID, actionID, identity, provider)
+	}
+}

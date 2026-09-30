@@ -342,6 +342,19 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 		receipt.LifecycleIdentity = matches[0]
 		state.SpawnReceipts[actionID] = receipt
 		plan.Detail = "unknown receipt attached to unique lifecycle identity " + matches[0]
+		// 唯一匹配即身份可判定：同一事务内以解析出的真实身份建立 lifecycle
+		// 绑定（claim 以观察到的身份解析，不信任回执的追踪键——与 SPAWNED
+		// 回执同一回调）。claim 失败只降级计量来源（UNAVAILABLE）留痕，不否
+		// 决挂接；零/多匹配不 claim（身份不可判定即不可计量）。
+		if e.cfg.ClaimDispatch != nil {
+			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, matches[0], state.RunProvider); claimErr != nil {
+				state.appendRecovery(RecoveryRecord{
+					ActionID: actionID,
+					Detail:   fmt.Sprintf("lifecycle dispatch claim failed; the dispatch cost source degrades to unavailable: %v", claimErr),
+					Revision: nextRevision,
+				})
+			}
+		}
 		// 挂接是观察事实照常落账；暂存结果的配对接纳属事务收尾单点
 		//（commitEffects）——屏障在位时收尾不配对，解除事务扫清。
 		if state.requirementChangePending() {

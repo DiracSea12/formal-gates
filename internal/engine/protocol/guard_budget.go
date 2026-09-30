@@ -19,9 +19,17 @@ import (
 // 状态，不自行持第二份。
 const GuardRuntimeIntegration = "ENGINE_AUTHORITATIVE"
 
+// token cap 面的三值（独立于 request/attempt 止损判定；无配置时 UNAVAILABLE，
+// request/attempt 硬止损继续生效）。
+const (
+	TokenCapUnavailable = "UNAVAILABLE"
+	TokenCapAvailable   = "AVAILABLE"
+	TokenCapExceeded    = "EXCEEDED"
+)
+
 // GuardBudget 是从权威事实派生的额度投影：guard.Calculate 的额度数字、basis
-// digest 与已用事实。事实源是签发/结果账本本身；本投影只在提交点重derive写入，
-// 加载边界重算比对（不一致＝BLOCKED_BUG）。
+// digest、已用事实与 token cap 面。事实源是签发/结果账本本身；本投影只在提交
+// 点重derive写入，加载边界重算比对（不一致＝BLOCKED_BUG）。
 type GuardBudget struct {
 	RequestAllowance  int    `json:"requestAllowance"`
 	RetryAllowance    int    `json:"retryAllowance"`
@@ -29,6 +37,33 @@ type GuardBudget struct {
 	BudgetBasisDigest string `json:"budgetBasisDigest"`
 	UsedRequests      int    `json:"usedRequests"`
 	UsedRetries       int    `json:"usedRetries"`
+	// TokenCapStatus 是 token cap 可用性三值；MaxTotalTokens 只在配置在账时有
+	// 效。派发用量合计（DispatchTokens）只统计 engine 派发条目，不含 owner。
+	TokenCapStatus   string `json:"tokenCapStatus"`
+	TokenCapMax      int64  `json:"tokenCapMaxTokens,omitempty"`
+	TokenCapDispatch int64  `json:"tokenCapDispatchTokens,omitempty"`
+}
+
+// dispatchTokenTotal 汇总 engine 派发条目的 token 用量（输入＋输出）。owner 终
+// 态报告在独立字段，天然不进该合计。
+func (s *State) dispatchTokenTotal() int64 {
+	if s.Cost == nil {
+		return 0
+	}
+	var total int64
+	for _, entry := range s.Cost.Dispatches {
+		total += entry.TotalInputTokens + entry.OutputTokens
+	}
+	return total
+}
+
+// tokenCapExceeded 报告 engine 派发用量是否已达配置的 token cap（达到即禁止后
+// 续自动派发）。无配置恒为 false（cap 维度不参与判定）。
+func (e *Engine) tokenCapExceeded(state *State) bool {
+	if state.TokenCapMaxTokens == nil {
+		return false
+	}
+	return state.dispatchTokenTotal() >= *state.TokenCapMaxTokens
 }
 
 // guardEngaged 报告 guard 包络是否作用于当前状态：验证管线就位（拓扑、路
@@ -50,8 +85,12 @@ func (e *Engine) guardEngaged(state *State) bool {
 // steps；requirement＝确认账本末条；Batch＝确认计划 contract digest；route/
 // topology＝绑定 digest；approvedQA＝各选中 mode 的 case-set 版本；selectedGates
 // ＝路线＋所选门；established obligations/repairs 只接 adjudication 完成、wave
-// 收齐后的有效义务与返修 TaskKey；externalTasks＝已签发外部派发现存事实。
-// raw finding、普通 result/receipt/resume 不是这些账本的成员，机械不可达。
+// 收齐后的有效义务与返修 TaskKey。ExternalTasks＝已确认授权全集单一枚举
+// （3.5b §C：额度来自已确认 canonical expected external TaskKey 集，Ready 只决定
+// 本次可签发子集）：确认计划的全部批次任务（无论 Ready 与否）＋已建 wave 的全
+// 部 target（QA/门）＋返修义务全集（含欠账未签发与重走替换者）＋预授权 QA 设计/
+// 审查槽；已签发治理事实逐个归类入集，对不上＝BLOCKED_BUG。raw finding、普通
+// result/receipt/resume 不是这些账本的成员，机械不可达。
 func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	definitionDigest := func() string {
 		data, err := encoder.Encode(e.cfg.Definition)
@@ -99,7 +138,6 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		// 首个建立它的 wave 为其身份 revision（wave 追加有序，身份稳定），
 		// 不因后续 wave 的 expected digest 变化产生冲突声明。
 		obligations := map[string]guard.Identity{}
-		repairs := map[string]guard.Identity{}
 		for i := range state.Validation.Waves {
 			w := &state.Validation.Waves[i]
 			if w.Status == "COLLECTING" || !state.validationFindingsAdjudicated(w) {
@@ -110,25 +148,17 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 					obligations[id] = guard.Identity{ID: id, Revision: w.ExpectedDigest}
 				}
 			}
-			if w.Repair != nil {
-				if _, exists := repairs[w.Repair.Task.String()]; !exists {
-					repairs[w.Repair.Task.String()] = guard.Identity{ID: w.Repair.Task.String(), Revision: w.ExpectedDigest}
-				}
-				// 需求重走替换后的返修 TaskKey 与原任务同源声明（其派发
-				// provenance 需要可匹配的声明来源）。
-				if current := state.replacementFold(w.Repair.Task); current != w.Repair.Task {
-					if _, exists := repairs[current.String()]; !exists {
-						repairs[current.String()] = guard.Identity{ID: current.String(), Revision: w.ExpectedDigest}
-					}
-				}
-			}
 		}
-		// 预授权 repair 机械加入：repairWork 是 wave 收齐、裁决定案后仍欠执行的
-		// 返修义务（含尚未签发的 TaskKey），不需另行确认即占基础槽位。
-		for _, work := range state.repairWork() {
-			if work.wave.Repair != nil && work.task == work.wave.Repair.Task {
-				if _, exists := repairs[work.task.String()]; !exists {
-					repairs[work.task.String()] = guard.Identity{ID: work.task.String(), Revision: work.wave.ExpectedDigest}
+		repairs := map[string]guard.Identity{}
+		for _, w := range state.establishedRepairWaves() {
+			if _, exists := repairs[w.Repair.Task.String()]; !exists {
+				repairs[w.Repair.Task.String()] = guard.Identity{ID: w.Repair.Task.String(), Revision: w.ExpectedDigest}
+			}
+			// 需求重走替换后的返修 TaskKey 与原任务同源声明（其派发
+			// provenance 需要可匹配的声明来源）。
+			if current := state.replacementFold(w.Repair.Task); current != w.Repair.Task {
+				if _, exists := repairs[current.String()]; !exists {
+					repairs[current.String()] = guard.Identity{ID: current.String(), Revision: w.ExpectedDigest}
 				}
 			}
 		}
@@ -139,30 +169,115 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			basis.EstablishedRepairs = append(basis.EstablishedRepairs, repairs[id])
 		}
 	}
-	issued := issuedGuardTasks(state, e.cfg.Definition)
-	for task := range issued {
+	// 授权全集枚举（单一事实源）：枚举桶内任务经 guardTaskProvenance 归类——
+	// 分类失败的枚举项即构造错误（返回错误，零派发）。
+	authorized := map[runtime.TaskKey]bool{}
+	declare := func(task runtime.TaskKey) error {
+		if !task.Valid() || authorized[task] {
+			return nil
+		}
 		provenance, maxAttempts, ok := e.guardTaskProvenance(state, task)
 		if !ok {
-			return guard.Basis{}, fmt.Errorf("guard budget: issued dispatch %s has no authorizing source", task.String())
+			return fmt.Errorf("guard budget: authorized dispatch %s has no authorizing source", task.String())
 		}
+		authorized[task] = true
 		attempts := maxAttempts
 		basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: task, Provenance: provenance, MaxAttempts: &attempts})
+		return nil
 	}
-	// 预授权 repair 机械加入（AC-059）：已声明未签发的返修槽位属于授权全集
-	// ——与已签发事实同一 provenance/策略声明，RequestAllowance 反映授权全集
-	// 而非仅已占用集。
-	for _, work := range state.repairWork() {
-		if work.wave.Repair == nil || work.task != work.wave.Repair.Task || issued[work.task] {
-			continue
+	// 桶 1：确认计划的全部批次任务（currentPlanTask 逐批，依赖未 Ready 同样
+	// 计入——批次身份是 plan digest，不随签发进度漂移）。
+	for _, task := range state.planTasks(e.cfg.Definition) {
+		if err := declare(task); err != nil {
+			return guard.Basis{}, err
 		}
-		provenance, maxAttempts, ok := e.guardTaskProvenance(state, work.task)
-		if !ok {
-			continue
+	}
+	// 桶 1b：需求重走替换任务——确认账本的 redo 决定经用户确认，替换 TaskKey
+	// 由该 revision 机械派生（预授权；provenance 经 sourceValidationTask 折叠
+	// 回原任务归类）。
+	for _, entry := range state.RequirementRevisions {
+		for j, choice := range entry.WorkDecisions {
+			if choice.Disposition == RequirementWorkRedo {
+				if err := declare(replacementWorkTask(entry, j)); err != nil {
+					return guard.Basis{}, err
+				}
+			}
 		}
-		attempts := maxAttempts
-		basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: work.task, Provenance: provenance, MaxAttempts: &attempts})
+	}
+	if state.Validation != nil {
+		// 桶 2：已建 wave 的全部 target（QA/门，含 PENDING 未签发槽位）。
+		for i := range state.Validation.Waves {
+			for _, key := range sortedTargetKeys(&state.Validation.Waves[i]) {
+				if err := declare(state.Validation.Waves[i].Targets[key].Task); err != nil {
+					return guard.Basis{}, err
+				}
+			}
+		}
+		// 桶 3：返修义务全集——已成立返修 wave 的返修 TaskKey（含重走替换
+		// 者）与 repairWork 现责任人（wave 收齐、裁决定案后仍欠执行的返修义
+		// 务，含尚未签发者；预授权机械加入，不需另行确认）。
+		for _, repairWave := range state.establishedRepairWaves() {
+			if err := declare(repairWave.Repair.Task); err != nil {
+				return guard.Basis{}, err
+			}
+			if err := declare(state.replacementFold(repairWave.Repair.Task)); err != nil {
+				return guard.Basis{}, err
+			}
+		}
+		for _, work := range state.repairWork() {
+			if err := declare(work.task); err != nil {
+				return guard.Basis{}, err
+			}
+		}
+		// 桶 4：预授权 QA 设计/审查槽——镜像 projectValidationTasks 的当前投影
+		//（set 缺失或 DRAFT/THAWED 的设计槽、REVIEW 的审查槽；首个 QA design
+		// 派发先于 case-set 存在，授权来源是路线选择）。
+		for _, mode := range state.validationKinds() {
+			set := state.Validation.Sets[mode]
+			if set == nil {
+				if mode == coverage.ReviewBlackbox || state.Validation.AuthoringWorkspace != "" {
+					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+						return guard.Basis{}, err
+					}
+				}
+				continue
+			}
+			switch set.Status {
+			case "DRAFT", "THAWED":
+				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+					return guard.Basis{}, err
+				}
+			case "REVIEW":
+				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.review.rationale", state.reviewTask(mode, state.Validation.Generation, set.Version, e.cfg.Definition).Scope)); err != nil {
+					return guard.Basis{}, err
+				}
+			}
+		}
+	}
+	// 桶 5：已签发治理事实必须能归入全集（provenance 可归类）——对不上即
+	// BLOCKED_BUG（账目无法对齐）；历史授权槽（如被替换的 design scope）按
+	// 事实入集。
+	for task := range issuedGuardTasks(state, e.cfg.Definition) {
+		if err := declare(task); err != nil {
+			return guard.Basis{}, err
+		}
 	}
 	return basis, nil
+}
+
+// establishedRepairWaves 枚举「已成立返修」的 wave——该判定的单一归属点：
+// Repair 只在 wave 裁决定案时落账（settleValidationWave），一经成立即为持
+// 久的授权事实；后续回归（路线重绑把 wave 置 INVALIDATED、新到未裁决
+// finding）不解散已成立的返修，只产生新义务。授权全集（桶 3）与 basis 的
+// RepairSource 声明集共用本枚举，声明与来源永不各执一词。
+func (s *State) establishedRepairWaves() []*ValidationWave {
+	var waves []*ValidationWave
+	for i := range s.Validation.Waves {
+		if w := &s.Validation.Waves[i]; w.Repair != nil && w.Status != "COLLECTING" {
+			waves = append(waves, w)
+		}
+	}
+	return waves
 }
 
 // externalStepsOf 列出 closed-world 外部步：可经 Ready 漏斗签发的全部 agent 步
@@ -246,8 +361,11 @@ func issuedGuardTasks(state *State, cd *compiler.CompiledDefinition) map[runtime
 // guardTaskProvenance 按任务角色归类 provenance（合同：「provenance 按上述
 // source 归类」）并给出该 TaskKey 的现行有限 retry 策略。策略读 attempt 账本
 // （一次性用户追加只改该账本的 MaxAttempts，AC-059），无账本条目时用编译步策略。
+// 需求重走替换任务先经 sourceValidationTask 折叠回原任务——替换与原任务同源
+// 声明，provenance 按其来源归类。
 func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.Provenance, int, bool) {
 	role := state.validationRole(task, e.cfg.Definition)
+	source := state.sourceValidationTask(task)
 	maxAttempts := e.retryMaxAttempts(task.Step)
 	if attempt, ok := state.Attempts[task]; ok && attempt.MaxAttempts > 0 {
 		maxAttempts = attempt.MaxAttempts
@@ -277,13 +395,13 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		}
 		// 派发 scope 内携带 mode 身份（generation:mode:...），按 mode 直查
 		// case-set 账本；set 缺失的历史事实按其 wave target 的冻结版本定位。
-		mode := taskScopeMode(task)
+		mode := taskScopeMode(source)
 		if set := state.Validation.Sets[mode]; set != nil {
 			return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(mode), Revision: set.Version}}, maxAttempts, true
 		}
 		for i := range state.Validation.Waves {
 			for _, target := range state.Validation.Waves[i].Targets {
-				if target.Task == task && target.Mode == mode {
+				if target.Task == source && target.Mode == mode {
 					return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(mode), Revision: state.Validation.Waves[i].Versions[mode]}}, maxAttempts, true
 				}
 			}
@@ -296,7 +414,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		for i := range state.Validation.Waves {
-			if target := state.Validation.Waves[i].Targets[task.String()]; target != nil && target.Gate != "" {
+			if target := state.Validation.Waves[i].Targets[source.String()]; target != nil && target.Gate != "" {
 				return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
 			}
 		}
@@ -311,9 +429,9 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 				continue
 			}
 			// 需求重走决定可把返修义务替换为新 TaskKey（binding/责任变化）；
-			// 原任务与替换任务同属该 wave 的返修义务来源。
-			if w.Repair.Task == task || state.replacementFold(w.Repair.Task) == task {
-				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: task.String(), Revision: w.ExpectedDigest}}, maxAttempts, true
+			// 折叠后的来源任务与该 wave 的返修义务互为同源。
+			if w.Repair.Task == source {
+				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: source.String(), Revision: w.ExpectedDigest}}, maxAttempts, true
 			}
 		}
 		return guard.Provenance{}, 0, false
@@ -322,7 +440,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 }
 
 // replacementFold 把一个返修 TaskKey 沿确认账本的重走决定折叠为当前责任人
-// （与 repairWork 的替换计算同一规则）。
+// （返修义务枚举与 repairWork 的替换计算共用本归属）。
 func (s *State) replacementFold(task runtime.TaskKey) runtime.TaskKey {
 	for _, revision := range s.RequirementRevisions {
 		for j, choice := range revision.WorkDecisions {
@@ -355,6 +473,15 @@ func (e *Engine) deriveGuardBudget(state *State) (*GuardBudget, error) {
 		TotalAllowance:    result.TotalAllowance,
 		BudgetBasisDigest: result.BudgetBasisDigest,
 		UsedRequests:      len(issued),
+		TokenCapStatus:    TokenCapUnavailable,
+	}
+	if state.TokenCapMaxTokens != nil {
+		budget.TokenCapStatus = TokenCapAvailable
+		budget.TokenCapMax = *state.TokenCapMaxTokens
+		budget.TokenCapDispatch = state.dispatchTokenTotal()
+		if budget.TokenCapDispatch >= budget.TokenCapMax {
+			budget.TokenCapStatus = TokenCapExceeded
+		}
 	}
 	// 已用 retry 与 guard 自身算术同口径（AC-055：retryAllowance=Σ max(0,
 	// MaxAttempts−1)）：每个 TaskKey 的首个执行占用 request 槽，其余执行才是
@@ -434,13 +561,93 @@ func (e *Engine) refreshGuardBudget(state *State) error {
 	return nil
 }
 
+// guardTaskAuthorized 是单任务派发 guard 判定（issueInto 漏斗与恢复换新共用）：
+// 治理任务（validation role）必须落在授权 basis 枚举内且有限 retry 未耗尽——
+// 无授权来源或不在全集＝GUARD_ALLOWANCE_BLOCKED（扩张只经既有 typed Ask 通道）；
+// attempt 账本未标记耗尽而重算已超发＝BLOCKED_BUG。
+func (e *Engine) guardTaskAuthorized(state *State, basis guard.Basis, task runtime.TaskKey) error {
+	_, maxAttempts, ok := e.guardTaskProvenance(state, task)
+	if !ok || !basisDeclaresTask(basis, task) {
+		return &RejectedError{
+			Code:   CodeGuardAllowanceBlocked,
+			Detail: fmt.Sprintf("dispatch %s is outside the authorized dispatch budget; expansion requires a new valid obligation, a confirmed plan or a budget disposition Ask", task.String()),
+		}
+	}
+	attempts := 0
+	exhausted := false
+	if prior, ok := state.EndedAttempts[task]; ok {
+		attempts, exhausted = prior.Attempts, prior.RetryExhausted
+	} else if prior, ok := state.Attempts[task]; ok {
+		attempts, exhausted = prior.Attempts, prior.RetryExhausted
+	}
+	if attempts >= maxAttempts && !exhausted {
+		return &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("dispatch %s would exceed its finite retry budget (%d/%d) while the attempt ledger does not record exhaustion", task.String(), attempts, maxAttempts)}
+	}
+	if attempts >= maxAttempts {
+		return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: fmt.Sprintf("dispatch %s consumed its finite retry budget (%d/%d)", task.String(), attempts, maxAttempts)}
+	}
+	return nil
+}
+
+// guardEffectBudget 判定一次宿主效果执行（resume intent 或换新 install）的
+// 派发预算，公开 ResumeAgent 与恢复入口的全部执行创建点共用同一判定，两维：
+//   - retry 余量：绑定未变的执行消耗有限次数——Attempt 账本已计执行＋在途
+//     resume intent＋本次将达上限即拒绝（无有限策略的步骤不参与该维）；
+//   - token cap：engine 派发用量达到配置上限且无未消耗的一次继续授权即拒
+//     绝（与签发漏斗同一算式）。
+//
+// 被阻时幂等落 DISPATCH_BUDGET_DISPOSITION Ask 并返回拒绝（Ask 即进展，不是
+// 错误）；本函数不改其他状态、不提交——提交形状归调用方（公开入口落 Ask 后
+// 提交并拒绝返回；事务收尾内的恢复路径直接跳过效果创建）。workerActionID 解
+// 析失败不在此拒（交给 agentHostIntent 以 UNKNOWN_ACTION 拒绝）。
+func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision uint64) *RejectedError {
+	pending, ok := s.PendingActions[workerActionID]
+	attempt := s.Attempts[pending.Task]
+	if !ok {
+		for task, ended := range s.EndedAttempts {
+			if ended.ActionID == workerActionID && ended.AwaitingResult {
+				pending = PendingAction{ActionID: workerActionID, Task: task, AttemptID: ended.ID}
+				attempt = ended
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return nil
+	}
+	if attempt.MaxAttempts > 0 {
+		inFlight := 0
+		for _, intent := range s.PendingHostActions {
+			if intent.Operation == HostActionResumeAgent && intent.Resume != nil && intent.Resume.WorkerActionID == workerActionID {
+				inFlight++
+			}
+		}
+		if attempt.Attempts+inFlight+1 >= attempt.MaxAttempts {
+			s.ensureDispatchBudgetAsk(pending.Task.String(), nextRevision)
+			return &RejectedError{
+				Code: CodeGuardAllowanceBlocked,
+				Detail: fmt.Sprintf("execution of %s consumed its finite retry budget (%d executions recorded, %d resume in flight, max %d); continue only via a budget disposition authorization",
+					pending.Task.String(), attempt.Attempts, inFlight, attempt.MaxAttempts),
+			}
+		}
+	}
+	if e.tokenCapExceeded(s) && !s.budgetContinueGranted(e.cfg.Definition) {
+		s.ensureDispatchBudgetAsk(pending.Task.String(), nextRevision)
+		return &RejectedError{
+			Code:   CodeGuardAllowanceBlocked,
+			Detail: "engine dispatch token cap reached; further automatic dispatch requires a budget disposition authorization",
+		}
+	}
+	return nil
+}
+
 // guardIssuanceGate 返回签发漏斗的 guard 判断（issueInto 在任何落账变更前调
-// 用）：QA/开发/门/repair 候选必须落在授权 basis 内——新 TaskKey 无授权来源或
-// 该 TaskKey 的有限 retry 已耗尽＝零签发（GUARD_ALLOWANCE_BLOCKED，扩张只经
-// 既有 typed Ask 通道：新有效义务/经确认新计划/一次性 attempt 追加）；已签发
-// 事实对不上账、或 attempt 账本未标记耗尽而重算已超发＝BLOCKED_BUG。guard
-// 不回写、不覆盖 series 轮次/Attempt 代次/wave 计数/返修轮次任何一者的判定，
-// 只从事实计算横切包络。
+// 用）：治理任务候选必须落在授权 basis 内——不在全集或该 TaskKey 的有限 retry
+// 已耗尽＝零签发；已签发事实对不上账、或 attempt 账本未标记耗尽而重算已超发＝
+// BLOCKED_BUG。达到 token cap 且无一次继续授权时同样零签发。guard 不回写、不
+// 覆盖 series 轮次/Attempt 代次/wave 计数/返修轮次任何一者的判定，只从事实计
+// 算横切包络。
 func (e *Engine) guardIssuanceGate(state *State) func(decision.IssuedSet) error {
 	return func(issued decision.IssuedSet) error {
 		var governed []decision.IssuedAction
@@ -452,9 +659,11 @@ func (e *Engine) guardIssuanceGate(state *State) func(decision.IssuedSet) error 
 		if len(governed) == 0 {
 			return nil
 		}
-		issuedFacts := issuedGuardTasks(state, e.cfg.Definition)
 		if !e.guardEngaged(state) {
 			return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: "dispatch budget is not established for this run yet"}
+		}
+		if e.tokenCapExceeded(state) && !state.budgetContinueGranted(e.cfg.Definition) {
+			return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: "engine dispatch token cap reached; further automatic dispatch requires a budget disposition authorization"}
 		}
 		basis, err := e.guardBasis(state)
 		if err != nil {
@@ -464,35 +673,9 @@ func (e *Engine) guardIssuanceGate(state *State) func(decision.IssuedSet) error 
 			return &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("dispatch budget does not align with its ledger: %v", err)}
 		}
 		for _, action := range governed {
-			provenance, maxAttempts, ok := e.guardTaskProvenance(state, action.Task)
-			if !ok {
-				return &RejectedError{
-					Code:   CodeGuardAllowanceBlocked,
-					Detail: fmt.Sprintf("dispatch %s has no authorizing basis source; expansion requires a new valid obligation, a confirmed plan or a one-shot attempt Ask", action.Task.String()),
-				}
+			if err := e.guardTaskAuthorized(state, basis, action.Task); err != nil {
+				return err
 			}
-			attempts := 0
-			exhausted := false
-			if prior, ok := state.EndedAttempts[action.Task]; ok {
-				attempts, exhausted = prior.Attempts, prior.RetryExhausted
-			} else if prior, ok := state.Attempts[action.Task]; ok {
-				attempts, exhausted = prior.Attempts, prior.RetryExhausted
-			}
-			if attempts >= maxAttempts && !exhausted {
-				return &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("dispatch %s would exceed its finite retry budget (%d/%d) while the attempt ledger does not record exhaustion", action.Task.String(), attempts, maxAttempts)}
-			}
-			if attempts >= maxAttempts {
-				return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: fmt.Sprintf("dispatch %s consumed its finite retry budget (%d/%d)", action.Task.String(), attempts, maxAttempts)}
-			}
-			// 新 TaskKey 进入 would-be basis（已在 basis 内的预授权槽位
-			// 不重复声明——guard 对相同声明去重，对不同值冲突拒绝）。
-			if _, fact := issuedFacts[action.Task]; !fact && !basisDeclaresTask(basis, action.Task) {
-				attemptBudget := maxAttempts
-				basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: action.Task, Provenance: provenance, MaxAttempts: &attemptBudget})
-			}
-		}
-		if _, err := guard.Calculate(basis); err != nil {
-			return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: fmt.Sprintf("candidate issuance is outside the closed dispatch budget: %v", err)}
 		}
 		return nil
 	}

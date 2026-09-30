@@ -75,9 +75,37 @@ func (e *Engine) advanceRecoveries(s *State, revision uint64) error {
 	return nil
 }
 
+// accountResumeExecution 把一次恢复执行计入目标任务的 Attempt 账本：resumed
+// execution 的唯一计数点（公开 ResumeAgent 与恢复决定共用），Attempts 达到
+// MaxAttempts 时置耗尽标记——与瞬态结果/FAILED spawn 的计数同一形状。目标无当
+// 前账本条目时不计（账本已被换新或终态收回的执行不改写新条目）。
+func (s *State) accountResumeExecution(workerActionID string) {
+	pending, ok := s.PendingActions[workerActionID]
+	if !ok {
+		return
+	}
+	if attempt, ok := s.Attempts[pending.Task]; ok {
+		attempt.Attempts++
+		if attempt.MaxAttempts > 0 && attempt.Attempts >= attempt.MaxAttempts {
+			attempt.RetryExhausted = true
+		}
+		s.Attempts[pending.Task] = attempt
+		return
+	}
+	if attempt, ok := s.EndedAttempts[pending.Task]; ok {
+		attempt.Attempts++
+		if attempt.MaxAttempts > 0 && attempt.Attempts >= attempt.MaxAttempts {
+			attempt.RetryExhausted = true
+		}
+		s.EndedAttempts[pending.Task] = attempt
+	}
+}
+
 func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt Attempt, action RecoveryAction, correlation string, revision uint64) error {
+	// 显式换新决定走 terminate 路线（用户指定的路线，不是预算边界）；resume
+	// 类动作的 retry 边界由统一预算判定拦截并落 typed Ask，不再静默转 terminate。
 	operation := HostActionResumeAgent
-	if action == RecoveryNewAttempt || attempt.Attempts+1 >= attempt.MaxAttempts {
+	if action == RecoveryNewAttempt {
 		operation = HostActionTerminateAgent
 	}
 	// An effect already signed for this recovery owns both its operation and cost.
@@ -115,20 +143,36 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 	}
 	identity := receipt.agentIdentity()
 	if !executed && (operation == HostActionResumeAgent || !s.hasLifecycleEvent(identity, LifecycleStop)) {
+		if operation == HostActionResumeAgent && e.guardEffectBudget(s, pending.ActionID, revision) != nil {
+			// 预算边界＝Ask 已落账（本函数运行在事务收尾内，随外层提交），
+			// 效果不创建、返回 nil——Ask 即进展，不是错误。
+			return nil
+		}
 		reason := "Recover original attempt by " + string(action)
 		intent, err := e.agentHostIntent(s, operation, pending.ActionID, identity, reason, correlation, revision)
 		if err != nil {
 			return err
-		}
-		if operation == HostActionResumeAgent {
-			attempt.Attempts++
-			s.Attempts[pending.Task] = attempt
 		}
 		s.PendingHostActions[intent.ActionID] = intent
 		return nil
 	}
 	// Fresh execution follows observed termination and retains the original
 	// finite policy and binding when the normal retry owner signs a replacement.
+	// 一次宿主效果执行的统一预算判定（retry 余量＋token cap 两维，与公开
+	// ResumeAgent 同一函数）；治理任务的换新仍经派发 guard（与 issueInto 漏斗
+	// 同一单任务判定）。
+	if e.guardEffectBudget(s, pending.ActionID, revision) != nil {
+		return nil
+	}
+	if s.validationRole(pending.Task, e.cfg.Definition) != "" && e.guardEngaged(s) {
+		basis, err := e.guardBasis(s)
+		if err != nil {
+			return &RejectedError{Code: CodeGuardBlockedBug, Detail: err.Error()}
+		}
+		if err := e.guardTaskAuthorized(s, basis, pending.Task); err != nil {
+			return err
+		}
+	}
 	attempt.Attempts++
 	attempt.RetryExhausted = attempt.Attempts >= attempt.MaxAttempts
 	attempt.AwaitingResult = false

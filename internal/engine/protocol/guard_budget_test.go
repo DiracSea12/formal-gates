@@ -98,15 +98,16 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 }
 
 // TestGuardBudgetDerivesFromAuthoritativeState：包络就位后额度投影从权威
-// 事实派生——已签发 QA 派发占一个基础槽位，digest 随 case-set 版本变化
-// （AC-058 engine 侧）。
+// 事实派生——授权全集（确认批次任务＋已建 wave 的两个 target）立即占 3 个基础
+// 槽位、已签发 QA 派发占用其中 1 个；digest 随 case-set 版本变化（AC-058
+// engine 侧）。
 func TestGuardBudgetDerivesFromAuthoritativeState(t *testing.T) {
 	engine, state, _ := guardPipelineFixture(t)
 	budget, err := engine.deriveGuardBudget(state)
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	if budget == nil || budget.RequestAllowance != 1 || budget.UsedRequests != 1 || budget.UsedRetries != 0 {
+	if budget == nil || budget.RequestAllowance != 3 || budget.UsedRequests != 1 || budget.UsedRetries != 0 {
 		t.Fatalf("budget = %+v", budget)
 	}
 	if !strings.HasPrefix(budget.BudgetBasisDigest, "sha256:") {
@@ -217,11 +218,11 @@ func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exhausted.UsedRetries != 1 || exhausted.RetryAllowance != 1 || exhausted.TotalAllowance != 2 {
-		t.Fatalf("exhausted budget = %+v, want retries 1/1 total 2/2", exhausted)
+	if exhausted.UsedRetries != 1 || exhausted.RetryAllowance != 3 || exhausted.TotalAllowance != 6 {
+		t.Fatalf("exhausted budget = %+v, want retries 1/3 total 2/6 (full authorized set)", exhausted)
 	}
-	if exhausted.UsedRequests != 1 || exhausted.RequestAllowance != 1 {
-		t.Fatalf("exhausted request slots = %d/%d, want 1/1", exhausted.UsedRequests, exhausted.RequestAllowance)
+	if exhausted.UsedRequests != 1 || exhausted.RequestAllowance != 3 {
+		t.Fatalf("exhausted request slots = %d/%d, want 1/3", exhausted.UsedRequests, exhausted.RequestAllowance)
 	}
 
 	engine, state, qaTask = guardPipelineFixture(t)
@@ -233,8 +234,8 @@ func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if midFlight.UsedRetries != 0 || midFlight.RetryAllowance != 1 {
-		t.Fatalf("mid-flight budget = %+v, want retries 0/1", midFlight)
+	if midFlight.UsedRetries != 0 || midFlight.RetryAllowance != 3 {
+		t.Fatalf("mid-flight budget = %+v, want retries 0/3", midFlight)
 	}
 	if err := engine.guardIssuanceGate(state)(decision.IssuedSet{{ActionID: "act:qa-2", Task: qaTask, Step: qaTask.Step}}); err != nil {
 		t.Fatalf("mid-flight retry issuance blocked: %v", err)
@@ -320,6 +321,68 @@ func TestGuardBudgetLoadBoundaryRejectsTamperedProjection(t *testing.T) {
 	}
 }
 
+// TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger：恢复换新
+// （NEW_ATTEMPT，绑定/责任变化的新计划槽位）仍经派发 guard——治理任务换新
+// 必须在授权 basis 内，且其执行计数续在同一 TaskKey 的 Attempt 账本
+// （IssueFromPlan/refill/ResumeAgent/RecoveryNewAttempt/HostAction retry 五入
+// 口共用同一 guard/Attempt 计数）。
+func TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger(t *testing.T) {
+	engine, state, qaTask := guardedFunnelFixture(t)
+	state.PendingActions["act:qa-1"] = PendingAction{ActionID: "act:qa-1", Task: qaTask, Step: string(qaTask.Step), AttemptID: "att:qa-1"}
+	state.Attempts[qaTask] = Attempt{
+		ID: "att:qa-1", Attempts: 0, MaxAttempts: 2, Business: true,
+		IssuedAction: decision.IssuedAction{ActionID: "act:qa-1", Task: qaTask, Step: qaTask.Step},
+		Bindings:     AttemptBindings{Task: qaTask, Snapshot: "fp", Responsibility: state.RunProvider},
+	}
+	state.SpawnReceipts["act:qa-1"] = SpawnReceipt{ActionID: "act:qa-1", Provider: state.RunProvider, Correlation: "qa-agent", Status: SpawnStatusSpawned, Task: qaTask}
+	state.LifecycleEvents = append(state.LifecycleEvents,
+		LifecycleEventRecord{Provider: state.RunProvider, Correlation: "qa-agent", Identity: "qa-agent", Event: LifecycleStart},
+		LifecycleEventRecord{Provider: state.RunProvider, Correlation: "qa-agent", Identity: "qa-agent", Event: LifecycleStop},
+	)
+	if err := engine.applyAttemptRecovery(state, state.PendingActions["act:qa-1"], state.Attempts[qaTask], RecoveryNewAttempt, "recover:1", 9); err != nil {
+		t.Fatalf("guarded replacement blocked: %v", err)
+	}
+	// 业务派发的换新经 endBusinessAttempt 续在同一 TaskKey 的 EndedAttempts
+	// 账本（attempts 0→1），重签发经同一签发闸放行并按 restoreRetryBinding
+	// 续接该计数。
+	ended, ok := state.EndedAttempts[qaTask]
+	if !ok {
+		t.Fatalf("fresh recovery did not account the business attempt: attempts=%+v ended=%+v", state.Attempts[qaTask], state.EndedAttempts)
+	}
+	if ended.Attempts != 1 || ended.MaxAttempts != 2 {
+		t.Fatalf("ended attempt ledger = %+v, want attempts 1/2", ended)
+	}
+	if state.Tasks[qaTask] != runtime.TaskQueued {
+		t.Fatalf("task status = %s, want QUEUED for re-issue", state.Tasks[qaTask])
+	}
+	if err := engine.guardIssuanceGate(state)(decision.IssuedSet{{ActionID: "act:qa-2", Task: qaTask, Step: qaTask.Step}}); err != nil {
+		t.Fatalf("re-issue of the accounted task blocked: %v", err)
+	}
+	// 计划外且已入账（SpawnReceipt 在账）的治理任务＝账目无法对齐：换新以
+	// BLOCKED_BUG 零派发终止（issued 事实经 provenance 归类失败）。
+	rogue := pipelineTask(engine.cfg.Definition, "engine.development.batch", "plan:rogue:rogue")
+	state.PendingActions["act:rogue"] = PendingAction{ActionID: "act:rogue", Task: rogue, Step: string(rogue.Step), AttemptID: "att:rogue"}
+	state.Attempts[rogue] = Attempt{ID: "att:rogue", Attempts: 0, MaxAttempts: 2, Business: true,
+		IssuedAction: decision.IssuedAction{ActionID: "act:rogue", Task: rogue, Step: rogue.Step},
+		Bindings:     AttemptBindings{Task: rogue, Snapshot: "fp", Responsibility: state.RunProvider}}
+	state.SpawnReceipts["act:rogue"] = SpawnReceipt{ActionID: "act:rogue", Provider: state.RunProvider, Correlation: "rogue-agent", Status: SpawnStatusSpawned, Task: rogue}
+	state.LifecycleEvents = append(state.LifecycleEvents,
+		LifecycleEventRecord{Provider: state.RunProvider, Correlation: "rogue-agent", Identity: "rogue-agent", Event: LifecycleStart},
+		LifecycleEventRecord{Provider: state.RunProvider, Correlation: "rogue-agent", Identity: "rogue-agent", Event: LifecycleStop},
+	)
+	err := engine.applyAttemptRecovery(state, state.PendingActions["act:rogue"], state.Attempts[rogue], RecoveryNewAttempt, "recover:2", 10)
+	var rejected *RejectedError
+	if !errors.As(err, &rejected) || rejected.Code != CodeGuardBlockedBug {
+		t.Fatalf("misaligned replacement = %v, want BLOCKED_BUG", err)
+	}
+	if _, installed := state.Attempts[rogue]; !installed {
+		t.Fatal("blocked replacement must leave zero state")
+	}
+	if state.Attempts[rogue].Attempts != 0 {
+		t.Fatalf("blocked replacement changed the attempt ledger: %+v", state.Attempts[rogue])
+	}
+}
+
 func gateTaskKeyOf(w *ValidationWave) string {
 	for _, target := range w.Targets {
 		if target.Kind == "GATE" {
@@ -327,6 +390,51 @@ func gateTaskKeyOf(w *ValidationWave) string {
 		}
 	}
 	return ""
+}
+
+// TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression：已签返修的 wave
+// 回归（路线重绑置 INVALIDATED＋新到未裁决 finding）不撤销其 RepairSource 声
+// 明——授权全集与 basis 声明集共用 establishedRepairWaves 单一归属点，账目
+// 不因回归错位（假阳性 BLOCKED_BUG 硬停）。
+func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
+	engine, state, _ := guardPipelineFixture(t)
+	cd := engine.cfg.Definition
+	w := &state.Validation.Waves[0]
+	gateTask := pipelineTask(cd, "engine.gate", "wave-1:quality")
+	for _, target := range w.Targets {
+		if target.Kind == "GATE" {
+			target.Status = "FAIL"
+			target.ResultAction = "act:gate-1"
+		} else {
+			target.Status = "PASS"
+			target.ResultAction = "act:qa-1"
+		}
+	}
+	state.Validation.Findings["finding-1"] = &ValidationFinding{
+		ID: "finding-1", WaveID: w.ID, Target: gateTask.String(),
+		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P2", AcceptedRevision: 2}},
+	}
+	w.Status = "REPAIR"
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair", "native-1"), Problems: []string{"problem-1"}}
+	// 返修已签发（签发代数在账）。
+	state.DispatchBindings["act:repair-1"] = WorkBinding{Task: w.Repair.Task, WaveID: w.ID, Candidate: "native-1", Generation: 1}
+	state.DispatchIssueRevisions["act:repair-1"] = 8
+	if _, err := engine.deriveGuardBudget(state); err != nil {
+		t.Fatalf("established repair basis failed before the regression: %v", err)
+	}
+	// 回归：wave 失效但返修仍在账，未裁决 finding 到达。
+	w.Status = "INVALIDATED"
+	state.Validation.Findings["finding-raw"] = &ValidationFinding{
+		ID: "finding-raw", WaveID: w.ID, Target: gateTask.String(),
+		Raw: &review.Finding{Message: "carried re-execution failed", Severity: "P2"},
+	}
+	budget, err := engine.deriveGuardBudget(state)
+	if err != nil {
+		t.Fatalf("regressed wave broke the repair basis: %v", err)
+	}
+	if budget == nil {
+		t.Fatal("guard envelope disappeared after the regression")
+	}
 }
 
 // TestGuardEnvelopeLeavesSeriesCountersSole：guard 是横切包络，不改写 series
@@ -399,14 +507,15 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 	if err := engine.guardIssuanceGate(state)(decision.IssuedSet{{ActionID: "act:repair-1", Task: w.Repair.Task, Step: w.Repair.Task.Step}}); err != nil {
 		t.Fatalf("pre-authorized repair blocked: %v", err)
 	}
-	// 声明未签发的返修槽位属于授权全集：RequestAllowance 反映 2 个槽而
-	// 占用仍为 1（headroom 可见，AC-059 预授权机械加入）。
+	// 声明未签发的返修槽位属于授权全集：RequestAllowance 反映 4 个授权槽
+	//（批次＋QA target＋门 target＋返修）而占用仍为 1（headroom 可见，
+	// AC-059 预授权机械加入）。
 	headroom, err := engine.deriveGuardBudget(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if headroom.RequestAllowance != 2 || headroom.UsedRequests != 1 {
-		t.Fatalf("declared-unissued repair headroom = %+v, want allowance 2 used 1", headroom)
+	if headroom.RequestAllowance != 4 || headroom.UsedRequests != 1 {
+		t.Fatalf("declared-unissued repair headroom = %+v, want allowance 4 used 1", headroom)
 	}
 	// 预授权 repair 签发后其基础槽位进入额度（占用即计数）。
 	state.DispatchBindings["act:repair-1"] = WorkBinding{Task: w.Repair.Task, WaveID: w.ID}
@@ -414,7 +523,7 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.RequestAllowance != 2 || after.UsedRequests != 2 {
+	if after.RequestAllowance != 4 || after.UsedRequests != 2 {
 		t.Fatalf("budget after repair issuance = %+v", after)
 	}
 }

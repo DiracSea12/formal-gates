@@ -25,7 +25,7 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 		}
 	}
 	for _, gate := range selected {
-		if !slices.Contains(s.SelectedGates, gate) && slices.Contains([]string{"blackbox", "whitebox", "merge"}, gate) {
+		if !slices.Contains(s.SelectedGates, gate) && (slices.Contains([]string{"blackbox", "whitebox"}, gate) || slices.Contains(reservedRouteGates, gate)) {
 			return validationError("development has started; route can add only ordinary gates")
 		}
 	}

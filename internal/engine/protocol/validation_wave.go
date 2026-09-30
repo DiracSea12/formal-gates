@@ -87,6 +87,12 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return e.advanceAbort(s, nextRevision)
 	}
 	changed := e.ensureRetryAsks(s, nextRevision)
+	// token cap 到达＝预算边界：落账 DISPATCH_BUDGET_DISPOSITION Ask（零签发由
+	// 签发闸执行、Ask 经本收尾单点）。cap 属派发预算包络——包络未就位（受理
+	// 前）不产生该边界；无配置时 cap 维度不参与判定。
+	if e.guardEngaged(s) && e.tokenCapExceeded(s) {
+		changed = s.ensureDispatchBudgetAsk(budgetDispositionTarget, nextRevision) || changed
+	}
 	changed = e.advanceCandidateFailures(s, nextRevision) || changed
 	if !pipelineEnabled(s, e.cfg.Definition) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return changed, nil

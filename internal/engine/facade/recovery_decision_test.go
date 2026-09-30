@@ -155,16 +155,48 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 						intent = p
 					}
 				}
-				kind := protocol.LifecycleStart
 				if used == 2 {
-					kind = protocol.LifecycleStop
+					// 有限边界：不创建任何宿主效果，落预算处置 Ask（继续执行
+					// 只能由用户授权一次有限增量）。
+					if intent.Resume != nil || intent.Terminate != nil {
+						t.Fatalf("finite boundary created a native effect: %+v", intent)
+					}
+					shown, err := d.f.Show()
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.run = shown
+					var ask PendingAskFace
+					for _, face := range shown.PendingAsks {
+						if face.Validation != nil && face.Validation.Kind == protocol.KindDispatchBudgetDisposition {
+							ask = face
+						}
+					}
+					if ask.RequestID == "" {
+						t.Fatal("finite recovery boundary did not land a budget disposition ask")
+					}
+					d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{
+						Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "retry",
+						Validation: &protocol.ValidationDecision{Reason: "one more resume for the interrupted agent", Digest: ask.Validation.Digest, StateRevision: shown.Revision},
+					}})
+					authorized, err := d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, p := range authorized.State.PendingHostActions {
+						if p.Correlation == plan.RequestID {
+							intent = p
+						}
+					}
+					if intent.Resume == nil {
+						t.Fatalf("authorized retry did not resume the original attempt: %+v", intent)
+					}
+				} else if intent.Resume == nil {
+					t.Fatalf("finite recovery effect within budget: %+v", intent)
 				}
-				if used == 1 && intent.Resume == nil || used == 2 && intent.Terminate == nil {
-					t.Fatalf("wrong finite recovery effect: %+v", intent)
-				}
-				observed, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, kind)
+				observed, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 				d.submit(observed)
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: kind})
+				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -176,20 +208,39 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 				d.run = r
 				d.drive()
 			}
-			ended := d.run.EndedAttempts[in.Binding.Task]
-			if ended.Attempts != 2 || ended.MaxAttempts != original.MaxAttempts || !ended.RetryExhausted {
-				t.Fatalf("recovery changed allowance: %+v", ended)
+			// 两次恢复执行都计入同一 TaskKey 的 Attempt 账本：身份不变、计数
+			// 2、额度只多出用户授权的一个槽位。
+			final, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
 			}
-			ask := d.validationAsk("RETRY")
-			decideValidation(d, ask, "approve")
-			fresh, fi := d.action("engine.development.batch")
-			if fresh == id || fi.Binding != in.Binding {
-				t.Fatal("extra authorization replaced duty or signed binding")
+			continued := final.State.Attempts[in.Binding.Task]
+			if continued.ID != original.ID || continued.Attempts != 2 || continued.MaxAttempts != original.MaxAttempts+1 {
+				t.Fatalf("recovery changed allowance or attempt identity: original=%+v continued=%+v", original, continued)
 			}
-			d.business(fresh, protocol.ValidationResult{Binding: fi.Binding, Status: "PASS", Development: batchEvidence(fi)})
-			d.reopen()
-			if d.run.Validation.DevelopmentSnapshot != "" {
-				t.Fatal("worker completion invented a materialized candidate")
+			// 预算通道的 retry 授权一次性：再次到达边界后的第二个 retry 决定被拒。
+			if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint()); err != nil {
+				t.Fatal(err)
+			}
+			shown, err := d.f.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ask PendingAskFace
+			for _, face := range shown.PendingAsks {
+				if face.Validation != nil && face.Validation.Kind == protocol.KindDispatchBudgetDisposition {
+					ask = face
+				}
+			}
+			if ask.RequestID == "" {
+				t.Fatal("the second finite boundary did not land a budget disposition ask")
+			}
+			_, _, err = d.f.Submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{
+				Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "retry",
+				Validation: &protocol.ValidationDecision{Reason: "a second extension of the same boundary", Digest: ask.Validation.Digest, StateRevision: shown.Revision},
+			}})
+			if err == nil {
+				t.Fatal("a second budget retry authorization extended the same boundary action")
 			}
 		})
 	}

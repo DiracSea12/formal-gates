@@ -4,14 +4,17 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/lifecycle"
 )
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
@@ -22,6 +25,17 @@ type validationDriver struct {
 	run      Run
 	seq      int
 	revision string
+	// provider 是本 driver 的宿主 provider 身份（事件/回执按它提交）；缺省
+	// DefaultProvider，可计量 provider（transcript 计量链）按需覆写。
+	provider string
+}
+
+// host 返回本 driver 使用的宿主 provider 身份。
+func (d *validationDriver) host() string {
+	if d.provider != "" {
+		return d.provider
+	}
+	return DefaultProvider
 }
 
 func (d *validationDriver) eventID() protocol.EventID {
@@ -50,7 +64,7 @@ func (d *validationDriver) drive() {
 }
 func (d *validationDriver) receipt(id string) {
 	d.t.Helper()
-	e, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, DefaultProvider, id, protocol.SpawnStatusSpawned)
+	e, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, d.host(), id, protocol.SpawnStatusSpawned)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -59,7 +73,7 @@ func (d *validationDriver) receipt(id string) {
 func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 	d.t.Helper()
 	d.receipt(id)
-	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &p}})
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &p}})
 }
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
@@ -88,6 +102,9 @@ func (d *validationDriver) control(kind protocol.ControlKind, choice string, p p
 	d.submit(e)
 }
 func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) *validationDriver {
+	return startValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory)
+}
+func startValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory) *validationDriver {
 	t.Helper()
 	sum := sha256.Sum256([]byte(validationDocument))
 	revision := fmt.Sprintf("sha256:%x", sum)
@@ -95,11 +112,11 @@ func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) 
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := Start(StartOptions{Capacity: 16, Root: t.TempDir(), Request: StartRequest{RunID: "validation", Route: "regular", BaseSnapshot: "native-run-base", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, r, err := Start(StartOptions{Capacity: 16, Root: root, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: "native-run-base", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: r, revision: revision}
+	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider}
 	d.drive()
 	return d
 }
@@ -128,8 +145,11 @@ func routeDecisionForGates(gates []string) protocol.RouteDecision {
 	return route
 }
 func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
+	return plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory, plan, gates...)
+}
+func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
 	t.Helper()
-	d := startValidationDriver(t, inventory)
+	d := startValidationDriverAt(t, root, provider, inventory)
 	revision := d.revision
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		id := ""
@@ -141,8 +161,14 @@ func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory
 		if id == "" {
 			t.Fatalf("missing %s dispatch: %+v", action, d.run)
 		}
-		d.receipt(id)
-		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{GranularityReview: func() *protocol.GranularityReview {
+		if provider != DefaultProvider {
+			// 可计量 provider：审查派发补零用量 transcript 与 sidecar 生命周期
+			// 事件，结果完成链走 bridge READY。
+			d.meteredSpawn(root, id)
+		} else {
+			d.receipt(id)
+		}
+		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, d.host(), string(d.eventID()), protocol.ReviewResultEvidence{GranularityReview: func() *protocol.GranularityReview {
 			if action == review.StartReadiness {
 				return plan
 			}
@@ -160,6 +186,26 @@ func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory
 	d.drive()
 	return d
 }
+
+// meteredSpawn 以可计量 provider 完成一次派发的宿主侧观察：SPAWNED 回执、
+// 零用量 transcript 与 sidecar start/stop 事件（派发计量来源解析 READY）。
+func (d *validationDriver) meteredSpawn(root, id string) {
+	d.t.Helper()
+	transcript := filepath.Join(root, strings.ReplaceAll(strings.ReplaceAll(id, "/", "_"), ":", "_")+".jsonl")
+	writeTranscript(d.t, transcript, []string{`{"type":"assistant","uuid":"metered-zero","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}`})
+	e, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, d.host(), id, protocol.SpawnStatusSpawned)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(e)
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"`+id+`"}`)); err != nil {
+		d.t.Fatal(err)
+	}
+	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"`+id+`","agent_transcript_path":"`+transcript+`"}`)); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
 func (d *validationDriver) action(handler string) (string, protocol.ValidationInput) {
 	d.t.Helper()
 	for id, input := range d.run.ValidationInputs {

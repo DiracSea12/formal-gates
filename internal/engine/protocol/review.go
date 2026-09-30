@@ -121,9 +121,15 @@ func validateTopologyDecision(topology *TopologyDecision) error {
 	return nil
 }
 
+// reservedRouteGates 是路线候选的保留字全集：合并验证（merge）与其保留总任务
+// 实例（merge-gate/merge-qa）只在拆分运行中自动附加，不进正常选择列表。命名权威
+// internal/validate/catalog.go:28-31；references/formal-flow.md「合并门/合并 QA
+// 不进正常选择列表」。
+var reservedRouteGates = []string{"merge", "merge-gate", "merge-qa"}
+
 // validateRouteGateCandidates 校验候选门全集的形状：非空、逐项非空、无重
-// 复、不含合并验证（合并验证只在拆分运行中自动附加）。SELECT_ROUTE 请求
-// 声明的全集与路线决定的候选表共用本定义点。
+// 复、不含保留合并验证。SELECT_ROUTE 请求声明的全集与路线决定的候选表共用本
+// 定义点。
 func validateRouteGateCandidates(gates []string) error {
 	if len(gates) == 0 {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "SELECT_ROUTE requires the explicit candidate gate list"}
@@ -138,8 +144,10 @@ func validateRouteGateCandidates(gates []string) error {
 		}
 		seen[gate] = true
 	}
-	if slices.Contains(gates, "merge") {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "merge verification is attached automatically for split runs and is not a route candidate"}
+	for _, reserved := range reservedRouteGates {
+		if seen[reserved] {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("%s verification is attached automatically for split runs and is not a route candidate", reserved)}
+		}
 	}
 	return nil
 }
