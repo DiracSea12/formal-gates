@@ -697,3 +697,11 @@ P3 账（累计，不阻塞）：TERMINAL 任务无再派发路径（活性观�
 预存问题入账：qastructure tagged 套件 TestStableHelpAndDocsRejectFutureCommandTokens 因 .dogfood/closeout-20260915-0844 快照内 venv 符号链接失败（09-15 起存在、与本轮无关），快照卫生留待处置。
 
 边界不变：未 push、未真实模型/provider/宿主 canary、Seal/安装切换/DB/split-merge 仍属后续交付。
+
+## 问题收口：F1 门全集钉绑＋qastructure 夹具根因修复（2026-09-25，机主令"先把问题收了，再开始 R4"）
+
+- **F1（P2）收口 `c4fd0da`**：修法＝复用 PendingAsk 既有 typed 绑定模式（Package 逐字段相等/BaseRevision 三方相等/Validation digest 同型先例）——SELECT_ROUTE 请求创建时把候选门全集钉进 Ask（RouteGates，形状规则提取为 validateRouteGateCandidates 单一定义点，请求侧与决定侧共用）；DECIDE 候选表与钉住全集集合相等（sameGateSet 顺序无关），少列/多列任一门＝可区分拒绝零写、Ask 存活。façade PendingAskFace 增全集只读投影（用户所见＝引擎持久事实）。schema 层刻意不校验该字段（已接纳事件重放稳定性）。主代理独立复核：diff 亲读＋自建路线 oracle 三探针（完备 full 接纳；缺陷载荷零写拒；钉绑探针：façade 投影可见全集、少列拒绝零写 Ask 存活、修正决定接纳）全过；oracle 过程自纠一处（计划确认摘要绑载荷字节，打乱顺序的候选表先撞摘要不匹配——引擎行为正确）。
+- **qastructure 预存失败根因修复（同提交）**：生产 Package() 在有 .git 根上由 Git 动态解析本地数据排除（.dogfood 已正确排除）；测试夹具 faultCopyPackage 复制进无 .git 临时目录时手工硬编码排除表（已漂移两次：$tmp、.harness，这次漏 .dogfood）。根因修法＝夹具改在源仓库上按生产口径枚举包输入（git ls-files --cached --others --exclude-standard＋生产无条件排除的 .git/.gates/.harness——实施代理核实 .gates 下有 109 个 tracked 台账文件须排除，主代理独立确认），排除表漂移类问题永久消除。tagged 套件 425s 全绿。
+- 验证：engine+cli+validate 全量（前节）＋三处定向负控＋vet/gofmt/diff-check 全过。
+
+下一单元：R4 guard 接入与三处权威切换（合同 /tmp/r4-contract.md，原文出处已核：incremental-seal-plan 阶段 4 节、draft §7:372-392、REQ-013 AC-059、REQ-015 AC-068/069、cost-metering 设计）。
