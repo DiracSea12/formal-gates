@@ -26,6 +26,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -82,30 +83,39 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
-	RecoveryRecords           []protocol.RecoveryRecord `json:"recoveryRecords,omitempty"`
-	lastEvent                 *protocol.EventRecord
-	Termination               *protocol.State                      `json:"termination,omitempty"`
-	ValidationDecisions       map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
-	ValidationRequests        map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
-	NotGuaranteed             bool                                 `json:"notGuaranteed,omitempty"`
-	ValidationInputs          map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
-	Attempts                  map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
-	PendingActions            map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
-	RejectedResults           map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
-	Validation                *protocol.Validation                 `json:"validation,omitempty"`
-	DispatchBindings          map[string]protocol.WorkBinding      `json:"dispatchBindings,omitempty"`
-	AdapterIntents            map[string]protocol.HostActionIntent `json:"adapterIntents,omitempty"`
-	EndedAttempts             map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
-	RunID                     string                               `json:"runId"`
-	Runtime                   string                               `json:"runtime"`
-	Route                     string                               `json:"route"`
-	Status                    string                               `json:"status"`
-	Revision                  uint64                               `json:"revision"`
-	Envelope                  Envelope                             `json:"envelope"`
-	IntakeConfirmationReceipt *IntakeConfirmationReceipt           `json:"intakeConfirmationReceipt,omitempty"`
-	IntakeReceipt             *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
-	Next                      decision.NextResult                  `json:"next"`
-	AvailableActions          []string                             `json:"availableActions,omitempty"`
+	RecoveryRecords     []protocol.RecoveryRecord `json:"recoveryRecords,omitempty"`
+	lastEvent           *protocol.EventRecord
+	Termination         *protocol.State                      `json:"termination,omitempty"`
+	ValidationDecisions map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
+	ValidationRequests  map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
+	NotGuaranteed       bool                                 `json:"notGuaranteed,omitempty"`
+	ValidationInputs    map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
+	Attempts            map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
+	PendingActions      map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
+	RejectedResults     map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
+	Validation          *protocol.Validation                 `json:"validation,omitempty"`
+	DispatchBindings    map[string]protocol.WorkBinding      `json:"dispatchBindings,omitempty"`
+	AdapterIntents      map[string]protocol.HostActionIntent `json:"adapterIntents,omitempty"`
+	EndedAttempts       map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
+	RunID               string                               `json:"runId"`
+	Runtime             string                               `json:"runtime"`
+	Route               string                               `json:"route"`
+	Status              string                               `json:"status"`
+	Revision            uint64                               `json:"revision"`
+	Envelope            Envelope                             `json:"envelope"`
+	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线；lightweight
+	// 恒空（无 VCS 语义）。
+	BaseSnapshot string `json:"baseSnapshot,omitempty"`
+	// PromotedSnapshot 是终态晋升绑定的候选快照（validation 完成后经
+	// PrepareCandidate 落账）。
+	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
+	// QAWorktree 是 QA 隔离工作区的登记事实（经 RegisterQAWorktree 校验落账；
+	// 物理建区归宿主）。
+	QAWorktree                string                     `json:"qaWorktree,omitempty"`
+	IntakeConfirmationReceipt *IntakeConfirmationReceipt `json:"intakeConfirmationReceipt,omitempty"`
+	IntakeReceipt             *IntakeReceipt             `json:"intakeReceipt,omitempty"`
+	Next                      decision.NextResult        `json:"next"`
+	AvailableActions          []string                   `json:"availableActions,omitempty"`
 	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
 	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
 	Review ReviewFace `json:"review"`
@@ -380,6 +390,9 @@ type StartOptions struct {
 	// Owner 是主代理（owner）计量来源声明（transcript＋provider，两者同
 	// 时非空才承诺 owner 计量；REQ-012）。
 	Owner OwnerBinding
+	// VCSRunner 注入 regular 路线快照校验用的 Git 命令 runner（测试替身；
+	// nil＝生产 exec）。lightweight 不消费它。
+	VCSRunner vcs.Runner
 }
 
 // Admission is a launcher-derived runtime binding.  It is intentionally
@@ -404,6 +417,11 @@ type Facade struct {
 	envelope   Envelope
 	definition *compiler.CompiledDefinition
 	capacity   int
+	// vcsRunner 是注入的 Git 命令 runner（测试替身）；vcs 是绑定 run 根的
+	// provider，regular 路线启动校验、终态快照边界与登记制共用。lightweight
+	// 不引入 VCS 依赖，两者为 nil。
+	vcsRunner vcs.Runner
+	vcs       *vcs.Provider
 }
 
 // Start creates an engine candidate run after validating the complete typed
@@ -464,6 +482,24 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
+	}
+	// regular 路线把 BaseSnapshot 从字符串变成事实（镜像 legacy workflow Start
+	// 的快照接线：base 必须可复现且是原生 HEAD 的祖先或相等）。lightweight 不
+	// 引入 VCS 依赖。
+	var vcsProvider *vcs.Provider
+	if req.Route == "regular" {
+		vcsProvider = vcs.New(root, options.VCSRunner)
+		current, err := vcsProvider.Resolve()
+		if err != nil {
+			return nil, Run{}, err
+		}
+		if err := vcsProvider.Verify(req.BaseSnapshot); err != nil {
+			return nil, Run{}, err
+		}
+		req.BaseSnapshot = strings.ToLower(strings.TrimSpace(req.BaseSnapshot))
+		if err := vcsProvider.IsAncestorOrEqual(req.BaseSnapshot, current); err != nil {
+			return nil, Run{}, fmt.Errorf("base snapshot %s: %w", req.BaseSnapshot, err)
+		}
 	}
 	if strings.TrimSpace(req.Provider) == "" {
 		req.Provider = DefaultProvider
@@ -639,7 +675,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity}
+	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
 	// BeginRun 之后失败的清理同时移除 lifecycle run 标记（active 标记会截获
 	// 宿主 capture 事件，失败的 run 不得残留）。request.json 已随不变量先行
 	// 落盘，随目录一并清理。
@@ -725,7 +761,7 @@ func Open(root, runID string) (*Facade, error) {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16}, nil
+	return &Facade{root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(root, req.Route)}, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -801,11 +837,20 @@ func (f *Facade) Drive() (Run, error) {
 		if run, err = f.project(); err != nil {
 			return Run{}, err
 		}
+		// 终态快照边界（regular COMPLETE）：多 commit 拒绝（先经候选晋升组
+		// 织）＋跨终态发布段原生身份恒等（双 resolve 镜像 legacy Seal）。
+		snapshotGuard, err := f.terminalSnapshotGuard(run)
+		if err != nil {
+			return Run{}, err
+		}
 		if run.Route == "lightweight" || run.Status == "ABORTED" {
 			if err := f.finalizeTerminal(run, interval); err != nil {
 				return Run{}, err
 			}
 		} else if err := f.writeSummaryValue(summaryForRun(run, interval)); err != nil {
+			return Run{}, err
+		}
+		if err := snapshotGuard(); err != nil {
 			return Run{}, err
 		}
 		// 终态收口：移除 lifecycle active 标记（幂等）——终态后晚到的宿主
@@ -964,6 +1009,9 @@ func (f *Facade) project() (Run, error) {
 		Status:           status,
 		Revision:         snap.Revision,
 		Envelope:         f.envelope,
+		BaseSnapshot:     snap.State.BaseSnapshot,
+		PromotedSnapshot: snap.State.PromotedSnapshot,
+		QAWorktree:       snap.State.QAWorktree,
 		Next:             plan.Next,
 		Review:           reviewFace(snap.State),
 		Cost:             snap.State.Cost,
@@ -1074,6 +1122,16 @@ func (f *Facade) Freshness(requestID string) (string, error) {
 
 func terminalSummaryPath(stateDir string) string {
 	return filepath.Join(stateDir, "terminal-summary.json")
+}
+
+// reopenVCSProvider 是重开 run 的 provider 构造：regular 路线用生产 exec
+// runner（重开没有注入替身的通道，exec 是唯一合法生产形态）；lightweight 无
+// VCS 语义，返回 nil。
+func reopenVCSProvider(root, route string) *vcs.Provider {
+	if route != "regular" {
+		return nil
+	}
+	return vcs.New(root, nil)
 }
 
 func terminalIntentPath(stateDir string) string {

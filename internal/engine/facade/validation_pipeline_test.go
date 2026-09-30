@@ -14,10 +14,37 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 )
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
+
+// frozenSnapshot 是冻结快照夹具身份：40 位 hex，base==HEAD 的单提交仓。
+const frozenSnapshot = "0123456789abcdef0123456789abcdef01234567"
+
+// frozenGitRunner 把 Git 命令面固定为「单提交、无未提交内容、区间提交数一」
+// 的冻结仓应答：regular 路线的启动快照校验与终态快照边界据此通过。真实 git
+// 行为（含排除规则与 squash）由 internal/engine/vcs 的真仓冒烟覆盖。
+type frozenGitRunner struct{}
+
+func (frozenGitRunner) Run(dir, command string, args ...string) (string, error) {
+	key := command
+	for _, arg := range args {
+		key += " " + arg
+	}
+	switch {
+	case key == "git rev-parse --show-toplevel":
+		return dir, nil
+	case strings.HasPrefix(key, "git rev-parse"), strings.HasPrefix(key, "git merge-base"):
+		return frozenSnapshot, nil
+	case strings.HasPrefix(key, "git status"):
+		return "", nil
+	case strings.HasPrefix(key, "git rev-list --count"):
+		return "1", nil
+	}
+	return "", fmt.Errorf("frozen git fixture: unexpected command %s", key)
+}
 
 type validationDriver struct {
 	t        *testing.T
@@ -105,6 +132,12 @@ func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) 
 	return startValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory)
 }
 func startValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory) *validationDriver {
+	return startValidationDriverAtVCS(t, root, provider, frozenGitRunner{}, frozenSnapshot, inventory)
+}
+
+// startValidationDriverAtVCS 以注入的 Git runner 与显式 base 身份建立 regular
+// 驱动；真仓链路传 nil runner（生产 exec），base 由调用方从仓库解析。
+func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory) *validationDriver {
 	t.Helper()
 	sum := sha256.Sum256([]byte(validationDocument))
 	revision := fmt.Sprintf("sha256:%x", sum)
@@ -112,7 +145,7 @@ func startValidationDriverAt(t *testing.T, root, provider string, inventory *pro
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := Start(StartOptions{Capacity: 16, Root: root, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: "native-run-base", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, r, err := Start(StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +181,14 @@ func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory
 	return plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory, plan, gates...)
 }
 func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
+	return plannedValidationDriverAtVCS(t, root, provider, frozenGitRunner{}, frozenSnapshot, inventory, plan, gates...)
+}
+
+// plannedValidationDriverAtVCS 以注入的 Git runner 建立已过审查/拓扑/路线/需
+// 求确认的驱动（runner nil＝生产 exec，用于真仓链路）。
+func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
 	t.Helper()
-	d := startValidationDriverAt(t, root, provider, inventory)
+	d := startValidationDriverAtVCS(t, root, provider, runner, base, inventory)
 	revision := d.revision
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		id := ""
@@ -560,7 +599,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		t.Fatal("reviewed deletion disappeared during assembly")
 	}
 	_, gate := d.gateAction("quality")
-	if p.ReviewBase != "native-run-base" || p.Base == p.ReviewBase || gate.Gate == nil || gate.Gate.Gate != "quality" || gate.Gate.BaseSnapshot != p.ReviewBase || gate.Gate.Candidate != d.run.Validation.Waves[0].Candidate || !reflect.DeepEqual(gate.Gate.TestOwnedPaths, []string{"app_test.go", "old_test.go"}) {
+	if p.ReviewBase != frozenSnapshot || p.Base == p.ReviewBase || gate.Gate == nil || gate.Gate.Gate != "quality" || gate.Gate.BaseSnapshot != p.ReviewBase || gate.Gate.Candidate != d.run.Validation.Waves[0].Candidate || !reflect.DeepEqual(gate.Gate.TestOwnedPaths, []string{"app_test.go", "old_test.go"}) {
 		t.Fatalf("gate range lost native base, candidate, or explicit artifact ownership: %+v", gate.Gate)
 	}
 	if len(gate.Manifest.Cases) != 0 || len(gate.Completed) != 0 || gate.Whitelist != nil {

@@ -480,7 +480,17 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
-	BaseSnapshot     string                      `json:"baseSnapshot,omitempty"`
+	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
+	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
+	BaseSnapshot string `json:"baseSnapshot,omitempty"`
+	// PromotedSnapshot 是终态晋升后的候选快照身份：validation 完成后经
+	// facade 候选晋升入口（squash 或单提交确认）绑定，终态边界在它绑定前
+	// 保持等待。
+	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
+	// QAWorktree 是 QA 隔离工作区的登记事实（resolve==BaseSnapshot＋需求产
+	// 物修订核对由 facade 在登记前完成；物理建区归宿主）。最终路线不含黑盒
+	// 或黑盒用例集审过冻结时清空。
+	QAWorktree       string                      `json:"qaWorktree,omitempty"`
 	Validation       *Validation                 `json:"validation,omitempty"`
 	DispatchBindings map[string]WorkBinding      `json:"dispatchBindings,omitempty"`
 	EndedAttempts    map[runtime.TaskKey]Attempt `json:"endedAttempts,omitempty"`

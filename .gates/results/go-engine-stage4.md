@@ -795,3 +795,26 @@ R4d 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion�
 主代理独立复核全绿：自建四探针（红态先行——并行 6 对全成＋双方终态 UNAVAILABLE；精确性负控〔留存终态 peer 不阻断，基线排除前段用量，差值恰 5/2〕保持绿；两向 vanish 交错〔legacy 先消失经 StartedAt 规则、engine 先消失经摘要相交〕＋双向跨 writer 字节守卫）＋机主三探针（并行 8/8、mixed 两顺序双方 unavailable、cross-namespace）＋R4c 六探针＋R4d 四探针（一处自建探针 map 迭代选 action 的 flake 为探针缺陷，按任务身份定位后 6/6 稳定）＋树内跨入口五组＋全量 23 包 rc=0＋vet/gofmt 净。关键 diff 亲读：request.json 先行落盘、锁段归属、终态重扫（检出先经引擎事务持久再量取）、摘要载荷、legacy 双扫只读。
 
 边界如实：留存摘要被手工删除则消失 peer 不可检出（留存边界）；peer 处非 owner 事务时 store 锁快速失败＝可重试错误；不可解析端点按相交处理（只假 UNAVAILABLE 不假精确）。R4e 收口；机主已令开下一阶段（R5）。
+
+## R5a 交付：Git provider 与快照/promotion/登记接线＋route matrix（2026-09-30）
+
+阶段 4 剩余公开面第一刀（合同 /tmp/r5a-contract.md），同实施代理落地：
+
+- **internal/engine/vcs 包**（值级移植 legacy internal/validate/vcs.go）：Provider 全集 Status/VerifyReady/Resolve/Verify/IsAncestorOrEqual/CommitCount/SquashToBase/TrackAll/Commit/DiffNames；Runner 注入可替换，protocol 层零 exec。runtimeGitStatusDirs 排除清单语义＝「由 CLI 自身创建/维护，不是交付文件」：engine 自建路径恰三条（.gates/engine/、.gates/tmp/、.gates/run-locks/），legacy 既有 qa-isolation/slices/results 平移，token-cap.json 定性排除（engine 只读不建，是否入库归宿主 .gitignore 决定）。
+- **facade.Start regular 分支 BaseSnapshot 事实校验**（镜像 legacy workflow.go:195-215）：Resolve→Verify（基础身份仍在）→IsAncestorOrEqual（工作区未落后于基线）；VCSRunner 经 StartOptions 注入。
+- **终态快照边界 terminalSnapshotGuard**：COMPLETE+regular 多 commit 拒绝（区间提交由候选晋升入口组织，终态是最后防线）＋摘要落盘后双 resolve 核对原生身份未动；无 provider 明确报错不静默跳过。
+- **PrepareCandidate 候选组织**（镜像 legacy PrepareCandidate）：工作区不净拒绝（与 verifySnapshotReady 同语义）；区间单提交＝确认当前 HEAD，多提交需 squash 消息、squash 后重解析绑定；track/commit 是宿主侧动作不自动执行。
+- **RegisterQAWorktree 登记**（镜像 legacy）：worktree resolve==BaseSnapshot＋隔离区内需求产物哈希==登记修订（"sha256:"+hex 语言，CRLF→LF 规范化——Windows checkout 不改工件身份）；物理建区归宿主。State 增 QAWorktree/PromotedSnapshot 字段；路线重绑弃黑盒与黑盒用例集审过 FROZEN 两处清空登记（镜像 legacy 两个清空点）。
+- **RecordCandidatePromotion/RecordQAWorktree 引擎落账**：晋升前置＝run 活动期（终态拒绝再改写），同值幂等/异值可重组再绑（镜像 legacy CurrentSnapshot 自由移动）；晋升绑定收口 op.candidate 步骤并解除 validation 边界晋升等待（原 "candidate promotion provider is not installed" 占位消息替换为真实等待语义）。
+- **route matrix 负测**（internal/cli/engine_writer_exclusivity_test.go）：遍历 workflowLegacyWriteEntry 注册表逐命令负表（31 条目：非零退出＋UNSUPPORTED_ENGINE_ENTRY＋engine state 字节不变）、cleanup 拒绝、交替入口绑定不可改。
+
+主代理自建四真仓探针（/tmp/r5a-verify，overlay 不入树，红态先行）抓到一项真实缺陷：runtimeGitStatusDirs 镜像 legacy 清单时漏 .gates/engine/（engine 自建运行时目录）——真仓无 .gitignore 时 VerifyReady 恒败、PrepareCandidate 不可用。当日小刀返修：排除清单按「engine 自建路径恰三条」语义枚举补 .gates/engine/；同刀根因修 RecordCandidatePromotion 前置（原「最终 wave COMPLETE＋一次性绑定」与 legacy CurrentSnapshot 自由移动语义冲突，改活动期＋可重组再绑），树内新增 TestPrepareCandidateChainPassesWithoutGitignore。
+
+主代理独立复核（全部亲跑）：四真仓探针（Start 校验/PrepareCandidate 含无 .gitignore 链/RegisterQAWorktree 真哈希/终态 guard）全绿；树内 route matrix 全表、vcs 单测、cli 套件、TestLegacyWritersCannotReachEngineRunState＋TestLegacyWriteCommandsRejectEngineRunPerCommand 全绿；全量 internal+cmd rc=0（24 包 ok，vcs 新增）。关键 diff 亲读：排除清单语义、promotion 前置、两处登记清空点、guard 双 resolve。
+
+如实边界三项待机主裁定：
+1. 真实宿主 Git 非分片 full canary（FAIL→repair→新候选→重验→Seal）未入本刀——真实模型调用须机主逐次授权。
+2. 既有缺口：regular engine run 无法经 Drive 推进到 COMPLETE（validation agent step 完成机制未接，旧占位已换成真实晋升等待语义）——canary 前须补。
+3. legacy internal/validate/vcs.go 的 runtimeGitStatusDirs 同样不含 .gates/engine/（混代真仓下 legacy VerifyReady 同族盲区）——实施代理披露，机主裁定是否另开刀（legacy 冻结侧）。
+
+R5a 收口。R5 剩余：真实 canary（授权后）＋RESET/RECOVERY 公开 typed contract 评估（plan :366）。

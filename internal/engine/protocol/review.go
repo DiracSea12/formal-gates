@@ -539,6 +539,11 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		before := state.validationRouteDigest()
 		state.RouteMode = route.Mode
 		state.SelectedGates = selected
+		// 最终路线不含黑盒时隔离工作区登记随之清空（镜像 legacy 路线弃黑盒
+		// 清空点；host 重建工作区时重新登记）。
+		if !slices.Contains(selected, "blackbox") {
+			state.QAWorktree = ""
+		}
 		if before != state.validationRouteDigest() {
 			e.rebindValidationRoute(state)
 		}

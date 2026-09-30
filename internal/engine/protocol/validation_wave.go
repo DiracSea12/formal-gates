@@ -52,7 +52,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 				message = "validation obligations remain unresolved; request VALIDATION_DETAIL_DISPOSITION with a justified legal remedy"
 			}
 		case "COMPLETE":
-			message = "validation complete; candidate promotion provider is not installed"
+			if s.promotionPending() {
+				message = "organize the final candidate with engine candidate promotion before terminal completion"
+			}
 		}
 	}
 	if s.Validation != nil && s.Validation.DevelopmentSnapshot != "" && s.Validation.Candidate == nil {
@@ -114,6 +116,12 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			continue
 		}
 		changed = advanceCaseReview(set) || changed
+		// 黑盒用例集审过冻结后隔离工作区登记随之清空（镜像 legacy 审过清
+		// 空点；host 重建工作区时重新登记）。
+		if mode == coverage.ReviewBlackbox && set.Status == "FROZEN" && s.QAWorktree != "" {
+			s.QAWorktree = ""
+			changed = true
+		}
 		if s.caseSetWaiver(mode) == "" && (set.Status == "DRAFT" || set.Status == "THAWED" || set.Status == "REVIEW") && s.prewaveBlocked(mode, "engine.qa.review.rationale", e.cfg.Definition) {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "QA_REVIEW", Mode: mode, Target: s.qaReviewTarget(mode)}, nextRevision) || changed
 		}

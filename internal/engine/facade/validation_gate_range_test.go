@@ -48,7 +48,7 @@ func TestGateRangeRequiresBoundOwnershipEvidence(t *testing.T) {
 			ev = candidateCompletion(t, d, intent)
 			d.submit(ev)
 			_, in := d.gateAction("quality")
-			if in.Gate == nil || in.Gate.BaseSnapshot != "native-run-base" || in.Gate.Gate != "quality" || in.Gate.Candidate.Identity != in.Binding.Candidate || !reflect.DeepEqual(in.Gate.TestOwnedPaths, []string{"app_test.go"}) {
+			if in.Gate == nil || in.Gate.BaseSnapshot != frozenSnapshot || in.Gate.Gate != "quality" || in.Gate.Candidate.Identity != in.Binding.Candidate || !reflect.DeepEqual(in.Gate.TestOwnedPaths, []string{"app_test.go"}) {
 				t.Fatalf("missing exact gate input: %+v", in.Gate)
 			}
 			saved := *in.Gate
@@ -73,7 +73,7 @@ func TestGateRangeKeepsRunBaseAcrossRepairRouteAndRequirement(t *testing.T) {
 	id, in := d.gateAction("performance")
 	before := *in.Gate
 	binding := in.Binding
-	if in.Gate == nil || in.Gate.BaseSnapshot != "native-run-base" || in.Gate.Candidate != w.Candidate || in.Gate.BaseSnapshot == d.run.Validation.DevelopmentSnapshot || in.Gate.Gate != "performance" || len(in.Gate.TestOwnedPaths) != 0 {
+	if in.Gate == nil || in.Gate.BaseSnapshot != frozenSnapshot || in.Gate.Candidate != w.Candidate || in.Gate.BaseSnapshot == d.run.Validation.DevelopmentSnapshot || in.Gate.Gate != "performance" || len(in.Gate.TestOwnedPaths) != 0 {
 		t.Fatalf("wrong immutable review range: %+v", in.Gate)
 	}
 	confirmValidationWork(d, "")
