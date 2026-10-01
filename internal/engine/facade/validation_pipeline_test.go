@@ -243,7 +243,8 @@ func startValidationDriverAt(t *testing.T, root, provider string, inventory *pro
 func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory) *validationDriver {
 	t.Helper()
 	sum := sha256.Sum256([]byte(validationDocument))
-	revision := fmt.Sprintf("sha256:%x", sum)
+	// 修订语言＝裸 hex：与 intake 工件绑定校验和 QA 工作区登记的重算同源。
+	revision := fmt.Sprintf("%x", sum)
 	receipt := testReceipt()
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision

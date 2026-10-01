@@ -156,9 +156,9 @@ func (f *Facade) RegisterQAWorktree(worktree string) error {
 	return f.engine.RecordQAWorktree(worktree, emptyFingerprint())
 }
 
-// requirementArtifactRevision 计算需求工件的内容哈希（"sha256:"+hex，与
-// intake receipt 的修订语言一致；行尾先规范化 CRLF→LF——Windows checkout 不
-// 改变工件身份）。
+// requirementArtifactRevision 计算需求工件的内容哈希（裸 hex，镜像 legacy
+// RequirementRevision，与 intake 工件绑定校验同一修订语言；行尾先规范化
+// CRLF→LF——Windows checkout 不改变工件身份）。
 func requirementArtifactRevision(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -166,5 +166,5 @@ func requirementArtifactRevision(path string) (string, error) {
 	}
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	sum := sha256.Sum256([]byte(normalized))
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:]), nil
 }
