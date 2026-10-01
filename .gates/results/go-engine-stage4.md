@@ -857,3 +857,11 @@ R5b 收口（提交见本条 git log）。canary（机主已授权真实模型�
 主代理独立复核（全部亲跑）：自建八探针红绿——复现时四红（屏障晋升成功/终态拒绝仍改写 HEAD/脏树 COMPLETE/漂移 COMPLETE）＋F3 探针红；修复后全绿（含内容保持型漂移 squash 重组织恢复、reset--hard 恢复路径）；R5b 三探针按新语义更新后绿；关键 diff 亲读（接纳单点/意图消费/内容绑定/Phase A 撤销/SealTerminal/sealDelivered 先于相变/投影单一权威/双侧 owner 扫描同形/链仓夹具 argv 精确）；engineSummaryOverlap 摘要留存注释与 commitTerminalCleanup 事实核对一致；全量 internal+cmd rc=0（24 包）。
 
 R5d 收口（提交见 git log）。canary 驱动器（R5c 交付的未跟踪文件）待与 R5d 语义对齐（REVIEW_READY 物化改直做＋树摘要约定＋intake/QAWorktree 两套修订语言疑点核判）后实跑——真实模型调用机主已授权。
+
+## R5c/R5e：canary 驱动器交付＋修订语言统一（b9d1eb1，实跑待执行）
+
+**R5c**（合同 /tmp/r5c-canary-contract.md）：internal/harness/engine_canary_live_test.go——engine 首个真实宿主执行桥（//go:build !windows＋env 门 FORMAL_GATES_ENGINE_CANARY=1，无 env 零花费 SKIP）。公开链全走 facade API（Start/Drive/Submit/DevelopmentPlan/PrepareCandidate）；八类派发 handler 各自角色 prompt＋最小诚实 schema＋typed 事件组装（映射表见实施报告）；行为命令由宿主桥在真实候选上真实执行（checkout 波候选→go build→逐例跑）、只读判断回合裁决——命令真实、门真实 FAIL、读写纪律不破；限额＝单派发 3 轮/repair 1 次/40 分钟/300 轮驱动上限/未预期边界即败 dump；每轮真实 usage 入日志。FAIL 种子＝frob.go 预置接受未知 flag（需求把开发范围钉在 analytics.go、flag 契约留给 QA）→blackbox 用例＋regression 门真实发现→裁决 NEW＋SAME_AS→真实返修→新候选→受影响重验→晋升（多提交真实 squash）→终态。
+
+**R5e**（合同 /tmp/r5e-align-contract.md）：canary 实施暴露的 R5a 缺陷核判与修——修订语言权威＝裸 hex（legacy RequirementRevision runstate.go:1246、legacy 隔离区校验 workflow_prompt.go:344、engine intake 校验 facade.go:1428-1448 三处同语言），RegisterQAWorktree 的 sha256: 前缀是缺陷（带 ArtifactRoot 的合法 intake 与工作区登记互斥）；改裸 hex 逐字镜像＋注释纠错。canary 驱动器对齐 R5d 语义：REVIEW_READY/各 Stage 物化直做 git＋回执（identity=真实 HEAD、digest=真实树身份 rev-parse ^{tree}；candidateDigest 自造路径哈希整删）、PrepareCandidate 唯一调用点＝promotion-wait Operator fact（多提交带真实 squash message）、collect 路径零调用（grep 自查）。验证：RegisterQAWorktree 用例绿、无 env SKIP、19 包全绿。
+
+主代理复核：diff 亲读（裸 hex 镜像、canary 三触点）；定向测试亲跑。实跑（真实模型调用，机主已授权）＝下一动作：FORMAL_GATES_ENGINE_CANARY=1，证据目录 FORMAL_GATES_ENGINE_CANARY_DIR 留存。
