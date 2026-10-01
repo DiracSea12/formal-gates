@@ -29,6 +29,7 @@ package harness
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -52,11 +54,14 @@ import (
 
 // canaryRequirementDocument is the confirmed REQ/AC document of the fixture
 // project. REQ-001 scopes the development batch to the usage-statistics
-// feature (new file analytics.go plus its wiring) and explicitly leaves the
-// pre-existing unknown-flag contract to validation judgment, so an honest
+// feature (new file analytics.go plus its wiring) only, so an honest
 // readiness plan puts the batch on analytics.go and schedules no flag work.
-// The unknown-flag clause is also the seeded defect: frob accepts any unknown
-// flag and keeps running.
+// The unknown-flag rejection of AC-002 is declared as a known baseline gap —
+// frob currently accepts any first argument — whose satisfaction is expected
+// through this run's validation-and-repair loop: the gate really catches the
+// gap and the flag-handling repair is the document-authorized closure. Every
+// baseline claim in the document is true of canaryFrobSource, so an honest
+// review finds no document defect.
 const canaryRequirementDocument = `# 交付
 
 ## 需求点
@@ -64,7 +69,7 @@ const canaryRequirementDocument = `# 交付
 ### REQ-001：usage 统计与公开 flag 契约
 
 #### 要求
-frob 是一个单命令工具。本次开发批次交付 usage 统计功能：统计实现放在新文件 analytics.go，并在 frob 的正常输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。开发验证命令为 go build ./...。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为：未知 flag 必须被拒绝是 frob 已交付的既有公开契约（见 AC-002），属验证判定范围，不在本开发批次内实现、修复或放宽。
+frob 是一个单命令工具。本次开发批次交付 usage 统计功能：统计实现放在新文件 analytics.go，并在 frob 的正常输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。开发验证命令为 go build ./...。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。本开发批次不实现、修复或放宽该条款；其满足预期经本 run 的验证与返修闭环完成：验证判定其不满足时，修复 frob.go 的 flag 处理属本 run 已授权的返修范围。
 #### 验收条件
 - AC-001：运行 frob word 后，输出在 frob: word 行之后包含精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数。
 - AC-002：传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。
@@ -188,6 +193,13 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
+	// The test binary runs from the build cache, outside the repository tree,
+	// so dshHarnessRoot's executable walk cannot find the harness runtime and
+	// every model turn would fail its credential request. Point the root env
+	// at the real checkout (same derivation as supervisorBinary, same env as
+	// the dsh patch tests).
+	_, file, _, _ := runtime.Caller(0)
+	t.Setenv("FORMAL_GATES_HARNESS_ROOT", filepath.Dir(filepath.Dir(filepath.Dir(file))))
 	project := t.TempDir()
 	c := &engineCanary{
 		t: t, project: project, deadline: time.Now().Add(canaryRunBudget),
@@ -304,7 +316,17 @@ func (c *engineCanary) loop() {
 		case decision.KindOperator:
 			c.serveOperator()
 		case decision.KindWait:
-			c.fail("unexpected WAIT boundary: %+v", c.run.Next.Wait)
+			// TASKS_IN_FLIGHT means the engine already issued its dispatches
+			// and they await host execution — serve them. Any other wait
+			// reason, or an in-flight wait with nothing dispatchable, is a
+			// stuck pass.
+			if c.run.Next.Wait == nil || c.run.Next.Wait.Reason != decision.WaitTasksInFlight {
+				c.fail("unexpected WAIT boundary: %+v", c.run.Next.Wait)
+			}
+			if len(c.run.PendingActions) == 0 {
+				c.fail("TASKS_IN_FLIGHT wait without dispatchable actions: %+v", c.run.Next.Wait)
+			}
+			c.dispatchPending()
 		default:
 			c.fail("unexpected boundary kind %q", c.run.Next.Kind)
 		}
@@ -380,7 +402,7 @@ func (c *engineCanary) dispatchPending() {
 	})
 	for _, id := range ids {
 		pending := c.run.PendingActions[id]
-		if pending.ReviewSeries != "" {
+		if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
 			c.dispatchReview(id, pending.ReviewSeries)
 		} else if input, ok := c.run.ValidationInputs[id]; ok && input.Handler != "" {
 			c.dispatchPipeline(id, input)
@@ -405,10 +427,10 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) {
 	)
 	if series == review.ProductReview {
 		role = "product review"
-		instructions = "Judge the confirmed requirement document for implementability and verifiability as a delivery contract. Report PASS unless you find a real defect in the document itself."
+		instructions = "Judge the confirmed requirement document for implementability and verifiability as a delivery contract. Report PASS unless you find a real defect in the document itself. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	} else {
 		role = "start readiness"
-		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project."
+		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	}
 	materials := canaryMaterials{
 		Role: role, ActionID: id, ReviewAction: string(series),
@@ -712,7 +734,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := canaryMaterials{Role: "development batch", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
-	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence plus a completion entry for every DoD criterion and every check. Do not run git commit or git push — the host organizes commits."
+	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not run git commit or git push — the host organizes commits."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -791,6 +813,7 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 	if time.Now().After(c.deadline) {
 		c.fail("canary exceeded its %s budget", canaryRunBudget)
 	}
+	schema = c.plainSchema(actionID, schema)
 	var lastErr error
 	for attempt := 1; attempt <= canaryTurnBudget; attempt++ {
 		promptNow := prompt
@@ -802,7 +825,10 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 			"provider": canaryProvider, "binding": c.binding, "workspace": c.project,
 			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
 		}
+		watchCtx, stopWatcher := context.WithCancel(context.Background())
+		go c.answerHeldInteractions(watchCtx, dir)
 		source, err := zcodeExecute(request, dir, false)
+		stopWatcher()
 		if err != nil {
 			lastErr = err
 			c.t.Logf("canary dispatch %s (%s) attempt %d failed: %v", actionID, role, attempt, err)
@@ -839,6 +865,94 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 	}
 	c.fail("dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
 	return canaryTurnResult{}
+}
+
+// plainSchema normalizes one role's schema literal into plain decoded JSON
+// values: the zcode canonical encoders speak decoded shapes only ([]any/
+// map[string]any/scalars), while the canary literals carry typed slices.
+// Same normalization as plainWorkerSchema; one pass here fixes every role
+// and stays immune to future literal shapes.
+func (c *engineCanary) plainSchema(actionID string, schema map[string]any) map[string]any {
+	c.t.Helper()
+	body, err := json.Marshal(schema)
+	if err != nil {
+		c.fail("marshal schema for %s: %v", actionID, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		c.fail("decode schema for %s: %v", actionID, err)
+	}
+	plain, ok := decoded.(map[string]any)
+	if !ok {
+		c.fail("schema for %s did not decode to a JSON object", actionID)
+	}
+	return plain
+}
+
+// answerHeldInteractions is the turn's user stand-in for held host
+// interactions (the live precedent: answer with the first offered option).
+// While the model turn runs, any request the host parks on the attempt's
+// interaction-pending.json gets interaction-answer.json with its first
+// offered option, in the native-respond answer shape; the job process
+// consumes each answer file exactly once (rename), which unblocks the turn.
+func (c *engineCanary) answerHeldInteractions(ctx context.Context, dir string) {
+	answered := map[string]bool{}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		records, err := readNativePendings(dir)
+		if err != nil {
+			continue
+		}
+		for _, raw := range records {
+			record := objectOrEmpty(raw)
+			requestID := textOf(getOf(record, "request_id"))
+			if textOf(getOf(record, "status")) != "pending" || answered[requestID] {
+				continue
+			}
+			if _, statErr := os.Stat(nativeAnswerPath(dir)); statErr == nil {
+				continue // the previous answer is not consumed yet
+			}
+			option := firstOfferedOption(getOf(record, "options"))
+			if option == "" {
+				continue
+			}
+			answer := map[string]any{
+				"request_id": requestID,
+				"option":     option,
+				"cancel":     false,
+				"written_at": time.Now().UTC().Format(time.RFC3339),
+			}
+			if err := writeAtomicJSON(nativeAnswerPath(dir), answer); err != nil {
+				continue
+			}
+			answered[requestID] = true
+			c.t.Logf("canary held interaction answered: request=%s option=%s", requestID, option)
+		}
+	}
+}
+
+// firstOfferedOption renders the host's first offered option id: option
+// objects identify themselves by "optionId" (permissions) or "value"
+// (questions) — the hosts' own spellings, same as nativePendingOffers reads.
+func firstOfferedOption(options any) string {
+	for _, option := range listOf(options) {
+		id := getOf(option, "optionId")
+		if id == nil {
+			id = getOf(option, "value")
+		}
+		if text := textOf(id); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // captureDispatchLifecycle records the dispatch's host start/stop pair with
@@ -978,7 +1092,13 @@ func (c *engineCanary) serveOperator() {
 	fact := c.run.Next.Operator.Facts[0]
 	switch {
 	case strings.Contains(fact.Value, "confirm topology"):
-		c.confirmTopology()
+		// The merged boundary message covers both stages (topology, then
+		// route); route by what the projection actually has bound.
+		if c.run.Review.Topology == nil {
+			c.confirmTopology()
+		} else {
+			c.confirmRoute()
+		}
 	case strings.Contains(fact.Value, "development plan with the route"):
 		c.confirmRoute()
 	case strings.Contains(fact.Value, "REQUIREMENT document"):
@@ -1172,7 +1292,7 @@ func (c *engineCanary) adjudicate() {
 			RootCause:   "unknown flags are accepted by the argument handling",
 			Consequence: "the unknown-flag rejection acceptance condition is violated by the same defect",
 			Verification: review.FindingVerification{
-				Scope: "acceptance case execution", Severity: "same defect observed by case execution",
+				Scope: "acceptance case execution",
 				Causality: "case oracle demands rejection, execution observed acceptance", Reproduction: "case " + caseID,
 				Classification: "implementation",
 			},
