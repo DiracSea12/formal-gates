@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/protocol"
 )
 
 // 本文件覆盖 owner 区间协调在同代 engine run 之间的并发与消失交错：并行启动
@@ -132,5 +133,49 @@ func TestTerminalPeerDoesNotOverlapLaterRun(t *testing.T) {
 	}
 	if laterRun.Cost.Owner == nil || laterRun.Cost.Owner.Source != "transcript" || laterRun.Cost.Owner.TotalInputTokens != 17 || laterRun.Cost.Owner.InputCacheHitTokens != 1 || laterRun.Cost.Owner.OutputTokens != 6 {
 		t.Fatalf("later owner = %+v, want precise 17/1/6 after terminal peer", laterRun.Cost.Owner)
+	}
+}
+
+// TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval：owner 终态落盘
+// 与量取端点分离的可恢复边界——first 停在持久终态检查点（TERMINAL 已落盘、
+// 摘要未发布＝区间仍开放）后，共享 transcript 的 peer 启动：peer 把 first 当开
+// 放区间（UNAVAILABLE、并补写 first 的重叠标记），双方不再各记一笔精确差值；
+// first 恢复量取同样 UNAVAILABLE。
+func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "owner.jsonl")
+	writeTranscript(t, path, []string{intervalBaseLine})
+	first := startIntervalRun(t, root, "first", path)
+	receipt := testReceipt()
+	digest, err := IntakeDigest(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = first.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	// 持久终态检查点：CompleteAll 落盘 TERMINAL 后、owner 量取前中断。
+	if _, err = first.engine.CompleteAll(emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	peer := startIntervalRun(t, root, "peer", path)
+	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
+	peerRun, err := peer.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peerRun.Cost.Owner == nil || peerRun.Cost.Owner.Source != "unavailable" || peerRun.Cost.Owner.TotalInputTokens != 0 {
+		t.Fatalf("peer owner = %+v, want unavailable zero (first's terminal interval was still open)", peerRun.Cost.Owner)
+	}
+	reopened, err := Open(root, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := reopened.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Cost.Owner == nil || firstRun.Cost.Owner.Source != "unavailable" || firstRun.Cost.Owner.TotalInputTokens != 0 {
+		t.Fatalf("first owner = %+v, want unavailable zero after recovery", firstRun.Cost.Owner)
 	}
 }

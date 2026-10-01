@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,30 +21,123 @@ import (
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
 
-// frozenSnapshot 是冻结快照夹具身份：40 位 hex，base==HEAD 的单提交仓。
+// frozenSnapshot 是冻结快照夹具身份：40 位 hex，单链冻结仓的 base。
 const frozenSnapshot = "0123456789abcdef0123456789abcdef01234567"
 
-// frozenGitRunner 把 Git 命令面固定为「单提交、无未提交内容、区间提交数一」
-// 的冻结仓应答：regular 路线的启动快照校验与终态快照边界据此通过。真实 git
-// 行为（含排除规则与 squash）由 internal/engine/vcs 的真仓冒烟覆盖。
-type frozenGitRunner struct{}
+// frozenTree 是 frozenSnapshot 所指向提交的树身份（base 内容的冻结摘要）。
+const frozenTree = "0123456789abcdef0123456789abcdef01234568"
 
-func (frozenGitRunner) Run(dir, command string, args ...string) (string, error) {
-	key := command
-	for _, arg := range args {
-		key += " " + arg
+// frozenGitRepo 是冻结场景的 Git 应答夹具：单链提交仓（链首即 base），按命令
+// 与参数精确区分身份——rev-parse HEAD 是当前提交，<rev>^{tree} 是该提交的树
+// 身份，merge-base 返回链上较早实参，区间计数＝链上距离（base==HEAD 如实为
+// 0）。宿主内容变化（开发/返修提交）经 advance 推进链上当前提交（真仓场景的
+// 对应动作是 git commit）；未推进时应答与单提交仓一致。真实 git 行为（含排除
+// 规则与 squash）由 internal/engine/vcs 的真仓冒烟覆盖。
+type frozenGitRepo struct {
+	commits []string
+	trees   map[string]string
+	// sequence 是身份发生的单调计数：squash 截断链后仍不复用已出现的提交
+	// 身份（悬空提交与新提交是不同对象）。
+	sequence int
+	// pendingTree 是 reset --soft 后待重提交保留的树身份（squash 保持最终
+	// 树不变）。
+	pendingTree string
+}
+
+func newFrozenGitRepo() *frozenGitRepo {
+	repo := &frozenGitRepo{trees: map[string]string{}}
+	repo.commits = append(repo.commits, frozenSnapshot)
+	repo.trees[frozenSnapshot] = frozenTree
+	return repo
+}
+
+// advance 提交一次内容变化：新提交与其树身份唯一入链并成为当前 HEAD，返回
+// 新提交身份。
+func (r *frozenGitRepo) advance() string {
+	r.sequence++
+	commit := fmt.Sprintf("%040d", r.sequence)
+	r.commits = append(r.commits, commit)
+	r.trees[commit] = fmt.Sprintf("%064d", r.sequence)
+	return commit
+}
+
+func (r *frozenGitRepo) indexOf(rev string) (int, bool) {
+	for i, commit := range r.commits {
+		if strings.EqualFold(commit, rev) {
+			return i, true
+		}
 	}
+	return 0, false
+}
+
+func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error) {
+	joined := strings.Join(args, " ")
+	if command != "git" {
+		return "", fmt.Errorf("frozen git fixture: unexpected command %s %s", command, joined)
+	}
+	head := r.commits[len(r.commits)-1]
 	switch {
-	case key == "git rev-parse --show-toplevel":
+	case joined == "rev-parse --show-toplevel":
 		return dir, nil
-	case strings.HasPrefix(key, "git rev-parse"), strings.HasPrefix(key, "git merge-base"):
-		return frozenSnapshot, nil
-	case strings.HasPrefix(key, "git status"):
+	case joined == "rev-parse HEAD":
+		return head, nil
+	case len(args) == 3 && args[0] == "rev-parse" && args[1] == "--verify" && strings.HasSuffix(args[2], "^{commit}"):
+		rev := strings.TrimSuffix(args[2], "^{commit}")
+		if _, ok := r.indexOf(rev); ok {
+			return rev, nil
+		}
+		return "", fmt.Errorf("frozen git fixture: unknown commit %s", rev)
+	case len(args) == 2 && args[0] == "rev-parse" && strings.HasSuffix(args[1], "^{tree}"):
+		if tree, ok := r.trees[strings.ToLower(strings.TrimSuffix(args[1], "^{tree}"))]; ok {
+			return tree, nil
+		}
+		return "", fmt.Errorf("frozen git fixture: unknown commit %s", args[1])
+	case len(args) == 3 && args[0] == "merge-base":
+		a, aok := r.indexOf(args[1])
+		b, bok := r.indexOf(args[2])
+		if !aok || !bok {
+			return "", fmt.Errorf("frozen git fixture: unknown commit in %s", joined)
+		}
+		if a <= b {
+			return r.commits[a], nil
+		}
+		return r.commits[b], nil
+	case joined == "status --porcelain=v1 --untracked-files=all":
 		return "", nil
-	case strings.HasPrefix(key, "git rev-list --count"):
-		return "1", nil
+	case len(args) == 3 && args[0] == "reset" && args[1] == "--soft":
+		// squash 第一步：区间压回 base，当前树留给重提交。
+		bi, ok := r.indexOf(args[2])
+		if !ok {
+			return "", fmt.Errorf("frozen git fixture: unknown commit %s", args[2])
+		}
+		r.pendingTree = r.trees[strings.ToLower(r.commits[len(r.commits)-1])]
+		r.commits = r.commits[:bi+1]
+		return "", nil
+	case len(args) == 3 && args[0] == "commit" && args[1] == "-m":
+		// squash 第二步：以保留树重新提交——内容不变、身份更新。
+		r.sequence++
+		commit := fmt.Sprintf("%040d", r.sequence)
+		tree := r.pendingTree
+		if tree == "" {
+			tree = fmt.Sprintf("%064d", r.sequence)
+		}
+		r.pendingTree = ""
+		r.commits = append(r.commits, commit)
+		r.trees[commit] = tree
+		return "", nil
+	case len(args) == 3 && args[0] == "rev-list" && args[1] == "--count":
+		base, tip, ok := strings.Cut(args[2], "..")
+		if !ok {
+			return "", fmt.Errorf("frozen git fixture: unexpected range %s", args[2])
+		}
+		bi, bok := r.indexOf(base)
+		hi, hok := r.indexOf(tip)
+		if !bok || !hok || hi < bi {
+			return "", fmt.Errorf("frozen git fixture: not an ancestor range %s", args[2])
+		}
+		return strconv.Itoa(hi - bi), nil
 	}
-	return "", fmt.Errorf("frozen git fixture: unexpected command %s", key)
+	return "", fmt.Errorf("frozen git fixture: unexpected command git %s", joined)
 }
 
 type validationDriver struct {
@@ -55,6 +149,12 @@ type validationDriver struct {
 	// provider 是本 driver 的宿主 provider 身份（事件/回执按它提交）；缺省
 	// DefaultProvider，可计量 provider（transcript 计量链）按需覆写。
 	provider string
+	// git 是本 driver 场景固定的 Git provider（root＋注入 runner）：候选回执
+	// 的身份/树摘要取自它——reopen 后的 façade 持生产 exec runner，测试替身
+	// 不随重开丢失。frozen 非空时场景用冻结链仓，materialize 把每次候选冻
+	// 结建模为一次宿主提交并推进链上当前提交。
+	git    *vcs.Provider
+	frozen *frozenGitRepo
 }
 
 // host 返回本 driver 使用的宿主 provider 身份。
@@ -132,7 +232,10 @@ func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) 
 	return startValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory)
 }
 func startValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory) *validationDriver {
-	return startValidationDriverAtVCS(t, root, provider, frozenGitRunner{}, frozenSnapshot, inventory)
+	repo := newFrozenGitRepo()
+	d := startValidationDriverAtVCS(t, root, provider, repo, frozenSnapshot, inventory)
+	d.frozen = repo
+	return d
 }
 
 // startValidationDriverAtVCS 以注入的 Git runner 与显式 base 身份建立 regular
@@ -149,7 +252,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider}
+	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner)}
 	d.drive()
 	return d
 }
@@ -181,7 +284,10 @@ func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory
 	return plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory, plan, gates...)
 }
 func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
-	return plannedValidationDriverAtVCS(t, root, provider, frozenGitRunner{}, frozenSnapshot, inventory, plan, gates...)
+	repo := newFrozenGitRepo()
+	d := plannedValidationDriverAtVCS(t, root, provider, repo, frozenSnapshot, inventory, plan, gates...)
+	d.frozen = repo
+	return d
 }
 
 // plannedValidationDriverAtVCS 以注入的 Git runner 建立已过审查/拓扑/路线/需
@@ -267,8 +373,21 @@ func (d *validationDriver) materialize() {
 		if err := json.Unmarshal(data, &p); err != nil {
 			d.t.Fatal(err)
 		}
-		identity := fmt.Sprintf("native-%d", d.seq)
-		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: "sha256:" + identity, Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
+		// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
+		// 冻结场景把每次候选冻结建模为一次宿主提交（阶段性产物入树，候选
+		// 身份随冻结推进）；真仓场景直接读真实 HEAD 与其树摘要。
+		if d.frozen != nil {
+			d.frozen.advance()
+		}
+		identity, err := d.git.Resolve()
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		digest, err := d.git.TreeDigest(identity)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
 		evidence.GateView = gateReviewView(p)
 		data, _ = json.Marshal(evidence)
 		fields := map[string]any{}

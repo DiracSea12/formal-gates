@@ -149,7 +149,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	writeTranscript(t, transcript, []string{
 		`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3}}}`,
 	})
-	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: frozenGitRunner{}, Request: StartRequest{RunID: "cost-chain", Route: "regular", Provider: "claude-code", BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "cost-chain", Route: "regular", Provider: "claude-code", BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
 	if err != nil {
 		t.Fatal(err)
 	}

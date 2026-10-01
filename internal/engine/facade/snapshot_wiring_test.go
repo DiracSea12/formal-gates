@@ -210,6 +210,26 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	if count, err := vcs.New(root, nil).CommitCount(base, promoted); err != nil || count != 1 {
 		t.Fatalf("post-squash count = %d, %v", count, err)
 	}
+	// squash 保留最终树：晋升内容摘要与已验证最终候选的树摘要相等（digest
+	// 绑定的真实验证——squash 只改提交历史，不改内容）。
+	reviewTree, err := vcs.New(root, nil).TreeDigest(identities[len(identities)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotedTree, err := vcs.New(root, nil).TreeDigest(promoted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotedTree != reviewTree {
+		t.Fatalf("squash changed the final tree: promoted %s, verified %s", promotedTree, reviewTree)
+	}
+	bound, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.State.PromotedDigest != promotedTree {
+		t.Fatalf("promoted digest = %s, want the verified tree %s", bound.State.PromotedDigest, promotedTree)
+	}
 	// 晋升绑定后收口：等待事实消失，真实 Drive 到达终态并发布摘要。
 	run, err := d.f.Drive()
 	if err != nil {
@@ -306,16 +326,34 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 }
 
 // TestPrepareCandidateRejectsUncommittedChanges：晋升要求工作区就绪（镜像
-// legacy verifySnapshotReady 语义：被跟踪修改与未跟踪交付文件都拒绝）。
+// legacy verifySnapshotReady 语义：被跟踪修改与未跟踪交付文件都拒绝）。准入
+// （wave COMPLETE）通过后执行前拒绝——零 Git 副作用。
 func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root, "dev commit")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+	d.reviewReady()
+	qa, qi := d.action("engine.qa.execution")
+	gate, gi := d.action("engine.gate")
+	report := executionFor(qi)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+	d.drive()
+	if wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; wave.Status != "COMPLETE" {
+		t.Fatalf("premise lost: wave status = %s", wave.Status)
+	}
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.f.PrepareCandidate("message"); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
 		t.Fatalf("dirty worktree promotion: %v", err)
+	}
+	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != head {
+		t.Fatalf("dirty promotion moved HEAD: %s -> %s (%v)", head, after, err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "untracked.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -456,7 +494,9 @@ func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
 
 // TestPrepareCandidateChainPassesWithoutGitignore：宿主仓库未 gitignore 运行
 // 期目录时，引擎自建目录（.gates/engine/ 等）不阻断晋升——无 .gitignore 的干
-// 净仓上 Start→PrepareCandidate 全链通过（幂等；晋升后区间再累积可重复组织）。
+// 净仓上验证管线完成后的 Start→PrepareCandidate 全链通过（幂等）。晋升绑定的
+// 是已验证候选：区间累积了改变内容的新提交时，重新组织因内容与已验证最终候
+// 选不符被拒（漂移须重验）。
 func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
@@ -481,33 +521,249 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := startSnapshotRun(t, root, "no-gitignore", base)
-	promoted, err := f.PrepareCandidate("")
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+	d.reviewReady()
+	qa, qi := d.action("engine.qa.execution")
+	gate, gi := d.action("engine.gate")
+	report := executionFor(qi)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+	d.drive()
+	promoted, err := d.f.PrepareCandidate("")
 	if err != nil {
 		t.Fatalf("promotion on a clean repo without .gitignore failed: %v", err)
 	}
 	if promoted != base {
 		t.Fatalf("single-commit promotion moved HEAD: %s -> %s", base, promoted)
 	}
-	again, err := f.PrepareCandidate("")
+	again, err := d.f.PrepareCandidate("")
 	if err != nil || again != promoted {
 		t.Fatalf("repeat promotion = %q, %v", again, err)
 	}
-	projection, err := f.Show()
+	projection, err := d.f.Show()
 	if err != nil || projection.PromotedSnapshot != promoted {
 		t.Fatalf("public projection = %q, %v", projection.PromotedSnapshot, err)
 	}
-	// 晋升后新增提交：可再次组织（重复绑定），压回单提交。
+	// 晋升后新增提交改变了内容：重新组织不再绑定已验证候选——拒绝且零
+	// Git 副作用（HEAD 保持在新提交上，恢复路径＝回退到已验证内容或重验）。
+	// 漂移提交只携交付文件：把运行期目录一并提交会让引擎自身的状态写入表
+	// 现为被跟踪修改，那是另一个边界（就绪检查如实报告）。
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // later\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "--all")
+	run("add", "app.go")
 	run("commit", "-m", "later work")
-	rePromoted, err := f.PrepareCandidate("re-organized candidate")
+	drifted, err := vcs.New(root, nil).Resolve()
 	if err != nil {
-		t.Fatalf("re-promotion after new commits failed: %v", err)
+		t.Fatal(err)
 	}
-	if count, err := vcs.New(root, nil).CommitCount(base, rePromoted); err != nil || count != 1 {
-		t.Fatalf("re-promotion left %d commits, %v", count, err)
+	if _, err := d.f.PrepareCandidate("re-organized candidate"); err == nil || !strings.Contains(err.Error(), "does not match the verified final candidate") {
+		t.Fatalf("content-drifted re-organization: %v", err)
+	}
+	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != drifted {
+		t.Fatalf("rejected re-organization moved HEAD: %s -> %s (%v)", drifted, after, err)
+	}
+}
+
+// completePromotionPipeline 把真仓 regular run 推进到「终 wave COMPLETE、待晋
+// 升」的边界（验证收集完成、区间保持 base..HEAD 多提交——晋升需要 squash，
+// 使「被拒时零 Git 副作用」可观察）。
+func completePromotionPipeline(t *testing.T, root, base string) *validationDriver {
+	t.Helper()
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+	d.reviewReady()
+	qa, qi := d.action("engine.qa.execution")
+	gate, gi := d.action("engine.gate")
+	report := executionFor(qi)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+	d.drive()
+	if wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; wave.Status != "COMPLETE" {
+		t.Fatalf("wave status = %s, want COMPLETE", wave.Status)
+	}
+	return d
+}
+
+// TestPromotionFrozenByRequirementChangeBarrierLeavesHistoryUntouched：需求变
+// 化屏障期间的晋升在意图准入处拒绝（Phase A 停止 candidate promotion）——多提
+// 交区间保持原样（零 Git 副作用），且 REQUEST 落账的同一事务撤销未完成意图。
+func TestPromotionFrozenByRequirementChangeBarrierLeavesHistoryUntouched(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, head); err != nil || count != 2 {
+		t.Fatalf("premise lost: interval count = %d, %v", count, err)
+	}
+	// 屏障到达前存在未完成意图：REQUEST 落账的同一事务撤销它。
+	if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" {
+		t.Fatalf("requirement change request kept a pending promotion intent: %q", snap.State.PendingPromotion)
+	}
+	if _, err := d.f.PrepareCandidate("organized under barrier"); err == nil || !strings.Contains(err.Error(), "frozen while a requirement change ask is pending") {
+		t.Fatalf("promotion under barrier: %v", err)
+	}
+	// 零 Git 副作用：HEAD 与区间提交数逐字节不变（多提交未被动过）。
+	after, err := vcs.New(root, nil).Resolve()
+	if err != nil || after != head {
+		t.Fatalf("rejected promotion moved HEAD: %s -> %s (%v)", head, after, err)
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, after); err != nil || count != 2 {
+		t.Fatalf("rejected promotion rewrote history: count = %d, %v", count, err)
+	}
+}
+
+// TestTerminalRunRejectsPromotionWithoutTouchingHistory：终态 run 的晋升误调
+// 用在意图准入处拒绝（活动期要求），被改写前的 Git 历史保持原样。
+func TestTerminalRunRejectsPromotionWithoutTouchingHistory(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, root, base)
+	if _, err := d.f.PrepareCandidate("organized final candidate"); err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" || run.PromotedSnapshot != promoted {
+		t.Fatalf("terminal drive = %s promoted = %s, want COMPLETE %s (%v)", run.Status, run.PromotedSnapshot, promoted, err)
+	}
+	// 终态后区间累积新提交再误调晋升：拒绝且 HEAD 不动（旧实现的 squash 会
+	// 先改写历史）。
+	snapshotCommitOne(t, root, "late work")
+	late, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.f.PrepareCandidate("reorganized after terminal"); err == nil || !strings.Contains(err.Error(), "requires an active run") {
+		t.Fatalf("terminal promotion: %v", err)
+	}
+	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != late {
+		t.Fatalf("terminal promotion moved HEAD: %s -> %s (%v)", late, after, err)
+	}
+}
+
+// TestTerminalSealingRejectsDirtyTreeAndDriftUntilReorganized：终态核验先于相
+// 变——脏树与身份漂移都拒绝且 run 保持活动（phase 非终态、错误可辨识）；回
+// 到已绑定晋升身份后 Drive 恢复 COMPLETE。
+func TestTerminalSealingRejectsDirtyTreeAndDriftUntilReorganized(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, root, base)
+	promoted, err := d.f.PrepareCandidate("organized final candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 脏树：HEAD 未移动但工作区有未提交内容——终态拒绝、保持活动。
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.f.Drive(); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
+		t.Fatalf("dirty terminal sealing: %v", err)
+	}
+	if snap, err := d.f.engine.Load(); err != nil || snap.State.Phase == runtime.PhaseTerminal {
+		t.Fatalf("dirty rejection sealed terminal: %v (%v)", snap.State.Phase, err)
+	}
+	if _, err := runner.Run(root, "git", "checkout", "--", "app.go"); err != nil {
+		t.Fatal(err)
+	}
+	// 身份漂移：区间再累积一个提交（区间计数仍为 1）——终态拒绝、保持活
+	// 动，重新组织晋升的恢复路径敞开。
+	snapshotCommitOne(t, root, "drift work")
+	if _, err := d.f.Drive(); err == nil || !strings.Contains(err.Error(), "does not match the promoted snapshot") {
+		t.Fatalf("drifted terminal sealing: %v", err)
+	}
+	if snap, err := d.f.engine.Load(); err != nil || snap.State.Phase == runtime.PhaseTerminal {
+		t.Fatalf("drift rejection sealed terminal: %v (%v)", snap.State.Phase, err)
+	}
+	// 恢复：回到已验证内容（reset 到晋升身份），Drive 收口 COMPLETE。
+	if _, err := runner.Run(root, "git", "reset", "-q", "--hard", promoted); err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "COMPLETE" || run.PromotedSnapshot != promoted {
+		t.Fatalf("recovered terminal = %s promoted = %s, want COMPLETE %s", run.Status, run.PromotedSnapshot, promoted)
+	}
+}
+
+// TestPromotionIntentSurvivesExecuteCrashAndReentryConverges：意图幂等（同
+// target 重开零变化）；execute 后崩溃（squash 已发生、意图仍在）经重入收敛——
+// 重解析得新 HEAD、覆盖意图、区间单提交确认、提交绑定，终态可达。
+func TestPromotionIntentSurvivesExecuteCrashAndReentryConverges(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 意图幂等：同 target 重开不报错、不产生第二意图。
+	if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+		t.Fatalf("intent reopen: %v", err)
+	}
+	snap, err := d.f.engine.Load()
+	if err != nil || snap.State.PendingPromotion != head {
+		t.Fatalf("intent reopen changed the target: %q (%v)", snap.State.PendingPromotion, err)
+	}
+	// execute 后崩溃：宿主已完成 squash（真实 reset --soft＋commit），意图
+	// 保留、引擎未提交。重入经 PrepareCandidate 收敛。
+	if _, err := runner.Run(root, "git", "reset", "-q", "--soft", base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(root, "git", "commit", "-q", "-m", "organized final candidate"); err != nil {
+		t.Fatal(err)
+	}
+	squashed, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if squashed == head {
+		t.Fatal("premise lost: squash did not move the identity")
+	}
+	promoted, err := d.f.PrepareCandidate("")
+	if err != nil {
+		t.Fatalf("reentry promotion: %v", err)
+	}
+	if promoted != squashed {
+		t.Fatalf("reentry reorganized again: %s -> %s", squashed, promoted)
+	}
+	bound, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.State.PendingPromotion != "" || bound.State.PromotedSnapshot != squashed {
+		t.Fatalf("reentry did not converge: pending=%q promoted=%q", bound.State.PendingPromotion, bound.State.PromotedSnapshot)
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" {
+		t.Fatalf("post-crash terminal = %s, %v", run.Status, err)
 	}
 }

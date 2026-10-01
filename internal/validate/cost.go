@@ -98,9 +98,13 @@ func beginOwnerCost(root string, state *RunState) error {
 }
 
 // beginEngineOwnerCost 补扫 engine 命名空间（.gates/engine，候选代 runtime，
-// 迁移期两代并存）：同一 owner transcript 上的活动 engine run 同样使区间无法
-// 精确拆分。只读自标记——engine 侧的接纳由 engine 自身观察点完成，本 writer
-// 不修改任何 engine 文件。state.json 为 persistence 信封形状，phase 字面值是
+// 迁移期两代并存）：同一 owner transcript 上区间无法排除相交的 engine run 使
+// 计量不可精确拆分。可排除条件与 engine 侧 engineOverlapPeers 同形：state.json
+// 非终态＝区间开放；终态但 terminal-summary.json 缺失或区间端点不可解析＝区间
+// 仍开放（终态落盘与摘要发布之间的中断窗口）；终态且端点可解析＝区间已先于
+// 本方锁段闭合（本观察点在协调锁内，闭合区间的 EndedAt 早于本方 StartedAt），
+// 可排除。只读自标记——engine 侧的接纳由 engine 自身观察点完成，本 writer 不
+// 修改任何 engine 文件。state.json 为 persistence 信封形状，phase 字面值是
 // engine 的终态 phase（internal/engine/runtime.PhaseTerminal）。
 func beginEngineOwnerCost(root string, state *RunState) error {
 	paths, err := filepath.Glob(filepath.Join(lifecycle.CleanRoot(root), ".gates", "engine", "*", "state.json"))
@@ -124,12 +128,36 @@ func beginEngineOwnerCost(root string, state *RunState) error {
 			state.OwnerCostOverlapped = true
 			continue
 		}
-		if envelope.Content.Phase != "TERMINAL" && envelope.Content.OwnerTranscript != "" &&
-			canonicalRegistryPath(envelope.Content.OwnerTranscript) == canonicalRegistryPath(state.OwnerTranscript) {
+		if envelope.Content.OwnerTranscript == "" ||
+			canonicalRegistryPath(envelope.Content.OwnerTranscript) != canonicalRegistryPath(state.OwnerTranscript) {
+			continue
+		}
+		if envelope.Content.Phase != "TERMINAL" || !enginePeerIntervalClosed(filepath.Dir(path)) {
 			state.OwnerCostOverlapped = true
 		}
 	}
 	return nil
+}
+
+// enginePeerIntervalClosed 报告终态 engine run 的区间是否已由其终态摘要闭合
+// （terminal-summary.json 的 OwnerStartedAt/OwnerEndedAt 可解析）。摘要缺失或
+// 端点不可解析＝区间仍开放：区间闭合的持久事实就是终态摘要，发布前的中断窗
+// 口内无人认领该区间，不可排除相交。
+func enginePeerIntervalClosed(stateDir string) bool {
+	data, err := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
+	if err != nil {
+		return false
+	}
+	var summary struct {
+		OwnerStartedAt string `json:"ownerStartedAt"`
+		OwnerEndedAt   string `json:"ownerEndedAt"`
+	}
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return false
+	}
+	_, startErr := time.Parse(time.RFC3339Nano, summary.OwnerStartedAt)
+	_, endErr := time.Parse(time.RFC3339Nano, summary.OwnerEndedAt)
+	return startErr == nil && endErr == nil
 }
 
 // finishOwnerCost 记录 owner 终态差值（幂等）。调用方（Seal/finishRun）已持有
@@ -164,10 +192,12 @@ func finishOwnerCost(root string, state *RunState) {
 }
 
 // engineOwnerOverlap 报告 engine 命名空间中是否有与本 run owner 区间相交的
-// peer：活动 engine run（非终态 phase 的 state.json）直接相交；已消失的 peer
-// 以终态摘要（terminal-summary.json 的区间端点载荷，与活动状态目录随终态清理
-// 不同、摘要留存）判定 [OwnerStartedAt, OwnerEndedAt] 与本 run 区间
-// [StartedAt, 重扫时点] 相交。读失败与无法解析的端点不可排除，按相交处理。
+// peer：区间开放的 engine run（非终态 phase 的 state.json，或终态但其终态摘
+// 要缺失/端点不可解析——与 beginEngineOwnerCost 同一可排除条件）直接相交；
+// 已闭合的 peer 以终态摘要（terminal-summary.json 的区间端点载荷，与活动状态
+// 目录随终态清理不同、摘要留存）判定 [OwnerStartedAt, OwnerEndedAt] 与本 run
+// 区间 [StartedAt, 重扫时点] 相交。读失败与无法解析的端点不可排除，按相交处
+// 理。
 func engineOwnerOverlap(root string, state *RunState) bool {
 	statePaths, err := filepath.Glob(filepath.Join(lifecycle.CleanRoot(root), ".gates", "engine", "*", "state.json"))
 	if err != nil {
@@ -187,8 +217,16 @@ func engineOwnerOverlap(root string, state *RunState) bool {
 		if err := json.Unmarshal(data, &envelope); err != nil {
 			return true
 		}
-		if envelope.Content.Phase != "TERMINAL" && envelope.Content.OwnerTranscript != "" &&
-			canonicalRegistryPath(envelope.Content.OwnerTranscript) == canonicalRegistryPath(state.OwnerTranscript) {
+		if envelope.Content.OwnerTranscript == "" ||
+			canonicalRegistryPath(envelope.Content.OwnerTranscript) != canonicalRegistryPath(state.OwnerTranscript) {
+			continue
+		}
+		if envelope.Content.Phase != "TERMINAL" {
+			return true
+		}
+		// 终态但摘要未发布＝区间仍开放；摘要已发布则由下方摘要扫描做相交
+		// 判定（同一份 terminal-summary.json）。
+		if !enginePeerIntervalClosed(filepath.Dir(path)) {
 			return true
 		}
 	}

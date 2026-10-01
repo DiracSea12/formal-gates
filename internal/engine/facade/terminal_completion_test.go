@@ -11,24 +11,27 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// 本文件验证 regular run 的终态完成机制：验证期步骤的收口事实（终 wave
-// COMPLETE＋候选晋升绑定）无论先后落在哪个事务，下一次 Drive 都完成收口；
-// 两个事实各缺其一都不达终态；终态后的重入 Drive 只读。
+// 本文件验证 regular run 的终态完成机制：终态收口以「终 wave COMPLETE＋候选
+// 晋升绑定（内容与已验证最终候选相等）」为共同事实，验证收集期晋升被意图准
+// 入拒绝（零 Git 副作用）；两事实齐备后 Drive 核验交付并相变到终态；终态后的
+// 重入 Drive 只读。
 
-// concludeInterleaved 以「晋升先于终 wave 完成」的交错序把 regular run 推进
-// 到 COMPLETE：reviewReady 冻结首 wave 后先绑定晋升，最后补齐 gate 结果（wave
-// COMPLETE 落在结果 Submit 事务内），下一次 Drive 收口到终态。返回到达终态
-// 的驱动。
-func concludeInterleaved(t *testing.T) *validationDriver {
+// concludePromoted 把 regular run 推进到 COMPLETE：验证收集期晋升被拒（wave
+// 未 COMPLETE——准入在先，零 Git 副作用、无意图落账），补齐 gate 结果使 wave
+// COMPLETE 后晋升收敛，最终 Drive 核验交付到达终态。返回到达终态的驱动。
+func concludePromoted(t *testing.T) *validationDriver {
 	t.Helper()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	promoted, err := d.f.PrepareCandidate("")
-	if err != nil {
-		t.Fatalf("promotion before wave conclusion: %v", err)
+	if _, err := d.f.PrepareCandidate(""); err == nil || !strings.Contains(err.Error(), "final validation wave to be COMPLETE") {
+		t.Fatalf("promotion during collection: %v", err)
 	}
-	if promoted != frozenSnapshot {
-		t.Fatalf("promoted snapshot = %s, want %s", promoted, frozenSnapshot)
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" {
+		t.Fatalf("rejected promotion left an intent behind: %q", snap.State.PendingPromotion)
 	}
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
@@ -38,6 +41,13 @@ func concludeInterleaved(t *testing.T) *validationDriver {
 	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	if wave.Status != "COMPLETE" {
 		t.Fatalf("wave status = %s, want COMPLETE after the final gate result", wave.Status)
+	}
+	promoted, err := d.f.PrepareCandidate("organized final candidate")
+	if err != nil {
+		t.Fatalf("promotion after wave conclusion: %v", err)
+	}
+	if promoted == frozenSnapshot {
+		t.Fatalf("multi-commit promotion kept the base identity: %s", promoted)
 	}
 	d.drive()
 	if d.run.Status != "COMPLETE" {
@@ -49,11 +59,11 @@ func concludeInterleaved(t *testing.T) *validationDriver {
 	return d
 }
 
-// TestTerminalCompletionConvergesWhenPromotionPrecedesWaveConclusion：晋升绑
-// 定与终 wave 完成的交错序——两个事实分属不同事务时，下一次 Drive 把 run 收
-// 口到 COMPLETE 且引擎 phase 进入 TERMINAL。
-func TestTerminalCompletionConvergesWhenPromotionPrecedesWaveConclusion(t *testing.T) {
-	d := concludeInterleaved(t)
+// TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion：收集期晋升被
+// 拒后，wave 完成与晋升绑定两个事实齐备时，Drive 把 run 收口到 COMPLETE 且引
+// 擎 phase 进入 TERMINAL。
+func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T) {
+	d := concludePromoted(t)
 	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -64,14 +74,14 @@ func TestTerminalCompletionConvergesWhenPromotionPrecedesWaveConclusion(t *testi
 }
 
 // TestTerminalCompletionRequiresWaveConclusionAndPromotion：收口的两个事实各
-// 缺其一都不达终态——仅绑定晋升而 wave 未完成不得终态；wave 完成而未晋升时
-// 晋升等待 Operator fact 仍在。
+// 缺其一都不达终态——wave 未完成时晋升被拒（不得出现「先绑定后收集」的交
+// 错）；wave 完成而未晋升时晋升等待 Operator fact 仍在。
 func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
-	t.Run("promotion without wave conclusion", func(t *testing.T) {
+	t.Run("promotion rejected before wave conclusion", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox", "quality")
 		d.reviewReady()
-		if _, err := d.f.PrepareCandidate(""); err != nil {
-			t.Fatal(err)
+		if _, err := d.f.PrepareCandidate(""); err == nil || !strings.Contains(err.Error(), "final validation wave to be COMPLETE") {
+			t.Fatalf("promotion with the wave unresolved: %v", err)
 		}
 		d.drive()
 		if d.run.Status == "COMPLETE" {
@@ -87,6 +97,9 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 		}
 		if snap.State.Phase == runtime.PhaseTerminal {
 			t.Fatal("engine phase reached TERMINAL with the wave unresolved")
+		}
+		if snap.State.PromotedSnapshot != "" || snap.State.PendingPromotion != "" {
+			t.Fatalf("rejected promotion bound state: promoted=%q pending=%q", snap.State.PromotedSnapshot, snap.State.PendingPromotion)
 		}
 	})
 	t.Run("wave conclusion without promotion", func(t *testing.T) {
@@ -118,7 +131,7 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 // TestTerminalDriveReplayIsReadOnly：终态后的重入 Drive 只读——不 bump
 // revision、不改写权威状态字节，也不改写已落盘的终态摘要字节。
 func TestTerminalDriveReplayIsReadOnly(t *testing.T) {
-	d := concludeInterleaved(t)
+	d := concludePromoted(t)
 	revision := d.run.Revision
 	statePath := filepath.Join(d.f.stateDir, "state.json")
 	summaryPath := filepath.Join(d.f.stateDir, "terminal-summary.json")

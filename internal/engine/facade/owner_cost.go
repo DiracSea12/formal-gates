@@ -67,10 +67,13 @@ func readTokenCap(root string) (*int64, error) {
 	return doc.EngineDispatchMaxTotalTokens, nil
 }
 
-// engineOverlapPeers 返回同 root 下与本 run 共享 owner transcript 的活动
-// engine peer runID（persistence 信封形状：非终态 phase、owner transcript 经
-// canonical 相等）。resolvable=false 表示存在无法排除的读取失败（Glob 错误/
-// 读失败/坏信封——重叠不可否定），调用方按重叠处理。
+// engineOverlapPeers 返回同 root 下与本 run 共享 owner transcript 且区间无法
+// 排除相交的 engine peer runID（persistence 信封形状）。peer 的区间端点权威是
+// 其终态摘要：state.json 非终态＝区间开放；终态但 terminal-summary.json 缺失或
+// 区间端点不可解析＝区间仍开放（终态落盘与摘要发布之间的中断窗口，无人认领
+// 的区间不可排除）；终态且端点可解析＝区间已闭合，交由 engineSummaryOverlap
+// 的相交判定。resolvable=false 表示存在无法排除的读取失败（Glob 错误/读失
+// 败/坏信封——重叠不可否定），调用方按重叠处理。
 func engineOverlapPeers(root, runID, transcript string) (peers []string, resolvable bool) {
 	canonical := filepath.Clean(transcript)
 	paths, err := filepath.Glob(filepath.Join(root, EngineNamespace, "*", "state.json"))
@@ -96,12 +99,82 @@ func engineOverlapPeers(root, runID, transcript string) (peers []string, resolva
 			return nil, false
 		}
 		projection := envelope.Content
-		if projection.Phase != string(runtime.PhaseTerminal) && strings.TrimSpace(projection.OwnerTranscript) != "" &&
-			filepath.Clean(projection.OwnerTranscript) == canonical {
+		if strings.TrimSpace(projection.OwnerTranscript) == "" || filepath.Clean(projection.OwnerTranscript) != canonical {
+			continue
+		}
+		if projection.Phase != string(runtime.PhaseTerminal) || !enginePeerIntervalClosed(filepath.Dir(path)) {
 			peers = append(peers, filepath.Base(filepath.Dir(path)))
 		}
 	}
 	return peers, true
+}
+
+// enginePeerIntervalClosed 报告终态 engine peer 的区间是否已由其终态摘要闭合
+// （OwnerStartedAt/OwnerEndedAt 可解析）。摘要缺失或端点不可解析＝区间仍开
+// 放：区间闭合的持久事实就是终态摘要，发布前的中断窗口内不可排除相交。
+func enginePeerIntervalClosed(stateDir string) bool {
+	data, err := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
+	if err != nil {
+		return false
+	}
+	var summary struct {
+		OwnerStartedAt string `json:"ownerStartedAt"`
+		OwnerEndedAt   string `json:"ownerEndedAt"`
+	}
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return false
+	}
+	_, startErr := time.Parse(time.RFC3339Nano, summary.OwnerStartedAt)
+	_, endErr := time.Parse(time.RFC3339Nano, summary.OwnerEndedAt)
+	return startErr == nil && endErr == nil
+}
+
+// engineSummaryOverlap 扫描 engine 终态留存摘要（terminal-summary.json：终态
+// 清理保留的区间事实，与随 state.json 消失的活动投影互补），镜像
+// legacySummaryOverlap 形状：OwnerTranscript canonical 相等且 [OwnerStartedAt,
+// OwnerEndedAt] 与本方区间 [startedAt, 量取时点] 相交。startedAt 为空＝启动观
+// 察点，已闭合区间必先于本方锁段结束，不判相交；端点不可解析＝不可排除，按
+// 相交处理。
+func engineSummaryOverlap(root, runID, transcript, startedAt string) bool {
+	if startedAt == "" {
+		return false
+	}
+	canonical := filepath.Clean(transcript)
+	summaryPaths, err := filepath.Glob(filepath.Join(root, EngineNamespace, "*", "terminal-summary.json"))
+	if err != nil {
+		return true
+	}
+	myStart, myStartErr := time.Parse(time.RFC3339Nano, startedAt)
+	now := time.Now().UTC()
+	for _, path := range summaryPaths {
+		if filepath.Base(filepath.Dir(path)) == runID {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return true
+		}
+		var summary struct {
+			OwnerTranscript string `json:"ownerTranscript"`
+			OwnerStartedAt  string `json:"ownerStartedAt"`
+			OwnerEndedAt    string `json:"ownerEndedAt"`
+		}
+		if err := json.Unmarshal(data, &summary); err != nil {
+			return true
+		}
+		if strings.TrimSpace(summary.OwnerTranscript) == "" || filepath.Clean(summary.OwnerTranscript) != canonical {
+			continue
+		}
+		peerStart, startErr := time.Parse(time.RFC3339Nano, summary.OwnerStartedAt)
+		peerEnd, endErr := time.Parse(time.RFC3339Nano, summary.OwnerEndedAt)
+		if startErr != nil || endErr != nil || myStartErr != nil {
+			return true
+		}
+		if !peerStart.After(now) && !peerEnd.Before(myStart) {
+			return true
+		}
+	}
+	return false
 }
 
 // legacyOwnerOverlap 检测 legacy runtime（internal/validate）侧与本 run 的区间
@@ -202,10 +275,13 @@ func legacyStartedWithin(peerStartedAt, myStartedAt string) bool {
 // ownerOverlap 报告本 run 的 owner 区间是否与 peer 相交（两个命名空间：engine
 // run 与 legacy validate run，迁移期两代并存是产品支持形态）。终态观察点额外
 // 携带本方绑定时点，接纳「peer 在我方区间内启动且先于我方终态重扫消失」的区间
-// 事实；启动观察点传空串只判 ACTIVE。
+// 事实；启动观察点传空串只判开放区间（活动或终态未发布摘要）。
 func ownerOverlap(root, runID, transcript, startedAt string) bool {
 	peers, resolvable := engineOverlapPeers(root, runID, transcript)
 	if len(peers) > 0 || !resolvable {
+		return true
+	}
+	if engineSummaryOverlap(root, runID, transcript, startedAt) {
 		return true
 	}
 	return legacyOwnerOverlap(root, runID, transcript, startedAt)
@@ -250,7 +326,7 @@ func captureOwnerBinding(root, runID string, owner OwnerBinding) protocol.OwnerC
 	return binding
 }
 
-// ownerInterval 是终态摘要携带的 owner 区间端点（D4 载荷的内存形态）：
+// ownerInterval 是终态摘要携带的 owner 区间端点的内存形态：
 // endedAt 在终态协调锁段内与量取同时点盖下。
 type ownerInterval struct {
 	transcript string

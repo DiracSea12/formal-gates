@@ -836,3 +836,24 @@ R5a 收口。R5 剩余：真实 canary（授权后）＋RESET/RECOVERY 公开 ty
 主代理独立复核（全部亲跑）：自建四探针（/tmp/r5b-verify overlay）红绿证明——stash 修复后两终态探针红（ACTIVE/WAIT 卡死形态与诊断一致）＋legacy 红＋负控绿，恢复后全绿；diff 亲读五面与合同一致；CompleteStep 全仓调用点清单验收（PASS-完成步仅两处均已守卫、过程级规则 settle 单点、op.candidate 归晋升事务）；树内新旧测试亲跑全绿；全量 internal+cmd rc=0（24 包）。
 
 R5b 收口（提交见本条 git log）。canary（机主已授权真实模型调用）为下一单元：K5 实跑模式（env 门控）驱动 engine regular run，FAIL 走真实种子缺陷→裁决→返修→新候选→重验→终态。
+
+## R5 判审（2026-10-01 机主复核 2c550a8：2 P1＋1 P2 未过）→ R5d 返修收口
+
+机主复核（含两名零上下文子代理、采用项均亲复现）判 2c550a8 未过，三组均主代理探针亲复现坐实（/tmp/r5d-verify 四探针＋机主 /tmp/r5-owner-recovery_test.go）：
+- F1/P1 晋升副作用/授权边界：需求变化屏障期 PrepareCandidate 仍 squash＋登记；终态 run 误调晋升报拒绝但 Git 历史已被改写——副作用先执行、接纳后判断，且屏障不在接纳条件。
+- F2/P1 候选身份未贯穿：晋升后脏树/身份漂移（含区间计数 1 的漂移）仍 COMPLETE；guard 拒时底层已 TERMINAL，关闭错误提示要求的重新晋升路径。PromotedSnapshot 非空被当收口事实、与已验证候选无绑定。
+- F3/P2 owner 终态落盘与量取端点分离：first 持久化 TERMINAL 无摘要中断→peer 扫描把其当已闭合排除→双方精确同记一笔。engine 侧扫描只认 ACTIVE state.json、engine 终态摘要从不参与相交。
+- 另点名：frozenGitRunner 对任意 identity 同值（base==HEAD 报 count=1）违反夹具忠实；注释过程代号（「D4 载荷」「D 系不变量」）。
+
+返修合同 /tmp/r5d-repair-contract.md（规格原文全钉：master-requirements §7.2 Phase A、incremental-seal-plan:205 intent→execute→observe/reconcile→commit、legacy workflow_carry_seal.go:327-380 双身份核对、guardrails :82/:84），原子代理落地：
+- **D1 晋升副作用协议**：State 增 PendingPromotion（意图）＋PromotedDigest（内容身份）；admitPromotion 单点接纳（活动/无屏障/无 abort/wave COMPLETE——晋升是解除 promotion-wait 的动作，collect 中拒绝）；OpenPromotion 意图先行（准入失败零 Git 副作用；同 target 幂等/异 target 覆盖）；RecordCandidatePromotion 原子重检＋须消费意图（无第二入口）＋digest==currentWave.Candidate.Digest 内容绑定；需求变化 REQUEST 落账同事务撤销意图；PrepareCandidate 重排 Resolve→Open→vcs 执行→观察（TreeDigest）→Record；execute/commit 屏障竞窗的错误文案写明恢复路径（窗口 legacy 同形不可全消）。
+- **D2 候选身份贯穿**：内容身份约定＝原生树身份（vcs.TreeDigest＝rev-parse ^{tree}）；validationConcluded 增 digest 绑定；Engine.SealTerminal 公开终态相变入口（delivered==PromotedSnapshot＋validationConcluded，幂等/屏障/abort）；engine.Drive KindComplete 相变收窄 lightweight；facade sealDelivered 三核验（身份相等/树净/祖先）先于相变，失败 run 保持活动、重组织敞开；投影 COMPLETE 单一权威＝phase TERMINAL。
+- **D3 owner 终态端点共用可恢复边界**：engine peer 可排除条件单一化（非终态∨终态但 terminal-summary 缺失/端点不可解析＝区间开放）；新增 engineSummaryOverlap 相交扫描（镜像 legacySummaryOverlap）；validate 侧 beginEngineOwnerCost＋engineOwnerOverlap 同形同步（偏离核可：合同只点名 begin，完成侧同洞一并闭）。修复形态：first 终态无摘要→peer 判开放→双方 unavailable，不再双精确。
+- **D4** 注释域语言化＋acquirePathLock 收敛（AcquirePath/Waiting 共享 internals）。
+- **D5 夹具诚实**：frozenGitRunner 改 frozenGitRepo 链仓（argv 精确、逐提交唯一身份/树、区间计数＝链距、squash 保树、未知身份报错）；cli 排他测试同形；materialize 真仓用真实 HEAD＋树摘要、冻结场景 per-freeze 链上推进（偏离核可：常答下约 20 个多代候选场景因同身份被引擎折叠不可表示，链仓是满足 argv 精确＋身份区分的最简形态）。
+
+语义更新（非打表）：collect 中晋升＝拒＋零副作用（交错序测试重写）；内容漂移重绑＝拒（恢复＝恢复已验证内容）；TestPrepareCandidateChainPassesWithoutGitignore 改走完验证管线再晋升。
+
+主代理独立复核（全部亲跑）：自建八探针红绿——复现时四红（屏障晋升成功/终态拒绝仍改写 HEAD/脏树 COMPLETE/漂移 COMPLETE）＋F3 探针红；修复后全绿（含内容保持型漂移 squash 重组织恢复、reset--hard 恢复路径）；R5b 三探针按新语义更新后绿；关键 diff 亲读（接纳单点/意图消费/内容绑定/Phase A 撤销/SealTerminal/sealDelivered 先于相变/投影单一权威/双侧 owner 扫描同形/链仓夹具 argv 精确）；engineSummaryOverlap 摘要留存注释与 commitTerminalCleanup 事实核对一致；全量 internal+cmd rc=0（24 包）。
+
+R5d 收口（提交见 git log）。canary 驱动器（R5c 交付的未跟踪文件）待与 R5d 语义对齐（REVIEW_READY 物化改直做＋树摘要约定＋intake/QAWorktree 两套修订语言疑点核判）后实跑——真实模型调用机主已授权。

@@ -74,7 +74,6 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 				d.drive()
 				id, in = d.action("engine.repair")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", Build: []string{"full build succeeds"}, Tests: []string{"full tests succeed"}, AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}})
-
 				d.materialize()
 				d.materialize()
 				if round == 0 {

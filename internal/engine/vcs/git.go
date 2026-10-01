@@ -128,6 +128,24 @@ func (p *Provider) Verify(identity string) error {
 	return nil
 }
 
+// TreeDigest 返回 rev 指向提交的树身份（git rev-parse <rev>^{tree}）：候选与
+// 晋升共用的内容摘要原生形态——同一棵树经不同提交历史组织（squash）内容仍
+// 相等。
+func (p *Provider) TreeDigest(rev string) (string, error) {
+	if err := p.verifyRoot(); err != nil {
+		return "", err
+	}
+	digest, err := p.runner.Run(p.root, "git", "rev-parse", rev+"^{tree}")
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve git tree of %s: %w", rev, err)
+	}
+	digest = strings.TrimSpace(digest)
+	if !gitIdentityPattern.MatchString(digest) {
+		return "", fmt.Errorf("git returned an invalid tree identity %q", digest)
+	}
+	return strings.ToLower(digest), nil
+}
+
 // IsAncestorOrEqual 要求 ancestor 是 descendant 的祖先或与之相等。
 func (p *Provider) IsAncestorOrEqual(ancestor, descendant string) error {
 	resolved, err := p.runner.Run(p.root, "git", "merge-base", ancestor, descendant)

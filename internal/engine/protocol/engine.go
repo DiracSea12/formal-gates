@@ -575,9 +575,14 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		}
 		switch plan.Next.Kind {
 		case decision.KindComplete:
-			// 终态相变唯一入口：decide 的 COMPLETE 判定即"无剩余义务"的权
-			// 威。已 TERMINAL 的重入只读——不 bump revision、不改写状态。
+			// 终态相变按路线分流：lightweight 的收口事实全在引擎账本内，
+			// Drive 直接相变（已 TERMINAL 的重入只读——不 bump revision、
+			// 不改写状态）。regular 的终态绑定原生交付身份——外部事实经
+			// SealTerminal 公开入口进入，Drive 只呈报 COMPLETE 边界。
 			if state.Phase != runtime.PhaseTerminal {
+				if state.Route != "lightweight" {
+					return plan, revision, nil
+				}
 				if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
 					return nil, revision, err
 				}
@@ -1097,6 +1102,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 					return Acceptance{}, nil, false, err
 				}
 			}
+			// Phase A「立即撤销未完成 Seal intent」：需求变化 REQUEST 落账
+			// 的同一事务撤销未完成的晋升意图——屏障期内不得有候选晋升在途。
+			state.PendingPromotion = ""
 			// Ask 落账创建时的权威基线：任何后续确认都使本 Ask 过期
 			//（DECIDE 三方相等校验）。
 			ask.BaseRevision = state.RequirementRevision()

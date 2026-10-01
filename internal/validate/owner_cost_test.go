@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -492,5 +493,53 @@ func TestOwnerTerminalRetryKeepsCompletedInterval(t *testing.T) {
 				t.Fatal("terminal cleanup did not finish")
 			}
 		})
+	}
+}
+
+// TestEngineTerminalCheckpointKeepsLegacyIntervalUnavailable：legacy 启动扫描与
+// engine 侧共用同一可排除条件——engine peer 的 state.json 已终态但终态摘要缺
+// 失（或端点不可解析）＝区间仍开放，legacy run 不得据此声称精确拆分；摘要端
+// 点可解析的终态 peer 区间已闭合，可排除。
+func TestEngineTerminalCheckpointKeepsLegacyIntervalUnavailable(t *testing.T) {
+	for _, name := range []string{"terminal without summary", "terminal with unparseable endpoints", "terminal with parseable endpoints"} {
+		t.Run(name, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			transcript := filepath.Join(root, "shared-owner.jsonl")
+			if err := os.WriteFile(transcript, []byte(costCodexFixture), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			engineDir := filepath.Join(root, ".gates", "engine", "engine-peer")
+			if err := os.MkdirAll(engineDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "terminal with unparseable endpoints":
+				writeEnginePeerSummary(t, engineDir, transcript, "not-a-time", "also-not-a-time")
+			case "terminal with parseable endpoints":
+				writeEnginePeerSummary(t, engineDir, transcript, "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z")
+			}
+			envelope := `{"content":{"phase":"TERMINAL","ownerTranscript":` + strconv.Quote(transcript) + `}}`
+			if err := os.WriteFile(filepath.Join(engineDir, "state.json"), []byte(envelope), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state := startMeteredOwner(t, root, pkg, "legacy-open-interval", "codex", transcript, "")
+			wantOverlapped := name != "terminal with parseable endpoints"
+			if state.OwnerCostOverlapped != wantOverlapped {
+				t.Fatalf("overlap = %t, want %t for %s", state.OwnerCostOverlapped, wantOverlapped, name)
+			}
+		})
+	}
+}
+
+// writeEnginePeerSummary 落一份 engine peer 的终态摘要工件（区间端点载荷）。
+func writeEnginePeerSummary(t *testing.T, engineDir, transcript, startedAt, endedAt string) {
+	t.Helper()
+	summary := map[string]string{"ownerTranscript": transcript, "ownerStartedAt": startedAt, "ownerEndedAt": endedAt}
+	data, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(engineDir, "terminal-summary.json"), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

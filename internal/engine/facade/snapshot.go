@@ -3,11 +3,13 @@ package facade
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -48,10 +50,13 @@ func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 
 // PrepareCandidate 组织终态候选（镜像 legacy PrepareCandidate：区间单提交＝确
 // 认当前 HEAD；多提交需 squash 消息，squash 后重解析绑定；晋升后区间再度累
-// 积提交时可重复组织）。工作区必须就绪（未提交内容拒绝——与 legacy
-// verifySnapshotReady 同语义；track/commit 是候选 freeze 的宿主侧动作，不在此
-// 自动执行）。绑定经引擎事务落账（同值幂等）；validation 边界的晋升等待随绑
-// 定解除。
+// 积提交时可重复组织）。晋升走完整副作用协议 intent→execute→observe→
+// commit：OpenPromotion 先过接纳（活动/无屏障/无 abort/wave COMPLETE），被拒
+// 时零 Git 副作用；squash 是唯一写点；组织后重解析并计算内容摘要，经
+// RecordCandidatePromotion 消费意图原子提交（内容必须等于已验证最终候选）。
+// 已在位且 HEAD==PromotedSnapshot 时幂等直返。工作区必须就绪（未提交内容拒
+// 绝——与 legacy verifySnapshotReady 同语义；track/commit 是候选 freeze 的宿主
+// 侧动作，不在此自动执行）。
 func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 	if f.vcs == nil {
 		return "", fmt.Errorf("candidate promotion requires a regular run with a git provider")
@@ -62,6 +67,12 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 	}
 	head, err := f.vcs.Resolve()
 	if err != nil {
+		return "", err
+	}
+	if snap.State.PromotedSnapshot == head {
+		return head, nil
+	}
+	if err := f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
 		return "", err
 	}
 	if err := f.vcs.VerifyReady(); err != nil {
@@ -86,7 +97,17 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 			return "", err
 		}
 	}
-	if err := f.engine.RecordCandidatePromotion(head, emptyFingerprint()); err != nil {
+	digest, err := f.vcs.TreeDigest(head)
+	if err != nil {
+		return "", err
+	}
+	if err := f.engine.RecordCandidatePromotion(head, digest, emptyFingerprint()); err != nil {
+		var rejected *protocol.RejectedError
+		if errors.As(err, &rejected) && rejected.Code == protocol.CodeChangeBarrierActive {
+			// execute 与 commit 之间屏障到达的窗口：内容已组织、意图保留，
+			// 接纳待屏障解除后重入（重入经 OpenPromotion 覆盖 target 收敛）。
+			return "", fmt.Errorf("%w; the organized content stays parked until the barrier resolves and promotion is re-entered", err)
+		}
 		return "", err
 	}
 	return head, nil

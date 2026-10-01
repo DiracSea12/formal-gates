@@ -607,10 +607,10 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		}
 		return nil, Run{}, err
 	}
-	// 启动身份先于任何 state 落盘（D 系不变量：任何有 state.json 的 engine run
-	// 必有 request.json）——peer 的区间标记经 facade.Open 读它，bootstrap 期的
-	// peer 永远合法可开，并行启动不因身份未就绪失败。失败清理 RemoveAll 覆盖
-	// 同目录文件，不变量双向成立。
+	// 启动身份先于任何 state 落盘：任何有 state.json 的 engine run 必有
+	// request.json——peer 的区间标记经 facade.Open 读它，bootstrap 期的 peer
+	// 永远合法可开，并行启动不因身份未就绪失败。失败清理 RemoveAll 覆盖同
+	// 目录文件，不变量双向成立。
 	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
@@ -822,6 +822,21 @@ func (f *Facade) Drive() (Run, error) {
 			}
 		}
 	}
+	// regular 的终态核验先于相变（镜像 legacy Seal 的前 resolve：原生交付身
+	// 份必须等于已绑定晋升身份——漂移拒、脏树拒、基线祖先核）。失败原样上
+	// 抛：run 保持活动，重新组织晋升的恢复路径敞开；通过经 SealTerminal 相
+	// 变后由下方投影呈现 COMPLETE。
+	if plan != nil && plan.Next.Kind == decision.KindComplete {
+		current, loadErr := f.engine.Load()
+		if loadErr != nil {
+			return Run{}, loadErr
+		}
+		if current.State.Phase != runtime.PhaseTerminal {
+			if err := f.sealDelivered(); err != nil {
+				return Run{}, err
+			}
+		}
+	}
 	run, err := f.project()
 	if err != nil {
 		return Run{}, err
@@ -861,6 +876,34 @@ func (f *Facade) Drive() (Run, error) {
 	}
 	_ = plan
 	return run, nil
+}
+
+// sealDelivered 核验 regular run 的原生交付并经引擎终态相变（SealTerminal 公
+// 开入口）：交付身份必须等于已绑定晋升身份（身份漂移拒——镜像 legacy
+// Seal 的「before != CurrentSnapshot」）、工作区就绪（脏树拒）、基线仍是祖
+// 先。任一失败＝错误上抛、run 保持活动。
+func (f *Facade) sealDelivered() error {
+	if f.vcs == nil {
+		return fmt.Errorf("engine terminal: regular run %q has no git provider for delivery verification", f.runID)
+	}
+	snap, err := f.engine.Load()
+	if err != nil {
+		return err
+	}
+	head, err := f.vcs.Resolve()
+	if err != nil {
+		return err
+	}
+	if head != snap.State.PromotedSnapshot {
+		return fmt.Errorf("engine terminal: native VCS identity %s does not match the promoted snapshot %s", head, snap.State.PromotedSnapshot)
+	}
+	if err := f.vcs.VerifyReady(); err != nil {
+		return err
+	}
+	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
+		return err
+	}
+	return f.engine.SealTerminal(head, emptyFingerprint())
 }
 
 // Submit accepts one typed protocol event and immediately computes the next
@@ -981,8 +1024,11 @@ func (f *Facade) project() (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	// COMPLETE 的单一权威是引擎 phase TERMINAL：regular 的 decide 边界在
+	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复），lightweight 的
+	// CompleteAll 已在引擎内相变。
 	status := "ACTIVE"
-	if snap.State.Phase == runtime.PhaseTerminal || plan.Next.Kind == decision.KindComplete {
+	if snap.State.Phase == runtime.PhaseTerminal {
 		status = "COMPLETE"
 	}
 	if _, aborted := snap.State.AbortDecision(); aborted {

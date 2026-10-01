@@ -16,29 +16,41 @@ import (
 	"formal-gates/internal/validate"
 )
 
-// frozenGitRunner 把 Git 命令面固定为「单提交、无未提交内容、区间提交数一」
-// 的冻结仓应答，供 regular 路线启动快照校验通过（真实 git 行为由
+// frozenGitRunner 把 Git 命令面固定为「单提交（base==HEAD）、无未提交内容」
+// 的冻结仓应答：按命令与参数精确区分身份——rev-parse HEAD 是提交身份，
+// <rev>^{tree} 是树身份，merge-base 返回祖先实参，base==HEAD 的区间计数如实
+// 为 0。regular 路线启动快照校验据此通过（真实 git 行为由
 // internal/engine/vcs 的真仓冒烟覆盖）。
 const frozenSnapshot = "0123456789abcdef0123456789abcdef01234567"
+const frozenTree = "0123456789abcdef0123456789abcdef01234568"
 
 type frozenGitRunner struct{}
 
 func (frozenGitRunner) Run(dir, command string, args ...string) (string, error) {
-	key := command
-	for _, arg := range args {
-		key += " " + arg
+	joined := strings.Join(args, " ")
+	if command != "git" {
+		return "", fmt.Errorf("frozen git fixture: unexpected command %s %s", command, joined)
 	}
 	switch {
-	case key == "git rev-parse --show-toplevel":
+	case joined == "rev-parse --show-toplevel":
 		return dir, nil
-	case strings.HasPrefix(key, "git rev-parse"), strings.HasPrefix(key, "git merge-base"):
+	case joined == "rev-parse HEAD":
 		return frozenSnapshot, nil
-	case strings.HasPrefix(key, "git status"):
+	case len(args) == 3 && args[0] == "rev-parse" && args[1] == "--verify" && strings.HasSuffix(args[2], "^{commit}"):
+		return strings.TrimSuffix(args[2], "^{commit}"), nil
+	case len(args) == 2 && args[0] == "rev-parse" && strings.HasSuffix(args[1], "^{tree}"):
+		return frozenTree, nil
+	case len(args) == 3 && args[0] == "merge-base":
+		return args[1], nil
+	case joined == "status --porcelain=v1 --untracked-files=all":
 		return "", nil
-	case strings.HasPrefix(key, "git rev-list --count"):
-		return "1", nil
+	case len(args) == 3 && args[0] == "rev-list" && args[1] == "--count":
+		if base, head, ok := strings.Cut(args[2], ".."); ok && base == head {
+			return "0", nil
+		}
+		return "", fmt.Errorf("frozen git fixture: unexpected range %s", args[2])
 	}
-	return "", fmt.Errorf("frozen git fixture: unexpected command %s", key)
+	return "", fmt.Errorf("frozen git fixture: unexpected command git %s", joined)
 }
 
 // startEngineRunForWriterTest 以 façade 建立真实 engine run（regular 路线，
