@@ -865,3 +865,13 @@ R5d 收口（提交见 git log）。canary 驱动器（R5c 交付的未跟踪文
 **R5e**（合同 /tmp/r5e-align-contract.md）：canary 实施暴露的 R5a 缺陷核判与修——修订语言权威＝裸 hex（legacy RequirementRevision runstate.go:1246、legacy 隔离区校验 workflow_prompt.go:344、engine intake 校验 facade.go:1428-1448 三处同语言），RegisterQAWorktree 的 sha256: 前缀是缺陷（带 ArtifactRoot 的合法 intake 与工作区登记互斥）；改裸 hex 逐字镜像＋注释纠错。canary 驱动器对齐 R5d 语义：REVIEW_READY/各 Stage 物化直做 git＋回执（identity=真实 HEAD、digest=真实树身份 rev-parse ^{tree}；candidateDigest 自造路径哈希整删）、PrepareCandidate 唯一调用点＝promotion-wait Operator fact（多提交带真实 squash message）、collect 路径零调用（grep 自查）。验证：RegisterQAWorktree 用例绿、无 env SKIP、19 包全绿。
 
 主代理复核：diff 亲读（裸 hex 镜像、canary 三触点）；定向测试亲跑。实跑（真实模型调用，机主已授权）＝下一动作：FORMAL_GATES_ENGINE_CANARY=1，证据目录 FORMAL_GATES_ENGINE_CANARY_DIR 留存。
+
+## R5 canary 实跑：真实宿主全链绿（2026-10-01，机主 09-25 授权真实模型调用）
+
+十一跑闭环（runs 1-11，证据 .harness/validation/engine-canary-*，含逐派发 jobs 材料/原生事件/交互应答/凭据链），第九跑起逐缝修复驱动器，第十一跑全链绿：998.58s、11 次真实派发、747,995 tokens。全链＝产品审 PASS（八维核验真实引用）→就绪审 PASS＋开发计划→开发批次（真写 analytics.go＋接线，真跑 go build）→QA 设计（AC-001/AC-002 六用例含非 SUCCESS）→用例审→第一波执行（未知 flag 用例真实 EXECUTED_FAIL）＋回归门（真实 FAIL 带发现）→裁决（门发现 NEW 立问题＋执行失败 SAME_AS 并同根因）→返修（真实可写回合修 flag 处理）→REVIEW_READY 物化提交→修复后候选 AFFECTED 波（六用例全过＋门过）→同候选 FULL 终验波（执行重跑、门 PASS 沿候选携带；AFFECTED 与 FULL 是同一候选上的两笔不同义务，freezeValidationWave 波身份含 scope）→晋升等待 fact→PrepareCandidate 真实 squash→终态 COMPLETE。终态断言全过：晋升快照==HEAD==efff4f01、区间单组织提交、双文件在 diff、终候选上未知 flag 真被拒（重新构建探针）、terminal-summary 重放 Drive 字节不变、无悬挂 ask、成本账覆盖全部 11 派发、返修授权恰一次。
+
+驱动器九缝（全为主代理亲复现后单代理小修，提交 bc89971）：①WAIT/TASKS_IN_FLIGHT＝已签发待宿主执行，路由进派发；②schema 字面量须纯 JSON 化（canonical 编码器闭类型集拒 []string）；③测试二进制居 build cache，可执行文件回溯找不到 harness root→凭据空，须 FORMAL_GATES_HARNESS_ROOT 指真仓；④审查指令须逐名列八核验维（否则诚实模型拒答）；⑤夹具需求须诚实声明基线缺口及授权闭环（否则真实评审员抓自相矛盾诚实 FAIL——引擎派发→typed 证据→审查接纳链在真实条件下工作的强证据）；⑥合并边界消息按实际绑定状态分流（Topology 已绑与否）；⑦挂起写权限交互须 watcher 应答（K5 面，原生 answer 文件一次性消费）；⑧系列身份三值闭集（enums.go:40-53），unaffiliated 非空≠开发前系列派发，按成员路由；⑨执行失败裁决禁带 severity/SeverityRationale/Verification.Severity（执行失败是观察到的事实，severity 属其并入的问题）。
+
+引擎零缺陷：十一跑中引擎每次拒绝都与其规则一致（REJECTED_INVALID_RESULT 两起均为驱动器事件组装错形）。真实花费总账：30 回合、1,605,342 tokens（runs 1-3 零回合环境/形状败、run 8 挂起零回合、其余为接缝定位与终验）。树内 harness 套件绿（352s）。
+
+R5 剩余：RESET/RECOVERY 公开 typed contract 评估（plan :366）。
