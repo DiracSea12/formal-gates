@@ -203,6 +203,28 @@ func TestNativeVCSResolverExemptsRuntimePathsPerUntrackedEntry(t *testing.T) {
 	}
 }
 
+// TestVerifyReadyExemptsEngineRuntimeFiles：混代仓库（先后跑过 engine 与
+// legacy run）里 engine 路线的运行期 run 目录是 CLI 自建产物——legacy 的工
+// 作区洁净检查不把 .gates/engine/ 下的未跟踪运行时文件当未提交交付物拦下；
+// 同仓其他未跟踪交付文件仍照常拦截。
+func TestVerifyReadyExemptsEngineRuntimeFiles(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "mixed-generation@example.invalid")
+	runGit(t, root, "config", "user.name", "Mixed Generation Test")
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "base\n")
+	runGit(t, root, "add", "--all")
+	runGit(t, root, "commit", "-m", "base delivery")
+	writeTestFile(t, filepath.Join(root, ".gates", "engine", "mixed-run", "state.json"), "{}\n")
+	if err := verifySnapshotReady(root, "git"); err != nil {
+		t.Fatalf("engine runtime directory blocked the legacy readiness check: %v", err)
+	}
+	writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
+	if err := verifySnapshotReady(root, "git"); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
+		t.Fatalf("untracked delivery file was accepted beside engine runtime files: %v", err)
+	}
+}
+
 // commitDeliveryPaths commits only the explicitly named delivery paths with
 // the same commit hygiene commitAll applies (no hooks, no signing). The shared
 // commitAll helper sweeps git add --all, which would also commit the

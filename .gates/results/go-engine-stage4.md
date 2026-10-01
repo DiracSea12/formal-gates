@@ -818,3 +818,21 @@ R4d 收口。下一单元：R5（Git provider＋whitebox workspace＋promotion�
 3. legacy internal/validate/vcs.go 的 runtimeGitStatusDirs 同样不含 .gates/engine/（混代真仓下 legacy VerifyReady 同族盲区）——实施代理披露，机主裁定是否另开刀（legacy 冻结侧）。
 
 R5a 收口。R5 剩余：真实 canary（授权后）＋RESET/RECOVERY 公开 typed contract 评估（plan :366）。
+
+## R5b 返修：regular run 终态完成机制＋legacy 混代排除（2026-10-01）
+
+机主三项裁定（①真实 canary 授权②修 COMPLETE 缺口③legacy 盲区随刀修）后的第二刀。既有缺口根因定案（主代理逐条亲核）：六个验证期 agent 步（development.worker/qa.design/qa.review/qa.execution/validation.gate/development.repair）没有任何完成机制——单次 PASS 被 engine.go:2036 守卫正确拒绝作为过程完成证据（任务跨 wave 反复签发），但过程级完成事实缺失；六步未完成→frontier→externalPresent→永久 Wait TASKS_IN_FLIGHT。且 Drive 终态相变只在结构上不可达的 WaitEngineInternal 分支内（全步完成后 decide 返回 KindComplete 走 default 直接 return，相变不发生）。R5a 测试里捏造 Run{Status:"COMPLETE"} 面自证了缺口。
+
+返修合同 /tmp/r5b-contract.md（五面＋legacy 一行），原子代理落地：
+- **D1** State.validationConcluded 单一谓词（workspace.go，与 promotionPending 同处）：前置门与 advanceValidation 管线门同形；收口＝currentValidationWave().Status==COMPLETE ∧ PromotedSnapshot != ""——只消费 settleValidationWave 与 RecordCandidatePromotion 两个既有权威，零新状态。
+- **D2** settle 规则集 AGENT 分支两类：验证期步（validationHandler≠""）⟺管线收口；其余非载体步⟺载体首过闩。规则集权威注释同步改写（删被证伪旧句）。
+- **D3** Drive 循环收敛点：advanceValidation 后、提交判定前跑 settleFrontierSteps，步数变化并入提交条件——wave COMPLETE 与晋升绑定两事实无论先后落在哪个事务，下一次 Drive 都收口（不枚举事务接缝）。
+- **D4** 终态相变唯一入口：switch 增 KindComplete case（非 TERMINAL→TransitionPhase+commit+continue；已 TERMINAL→只读重入）。
+- **D5** 删除被替代的 WaitEngineInternal 特判段（原 engine.go:571-591）；不可达构造性论证：settle 与 decide 的就绪判定共用同一 decisionView.StepSatisfied，decide 时 frontier 不可能含引擎内部未完成步；旧相变条件严格弱于 decide:313 权威判定，语义只增强。
+- **D6** legacy internal/validate/vcs.go runtimeGitStatusDirs 增 .gates/engine/（混代真仓防误拦）＋注释混代语义。
+- **实施代理一处核可偏差**：迟到结果对账路径（admitWorkerResultRecord）补与主接纳路径同形 validationRole=="" 守卫（原路径会让单次迟到 PASS 完成验证期步，与规则矛盾；同缝贯穿）。
+- 树内测试：改造晋升测试走真实 COMPLETE（删捏造面）；新增交错序收敛、双负控（仅晋升不终态／wave 完成未晋升仍等待）、终态重入只读（revision＋状态字节＋摘要字节三断言）；legacy 正负控。
+
+主代理独立复核（全部亲跑）：自建四探针（/tmp/r5b-verify overlay）红绿证明——stash 修复后两终态探针红（ACTIVE/WAIT 卡死形态与诊断一致）＋legacy 红＋负控绿，恢复后全绿；diff 亲读五面与合同一致；CompleteStep 全仓调用点清单验收（PASS-完成步仅两处均已守卫、过程级规则 settle 单点、op.candidate 归晋升事务）；树内新旧测试亲跑全绿；全量 internal+cmd rc=0（24 包）。
+
+R5b 收口（提交见本条 git log）。canary（机主已授权真实模型调用）为下一单元：K5 实跑模式（env 门控）驱动 engine regular run，FAIL 走真实种子缺陷→裁决→返修→新候选→重验→终态。

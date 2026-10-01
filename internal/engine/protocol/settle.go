@@ -21,9 +21,13 @@ import (
 //     completes iff its series' first-pass latch is set—a monotonic fact, so
 //     sibling carriers of a concluded series complete in dependency order
 //     without their own dispatches and a later PASS transaction idempotently
-//     skips already-completed carriers. Non-carrier agent steps are never
-//     settled here: their completion fact is a recorded PASS result and
-//     completeResult completes them directly.
+//     skips already-completed carriers. Non-carrier agent steps split into two
+//     completion facts: a validation-period step is dispatched across waves,
+//     so a single recorded PASS is not evidence of process completion (the
+//     PASS admission guard keeps the step open) and it settles iff the
+//     pipeline concluded—final wave COMPLETE plus the candidate promotion
+//     bound; every other non-carrier step's completion fact is its recorded
+//     PASS result, and completeResult completes it directly.
 //   - LOCAL / DURABLE steps execute inside the engine's controller boundary;
 //     once eligible they complete mechanically in dependency order.
 //   - PARALLEL steps are pure scheduling markers; once eligible they complete
@@ -58,7 +62,11 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
 			case compiler.CompiledAgentStep:
-				settle = s.carrierLatched(payload)
+				if validationHandler(*step) != "" {
+					settle = s.validationConcluded(compiled)
+				} else {
+					settle = s.carrierLatched(payload)
+				}
 			default:
 				return fmt.Errorf("protocol: settle: unknown compiled payload %T", step.Payload)
 			}
@@ -81,8 +89,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 // carrierLatched 报告载体步（携带账本审查系列标记的 agent 步）的完成条
 // 件：所属系列首过闩已置位（首次 effective PASS 的同一事务内由内核
 // refresh 写入）。闩单调：置位后纠正/重走只改 effective 投影，不回退步
-// 完成。非载体 agent 步不经 settle 完成——其完成事实＝入账 PASS 结果，
-// 由 completeResult 直接完成。
+// 完成。
 func (s *State) carrierLatched(payload compiler.CompiledAgentStep) bool {
 	series, ok := s.ReviewSeries.Series(review.Action(payload.ReviewSeries))
 	return ok && series.FirstPass

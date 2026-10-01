@@ -153,9 +153,11 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 
 // runtimeGitStatusDirs are formal-gates 的保留运行期目录（git status 路径形
 // 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先 gitignore 它
-// 们。清单在这里单源持有，逐路径豁免读这一份。
+// 们。.gates/engine/ 是 engine 路线的运行期 run 目录——混代仓库（先后跑过
+// engine 与 legacy run）里 legacy 的工作区洁净检查不把它当未提交交付物。清
+// 单在这里单源持有，逐路径豁免读这一份。
 var runtimeGitStatusDirs = []string{
-	".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
+	".gates/engine/", ".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
 }
 
 // excludeRuntimeUntrackedGitStatus removes porcelain "?? <path>" lines that sit

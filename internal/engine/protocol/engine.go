@@ -556,7 +556,14 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		if err != nil {
 			return nil, revision, err
 		}
-		if advanced || e.reconcileReviewGrantAsks(state) {
+		// 跨事务事实收敛点：wave COMPLETE 与晋升绑定两个收口事实无论先
+		// 后、无论落在哪个事务，下一次 Drive 都在此完成收口。settle 只完
+		// 成步、不签发工作——观察类事务不自动签发的约束不受影响。
+		completed := len(state.Completed)
+		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			return nil, revision, err
+		}
+		if advanced || len(state.Completed) != completed || e.reconcileReviewGrantAsks(state) {
 			if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
 				return nil, revision, err
 			}
@@ -567,28 +574,20 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 			return nil, revision, err
 		}
 		switch plan.Next.Kind {
-		case decision.KindWait:
-			if plan.Next.Wait != nil && plan.Next.Wait.Reason == decision.WaitEngineInternal {
-				if len(plan.Frontier) == 0 {
-					return plan, revision, nil
-				}
-				for _, entry := range plan.Frontier {
-					if err := state.CompleteStep(entry.Step, e.cfg.Definition); err != nil {
-						return nil, revision, fmt.Errorf("protocol: drive complete %s: %w", entry.Step, err)
-					}
-				}
-				if len(state.Completed) == len(e.cfg.Definition.Steps) && len(state.requiredWorkTasks()) == 0 && state.Phase != runtime.PhaseTerminal {
-					if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
-						return nil, revision, err
-					}
-				}
-				committed, err := e.commit(state, revision, expectedFingerprint)
-				if err != nil {
+		case decision.KindComplete:
+			// 终态相变唯一入口：decide 的 COMPLETE 判定即"无剩余义务"的权
+			// 威。已 TERMINAL 的重入只读——不 bump revision、不改写状态。
+			if state.Phase != runtime.PhaseTerminal {
+				if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
 					return nil, revision, err
 				}
-				_ = committed
+				if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+					return nil, revision, err
+				}
 				continue
 			}
+			return plan, revision, nil
+		case decision.KindWait:
 			return plan, revision, nil
 		case decision.KindReady:
 			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: e.cfg.Capacity}, expectedFingerprint)
@@ -1771,9 +1770,10 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		})
 		// PASS 的机械后果与结果先到的完成路径（completeResult）同源：任
 		// 务迁移已由 TASK_PROGRESS 完成，此处不做；步骤完成（载体步＝系
-		// 列首过闩，其余 agent 步凭 PASS 结果）、frontier settle 与补位
-		// 签发照常，两种完成顺序到达同一终态（§8.2.3）。
-		if record.Outcome == OutcomePass && state.passResultCompletesStep(receipt.Task.Step, e.reviewSeriesOf) {
+		// 列首过闩，验证期步＝管线收口，其余 agent 步凭 PASS 结果）、
+		// frontier settle 与补位签发照常，两种完成顺序到达同一终态
+		// （§8.2.3）。
+		if record.Outcome == OutcomePass && state.validationRole(receipt.Task, e.cfg.Definition) == "" && state.passResultCompletesStep(receipt.Task.Step, e.reviewSeriesOf) {
 			if err := state.CompleteStep(receipt.Task.Step, e.cfg.Definition); err != nil {
 				return Acceptance{}, false, fmt.Errorf("protocol: complete step %s: %w", receipt.Task.Step, err)
 			}
@@ -2030,9 +2030,11 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		state.routingReleasedCapacity = true
 		return nil, nil
 	}
-	// PASS 结果完成其步骤：非载体 agent 步直接完成；载体步完成 ⟺ 所属系
-	// 列首过闩（语义 FAIL 的证据不置闩，载体保持开放等待下一轮）。完成后
-	// 补一次 frontier settle——外部边界事实与其余载体按依赖序补齐。
+	// PASS 结果完成其步骤：验证期步除外（其任务跨 wave 反复签发，完成事
+	// 实＝管线收口，由 settle 的验证期规则收口）；其余非载体 agent 步直接
+	// 完成；载体步完成 ⟺ 所属系列首过闩（语义 FAIL 的证据不置闩，载体保
+	// 持开放等待下一轮）。完成后补一次 frontier settle——外部边界事实与其
+	// 余载体按依赖序补齐。
 	if state.validationRole(key, e.cfg.Definition) == "" && state.passResultCompletesStep(authoring.StepID(pending.Step), e.reviewSeriesOf) {
 		if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
 			return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)

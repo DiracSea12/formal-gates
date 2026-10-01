@@ -87,3 +87,16 @@ func (s *State) promotionPending() bool {
 	w := s.currentValidationWave()
 	return w != nil && w.Status == "COMPLETE"
 }
+
+// validationConcluded 报告验证管线是否已收口——验证期 agent 步的过程级完成
+// 事实。前置门与 advanceValidation 的管线门同形（门未开时收口事实不存在）；
+// 收口只消费两个既有权威：终 wave COMPLETE（obligations 全解，由
+// settleValidationWave 单点定义）＋候选晋升已绑定（由 RecordCandidatePromotion
+// 单点写入）。
+func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
+	if !pipelineEnabled(s, cd) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+		return false
+	}
+	w := s.currentValidationWave()
+	return w != nil && w.Status == "COMPLETE" && s.PromotedSnapshot != ""
+}

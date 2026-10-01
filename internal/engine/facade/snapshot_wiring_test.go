@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -158,7 +159,8 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 
 // TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal：validation
 // 完成后的晋升——区间单提交确认当前 HEAD；多提交先拒无消息、再以 squash 消息
-// 压回单提交并重解析绑定；晋升后新增提交在终态边界被最后防线拒绝。
+// 压回单提交并重解析绑定；晋升后经真实 Drive 收口到 COMPLETE（引擎 phase
+// TERMINAL、终态摘要落盘），晋升后新增提交在终态边界被最后防线拒绝。
 func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -208,13 +210,16 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	if count, err := vcs.New(root, nil).CommitCount(base, promoted); err != nil || count != 1 {
 		t.Fatalf("post-squash count = %d, %v", count, err)
 	}
-	// 晋升绑定后等待事实消失（operator fact 不再含 promotion 消息）。
+	// 晋升绑定后收口：等待事实消失，真实 Drive 到达终态并发布摘要。
 	run, err := d.f.Drive()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if run.PromotedSnapshot != promoted {
 		t.Fatalf("promoted snapshot = %s, want %s", run.PromotedSnapshot, promoted)
+	}
+	if run.Status != "COMPLETE" {
+		t.Fatalf("run status = %s, want COMPLETE (next = %+v)", run.Status, run.Next)
 	}
 	if run.Next.Operator != nil {
 		for _, fact := range run.Next.Operator.Facts {
@@ -223,9 +228,19 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 			}
 		}
 	}
-	// 终态快照边界：晋升后区间单提交，guard 通过且发布段身份恒等。
-	terminalFace := Run{Route: "regular", Status: "COMPLETE", BaseSnapshot: run.BaseSnapshot}
-	guard, err := d.f.terminalSnapshotGuard(terminalFace)
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.Phase != runtime.PhaseTerminal {
+		t.Fatalf("engine phase = %s, want TERMINAL", snap.State.Phase)
+	}
+	if _, err := os.Stat(filepath.Join(d.f.stateDir, "terminal-summary.json")); err != nil {
+		t.Fatalf("terminal summary missing: %v", err)
+	}
+	// 终态快照边界消费真实 Drive 结果：晋升后区间单提交，guard 通过且发布
+	// 段身份恒等。
+	guard, err := d.f.terminalSnapshotGuard(run)
 	if err != nil {
 		t.Fatalf("guard after promotion: %v", err)
 	}
@@ -242,8 +257,7 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	if _, err := runner.Run(root, "git", "commit", "-q", "-m", "late commit"); err != nil {
 		t.Fatal(err)
 	}
-	// guard 以终态面直接检验（Drive 接线在 run 达 COMPLETE 时触发同一入口）。
-	if _, err := d.f.terminalSnapshotGuard(terminalFace); err == nil || !strings.Contains(err.Error(), "organize the final candidate") {
+	if _, err := d.f.terminalSnapshotGuard(run); err == nil || !strings.Contains(err.Error(), "organize the final candidate") {
 		t.Fatalf("post-promotion commit escaped the terminal guard: %v", err)
 	}
 }
