@@ -875,3 +875,15 @@ R5d 收口（提交见 git log）。canary 驱动器（R5c 交付的未跟踪文
 引擎零缺陷：十一跑中引擎每次拒绝都与其规则一致（REJECTED_INVALID_RESULT 两起均为驱动器事件组装错形）。真实花费总账：30 回合、1,605,342 tokens（runs 1-3 零回合环境/形状败、run 8 挂起零回合、其余为接缝定位与终验）。树内 harness 套件绿（352s）。
 
 R5 剩余：RESET/RECOVERY 公开 typed contract 评估（plan :366）。
+
+## R5 收尾：RESET/RECOVERY 公开 typed contract 评估销案（2026-10-02，机主裁定采纳）
+
+机主裁定「可以」，采纳建议＝**引擎不提供 reset**；RECOVERY 一并销案。评估依据＝legacy ResetRun 全文（workflow.go:887-960）逐用途机制对照：
+
+- reset 三用途逐一被引擎原生机制吸收：①文档变了重登记→run 内需求变化流程（REQUEST_REQUIREMENT_CHANGE：停写屏障＋复审新鲜度门槛，R5d）；②验证状态烂了全重走→引擎事实全事务化、验证按 wave 收敛（FAIL→返修→AFFECTED→FULL 只重验受影响面，canary 实证），legacy reset 的「清卡住派发」土壤不存在；③开发成果保留、其余重做→abort＋新 run 覆盖不了此件，但该组合在引擎语义下不成立（开发完好不需整体重验；需求变了 legacy reset 自己也作废开发）。
+- 审计差异记入考量：legacy reset 同 run ID 原地抹史；abort＋新 run 是两段完整留痕区间（abort 终态摘要＋owner 区间闭合，R4e/R5d 形状）——对关口核原始证据的项目是优点。
+- 现状已安全且响亮：engine 公开面对 reset/recovery 控制显式拒绝（engine.go:1081、:1152）；route matrix 31 条目已含 workflow reset 对 engine run 拦死（UNSUPPORTED_ENGINE_ENTRY、状态字节不变）；legacy run 自身的 reset 不动（冻结侧）。
+- RECOVERY：崩溃恢复＝重开 facade 续 Drive（R5b/R5d 已验，canary 终态重放字节不变），是恢复性质不是命令；ControlRecovery 词汇仅作为 abort choice 的合法载体（abort.go:17）。
+- 诚实边界：结论由机制推导得出，未考 dogfood 历史中 reset 的实际使用频率。
+
+R5 全部收口（Git provider、whitebox 登记、晋升协议、终态完成机制、owner 区间、真实 canary 绿链、route matrix、RESET/RECOVERY 销案）。
