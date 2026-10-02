@@ -585,7 +585,7 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 // the case review freezes.
 func (c *engineCanary) whiteboxDesignResult(id string, input protocol.ValidationInput, materials canaryMaterials, manifest coverage.AcceptanceManifest, pointKnown func(string) bool, sourceFor func(string) string) protocol.ValidationResult {
 	c.t.Helper()
-	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly."
+	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths."
 	var answer struct {
 		Cases []struct {
 			CaseID   string `json:"caseId"`
@@ -605,6 +605,13 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 		}
 		if len(answer.Paths) == 0 || answer.Summary == "" || len(answer.Build) == 0 || len(answer.Tests) == 0 {
 			return fmt.Errorf("whitebox design lacks authored paths, summary, build or test evidence")
+		}
+		for index, path := range answer.Paths {
+			relative, err := canaryWorkspacePath(c.project, path)
+			if err != nil {
+				return err
+			}
+			answer.Paths[index] = relative
 		}
 		for _, designed := range answer.Cases {
 			if !pointKnown(designed.PointID) {
@@ -627,6 +634,38 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest,
 		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests}}
+}
+
+// canaryWorkspacePath normalizes one authored-artifact path to the
+// repo-relative workspace form the engine's path vocabulary uses (manifest
+// paths, diff ranges); the model may instead report the absolute path of the
+// file it wrote, possibly spelled through a resolved symlink prefix. The
+// path must stay inside the workspace and name an existing file.
+func canaryWorkspacePath(project, path string) (string, error) {
+	if filepath.IsAbs(path) {
+		prefixes := []string{project}
+		if resolved, err := filepath.EvalSymlinks(project); err == nil {
+			prefixes = append(prefixes, resolved)
+		}
+		for _, prefix := range prefixes {
+			relative, err := filepath.Rel(prefix, path)
+			if err == nil && relative != ".." && !strings.HasPrefix(relative, "../") {
+				path = relative
+				break
+			}
+		}
+		if filepath.IsAbs(path) {
+			return "", fmt.Errorf("absolute path %q is not inside the workspace", path)
+		}
+	}
+	path = filepath.Clean(path)
+	if path == "." || path == ".." || strings.HasPrefix(path, "../") {
+		return "", fmt.Errorf("path %q is not a file inside the workspace", path)
+	}
+	if _, err := os.Stat(filepath.Join(project, path)); err != nil {
+		return "", fmt.Errorf("authored file %q is missing: %w", path, err)
+	}
+	return path, nil
 }
 
 // canaryReviewDecision is one item decision as the review answer schema
@@ -1165,17 +1204,22 @@ func (c *engineCanary) materializeIntents() {
 			c.fail("candidate parameters for %s: %v", id, err)
 		}
 		identity := c.git("rev-parse", "HEAD")
-		// Each stage materialization is plain host git work: commit the
-		// current working-tree content at the stage's scope (development
+		// Each stage materialization is plain host git work over the stage's
+		// declared paths: the declared paths are the change (development
 		// output and the authored whitebox tests arrive as working-tree
-		// changes; a repair round delivers its changes the same way); a
-		// clean tree keeps the current HEAD. Candidate promotion is admitted
-		// only after the final wave is COMPLETE, so it is never reachable
-		// from here.
+		// changes; a repair round delivers its changes the same way), while
+		// undeclared untracked files — build outputs left behind by writable
+		// model turns — are residue, removed so later tree checks stay
+		// clean. A tree without a declared change keeps the current HEAD.
+		// Candidate promotion is admitted only after the final wave is
+		// COMPLETE, so it is never reachable from here.
 		if c.git("status", "--porcelain") != "" {
-			c.git("add", "--all")
-			c.git("commit", "-m", "candidate: "+strings.Join(params.Paths, ", "))
-			identity = c.git("rev-parse", "HEAD")
+			c.git(append([]string{"add", "--"}, params.Paths...)...)
+			if c.git("diff", "--cached", "--name-only") != "" {
+				c.git("commit", "-m", "candidate: "+strings.Join(params.Paths, ", "))
+				identity = c.git("rev-parse", "HEAD")
+			}
+			c.git("clean", "-fd")
 		}
 		digest := c.git("rev-parse", identity+"^{tree}")
 		evidence := protocol.CandidateEvidence{

@@ -901,3 +901,11 @@ R5 全部收口（Git provider、whitebox 登记、晋升协议、终态完成�
 主代理独立复核（全部亲跑）：diff 亲读（补偿分支/前置门单规则/续行路径/白盒桥三引擎原文核据：validation_result.go:341 白盒 count==2＋Development、contract.go:655-668 TestRef-only、validation_candidate.go AUTHORING/QA_ARTIFACT）；机主探针红绿——修复后 4/5 绿，第 5 个（TestRootPromotionResetCommitRecovery）日志示 retry error=nil＝修复生效，其末断言写于坏世界（成功消费意图后 pending=""），判陈旧断言非缺陷，树内 TestPromotionResumeAfterResetInterruptionBindsOrganizedHead 持正确语义；夹具自洽核（commit 步清 pendingTree）；全量 internal+cmd rc=0（24 包）＋vet/gofmt 干净。
 
 **费用更正**：真实总账修正为 33 次调用、1,709,433 tokens（原报 30/1,605,342 漏 run 122152 三次被拒调用 104,091——机主复核发现，主代理对全部证据目录 source.json 重核一致；驱动器已改逐调用入账）。full canary 重跑（full 路线＋白盒面＋三层审查）待机主授权真实模型调用。
+
+## full canary 实跑绿链（2026-10-02，机主授权「用 zcode 重跑」）＋R5f 后两驱动器缝
+
+R5f 修复后 full 路线重跑三回合（runs 12-14，证据 .harness/validation/engine-canary-2026100[2]T*）：run 12 挂于白盒设计回合真实跑 `go build` 留下的 `frob` 二进制被 `git add --all` 卷入 QA 工件区间——**assertTestOnlyArtifact 诚实回执拦截**（引擎每阶段参数本就携带精确声明 Paths，validation_candidate.go:188-234 亲核）；修＝物化只提交声明路径＋clean 构建残留。run 13 挂于模型把 authored 文件报成绝对路径（darwin 符号链接前缀 /var↔/private/var 加剧）与引擎相对名词表不符；修＝canaryWorkspacePath 归一（双前缀 EvalSymlinks＋工作区内校验＋文件存在校验——模型必须报其所写）。
+
+**run 14 绿链（PASS 1901.26s，16 派发 17 次真实调用含 1 次被拒全入账，1,475,763 tokens）**：产品审→就绪审→开发批次→黑盒设计→**白盒设计（可写回合，11 次模型请求真实撰写 Go 验收测试）**→黑盒用例审（三层答案两次 shape 重试后过、被拒调用入账）→白盒用例审（三层判定真实：source 1＋point 2＋case 8 各带真实理由，答卷亲核）→第一波黑盒/白盒双执行真实 FAIL（白盒＝登记工作区真跑 go test）→回归门真实 FAIL→裁决→真实返修（317k tokens）→修复后候选 AFFECTED 双执行＋门过→同候选 FULL 终验波双执行→squash 晋升→终态 COMPLETE（promoted=1df559d7，全部终态断言过：晋升==HEAD、单组织提交、终候选 flag 真被拒、摘要重放字节不变、成本账覆盖全派发、返修授权恰一次）。**计划 :367 的 full canary 验收（真实宿主＋FAIL→repair→新候选→重验→Seal＋白盒＋三层审查）至此以完整形态满足。**
+
+本授权环真实花费：三回合合计 31 次调用、2,747,965 tokens（run12 684,067＋run13 588,135＋run14 1,475,763；全部逐调用入账，无漏账——费用修复经实跑验证）。引擎零缺陷：run12/13 的拦截均来自驱动器自己的诚实回执检查（test-only 区间、路径词表），引擎链每次接纳/拒绝与规则一致。canary 累计（runs 1-14）真实总花费 64 次调用、4,457,398 tokens。
