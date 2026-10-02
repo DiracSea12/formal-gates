@@ -138,6 +138,10 @@ const (
 	// 久投影不一致、已签发事实无来源、或将要超发而账本未记）——以
 	// BLOCKED_BUG 终止该次签发，零派发。
 	CodeGuardBlockedBug = "BLOCKED_BUG"
+	// CodeSliceClaimRejected：child run 对 master 分片的认领无法执行（master
+	// 非 ACTIVE、未绑定 split 拓扑、分片越界、已被异 id 认领或受理身份与
+	// master 账目不匹配）——零状态变化。
+	CodeSliceClaimRejected = "SLICE_CLAIM_REJECTED"
 )
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
@@ -587,12 +591,22 @@ type State struct {
 	// 主代理）。首条是受理落账回填的 INTAKE 初始账目。
 	RequirementRevisions []ConfirmedRevision `json:"requirementRevisions"`
 	// Topology 是 start-readiness PASS 后唯一绑定的拆分拓扑决定（总需求
-	// §8.1.1 绑定点：确认后不得重切）。nil 表示尚未确认。
+	// §8.1.1 绑定点：确认后不得重切）。child run 落账的是从 master 继承的
+	// 拓扑副本（同样不可重切）。nil 表示尚未确认。
 	Topology *TopologyBinding `json:"topology,omitempty"`
 	// RouteMode/SelectedGates 是拓扑绑定后的验证路线（full/custom）。
-	// lightweight 是 run 级路线、start 时已定，不经这两个字段。
+	// lightweight 是 run 级路线、start 时已定，不经这两个字段；split 绑定
+	// 同事务锁定 merge 路线（保留总任务实例不涉常规路线选择）。
 	RouteMode     string   `json:"routeMode,omitempty"`
 	SelectedGates []string `json:"selectedGates,omitempty"`
+	// SliceChild 是 child run 的继承事实（master run、分片名与继承结论绑定
+	// 的需求 revision）；nil＝普通 run。产品审/技术审经它等价满足，child 不
+	// 自行增加审查轮次。
+	SliceChild *SliceChildBinding `json:"sliceChild,omitempty"`
+	// SliceChildren 是 master 账上的分片认领事实（sliceID → childRunID，累
+	// 积运行事实）。它不放进 TopologyBinding：拓扑是不可变的确认决定，
+	// children 是运行期累积——一个控制事实只有一个权威来源。
+	SliceChildren map[string]string `json:"sliceChildren,omitempty"`
 	// Guard 是从签发/结果账本派生的额度投影（requestAllowance/retryAllowance/
 	// totalAllowance/budgetBasisDigest＋used 事实与 token cap 面）。事实源是账本
 	// 本身，本投影只在提交点重derive写入，加载边界重算比对；受理前的 run（包络
@@ -617,14 +631,17 @@ type State struct {
 }
 
 // TopologyBinding 是拓扑确认的持久形态：no-split 必有理由 note（建议不拆
-// 原因留痕）；split 必有 SplitCount≥2、与之一致的 Slices 与并行度。类型
-// 名避开 Slicing 一词，防止与审查动作 start-readiness 的下游影响表混淆。
+// 原因留痕）；split 必有 SplitCount≥2、与之一致的 Slices 与并行度，以及每
+// 条验收条件恰一个主责 owner 的责任映射（owner ∈ Slices ∪ {master-merge}，
+// 绑定时已归一校验）。类型名避开 Slicing 一词，防止与审查动作
+// start-readiness 的下游影响表混淆。
 type TopologyBinding struct {
-	Decision   string   `json:"decision"`
-	Note       string   `json:"note,omitempty"`
-	SplitCount int      `json:"splitCount,omitempty"`
-	Slices     []string `json:"slices,omitempty"`
-	Parallel   string   `json:"parallel,omitempty"`
+	Decision   string            `json:"decision"`
+	Note       string            `json:"note,omitempty"`
+	SplitCount int               `json:"splitCount,omitempty"`
+	Slices     []string          `json:"slices,omitempty"`
+	Parallel   string            `json:"parallel,omitempty"`
+	ACOwners   map[string]string `json:"acOwners,omitempty"`
 }
 
 // ConfirmedRevision 是需求 revision 权威账本的单条确认事实。Revision 是

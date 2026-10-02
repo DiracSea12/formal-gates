@@ -137,7 +137,7 @@ func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *co
 	}
 	fp := fingerprintOf(t, engine)
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-review", "", confirmation, ""); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, fp, "run-review", "", confirmation, "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
@@ -389,37 +389,47 @@ func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 	}
 }
 
-// TestSplitTopologyAndCustomRouteBinding：choice 与载荷一致的 split 拓扑
-// 与 custom 路线各走通——split 落账完整拆分参数，custom 按候选全集顺序
-// 归一落账所选项，两者绑定后推进 DEVELOPMENT_PARALLEL。
-func TestSplitTopologyAndCustomRouteBinding(t *testing.T) {
+// TestSplitTopologyRequiresTheConfirmedACUniverse：split 绑定的 AC 责任映
+// 射以确认需求冻结投影的验收条件为宇宙——文档未冻结时绑定可区分拒绝、
+// 零状态变化；分片名非标识形状在 schema 层拒绝（owner 引用与 child 认领
+// 键都以它进行）。
+func TestSplitTopologyRequiresTheConfirmedACUniverse(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-	engine, _ := reviewEngine(t, cd, reg)
+	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
 	readiness := pendingActionID(t, engine)
 	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
 
-	askAndDecide(t, engine, ControlConfirmTopology, "req-topology-split", topologyOptions(), "split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+	if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-topology-split", topologyOptions(), "split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "split", SplitCount: 2, Slices: []string{"lane-core", "lane-tooling"}, Parallel: "two lanes",
-	}})
-	snap := engine.LoadMustSucceed(t)
-	topology := snap.State.Topology
-	if topology == nil || topology.Decision != "split" || topology.SplitCount != 2 ||
-		len(topology.Slices) != 2 || topology.Slices[0] != "lane-core" || topology.Slices[1] != "lane-tooling" || topology.Parallel != "two lanes" {
-		t.Fatalf("split topology binding = %+v", topology)
+		ACOwners: []ACOwner{{AC: "AC-001", Owner: "lane-core"}, {AC: "AC-002", Owner: "lane-tooling"}},
+	}}); err == nil {
+		t.Fatal("split topology accepted without the confirmed requirement document")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("universe-less split code = %q (%v)", code, err)
 	}
-
-	askAndDecide(t, engine, ControlSelectRoute, "req-route-custom", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"},
-	}})
-	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != "custom" || len(snap.State.SelectedGates) != 2 ||
-		snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.release" {
-		t.Fatalf("custom route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	for name, slices := range map[string][]string{
+		"uppercase-slice":   {"lane-core", "Lane.Tooling"},
+		"whitespace-slice":  {"lane-core", "lane tooling"},
+		"underscore-slice":  {"lane-core", "lane_tooling"},
+		"empty-slice-entry": {"lane-core", " "},
+	} {
+		if _, err := NewReviewDecideEvent(EventID("evt-"+name), RequestID("req-topology-"+name), "sha256:token", "split", ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "split", SplitCount: 2, Slices: slices, Parallel: "two lanes",
+		}}); err == nil {
+			t.Fatalf("%s accepted", name)
+		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+			t.Fatalf("%s code = %q (%v)", name, code, err)
+		}
 	}
-	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
-		t.Fatalf("phase after custom route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	// no-split 不得携带 AC 责任参数（与拆分参数同族约束）。
+	if _, err := NewReviewDecideEvent("evt-no-split-owners", "req-topology-no-split-owners", "sha256:token", "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "no-split", Note: "建议不拆", ACOwners: []ACOwner{{AC: "AC-001", Owner: masterMergeOwner}},
+	}}); err == nil {
+		t.Fatal("no-split with AC owners accepted")
+	} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+		t.Fatalf("no-split owners code = %q (%v)", code, err)
 	}
 }
 
@@ -454,6 +464,73 @@ func TestCustomRouteBindsWholeCandidateList(t *testing.T) {
 				t.Fatalf("phase after custom whole-list route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 			}
 		})
+	}
+}
+
+// TestRouteBindingIsFinalForAskAndDecision：路线绑定即最终（需求 7「路线
+// 只问一次」）。绑定后第二次 SELECT_ROUTE 的 Ask 抬起在接纳处可区分拒绝；
+// 绑定前已并存的第二个 Ask，其决定在同一绑定后同样可区分拒绝——两处都
+// 零状态写入，并存 Ask 保持未决，原绑定不变。
+func TestRouteBindingIsFinalForAskAndDecision(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, dir := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "no-split", Note: "one cohesive command",
+	}})
+	gates := []string{"blackbox", "whitebox", "gate.quality"}
+	// 绑定前两个 Ask 并存（PendingAsks 按 requestID 各自落账）。
+	fp := fingerprintOf(t, engine)
+	for _, requestID := range []string{"req-route-binding", "req-route-coexisting"} {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fp); err != nil {
+			t.Fatalf("submit ask %s: %v", requestID, err)
+		}
+	}
+	token, err := engine.Freshness("req-route-binding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := NewReviewDecideEvent("evt-route-binding", "req-route-binding", token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(binding, fp); err != nil {
+		t.Fatalf("submit binding decide: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	// 绑定后的第二次 Ask 抬起即拒。
+	if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-route-second", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fingerprintOf(t, engine)); err == nil {
+		t.Fatal("second route ask after binding accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("second ask code = %q (%v)", code, err)
+	}
+	// 并存 Ask 的决定同样拒绝（token 按当前 revision 重取）。
+	coexist, err := engine.Freshness("req-route-coexisting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := NewReviewDecideEvent("evt-route-coexisting", "req-route-coexisting", coexist, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err == nil {
+		t.Fatal("coexisting route decide after binding accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("coexisting decide code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected re-selection attempts changed state bytes")
+	}
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeFull || len(snap.State.SelectedGates) != len(gates) {
+		t.Fatalf("binding after rejections = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	}
+	ask, pending := snap.State.PendingAsks["req-route-coexisting"]
+	if !pending || ask.Resolved {
+		t.Fatalf("coexisting ask did not survive the rejection: %+v", ask)
 	}
 }
 
@@ -795,12 +872,10 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}})
 		fp := fingerprintOf(t, engine)
 		for name, route := range map[string]*RouteDecision{
-			"full-without-whitebox": {Mode: "full", Gates: []string{"blackbox", "gate.quality"}},
-			"full-without-blackbox": {Mode: "full", Gates: []string{"whitebox", "gate.quality"}},
-			"full-with-merge":       {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
-			"custom-with-merge":     {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
-			"full-with-merge-gate":  {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge-gate", "gate.quality"}},
-			"custom-with-merge-qa":  {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge-qa", "gate.quality"}, Selected: []string{"gate.quality"}},
+			"full-with-merge":      {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
+			"custom-with-merge":    {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
+			"full-with-merge-gate": {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge-gate", "gate.quality"}},
+			"custom-with-merge-qa": {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge-qa", "gate.quality"}, Selected: []string{"gate.quality"}},
 		} {
 			// 字面构造事件绕开构造器前置校验，让引擎在 Submit 边界拒绝；
 			// 拒绝必须零状态写入。
@@ -812,6 +887,35 @@ func TestReviewGatingNegatives(t *testing.T) {
 			if _, err := engine.Submit(ev, fp); err == nil {
 				t.Fatalf("%s accepted", name)
 			} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
+				t.Fatalf("%s code = %q (%v)", name, code, err)
+			}
+			if after := stateBytesOf(t, dir); string(before) != string(after) {
+				t.Fatalf("rejected %s changed state bytes", name)
+			}
+		}
+		// full 缺内建 QA 是 run 形态相关约束（child 的 full 不含 QA），在接
+		// 纳层判定：真实 Ask 上提交缺 QA 的 full 决定被可区分拒绝、零写且
+		// Ask 存活。
+		for name, gates := range map[string][]string{
+			"full-without-whitebox": {"blackbox", "gate.quality"},
+			"full-without-blackbox": {"whitebox", "gate.quality"},
+		} {
+			request := controlRequestEvent(t, ControlSelectRoute, "req-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions())
+			if _, err := engine.Submit(request, fp); err != nil {
+				t.Fatalf("route ask %s: %v", name, err)
+			}
+			token, err := engine.Freshness(RequestID("req-route-" + name))
+			if err != nil {
+				t.Fatalf("freshness %s: %v", name, err)
+			}
+			event, err := NewReviewDecideEvent(EventID("evt-"+name), RequestID("req-route-"+name), token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+			if err != nil {
+				t.Fatalf("decide event %s: %v", name, err)
+			}
+			before := stateBytesOf(t, dir)
+			if _, err := engine.Submit(event, fp); err == nil {
+				t.Fatalf("%s accepted", name)
+			} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 				t.Fatalf("%s code = %q (%v)", name, code, err)
 			}
 			if after := stateBytesOf(t, dir); string(before) != string(after) {
@@ -1641,7 +1745,7 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	err = engine.InitWithMetadata(view, testProvider, fingerprintOf(t, engine), "run-dial", "", reviewConfirmation(), "")
+	err = engine.InitWithMetadata(view, testProvider, fingerprintOf(t, engine), "run-dial", "", reviewConfirmation(), "", nil)
 	if err == nil {
 		t.Fatal("dial-past init accepted")
 	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {

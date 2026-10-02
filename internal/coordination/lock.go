@@ -28,6 +28,13 @@ func AcquireRun(root, runID string) (func(), error) {
 	return unlock, nil
 }
 
+// AcquireRunWaiting 获取与 AcquireRun 同一锁对象的独占锁，但持锁冲突时等待
+// 而不是立即失败。用于跨 run 的串行化段（如 child run 在 master 账上认领分
+// 片）：等待后按持久事实判定，不把并发竞争当失败上抛。
+func AcquireRunWaiting(root, runID string) (func(), error) {
+	return AcquirePathWaiting(filepath.Join(root, ".gates", "run-locks", runID+".lock"), "run start")
+}
+
 // AcquirePath acquires an exclusive, cross-process lock at path and returns
 // the release function. Releasing closes the descriptor, which is what frees
 // the lock; a holder that exits without releasing is freed by the kernel, so

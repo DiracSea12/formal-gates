@@ -82,6 +82,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 					d.recordExecutionScope(coverage.ReviewBlackbox, affected)
 				}
 				if example.addGate && round == 0 {
+					unlockRouteByRequirementRedo(d)
 					d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 					d.reopen()
 					d.drive()

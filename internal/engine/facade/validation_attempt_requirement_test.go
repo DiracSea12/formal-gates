@@ -19,7 +19,6 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 			name := disposition + map[bool]string{false: "/normal", true: "/reopen"}[reopen]
 			t.Run(name, func(t *testing.T) {
 				d := newValidationDriver(t, "quality")
-				d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 				oldID, original := d.action("engine.development.batch")
 				task := original.Binding.Task
 				for i := 0; i < 2; i++ {
@@ -278,7 +277,6 @@ func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replace=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			_, original := d.action("engine.development.batch")
 			fail := func() string {
 				id, in := d.action("engine.development.batch")
@@ -469,7 +467,6 @@ func TestRequirementBarrierSettlesFailedAttemptByItsDecision(t *testing.T) {
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("redo=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			first, original := d.action("engine.development.batch")
 			d.receipt(first)
 			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: first, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "first execution interrupted"}})

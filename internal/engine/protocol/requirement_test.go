@@ -374,8 +374,10 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 			Reason: "the whole walk is affected",
 		})
 		snap := engine.LoadMustSucceed(t)
-		if snap.State.Topology != nil || snap.State.RouteMode != "" || snap.State.SelectedGates != nil {
-			t.Fatalf("checked topology/route must be unbound: %+v %q %v", snap.State.Topology, snap.State.RouteMode, snap.State.SelectedGates)
+		// 拓扑/路线解绑，已生效义务在册（重选的 add-only 基线，见
+		// admitRequirementDecision 的 RedoRoute 处置）。
+		if snap.State.Topology != nil || snap.State.RouteMode != "" || len(snap.State.SelectedGates) != 4 {
+			t.Fatalf("checked topology/route must be unbound with obligations retained: %+v %q %v", snap.State.Topology, snap.State.RouteMode, snap.State.SelectedGates)
 		}
 		if entry := snap.State.RequirementRevisions[1]; len(entry.DecidedScope) != 4 || entry.DecidedScope[0] != "product-review" ||
 			entry.DecidedScope[1] != "start-readiness" || entry.DecidedScope[2] != "topology" || entry.DecidedScope[3] != "route" {

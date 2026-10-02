@@ -898,7 +898,7 @@ func (f *ProtocolFixture) Initialize(view *decision.State, provider string) erro
 		return err
 	}
 	confirmation := fakeIntakeConfirmation()
-	if err := f.Engine.InitWithMetadata(view, provider, fingerprint, "", "", confirmation, ""); err != nil {
+	if err := f.Engine.InitWithMetadata(view, provider, fingerprint, "", "", confirmation, "", nil); err != nil {
 		return err
 	}
 	fingerprint, err = f.Engine.ObserveFingerprint()

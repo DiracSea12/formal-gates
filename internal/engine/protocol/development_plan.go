@@ -409,6 +409,11 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 	if !pipelineEnabled(s, e.cfg.Definition) {
 		return nil
 	}
+	// child 无自身 readiness 候选可确认——整体粒度审随 master 继承，child
+	// 的路线确认不绑定开发计划。
+	if s.SliceChild != nil {
+		return nil
+	}
 	preview, err := s.developmentPlanPreview(e.cfg.Definition, *route)
 	if err != nil {
 		return err

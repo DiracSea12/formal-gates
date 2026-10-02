@@ -71,7 +71,6 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 					p.CheckpointReason = "The command consumes a separately verifiable parser and independent utility boundary"
 				}
 				d := plannedValidationDriver(t, nil, p, "quality")
-				d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 				id, a := planBatchAction(d, "parser")
 				other, b := planBatchAction(d, "independent")
 				for _, input := range d.run.ValidationInputs {
@@ -155,7 +154,6 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			p.Batches[0].DependsOn = []string{"parser"}
 			p.Batches = append([]protocol.DevelopmentBatch{first}, p.Batches...)
 			d := plannedValidationDriver(t, nil, p, "quality")
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			parser, pi := planBatchAction(d, "parser")
 			d.business(parser, protocol.ValidationResult{Binding: pi.Binding, Status: "PASS", Development: batchEvidence(pi)})
 			old, ci := planBatchAction(d, "command")
@@ -171,14 +169,16 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 				}
 				choices = append(choices, protocol.RequirementWorkDecision{Work: w, Disposition: disposition, Reason: "Parser unchanged; command contract explicitly replaced"})
 			}
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:diagnostic-contract", ImpactDigest: "sha256:command-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged, RedoStartReadiness: true, WorkDecisions: choices}
+			// 变更合同重走 readiness 必须同时重走路线：开发计划确认搭载在
+			// 路线决定上，重走解除绑定后由下面的重新选择确认新计划。
+			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:diagnostic-contract", ImpactDigest: "sha256:command-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices}
 			request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(request)
 			ask := d.run.PendingRequirementAsk
-			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, WorkDecisions: choices, Reason: "Confirm changed batch contract"}}})
+			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices, Reason: "Confirm changed batch contract"}}})
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			if reopen {
 				d.reopen()
@@ -207,6 +207,8 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 					t.Fatal("new contract executed before plan confirmation")
 				}
 			}
+			// 重走解除了路线绑定：重新选择即新计划的确认通道（绑定→重走
+			// 解除→重新选择）。
 			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			d.drive()
 			id, in := planBatchAction(d, "command")
@@ -252,7 +254,6 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	p.CheckpointGroups = [][]string{{"command"}, {"dependent"}}
 	p.CheckpointReason = "Verify command before a dependent integration"
 	d := plannedValidationDriver(t, nil, p, "quality")
-	d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 	id, in := planBatchAction(d, "command")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
@@ -344,7 +345,6 @@ func TestSpikeConclusionUnlocksDevelopmentWithoutEnteringCandidate(t *testing.T)
 				p.CheckpointReason = "Record the investigation before production development"
 			}
 			d := plannedValidationDriver(t, nil, p, "quality")
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			id, in := planBatchAction(d, "spike")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 			if len(d.run.AdapterIntents) != 0 {

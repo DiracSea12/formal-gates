@@ -85,6 +85,8 @@ func TestSignedRepairDiagnosisSurvivesCorrectionAndReopen(t *testing.T) {
 // the actual signed repair and its materialized candidate, not the report wave.
 func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 	d, finding, origin := validationWithGateFinding(t)
+	unlockRouteByRequirementRedo(d)
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.drive()
 	id, input := d.gateAction("security")
@@ -188,6 +190,8 @@ func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
 			problem := d.run.Validation.Findings[finding].History[1].ProblemID
 			switch projection {
 			case "route":
+				unlockRouteByRequirementRedo(d)
+				unlockRouteByRequirementRedo(d)
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 				d.reopen()
 				d.drive()

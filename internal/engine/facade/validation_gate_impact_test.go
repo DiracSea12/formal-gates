@@ -38,6 +38,7 @@ func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
 					t.Fatal("missing exact pending gate impact boundary")
 				}
 				if route {
+					unlockRouteByRequirementRedo(d)
 					d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security", "performance"}))
 					d.reopen()
 					d.drive()

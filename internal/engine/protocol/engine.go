@@ -125,14 +125,15 @@ func (e *Engine) load() (uint64, *State, error) {
 // PROVIDER_MISMATCH 硬拒绝、不降级 default。已存在状态时
 // 拒绝且零变化。
 func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
-	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "")
+	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "", nil)
 }
 
 // InitWithMetadata is the façade bootstrap variant.  It preserves Init's
 // original signature for protocol callers while persisting run identity and
 // the typed pre-start intake confirmation in the same authoritative state
-// write.
-func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot string) error {
+// write. sliceStart 非 nil 时是 child run 启动：继承事实与继承拓扑在首次
+// 状态写入一并落账（与受理 phase 同点），不存在无继承事实的 child 中间态。
+func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot string, sliceStart *SliceRunStart) error {
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
 	}
@@ -150,6 +151,12 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.Route = route
 	state.BaseSnapshot = baseSnapshot
 	state.IntakeConfirmationReceipt = confirmation
+	if sliceStart != nil {
+		binding := sliceStart.Binding
+		state.SliceChild = &binding
+		topology := copyTopology(sliceStart.Topology)
+		state.Topology = &topology
+	}
 	_, err := e.commit(state, 0, expectedFingerprint)
 	return err
 }
@@ -1122,10 +1129,29 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 点），通过后钉进 Ask：用户确认边界以此为唯一权威，DECIDE 的候选
 		// 表必须与之集合相等（admitReviewDecision 核对）。schema 层不校验
 		// 该字段——事件 schema 判定先于幂等台账，已接纳事件的重放不得因
-		// 此字段被拒。
+		// 此字段被拒。按 run 形态分流的约束在此接纳处判定：已绑定路线的
+		// run 不再抬路线 Ask（路线只问一次；merge 锁定与 full/custom 绑定
+		// 同为最终，变更走需求变化重走）；child 的候选不含内建 QA 模式。
 		if ev.Request.Control == ControlSelectRoute {
 			if err := validateRouteGateCandidates(ev.Request.RouteGates); err != nil {
 				return Acceptance{}, nil, false, err
+			}
+			if state.RouteMode != "" {
+				detail := "route is already bound and is the binding point; it is not re-selected (change goes through requirement change, reset, or abort)"
+				if state.RouteMode == routeModeMerge {
+					detail = "route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"
+				}
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeReviewDecisionRejected, Detail: detail}
+			}
+			if state.SliceChild != nil {
+				for _, gate := range ev.Request.RouteGates {
+					if gate == "blackbox" || gate == "whitebox" {
+						return Acceptance{}, nil, false, &RejectedError{
+							Code:   CodeReviewDecisionRejected,
+							Detail: fmt.Sprintf("slice route candidates cannot carry the built-in QA mode %q; ordinary QA is not selected or executed per slice", gate),
+						}
+					}
+				}
 			}
 			ask.RouteGates = slices.Clone(ev.Request.RouteGates)
 		}

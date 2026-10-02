@@ -1,0 +1,185 @@
+// slice_test.go 覆盖 child run 的继承身份行为：启动即处于拓扑/路线段、
+// 继承拓扑不可重切、SELECT_ROUTE 候选不含内建 QA、选路线后推进
+// DEVELOPMENT_PARALLEL，且全程不产生自身审查轮（审查结论经继承等价满
+// 足，账本校验在加载边界重算通过）。
+package protocol
+
+import (
+	"testing"
+
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/runtime"
+	definition "formal-gates/internal/engine/testkit/workflow"
+)
+
+func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
+	// 候选含内建 QA 的路线 Ask 在接纳处拒绝（普通 QA 不进 child 候选）。
+	engine, _ := sliceChildEngine(t)
+	fp := fingerprintOf(t, engine)
+	for name, gates := range map[string][]string{
+		"with-blackbox": {"blackbox", "gate.quality"},
+		"with-whitebox": {"whitebox", "gate.quality"},
+	} {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fp); err == nil {
+			t.Fatalf("QA-carrying child route ask %s accepted", name)
+		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+			t.Fatalf("QA-carrying ask %s code = %q (%v)", name, code, err)
+		}
+	}
+
+	// QA-free custom 子集按候选全集顺序归一落账并推进开发段。
+	engine, dir := sliceChildEngine(t)
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"},
+	}})
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 2 ||
+		snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.release" {
+		t.Fatalf("child custom route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	}
+	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase after child route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	}
+	// 绑定后的第二次路线选择拒绝（路线只问一次，child 逐片各一次）——
+	// Ask 抬起即被拒、零状态写入。
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-again", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security", "gate.release"},
+	}}, routeOptions()), fingerprintOf(t, engine)); err == nil {
+		t.Fatal("second route selection ask on the bound child accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("second child selection code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected second selection changed state bytes")
+	}
+}
+
+// TestSliceChildRouteDecisionIsFinalAfterBinding：child 路线绑定后，绑定
+// 前并存的第二个路线 Ask，其决定同样可区分拒绝（逐片各问一次）、零状态
+// 写入，并存 Ask 保持未决、原绑定不变。
+func TestSliceChildRouteDecisionIsFinalAfterBinding(t *testing.T) {
+	engine, dir := sliceChildEngine(t)
+	gates := []string{"gate.quality", "gate.security"}
+	fp := fingerprintOf(t, engine)
+	for _, requestID := range []string{"req-child-bind", "req-child-coexist"} {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}}, routeOptions()), fp); err != nil {
+			t.Fatalf("submit ask %s: %v", requestID, err)
+		}
+	}
+	token, err := engine.Freshness("req-child-bind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := NewReviewDecideEvent("evt-child-bind", "req-child-bind", token, "custom", ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(binding, fp); err != nil {
+		t.Fatalf("submit binding decide: %v", err)
+	}
+	before := stateBytesOf(t, dir)
+	coexist, err := engine.Freshness("req-child-coexist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := NewReviewDecideEvent("evt-child-coexist", "req-child-coexist", coexist, "custom", ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.security"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err == nil {
+		t.Fatal("coexisting child route decide after binding accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("coexisting child decide code = %q (%v)", code, err)
+	}
+	if after := stateBytesOf(t, dir); string(before) != string(after) {
+		t.Fatal("rejected child re-selection changed state bytes")
+	}
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
+		t.Fatalf("child binding after rejection = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	}
+	if ask, pending := snap.State.PendingAsks["req-child-coexist"]; !pending || ask.Resolved {
+		t.Fatalf("coexisting child ask did not survive: %+v", ask)
+	}
+}
+
+// TestSliceChildFullRouteBindsEveryDiscoveredGate：QA-free 候选的 full 路线
+// 全选绑定（候选即全部已发现门，不含 QA）；账本 residue 使加载边界在
+// DEVELOPMENT_PARALLEL 上重算通过（隐含于 LoadMustSucceed）。
+func TestSliceChildFullRouteBindsEveryDiscoveredGate(t *testing.T) {
+	engine, _ := sliceChildEngine(t)
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-full", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
+	}})
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeFull || snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.security" {
+		t.Fatalf("child full route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	}
+	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase after child full route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+	}
+}
+
+// sliceChildEngine 构造已继承 master 拓扑、受理即处于 TOPOLOGY_AND_ROUTE 的
+// child run（继承 revision 与受理确认同为 rev-1；无任何自身审查轮）。
+func sliceChildEngine(t *testing.T) (*Engine, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseTopologyAndRoute)
+	if err != nil {
+		t.Fatalf("new view: %v", err)
+	}
+	fp := fingerprintOf(t, engine)
+	confirmation := reviewConfirmation()
+	sliceStart := &SliceRunStart{
+		Binding: SliceChildBinding{MasterRunID: "run-master", SliceID: "lane-core", RequirementRevision: "rev-1"},
+		Topology: TopologyBinding{
+			Decision: topologySplit, SplitCount: 2,
+			Slices:   []string{"lane-core", "lane-tooling"},
+			Parallel: "two lanes",
+			ACOwners: map[string]string{"AC-001": "lane-core", "AC-002": "lane-tooling"},
+		},
+	}
+	if err := engine.InitWithMetadata(view, testProvider, fp, "run-child", "", confirmation, "", sliceStart); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
+		t.Fatalf("intake receipt: %v", err)
+	}
+	snap := engine.LoadMustSucceed(t)
+	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
+		t.Fatalf("child phase = %s, want TOPOLOGY_AND_ROUTE", snap.State.Phase)
+	}
+	if snap.State.SliceChild == nil || snap.State.SliceChild.MasterRunID != "run-master" || snap.State.SliceChild.SliceID != "lane-core" {
+		t.Fatalf("child binding = %+v", snap.State.SliceChild)
+	}
+	if snap.State.Topology == nil || snap.State.Topology.Decision != topologySplit || snap.State.Topology.Slices[1] != "lane-tooling" || snap.State.Topology.ACOwners["AC-002"] != "lane-tooling" {
+		t.Fatalf("inherited topology = %+v", snap.State.Topology)
+	}
+	// 继承即满足整体审查：两条 series 无任何轮次，也不派发审查工作。
+	if snap.State.ReviewSeries.ProductReview.Completed != 0 || snap.State.ReviewSeries.StartReadiness.Completed != 0 ||
+		len(snap.State.ReviewSeries.ProductReview.RawCandidates) != 0 || len(snap.State.ReviewSeries.StartReadiness.RawCandidates) != 0 {
+		t.Fatalf("child carries its own review rounds: %+v", snap.State.ReviewSeries)
+	}
+	if !snap.State.dualReviewPass() {
+		t.Fatal("inherited reviews do not satisfy the dual-review gate")
+	}
+	if issued := issueReady(t, engine); len(issued) != 0 {
+		t.Fatalf("child dispatched review work: %v", issued)
+	}
+	// 继承绑定不可重切。
+	if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-child-topology", topologyOptions(), "split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		Decision: "split", SplitCount: 2, Slices: []string{"re-cut-a", "re-cut-b"}, Parallel: "re-cut",
+	}}); err == nil {
+		t.Fatal("child topology re-cut accepted")
+	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		t.Fatalf("child re-cut code = %q (%v)", code, err)
+	}
+	return engine, dir
+}

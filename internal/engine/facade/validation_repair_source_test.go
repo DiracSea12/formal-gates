@@ -13,7 +13,6 @@ import (
 
 func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(t *testing.T) {
 	d := plannedValidationDriver(t, nil, commandPlan(), "quality")
-	d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 	dev, di := planBatchAction(d, "command")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	d.materialize()
@@ -137,7 +136,6 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 			reopen := scenario == "reopen"
 			inflight := scenario == "inflight"
 			d := plannedValidationDriver(t, nil, commandPlan(), "quality")
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			id, in := planBatchAction(d, "command")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 			d.materialize()

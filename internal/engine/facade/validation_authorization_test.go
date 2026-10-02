@@ -476,6 +476,8 @@ func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) 
 				}
 			}
 			if change == "route-addition" {
+				unlockRouteByRequirementRedo(d)
+				unlockRouteByRequirementRedo(d)
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 				d.drive()
 			} else {

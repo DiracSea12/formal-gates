@@ -67,6 +67,7 @@ func TestGateRangeKeepsRunBaseAcrossRepairRouteAndRequirement(t *testing.T) {
 	if w.Candidate == d.run.Validation.Waves[0].Candidate {
 		t.Fatal("fixture did not materialize a repaired candidate")
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security", "performance"}))
 	d.reopen()
 	d.drive()

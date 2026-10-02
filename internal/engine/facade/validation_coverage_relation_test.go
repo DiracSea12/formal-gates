@@ -196,6 +196,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	d.business(id, gateRepairResult(in))
 	d.materialize()
 	d.materialize()
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality", "security"}})
 	id, in = d.gateAction("security")
 	for _, input := range d.run.ValidationInputs {

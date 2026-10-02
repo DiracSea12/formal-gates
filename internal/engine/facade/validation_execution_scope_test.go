@@ -222,11 +222,13 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 			source := d.run.Validation.Waves[0].Candidate.Identity
 			switch change {
 			case "route":
+				unlockRouteByRequirementRedo(d)
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 			case "carry":
 				confirmValidationWork(d, "")
 			case "carry-route":
 				confirmValidationWork(d, "")
+				unlockRouteByRequirementRedo(d)
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 			case "redo":
 				confirmValidationWork(d, original)

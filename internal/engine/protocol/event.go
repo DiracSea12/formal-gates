@@ -239,20 +239,31 @@ type RoundGrantDecision struct {
 // TopologyDecision 是 CONFIRM_TOPOLOGY 的精确拓扑决定：no-split 必带
 // 理由 note；split 必带 SplitCount≥2、与之一致的 Slices 与并行度
 // （incremental-seal-plan §2.3：矩阵 start 行不声明拆分意向，绑定唯一
-// 发生在此处）。
+// 发生在此处）。ACOwners 是 split 的验收条件主责声明列表——载荷以列表
+// 形态携带使重复声明可区分拒绝，绑定点归一为 map 后落账。
 type TopologyDecision struct {
-	Decision   string   `json:"decision"`
-	Note       string   `json:"note,omitempty"`
-	SplitCount int      `json:"splitCount,omitempty"`
-	Slices     []string `json:"slices,omitempty"`
-	Parallel   string   `json:"parallel,omitempty"`
+	Decision   string    `json:"decision"`
+	Note       string    `json:"note,omitempty"`
+	SplitCount int       `json:"splitCount,omitempty"`
+	Slices     []string  `json:"slices,omitempty"`
+	Parallel   string    `json:"parallel,omitempty"`
+	ACOwners   []ACOwner `json:"acOwners,omitempty"`
+}
+
+// ACOwner 是 split 拓扑决定里的单条验收条件主责声明（AC-ID → 分片名或
+// master-merge）。owner 引用的合法性（∈ Slices ∪ {master-merge}）与 AC
+// 宇宙由绑定点对确认需求校验。
+type ACOwner struct {
+	AC    string `json:"ac"`
+	Owner string `json:"owner"`
 }
 
 // RouteDecision 是 SELECT_ROUTE 的显式门列表决定：候选列表不得含合并验证
-// （合并验证只在拆分运行中自动附加）；full 携带完整候选全集且必含内建黑盒
-// 与白盒 QA（Selected 必须为空），custom 携带非空、逐项属于候选列表的选
-// 择（可选全集）。门目录发现不在协议层——全集与选择都由 payload 显式给
-// 出，引擎只做集合约束校验。
+// （合并验证只在拆分运行中自动附加）；full 携带完整候选全集（Selected 必
+// 须为空），custom 携带非空、逐项属于候选列表的选择（可选全集）。门目录
+// 发现不在协议层——全集与选择都由 payload 显式给出，引擎只做集合约束校
+// 验；full 必含双内建 QA（普通 run）与 child 候选不含 QA 依赖 run 形态，
+// 在接纳层判定。
 type RouteDecision struct {
 	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`
 	Mode            string                       `json:"mode"`

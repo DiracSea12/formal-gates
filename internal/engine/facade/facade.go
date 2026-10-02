@@ -61,7 +61,9 @@ const (
 // StartRequest is the candidate bootstrap request.  Runtime is not a caller
 // selectable switch in normal use; an admitted target identity/package digest
 // selects the candidate engine.  Runtime is retained as a read-only projection
-// for diagnostics and is always set to "engine" by Start.
+// for diagnostics and is always set to "engine" by Start.  MasterRunID 与
+// SliceID 同时非空时是分片 child 启动：在 master run 上认领分片并继承整体
+// 拓扑与审查结论；两者皆空是普通启动，行为不变。
 type StartRequest struct {
 	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
@@ -75,6 +77,8 @@ type StartRequest struct {
 	DefinitionSource          string                    `json:"definitionSource"`
 	DefinitionDigest          string                    `json:"definitionDigest"`
 	IntakeConfirmationReceipt IntakeConfirmationReceipt `json:"intakeConfirmationReceipt"`
+	MasterRunID               string                    `json:"masterRunId,omitempty"`
+	SliceID                   string                    `json:"sliceId,omitempty"`
 }
 
 // Envelope is the exact six-field identity projected by the candidate state.
@@ -577,6 +581,20 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if req.DefinitionSource != DefaultDefinitionSource {
 		return nil, Run{}, unsupported("definitionSource", DefaultDefinitionSource, req.DefinitionSource)
 	}
+	// 分片 child 启动：认领先于 child 状态落盘（两写窗的中断以认领为事实，
+	// 同 childRunID 重入经同一创建路径补齐）。锁序＝child run 锁（上方已持
+	// 有）→master run 锁，无人持 master 锁等 child 锁，无环。
+	var sliceStart *protocol.SliceRunStart
+	if req.MasterRunID != "" || req.SliceID != "" {
+		if req.MasterRunID == "" || req.SliceID == "" {
+			return nil, Run{}, fmt.Errorf("engine start: a slice child requires both the master run id and the slice id")
+		}
+		claim, err := claimMasterSlice(root, req)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		sliceStart = claim
+	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), req.RunID)
 	if _, err := os.Stat(stateDir); err == nil {
 		return nil, Run{}, fmt.Errorf("engine start: run %q already exists", req.RunID)
@@ -634,12 +652,18 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	view, err := decision.NewState(cd.Version, runtime.PhaseIntakeRegistered)
+	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
+	// SELECT_ROUTE）。
+	phase := runtime.PhaseIntakeRegistered
+	if sliceStart != nil {
+		phase = runtime.PhaseTopologyAndRoute
+	}
+	view, err := decision.NewState(cd.Version, phase)
 	if err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot); err != nil {
+	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, sliceStart); err != nil {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
@@ -691,6 +715,33 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	intentWritten = false
 	_ = os.Remove(intentPath)
 	return f, run, nil
+}
+
+// claimMasterSlice 在 master run 锁内完成 child run 的分片认领并返回继承
+// 事实。认领互斥由 master run 锁＋引擎 CAS 共同保证（并行创建同一分片恰成
+// 一个）；唯一性与身份匹配的权威判定在引擎 ClaimSlice（认领即事实——异
+// id 重入拒绝、同 id 重入幂等）。
+func claimMasterSlice(root string, req StartRequest) (*protocol.SliceRunStart, error) {
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(EngineNamespace), req.MasterRunID, "state.json")); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("engine start: master run %q has no engine state", req.MasterRunID)
+		}
+		return nil, err
+	}
+	unlock, err := coordination.AcquireRunWaiting(root, req.MasterRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	master, err := Open(root, req.MasterRunID)
+	if err != nil {
+		return nil, fmt.Errorf("engine start: open master run %q: %w", req.MasterRunID, err)
+	}
+	claim, err := master.engine.ClaimSlice(req.SliceID, req.RunID, req.IntakeConfirmationReceipt.RequirementRevision, req.BaseSnapshot, emptyFingerprint())
+	if err != nil {
+		return nil, fmt.Errorf("engine start: claim slice %q of master run %q: %w", req.SliceID, req.MasterRunID, err)
+	}
+	return claim, nil
 }
 
 // Open loads an existing engine run and validates all six identity fields

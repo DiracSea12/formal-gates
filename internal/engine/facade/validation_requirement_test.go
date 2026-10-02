@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -40,6 +41,54 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 	d.submit(event)
 	ask := d.run.PendingRequirementAsk
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}})
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+}
+
+// TestReadinessRedoOnBoundRouteRequiresRouteRedo：开发计划确认搭载在路线
+// 决定上（路线只问一次），已绑定路线的 run 勾选重走 start-readiness 而
+// 不重走路线时，新计划将永远等不到确认通道——该组合可区分拒绝、零写。
+func TestReadinessRedoOnBoundRouteRequiresRouteRedo(t *testing.T) {
+	d := newValidationDriver(t, "quality")
+	var choices []protocol.RequirementWorkDecision
+	for _, item := range d.run.RequirementWork {
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "carry every confirmed duty"})
+	}
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: "sha256:stall-guard", DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:readiness-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices}
+	request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	ask := d.run.PendingRequirementAsk
+	decision := protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only"}}}
+	if _, _, err := d.f.Submit(decision); err == nil {
+		t.Fatal("readiness-only redo on a bound route accepted")
+	}
+	if d.run.Review.RouteMode != "custom" {
+		t.Fatalf("rejected decision changed the route binding: %q", d.run.Review.RouteMode)
+	}
+}
+
+// unlockRouteByRequirementRedo 走需求变化勾选重走路线（路线只问一次的
+// 唯一变更通道）：PRESERVED 全携解除当前路线绑定并重新观察需求文档；
+// 已派发工作与波次证据不动，随后的重新选择由调用方完成。
+func unlockRouteByRequirementRedo(d *validationDriver) {
+	d.t.Helper()
+	d.routeRedos++
+	document := validationDocument + strings.Repeat("\n", d.routeRedos+1)
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	var choices []protocol.RequirementWorkDecision
+	for _, item := range d.run.RequirementWork {
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "route redo carries every confirmed duty"})
+	}
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:route-redo", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoRoute: true, WorkDecisions: choices}
+	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(event)
+	ask := d.run.PendingRequirementAsk
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoRoute: true, WorkDecisions: choices, Reason: "redo the route selection boundary"}}})
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 }
 
@@ -170,6 +219,7 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 	d.drive()
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()

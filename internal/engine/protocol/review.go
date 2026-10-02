@@ -90,14 +90,16 @@ func validateReviewDecisionPayload(payload *ReviewDecisionPayload) error {
 }
 
 // validateTopologyDecision 校验拓扑决定的形状：no-split 必带理由 note 且
-// 不携带拆分参数；split 必有 SplitCount≥2、等长非空 Slices 与并行度。
+// 不携带拆分参数；split 必有 SplitCount≥2、等长 Slices 与并行度，分片名须
+// 是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child 认
+// 领键都以它进行）。AC 责任映射对确认需求的校验在绑定点（slice.go）。
 func validateTopologyDecision(topology *TopologyDecision) error {
 	switch topology.Decision {
 	case topologyNoSplit:
 		if strings.TrimSpace(topology.Note) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a no-split topology requires the mandatory reason note"}
 		}
-		if topology.SplitCount != 0 || len(topology.Slices) != 0 || strings.TrimSpace(topology.Parallel) != "" {
+		if topology.SplitCount != 0 || len(topology.Slices) != 0 || strings.TrimSpace(topology.Parallel) != "" || len(topology.ACOwners) != 0 {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a no-split topology cannot carry split parameters"}
 		}
 	case topologySplit:
@@ -108,8 +110,13 @@ func validateTopologyDecision(topology *TopologyDecision) error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("a split topology's slice list (%d) must match the declared count (%d)", len(topology.Slices), topology.SplitCount)}
 		}
 		for _, slice := range topology.Slices {
-			if strings.TrimSpace(slice) == "" {
-				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a split topology cannot carry an empty slice name"}
+			if !validSliceID(slice) {
+				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("split slice name %q must be a lowercase run-id shaped identifier (letters, digits, hyphens)", slice)}
+			}
+		}
+		for _, entry := range topology.ACOwners {
+			if strings.TrimSpace(entry.AC) == "" || strings.TrimSpace(entry.Owner) == "" {
+				return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "split AC responsibility entries need both the acceptance condition id and the owner"}
 			}
 		}
 		if strings.TrimSpace(topology.Parallel) == "" {
@@ -167,18 +174,16 @@ func sameGateSet(a, b []string) bool {
 }
 
 // validateRouteDecision 校验路线决定的形状：候选列表不得含合并验证（合并
-// 验证只在拆分运行中自动附加）；full 携带显式完整门全集、必含内建黑盒与
-// 白盒 QA 且 Selected 为空；custom 携带非空、无重复、逐项属于候选列表的
-// 选择，可选全集（sliced-runs-confirmation-and-qa-refactor 需求9：至少选
-// 一项，可省略任一）。
+// 验证只在拆分运行中自动附加）；full 携带显式完整门全集且 Selected 为空；
+// custom 携带非空、无重复、逐项属于候选列表的选择，可选全集
+// （sliced-runs-confirmation-and-qa-refactor 需求9：至少选一项，可省略任
+// 一）。full 对内建 QA 模式的要求与 child 候选不含 QA 的约束依赖 run 形
+// 态，在 SELECT_ROUTE 接纳层判定（admitReviewDecision）。
 func validateRouteDecision(route *RouteDecision) error {
 	switch route.Mode {
 	case routeModeFull:
 		if len(route.Selected) != 0 {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route selects the complete gate list without a subset"}
-		}
-		if !slices.Contains(route.Gates, "blackbox") || !slices.Contains(route.Gates, "whitebox") {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route must carry both built-in QA modes (blackbox and whitebox) alongside every discovered gate"}
 		}
 	case routeModeCustom:
 		if len(route.Selected) == 0 {
@@ -225,7 +230,12 @@ func (s *State) confirmedRequirementRevision(revision string) bool {
 // effectivePass accepts a PASS at confirmed content only after any fresh-round
 // obligation is discharged. Requirement confirmations either request redo or
 // carry the existing conclusion; the content hash need not be unique in history.
+// Slice children satisfy the same gate through their inherited binding
+// (inheritedReviewPass)——child 不自跑审查轮。
 func (s *State) effectivePass(series review.Series) bool {
+	if s.SliceChild != nil {
+		return s.inheritedReviewPass(series)
+	}
 	// FreshOwed 在则该系列不算 PASS：重走义务未清偿时，即便投影被纠正
 	// 刷成携已确认 revision 的 PASS，门也不开。
 	return series.Effective.Status == reviewStatusPass && !series.FreshOwed && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
@@ -475,6 +485,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				Detail: fmt.Sprintf("topology payload decision %q does not match the chosen option %q (closed set: no-split, split)", payload.Topology.Decision, decide.Choice),
 			}
 		}
+		if state.SliceChild != nil {
+			return reviewReject(fmt.Errorf("a slice child inherits its master's topology binding; it is not re-cut (change goes through requirement change, reset, or abort)"))
+		}
 		if state.Topology != nil {
 			return reviewReject(fmt.Errorf("topology is already bound and is the binding point; it is not re-cut (change goes through requirement change, reset, or abort)"))
 		}
@@ -483,13 +496,34 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		decision := payload.Topology
-		state.Topology = &TopologyBinding{
+		binding := &TopologyBinding{
 			Decision:   decision.Decision,
 			Note:       strings.TrimSpace(decision.Note),
 			SplitCount: decision.SplitCount,
 			Slices:     append([]string{}, decision.Slices...),
 			Parallel:   strings.TrimSpace(decision.Parallel),
 		}
+		if decision.Decision == topologySplit {
+			// 合并路线锁定后不再有常规路线选择：仍有未决 SELECT_ROUTE Ask
+			// 时不绑定——先了结该 Ask，绑定后的 run 不携带不可能再决定的
+			// 路线 Ask。
+			for id, pending := range state.PendingAsks {
+				if pending.Control == ControlSelectRoute && !pending.Resolved {
+					return reviewReject(fmt.Errorf("route selection ask %s is still pending; settle it before binding the split topology (the binding locks the merge route)", id))
+				}
+			}
+			owners, err := state.splitACOwners(decision)
+			if err != nil {
+				return reviewReject(err)
+			}
+			binding.ACOwners = owners
+			// split 绑定同一事务锁定合并路线：保留总任务实例只跑强制的合并
+			// 门＋合并 QA，不抬 SELECT_ROUTE（legacy workflow.go 同点锁定；
+			// 合并验证在合并收尾执行）。
+			state.RouteMode = routeModeMerge
+			state.SelectedGates = mergeRouteGates()
+		}
+		state.Topology = binding
 		return nil
 	case ControlSelectRoute:
 		if branch != "route" {
@@ -503,11 +537,34 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: full, custom)", payload.Route.Mode, decide.Choice),
 			}
 		}
+		// 路线绑定即最终（需求 7「路线只问一次」：单一 run 一次、拆后逐片
+		// 各一次；与拓扑最终性同族）：绑定后的第二次决定可区分拒绝、零写、
+		// Ask 存活；变更走需求变化勾选重走路线（解除后重选）、reset 或
+		// abort。split 绑定锁定的合并路线同样不可选择。
+		if state.RouteMode == routeModeMerge {
+			return reviewReject(fmt.Errorf("route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"))
+		}
+		if state.RouteMode != "" {
+			return reviewReject(fmt.Errorf("route is already bound and is the binding point; it is not re-selected (change goes through requirement change, reset, or abort)"))
+		}
 		// 候选表必须与 Ask 钉住的全集集合相等（顺序无关）：少列或多列任一
 		// 门，决定声称的候选表就不再是用户所见并批准的全集——可区分拒
 		// 绝、零写，Ask 保持未决，修正后的决定仍可提交。
 		if !sameGateSet(payload.Route.Gates, ask.RouteGates) {
 			return reviewReject(fmt.Errorf("route candidate gates %v do not match the gate list pinned on ask %s (%v); the decide must repeat exactly the list the user approved", payload.Route.Gates, requestID, ask.RouteGates))
+		}
+		// 路线候选对内建 QA 模式的约束按 run 形态分流（child 的普通 QA 不进
+		// 候选、不选择、不执行；普通 run 的 full 必含双内建 QA）。
+		if state.SliceChild != nil {
+			for _, gate := range payload.Route.Gates {
+				if gate == "blackbox" || gate == "whitebox" {
+					return reviewReject(fmt.Errorf("slice route candidates cannot carry the built-in QA mode %q; ordinary QA is not selected or executed per slice", gate))
+				}
+			}
+		} else if payload.Route.Mode == routeModeFull {
+			if !slices.Contains(payload.Route.Gates, "blackbox") || !slices.Contains(payload.Route.Gates, "whitebox") {
+				return reviewReject(fmt.Errorf("full route must carry both built-in QA modes (blackbox and whitebox) alongside every discovered gate"))
+			}
 		}
 		if state.Topology == nil {
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))
@@ -596,8 +653,10 @@ func (s *State) advanceReviewPhases() error {
 			}
 		case runtime.PhaseTopologyAndRoute:
 			// 进入开发的双审门与 SELECT_ROUTE 接纳同条件：账本只能证明
-			// 双 series 携已确认 revision 的 effective PASS 时才推进。
-			if s.Topology != nil && s.RouteMode != "" && s.dualReviewPass() {
+			// 双 series 携已确认 revision 的 effective PASS 时才推进
+			//（child 经继承等价满足后照常放行）。merge 路线的保留总任务
+			// 实例不进开发——停等 children，合并验证属收尾。
+			if s.Topology != nil && s.RouteMode != "" && s.RouteMode != routeModeMerge && s.dualReviewPass() {
 				target = runtime.PhaseDevelopmentParallel
 			}
 		}
@@ -614,16 +673,18 @@ func (s *State) advanceReviewPhases() error {
 // 都是单调的持久事实（受理回执、完成过的审查轮、拓扑/路线确认决定）。
 // effective 投影会随新的阻塞轮或需求修订重走合法回落，当前绑定会按用户
 // 勾选的重走范围解除，但不会抹掉"该阶段曾经走完"的事实，因此 residue
-// 不以当前 effective 或当前绑定为准。
+// 不以当前 effective 或当前绑定为准。child 的审查阶段 residue 由继承事实
+// 等价成立（不伪造审查轮账目）。
 func (s *State) phaseLedgerFloor() int {
 	floor := 0
 	if s.IntakeReceipt != nil {
 		floor = 1
 	}
-	if s.hasReviewRounds(review.ProductReview) {
+	inherited := s.SliceChild != nil
+	if s.hasReviewRounds(review.ProductReview) || inherited {
 		floor = 2
 	}
-	if s.hasReviewRounds(review.StartReadiness) {
+	if s.hasReviewRounds(review.StartReadiness) || inherited {
 		// start-readiness 的 TECHNICAL_REVIEW→START_READINESS→
 		// TOPOLOGY_AND_ROUTE 两边同条件，residue 同源；且其候选接纳
 		// 前置（双审顺序守卫）隐含接纳时 product-review 曾 effective PASS。
@@ -649,9 +710,13 @@ func (s *State) hasReviewRounds(action review.Action) bool {
 // topologyRouteConfirmed 报告拓扑与路线是否都曾被用户确认过：决定台账
 // （Decisions）不可变且不因重走解除，因此它是比当前绑定更强的单调
 // residue——需求修订勾选重走拓扑/路线会清空当前绑定，但已进入过开发的
-// run phase 仍须被账本证明合法。
+// run phase 仍须被账本证明合法。child 的拓扑 residue 来自继承绑定（与用
+// 户确认同级：同样不可重切），路线仍由自身决定台账证明。
 func (s *State) topologyRouteConfirmed() bool {
 	var topology, route bool
+	if s.SliceChild != nil {
+		topology = true
+	}
 	for _, decision := range s.Decisions {
 		switch decision.Control {
 		case ControlConfirmTopology:

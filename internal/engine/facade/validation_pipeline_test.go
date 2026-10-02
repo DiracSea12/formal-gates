@@ -162,6 +162,10 @@ type validationDriver struct {
 	// 结建模为一次宿主提交并推进链上当前提交。
 	git    *vcs.Provider
 	frozen *frozenGitRepo
+	// routeRedos 记录本 driver 已走过的路线重走次数：每次重走需要一个
+	// 全新的需求文档 revision（账本要求严格单调），递增换行数产生唯一
+	// revision。
+	routeRedos int
 }
 
 // host 返回本 driver 使用的宿主 provider 身份。
@@ -298,11 +302,10 @@ func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *p
 	return d
 }
 
-// plannedValidationDriverAtVCS 以注入的 Git runner 建立已过审查/拓扑/路线/需
-// 求确认的驱动（runner nil＝生产 exec，用于真仓链路）。
-func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
+// passPreDevelopmentReviews 完成两条开发前审查系列的 PASS 轮（产品审→
+// start-readiness，后者携结构化粒度计划），驱动至拓扑确认起点。
+func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol.GranularityReview) {
 	t.Helper()
-	d := startValidationDriverAtVCS(t, root, provider, runner, base, inventory)
 	revision := d.revision
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		id := ""
@@ -314,10 +317,10 @@ func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vc
 		if id == "" {
 			t.Fatalf("missing %s dispatch: %+v", action, d.run)
 		}
-		if provider != DefaultProvider {
+		if d.provider != DefaultProvider {
 			// 可计量 provider：审查派发补零用量 transcript 与 sidecar 生命周期
 			// 事件，结果完成链走 bridge READY。
-			d.meteredSpawn(root, id)
+			d.meteredSpawn(d.f.root, id)
 		} else {
 			d.receipt(id)
 		}
@@ -333,9 +336,17 @@ func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vc
 		d.submit(e)
 		d.drive()
 	}
+}
+
+// plannedValidationDriverAtVCS 以注入的 Git runner 建立已过审查/拓扑/路线/需
+// 求确认的驱动（runner nil＝生产 exec，用于真仓链路）。
+func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
+	t.Helper()
+	d := startValidationDriverAtVCS(t, root, provider, runner, base, inventory)
+	passPreDevelopmentReviews(t, d, plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 	d.confirmRoute(routeDecisionForGates(gates))
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	return d
 }

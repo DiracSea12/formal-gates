@@ -42,6 +42,7 @@ func gateRepairResult(in protocol.ValidationInput) protocol.ValidationResult {
 func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
 	oldDigest := d.run.Validation.Waves[0].ExpectedDigest
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -69,6 +70,7 @@ func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	resolveGateFinding(d, finding, oldID)
 	repairID, repairInput := d.action("engine.repair")
 	d.receipt(repairID)
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -131,6 +133,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	d.drive()
 	reviewID, reviewInput := d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.receipt(reviewID)
@@ -151,6 +154,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 	d.reviewReady()
 	original := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	for i := 0; i < 2; i++ {
+		unlockRouteByRequirementRedo(d)
 		d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 		d.reopen()
 		d.drive()
@@ -173,6 +177,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -199,6 +204,7 @@ func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design")
 	manifest := simpleManifest(in)
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	currentID, current := d.action("engine.qa.design")
@@ -231,6 +237,7 @@ func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
 	if original.Status != "COMPLETE" || !original.Counted {
 		t.Fatal("setup did not complete")
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -270,6 +277,7 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 					}
 				}
 			}
+			unlockRouteByRequirementRedo(d)
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 			d.reopen()
 			d.drive()
@@ -336,12 +344,18 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 			if original.Adapter == nil || original.Adapter.Operation != "op.candidate" || original.Adapter.Params["stage"] != stage {
 				t.Fatal("fixture did not issue exact candidate stage")
 			}
+			// 重走解除绑定后重新选择加入 security：重走确认了新需求
+			// revision，在途旧 intent 不被改写（下方断言），结清后候选按
+			// 当前路线重新登账，逐个回执直至当前阶段完成。
+			unlockRouteByRequirementRedo(d)
 			d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality", "security"}))
 			d.reopen()
 			if d.run.AdapterIntents[original.ActionID].PayloadDigest != original.PayloadDigest {
-				t.Fatal("route addition rewrote candidate intent")
+				t.Fatal("route redo rewrote the in-flight candidate intent")
 			}
-			d.materialize()
+			for len(d.run.AdapterIntents) > 0 {
+				d.materialize()
+			}
 			if stage == "QA_ARTIFACT" {
 				id, in = d.action("engine.qa.review.rationale")
 				approved := approvedReview(in.Manifest)
@@ -369,6 +383,7 @@ func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	if before.Attempts != 1 || before.MaxAttempts != 2 || retry.Binding.Task != task {
 		t.Fatal("setup did not retain first failure")
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -393,16 +408,47 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 	if old.Status != "DISPOSED" || old.DispositionReason == "" {
 		t.Fatal("setup did not explicitly dispose gate")
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
+	// 需求重走跨 generation 重建波次：显式处置不自动过账（处置本身 retire
+	// 了其义务的工作项，无 CARRY 授权可依），新波对该门重新裁定；原波的
+	// 处置与理由作为证据原样保留。
+	retired := d.run.Validation.Waves[0].Targets[in.Binding.Task.String()]
+	if retired == nil || retired.Status != "DISPOSED" || retired.DispositionReason != old.DispositionReason {
+		t.Fatal("route redo rewrote the original disposition evidence")
+	}
+	qid, quality := d.gateAction("quality")
+	d.receipt(qid)
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qid, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "gate-environment-unavailable"}})
+	d.chooseValidation(protocol.ValidationRequest{Kind: "DISPOSE", Target: quality.Binding.Task.String()}, "")
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	for _, target := range current.Targets {
-		if target.Gate == "quality" && (target.Status != "DISPOSED" || target.DispositionReason != old.DispositionReason) {
-			t.Fatal("route rebind turned disposition into PASS or lost reason")
-		}
+	if target := current.Targets[quality.Binding.Task.String()]; target == nil || target.Status != "DISPOSED" || target.DispositionReason == "" {
+		t.Fatal("route redo blocked re-disposing the rebuilt gate target")
 	}
 	d.gateAction("security")
+}
+
+// TestRouteRedoUnlocksTheBoundSelection：路线只问一次的合法变更通道——
+// 绑定后经需求变化勾选重走路线解除绑定（RouteMode 清空、已生效义务在
+// 册），重新 Ask/决定照常接纳并落账新绑定，开发继续。
+func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
+	d := newValidationDriver(t, "quality")
+	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 1 {
+		t.Fatalf("fixture route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	}
+	unlockRouteByRequirementRedo(d)
+	if d.run.Review.RouteMode != "" {
+		t.Fatalf("requirement redo left the route bound: %q", d.run.Review.RouteMode)
+	}
+	d.confirmRoute(routeDecisionForGates([]string{"quality", "security"}))
+	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 2 ||
+		d.run.Review.SelectedGates[0] != "quality" || d.run.Review.SelectedGates[1] != "security" {
+		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	}
+	d.drive()
+	d.action("engine.development.batch")
 }
 
 func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
@@ -413,24 +459,15 @@ func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
 	for _, route := range changedRoutes {
 		d := newValidationDriver(t, "blackbox", "quality")
 		d.reviewReady()
+		// 路线绑定即最终：换 QA 或去义务的变更不走第二次选择（Ask 直接可
+		// 区分拒绝、零写），只可经需求变化勾选重走解除后重新选择。
 		requestID := d.eventID()
 		request, err := protocol.NewRouteRequestEvent(requestID, route.Gates, protocol.AskOption{ID: protocol.AskOptionID(route.Mode), Label: "Select route"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		d.submit(request)
-		var token string
-		for _, ask := range d.run.PendingAsks {
-			if ask.RequestID == string(requestID) {
-				token = ask.Token
-			}
-		}
-		event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(requestID), token, protocol.AskOptionID(route.Mode), protocol.ReviewDecisionPayload{Route: &route})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err = d.f.Submit(event); err == nil {
-			t.Fatalf("accepted post-development route %s %v", route.Mode, route.Gates)
+		if _, _, err = d.f.Submit(request); err == nil {
+			t.Fatalf("accepted a re-selection ask after the route was bound: %s %v", route.Mode, route.Gates)
 		}
 		d.reopen()
 		if len(d.run.Validation.Waves) != 1 || len(d.run.Review.SelectedGates) != 2 {
@@ -448,6 +485,7 @@ func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
@@ -520,6 +558,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	if wave.Status != "COLLECTING" {
 		t.Fatalf("expected pending quality gate, got %s", wave.Status)
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()

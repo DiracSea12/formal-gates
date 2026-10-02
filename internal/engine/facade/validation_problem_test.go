@@ -87,6 +87,7 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	if current.Status != "COMPLETE" {
 		t.Fatalf("resolved baseline not complete: %s", current.Status)
 	}
+	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.drive()
 	id, in = d.gateAction("security")
