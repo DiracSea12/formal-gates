@@ -921,3 +921,7 @@ R5f 修复后 full 路线重跑三回合（runs 12-14，证据 .harness/validati
 - **P2 三层答案重试继承**：decodeCanaryAnswer 泛型化——每次解码从零值开始、整份成功才换入，重试省略字段不可继承被拒答案的 PASS；离线测试持评审复现场景。
 - **P2 authoring workspace（§7.1）**：白盒 authoring 现在独立注册工作区——AUTHORING 意图（params.Base=Dn）时建真 detach worktree、白盒设计与用例审回合 workspace＝该区（identity.json 亲证）、QA_ARTIFACT 在区内提交声明路径并对 Dn..head 区间验 test-only、REVIEW_READY 把工件复制进主项目终候选；引擎时序五项事实亲核（qa.design 仅在 AuthoringWorkspace 非空后投影等）。
 主代理独立复核（全部亲跑）：三代理 diff 亲读（互斥窗口/补偿删除/StagedOnly 分类/persistence 白名单/泛型解码/native 错误费用/authoring 机制）；评审探针 overlay 亲跑（可表示项全绿：发布漂移/未暂存拒绝/答案继承）；全量 internal+cmd 除一项 K5 恢复不变量偶发外全绿——该失败项隔离复跑 3＋5 次（含 race）全绿、与本次改动无依赖路径（K5 组合层不 import engine facade），按偶发如实记录不掩盖。
+
+## R5g 后 full canary 复跑绿链＋窗口互斥语义追认（2026-10-02，机主「1.可以 2 跑」）
+
+机主追认排队语义（晋升窗口与需求变化接纳互斥——接纳后零新 Git 写）并授权复跑。run 15（证据 engine-canary-20261002T1*，R5g 修复后的引擎＋驱动器）**首跑即绿**：PASS 1733.05s、16 派发 17 次真实调用、1,438,736 tokens（1 次被拒调用照常入账）。全链＝审查→开发→黑盒设计＋**白盒设计于独立 authoring 工作区**（identity.json workspace＝…/004/qa-authoring，非主项目——P2-6 修复实跑验证）→三层用例审→第一波双模式执行真实 FAIL＋回归门 FAIL→裁决→真实返修→复验波双执行＋门→晋升（窗口互斥语义下真实走通）→终态 COMPLETE，全部终态断言过。本轮真实花费 17 调用/1,438,736；canary 累计 82 调用、5,952,398 tokens。引擎与驱动器本轮零新缝。
