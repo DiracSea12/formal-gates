@@ -908,15 +908,20 @@ func (f *Facade) sealDelivered() error {
 
 // Submit accepts one typed protocol event and immediately computes the next
 // boundary.  The event itself remains the only external write channel.
-// 需求变化接纳（Phase A 载体：KindRequestControl ∧ Control==
-// ControlRequestRequirementChange）与晋升执行窗在同一把等待式锁上互斥：窗口
-// 内到达的接纳等待至窗口关闭、作用于已提交事实；其余事件不加锁（不阻断常规
-// 控制/结果流）。
+// 每个撤销晋升资格的控制接纳与晋升执行窗在同一把等待式锁上互斥：需求变化
+// （Phase A 载体：KindRequestControl ∧ Control==ControlRequestRequirementChange）
+// 与 abort 决定（词表权威 internal/engine/protocol/abort.go：对 ControlAbort/
+// ControlValidation/ControlRecovery 未决 Ask 的 Choice=="abort" DECIDE）——窗
+// 口内到达的接纳等待至窗口关闭、作用于已提交事实，任何此类接纳之后不再有
+// 窗口内的新 Git 写。abort 的 REQUEST 不加锁（只落未决 Ask、不记决定，资格
+// 不变）；等待过的 DECIDE 可能携带 stale freshness token（窗口内的晋升提交
+// 已推进 revision），按既有 STALE_FRESHNESS 拒绝与重取指引处理——设计内的
+// 新鲜度行为。其余事件不加锁（不阻断常规控制/结果流）。
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
-	if event.Kind == protocol.KindRequestControl && event.Request != nil && event.Request.Control == protocol.ControlRequestRequirementChange {
+	if (event.Kind == protocol.KindRequestControl && event.Request != nil && event.Request.Control == protocol.ControlRequestRequirementChange) || f.recordsAbortDecision(event) {
 		unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -936,6 +941,30 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	}
 	run, err := f.projectOrSummary()
 	return acceptance, run, err
+}
+
+// recordsAbortDecision 报告事件是否落账一条 abort 决定——撤销晋升资格的第
+// 二接纳族。词表权威在 internal/engine/protocol/abort.go：Choice=="abort" 且
+// 控制为 ControlAbort/ControlValidation/ControlRecovery 三者之一。DECIDE 载
+// 荷不携带控制：控制随请求创建固定在未决 Ask 上，此处按 request ID 查账；
+// Ask 不在账时事件必被接纳层拒绝（零状态变化），无需等待。
+func (f *Facade) recordsAbortDecision(event protocol.Event) bool {
+	if event.Kind != protocol.KindDecide || event.Decide == nil || event.Decide.Choice != "abort" {
+		return false
+	}
+	snap, err := f.engine.Load()
+	if err != nil {
+		return false
+	}
+	ask, ok := snap.State.PendingAsks[string(event.Decide.Request)]
+	if !ok {
+		return false
+	}
+	switch ask.Control {
+	case protocol.ControlAbort, protocol.ControlValidation, protocol.ControlRecovery:
+		return true
+	}
+	return false
 }
 
 // replayTerminalEvent reads the last stable receipt while cleanup is pending

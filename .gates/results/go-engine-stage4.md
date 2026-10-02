@@ -925,3 +925,9 @@ R5f 修复后 full 路线重跑三回合（runs 12-14，证据 .harness/validati
 ## R5g 后 full canary 复跑绿链＋窗口互斥语义追认（2026-10-02，机主「1.可以 2 跑」）
 
 机主追认排队语义（晋升窗口与需求变化接纳互斥——接纳后零新 Git 写）并授权复跑。run 15（证据 engine-canary-20261002T1*，R5g 修复后的引擎＋驱动器）**首跑即绿**：PASS 1733.05s、16 派发 17 次真实调用、1,438,736 tokens（1 次被拒调用照常入账）。全链＝审查→开发→黑盒设计＋**白盒设计于独立 authoring 工作区**（identity.json workspace＝…/004/qa-authoring，非主项目——P2-6 修复实跑验证）→三层用例审→第一波双模式执行真实 FAIL＋回归门 FAIL→裁决→真实返修→复验波双执行＋门→晋升（窗口互斥语义下真实走通）→终态 COMPLETE，全部终态断言过。本轮真实花费 17 调用/1,438,736；canary 累计 82 调用、5,952,398 tokens。引擎与驱动器本轮零新缝。
+
+## R5h 小刀：abort 接纳纳入晋升互斥＋注释去过程标记（2026-10-02，机主复核 2f31995 判 1 P2＋1 P3 后）
+
+机主复核 2f31995（报告 /tmp/latest-delivery-review.md）：其余修复全部确认有效，剩 **P2＝ABORT 接纳未入晋升互斥**——abort 决定窗内落账后 squash 仍执行（评审实录：accepted=true、写 2 次、区间 2→1 提交），Record 才拒；正常与恢复两路同形。根因＝互斥谓词只覆盖需求变化一族，abort 决定（词表权威 abort.go:17：Choice=="abort" ∧ Control∈{Abort,Validation,Recovery}）这第二撤销族未入。**P3＝snapshot.go:54 注释含「R4e」过程标记。**
+
+修（原子代理）：Submit 锁谓词扩为「每个撤销晋升资格的接纳」——需求变化 REQUEST＋abort DECIDE（DecidePayload 不携 Control，经 pending Ask 按 requestID 反查，词表出处入注释；Ask 不在账＝必被接纳层拒、不等待）；abort REQUEST 不锁（只落 Ask 不记决定）；等待过的 DECIDE 可能 stale token＝设计内新鲜度行为（注释写明）。注释重写去 R4e（按原语行为描述），扫 facade/vcs/persistence 非测试文件无其他过程标记（Phase A 是规格词汇保留）。测试＝双执行流两例（窗内 abort：REQUEST 窗内落账＋DECIDE 等锁→stale 拒→Freshness 重取→接纳；效果序断言接纳后零写＋晋升先成后 ABORTED；窗前 abort：零写、区间原样、准入错 surfaced）＋代理自做负控（谓词临时禁用→评审原签名复现）。主代理复核：diff 亲读、定向六测亲跑全绿、build/vet/gofmt 干净、facade 全包绿。

@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1026,6 +1027,191 @@ func TestRequirementChangeAdmissionWaitsForThePromotionWindow(t *testing.T) {
 	}
 	if !barrierAsk {
 		t.Fatal("requirement change admission did not land after the window")
+	}
+}
+
+// abortWindowObserver 是 abort 决定与晋升执行窗双执行流的观察者：在窗口内的
+// write-tree（内容前置门——此时晋升锁已持有）处放出窗口已开信号并 rendezvous
+// ——等待执行流落完 abort REQUEST（REQUEST 不取晋升锁，窗口内即可落账）后窗
+// 口线程才继续，两线程的引擎提交因此不并发；并按接纳时序分窗计数 reset/
+// commit 写命令（git 命令只由 PrepareCandidate 所在线程发出，计数与标志不存
+// 在跨线程字段访问）。
+type abortWindowObserver struct {
+	inner                vcs.Runner
+	windowOpened         chan struct{}
+	requestLanded        chan struct{}
+	admitted             chan struct{}
+	windowSignalled      bool
+	writes               int
+	writesAfterAdmission int
+}
+
+func (r *abortWindowObserver) Run(dir, command string, args ...string) (string, error) {
+	if !r.windowSignalled && command == "git" && len(args) == 1 && args[0] == "write-tree" {
+		r.windowSignalled = true
+		close(r.windowOpened)
+		<-r.requestLanded
+	}
+	if command == "git" && len(args) > 0 && (args[0] == "reset" || args[0] == "commit") {
+		r.writes++
+		select {
+		case <-r.admitted:
+			r.writesAfterAdmission++
+		default:
+		}
+	}
+	return r.inner.Run(dir, command, args...)
+}
+
+// TestAbortDecisionAdmissionWaitsForThePromotionWindow：abort 决定接纳与晋升
+// 执行窗互斥的双执行流形态——执行流在窗口内（内容前置门处）先落 abort
+// REQUEST（不取晋升锁、不记决定、不改资格，窗口内即接纳），DECIDE 等待至窗
+// 口关闭后接纳：等待过的 token 已被窗口内的晋升提交取代，以 STALE_FRESHNESS
+// 拒绝、重取再提交后接纳（设计内新鲜度行为）。断言按效果时序：晋升在接纳前
+// 完成并绑定（squash 两写全在窗口内）、接纳之后零个 reset/commit 写命令、晋
+// 升绑定在接纳后存活、run 随后到达 ABORTED。窗口内的同步提交会等待调用方自
+// 身持有的锁（死锁），竞争只能以双执行流表示。
+func TestAbortDecisionAdmissionWaitsForThePromotionWindow(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	observer := &abortWindowObserver{inner: vcs.ExecRunner{}, windowOpened: make(chan struct{}), requestLanded: make(chan struct{}), admitted: make(chan struct{})}
+	d := completePromotionPipeline(t, observer, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, head); err != nil || count != 2 {
+		t.Fatalf("premise lost: interval count = %d, %v", count, err)
+	}
+	request, err := protocol.NewRequestEvent(protocol.EventID("window-abort"), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type abortAdmission struct {
+		acceptance protocol.Acceptance
+		staleRetry bool
+		err        error
+	}
+	decided := make(chan abortAdmission, 1)
+	go func() {
+		<-observer.windowOpened
+		acceptance, _, err := d.f.Submit(request)
+		// REQUEST 落账后即放行窗口线程，DECIDE 才开始在晋升锁上等待。
+		close(observer.requestLanded)
+		if err != nil {
+			close(observer.admitted)
+			decided <- abortAdmission{err: err}
+			return
+		}
+		decide, err := protocol.NewDecideEvent(protocol.EventID("window-abort-decide"), protocol.RequestID(request.ID), acceptance.FreshnessToken, "abort")
+		if err != nil {
+			close(observer.admitted)
+			decided <- abortAdmission{err: err}
+			return
+		}
+		_, _, err = d.f.Submit(decide)
+		staleRetry := false
+		var rejected *protocol.RejectedError
+		if errors.As(err, &rejected) && rejected.Code == protocol.CodeStaleFreshness {
+			staleRetry = true
+			var token string
+			if token, err = d.f.Freshness(string(request.ID)); err == nil {
+				if decide, err = protocol.NewDecideEvent(protocol.EventID("window-abort-retry"), protocol.RequestID(request.ID), token, "abort"); err == nil {
+					acceptance, _, err = d.f.Submit(decide)
+				}
+			}
+		}
+		close(observer.admitted)
+		decided <- abortAdmission{acceptance: acceptance, staleRetry: staleRetry, err: err}
+	}()
+	promoted, err := d.f.PrepareCandidate("organized under a waiting abort decision")
+	if err != nil {
+		t.Fatalf("promotion with an abort decision waiting on the window: %v", err)
+	}
+	result := <-decided
+	if result.err != nil {
+		t.Fatalf("abort decision admission after the window: %v", result.err)
+	}
+	if !result.staleRetry {
+		t.Fatal("the waiting decide was not superseded by the window's promotion commits")
+	}
+	if result.acceptance.RequestID != string(request.ID) || result.acceptance.Kind != string(protocol.KindDecide) {
+		t.Fatalf("abort acceptance = %+v", result.acceptance)
+	}
+	// 接纳之后零个新 Git 写：组织（reset＋commit 各一）全部发生在窗口内。
+	if observer.writes != 2 || observer.writesAfterAdmission != 0 {
+		t.Fatalf("git writes = %d total, %d after admission; want 2 before admission and none after", observer.writes, observer.writesAfterAdmission)
+	}
+	if promoted == head {
+		t.Fatal("promotion kept the pre-squash identity")
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, promoted); err != nil || count != 1 {
+		t.Fatalf("post-window interval count = %d, %v", count, err)
+	}
+	// abort 作用于已完成晋升：绑定在接纳后存活、意图已消费、决定在账。
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PromotedSnapshot != promoted || snap.State.PendingPromotion != "" {
+		t.Fatalf("abort admission disturbed the recorded promotion: promoted=%q pending=%q", snap.State.PromotedSnapshot, snap.State.PendingPromotion)
+	}
+	if _, aborted := snap.State.AbortDecision(); !aborted {
+		t.Fatal("abort decision was not recorded")
+	}
+	d.drive()
+	if d.run.Status != "ABORTED" || d.run.PromotedSnapshot != promoted {
+		t.Fatalf("post-admission terminal = %s promoted = %s, want ABORTED %s", d.run.Status, d.run.PromotedSnapshot, promoted)
+	}
+}
+
+// TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched：abort 决定先于晋升
+// 窗口落账（REQUEST＋DECIDE 都在 PrepareCandidate 之前完成；决定的提交收尾
+// 随即把 run 推进 TERMINAL）——晋升在意图准入处拒绝（活动期要求）：零 Git
+// 写、多提交区间原样、拒绝可辨识。
+func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	observer := &promotionWindowObserver{inner: vcs.ExecRunner{}, windowOpened: make(chan struct{}), admitted: make(chan struct{})}
+	d := completePromotionPipeline(t, observer, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	token := ""
+	for _, ask := range d.run.PendingAsks {
+		if ask.RequestID == string(request.ID) {
+			token = ask.Token
+		}
+	}
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}})
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, aborted := snap.State.AbortDecision(); !aborted || snap.State.Phase != runtime.PhaseTerminal {
+		t.Fatalf("premise lost: aborted=%t phase=%s", aborted, snap.State.Phase)
+	}
+	if _, err := d.f.PrepareCandidate("organized after an abort decision"); err == nil || !strings.Contains(err.Error(), "requires an active run") {
+		t.Fatalf("promotion after an abort decision: %v", err)
+	}
+	// 零 Git 副作用：HEAD 与区间提交数逐字节不变（多提交未被动过）。
+	if observer.writes != 0 {
+		t.Fatalf("rejected promotion issued %d git writes", observer.writes)
+	}
+	after, err := vcs.New(root, nil).Resolve()
+	if err != nil || after != head {
+		t.Fatalf("rejected promotion moved HEAD: %s -> %s (%v)", head, after, err)
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, after); err != nil || count != 2 {
+		t.Fatalf("rejected promotion rewrote history: count = %d, %v", count, err)
 	}
 }
 

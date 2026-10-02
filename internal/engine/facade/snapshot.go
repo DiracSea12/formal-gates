@@ -50,8 +50,10 @@ const promotionLockDescription = "candidate promotion window"
 
 // promotionLockPath 是晋升执行窗互斥锁（等待式文件锁）的路径：放在 run 状态
 // 目录内（.gates/engine/ 属 porcelain 的运行期未跟踪排除清单，锁文件不污染
-// 就绪检查）。窗口＝PrepareCandidate 的准入→执行→观察→提交；需求变化接纳在
-// 同一把锁上等待至窗口关闭（R4e owner 区间串行先例的同款原语）。
+// 就绪检查）。窗口＝PrepareCandidate 的准入→执行→观察→提交；撤销晋升资格的
+// 接纳（需求变化与 abort 决定）在同一把锁上等待至窗口关闭（等待式文件锁本
+// 体：持锁冲突时阻塞、由内核在持锁释放时唤醒的等待者，与 owner 区间串行使
+// 用同款原语）。
 func (f *Facade) promotionLockPath() string {
 	return filepath.Join(f.stateDir, "promotion.lock")
 }
@@ -59,9 +61,10 @@ func (f *Facade) promotionLockPath() string {
 // PrepareCandidate 组织终态候选（镜像 legacy PrepareCandidate：区间单提交＝确
 // 认当前 HEAD；多提交需 squash 消息，squash 后重解析绑定；晋升后区间再度累
 // 积提交时可重复组织）。晋升走完整副作用协议 intent→execute→observe→
-// commit，整个窗口（准入→执行→观察→提交）持 run 级晋升锁与需求变化接纳互
-// 斥：屏障要么先于窗口落账（准入处拒绝、零 Git 副作用）、要么等待至窗口关闭
-// 后作用于已提交事实——接纳之后不再有窗口内的新 Git 写。恢复只按持久事实
+// commit，整个窗口（准入→执行→观察→提交）持 run 级晋升锁与撤销晋升资格的
+// 接纳（需求变化、abort 决定）互斥：接纳要么先于窗口落账（准入处拒绝、零
+// Git 副作用）、要么等待至窗口关闭后作用于已提交事实——接纳之后不再有窗口
+// 内的新 Git 写。恢复只按持久事实
 // （引擎状态＋观察到的 Git 状态）对账，零内存恢复事实跨调用：内容前置门核对
 // 暂存树等于已验证最终候选 digest，squash 与续行 commit 只组织已验证内容；
 // 意图存活期间重入＝续行而非重开，squash 的 reset 已完成、commit 未执行的中
