@@ -92,6 +92,30 @@ func (p *Provider) VerifyReady() error {
 	return nil
 }
 
+// StagedOnly 报告未提交内容是否恰为纯暂存形态：porcelain 主体非空且每行都
+// 是已暂存差异（index 侧非空、工作区侧为空、无未跟踪）。squash 的
+// reset --soft 已完成而 commit 未执行的组织中断中间态正是这一形状（index
+// 持候选树、工作区与 index 一致）；未暂存或未跟踪的用户修改不属于它。读
+// --branch 变体：首行 "## " 头保证 XY 状态列不位于输出开头——共享 runner 会
+// 裁剪整个 stdout 的首尾空白，纯 " M" 行一旦居首会丢列。
+func (p *Provider) StagedOnly() (bool, error) {
+	pending, err := p.runner.Run(p.root, "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all")
+	if err != nil {
+		return false, fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
+	}
+	staged := false
+	for _, line := range strings.Split(excludeRuntimeUntracked(pending), "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "## ") {
+			continue
+		}
+		if len(line) < 2 || line[0] == ' ' || line[0] == '?' || line[1] != ' ' {
+			return false, nil
+		}
+		staged = true
+	}
+	return staged, nil
+}
+
 // Resolve 返回当前 HEAD 的提交身份（40/64 位 hex，小写规范化）。
 func (p *Provider) Resolve() (string, error) {
 	if err := p.verifyRoot(); err != nil {
@@ -199,16 +223,6 @@ func (p *Provider) SquashToBase(base, message string) error {
 	}
 	if _, err := p.runner.Run(p.root, "git", "commit", "-m", message); err != nil {
 		return fmt.Errorf("cannot squash: %w", err)
-	}
-	return nil
-}
-
-// SoftReset 把 HEAD 移到 rev 并保留 index 与工作区（git reset --soft <rev>）：
-// 晋升补偿动作——组织截链后回到意图目标，index 仍持有组织树（树相等＝工作区
-// 干净），净零历史改写。
-func (p *Provider) SoftReset(rev string) error {
-	if _, err := p.runner.Run(p.root, "git", "reset", "--soft", rev); err != nil {
-		return fmt.Errorf("cannot soft reset to %s: %w", rev, err)
 	}
 	return nil
 }

@@ -3,21 +3,22 @@ package facade
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/vcs"
 )
 
-// terminalSnapshotGuard 是 regular COMPLETE 终态发布段的身份恒等边界：发布
-// 前 resolve 记录原生身份，返回的 guard 在终态发布（摘要落盘）后调用，核对
-// 发布段内身份未移动（镜像 legacy Seal 发布窗口的前后双 resolve）。交付内容
-// 与历史形状的核验统一由 sealDelivered 单点持有，guard 不持第二套判据。无
-// provider＝明确报错，不静默跳过校验。
+// terminalSnapshotGuard 是 regular COMPLETE 终态发布段的身份边界，单一规则：
+// sealDelivered 已验证的交付身份（head==PromotedSnapshot）贯穿 seal 窗口与发布
+// 窗口——发布前 resolve 必须仍等于该晋升身份（窗口内漂移即错、摘要不落盘），
+// 返回的 guard 在终态发布（摘要落盘）后调用，核对发布段内身份未移动（镜像
+// legacy Seal 发布窗口的前后双 resolve）。guard 不持第二套判据：交付内容与历
+// 史形状的核验统一由 sealDelivered 单点持有。无 provider＝明确报错，不静默跳
+// 过校验。
 func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 	if run.Route != "regular" || run.Status != "COMPLETE" {
 		return func() error { return nil }, nil
@@ -28,6 +29,9 @@ func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 	head, err := f.vcs.Resolve()
 	if err != nil {
 		return nil, err
+	}
+	if head != run.PromotedSnapshot {
+		return nil, fmt.Errorf("engine terminal: native VCS identity %s does not match the promoted snapshot %s", head, run.PromotedSnapshot)
 	}
 	return func() error {
 		after, err := f.vcs.Resolve()
@@ -41,18 +45,31 @@ func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 	}, nil
 }
 
+// promotionLockDescription 是晋升执行窗互斥锁的用途描述（锁诊断用）。
+const promotionLockDescription = "candidate promotion window"
+
+// promotionLockPath 是晋升执行窗互斥锁（等待式文件锁）的路径：放在 run 状态
+// 目录内（.gates/engine/ 属 porcelain 的运行期未跟踪排除清单，锁文件不污染
+// 就绪检查）。窗口＝PrepareCandidate 的准入→执行→观察→提交；需求变化接纳在
+// 同一把锁上等待至窗口关闭（R4e owner 区间串行先例的同款原语）。
+func (f *Facade) promotionLockPath() string {
+	return filepath.Join(f.stateDir, "promotion.lock")
+}
+
 // PrepareCandidate 组织终态候选（镜像 legacy PrepareCandidate：区间单提交＝确
 // 认当前 HEAD；多提交需 squash 消息，squash 后重解析绑定；晋升后区间再度累
 // 积提交时可重复组织）。晋升走完整副作用协议 intent→execute→observe→
-// commit：内容前置门先核对净内容（暂存树——干净工作区即 HEAD 树）等于已验
-// 证最终候选 digest，squash 与续行 commit 只组织已验证内容，漂移零 Git 副作
-// 用拒绝；OpenPromotion 先过接纳（活动/无屏障/无 abort/wave COMPLETE），被拒
-// 时零 Git 副作用；意图存活期间重入＝续行而非重开，reset 已完成、commit 未
-// 执行的中断由暂存树识别并以 Commit 完成组织；RecordCandidatePromotion 消费
-// 意图原子提交，接纳被屏障/终态撤销且本次调用改写过历史时 soft reset 回意图
-// 目标补偿（净零历史改写）。已在位且 HEAD==PromotedSnapshot 时幂等直返。工
-// 作区必须就绪（未提交内容拒绝——与 legacy verifySnapshotReady 同语义；
-// track/commit 是候选 freeze 的宿主侧动作，不在此自动执行）。
+// commit，整个窗口（准入→执行→观察→提交）持 run 级晋升锁与需求变化接纳互
+// 斥：屏障要么先于窗口落账（准入处拒绝、零 Git 副作用）、要么等待至窗口关闭
+// 后作用于已提交事实——接纳之后不再有窗口内的新 Git 写。恢复只按持久事实
+// （引擎状态＋观察到的 Git 状态）对账，零内存恢复事实跨调用：内容前置门核对
+// 暂存树等于已验证最终候选 digest，squash 与续行 commit 只组织已验证内容；
+// 意图存活期间重入＝续行而非重开，squash 的 reset 已完成、commit 未执行的中
+// 断由「未提交内容恰为纯暂存形态」识别并以 Commit 完成组织，区间已是单提交
+// 且树＝候选时只提交结果（不重复 squash）；工作区含未暂存/未跟踪的修改不是
+// 本操作的中断中间态——拒绝并指明先处理，绝不把用户脏区提交成晋升。已在位
+// 且 HEAD==PromotedSnapshot 时幂等直返。track/commit 是候选 freeze 的宿主侧
+// 动作，不在此自动执行。
 func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 	if f.vcs == nil {
 		return "", fmt.Errorf("candidate promotion requires a regular run with a git provider")
@@ -63,6 +80,21 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 	}
 	head, err := f.vcs.Resolve()
 	if err != nil {
+		return "", err
+	}
+	if snap.State.PromotedSnapshot == head {
+		return head, nil
+	}
+	unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	// 窗口可能等待过：以窗口内事实重新对账（引擎状态与 Git 状态都可能已变）。
+	if snap, err = f.engine.Load(); err != nil {
+		return "", err
+	}
+	if head, err = f.vcs.Resolve(); err != nil {
 		return "", err
 	}
 	if snap.State.PromotedSnapshot == head {
@@ -91,14 +123,21 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		}
 		intent = head
 	}
-	wrote := false
 	if err := f.vcs.VerifyReady(); err != nil {
-		// 意图目标之后的脏树且暂存树＝已验证候选（前置门已核）＝本意图组织
-		// 的中断中间态：reset 已完成、commit 未执行（soft reset 保树保
-		// index），以 Commit 完成组织并绑定原意图。head 仍在意图目标上的脏树
-		// 不是本操作的中间态，原样返回就绪错误。
 		if head == intent {
 			return "", err
+		}
+		// head 已离开意图目标且工作区不净：本意图组织的精确中断中间态＝
+		// 「未提交内容恰为纯暂存形态」（squash 的 reset --soft 已完成、
+		// commit 未执行——保树保 index，暂存树＝候选已由前置门核对），以
+		// Commit 完成组织并绑定原意图。其余形状（未暂存/未跟踪的用户修
+		// 改）不是本操作的中间态：拒绝并指明先处理工作区。
+		stagedOnly, classErr := f.vcs.StagedOnly()
+		if classErr != nil {
+			return "", classErr
+		}
+		if !stagedOnly {
+			return "", fmt.Errorf("candidate promotion cannot resume over workspace changes it did not stage (unstaged or untracked); commit, stage or clean them and re-enter")
 		}
 		message := strings.TrimSpace(squashMessage)
 		if message == "" {
@@ -107,7 +146,6 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		if err := f.vcs.Commit(message); err != nil {
 			return "", err
 		}
-		wrote = true
 		if head, err = f.vcs.Resolve(); err != nil {
 			return "", err
 		}
@@ -127,7 +165,6 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		if err := f.vcs.SquashToBase(snap.State.BaseSnapshot, message); err != nil {
 			return "", err
 		}
-		wrote = true
 		if head, err = f.vcs.Resolve(); err != nil {
 			return "", err
 		}
@@ -137,16 +174,6 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		return "", err
 	}
 	if err := f.engine.RecordCandidatePromotion(head, digest, emptyFingerprint()); err != nil {
-		// 接纳被撤销（屏障/活动期）且本次调用改写过历史：soft reset 回意图
-		// 目标补偿——组织保树，index==目标树＝工作区干净，净零历史改写。
-		// digest 不匹配与 schema 拒绝不补偿（内容错≠接纳撤销）。
-		var rejected *protocol.RejectedError
-		if wrote && errors.As(err, &rejected) && (rejected.Code == protocol.CodeChangeBarrierActive || rejected.Code == protocol.CodeEventNotCurrent) {
-			if resetErr := f.vcs.SoftReset(intent); resetErr != nil {
-				return "", errors.Join(err, fmt.Errorf("restoring the promotion head %s failed: %w", intent, resetErr))
-			}
-			return "", fmt.Errorf("%w; the organized history was restored to the promotion head", err)
-		}
 		return "", err
 	}
 	return head, nil

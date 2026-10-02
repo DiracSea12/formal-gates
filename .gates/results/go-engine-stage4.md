@@ -909,3 +909,15 @@ R5f 修复后 full 路线重跑三回合（runs 12-14，证据 .harness/validati
 **run 14 绿链（PASS 1901.26s，16 派发 17 次真实调用含 1 次被拒全入账，1,475,763 tokens）**：产品审→就绪审→开发批次→黑盒设计→**白盒设计（可写回合，11 次模型请求真实撰写 Go 验收测试）**→黑盒用例审（三层答案两次 shape 重试后过、被拒调用入账）→白盒用例审（三层判定真实：source 1＋point 2＋case 8 各带真实理由，答卷亲核）→第一波黑盒/白盒双执行真实 FAIL（白盒＝登记工作区真跑 go test）→回归门真实 FAIL→裁决→真实返修（317k tokens）→修复后候选 AFFECTED 双执行＋门过→同候选 FULL 终验波双执行→squash 晋升→终态 COMPLETE（promoted=1df559d7，全部终态断言过：晋升==HEAD、单组织提交、终候选 flag 真被拒、摘要重放字节不变、成本账覆盖全派发、返修授权恰一次）。**计划 :367 的 full canary 验收（真实宿主＋FAIL→repair→新候选→重验→Seal＋白盒＋三层审查）至此以完整形态满足。**
 
 本授权环真实花费：三回合合计 31 次调用、2,747,965 tokens（run12 684,067＋run13 588,135＋run14 1,475,763；全部逐调用入账，无漏账——费用修复经实跑验证）。引擎零缺陷：run12/13 的拦截均来自驱动器自己的诚实回执检查（test-only 区间、路径词表），引擎链每次接纳/拒绝与规则一致。canary 累计（runs 1-14）真实总花费 64 次调用、4,457,398 tokens。
+
+## 费用更正（机主复核纠错）＋R5g 返修：发布身份贯穿＋晋升窗口互斥＋持久对账（2026-10-02）
+
+**费用更正**：run 14 实际 **18 次调用、1,532,027 tokens**（此前报 17/1,475,763 并称「无漏账」——错：黑盒 QA review attempt-1 的 native 调用以 "competing structured content" 错误返回，无 source.json 故无 spend 行；机主从 native-events.jsonl 核出 56,264/4 次，代理 oracle 复算逐位一致）。canary 累计更正为 **65 次调用、4,513,662 tokens**。根因＝只把「适配器成功返回」当花费证据；native 错误路径现已逐调用入账（读 attempt 的 identity.json＋native-events.jsonl 末个 provider usage，不可读则零用量行＋原始错误，绝不静默）。
+
+机主复核 2e30574 判 2 P1＋4 P2，全部主代理亲复现后三代理并行修（合同 /tmp/r5g-promotion-contract.md 等，规格全钉：final-implementation-draft:299 Phase A、§9.2 intent→execute→observe/reconcile→commit、§7.1 authoring workspace、stage-3-5a:274 三层）：
+- **P1 发布窗口身份（回归）**：R5f 删 guard 前置判据造成——sealDelivered 核验后、guard 首次 resolve 前新增普通提交被当发布窗口初值放行 COMPLETE。修＝单一规则贯穿：guard 发布前 resolve 必须仍等于 PromotedSnapshot（与 sealDelivered 同一已验证身份、同一文案），漂移即错、摘要不落盘。评审探针 TestBoundaryPublicationUsesVerifiedDeliveryHead 红→绿亲证。
+- **P1 屏障后 Git 写＋补偿非崩溃安全**：机主询问（三语义候选）未获答复，主代理裁定**窗口互斥＋持久对账**（正交组合）：晋升窗（准入→执行→观察→提交）持 run 级等待式文件锁（coordination.AcquirePathWaiting，stateDir 下 promotion.lock，flock 永不删、CleanupTerminal 白名单），需求变化接纳（Phase A 载体）同锁等待——接纳后必然零新 Git 写；**补偿整删**（wrote 内存事实/SoftReset 分支/恢复文案），恢复只按持久事实对账（意图存活＝续行；staged-only 中间态以 Provider.StagedOnly 精确分类（porcelain --branch 头防 TrimSpace 吃首行列，有注释出处）识别后补 commit；已组织单提交＝只提交结果不重复 squash；parked 空意图直绑）。评审探针的同步窗内提交拓扑在互斥语义下不可表示（会等待自锁——设计内），该属性由树内双执行流测试 TestRequirementChangeAdmissionWaitsForThePromotionWindow 持有（效果序断言：接纳后 writesAfterAdmission==0＋绑定存活）。此裁定待机主追认。
+- **P2 用户新脏区误判中间态**：StagedOnly 分类＋拒绝文案（「changes it did not stage…先处理再重入」），评审探针 TestBoundaryResumeRejectsUnstagedUserChanges 绿；用户字节保留、HEAD 不动。
+- **P2 三层答案重试继承**：decodeCanaryAnswer 泛型化——每次解码从零值开始、整份成功才换入，重试省略字段不可继承被拒答案的 PASS；离线测试持评审复现场景。
+- **P2 authoring workspace（§7.1）**：白盒 authoring 现在独立注册工作区——AUTHORING 意图（params.Base=Dn）时建真 detach worktree、白盒设计与用例审回合 workspace＝该区（identity.json 亲证）、QA_ARTIFACT 在区内提交声明路径并对 Dn..head 区间验 test-only、REVIEW_READY 把工件复制进主项目终候选；引擎时序五项事实亲核（qa.design 仅在 AuthoringWorkspace 非空后投影等）。
+主代理独立复核（全部亲跑）：三代理 diff 亲读（互斥窗口/补偿删除/StagedOnly 分类/persistence 白名单/泛型解码/native 错误费用/authoring 机制）；评审探针 overlay 亲跑（可表示项全绿：发布漂移/未暂存拒绝/答案继承）；全量 internal+cmd 除一项 K5 恢复不变量偶发外全绿——该失败项隔离复跑 3＋5 次（含 race）全绿、与本次改动无依赖路径（K5 组合层不 import engine facade），按偶发如实记录不掩盖。

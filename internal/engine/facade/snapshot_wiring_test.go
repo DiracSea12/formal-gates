@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,7 +269,7 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 		t.Fatalf("guard re-resolve: %v", err)
 	}
 	// 晋升后新增提交：终态检查点在 Drive 的交付核验单点拒绝（head≠晋升身
-	// 份、摘要不重发）；guard 收敛为发布窗口身份恒等，不再持第二套判据。
+	// 份、摘要不重发）；guard 持同一条身份判据，构造即拒绝漂移的发布基线。
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // late\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +282,8 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	if _, err := d.f.Drive(); err == nil || !strings.Contains(err.Error(), "does not match the promoted snapshot") {
 		t.Fatalf("post-promotion commit escaped the terminal checkpoint: %v", err)
 	}
-	if _, err := d.f.terminalSnapshotGuard(run); err != nil {
-		t.Fatalf("guard holds a verdict outside the publication window: %v", err)
+	if _, err := d.f.terminalSnapshotGuard(run); err == nil || !strings.Contains(err.Error(), "does not match the promoted snapshot") {
+		t.Fatalf("guard accepted a drifted publication baseline: %v", err)
 	}
 }
 
@@ -834,46 +835,121 @@ func TestTerminalCheckpointDriftRejectsPublicationUntilContentRestored(t *testin
 	}
 }
 
-// barrierWindowRunner 把需求变化屏障事务注入 squash 的 reset 步之前（意图已
-// 落账、历史改写未开始的窗口），其余命令直通内层 runner——屏障在晋升执行
-// 途中到达的测试载体。
-type barrierWindowRunner struct {
+// publicationDriftRunner 在 sealDelivered 核验完成后（merge-base 是其最后一
+// 条 Git 命令）、终态发布基线 resolve 之前落一次宿主动作，其余命令直通内层
+// runner——seal 窗口与发布窗口之间竞态的测试载体。
+type publicationDriftRunner struct {
 	inner  vcs.Runner
 	land   func() error
 	landed bool
-	err    error
 }
 
-func (r *barrierWindowRunner) Run(dir, command string, args ...string) (string, error) {
-	if !r.landed && command == "git" && len(args) >= 2 && args[0] == "reset" && args[1] == "--soft" {
+func (r *publicationDriftRunner) Run(dir, command string, args ...string) (string, error) {
+	if !r.landed && command == "git" && len(args) == 3 && args[0] == "merge-base" {
 		r.landed = true
-		r.err = r.land()
+		if err := r.land(); err != nil {
+			return "", err
+		}
 	}
 	return r.inner.Run(dir, command, args...)
 }
 
-// TestPromotionBarrierBetweenIntentAndSquashRestoresPromotionHead：屏障事务在
-// OpenPromotion 与 squash 之间的窗口内落账（Phase A 已撤销意图、接纳已不可能
-// 通过）时，组织仍执行但 Record 拒绝后以 soft reset 回意图目标补偿——晋升返
-// 回屏障错误且 HEAD 与区间恢复晋升前形状（净零历史改写），工作区干净。
-func TestPromotionBarrierBetweenIntentAndSquashRestoresPromotionHead(t *testing.T) {
+// TestTerminalPublicationRejectsDriftAfterSealVerification：sealDelivered 核
+// 验通过与终态摘要发布之间的窗口内普通用户提交落地——已验证交付身份必须贯穿
+// seal 窗口与发布窗口：Drive 以同一身份判据拒绝（不呈现 COMPLETE、摘要不落
+// 盘）；恢复已验证内容（reset --hard 晋升身份）后重放发布 COMPLETE。
+func TestTerminalPublicationRejectsDriftAfterSealVerification(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	d := completePromotionPipeline(t, nil, root, identities[0])
+	promoted, err := d.f.PrepareCandidate("organized final candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 用户提交落在 seal 核验之后、发布基线 resolve 之前。
+	drift := &publicationDriftRunner{inner: vcs.ExecRunner{}}
+	drift.land = func() error {
+		if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // parallel user work\n"), 0o600); err != nil {
+			return err
+		}
+		if _, err := runner.Run(root, "git", "add", "app.go"); err != nil {
+			return err
+		}
+		_, err := runner.Run(root, "git", "commit", "-q", "-m", "parallel user work")
+		return err
+	}
+	d.f.vcs = vcs.New(root, drift)
+	run, err := d.f.Drive()
+	if err == nil || !strings.Contains(err.Error(), "does not match the promoted snapshot") {
+		t.Fatalf("publication adopted a head the seal window did not verify: run=%s err=%v", run.Status, err)
+	}
+	if run.Status == "COMPLETE" {
+		t.Fatal("drifted publication returned COMPLETE")
+	}
+	if _, statErr := os.Stat(filepath.Join(d.f.stateDir, "terminal-summary.json")); !os.IsNotExist(statErr) {
+		t.Fatal("drifted publication wrote the terminal summary")
+	}
+	if !drift.landed {
+		t.Fatal("premise lost: the drift window was not reached")
+	}
+	// 恢复已验证内容后重放：COMPLETE 且摘要发布。
+	if _, err := runner.Run(root, "git", "reset", "-q", "--hard", promoted); err != nil {
+		t.Fatal(err)
+	}
+	run, err = d.f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "COMPLETE" || run.PromotedSnapshot != promoted {
+		t.Fatalf("restored replay = %s promoted = %s, want COMPLETE %s", run.Status, run.PromotedSnapshot, promoted)
+	}
+	if _, err := os.Stat(filepath.Join(d.f.stateDir, "terminal-summary.json")); err != nil {
+		t.Fatalf("restored replay did not publish the summary: %v", err)
+	}
+}
+
+// promotionWindowObserver 是晋升窗口双执行流的观察者：在窗口内的 write-tree
+// （内容前置门——此时晋升锁已持有）处放出窗口已开信号，供需求变化执行流开
+// 始提交；并按接纳时序分窗计数 reset/commit 写命令（git 命令只由 PrepareCandidate
+// 所在线程发出，计数与标志不存在跨线程字段访问）。
+type promotionWindowObserver struct {
+	inner                vcs.Runner
+	windowOpened         chan struct{}
+	admitted             chan struct{}
+	windowSignalled      bool
+	writes               int
+	writesAfterAdmission int
+}
+
+func (r *promotionWindowObserver) Run(dir, command string, args ...string) (string, error) {
+	if !r.windowSignalled && command == "git" && len(args) == 1 && args[0] == "write-tree" {
+		r.windowSignalled = true
+		close(r.windowOpened)
+	}
+	if command == "git" && len(args) > 0 && (args[0] == "reset" || args[0] == "commit") {
+		r.writes++
+		select {
+		case <-r.admitted:
+			r.writesAfterAdmission++
+		default:
+		}
+	}
+	return r.inner.Run(dir, command, args...)
+}
+
+// TestRequirementChangeAdmissionWaitsForThePromotionWindow：屏障与晋升执行窗
+// 互斥的双执行流形态——需求变化 REQUEST 在窗口内（内容前置门处）经独立执行
+// 流提交，接纳等待至窗口关闭：PrepareCandidate 正常成功（若互斥失效，Record
+// 会被屏障拒绝或 squash 落在接纳之后，两处断言任一捕获）、晋升绑定在接纳后
+// 存活、接纳之后零个 reset/commit 写命令。窗口内的同步提交会等待调用方自身
+// 持有的锁（死锁），屏障竞争只能以双执行流表示。
+func TestRequirementChangeAdmissionWaitsForThePromotionWindow(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
-	var d *validationDriver
-	hooked := &barrierWindowRunner{inner: vcs.ExecRunner{}}
-	hooked.land = func() error {
-		request, err := protocol.NewRequestEvent(protocol.EventID("barrier-window"), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
-		if err != nil {
-			return err
-		}
-		_, _, err = d.f.Submit(request)
-		return err
-	}
-	d = completePromotionPipeline(t, hooked, root, base)
-	if hooked.err != nil {
-		t.Fatalf("premise lost: barrier landed before the window: %v", hooked.err)
-	}
+	observer := &promotionWindowObserver{inner: vcs.ExecRunner{}, windowOpened: make(chan struct{}), admitted: make(chan struct{})}
+	d := completePromotionPipeline(t, observer, root, base)
 	head, err := vcs.New(root, nil).Resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -881,37 +957,75 @@ func TestPromotionBarrierBetweenIntentAndSquashRestoresPromotionHead(t *testing.
 	if count, err := vcs.New(root, nil).CommitCount(base, head); err != nil || count != 2 {
 		t.Fatalf("premise lost: interval count = %d, %v", count, err)
 	}
-	_, err = d.f.PrepareCandidate("organized under barrier")
-	if err == nil || !strings.Contains(err.Error(), "frozen while a requirement change ask is pending") {
-		t.Fatalf("barrier-window promotion: %v", err)
+	request, err := protocol.NewRequestEvent(protocol.EventID("window-barrier"), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "restored to the promotion head") {
-		t.Fatalf("barrier-window promotion lost the compensation note: %v", err)
+	type admission struct {
+		acceptance protocol.Acceptance
+		err        error
 	}
-	if hooked.err != nil {
-		t.Fatalf("barrier window landing: %v", hooked.err)
+	admitted := make(chan admission, 1)
+	go func() {
+		<-observer.windowOpened
+		acceptance, _, err := d.f.Submit(request)
+		close(observer.admitted)
+		admitted <- admission{acceptance: acceptance, err: err}
+	}()
+	promoted, err := d.f.PrepareCandidate("organized under a waiting barrier")
+	if err != nil {
+		t.Fatalf("promotion with a barrier waiting on the window: %v", err)
 	}
-	if !hooked.landed {
-		t.Fatal("premise lost: promotion never rewrote history")
+	result := <-admitted
+	if result.err != nil {
+		t.Fatalf("requirement change admission after the window: %v", result.err)
 	}
-	// 补偿＝净零历史改写：HEAD 与区间逐字节恢复晋升前，工作区干净，意图已
-	// 被屏障事务撤销。
-	after, err := vcs.New(root, nil).Resolve()
-	if err != nil || after != head {
-		t.Fatalf("compensated promotion moved HEAD: %s -> %s (%v)", head, after, err)
+	if result.acceptance.EventID != string(request.ID) || result.acceptance.Kind != string(protocol.KindRequestControl) {
+		t.Fatalf("barrier acceptance = %+v", result.acceptance)
 	}
-	if count, err := vcs.New(root, nil).CommitCount(base, after); err != nil || count != 2 {
-		t.Fatalf("compensated promotion rewrote history: count = %d, %v", count, err)
+	// 接纳之后零个新 Git 写：组织（reset＋commit 各一）全部发生在窗口内。
+	if observer.writes != 2 || observer.writesAfterAdmission != 0 {
+		t.Fatalf("git writes = %d total, %d after admission; want 2 before admission and none after", observer.writes, observer.writesAfterAdmission)
+	}
+	if promoted == head {
+		t.Fatal("promotion kept the pre-squash identity")
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, promoted); err != nil || count != 1 {
+		t.Fatalf("post-window interval count = %d, %v", count, err)
+	}
+	verifiedTree, err := vcs.New(root, nil).TreeDigest(identities[len(identities)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotedTree, err := vcs.New(root, nil).TreeDigest(promoted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotedTree != verifiedTree {
+		t.Fatalf("promotion changed the final tree: %s -> %s", verifiedTree, promotedTree)
 	}
 	if err := vcs.New(root, nil).VerifyReady(); err != nil {
-		t.Fatalf("compensation left pending changes: %v", err)
+		t.Fatalf("promotion left pending changes: %v", err)
 	}
+	// 屏障作用于已完成晋升：绑定在接纳后存活、意图已消费、屏障 Ask 在账。
 	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if snap.State.PromotedSnapshot != promoted || snap.State.PromotedDigest != promotedTree {
+		t.Fatalf("barrier admission disturbed the recorded promotion: promoted=%q digest=%q", snap.State.PromotedSnapshot, snap.State.PromotedDigest)
+	}
 	if snap.State.PendingPromotion != "" {
-		t.Fatalf("barrier transaction kept a pending promotion intent: %q", snap.State.PendingPromotion)
+		t.Fatalf("window kept a pending promotion intent: %q", snap.State.PendingPromotion)
+	}
+	barrierAsk := false
+	for _, ask := range snap.State.PendingAsks {
+		if !ask.Resolved && ask.Control == protocol.ControlRequestRequirementChange {
+			barrierAsk = true
+		}
+	}
+	if !barrierAsk {
+		t.Fatal("requirement change admission did not land after the window")
 	}
 }
 
@@ -973,6 +1087,228 @@ func TestPromotionResumeAfterResetInterruptionBindsOrganizedHead(t *testing.T) {
 	run, err := d.f.Drive()
 	if err != nil || run.Status != "COMPLETE" {
 		t.Fatalf("post-resume terminal = %s, %v", run.Status, err)
+	}
+}
+
+// commitFailureRunner 在指定消息的 commit 命令上注入一次执行失败（窗口中断
+// 的崩溃载体：squash 的 reset --soft 已完成、commit 未执行），其余命令直通
+// 内层 runner。
+type commitFailureRunner struct {
+	inner   vcs.Runner
+	message string
+	failed  bool
+}
+
+func (r *commitFailureRunner) Run(dir, command string, args ...string) (string, error) {
+	if !r.failed && command == "git" && len(args) == 3 && args[0] == "commit" && args[1] == "-m" && args[2] == r.message {
+		r.failed = true
+		return "", fmt.Errorf("injected commit interruption")
+	}
+	return r.inner.Run(dir, command, args...)
+}
+
+// TestPromotionResumeAfterCommitFailureBindsOrganizedHead：squash 的 commit 命
+// 令执行失败＝窗口中断（意图存活、reset 已完成、commit 未执行）。重入按持久
+// 事实对账：纯暂存中间态（前置门已核暂存树＝候选）以一次 commit 完成组织并
+// 绑定原意图——无补偿写（组织头建立在 base 上、HEAD 不是意图目标）、意图消
+// 费为空、树摘要绑定、终态可达。
+func TestPromotionResumeAfterCommitFailureBindsOrganizedHead(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	crashed := &commitFailureRunner{inner: vcs.ExecRunner{}, message: "interrupted organization"}
+	d := completePromotionPipeline(t, crashed, root, base)
+	if _, err := d.f.PrepareCandidate("interrupted organization"); err == nil || !strings.Contains(err.Error(), "cannot squash") {
+		t.Fatalf("injected commit failure did not interrupt the window: %v", err)
+	}
+	// 中断中间态：HEAD 回到 base、未提交内容恰为纯暂存形态、意图存活。
+	if head, err := vcs.New(root, nil).Resolve(); err != nil || head != base {
+		t.Fatalf("interrupted head = %s, want base %s (%v)", head, base, err)
+	}
+	stagedOnly, err := vcs.New(root, nil).StagedOnly()
+	if err != nil || !stagedOnly {
+		t.Fatalf("interrupted midstate staged-only = %t (%v)", stagedOnly, err)
+	}
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion == "" {
+		t.Fatal("interrupted window lost the promotion intent")
+	}
+	// 重入（重开后生产 exec runner）：完成组织并绑定原意图。
+	d.reopen()
+	promoted, err := d.f.PrepareCandidate("interrupted organization")
+	if err != nil {
+		t.Fatalf("resumed promotion: %v", err)
+	}
+	organized, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted != organized || organized == base || organized == identities[len(identities)-1] {
+		t.Fatalf("resumed promotion = %s (head %s, base %s, intent %s)", promoted, organized, base, identities[len(identities)-1])
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, organized); err != nil || count != 1 {
+		t.Fatalf("resumed organization interval = %d, %v", count, err)
+	}
+	snap, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" || snap.State.PromotedSnapshot != organized {
+		t.Fatalf("resumed promotion did not bind the original intent: pending=%q promoted=%q", snap.State.PendingPromotion, snap.State.PromotedSnapshot)
+	}
+	digest, err := vcs.New(root, nil).TreeDigest(organized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if digest != wave.Candidate.Digest || snap.State.PromotedDigest != digest {
+		t.Fatalf("organized tree %s does not bind the verified candidate %s (promoted digest %s)", digest, wave.Candidate.Digest, snap.State.PromotedDigest)
+	}
+	if err := vcs.New(root, nil).VerifyReady(); err != nil {
+		t.Fatalf("resumed promotion left the worktree dirty: %v", err)
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" {
+		t.Fatalf("post-resume terminal = %s, %v", run.Status, err)
+	}
+}
+
+// TestPromotionRejectsUserWorkspaceChangesUntilCleaned：中断中间态上叠加用户
+// 未暂存修改＝不是本操作的中间态：重入拒绝（指明先处理工作区）、HEAD 不动、
+// 用户修改原样保留；用户清理后重入完成组织。
+func TestPromotionRejectsUserWorkspaceChangesUntilCleaned(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, nil, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(root, "git", "reset", "-q", "--soft", base); err != nil {
+		t.Fatal(err)
+	}
+	// 用户在中断中间态上新增未暂存修改。
+	userEdit := "package main // user edit\n"
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte(userEdit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.f.PrepareCandidate("resumed organization"); err == nil || !strings.Contains(err.Error(), "changes it did not stage") {
+		t.Fatalf("user-dirty midstate promotion: %v", err)
+	}
+	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != base {
+		t.Fatalf("rejected resume moved HEAD: %s -> %s (%v)", base, after, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "app.go"))
+	if err != nil || string(data) != userEdit {
+		t.Fatalf("rejected resume touched the user change: %q (%v)", data, err)
+	}
+	if stagedOnly, err := vcs.New(root, nil).StagedOnly(); err != nil || stagedOnly {
+		t.Fatalf("user-dirty midstate classified staged-only = %t (%v)", stagedOnly, err)
+	}
+	// 用户处理（丢弃未暂存修改回到纯暂存中间态）后重入成功。
+	if _, err := runner.Run(root, "git", "checkout", "--", "app.go"); err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := d.f.PrepareCandidate("resumed organization")
+	if err != nil {
+		t.Fatalf("cleaned re-entry promotion: %v", err)
+	}
+	organized, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted != organized || organized == base || organized == head {
+		t.Fatalf("cleaned re-entry = %s (head %s, base %s, intent %s)", promoted, organized, base, head)
+	}
+	if count, err := vcs.New(root, nil).CommitCount(base, organized); err != nil || count != 1 {
+		t.Fatalf("cleaned re-entry interval = %d, %v", count, err)
+	}
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" || snap.State.PromotedSnapshot != organized {
+		t.Fatalf("cleaned re-entry did not bind: pending=%q promoted=%q", snap.State.PendingPromotion, snap.State.PromotedSnapshot)
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" {
+		t.Fatalf("post-clean terminal = %s, %v", run.Status, err)
+	}
+}
+
+// TestPromotionBindsParkedOrganizationAfterBarrierRelease：晋升窗口在组织完成
+// 后、Record 前中断（意图存活、历史已组织）；随后需求变化屏障到达撤销意图
+// （组织形态驻留），屏障解除后重入——空意图路径经 count==1 无 squash 直绑已
+// 组织形态（§9.2「外部事实已精确满足预期时只提交结果」）。
+func TestPromotionBindsParkedOrganizationAfterBarrierRelease(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
+	base := identities[0]
+	d := completePromotionPipeline(t, nil, root, base)
+	head, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	// 窗口中断已越过组织：reset --soft＋commit 已完成、Record 未执行。
+	if _, err := runner.Run(root, "git", "reset", "-q", "--soft", base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(root, "git", "commit", "-q", "-m", "organized final candidate"); err != nil {
+		t.Fatal(err)
+	}
+	organized, err := vcs.New(root, nil).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if organized == head || organized == base {
+		t.Fatalf("premise lost: parked organization identity = %s", organized)
+	}
+	// 屏障到达：REQUEST 落账撤销驻留意图；随后解除（Keep 需求）。
+	request := holdRequirement(t, d)
+	releaseRequirement(t, d, request)
+	snap, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" || snap.State.PromotedSnapshot != "" {
+		t.Fatalf("premise lost: pending=%q promoted=%q", snap.State.PendingPromotion, snap.State.PromotedSnapshot)
+	}
+	promoted, err := d.f.PrepareCandidate("re-bound organization")
+	if err != nil {
+		t.Fatalf("parked organization re-bind: %v", err)
+	}
+	if promoted != organized {
+		t.Fatalf("re-bind reorganized history: %s -> %s", organized, promoted)
+	}
+	snap, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PendingPromotion != "" || snap.State.PromotedSnapshot != organized {
+		t.Fatalf("re-bind did not bind the parked form: pending=%q promoted=%q", snap.State.PendingPromotion, snap.State.PromotedSnapshot)
+	}
+	digest, err := vcs.New(root, nil).TreeDigest(organized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.PromotedDigest != digest {
+		t.Fatalf("re-bind digest = %s, want the organized tree %s", snap.State.PromotedDigest, digest)
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" || run.PromotedSnapshot != organized {
+		t.Fatalf("post-rebind terminal = %s promoted = %s, want COMPLETE %s (%v)", run.Status, run.PromotedSnapshot, organized, err)
 	}
 }
 

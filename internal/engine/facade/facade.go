@@ -908,9 +908,20 @@ func (f *Facade) sealDelivered() error {
 
 // Submit accepts one typed protocol event and immediately computes the next
 // boundary.  The event itself remains the only external write channel.
+// 需求变化接纳（Phase A 载体：KindRequestControl ∧ Control==
+// ControlRequestRequirementChange）与晋升执行窗在同一把等待式锁上互斥：窗口
+// 内到达的接纳等待至窗口关闭、作用于已提交事实；其余事件不加锁（不阻断常规
+// 控制/结果流）。
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
+	}
+	if event.Kind == protocol.KindRequestControl && event.Request != nil && event.Request.Control == protocol.ControlRequestRequirementChange {
+		unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		defer unlock()
 	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {

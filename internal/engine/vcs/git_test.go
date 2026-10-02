@@ -213,19 +213,31 @@ func TestStagedTreeDigestResolvesWriteTree(t *testing.T) {
 	})
 }
 
-func TestSoftResetPassesRevisionThrough(t *testing.T) {
-	p, runner := newStub(map[string]string{"git reset --soft": ""}, nil)
-	if err := p.SoftReset(headIdentity); err != nil {
-		t.Fatalf("soft reset = %v", err)
+// TestStagedOnlyClassifiesPorcelainLines：纯暂存形态判定＝porcelain 主体非空
+// 且每行都是已暂存差（index 侧非空、工作区侧为空）；未暂存（含居首行）、未
+// 跟踪、混合与空主体（含仅剩运行期未跟踪豁免行）都不是。
+func TestStagedOnlyClassifiesPorcelainLines(t *testing.T) {
+	cases := map[string]struct {
+		status string
+		want   bool
+	}{
+		"pure staged":            {"## master\nM  a.go\nA  b.go\nR  old -> new", true},
+		"unstaged first line":    {"## master\n M a.go", false},
+		"unstaged later line":    {"## master\nM  a.go\n M b.go", false},
+		"staged and unstaged":    {"## master\nMM a.go", false},
+		"staged plus untracked":  {"## master\nM  a.go\n?? new.go", false},
+		"untracked only":         {"## master\n?? new.go", false},
+		"header only":            {"## master", false},
+		"runtime untracked only": {"## master\n?? .gates/engine/run-1/promotion.lock", false},
 	}
-	last := runner.commands[len(runner.commands)-1]
-	want := []string{"git", "reset", "--soft", headIdentity}
-	if strings.Join(last, " ") != strings.Join(want, " ") {
-		t.Fatalf("soft reset argv = %v, want %v", last, want)
-	}
-	p2, _ := newStub(nil, map[string]string{"git reset --soft": "unknown revision"})
-	if err := p2.SoftReset(headIdentity); err == nil || !strings.Contains(err.Error(), "cannot soft reset") {
-		t.Fatalf("soft reset failure = %v", err)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			p, _ := newStub(map[string]string{"git status": tc.status}, nil)
+			got, err := p.StagedOnly()
+			if err != nil || got != tc.want {
+				t.Fatalf("staged-only = %t, %v; want %t", got, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -353,19 +365,19 @@ func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
 	if staged != squashTree {
 		t.Fatalf("clean staged tree = %s, want the HEAD tree %s", staged, squashTree)
 	}
-	// 补偿复位：soft reset 回组织前身份，index 仍持有组织树（树相等＝工作区
-	// 干净），净零历史改写。
-	if err := p.SoftReset(head); err != nil {
+	// 纯暂存形态：reset --soft 回 base 后 commit 未执行的组织中断中间态。
+	if _, err := p.runner.Run(p.Root(), "git", "reset", "-q", "--soft", base); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := p.Resolve()
-	if err != nil {
+	stagedOnly, err := p.StagedOnly()
+	if err != nil || !stagedOnly {
+		t.Fatalf("soft-reset midstate staged-only = %t (%v)", stagedOnly, err)
+	}
+	// 叠加未暂存修改后不再属于该形态。
+	if err := os.WriteFile(filepath.Join(p.Root(), "app.go"), []byte("package main // user edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if restored != head {
-		t.Fatalf("soft reset landed on %s, want the pre-organization head %s", restored, head)
-	}
-	if err := p.VerifyReady(); err != nil {
-		t.Fatalf("soft reset left pending changes: %v", err)
+	if stagedOnly, err := p.StagedOnly(); err != nil || stagedOnly {
+		t.Fatalf("unstaged modification classified staged-only = %t (%v)", stagedOnly, err)
 	}
 }
