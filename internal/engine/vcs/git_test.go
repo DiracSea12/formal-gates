@@ -181,6 +181,54 @@ func TestStatusExcludesOnlyRuntimeUntrackedEntries(t *testing.T) {
 	}
 }
 
+func TestStagedTreeDigestResolvesWriteTree(t *testing.T) {
+	t.Run("resolves and normalizes the staged identity", func(t *testing.T) {
+		p, runner := newStub(map[string]string{
+			"git rev-parse --show-toplevel": "/repo",
+			"git write-tree":                strings.ToUpper(headIdentity),
+		}, nil)
+		got, err := p.StagedTreeDigest()
+		if err != nil || got != headIdentity {
+			t.Fatalf("staged digest = %q, %v", got, err)
+		}
+		if len(runner.commands) == 0 {
+			t.Fatal("stub runner saw no commands")
+		}
+	})
+	t.Run("rejects non-identity output", func(t *testing.T) {
+		p, _ := newStub(map[string]string{
+			"git rev-parse --show-toplevel": "/repo",
+			"git write-tree":                "not a tree",
+		}, nil)
+		if _, err := p.StagedTreeDigest(); err == nil || !strings.Contains(err.Error(), "invalid tree identity") {
+			t.Fatalf("staged digest error = %v", err)
+		}
+	})
+	t.Run("write-tree failure wraps", func(t *testing.T) {
+		p, _ := newStub(map[string]string{"git rev-parse --show-toplevel": "/repo"},
+			map[string]string{"git write-tree": "index unusable"})
+		if _, err := p.StagedTreeDigest(); err == nil || !strings.Contains(err.Error(), "cannot resolve the staged tree") {
+			t.Fatalf("staged digest failure = %v", err)
+		}
+	})
+}
+
+func TestSoftResetPassesRevisionThrough(t *testing.T) {
+	p, runner := newStub(map[string]string{"git reset --soft": ""}, nil)
+	if err := p.SoftReset(headIdentity); err != nil {
+		t.Fatalf("soft reset = %v", err)
+	}
+	last := runner.commands[len(runner.commands)-1]
+	want := []string{"git", "reset", "--soft", headIdentity}
+	if strings.Join(last, " ") != strings.Join(want, " ") {
+		t.Fatalf("soft reset argv = %v, want %v", last, want)
+	}
+	p2, _ := newStub(nil, map[string]string{"git reset --soft": "unknown revision"})
+	if err := p2.SoftReset(headIdentity); err == nil || !strings.Contains(err.Error(), "cannot soft reset") {
+		t.Fatalf("soft reset failure = %v", err)
+	}
+}
+
 // realRepo 建立真 git 仓（exec 冒烟；无模型调用）。
 func realRepo(t *testing.T) *Provider {
 	t.Helper()
@@ -208,7 +256,7 @@ func realRepo(t *testing.T) *Provider {
 	return p
 }
 
-func TestRealRepositorySmokeCoversSixOperations(t *testing.T) {
+func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
 	p := realRepo(t)
 	base, err := p.Resolve()
 	if err != nil {
@@ -292,5 +340,32 @@ func TestRealRepositorySmokeCoversSixOperations(t *testing.T) {
 	}
 	if squashed == head {
 		t.Fatal("squash produced the pre-squash identity")
+	}
+	// 暂存树只读探针：干净 index 的暂存树＝HEAD 提交的树。
+	staged, err := p.StagedTreeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	squashTree, err := p.TreeDigest(squashed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staged != squashTree {
+		t.Fatalf("clean staged tree = %s, want the HEAD tree %s", staged, squashTree)
+	}
+	// 补偿复位：soft reset 回组织前身份，index 仍持有组织树（树相等＝工作区
+	// 干净），净零历史改写。
+	if err := p.SoftReset(head); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored != head {
+		t.Fatalf("soft reset landed on %s, want the pre-organization head %s", restored, head)
+	}
+	if err := p.VerifyReady(); err != nil {
+		t.Fatalf("soft reset left pending changes: %v", err)
 	}
 }

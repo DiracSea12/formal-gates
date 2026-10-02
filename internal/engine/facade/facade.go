@@ -822,16 +822,16 @@ func (f *Facade) Drive() (Run, error) {
 			}
 		}
 	}
-	// regular 的终态核验先于相变（镜像 legacy Seal 的前 resolve：原生交付身
-	// 份必须等于已绑定晋升身份——漂移拒、脏树拒、基线祖先核）。失败原样上
-	// 抛：run 保持活动，重新组织晋升的恢复路径敞开；通过经 SealTerminal 相
-	// 变后由下方投影呈现 COMPLETE。
+	// regular 的终态交付核验单点：首次到达与已相变未发布的重入都经
+	// sealDelivered 同一核验（原生交付身份＝已绑定晋升身份、工作区就绪、基线
+	// 祖先）——检查点漂移即错、摘要不发布；SealTerminal 对已相变且身份一致的
+	// 重入幂等返回。ABORTED run 的终态事实是用户决定，不做交付核验。
 	if plan != nil && plan.Next.Kind == decision.KindComplete {
 		current, loadErr := f.engine.Load()
 		if loadErr != nil {
 			return Run{}, loadErr
 		}
-		if current.State.Phase != runtime.PhaseTerminal {
+		if _, aborted := current.State.AbortDecision(); !aborted {
 			if err := f.sealDelivered(); err != nil {
 				return Run{}, err
 			}
@@ -852,8 +852,8 @@ func (f *Facade) Drive() (Run, error) {
 		if run, err = f.project(); err != nil {
 			return Run{}, err
 		}
-		// 终态快照边界（regular COMPLETE）：多 commit 拒绝（先经候选晋升组
-		// 织）＋跨终态发布段原生身份恒等（双 resolve 镜像 legacy Seal）。
+		// 终态快照边界（regular COMPLETE）：发布段内原生身份恒等（发布前后
+		// 双 resolve，镜像 legacy Seal 的发布窗口核验）。
 		snapshotGuard, err := f.terminalSnapshotGuard(run)
 		if err != nil {
 			return Run{}, err

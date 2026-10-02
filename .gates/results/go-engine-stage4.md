@@ -887,3 +887,17 @@ R5 剩余：RESET/RECOVERY 公开 typed contract 评估（plan :366）。
 - 诚实边界：结论由机制推导得出，未考 dogfood 历史中 reset 的实际使用频率。
 
 R5 全部收口（Git provider、whitebox 登记、晋升协议、终态完成机制、owner 区间、真实 canary 绿链、route matrix、RESET/RECOVERY 销案）。
+
+## R5f 返修：机主复核 5df762d 未过（2 P1＋2 P2＋验收/费用缺口）→ 收口（2026-10-02）
+
+五发现全部主代理亲复现坐实（机主探针 overlay 亲跑红态）：①终态落盘、摘要发布前中断→恢复路径旧 terminalSnapshotGuard 弱判据（ancestor/count/发布期不变）放行 amended HEAD 为 COMPLETE——两套终态判据并存是根因；②屏障接纳后 squash 仍改写历史、Record 才拒——意图未贯穿副作用执行；③soft reset 后 commit 前中断→重入以 base 覆盖未决意图＋VerifyReady 拒——中间态无恢复；④canary 代码固定补写 source/point PASS（run 144748 答卷仅 caseDecisions 6 条核实）；⑤被拒真调用不入账（run 122152 三次 104,091 tokens 亲核）。
+
+返修合同 /tmp/r5f-engine-contract.md＋/tmp/r5f-canary-contract.md（规格原文全钉：final-implementation-draft:299 Phase A、legacy Seal 双 resolve、stage-3-5a QA review 三层条款、review.go:170-186 full 路线语义、legacy canary 白盒机械），两代理并行落地：
+- **终态判据统一**：sealDelivered 对 regular 未 abort 的 run 在 KindComplete 一律执行（SealTerminal 已 TERMINAL 幂等）——首达＝核验＋相变、中断重入＝同一核验先于摘要发布（漂移即错不发布）；terminalSnapshotGuard 收敛为纯发布窗口身份恒等，删分叉前置判据，交付核验单点＝sealDelivered。
+- **晋升 intent 贯穿**：内容前置门（StagedTreeDigest＝git write-tree 的净树须等于终 wave 候选 digest，先于任何 Git 写——干净区即 HEAD 树，中间态即候选树，单一规则覆盖两形态；漂移零副作用拒）；意图存活重入＝续行不重开（消除覆盖）；squash/续行 commit 后接纳被撤销（屏障/活动期）＝SoftReset 回意图目标补偿（组织保树→工作区干净，净零历史改写；digest/schema 拒不补偿）；reset 完成 commit 未执行中间态以前置门识别后 Commit 完成、绑定原意图。新增 vcs 操作 StagedTreeDigest/SoftReset（Runner 直通镜像既有形态）。
+- **canary**：三层审查逐层取模型判定（sourceDecisions/pointDecisions/caseDecisions 全覆盖形状检查＋逐字组装，删除固定补写）；路线改 full（读 Ask 钉住 RouteGates，Mode full/Selected 空）；白盒面（worktree add --detach at BaseSnapshot→RegisterQAWorktree→白盒 design 可写回合真实写 Go 测试、TestRef-only 形态、QA_ARTIFACT 回执前 assertTestOnlyArtifact 对真实 diff 验证 test-only 主张、白盒执行在登记区跑 go test）；逐调用费用入账（zcodeExecute 返回即记，含被拒）；gofmt。
+- 树内新增四行为测试（检查点漂移拒发布/屏障净零/中断续行绑定组织头/漂移前置拒）；既有测试机械适配逐处披露（guard 多 commit 断言改由 sealDelivered 检查点拒绝、completePromotionPipeline 增 runner 注入位等）。
+
+主代理独立复核（全部亲跑）：diff 亲读（补偿分支/前置门单规则/续行路径/白盒桥三引擎原文核据：validation_result.go:341 白盒 count==2＋Development、contract.go:655-668 TestRef-only、validation_candidate.go AUTHORING/QA_ARTIFACT）；机主探针红绿——修复后 4/5 绿，第 5 个（TestRootPromotionResetCommitRecovery）日志示 retry error=nil＝修复生效，其末断言写于坏世界（成功消费意图后 pending=""），判陈旧断言非缺陷，树内 TestPromotionResumeAfterResetInterruptionBindsOrganizedHead 持正确语义；夹具自洽核（commit 步清 pendingTree）；全量 internal+cmd rc=0（24 包）＋vet/gofmt 干净。
+
+**费用更正**：真实总账修正为 33 次调用、1,709,433 tokens（原报 30/1,605,342 漏 run 122152 三次被拒调用 104,091——机主复核发现，主代理对全部证据目录 source.json 重核一致；驱动器已改逐调用入账）。full canary 重跑（full 路线＋白盒面＋三层审查）待机主授权真实模型调用。

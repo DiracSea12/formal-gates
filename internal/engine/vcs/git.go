@@ -146,6 +146,24 @@ func (p *Provider) TreeDigest(rev string) (string, error) {
 	return strings.ToLower(digest), nil
 }
 
+// StagedTreeDigest 返回暂存区的树身份（git write-tree，只读）。干净 index 的
+// 暂存树＝HEAD 提交的树；reset --soft 后 index 保留截链前内容——晋升入口以
+// 此分辨「reset 已完成、commit 未执行」的组织中断中间态。
+func (p *Provider) StagedTreeDigest() (string, error) {
+	if err := p.verifyRoot(); err != nil {
+		return "", err
+	}
+	digest, err := p.runner.Run(p.root, "git", "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve the staged tree: %w", err)
+	}
+	digest = strings.TrimSpace(digest)
+	if !gitIdentityPattern.MatchString(digest) {
+		return "", fmt.Errorf("git returned an invalid tree identity %q", digest)
+	}
+	return strings.ToLower(digest), nil
+}
+
 // IsAncestorOrEqual 要求 ancestor 是 descendant 的祖先或与之相等。
 func (p *Provider) IsAncestorOrEqual(ancestor, descendant string) error {
 	resolved, err := p.runner.Run(p.root, "git", "merge-base", ancestor, descendant)
@@ -181,6 +199,16 @@ func (p *Provider) SquashToBase(base, message string) error {
 	}
 	if _, err := p.runner.Run(p.root, "git", "commit", "-m", message); err != nil {
 		return fmt.Errorf("cannot squash: %w", err)
+	}
+	return nil
+}
+
+// SoftReset 把 HEAD 移到 rev 并保留 index 与工作区（git reset --soft <rev>）：
+// 晋升补偿动作——组织截链后回到意图目标，index 仍持有组织树（树相等＝工作区
+// 干净），净零历史改写。
+func (p *Provider) SoftReset(rev string) error {
+	if _, err := p.runner.Run(p.root, "git", "reset", "--soft", rev); err != nil {
+		return fmt.Errorf("cannot soft reset to %s: %w", rev, err)
 	}
 	return nil
 }

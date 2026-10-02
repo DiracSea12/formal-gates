@@ -104,6 +104,13 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 		return r.commits[b], nil
 	case joined == "status --porcelain=v1 --untracked-files=all":
 		return "", nil
+	case joined == "write-tree":
+		// 暂存区树：reset --soft 后 index 保留截链前内容（pendingTree）；干净
+		// index 的暂存树＝HEAD 提交的树。
+		if r.pendingTree != "" {
+			return r.pendingTree, nil
+		}
+		return r.trees[head], nil
 	case len(args) == 3 && args[0] == "reset" && args[1] == "--soft":
 		// squash 第一步：区间压回 base，当前树留给重提交。
 		bi, ok := r.indexOf(args[2])
