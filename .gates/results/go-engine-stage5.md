@@ -74,3 +74,47 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
 ## 批 1 二轮返修（本轮提交）：终态证据误删＋full 门链
 
 外部复核再判 FAIL（P1 终态证据误删＋P2 full 分片门链＋2 P3 注释），主代理以复核 oracle 亲复现双红后派原子代理。修：①「run 已成立」单一谓词（state.json ∨ terminal-summary.json ∨ 发布窗 intent），Start already-exists 与 recoverStartIntent 共用——同 ID 重试只清过期 intent、终态证据零写；request-only 真半启动重建保留。②「无 QA」判据语义化（routeHasNoQAModes＝validationKinds 为空），三处 custom 模式名判据收敛为单一归属；QA-free full child 端到端到 wave COMPLETE。③两处 P3 注释失配更正。主代理独立复核：P1 oracle 以修后 facade 重建同点位 exit86 注入（首跑误注失败清理路径自纠）真进程重跑 PASS（摘要 1357 字节保留、Open 可用、重试拒）；P2 oracle 双子例 PASS；绕行 oracle 红＝其前提（MISSING_COVERAGE 卡死）已消失，按设计判；round-1 边界探针红＝其无计划选路线先于 F1 必填语义，陈旧期望。全量 engine＋coordination 亲跑绿。教训：**「无 X」类语义判据不得绑在模式/入口名上（custom≠无 QA 的充要），生命周期判据必须枚举同一事实的全部合法形态（活动态＋终态回落是 Open 侧早已承认的一组文件）。**
+
+## 默认路线交付（76f9f0d、66c9f4f）
+
+机主新增并确认：默认独立叫“默认/default”，选全部普通门、不含黑盒/白盒 QA；full 加“QA 阶段较重，适合大型任务”括注；custom 可选子集或全集并保留身份。推荐仍须确认，lightweight 是独立 start 模式。candidate child 普通 QA 不进候选、不选、不执行，各片仍跑所选门、master 强制合并验证；legacy 本块仅扩 default，不改变既有 full/custom/child QA。
+
+本块按机主要求不走正式流程；使用已批准 `/tmp/default-route-implementation-contract.md` 与 `prompts/actions/development-worker.md`。实施代理 `/root/default_route_implementation` 为 fresh fork_turns:none，每次实施/返修指令携带全部代码准则。主代理只独立复核、记账与提交，无 push。基线 d8f24aa→最终 66c9f4f，完整 23 文件 diff；生产只有既有枚举、接纳点的动态过滤、help 和保证理由，未新增状态、配置或执行旁路。
+
+### 实际验证和失败记录
+
+- 开发初次新增并发用例误期望两个首次提交均成功；按真实 CAS 修正为一次接纳、合法 REVISION_CONFLICT 及原事件幂等重放。新真实 Git 完整链首次误用 reopen 后丢失的 fake runner，改用现有真实 Git 夹具；没有改生产纪律。
+- 开发编译、定向四包、相关 race 通过。完整 protocol/facade/validate/CLI 组合 exit1：前三者中 protocol 73.133s、facade 428.803s、CLI 127.612s 通过，validate 461.557s 仅 metadata 小写 lightweight 词检查失败。修提示词形，不改该期望；相关 package/metadata/保证复核22.436s通过。
+- 两条 qastructure 的既有 full/custom 精确文案期望按新需求增加 default，保留全部受理、确认与不自行触发断言，并加强三独立选项/推荐确认/child-master 边界。受影响 tagged 消费者分别2.761s、11.474s通过；保留原始失败 `/tmp/default-route-tagged-route-before.log`。完整慢包组合未重跑，不把历史 exit1 写为通过。
+- 主代理独立 oracle `/tmp/default-route-business_test.go`：真实 Git regular 默认路线，交错双 QA 与 audit-local/readability-local，真实开发提交、候选、两个精确门输入、晋升、COMPLETE及终态 bytes 保持。d8 基线实际执行失败（不认识 default），交付实际执行通过2.20s；日志 `/tmp/default-route-baseline-check.log`、`/tmp/default-route-current-check.log`。首个基线 overlay 路径未规范化导致 no tests to run，未计为负控；修正后才取得执行证据。
+- 主代理独立元数据负控实际失败；最终66上普通检查及相关 tagged 五用例通过2.308s：metadata、默认/full/custom菜单、start只接受lightweight及枚举；日志 `/tmp/default-route-final-metadata-check.log`。亲读完整生产、文档与交付测试 diff；新文案期望来自已批准三值要求，未降低断言。
+- 初次不可变76手动两门各 PASS附同一P3词形项。其完整慢包分别出现10分钟超时、archive缺Git/bin前置失败，如实保留，不归因产品、不记整包通过。词形及需求期望调整后，最终66全新零上下文 complexity与implementation-quality各 PASS，无范围内发现。两份完整任务与返回存 `default-route-gates.md`。最终门实际覆盖当前相关路线包、child/master、并发 race、构建、help；质量门另在正常Git检出构建候选binary并通过 package validate。
+
+### 主代理逐项工程验收
+
+| 硬标准 | 当前代码/执行依据 |
+| --- | --- |
+| 正确性 | review.go 的同一 SELECT_ROUTE 接纳过滤后仍走计划/候选/choice/freshness/变更校验；独立真实 Git 完整交付与原生负控通过。 |
+| 质量 | 核持久 mode/SelectedGates/决定、真实门身份、波次与摘要字节；相关编译、race、包校验和原失败消费者均有执行。 |
+| 需求完整性 | 三独立身份、default全普通门、full括注、custom全集、推荐确认、lightweight、candidate child/master及legacy边界分别有实现/断言；两门逐项映射。 |
+| 简洁性 | 一个要求中的枚举值；已有接纳者＋标准库 Clone/DeleteFunc，无新策略/状态/配置。 |
+| 耦合性 | 下游QA/coverage/wave/guard继续消费SelectedGates；未新增模式名豁免或跨层依赖。 |
+| 可维护性 | 普通门来自当前候选全集，动态新增门及独立非内建门名实际进入default；无固定普通门清单。 |
+| 高可读性 | 模式常量、直接分支、具体禁止手选错误，文档明确每种身份与适用面。 |
+| 优雅/设计一致性 | 沿原Ask/DECIDE、计划、当前绑定、投影与持久化链，未引入额外确认或恢复。 |
+| 无不当硬编码 | 只排除已定义两个内建QA协议ID；普通门名称和数量不固定。 |
+| 无窄逻辑 | 实际选门作为单一QA义务语义；普通、child及legacy各既有owner全范围适用。 |
+| 无过拟合 | 混排QA、多普通门、动态门、custom子集/全集、child/master、拒绝、追加及重开/并发有需求来源证据，不按反例分支。 |
+| 无过度设计 | 没有新增控制事实、旁路、节点、菜单账、费用账或发布机制。 |
+| 无过度防御 | 仅文档化路线选择及常见手选/锚定/计划失误；没有增加对抗性状态防御。 |
+| 无过度抽象 | 原两个运行时各扩既有接纳点，无新增helper/interface/框架/依赖。 |
+| 测试业务隔离 | 新测试只在_test.go；没有测试数据、故障开关或生产测试分支。 |
+| 唯一归属 | 当前路线仍在RouteMode/SelectedGates，历史决定仍在Decisions，查询只读投影；按已确认state.json边界实施，通用数据库条款不记通过。 |
+| 正常/恢复共用与携带者 | Ask.Options/RouteGates→DECIDE.Choice/Route/plan→Decisions/当前字段→validation/store/Open；同事件并发及重开重放字节不变，同Submit/CAS路径。 |
+| 诚实夹具/不降期望 | 真Git、实际Binding/Gate身份；按真实CAS允许冲突但核一次业务写；tagged文案改动有新需求原文并保留原验收能力。 |
+| 删除替代路径/标记 | 原custom单门测试由同一两模式完整链替代；错误custom不能全选说明已替换；无并行机制/账本/开发标记。 |
+| 注释命名 | 修改项描述当前路线/约束，新增行为测试无阶段/返修命名；未添加历史叙事。 |
+
+结论仅为默认路线本块开发验收闭合，非正式流程 PASS或阶段5退出。剩余 checkpoint/收据、master接纳汇总、worktree/integration/merge、级联/guarantee、installed公共面与实机ZCode仍待后续。
+
+机主另授权 active goal 推进剩余阶段5–7，每大阶段结束必须实际ZCode happy path＋大量业务non-happy path。全量构建/测试、隔离安装、版本/原生身份、故障恢复/清理及逐次真实模型授权要求纳入阶段退出；本块没有真实外部模型调用。不得用本块两门或窄测试代替阶段退出。
