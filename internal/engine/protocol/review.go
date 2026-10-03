@@ -90,9 +90,10 @@ func validateReviewDecisionPayload(payload *ReviewDecisionPayload) error {
 }
 
 // validateTopologyDecision 校验拓扑决定的形状：no-split 必带理由 note 且
-// 不携带拆分参数；split 必有 SplitCount≥2、等长 Slices 与并行度，分片名须
-// 是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child 认
-// 领键都以它进行）。AC 责任映射对确认需求的校验在绑定点（slice.go）。
+// 不携带拆分参数；split 必有 SplitCount≥2、等长的 Slices 与并行度，分片名
+// 须是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child
+// 认领键都以它进行）。Slices 逐项唯一与 AC 责任映射对确认需求的校验在绑
+// 定点（slice.go splitACOwners）。
 func validateTopologyDecision(topology *TopologyDecision) error {
 	switch topology.Decision {
 	case topologyNoSplit:
@@ -203,6 +204,19 @@ func validateRouteDecision(route *RouteDecision) error {
 		}
 	default:
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route mode %q invalid for SELECT_ROUTE (closed set: full, custom)", route.Mode)}
+	}
+	// 计划确认的两种形态不得混携：内联片内提案（child，摘要＝提案内容摘
+	// 要、结构复用 validateGranularity）与 readiness 引用（普通 run）。
+	if plan := route.DevelopmentPlan; plan != nil && plan.Proposal != nil {
+		if plan.ReviewActionID != "" {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "an inline development plan proposal cannot also reference its readiness review action"}
+		}
+		if err := validateGranularity(plan.Proposal); err != nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: err.Error()}
+		}
+		if plan.Digest != planContractDigest(plan.Proposal) {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "the inline development plan digest must match its proposal"}
+		}
 	}
 	return validateRouteGateCandidates(route.Gates)
 }
@@ -537,15 +551,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: full, custom)", payload.Route.Mode, decide.Choice),
 			}
 		}
-		// 路线绑定即最终（需求 7「路线只问一次」：单一 run 一次、拆后逐片
-		// 各一次；与拓扑最终性同族）：绑定后的第二次决定可区分拒绝、零写、
-		// Ask 存活；变更走需求变化勾选重走路线（解除后重选）、reset 或
-		// abort。split 绑定锁定的合并路线同样不可选择。
+		// §6.3.1：开发前可重选或追加，开发后只可追加普通门（不能新增 QA、
+		// 不能静默移除既有义务）——绑定后路线变更的约束由 validateRouteChange
+		// 在本接纳链上执行。合并路线例外：split 绑定同事务锁定的合并验证
+		// 拒绝普通 route-add/reselect。
 		if state.RouteMode == routeModeMerge {
 			return reviewReject(fmt.Errorf("route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"))
-		}
-		if state.RouteMode != "" {
-			return reviewReject(fmt.Errorf("route is already bound and is the binding point; it is not re-selected (change goes through requirement change, reset, or abort)"))
 		}
 		// 候选表必须与 Ask 钉住的全集集合相等（顺序无关）：少列或多列任一
 		// 门，决定声称的候选表就不再是用户所见并批准的全集——可区分拒

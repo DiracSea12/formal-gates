@@ -1130,18 +1130,15 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 表必须与之集合相等（admitReviewDecision 核对）。schema 层不校验
 		// 该字段——事件 schema 判定先于幂等台账，已接纳事件的重放不得因
 		// 此字段被拒。按 run 形态分流的约束在此接纳处判定：已绑定路线的
-		// run 不再抬路线 Ask（路线只问一次；merge 锁定与 full/custom 绑定
-		// 同为最终，变更走需求变化重走）；child 的候选不含内建 QA 模式。
+		// run 照常抬路线 Ask（§6.3.1 开发前重选/开发后追加，变更约束在决定
+		// 侧由 validateRouteChange 把关）；split 绑定锁定的合并路线拒绝普通
+		// route-add/reselect；child 的候选不含内建 QA 模式。
 		if ev.Request.Control == ControlSelectRoute {
 			if err := validateRouteGateCandidates(ev.Request.RouteGates); err != nil {
 				return Acceptance{}, nil, false, err
 			}
-			if state.RouteMode != "" {
-				detail := "route is already bound and is the binding point; it is not re-selected (change goes through requirement change, reset, or abort)"
-				if state.RouteMode == routeModeMerge {
-					detail = "route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"
-				}
-				return Acceptance{}, nil, false, &RejectedError{Code: CodeReviewDecisionRejected, Detail: detail}
+			if state.RouteMode == routeModeMerge {
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeReviewDecisionRejected, Detail: "route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"}
 			}
 			if state.SliceChild != nil {
 				for _, gate := range ev.Request.RouteGates {

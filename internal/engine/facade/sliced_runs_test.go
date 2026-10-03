@@ -6,6 +6,7 @@ package facade
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -89,6 +90,43 @@ func controlError(t *testing.T, d *validationDriver, control protocol.ControlKin
 	return nil
 }
 
+// decideRaw 走完整两段，但决定以字面事件提交（不经构造器前置校验），使
+// schema 层拒绝落在引擎接纳处——供载荷形状拒绝用例断言。
+func decideRaw(t *testing.T, d *validationDriver, control protocol.ControlKind, choice string, payload protocol.ReviewDecisionPayload) error {
+	t.Helper()
+	id := d.eventID()
+	var ask protocol.Event
+	var err error
+	if control == protocol.ControlSelectRoute && payload.Route != nil {
+		ask, err = protocol.NewRouteRequestEvent(id, payload.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+	} else {
+		ask, err = protocol.NewRequestEvent(id, control, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, run, askErr := d.f.Submit(ask); askErr != nil {
+		return askErr
+	} else {
+		d.run = run
+	}
+	token := ""
+	for _, pending := range d.run.PendingAsks {
+		if pending.RequestID == string(id) {
+			token = pending.Token
+		}
+	}
+	decide := protocol.Event{ID: d.eventID(), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{
+		Request: protocol.RequestID(id), Token: token, Choice: protocol.AskOptionID(choice), Review: &payload,
+	}}
+	_, run, err := d.f.Submit(decide)
+	if err != nil {
+		return err
+	}
+	d.run = run
+	return nil
+}
+
 // driverState 读取 run 的权威状态投影。
 func driverState(t *testing.T, d *validationDriver) *protocol.State {
 	t.Helper()
@@ -116,6 +154,28 @@ func sliceChildReceipt(revision string) IntakeConfirmationReceipt {
 	receipt.RequirementRevision = revision
 	receipt.Artifacts = []IntakeArtifact{{Path: "requirements.md", Revision: revision}}
 	return receipt
+}
+
+// sliceLanePlan 是宿主为 lane-core 分片派生的片内开发计划（从 master 继承
+// 的整体粒度审派生的单批退化形态——child 无自身 readiness 候选，计划随路
+// 线决定内联确认）。
+func sliceLanePlan() *protocol.GranularityReview {
+	plan := commandPlan()
+	plan.Reason = "The lane-core slice inherits the master granularity review as one cohesive batch."
+	return plan
+}
+
+// confirmSliceRoute 是 child 的路线确认辅助：内联提案先随载荷提交预览，
+// 取回精确确认后再走两段决定。
+func (d *validationDriver) confirmSliceRoute(route protocol.RouteDecision, plan *protocol.GranularityReview) {
+	d.t.Helper()
+	route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: plan}
+	preview, err := d.f.DevelopmentPlan(route)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	route.DevelopmentPlan = &preview.Confirmation
+	d.control(protocol.ControlSelectRoute, route.Mode, protocol.ReviewDecisionPayload{Route: &route})
 }
 
 // abortRun 提交并落账 abort 决定，使 run 离开 ACTIVE（保持 ABORTING：账
@@ -286,9 +346,9 @@ func TestSliceChildStartValidations(t *testing.T) {
 	})
 	t.Run("base snapshot mismatch", func(t *testing.T) {
 		options := sliceChildStart(master, "child-snapshot", "lane-core", validReceipt)
-		options.Request.Route = "lightweight"
-		options.Request.BaseSnapshot = ""
-		options.VCSRunner = nil
+		// 以链上另一真实提交通过 regular 的 VCS 边界，抵达认领处的基线身份
+		// 比对（master 冻结在原 base 上）。
+		options.Request.BaseSnapshot = master.frozen.advance()
 		if _, _, err := Start(options); err == nil {
 			t.Fatal("base snapshot mismatch accepted")
 		} else if !strings.Contains(err.Error(), "does not match the master base snapshot") {
@@ -305,8 +365,8 @@ func TestSliceChildStartValidations(t *testing.T) {
 }
 
 // TestSliceChildInheritsAndSelectsRoute：child 创建成功后 master 记录认领映
-// 射、child 状态含继承事实，全程无自身审查轮，QA-free 路线确认后推进开发
-// 段；继承拓扑不可重切。
+// 射、child 状态含继承事实，全程无自身审查轮，携片内计划的 QA-free 路线
+// 确认后推进开发段；继承拓扑不可重切。
 func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	master := splitMaster(t)
 	f, run, err := Start(sliceChildStart(master, "child-lane-core", "lane-core", sliceChildReceipt(master.revision)))
@@ -337,15 +397,26 @@ func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	if err := controlError(t, child, protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "re-cut"}}); err == nil {
 		t.Fatal("child topology confirmation accepted")
 	}
-	// 候选含 QA 的 Ask 拒绝；QA-free 候选的 custom 路线照常绑定并推进。
+	// 候选含 QA 的 Ask 拒绝；缺片内计划的决定拒绝（计划随路线内联确认）。
 	if err := controlError(t, child, protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{
 		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"},
 	}}); err == nil {
 		t.Fatal("QA-carrying child route ask accepted")
 	}
-	child.control(protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{
+	if err := controlError(t, child, protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{
 		Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.security"},
-	}})
+	}}); err == nil {
+		t.Fatal("child route decision without its slice plan accepted")
+	} else if !strings.Contains(err.Error(), "slice development plan") {
+		t.Fatalf("plan-less child route error = %v", err)
+	}
+	if state := driverState(t, child); state.RouteMode != "" {
+		t.Fatalf("rejected plan-less decision bound a route: %q", state.RouteMode)
+	}
+	// 携片内计划的 QA-free custom 路线照常绑定并推进。
+	child.confirmSliceRoute(protocol.RouteDecision{
+		Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.security"},
+	}, sliceLanePlan())
 	state = driverState(t, child)
 	if state.RouteMode != "custom" || len(state.SelectedGates) != 1 || state.SelectedGates[0] != "gate.security" {
 		t.Fatalf("child route binding = %q %v", state.RouteMode, state.SelectedGates)
@@ -367,8 +438,8 @@ func operatorBoundary(t *testing.T, d *validationDriver) string {
 
 // TestSliceChildBoundaryFollowsRouteSelection：child 的 operator 边界随进度
 // 前进——未选路线时提示选择分片路线，选完路线后指向确认需求文档的提交
-// （验证波次依赖 Validation 冻结）；全程不出现开发计划提示（child 的路线
-// 确认不绑定开发计划）。
+// （验证波次依赖 Validation 冻结）；计划随路线一次确认，边界不另出现开发
+// 计划提示。
 func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 	master := splitMaster(t)
 	f, run, err := Start(sliceChildStart(master, "child-boundary", "lane-core", sliceChildReceipt(master.revision)))
@@ -382,9 +453,9 @@ func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 	} else if strings.Contains(boundary, "development plan") {
 		t.Fatalf("child boundary carries a development-plan prompt: %q", boundary)
 	}
-	child.control(protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{
+	child.confirmSliceRoute(protocol.RouteDecision{
 		Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
-	}})
+	}, sliceLanePlan())
 	if boundary := operatorBoundary(t, child); !strings.Contains(boundary, "REQUIREMENT document") {
 		t.Fatalf("boundary after route selection = %q, want the confirmed requirement document", boundary)
 	} else if strings.Contains(boundary, "development plan") {
@@ -451,5 +522,198 @@ func TestSliceChildClaimSurvivesInterruptedStart(t *testing.T) {
 		t.Fatal("different child run id re-entered the claimed slice")
 	} else if !strings.Contains(err.Error(), "already claimed") {
 		t.Fatalf("foreign re-entry error = %v", err)
+	}
+}
+
+// TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch：child 全程——
+// 继承→选 QA-free 路线（携片内计划）→提交 REQUIREMENT 观察→Drive 产生开
+// 发派发任务；断言具体 batch/task 与 DevelopmentInput 内容（片内计划即执
+// 行契约），full/custom 两形态。
+func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
+	for _, mode := range []string{"full", "custom"} {
+		t.Run(mode, func(t *testing.T) {
+			master := splitMaster(t)
+			f, run, err := Start(sliceChildStart(master, "child-dispatch-"+mode, "lane-core", sliceChildReceipt(master.revision)))
+			if err != nil {
+				t.Fatalf("slice child start: %v", err)
+			}
+			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: master.git, frozen: master.frozen}
+			child.drive()
+			route := protocol.RouteDecision{Mode: mode, Gates: []string{"gate.quality"}}
+			if mode == "custom" {
+				route.Selected = []string{"gate.quality"}
+			}
+			child.confirmSliceRoute(route, sliceLanePlan())
+			child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
+				Subject:    child.revision,
+				Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
+			}})
+			child.drive()
+			child.reopen()
+			child.drive()
+			id, in := planBatchAction(child, "command")
+			if in.Development == nil {
+				t.Fatalf("child route produced no development dispatch: inputs=%+v next=%+v", child.run.ValidationInputs, child.run.Next)
+			}
+			plan := sliceLanePlan()
+			if !reflect.DeepEqual(in.Development.Batch, plan.Batches[0]) {
+				t.Fatalf("dispatched batch contract = %+v, want the confirmed slice plan batch", in.Development.Batch)
+			}
+			if len(in.Development.Dependencies) != 0 {
+				t.Fatalf("single-batch slice plan carried dependencies: %+v", in.Development.Dependencies)
+			}
+			if state := driverState(t, child); len(state.PendingActions) == 0 || state.PendingActions[id].Task != in.Binding.Task {
+				t.Fatalf("development dispatch %s is not pending: %+v", id, state.PendingActions)
+			}
+		})
+	}
+}
+
+// TestSliceChildRouteWithoutPlanIsRejected：child 路线决定缺片内计划（提案
+// 为空）可区分拒绝、零写；摘要与提案不一致同样拒绝。
+func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
+	master := splitMaster(t)
+	f, run, err := Start(sliceChildStart(master, "child-unplanned", "lane-core", sliceChildReceipt(master.revision)))
+	if err != nil {
+		t.Fatalf("slice child start: %v", err)
+	}
+	child := &validationDriver{t: t, f: f, run: run, provider: DefaultProvider, git: master.git, frozen: master.frozen}
+	child.drive()
+	before := driverState(t, child)
+	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	if err := controlError(t, child, protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &route}); err == nil {
+		t.Fatal("child route decision without a slice plan accepted")
+	} else if !strings.Contains(err.Error(), "slice development plan") {
+		t.Fatalf("plan-less child route error = %v", err)
+	}
+	// 摘要与提案不一致：schema 层拒绝。
+	mismatched := route
+	mismatched.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Digest: "sha256:wrong", Proposal: sliceLanePlan()}
+	if err := decideRaw(t, child, protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &mismatched}); err == nil {
+		t.Fatal("child route decision with a mismatched plan digest accepted")
+	} else if !strings.Contains(err.Error(), "digest must match its proposal") {
+		t.Fatalf("mismatched digest error = %v", err)
+	}
+	after := driverState(t, child)
+	if after.RouteMode != "" || after.SelectedGates != nil || len(after.Decisions) != len(before.Decisions) {
+		t.Fatalf("rejected plan-less child route changed state: %q %v", after.RouteMode, after.SelectedGates)
+	}
+}
+
+// TestSliceChildStartRebuildsAfterRequestOnlyPersistence：启动中断窗（认领
+// 已写、request.json 已写、state.json 未写）以 state.json 为完成判据——同
+// ID Start 清理半启动残留并重建、Open 可用、master 认领不变；异 ID 仍被
+// 认领拒绝。
+func TestSliceChildStartRebuildsAfterRequestOnlyPersistence(t *testing.T) {
+	master := splitMaster(t)
+	opts := sliceChildStart(master, "child-request-gap", "lane-core", sliceChildReceipt(master.revision))
+	req := opts.Request
+	req.IntakeConfirmationReceipt = canonicalizeIntakeReceipt(req.IntakeConfirmationReceipt)
+	digest, err := IntakeDigest(req.IntakeConfirmationReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.IntakeConfirmationReceipt.Digest = digest
+	req.PackageDigest = opts.Admission.PackageDigest
+	req.InstalledTargetIdentity = opts.Admission.InstalledTargetIdentity
+	// 按真实持久前缀构造中断：认领已提交、intent 与 request.json 已落盘、
+	// state.json 未写（Start 在 request 落盘后、首个状态事务前中断）。
+	if _, err := master.f.engine.ClaimSlice(req.SliceID, req.RunID, master.revision, req.BaseSnapshot, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(startIntentPath(master.f.root, req.RunID), startIntent{RunID: req.RunID, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(master.f.root, filepath.FromSlash(EngineNamespace), req.RunID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(dir, "request.json"), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Start(opts); err != nil {
+		t.Fatalf("same-id restart after the request-only window: %v", err)
+	}
+	if _, err := Open(master.f.root, req.RunID); err != nil {
+		t.Fatalf("open after the rebuild: %v", err)
+	}
+	if state := driverState(t, master); state.SliceChildren["lane-core"] != req.RunID {
+		t.Fatalf("master claim after the rebuild = %v", state.SliceChildren)
+	}
+	if _, _, err := Start(sliceChildStart(master, "child-late-arrival", "lane-core", sliceChildReceipt(master.revision))); err == nil || !strings.Contains(err.Error(), "already claimed") {
+		t.Fatalf("foreign restart in the claimed slice = %v", err)
+	}
+}
+
+// TestSliceClaimIsFrozenByRequirementBarrier：需求变化写屏障（Phase A）在
+// 位时 child 认领可区分拒绝、零写；Ask 了结后照常认领。
+func TestSliceClaimIsFrozenByRequirementBarrier(t *testing.T) {
+	master := splitMaster(t)
+	ask, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlRequestRequirementChange,
+		protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(ask)
+	if master.run.PendingRequirementAsk == nil {
+		t.Fatal("requirement barrier not established")
+	}
+	if _, _, err := Start(sliceChildStart(master, "child-barrier", "lane-core", sliceChildReceipt(master.revision))); err == nil || !strings.Contains(err.Error(), "requirement change ask is pending") {
+		t.Fatalf("child claim under the barrier = %v", err)
+	}
+	if state := driverState(t, master); state.SliceChildren["lane-core"] != "" {
+		t.Fatalf("barrier-period start wrote a claim: %v", state.SliceChildren)
+	}
+	// 了结屏障（放弃变更）后认领照常。
+	decide, err := protocol.NewDecideEvent(master.eventID(), protocol.RequestID(master.run.PendingRequirementAsk.RequestID), master.run.PendingRequirementAsk.Token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(decide)
+	if _, _, err := Start(sliceChildStart(master, "child-after-barrier", "lane-core", sliceChildReceipt(master.revision))); err != nil {
+		t.Fatalf("claim after the barrier lifted: %v", err)
+	}
+	if state := driverState(t, master); state.SliceChildren["lane-core"] != "child-after-barrier" {
+		t.Fatalf("post-barrier claim = %v", state.SliceChildren)
+	}
+}
+
+// TestSliceChildRequiresExplicitRegularRoute：child 启动省略 Route 或声明
+// lightweight 在任何 master 写之前拒绝（拆分与拆分决定记录仅限正式 run），
+// master 认领表不变；显式 regular 照常。
+func TestSliceChildRequiresExplicitRegularRoute(t *testing.T) {
+	master := splitMaster(t)
+	for _, route := range []string{"", "lightweight"} {
+		name := "child-route-" + map[bool]string{true: "lightweight", false: "default"}[route == "lightweight"]
+		options := sliceChildStart(master, name, "lane-core", sliceChildReceipt(master.revision))
+		options.Request.Route = route
+		if _, _, err := Start(options); err == nil || !strings.Contains(err.Error(), "explicit regular route") {
+			t.Fatalf("slice child route %q = %v", route, err)
+		}
+	}
+	if state := driverState(t, master); len(state.SliceChildren) != 0 {
+		t.Fatalf("rejected child starts wrote master claims: %v", state.SliceChildren)
+	}
+	if _, _, err := Start(sliceChildStart(master, "child-explicit-regular", "lane-core", sliceChildReceipt(master.revision))); err != nil {
+		t.Fatalf("explicit regular child start: %v", err)
+	}
+}
+
+// TestSplitTopologyRequiresDistinctSliceNames：split 的 Slices 列表逐项唯一
+// （分片名是 child 认领键），重复声明在 schema 层拒绝、零写；no-split 不
+// 受影响。
+func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
+	master := splitMasterDriver(t)
+	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
+	topology.Slices = []string{"lane-core", "lane-core"}
+	before := driverState(t, master)
+	if err := controlError(t, master, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology}); err == nil {
+		t.Fatal("split count 2 admitted with one distinct slice identity")
+	} else if !strings.Contains(err.Error(), "listed twice") {
+		t.Fatalf("duplicate slice rejection = %v", err)
+	}
+	after := driverState(t, master)
+	if after.Topology != nil || after.RouteMode != "" || len(after.Decisions) != len(before.Decisions) {
+		t.Fatalf("rejected duplicate-name binding changed state: %+v", after.Topology)
 	}
 }

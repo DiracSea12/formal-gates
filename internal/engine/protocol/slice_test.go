@@ -28,7 +28,7 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 	}
 
 	// QA-free custom 子集按候选全集顺序归一落账并推进开发段。
-	engine, dir := sliceChildEngine(t)
+	engine, _ = sliceChildEngine(t)
 	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
 		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"},
 	}})
@@ -40,26 +40,22 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after child route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
-	// 绑定后的第二次路线选择拒绝（路线只问一次，child 逐片各一次）——
-	// Ask 抬起即被拒、零状态写入。
-	before := stateBytesOf(t, dir)
-	if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-again", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security", "gate.release"},
-	}}, routeOptions()), fingerprintOf(t, engine)); err == nil {
-		t.Fatal("second route selection ask on the bound child accepted")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("second child selection code = %q (%v)", code, err)
-	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("rejected second selection changed state bytes")
+	// §6.3.1 开发前可重选：绑定后的第二次路线选择 Ask 照常抬起，缩集重
+	// 选落账新绑定。
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-again", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.security"},
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
+		t.Fatalf("child re-selected route = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
 	}
 }
 
-// TestSliceChildRouteDecisionIsFinalAfterBinding：child 路线绑定后，绑定
-// 前并存的第二个路线 Ask，其决定同样可区分拒绝（逐片各问一次）、零状态
-// 写入，并存 Ask 保持未决、原绑定不变。
-func TestSliceChildRouteDecisionIsFinalAfterBinding(t *testing.T) {
-	engine, dir := sliceChildEngine(t)
+// TestSliceChildRouteDecisionRebindsCoexistingAsk：child 绑定前并存的第
+// 二个路线 Ask，其决定在绑定后仍被各自接纳（候选表锚定各自 Ask），缩集
+// 重选落账新绑定。
+func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
+	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security"}
 	fp := fingerprintOf(t, engine)
 	for _, requestID := range []string{"req-child-bind", "req-child-coexist"} {
@@ -78,7 +74,6 @@ func TestSliceChildRouteDecisionIsFinalAfterBinding(t *testing.T) {
 	if _, err := engine.Submit(binding, fp); err != nil {
 		t.Fatalf("submit binding decide: %v", err)
 	}
-	before := stateBytesOf(t, dir)
 	coexist, err := engine.Freshness("req-child-coexist")
 	if err != nil {
 		t.Fatal(err)
@@ -87,20 +82,15 @@ func TestSliceChildRouteDecisionIsFinalAfterBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err == nil {
-		t.Fatal("coexisting child route decide after binding accepted")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("coexisting child decide code = %q (%v)", code, err)
-	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("rejected child re-selection changed state bytes")
+	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("coexisting child route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
-		t.Fatalf("child binding after rejection = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
+		t.Fatalf("child binding after the coexisting decide = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
 	}
-	if ask, pending := snap.State.PendingAsks["req-child-coexist"]; !pending || ask.Resolved {
-		t.Fatalf("coexisting child ask did not survive: %+v", ask)
+	if ask, pending := snap.State.PendingAsks["req-child-coexist"]; !pending || !ask.Resolved {
+		t.Fatalf("coexisting child ask did not settle: %+v", ask)
 	}
 }
 

@@ -1,12 +1,15 @@
 package facade
 
 import (
+	"slices"
+	"strings"
+	"testing"
+
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
-	"testing"
 )
 
 func validationWithGateFinding(t *testing.T) (*validationDriver, string, string) {
@@ -430,9 +433,9 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 	d.gateAction("security")
 }
 
-// TestRouteRedoUnlocksTheBoundSelection：路线只问一次的合法变更通道——
-// 绑定后经需求变化勾选重走路线解除绑定（RouteMode 清空、已生效义务在
-// 册），重新 Ask/决定照常接纳并落账新绑定，开发继续。
+// TestRouteRedoUnlocksTheBoundSelection：需求变化勾选重走路线的变更通道
+// ——绑定解除（RouteMode 清空、已生效义务在册），重新 Ask/决定照常接纳并
+// 落账新绑定，开发继续。
 func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 	d := newValidationDriver(t, "quality")
 	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 1 {
@@ -451,29 +454,51 @@ func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 	d.action("engine.development.batch")
 }
 
-func TestDevelopedRouteRejectsChangedQAOrRemovedObligations(t *testing.T) {
-	changedRoutes := []protocol.RouteDecision{
+// TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges：§6.3.1 开发已
+// 启动后的路线变更语义——Ask 照常抬起，非 add-only 变更（移除既有义务、
+// 缩减集合、新增 QA）在决定处可区分拒绝、零写；追加普通门经直接通道照常
+// 落账并进入新门的验证。
+func TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges(t *testing.T) {
+	nonAdditive := []protocol.RouteDecision{
 		{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality"}},
 		{Mode: "custom", Gates: []string{"blackbox", "whitebox", "security"}, Selected: []string{"blackbox", "security"}},
+		{Mode: "custom", Gates: []string{"blackbox", "quality"}, Selected: []string{"blackbox"}},
 	}
-	for _, route := range changedRoutes {
+	for _, route := range nonAdditive {
 		d := newValidationDriver(t, "blackbox", "quality")
 		d.reviewReady()
-		// 路线绑定即最终：换 QA 或去义务的变更不走第二次选择（Ask 直接可
-		// 区分拒绝、零写），只可经需求变化勾选重走解除后重新选择。
-		requestID := d.eventID()
-		request, err := protocol.NewRouteRequestEvent(requestID, route.Gates, protocol.AskOption{ID: protocol.AskOptionID(route.Mode), Label: "Select route"})
+		before := driverState(t, d)
+		// 重选决定必须携再取的计划确认（不变计划的确认与路线载荷绑定），
+		// 变更约束由 validateRouteChange 在其后把关。
+		preview, err := d.f.DevelopmentPlan(route)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err = d.f.Submit(request); err == nil {
-			t.Fatalf("accepted a re-selection ask after the route was bound: %s %v", route.Mode, route.Gates)
+		route.DevelopmentPlan = &preview.Confirmation
+		err = controlError(t, d, protocol.ControlSelectRoute, route.Mode, protocol.ReviewDecisionPayload{Route: &route})
+		if err == nil {
+			t.Fatalf("developed route accepted a non-additive change: %s %v", route.Mode, route.Gates)
+		}
+		if !strings.Contains(err.Error(), "development has started") {
+			t.Fatalf("non-additive change rejection = %v", err)
 		}
 		d.reopen()
-		if len(d.run.Validation.Waves) != 1 || len(d.run.Review.SelectedGates) != 2 {
-			t.Fatal("rejected route changed validation")
+		after := driverState(t, d)
+		if len(after.Validation.Waves) != len(before.Validation.Waves) ||
+			after.Validation.Waves[0].ExpectedDigest != before.Validation.Waves[0].ExpectedDigest ||
+			len(after.SelectedGates) != len(before.SelectedGates) {
+			t.Fatalf("rejected developed-route change rewrote validation: %q %v", after.RouteMode, after.SelectedGates)
 		}
 	}
+	// 开发后追加普通门（直接通道，不经需求重走）：落账新义务并进入其验证。
+	d := newValidationDriver(t, "blackbox", "quality")
+	d.reviewReady()
+	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
+	if got := d.run.Review.SelectedGates; len(got) != 3 || !slices.Contains(got, "security") {
+		t.Fatalf("additive gate change = %v", got)
+	}
+	d.drive()
+	d.gateAction("security")
 }
 
 func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
@@ -578,5 +603,35 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	}
 	if wave.Scope == coverage.ScopeFull && wave.Status == "COMPLETE" {
 		t.Fatal("route addition converted inherited AFFECTED evidence into final FULL completion without executing all cases")
+	}
+}
+
+// TestRouteReselectionBeforeDevelopmentReconfirmsPlan：§6.3.1 开发前可重选
+// ——绑定后同集重选经一次路线再确认（确认随载荷重取）重新落账，决定台账
+// 记两次选择，开发照常派发计划任务。
+func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
+	d := startValidationDriver(t, nil)
+	passPreDevelopmentReviews(t, d, commandPlan())
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 1 || d.run.Review.SelectedGates[0] != "quality" {
+		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	}
+	state := driverState(t, d)
+	selections := 0
+	for _, decision := range state.Decisions {
+		if decision.Control == protocol.ControlSelectRoute {
+			selections++
+		}
+	}
+	if selections != 2 {
+		t.Fatalf("route selections recorded = %d, want 2", selections)
+	}
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+	d.drive()
+	id, in := planBatchAction(d, "command")
+	if in.Development == nil || in.Development.Batch.ID != "command" {
+		t.Fatalf("reselection broke development dispatch: %s %+v", id, in)
 	}
 }

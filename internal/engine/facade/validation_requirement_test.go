@@ -10,6 +10,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -44,34 +45,71 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 }
 
-// TestReadinessRedoOnBoundRouteRequiresRouteRedo：开发计划确认搭载在路线
-// 决定上（路线只问一次），已绑定路线的 run 勾选重走 start-readiness 而
-// 不重走路线时，新计划将永远等不到确认通道——该组合可区分拒绝、零写。
-func TestReadinessRedoOnBoundRouteRequiresRouteRedo(t *testing.T) {
+// TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection：重走
+// start-readiness 而不重走路线时绑定保持，新计划经一次直接路线重选（同
+// 集＋新计划确认）即可确认并替换执行契约——重选通道常开，无死等。
+func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	d := newValidationDriver(t, "quality")
+	old, oldInput := planBatchAction(d, "command")
 	var choices []protocol.RequirementWorkDecision
 	for _, item := range d.run.RequirementWork {
-		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "carry every confirmed duty"})
+		disposition := protocol.RequirementWorkCarry
+		if item.ActionID == old {
+			disposition = protocol.RequirementWorkRedo
+		}
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "the changed command contract replaces its dispatch; other duties carry"})
 	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: "sha256:stall-guard", DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:readiness-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices}
+	d.routeRedos++
+	document := validationDocument + strings.Repeat("\n", d.routeRedos+1)
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:readiness-only", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices}
 	request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(request)
 	ask := d.run.PendingRequirementAsk
-	decision := protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only"}}}
-	if _, _, err := d.f.Submit(decision); err == nil {
-		t.Fatal("readiness-only redo on a bound route accepted")
-	}
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only; the route stays bound"}}})
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	d.drive()
 	if d.run.Review.RouteMode != "custom" {
-		t.Fatalf("rejected decision changed the route binding: %q", d.run.Review.RouteMode)
+		t.Fatalf("readiness-only redo changed the route binding: %q", d.run.Review.RouteMode)
+	}
+	// 新计划的重走 readiness 轮（DoD 扩一项）。
+	nextPlan := *commandPlan()
+	nextPlan.Batches[0].DoD = append(nextPlan.Batches[0].DoD, protocol.DevelopmentCriterion{ID: "diagnostic", Description: "Invalid input reports its specific diagnostic"})
+	var ready string
+	for id, pending := range d.run.PendingActions {
+		if pending.ReviewSeries == review.StartReadiness {
+			ready = id
+		}
+	}
+	if ready == "" {
+		t.Fatal("readiness redo omitted the fresh round")
+	}
+	d.receipt(ready)
+	ev, err := protocol.NewReviewWorkerResultEvent(d.eventID(), ready, DefaultProvider, "new plan", protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: ready, RequirementRevision: revision, Status: "PASS", GranularityReview: &nextPlan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Compared the extended command DoD"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(ev)
+	for _, input := range d.run.ValidationInputs {
+		if input.Handler == "engine.development.batch" {
+			t.Fatal("new contract executed before plan confirmation")
+		}
+	}
+	// 直接同集重选即新计划的确认通道（路线未解除绑定）。
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	d.drive()
+	id, in := planBatchAction(d, "command")
+	if id == old || in.Binding.Task == oldInput.Binding.Task || len(in.Development.Batch.DoD) != 2 {
+		t.Fatal("direct reselection did not bind the new plan")
 	}
 }
 
-// unlockRouteByRequirementRedo 走需求变化勾选重走路线（路线只问一次的
-// 唯一变更通道）：PRESERVED 全携解除当前路线绑定并重新观察需求文档；
-// 已派发工作与波次证据不动，随后的重新选择由调用方完成。
+// unlockRouteByRequirementRedo 走需求变化勾选重走路线：PRESERVED 全携解
+// 除当前路线绑定并重新观察需求文档；已派发工作与波次证据不动，随后的重
+// 新选择由调用方完成（直接重选通道同样可达，两种通道等价）。
 func unlockRouteByRequirementRedo(d *validationDriver) {
 	d.t.Helper()
 	d.routeRedos++

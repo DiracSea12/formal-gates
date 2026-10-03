@@ -484,6 +484,12 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if req.Route != "lightweight" && req.Route != "regular" {
 		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
 	}
+	// 分片 child 是正式 run：必须显式以 regular 启动（sliced-runs 需求 10
+	// ——拆分与拆分决定记录仅限正式 run，轻量不增加任何拆分或记录）。拒绝
+	// 先于任何 master 写（认领不在此时点发生）。
+	if (req.MasterRunID != "" || req.SliceID != "") && req.Route != "regular" {
+		return nil, Run{}, fmt.Errorf("engine start: a slice child must start on the explicit regular route")
+	}
 	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
 	}
@@ -596,7 +602,9 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		sliceStart = claim
 	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), req.RunID)
-	if _, err := os.Stat(stateDir); err == nil {
+	// already-exists 与恢复共用同一完成判据：state.json 存在才判已建（终态
+	// 清理后的目录仍被下方 Mkdir 预约拦截，不可重启已完成 run）。
+	if _, err := os.Stat(filepath.Join(stateDir, "state.json")); err == nil {
 		return nil, Run{}, fmt.Errorf("engine start: run %q already exists", req.RunID)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, Run{}, err
@@ -1610,9 +1618,11 @@ func startIntentPath(root, runID string) string {
 	return filepath.Join(root, filepath.FromSlash(EngineNamespace), runID+startIntentSuffix)
 }
 
-// recoverStartIntent removes only a start directory that is still incomplete
-// and is paired with our durable start intent. A directory with a request is a
-// completed start and is never deleted; the stale intent is simply cleared.
+// recoverStartIntent 清理未完成启动的残留：启动完成判据是 state.json 存
+// 在（request.json 只是 StartRequest 的纯投影——无 state 即无 run，「request
+// 先于 state」的不变量不受影响）。intent 在而 state.json 不在＝半启动残
+// 留：stateDir 内容与 intent 一并清除，让同一 Start 路径重建（分片认领同
+// childRunID 幂等已备）；state.json 已在则启动完成，只清过期 intent。
 func recoverStartIntent(root, runID string) error {
 	path := startIntentPath(root, runID)
 	data, err := os.ReadFile(path)
@@ -1630,8 +1640,7 @@ func recoverStartIntent(root, runID string) error {
 		return fmt.Errorf("engine start intent run id mismatch")
 	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), runID)
-	requestPath := filepath.Join(stateDir, "request.json")
-	if _, statErr := os.Stat(requestPath); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(stateDir, "state.json")); statErr == nil {
 		return os.Remove(path)
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return statErr

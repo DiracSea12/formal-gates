@@ -89,10 +89,17 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 // carrierLatched 报告载体步（携带账本审查系列标记的 agent 步）的完成条
 // 件：所属系列首过闩已置位（首次 effective PASS 的同一事务内由内核
 // refresh 写入）。闩单调：置位后纠正/重走只改 effective 投影，不回退步
-// 完成。
+// 完成。child 不自行跑审查轮，其载体步的完成事实来自继承结论（判据与
+// effectivePass 的 child 分支同构：inheritedReviewPass）。
 func (s *State) carrierLatched(payload compiler.CompiledAgentStep) bool {
 	series, ok := s.ReviewSeries.Series(review.Action(payload.ReviewSeries))
-	return ok && series.FirstPass
+	if !ok {
+		return false
+	}
+	if s.SliceChild != nil {
+		return s.inheritedReviewPass(series)
+	}
+	return series.FirstPass
 }
 
 // passResultCompletesStep 报告一条入账 PASS 结果是否完成其步骤：非载体

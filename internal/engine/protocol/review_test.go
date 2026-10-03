@@ -467,13 +467,13 @@ func TestCustomRouteBindsWholeCandidateList(t *testing.T) {
 	}
 }
 
-// TestRouteBindingIsFinalForAskAndDecision：路线绑定即最终（需求 7「路线
-// 只问一次」）。绑定后第二次 SELECT_ROUTE 的 Ask 抬起在接纳处可区分拒绝；
-// 绑定前已并存的第二个 Ask，其决定在同一绑定后同样可区分拒绝——两处都
-// 零状态写入，并存 Ask 保持未决，原绑定不变。
-func TestRouteBindingIsFinalForAskAndDecision(t *testing.T) {
+// TestRouteReselectionBeforeDevelopmentRebinds：§6.3.1 开发前可重选——绑定
+// 后第二次 SELECT_ROUTE 的 Ask 照常抬起；绑定前已并存的第二个 Ask 的决定
+// 在绑定后仍被各自接纳（候选表锚定各自 Ask），同集重选落账不变、缩集重
+// 选落账新绑定。
+func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-	engine, dir := reviewEngine(t, cd, reg)
+	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
 	readiness := pendingActionID(t, engine)
@@ -500,14 +500,8 @@ func TestRouteBindingIsFinalForAskAndDecision(t *testing.T) {
 	if _, err := engine.Submit(binding, fp); err != nil {
 		t.Fatalf("submit binding decide: %v", err)
 	}
-	before := stateBytesOf(t, dir)
-	// 绑定后的第二次 Ask 抬起即拒。
-	if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-route-second", &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fingerprintOf(t, engine)); err == nil {
-		t.Fatal("second route ask after binding accepted")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("second ask code = %q (%v)", code, err)
-	}
-	// 并存 Ask 的决定同样拒绝（token 按当前 revision 重取）。
+	// 并存 Ask 的决定在绑定后被接纳：同集重选（候选表与自身 Ask 钉住的
+	// 全集相等）落账不变。
 	coexist, err := engine.Freshness("req-route-coexisting")
 	if err != nil {
 		t.Fatal(err)
@@ -516,21 +510,24 @@ func TestRouteBindingIsFinalForAskAndDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err == nil {
-		t.Fatal("coexisting route decide after binding accepted")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("coexisting decide code = %q (%v)", code, err)
-	}
-	if after := stateBytesOf(t, dir); string(before) != string(after) {
-		t.Fatal("rejected re-selection attempts changed state bytes")
+	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err != nil {
+		t.Fatalf("coexisting route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
 	if snap.State.RouteMode != routeModeFull || len(snap.State.SelectedGates) != len(gates) {
-		t.Fatalf("binding after rejections = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+		t.Fatalf("same-set reselection changed the binding: %q %v", snap.State.RouteMode, snap.State.SelectedGates)
 	}
-	ask, pending := snap.State.PendingAsks["req-route-coexisting"]
-	if !pending || ask.Resolved {
-		t.Fatalf("coexisting ask did not survive the rejection: %+v", ask)
+	if ask, pending := snap.State.PendingAsks["req-route-coexisting"]; !pending || !ask.Resolved {
+		t.Fatalf("coexisting ask did not settle: %+v", ask)
+	}
+	// 绑定后的第二次 Ask 照常抬起，缩集重选落账新绑定。
+	subset := []string{"gate.quality"}
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-second", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
+		Mode: "custom", Gates: subset, Selected: subset,
+	}})
+	snap = engine.LoadMustSucceed(t)
+	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
+		t.Fatalf("re-selected route = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
 	}
 }
 

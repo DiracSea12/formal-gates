@@ -63,8 +63,8 @@ func validSliceID(id string) bool {
 // splitACOwners 校验 split 拓扑决定的验收条件责任映射并归一为
 // map[AC-ID]owner：AC 宇宙＝当前确认需求冻结投影的验收条件（引擎内 REQ/AC
 // 事实的唯一权威是 REQUIREMENT 观察冻结的需求文档）；每条 AC 恰一个主责
-// owner；owner ∈ Slices ∪ {master-merge}。载荷以列表形态携带，重复声明在
-// 此可区分拒绝。
+// owner；owner ∈ Slices ∪ {master-merge}。Slices 逐项唯一（认领键）与
+// ACOwners 重复声明都在此可区分拒绝。
 func (s *State) splitACOwners(decision *TopologyDecision) (map[string]string, error) {
 	if s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() {
 		return nil, fmt.Errorf("split binding requires the acceptance-condition universe of the confirmed requirement; submit the REQUIREMENT operator observation at revision %q first", s.RequirementRevision())
@@ -76,7 +76,14 @@ func (s *State) splitACOwners(decision *TopologyDecision) (map[string]string, er
 		}
 	}
 	allowedOwners := map[string]bool{masterMergeOwner: true}
+	seenSlices := make(map[string]bool, len(decision.Slices))
 	for _, slice := range decision.Slices {
+		// 分片名是 child 认领键（SliceChildren 以它为唯一键）：逐项唯一，
+		// 重复声明不可代表拆分数量。
+		if seenSlices[slice] {
+			return nil, fmt.Errorf("split slice name %q listed twice; each slice is a distinct claim identity", slice)
+		}
+		seenSlices[slice] = true
 		allowedOwners[slice] = true
 	}
 	owners := make(map[string]string, len(decision.ACOwners))
@@ -126,6 +133,11 @@ func (e *Engine) ClaimSlice(sliceID, childRunID, childRevision, childBaseSnapsho
 	}
 	if state == nil {
 		return nil, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	// 认领是 master 账上的权威写入：需求变化写屏障（Phase A）在位时可区
+	// 分拒绝、零写（复用 FA 单一屏障闸判定，不另建第二套屏障逻辑）。
+	if err := state.errWriteBarrier("slice claiming"); err != nil {
+		return nil, err
 	}
 	if state.Phase == runtime.PhaseTerminal || state.abortRequested() {
 		return nil, claimRejected("master run %q is not ACTIVE", state.RunID)

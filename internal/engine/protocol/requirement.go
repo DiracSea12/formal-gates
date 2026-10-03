@@ -484,14 +484,6 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if err := e.validateRequirementWork(state, payload.WorkDecisions, false); err != nil {
 		return err
 	}
-	// 重走 start-readiness 必须同时重走已绑定的常规路线：开发计划确认搭载
-	// 在路线决定上（路线只问一次），新计划没有独立的再确认通道——只重走
-	// readiness 不重走路线会让 run 停等一个不可能再被接纳的确认。该搭载只
-	// 属 pipeline 形态（无 pipeline 的 run 不绑定开发计划确认）；合并路线
-	// 的保留总任务实例不做开发计划确认，不受此约束。
-	if pipelineEnabled(state, e.cfg.Definition) && payload.RedoStartReadiness && !payload.RedoRoute && state.RouteMode != "" && state.RouteMode != routeModeMerge {
-		return reject("a requirement change that redoes start-readiness must also redo the route (the development plan confirmation rides on the route decision)")
-	}
 	// scope 的计算与应用对两类分类完全一致（§7.2.1：PRESERVED 保留产品含
 	// 义＋重做受影响技术审是合法组合）；唯一硬规则是上面的 P1 源两约束。
 	scope := make([]string, 0, len(requirementScopeItems))

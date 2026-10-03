@@ -58,6 +58,13 @@ type DevelopmentCompletion struct {
 type DevelopmentPlanConfirmation struct {
 	ReviewActionID string `json:"reviewActionId"`
 	Digest         string `json:"digest"`
+	// Proposal 是 child run 的片内开发计划内联提案：child 的整体粒度审随
+	// master 继承、无自身 readiness 候选可引用，片内计划随路线决定一并产
+	// 生并经同一次用户决定确认（ADR-002 决策 1「显式批次计划在拆分决定
+	// 与路线确认时一并产生、经同一次用户决定确认并留痕」）。携带
+	// Proposal 时 ReviewActionID 必空、Digest 必等于提案内容摘要；普通
+	// run 不携带（计划经 ReviewActionID 引用 readiness 提案）。
+	Proposal *GranularityReview `json:"proposal,omitempty"`
 }
 
 // DevelopmentPlanPreview is computed from the proposal and the proposed route.
@@ -230,6 +237,14 @@ func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) 
 }
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
 	id, p := s.readinessProposal()
+	if s.SliceChild != nil {
+		// child 的片内计划取自决定载荷的内联提案（宿主从 master 继承的整
+		// 体粒度审派生），无自身 readiness 候选。
+		if route.DevelopmentPlan == nil {
+			return nil, validationError("a slice child route must carry its slice development plan")
+		}
+		id, p = "", route.DevelopmentPlan.Proposal
+	}
 	if err := validateGranularity(p); err != nil {
 		return nil, err
 	}
@@ -240,6 +255,10 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 			group.DependsOn = append(group.DependsOn, runtime.BatchID(dep))
 		}
 		preview.Tasks = append(preview.Tasks, group)
+	}
+	if s.SliceChild != nil {
+		preview.Confirmation = DevelopmentPlanConfirmation{Digest: planContractDigest(p), Proposal: p}
+		return preview, nil
 	}
 	route.DevelopmentPlan = nil
 	solutionRevision := s.RequirementRevision()
@@ -267,6 +286,9 @@ func (e *Engine) DevelopmentPlan(route RouteDecision) (*DevelopmentPlanPreview, 
 	return s.developmentPlanPreview(e.cfg.Definition, route)
 }
 func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) {
+	if s.SliceChild != nil {
+		return s.confirmedSlicePlan()
+	}
 	var request, revision string
 	var latest uint64
 	var p *GranularityReview
@@ -292,17 +314,71 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 	}
 	return request, p, revision
 }
+
+// confirmedSlicePlan 取 child 已确认的片内计划：最新路线决定的内联提案
+// 为准；同摘要的更早决定保留原引用（与普通 run 的执行契约引用保留形态
+// 一致）。
+func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
+	var request string
+	var latest uint64
+	var p *GranularityReview
+	for id, d := range s.Decisions {
+		if d.Control != ControlSelectRoute || d.Revision < latest {
+			continue
+		}
+		if proposal := s.decisionPlanProposal(d); proposal != nil {
+			request, p, latest = id, proposal, d.Revision
+		}
+	}
+	for id, d := range s.Decisions {
+		if d.Revision >= latest {
+			continue
+		}
+		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == planContractDigest(p) {
+			request, latest = id, d.Revision
+		}
+	}
+	return request, p, ""
+}
+
+// decisionPlanProposal 返回一条 SELECT_ROUTE 决定携带的计划提案来源：
+// child 读内联提案，普通 run 经 ReviewActionID 引用 readiness 结果。
+func (s *State) decisionPlanProposal(d RecordedDecision) *GranularityReview {
+	if d.Review == nil || d.Review.Route == nil || d.Review.Route.DevelopmentPlan == nil {
+		return nil
+	}
+	if s.SliceChild != nil {
+		return d.Review.Route.DevelopmentPlan.Proposal
+	}
+	source := s.Results[d.Review.Route.DevelopmentPlan.ReviewActionID]
+	if source.Review == nil {
+		return nil
+	}
+	return source.Review.GranularityReview
+}
+
+// latestSlicePlanProposal 返回 child 最近一次路线决定携带的片内计划提案
+// （child 的当前提案权威：重选携带新提案时确认计划随之切换）。
+func (s *State) latestSlicePlanProposal() *GranularityReview {
+	var latest uint64
+	var p *GranularityReview
+	for _, d := range s.Decisions {
+		if d.Control != ControlSelectRoute || d.Revision < latest {
+			continue
+		}
+		if proposal := s.decisionPlanProposal(d); proposal != nil {
+			p, latest = proposal, d.Revision
+		}
+	}
+	return p
+}
 func (s *State) plannedBatchSource(task runtime.TaskKey, cd *compiler.CompiledDefinition) (DevelopmentBatch, bool) {
 	original := s.sourceValidationTask(task)
 	for _, d := range s.Decisions {
-		if d.Review == nil || d.Review.Route == nil || d.Review.Route.DevelopmentPlan == nil {
+		p := s.decisionPlanProposal(d)
+		if p == nil {
 			continue
 		}
-		raw := s.Results[d.Review.Route.DevelopmentPlan.ReviewActionID]
-		if raw.Review == nil || raw.Review.GranularityReview == nil {
-			continue
-		}
-		p := raw.Review.GranularityReview
 		for _, b := range p.Batches {
 			if planTask(cd, p, b.ID) == original {
 				return b, true
@@ -409,9 +485,17 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 	if !pipelineEnabled(s, e.cfg.Definition) {
 		return nil
 	}
-	// child 无自身 readiness 候选可确认——整体粒度审随 master 继承，child
-	// 的路线确认不绑定开发计划。
+	// child 无自身 readiness 候选可确认——整体粒度审随 master 继承，片内
+	// 计划随路线决定一并确认（ADR-002 决策 1）：提案必填且结构完整、不引
+	// 用 readiness 派发，确认必须与预览逐字段一致（摘要即提案内容摘要）。
 	if s.SliceChild != nil {
+		preview, err := s.developmentPlanPreview(e.cfg.Definition, *route)
+		if err != nil {
+			return err
+		}
+		if route.DevelopmentPlan == nil || route.DevelopmentPlan.ReviewActionID != "" || *route.DevelopmentPlan != preview.Confirmation {
+			return validationError("a slice child route must confirm its exact inline slice development plan")
+		}
 		return nil
 	}
 	preview, err := s.developmentPlanPreview(e.cfg.Definition, *route)
@@ -594,5 +678,10 @@ func planContractDigest(p *GranularityReview) string {
 }
 func (s *State) developmentPlanCurrent(p *GranularityReview) bool {
 	_, proposed := s.readinessProposal()
+	if s.SliceChild != nil {
+		// child 的计划确认权威是路线决定本身：当前提案＝最近一次决定携带
+		// 的内联提案（重选携带新提案时旧计划停止投影）。
+		proposed = s.latestSlicePlanProposal()
+	}
 	return proposed != nil && planContractDigest(proposed) == planContractDigest(p)
 }

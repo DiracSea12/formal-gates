@@ -169,8 +169,8 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 				}
 				choices = append(choices, protocol.RequirementWorkDecision{Work: w, Disposition: disposition, Reason: "Parser unchanged; command contract explicitly replaced"})
 			}
-			// 变更合同重走 readiness 必须同时重走路线：开发计划确认搭载在
-			// 路线决定上，重走解除绑定后由下面的重新选择确认新计划。
+			// 本场景同时勾选重走路线：解除绑定后由下面的重新选择确认新计
+			// 划（重选通道常开，直接重选同样可达——见需求侧同名场景）。
 			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:diagnostic-contract", ImpactDigest: "sha256:command-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices}
 			request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 			if err != nil {
