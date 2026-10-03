@@ -4,6 +4,8 @@
 package facade
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -715,5 +717,96 @@ func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 	after := driverState(t, master)
 	if after.Topology != nil || after.RouteMode != "" || len(after.Decisions) != len(before.Decisions) {
 		t.Fatalf("rejected duplicate-name binding changed state: %+v", after.Topology)
+	}
+}
+
+// TestSliceChildPlanSwapRequiresPerBatchUserDecisions：片内计划的换约纪律
+// 与普通 run 同一条规则——开发已启动后，路线重选携带内容不同的片内计划
+// 时，逐批变更须有用户工作决定授权：无决定可区分拒绝、零写；带齐决定的
+// 换约接纳并切换执行契约（换约后派发批次来自新计划）。开发前的同集同计
+// 划重选照常（用户决定本身即确认）。
+func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
+	master := splitMaster(t)
+	f, run, err := Start(sliceChildStart(master, "child-plan-swap", "lane-core", sliceChildReceipt(master.revision)))
+	if err != nil {
+		t.Fatalf("slice child start: %v", err)
+	}
+	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: master.git, frozen: master.frozen}
+	child.drive()
+	first := sliceLanePlan()
+	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	child.confirmSliceRoute(route, first)
+	// 开发前同集同计划重选：决定本身即再确认，无额外要求。
+	child.confirmSliceRoute(route, first)
+	if state := driverState(t, child); state.RouteMode != "custom" || len(state.SelectedGates) != 1 {
+		t.Fatalf("pre-development same-plan reselection = %q %v", state.RouteMode, state.SelectedGates)
+	}
+	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
+		Subject:    child.revision,
+		Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
+	}})
+	child.drive()
+	old, oldInput := planBatchAction(child, "command")
+	if oldInput.Development == nil {
+		t.Fatal("development did not start under the first plan")
+	}
+	// 开发后换计划、无用户工作决定：可区分拒绝、零写。
+	swapped := sliceLanePlan()
+	swapped.Batches[0].Deliverable = swapped.Batches[0].Deliverable + " (swapped execution contract)"
+	swapRoute := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality", "gate.security"}, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: swapped}}
+	preview, err := child.f.DevelopmentPlan(swapRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapRoute.DevelopmentPlan = &preview.Confirmation
+	before := driverState(t, child)
+	if err := controlError(t, child, protocol.ControlSelectRoute, "custom", protocol.ReviewDecisionPayload{Route: &swapRoute}); err == nil {
+		t.Fatal("plan swap after development start accepted without per-batch user decisions")
+	} else if !strings.Contains(err.Error(), "changed plan requires a matching explicit work disposition for batch command") {
+		t.Fatalf("plan swap rejection = %v", err)
+	}
+	after := driverState(t, child)
+	if after.RouteMode != before.RouteMode || len(after.SelectedGates) != len(before.SelectedGates) ||
+		len(after.Decisions) != len(before.Decisions) || len(after.PendingActions) != len(before.PendingActions) {
+		t.Fatalf("rejected plan swap changed state: %q %v decisions=%d pending=%d", after.RouteMode, after.SelectedGates, len(after.Decisions), len(after.PendingActions))
+	}
+	if _, pending := after.PendingActions[old]; !pending {
+		t.Fatal("rejected plan swap disturbed the dispatched batch")
+	}
+	// 带齐逐批用户决定（需求变化对换约批次 REDO）：换约接纳并切换执行
+	// 契约。
+	var choices []protocol.RequirementWorkDecision
+	for _, item := range child.run.RequirementWork {
+		disposition := protocol.RequirementWorkCarry
+		if item.ActionID == old {
+			disposition = protocol.RequirementWorkRedo
+		}
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "the swapped slice contract replaces the command dispatch"})
+	}
+	document := validationDocument + "\n"
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:slice-plan-swap", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	request, err := protocol.NewRequirementRequestEvent(child.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.submit(request)
+	ask := child.run.PendingRequirementAsk
+	child.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "authorize the swapped slice plan"}}})
+	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
+		Subject:    revision,
+		Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document},
+	}})
+	child.confirmSliceRoute(swapRoute, swapped)
+	if got := child.run.Review.SelectedGates; len(got) != 2 || !strings.Contains(strings.Join(got, ","), "security") {
+		t.Fatalf("swap route binding = %v", got)
+	}
+	child.drive()
+	id, in := planBatchAction(child, "command")
+	if id == old || in.Binding.Task == oldInput.Binding.Task {
+		t.Fatal("authorized swap kept the old dispatch identity")
+	}
+	if !strings.Contains(in.Development.Batch.Deliverable, "(swapped execution contract)") {
+		t.Fatalf("re-dispatched batch contract = %q, want the swapped plan", in.Development.Batch.Deliverable)
 	}
 }

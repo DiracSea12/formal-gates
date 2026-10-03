@@ -317,7 +317,8 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 
 // confirmedSlicePlan 取 child 已确认的片内计划：最新路线决定的内联提案
 // 为准；同摘要的更早决定保留原引用（与普通 run 的执行契约引用保留形态
-// 一致）。
+// 一致）。返回的计划绑定 revision＝原确认决定时点的权威需求 revision（账
+// 本中代数不晚于该决定的最近确认；空账本回退受理确认）。
 func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 	var request string
 	var latest uint64
@@ -338,7 +339,16 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 			request, latest = id, d.Revision
 		}
 	}
-	return request, p, ""
+	revision := ""
+	for _, entry := range s.RequirementRevisions {
+		if entry.StateRevision <= latest {
+			revision = entry.Revision
+		}
+	}
+	if revision == "" && s.IntakeConfirmationReceipt != nil {
+		revision = s.IntakeConfirmationReceipt.RequirementRevision
+	}
+	return request, p, revision
 }
 
 // decisionPlanProposal 返回一条 SELECT_ROUTE 决定携带的计划提案来源：
@@ -485,26 +495,24 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 	if !pipelineEnabled(s, e.cfg.Definition) {
 		return nil
 	}
-	// child 无自身 readiness 候选可确认——整体粒度审随 master 继承，片内
-	// 计划随路线决定一并确认（ADR-002 决策 1）：提案必填且结构完整、不引
-	// 用 readiness 派发，确认必须与预览逐字段一致（摘要即提案内容摘要）。
-	if s.SliceChild != nil {
-		preview, err := s.developmentPlanPreview(e.cfg.Definition, *route)
-		if err != nil {
-			return err
-		}
-		if route.DevelopmentPlan == nil || route.DevelopmentPlan.ReviewActionID != "" || *route.DevelopmentPlan != preview.Confirmation {
-			return validationError("a slice child route must confirm its exact inline slice development plan")
-		}
-		return nil
-	}
 	preview, err := s.developmentPlanPreview(e.cfg.Definition, *route)
 	if err != nil {
 		return err
 	}
-	if route.DevelopmentPlan == nil || *route.DevelopmentPlan != preview.Confirmation {
+	// 确认的形态按 run 形态分流：child 的片内计划随路线决定内联确认
+	// （ADR-002 决策 1）——提案必填已由 preview 校验、不引用 readiness 派
+	// 发，确认摘要＝提案内容摘要；普通 run 经 ReviewActionID 引用 readiness
+	// 提案。
+	if s.SliceChild != nil {
+		if route.DevelopmentPlan.ReviewActionID != "" || *route.DevelopmentPlan != preview.Confirmation {
+			return validationError("a slice child route must confirm its exact inline slice development plan")
+		}
+	} else if route.DevelopmentPlan == nil || *route.DevelopmentPlan != preview.Confirmation {
 		return validationError("route must confirm the exact readiness development plan")
 	}
+	// 计划换约纪律不分流：已确认计划与本次提案内容不一致时，逐批变更须
+	// 有用户工作决定授权——child 的已确认片内计划与普通 run 的 readiness
+	// 计划经同一 confirmedDevelopmentPlan 读取、同一判定。
 	_, prior, _ := s.confirmedDevelopmentPlan()
 	if prior != nil && planContractDigest(prior) != planContractDigest(&preview.Proposal) {
 		for _, batch := range prior.Batches {
