@@ -53,3 +53,16 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
   重选路径上以基线形式生效——保持现状，不在返修轮里过度收敛。
 
 费用：本批无真实付费调用；子代理派发 3 次（1 实施＋2 返修）。
+
+## 批 1 返修（54a1965）：外部复核 FAIL（2 P1＋2 P2＋1 既有缺口＋1 过度限制）全数收口
+
+复核方五探针留 /tmp（slice-main-oracle 等），主代理 overlay 亲跑全红坐实后派单代理六项返修；回收后亲读全部 13 文件 diff、重跑五探针（4 PASS＋#2 见裁定）、全量亲验。
+
+- **F1/P1** child 无可执行计划：片内计划随路线决定内联确认（ADR-002 决策 1 原文出处；`DevelopmentPlanConfirmation.Proposal` 两形态不混携；载体步闩经继承结论）；开发派发断言到批次契约内容级。
+- **F2/P1** 启动中断窗：完成判据统一 state.json（request.json 只是投影）；半启动残留经同一 Start 路径重建（认领同 ID 幂等）；成功路径 facade.go:724 删 intent 保证终态清理目录不被重建、重启仍被 Mkdir 拒。
+- **F3/P2** 认领过 Phase A 屏障（复用 errWriteBarrier 单一闸）；**F4/P2** child 必须显式 regular（拒绝先于任何 master 写）；**F5** split Slices 逐项唯一（绑定点拒、零写）。
+- **F6** 我方上轮引入的过度限制回退：§6.3.1（orchestration master-requirements:89）原文「开发前可重选或追加；开发后只可追加普通门…」——删一揽子 finality（保留 merge 拒绝）与「重走 readiness 必须同时重走路线」耦合守卫；validateRouteChange 恢复为绑定后变更唯一权威；finality 测试按 §6.3.1 语义重写＋直接通道正例。
+- **探针 #2 裁定**：其"无计划路线决定也应产生开发"的期望先于设计存在，与 ADR-002「计划随路线确认」冲突；缺陷本体（合法路线后永久无任务）由携计划全程测试＋缺计划拒绝测试覆盖，探针按陈旧期望判红属预期。
+- 验证：engine+coordination 全绿（主代理亲跑）；harness 满载一次 TestTransportPerMessageWaitHasNoTotalDeadline 红、隔离 -count=3 全绿＝计时 flake（无依赖路径，如实记录）；gofmt/vet 净；无过程标记。
+
+费用：无真实付费调用；返修子代理派发 1 次。
