@@ -37,12 +37,13 @@ func (e *Engine) RecordQAWorktree(worktree, expectedFingerprint string) error {
 }
 
 // admitPromotion 是候选晋升两段（意图 OpenPromotion／提交
-// RecordCandidatePromotion）共用的接纳判定：run 活动（TERMINAL 拒）、无未决
+// RecordCandidatePromotion）共用的接纳判定：run 在成功收口之前（TERMINAL 与
+// SLICE_READY 拒）、无未决
 // 需求变化屏障（Phase A 停止 candidate promotion）、无 abort、当前 wave 存在
 // 且 Status==COMPLETE（晋升是解除 promotion-wait 边界的动作，验证收集期不存
 // 在可晋升的终候选）。
 func (s *State) admitPromotion() error {
-	if s.Phase == runtime.PhaseTerminal {
+	if s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhaseSliceReady {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires an active run"}
 	}
 	if s.requirementChangePending() {
@@ -137,11 +138,10 @@ func (e *Engine) RecordCandidatePromotion(snapshot, digest, expectedFingerprint 
 	return err
 }
 
-// SealTerminal 是 regular run 终态相变的公开入口（镜像 legacy Seal 的双身份核
-// 对：原生交付身份与已绑定晋升身份相等才相变）。原生身份是外部事实，经本入
-// 口进入，不在引擎内部自取。准入＝Route regular、Phase 活动（已 TERMINAL 且
-// delivered 与绑定一致＝幂等返回）、无屏障/abort、delivered==PromotedSnapshot、
-// validationConcluded 成立；通过即 TransitionPhase(TERMINAL)＋commit。
+// SealTerminal seals an ordinary regular run after verified native delivery.
+// A child cannot seal independently. Native identity enters from the facade;
+// current validation, promotion, barrier and abort facts are checked here.
+// A terminal replay with the same promoted identity performs no write.
 func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 	delivered = strings.TrimSpace(delivered)
 	revision, state, err := e.load()
@@ -151,8 +151,8 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 	if state == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if state.Route != "regular" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "terminal sealing requires a regular run"}
+	if state.Route != "regular" || state.SliceChild != nil {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "terminal sealing requires an ordinary regular run; a slice child uses its recoverable checkpoint"}
 	}
 	if state.Phase == runtime.PhaseTerminal {
 		if delivered == state.PromotedSnapshot {

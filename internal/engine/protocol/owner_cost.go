@@ -10,7 +10,8 @@ import (
 // （transcript＋provider）时携带启动基线与绑定时点（REQ-012 AC-050；缺源不
 // 承诺 owner 计量，AC-051 零数字）。基线捕获与重叠检测的 I/O 归 facade（与
 // CostSourceResolver 同一注入边界），本结构只承载持久值。StartedAt 是区间事实
-// 的本方端点（wall clock，观察点在协调锁内写入），终态重扫与终态摘要消费它。
+// 的本方端点（wall clock，观察点在协调锁内写入），收口重扫、终态摘要与 child
+// checkpoint 消费它。
 type OwnerCostBinding struct {
 	Transcript string                   `json:"transcript"`
 	Provider   string                   `json:"provider"`

@@ -111,6 +111,9 @@ func (e *Engine) load() (uint64, *State, error) {
 	if err := verifyReviewIntegrity(&state); err != nil {
 		return 0, nil, err
 	}
+	if err := state.verifySliceReceipt(); err != nil {
+		return 0, nil, err
+	}
 	// 额度投影同一加载边界重算比对：持久投影与事实重算不一致（篡改投影或
 	// 改写 basis 事实）＝BLOCKED_BUG，拒绝读取。
 	if err := e.verifyGuardBudget(&state); err != nil {
@@ -237,6 +240,9 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 		return 0, nil, err
 	}
 	if err := verifyReviewIntegrity(state); err != nil {
+		return 0, nil, err
+	}
+	if err := state.verifySliceReceipt(); err != nil {
 		return 0, nil, err
 	}
 	if event != nil {
@@ -521,6 +527,9 @@ func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
 	if err == nil {
 		state.abortPlan(plan)
+		if state.Phase == runtime.PhaseSliceReady && !state.abortRequested() {
+			plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitDependencies}}
+		}
 	}
 	return plan, err
 }

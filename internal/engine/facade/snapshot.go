@@ -17,7 +17,7 @@ import (
 // 窗口——发布前 resolve 必须仍等于该晋升身份（窗口内漂移即错、摘要不落盘），
 // 返回的 guard 在终态发布（摘要落盘）后调用，核对发布段内身份未移动（镜像
 // legacy Seal 发布窗口的前后双 resolve）。guard 不持第二套判据：交付内容与历
-// 史形状的核验统一由 sealDelivered 单点持有。无 provider＝明确报错，不静默跳
+// 史形状的核验统一由 verifyDelivered 单点持有。无 provider＝明确报错，不静默跳
 // 过校验。
 func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 	if run.Route != "regular" || run.Status != "COMPLETE" {

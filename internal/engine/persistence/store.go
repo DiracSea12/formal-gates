@@ -71,6 +71,9 @@ type Store struct {
 	cfg Config
 }
 
+// Envelope returns the store's exact version binding for durable evidence.
+func (s *Store) Envelope() Envelope { return expectedEnvelope(s.cfg) }
+
 func (s *Store) inject(point FaultPoint) error {
 	if s.cfg.FaultInjector == nil {
 		return nil

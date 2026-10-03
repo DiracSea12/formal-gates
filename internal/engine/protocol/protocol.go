@@ -603,6 +603,9 @@ type State struct {
 	// 的需求 revision）；nil＝普通 run。产品审/技术审经它等价满足，child 不
 	// 自行增加审查轮次。
 	SliceChild *SliceChildBinding `json:"sliceChild,omitempty"`
+	// SliceReceipt is the immutable successful child checkpoint. Its sidecar
+	// is evidence only; phase, cost and the owner endpoint commit with this value.
+	SliceReceipt *SliceReceipt `json:"sliceReceipt,omitempty"`
 	// SliceChildren 是 master 账上的分片认领事实（sliceID → childRunID，累
 	// 积运行事实）。它不放进 TopologyBinding：拓扑是不可变的确认决定，
 	// children 是运行期累积——一个控制事实只有一个权威来源。
@@ -622,7 +625,8 @@ type State struct {
 	// Owner 投影是主代理（owner）计量的持久绑定、启动时点与启动基线（REQ-012
 	// AC-050）：来源稳定时由 facade 在 bootstrap 一次写入（OwnerStartedAt 是
 	// 区间事实的本方端点，终态重扫与终态摘要消费它）；缺源不承诺 owner 计量
-	//（AC-051 零数字）。终态差值只作报告（Cost.Owner），不参与 in-flight guard。
+	//（AC-051 零数字）。收口差值只作报告（Cost.Owner），不参与 in-flight guard；
+	// child 的闭合端点和计量原值随 SliceReceipt 同事务冻结。
 	OwnerTranscript string                   `json:"ownerTranscript,omitempty"`
 	OwnerProvider   string                   `json:"ownerProvider,omitempty"`
 	OwnerStartedAt  string                   `json:"ownerStartedAt,omitempty"`

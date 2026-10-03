@@ -136,7 +136,8 @@ type Run struct {
 	PendingAsks []PendingAskFace `json:"pendingAsks,omitempty"`
 	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计）；owner 项缺源
 	// 时缺席。engine run 的 cost 只来自引擎权威 State。
-	Cost *cost.RunCost `json:"cost,omitempty"`
+	Cost         *cost.RunCost          `json:"cost,omitempty"`
+	SliceReceipt *protocol.SliceReceipt `json:"sliceReceipt,omitempty"`
 	// GuardBudget 是 dispatch 额度投影（额度数字、basis digest 与已用事实）；
 	// 受理前（包络未就位）为 nil。
 	GuardBudget *protocol.GuardBudget `json:"guardBudget,omitempty"`
@@ -855,6 +856,12 @@ func (f *Facade) Drive() (Run, error) {
 		}
 		return Run{}, err
 	}
+	if _, aborted := snap.State.AbortDecision(); snap.State.Phase == runtime.PhaseSliceReady && !aborted {
+		if err := f.publishSliceReceipt(snap.State.SliceReceipt); err != nil {
+			return Run{}, err
+		}
+		return f.project()
+	}
 	if snap.State.IntakeReceipt == nil {
 		confirmation := snap.State.IntakeConfirmationReceipt
 		if confirmation == nil {
@@ -883,18 +890,22 @@ func (f *Facade) Drive() (Run, error) {
 			}
 		}
 	}
-	// regular 的终态交付核验单点：首次到达与已相变未发布的重入都经
-	// sealDelivered 同一核验（原生交付身份＝已绑定晋升身份、工作区就绪、基线
-	// 祖先）——检查点漂移即错、摘要不发布；SealTerminal 对已相变且身份一致的
-	// 重入幂等返回。ABORTED run 的终态事实是用户决定，不做交付核验。
+	// Native delivery has one verifier. A child freezes a recoverable checkpoint;
+	// an ordinary regular run seals. An abort consumes its existing decision.
 	if plan != nil && plan.Next.Kind == decision.KindComplete {
 		current, loadErr := f.engine.Load()
 		if loadErr != nil {
 			return Run{}, loadErr
 		}
 		if _, aborted := current.State.AbortDecision(); !aborted {
-			if err := f.sealDelivered(); err != nil {
-				return Run{}, err
+			var deliveryErr error
+			if current.State.SliceChild != nil {
+				deliveryErr = f.checkpointDelivered()
+			} else {
+				deliveryErr = f.sealDelivered()
+			}
+			if deliveryErr != nil {
+				return Run{}, deliveryErr
 			}
 		}
 	}
@@ -939,32 +950,129 @@ func (f *Facade) Drive() (Run, error) {
 	return run, nil
 }
 
-// sealDelivered 核验 regular run 的原生交付并经引擎终态相变（SealTerminal 公
-// 开入口）：交付身份必须等于已绑定晋升身份（身份漂移拒——镜像 legacy
-// Seal 的「before != CurrentSnapshot」）、工作区就绪（脏树拒）、基线仍是祖
-// 先。任一失败＝错误上抛、run 保持活动。
+// sealDelivered sends the shared native delivery proof to ordinary run sealing.
 func (f *Facade) sealDelivered() error {
-	if f.vcs == nil {
-		return fmt.Errorf("engine terminal: regular run %q has no git provider for delivery verification", f.runID)
+	identity, _, err := f.verifyDelivered()
+	if err != nil {
+		return err
 	}
+	return f.engine.SealTerminal(identity, emptyFingerprint())
+}
+
+// verifyDelivered observes the promoted native snapshot and tree, the clean
+// worktree and its baseline ancestry. Both seal and child checkpoint use it.
+func (f *Facade) verifyDelivered() (string, string, error) {
+	if f.vcs == nil {
+		return "", "", fmt.Errorf("engine delivery: regular run %q has no git provider for delivery verification", f.runID)
+	}
+	snap, err := f.engine.Load()
+	if err != nil {
+		return "", "", err
+	}
+	head, err := f.vcs.Resolve()
+	if err != nil {
+		return "", "", err
+	}
+	if head != snap.State.PromotedSnapshot {
+		return "", "", fmt.Errorf("engine delivery: native VCS identity %s does not match the promoted snapshot %s", head, snap.State.PromotedSnapshot)
+	}
+	if err := f.vcs.VerifyReady(); err != nil {
+		return "", "", err
+	}
+	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
+		return "", "", err
+	}
+	tree, err := f.vcs.TreeDigest(head)
+	if err != nil {
+		return "", "", err
+	}
+	if tree != snap.State.PromotedDigest {
+		return "", "", fmt.Errorf("engine delivery: native tree %s does not match the verified promoted tree %s", tree, snap.State.PromotedDigest)
+	}
+	return head, tree, nil
+}
+
+// checkpointDelivered holds the promotion window against decisions that revoke
+// admission, then freezes owner measurement and its endpoint under their owner
+// coordination lock. A committed receipt is replayed without another measurement.
+func (f *Facade) checkpointDelivered() error {
+	unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	snap, err := f.engine.Load()
 	if err != nil {
 		return err
 	}
-	head, err := f.vcs.Resolve()
+	if snap.State.SliceReceipt == nil {
+		if err := func() error {
+			release, err := lockOwnerCost(f.root)
+			if err != nil {
+				return err
+			}
+			defer release()
+			head, tree, err := f.verifyDelivered()
+			if err != nil {
+				return err
+			}
+			interval, owner, err := f.observeOwnerCost()
+			if err != nil {
+				return err
+			}
+			return f.engine.CheckpointSlice(head, tree, owner, interval.endedAt, emptyFingerprint())
+		}(); err != nil {
+			return err
+		}
+		if snap, err = f.engine.Load(); err != nil {
+			return err
+		}
+	}
+	return f.publishSliceReceipt(snap.State.SliceReceipt)
+}
+
+// publishSliceReceipt materializes evidence from the state-owned frozen value.
+// Recovery verifies the immutable object, so later legitimate HEAD movement does
+// not redefine a completed checkpoint or its owner interval.
+func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
+	if receipt == nil || receipt.Digest != receipt.Receipt.CanonicalDigest() {
+		return fmt.Errorf("engine slice checkpoint: frozen receipt is unavailable or inconsistent")
+	}
+	if f.vcs == nil {
+		return fmt.Errorf("engine slice checkpoint: Git provider is required")
+	}
+	if err := f.vcs.Verify(receipt.Receipt.Snapshot); err != nil {
+		return err
+	}
+	tree, err := f.vcs.TreeDigest(receipt.Receipt.Snapshot)
 	if err != nil {
 		return err
 	}
-	if head != snap.State.PromotedSnapshot {
-		return fmt.Errorf("engine terminal: native VCS identity %s does not match the promoted snapshot %s", head, snap.State.PromotedSnapshot)
+	if tree != receipt.Receipt.Tree {
+		return fmt.Errorf("engine slice checkpoint: frozen snapshot tree differs from its receipt")
 	}
-	if err := f.vcs.VerifyReady(); err != nil {
+	path := filepath.Join(f.stateDir, "slice-receipt.json")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
+	var published protocol.SliceReceipt
+	if err != nil || json.Unmarshal(data, &published) != nil || published.Digest != receipt.Digest || published.Receipt.CanonicalDigest() != receipt.Digest {
+		if err := writeJSONAtomic(path, receipt); err != nil {
+			return err
+		}
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
 		return err
 	}
-	return f.engine.SealTerminal(head, emptyFingerprint())
+	if err := json.Unmarshal(data, &published); err != nil {
+		return err
+	}
+	if published.Digest != receipt.Digest || published.Receipt.CanonicalDigest() != receipt.Digest {
+		return fmt.Errorf("engine slice checkpoint: published receipt does not match the frozen value")
+	}
+	return nil
 }
 
 // Submit accepts one typed protocol event and immediately computes the next
@@ -1129,6 +1237,9 @@ func (f *Facade) project() (Run, error) {
 	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复），lightweight 的
 	// CompleteAll 已在引擎内相变。
 	status := "ACTIVE"
+	if snap.State.Phase == runtime.PhaseSliceReady {
+		status = "SLICE_READY"
+	}
 	if snap.State.Phase == runtime.PhaseTerminal {
 		status = "COMPLETE"
 	}
@@ -1162,9 +1273,13 @@ func (f *Facade) project() (Run, error) {
 		Next:             plan.Next,
 		Review:           reviewFace(snap.State),
 		Cost:             snap.State.Cost,
+		SliceReceipt:     snap.State.SliceReceipt,
 		GuardBudget:      snap.State.Guard,
 		SummaryPath:      filepath.Join(f.stateDir, "terminal-summary.json"),
 		Unverified:       snap.State.Route == "lightweight",
+	}
+	if status == "SLICE_READY" {
+		run.SummaryPath = ""
 	}
 
 	for _, event := range snap.State.Events {

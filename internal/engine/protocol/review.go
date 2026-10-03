@@ -777,6 +777,9 @@ func (s *State) verifyPhaseAgainstLedgers() error {
 	if s.Phase == runtime.PhaseTerminal {
 		return nil
 	}
+	if s.Phase == runtime.PhaseSliceReady && s.SliceReceipt != nil {
+		return nil
+	}
 	if phaseRank(s.Phase) > s.phaseLedgerFloor() {
 		return &RejectedError{
 			Code:   CodeStateIntegrityInvalid,

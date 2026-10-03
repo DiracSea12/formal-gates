@@ -6,10 +6,15 @@
 package protocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
+	"formal-gates/internal/cost"
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
@@ -44,6 +49,206 @@ type SliceChildBinding struct {
 type SliceRunStart struct {
 	Binding  SliceChildBinding
 	Topology TopologyBinding
+}
+
+// SliceReceipt binds the frozen checkpoint to its canonical content digest.
+type SliceReceipt struct {
+	Receipt SliceTerminalReceipt `json:"receipt"`
+	Digest  string               `json:"digest"`
+}
+
+// SliceTerminalReceipt carries the successful child evidence needed by its
+// master. It contains final results rather than a second copy of run state.
+// Empty SelectedQA and ApprovedCases explicitly mean ordinary QA was not selected.
+type SliceTerminalReceipt struct {
+	Status              runtime.RunPhase                                    `json:"status"`
+	ChildRunID          string                                              `json:"childRunId"`
+	SliceID             string                                              `json:"sliceId"`
+	MasterRunID         string                                              `json:"masterRunId"`
+	Envelope            persistence.Envelope                                `json:"envelope"`
+	Snapshot            string                                              `json:"snapshot"`
+	Tree                string                                              `json:"tree"`
+	Digest              string                                              `json:"digest"`
+	RequirementRevision string                                              `json:"requirementRevision"`
+	Topology            TopologyBinding                                     `json:"topology"`
+	RouteMode           string                                              `json:"routeMode"`
+	SelectedGates       []string                                            `json:"selectedGates"`
+	Validation          SliceValidationReceipt                              `json:"validation"`
+	SelectedQA          []coverage.ReviewKind                               `json:"selectedQA"`
+	ApprovedCases       map[coverage.ReviewKind]coverage.AcceptanceManifest `json:"approvedCases"`
+	Cost                *cost.RunCost                                       `json:"cost"`
+	OwnerTranscript     string                                              `json:"ownerTranscript,omitempty"`
+	OwnerStartedAt      string                                              `json:"ownerStartedAt,omitempty"`
+	OwnerEndedAt        string                                              `json:"ownerEndedAt,omitempty"`
+	LastEvent           *SliceEventIdentity                                 `json:"lastEvent,omitempty"`
+	LastRequest         *SliceRequestIdentity                               `json:"lastRequest,omitempty"`
+}
+
+type SliceValidationReceipt struct {
+	WaveID              string                       `json:"waveId"`
+	Status              string                       `json:"status"`
+	RequirementRevision string                       `json:"requirementRevision"`
+	Generation          uint64                       `json:"generation"`
+	RouteDigest         string                       `json:"routeDigest"`
+	ExpectedDigest      string                       `json:"expectedDigest"`
+	Candidate           coverage.ValidationCandidate `json:"candidate"`
+	Scope               coverage.ScopeMode           `json:"scope"`
+	Results             []SliceValidationResult      `json:"results"`
+}
+
+type SliceValidationResult struct {
+	Target ValidationTarget `json:"target"`
+	Result WorkerResult     `json:"result"`
+}
+
+type SliceEventIdentity struct {
+	EventID   string `json:"eventId"`
+	RequestID string `json:"requestId,omitempty"`
+	Digest    string `json:"digest"`
+	Revision  uint64 `json:"revision"`
+}
+
+type SliceRequestIdentity struct {
+	RequestID      string `json:"requestId"`
+	EventID        string `json:"eventId"`
+	RequestDigest  string `json:"requestDigest"`
+	DecisionDigest string `json:"decisionDigest"`
+	Revision       uint64 `json:"revision"`
+}
+
+// CanonicalDigest uses the protocol's canonical wire digest, independently of
+// sidecar whitespace. The Git tree identity remains the native content digest.
+func (r SliceTerminalReceipt) CanonicalDigest() string { return digestOfCanonical(r) }
+
+// CheckpointSlice commits successful child evidence, phase, owner cost and its
+// closed interval together. Native observation and measurement belong to facade;
+// this transaction rechecks the existing validation/promotion admission owner.
+func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, endedAt, expectedFingerprint string) error {
+	revision, state, err := e.load()
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if state.SliceChild == nil || state.Route != "regular" {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "slice checkpoint requires a regular child run"}
+	}
+	if state.SliceReceipt != nil {
+		if state.SliceReceipt.Receipt.Snapshot == snapshot && state.SliceReceipt.Receipt.Tree == tree {
+			return nil
+		}
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice checkpoint is already frozen at a different native identity"}
+	}
+	if err := state.errWriteBarrier("slice checkpoint"); err != nil {
+		return err
+	}
+	if state.Phase == runtime.PhaseTerminal || state.abortRequested() || !state.validationConcluded(e.cfg.Definition) {
+		return &RejectedError{Code: CodeEventNotCurrent, Detail: "slice checkpoint requires the concluded validation pipeline without an abort decision"}
+	}
+	if snapshot == "" || snapshot != state.PromotedSnapshot || tree == "" || tree != state.PromotedDigest {
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice checkpoint native snapshot/tree differs from the verified promotion"}
+	}
+	if state.OwnerTranscript != "" {
+		if _, err := time.Parse(time.RFC3339Nano, endedAt); err != nil || owner == nil {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "slice checkpoint requires its measured owner cost and closed interval"}
+		}
+		cost.RecordOwner(state.costLedger(), *owner)
+	} else if owner != nil || endedAt != "" {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "slice checkpoint has no owner binding to measure"}
+	}
+	wave := state.currentValidationWave()
+	r := SliceTerminalReceipt{
+		Status:              runtime.PhaseSliceReady,
+		ChildRunID:          state.RunID,
+		SliceID:             state.SliceChild.SliceID,
+		MasterRunID:         state.SliceChild.MasterRunID,
+		Envelope:            e.store.Envelope(),
+		Snapshot:            snapshot,
+		Tree:                tree,
+		Digest:              tree,
+		RequirementRevision: state.RequirementRevision(),
+		Topology:            copyTopology(*state.Topology),
+		RouteMode:           state.RouteMode,
+		SelectedGates:       slices.Clone(state.SelectedGates),
+		Validation: SliceValidationReceipt{
+			WaveID:              wave.ID,
+			Status:              wave.Status,
+			RequirementRevision: wave.RequirementRevision,
+			Generation:          wave.Generation,
+			RouteDigest:         wave.RouteDigest,
+			ExpectedDigest:      wave.ExpectedDigest,
+			Candidate:           wave.Candidate,
+			Scope:               wave.Scope,
+			Results:             []SliceValidationResult{},
+		},
+		SelectedQA:      []coverage.ReviewKind{},
+		ApprovedCases:   map[coverage.ReviewKind]coverage.AcceptanceManifest{},
+		Cost:            state.Cost,
+		OwnerTranscript: state.OwnerTranscript,
+		OwnerStartedAt:  state.OwnerStartedAt,
+		OwnerEndedAt:    endedAt,
+	}
+	keys := make([]string, 0, len(wave.Targets))
+	for key := range wave.Targets {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		target := wave.Targets[key]
+		r.Validation.Results = append(r.Validation.Results, SliceValidationResult{Target: *target, Result: state.Results[target.ResultAction]})
+	}
+	for id, event := range state.Events {
+		if r.LastEvent == nil || event.Acceptance.Revision > r.LastEvent.Revision {
+			r.LastEvent = &SliceEventIdentity{EventID: id, RequestID: event.Acceptance.RequestID, Digest: event.Digest, Revision: event.Acceptance.Revision}
+		}
+	}
+	for _, decision := range state.Decisions {
+		if r.LastRequest == nil || decision.Revision > r.LastRequest.Revision {
+			r.LastRequest = &SliceRequestIdentity{RequestID: decision.RequestID, EventID: decision.EventID, RequestDigest: state.Events[decision.RequestID].Digest, DecisionDigest: state.Events[decision.EventID].Digest, Revision: decision.Revision}
+		}
+	}
+	// Detach the frozen evidence from the run's mutable maps and cost projection.
+	data, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	state.SliceReceipt = &SliceReceipt{Receipt: r, Digest: r.CanonicalDigest()}
+	if state.Phase == runtime.PhaseDevelopmentParallel {
+		if err := state.TransitionPhase(runtime.PhaseSnapshotReady); err != nil {
+			return err
+		}
+	}
+	if state.Phase == runtime.PhaseSnapshotReady {
+		if err := state.TransitionPhase(runtime.PhasePostReview); err != nil {
+			return err
+		}
+	}
+	if err := state.TransitionPhase(runtime.PhaseSliceReady); err != nil {
+		return err
+	}
+	_, err = e.commit(state, revision, expectedFingerprint)
+	return err
+}
+
+func (s *State) verifySliceReceipt() error {
+	if s.SliceReceipt == nil {
+		if s.Phase == runtime.PhaseSliceReady {
+			return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "SLICE_READY requires its frozen receipt"}
+		}
+		return nil
+	}
+	r := s.SliceReceipt.Receipt
+	if s.SliceChild == nil || r.Status != runtime.PhaseSliceReady ||
+		r.ChildRunID != s.RunID || r.MasterRunID != s.SliceChild.MasterRunID || r.SliceID != s.SliceChild.SliceID ||
+		r.Snapshot != s.PromotedSnapshot || r.Tree != s.PromotedDigest || r.Digest != r.Tree ||
+		s.SliceReceipt.Digest != r.CanonicalDigest() {
+		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "slice receipt does not match its frozen child identity and digest"}
+	}
+	return nil
 }
 
 // validSliceID 报告分片名是否为可作 AC 责任 owner 引用与 child 认领键的

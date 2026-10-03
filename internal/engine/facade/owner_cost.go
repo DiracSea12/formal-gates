@@ -68,11 +68,10 @@ func readTokenCap(root string) (*int64, error) {
 }
 
 // engineOverlapPeers 返回同 root 下与本 run 共享 owner transcript 且区间无法
-// 排除相交的 engine peer runID（persistence 信封形状）。peer 的区间端点权威是
-// 其终态摘要：state.json 非终态＝区间开放；终态但 terminal-summary.json 缺失或
-// 区间端点不可解析＝区间仍开放（终态落盘与摘要发布之间的中断窗口，无人认领
-// 的区间不可排除）；终态且端点可解析＝区间已闭合，交由 engineSummaryOverlap
-// 的相交判定。resolvable=false 表示存在无法排除的读取失败（Glob 错误/读失
+// 排除相交的 engine peer runID（persistence 信封形状）。闭合区间来自成功
+// child 的 state receipt 或普通 run 的终态摘要；证据未落盘或端点不可解析时
+// 区间仍开放。闭合区间交由 engineSummaryOverlap 判断实际相交。
+// resolvable=false 表示存在无法排除的读取失败（Glob 错误/读失
 // 败/坏信封——重叠不可否定），调用方按重叠处理。
 func engineOverlapPeers(root, runID, transcript string) (peers []string, resolvable bool) {
 	canonical := filepath.Clean(transcript)
@@ -91,8 +90,9 @@ func engineOverlapPeers(root, runID, transcript string) (peers []string, resolva
 		}
 		var envelope struct {
 			Content struct {
-				Phase           string `json:"phase"`
-				OwnerTranscript string `json:"ownerTranscript"`
+				Phase           string                 `json:"phase"`
+				OwnerTranscript string                 `json:"ownerTranscript"`
+				SliceReceipt    *protocol.SliceReceipt `json:"sliceReceipt"`
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
@@ -102,17 +102,21 @@ func engineOverlapPeers(root, runID, transcript string) (peers []string, resolva
 		if strings.TrimSpace(projection.OwnerTranscript) == "" || filepath.Clean(projection.OwnerTranscript) != canonical {
 			continue
 		}
-		if projection.Phase != string(runtime.PhaseTerminal) || !enginePeerIntervalClosed(filepath.Dir(path)) {
+		if projection.Phase != string(runtime.PhaseTerminal) && projection.Phase != string(runtime.PhaseSliceReady) || !enginePeerIntervalClosed(filepath.Dir(path), projection.SliceReceipt) {
 			peers = append(peers, filepath.Base(filepath.Dir(path)))
 		}
 	}
 	return peers, true
 }
 
-// enginePeerIntervalClosed 报告终态 engine peer 的区间是否已由其终态摘要闭合
-// （OwnerStartedAt/OwnerEndedAt 可解析）。摘要缺失或端点不可解析＝区间仍开
-// 放：区间闭合的持久事实就是终态摘要，发布前的中断窗口内不可排除相交。
-func enginePeerIntervalClosed(stateDir string) bool {
+// enginePeerIntervalClosed reads the existing owner endpoint evidence. A child
+// receipt closes the interval in state even before its sidecar is published.
+func enginePeerIntervalClosed(stateDir string, receipt *protocol.SliceReceipt) bool {
+	if receipt != nil {
+		_, startErr := time.Parse(time.RFC3339Nano, receipt.Receipt.OwnerStartedAt)
+		_, endErr := time.Parse(time.RFC3339Nano, receipt.Receipt.OwnerEndedAt)
+		return startErr == nil && endErr == nil
+	}
 	data, err := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
 	if err != nil {
 		return false
@@ -129,9 +133,8 @@ func enginePeerIntervalClosed(stateDir string) bool {
 	return startErr == nil && endErr == nil
 }
 
-// engineSummaryOverlap 扫描 engine 终态留存摘要（terminal-summary.json：终态
-// 清理保留的区间事实，与随 state.json 消失的活动投影互补），镜像
-// legacySummaryOverlap 形状：OwnerTranscript canonical 相等且 [OwnerStartedAt,
+// engineSummaryOverlap consumes closed intervals from terminal summaries and
+// state-owned child receipts. OwnerTranscript canonical 相等且 [OwnerStartedAt,
 // OwnerEndedAt] 与本方区间 [startedAt, 量取时点] 相交。startedAt 为空＝启动观
 // 察点，已闭合区间必先于本方锁段结束，不判相交；端点不可解析＝不可排除，按
 // 相交处理。
@@ -144,9 +147,13 @@ func engineSummaryOverlap(root, runID, transcript, startedAt string) bool {
 	if err != nil {
 		return true
 	}
+	statePaths, err := filepath.Glob(filepath.Join(root, EngineNamespace, "*", "state.json"))
+	if err != nil {
+		return true
+	}
 	myStart, myStartErr := time.Parse(time.RFC3339Nano, startedAt)
 	now := time.Now().UTC()
-	for _, path := range summaryPaths {
+	for _, path := range append(summaryPaths, statePaths...) {
 		if filepath.Base(filepath.Dir(path)) == runID {
 			continue
 		}
@@ -159,7 +166,21 @@ func engineSummaryOverlap(root, runID, transcript, startedAt string) bool {
 			OwnerStartedAt  string `json:"ownerStartedAt"`
 			OwnerEndedAt    string `json:"ownerEndedAt"`
 		}
-		if err := json.Unmarshal(data, &summary); err != nil {
+		if filepath.Base(path) == "state.json" {
+			var envelope struct {
+				Content struct {
+					SliceReceipt *protocol.SliceReceipt `json:"sliceReceipt"`
+				} `json:"content"`
+			}
+			if err := json.Unmarshal(data, &envelope); err != nil {
+				return true
+			}
+			if envelope.Content.SliceReceipt == nil {
+				continue
+			}
+			r := envelope.Content.SliceReceipt.Receipt
+			summary.OwnerTranscript, summary.OwnerStartedAt, summary.OwnerEndedAt = r.OwnerTranscript, r.OwnerStartedAt, r.OwnerEndedAt
+		} else if err := json.Unmarshal(data, &summary); err != nil {
 			return true
 		}
 		if strings.TrimSpace(summary.OwnerTranscript) == "" || filepath.Clean(summary.OwnerTranscript) != canonical {
@@ -340,8 +361,7 @@ type ownerInterval struct {
 // 样不可记精确假数字）；量取后经引擎落账（幂等；REQ-012 AC-052）。差值只作
 // 报告：无法精确核对时记 UNAVAILABLE 零数字（AC-051）。
 func (f *Facade) finishOwnerCost() (ownerInterval, error) {
-	transcript, provider, startedAt, baseline, overlapped, bound := f.engine.OwnerCostFacts()
-	if !bound {
+	if _, _, _, _, _, bound := f.engine.OwnerCostFacts(); !bound {
 		return ownerInterval{}, nil
 	}
 	release, err := lockOwnerCost(f.root)
@@ -349,14 +369,34 @@ func (f *Facade) finishOwnerCost() (ownerInterval, error) {
 		return ownerInterval{}, err
 	}
 	defer release()
+	interval, entry, err := f.observeOwnerCost()
+	if err != nil {
+		return ownerInterval{}, err
+	}
+	if entry != nil {
+		if err := f.engine.RecordOwnerCost(*entry, emptyFingerprint()); err != nil {
+			return ownerInterval{}, err
+		}
+	}
+	return interval, nil
+}
+
+// observeOwnerCost uses the bound owner interval under lockOwnerCost. It leaves
+// cost and the endpoint uncommitted so its caller can freeze them with either
+// the child checkpoint or the ordinary terminal report.
+func (f *Facade) observeOwnerCost() (ownerInterval, *cost.OwnerCost, error) {
+	transcript, provider, startedAt, baseline, overlapped, bound := f.engine.OwnerCostFacts()
+	if !bound {
+		return ownerInterval{}, nil, nil
+	}
 	if !overlapped && ownerOverlap(f.root, f.runID, transcript, startedAt) {
 		if err := f.engine.MarkOwnerOverlapped(emptyFingerprint()); err != nil {
-			return ownerInterval{}, err
+			return ownerInterval{}, nil, err
 		}
 		overlapped = true
 	}
 	if err := markOverlappingEnginePeers(f.root, f.runID, transcript); err != nil {
-		return ownerInterval{}, err
+		return ownerInterval{}, nil, err
 	}
 	interval := ownerInterval{transcript: transcript, startedAt: startedAt, endedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	entry := cost.OwnerCost{Source: cost.SourceUnavailable}
@@ -371,8 +411,5 @@ func (f *Facade) finishOwnerCost() (ownerInterval, error) {
 			}
 		}
 	}
-	if err := f.engine.RecordOwnerCost(entry, emptyFingerprint()); err != nil {
-		return ownerInterval{}, err
-	}
-	return interval, nil
+	return interval, &entry, nil
 }
