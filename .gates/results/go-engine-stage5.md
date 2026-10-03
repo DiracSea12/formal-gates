@@ -118,3 +118,46 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
 结论仅为默认路线本块开发验收闭合，非正式流程 PASS或阶段5退出。剩余 checkpoint/收据、master接纳汇总、worktree/integration/merge、级联/guarantee、installed公共面与实机ZCode仍待后续。
 
 机主另授权 active goal 推进剩余阶段5–7，每大阶段结束必须实际ZCode happy path＋大量业务non-happy path。全量构建/测试、隔离安装、版本/原生身份、故障恢复/清理及逐次真实模型授权要求纳入阶段退出；本块没有真实外部模型调用。不得用本块两门或窄测试代替阶段退出。
+
+## 分片成功 checkpoint（e030dc3、e08c468）
+
+授权：完整收据合同已批准；本块先交付 child 成功 checkpoint，下一块完成 master 接纳/汇总。当前原生基线 0c5400b93885e1edf1949ee1e4467a9fc44d88a8 → e08c468d5b163b9fee270b0d255f929a0e629e6e，14 文件、995 行新增/57 行删除。实施子代理使用完整 development-worker 提示词和全部硬标准；主代理没有修改业务代码，无 push。
+
+### 原始证据与实际执行
+
+- 开发先在原代码三路线真实 Git 链复现 child 错误 TERMINAL/COMPLETE，原日志 /tmp/slice-checkpoint-original-failure.log；主代理独立完整链在 0c 基线实际失败 /tmp/child-checkpoint-before.log（4.43s），未将 overlay 未执行计为负控。
+- e030 初次完整相关包通过：protocol65.794s、facade412.186s、cost2.082s、vcs2.308s、persistence13.386s。开发首次 unused import 编译错误仅保留工具输出；lifecycle fixture 初次读取 legacy namespace 失败后改用实际 ActiveRunIDs；最终 race 一次 native Git rev-parse segmentation fault，原日志 /tmp/slice-checkpoint-race-native-git-failure.log，冻结代码重跑22.660s PASS，不包装为 race 通过的首次运行。
+- 主代理完整 receipt 原生 oracle e030 实际 PASS6.529s；原生门/脏树/漂移/Owner/replay/普通终态相关十用例 PASS23.778s。主代理亲读完整生产和交付测试 diff。
+- e030 两个 fork_turns:none 手动门均给 PASS 候选及一个 P3 纯内存别名。主代理未接纳：独立实际自动 RETRY→授权→PASS→promotion→checkpoint 正常链复现 LastRequest.RequestDigest 为空，违反已批准 receipt 条款。P2 的 root 失败日志 /tmp/child-request-evidence-before.log（2.599s），开发原样复现 /tmp/child-request-evidence-reproduced.log（3.160s）。修补根因是 Events/PendingAsks 两个既有正常请求来源，而非 RETRY 特判。
+- e08 修补前后完整 diff SHA-256 6fcec3bc0b6f081496baa92d859f654f700437fd1b873270e48eda0cae719cc7。开发来源2.285s、checkpoint17.420s、未改原 probe5.081s、race18.900s、build0.82s均 PASS；全仓或未改慢包未机械重跑。完整开发报告 /tmp/child-request-evidence-implementation-report.md。
+- 主代理 e08 未改原探针实际 PASS3.111s（/tmp/child-request-evidence-root-after.log）；三路线真实原生完整收据/字节/后续 HEAD/丢副本复建 oracle PASS6.434s（/tmp/child-checkpoint-root-final.log）；外部、自动 validation、review grant grant/decline、attempt recovery 与 generated requirement 来源五用例 PASS3.041s（/tmp/child-request-evidence-root-sources.log）。
+- 主代理 e08 并发收口、后来 HEAD/owner 变化、receipt 副本丢失、intent_before/replace_after/commit_response_lost 三提交故障窗口及普通 terminal replay/peer 五用例实际 PASS12.781s（/tmp/child-checkpoint-root-recovery-final.log）。断言读取 state、sidecar 全内容和相同 bytes，不只检查存在。
+- 主代理追加实际 Git gate FAIL→核实 P2→repair completion→新候选→promotion→checkpoint 检查，PASS3.755s（/tmp/child-repaired-gate-evidence-root.log）。收据保留真实 repair completion 作为终门义务证据，child 原始 FAIL 未改写；后续 master 接纳须沿该既有收口语义。
+- P3 别名原生内存 probe 证实非零 receiver 保留 Cost pointer；没有正常持久损坏复现，维持 P3。与当前授权构造处同改为已有标准库零值 receiver，不新增 clone helper 或另开偏好返修。
+
+### 主代理逐项工程核验
+
+| 硬标准 | 当前代码/执行证据 |
+| --- | --- |
+| 正确性 | facade.verifyDelivered 共用于 ordinary seal 与 child checkpoint；promotion HEAD/tree/clean/ancestry 均原生核验；独立原负控及三路线完整 receipt 通过。 |
+| 质量 | 持久 receipt/digest/phase/费用/endpoint 同 commit；构建、相关包/race、原生原失败与恢复证据俱全，首次失败如实保留。 |
+| 当前块需求完整性 | SliceTerminalReceipt 全字段；SLICE_READY 非终态、无 summary/EndRun/提前 cleanup；selectedQA/cases 真实为空；最后请求两个来源；三路线、拒绝与恢复有内容断言。master 整体合同尚待下一块，未记完成。 |
+| 最简/简洁（保留 P3 等价表达建议） | 复用当前 validationConcluded、promotion、已有 phase、Events/PendingAsks、canonical digest、owner 观察和 atomic writer；只增加需求明定 typed 冻结 receipt，没有新发布/计量状态机。 |
+| 耦合 | native 观察归 facade/VCS；资格/冻结归 protocol/CAS；owner 归原 owner lock；publisher 只消费冻结值。两种请求来源解析留在 receipt 所属层，无要求其他调用者发伪事件。 |
+| 可维护 | normal/recovery 同 frozen value/publisher，后来 HEAD 不改交付；请求读取以已有 owner 为依据，不按 kind/ID 前缀；批准 schema 字段自然参与 canonical digest。 |
+| 高可读 | 小的共享 verifyDelivered 与 checkpoint/publish 直读主干；类型明示完整 identity/validation/route/request/cost，注释说明当前事务/恢复约束。 |
+| 优雅/设计一致 | SLICE_READY 沿当前相位合法推进；owner observation 与普通终态同算法；零值 JSON receiver 沿现 prepareValidationResult，未搭复制框架。 |
+| 无不当硬编码 | 不固定门数量/名字、请求前缀或 RETRY 处置；validation targets 来自真实当前 wave；native identity 与 owner 原来源如实冻结。 |
+| 无窄逻辑 | 正常/重复/并发/发表恢复/closed peer/后续 native commit 贯穿；外部、validation、review grant、attempt recovery、generated requirement 请求来源全核归属。 |
+| 无过拟合 | root oracle 与基线真实失效；完整 offer 期望由独立 JSON+SHA 算出，不把 Validation.Digest 或非空字符串替代 request digest；原 probe 未为过测试修改。 |
+| 无过度设计 | 没有额外 owner/cost ledger、receipt queue、扫描成员表、clone/发布状态机、节点/数据库迁移；未提前增加 master/集成占位字段。 |
+| 无过度防御 | 检查只为已要求身份、业务准入和正常 I/O/恢复，不对恶意改状态/权限/无支持平台添加机制。 |
+| 无过度抽象 | 当前两个层各保自己的小函数和明定 DTO；既有 standard library 与 native Git，无新接口层或依赖。 |
+| 测试业务隔离 | 夹具与 oracle 在 _test.go 或树外 overlay；生产没有测试分支或新增 public fault 开关，恢复复用既有 FaultInjector。 |
+| 唯一事实/携带者 | wave/promotion→native proof→CheckpointSlice；OwnerCost+closed interval 同 commit；Events/PendingAsks+Decisions→LastRequest；state SliceReceipt→sidecar/query，副本可再建。state.json 按已批准例外继续，不把通用数据库条款写通过。 |
+| 正常/恢复共用 | 冻结再发表，同 checkpoint 与 publisher；三 fault windows、repeat/parallel/late HEAD 均实际断言全值/byte 稳定，无恢复重测 owner 或重新跑门。 |
+| 诚实夹具/期望 | 真 Git、实际 action/task/candidate、完整 request offer、精确已知 token；source-owner unit 明确不冒称全 child lifecycle；没有降低原断言。 |
+| 替代删除 | 原 seal native 重复段改共享；child 独立成功 seal 拒绝；单 Events 摘要与非零 receipt 解码、过时注释已删除，无平行路径或账本。 |
+| 命名/注释 | 新源码/测试按 slice checkpoint/request 行为命名，无阶段/修复/审查轮次标记；注释只说当前身份/约束。 |
+
+最终全新零上下文手动复杂度门与实现质量门均 PASS，未发现 P0/P1/P2。主代理读完整返回并核原始执行输出：复杂度门 protocol59.413s/facade511.806s/cost3.552s/vcs3.773s、race109.871s与构建/diff-check通过；质量门原整包 exit143 主动中止、未记全包通过，随后 facade47.316s/race17.784s通过，三包为 Go cache、非重跑，protocol83.616s来自被中止组合。所有原始输入/返回/输出副本在 slice-checkpoint-gates.md。复杂度门排序 helper 复用建议经主代理源值核对是 P3 等价表达（没有行为后果），只记录，不能据此写“完全最简”或不存在一切建议。本块已核的范围内功能和工程条件闭合，可以推进 master 接纳；这不是整个收据合同完成、正式流程 PASS 或阶段5退出。没有收费 native 模型/安装副本/ZCode canary。费用：本块实施一次、返修一次，另有四个零上下文门派发；本记录不把协作代理当实际 ZCode 调用证据。
