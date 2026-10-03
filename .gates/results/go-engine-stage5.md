@@ -66,3 +66,7 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
 - 验证：engine+coordination 全绿（主代理亲跑）；harness 满载一次 TestTransportPerMessageWaitHasNoTotalDeadline 红、隔离 -count=3 全绿＝计时 flake（无依赖路径，如实记录）；gofmt/vet 净；无过程标记。
 
 费用：无真实付费调用；返修子代理派发 1 次。
+
+## 批 1 补缝（683bd10）：child 计划换约纪律收敛
+
+机主追问「是否根因级而非摞补丁」触发自查：主代理独立探针（/tmp/probe_child_plan_swap_test.go）坐实 F1 有一条缝没打穿——child 已确认计划、开发已派发后，追加普通门的路线重选携带内容不同的片内计划被静默接纳（普通 run 的逐批用户决定纪律被 child 分支提前 return 跳过）。修＝纪律收敛不分流：child 分支只留确认形态检查，prior-plan 换约比对对两种 run 形态同一条判定；连带闭合同源缝——child 计划确认的绑定 revision 此前返回空，派发绑定与 work-decision 形状校验断链，现回填确认决定时点的权威需求 revision。验证：探针 PASS（拒绝语与普通 run 同族）、protocol/facade 定向与全包绿（coordination 组合跑一次 FAIL 未捕获用例名、单独＋组合复跑两遍全绿，按满载 flike 如实记录）。教训：**新增形态的"特殊分支"每提前 return 一次，就是一条既有纪律的旁路——分支只许分流形态，不许分流纪律。**
