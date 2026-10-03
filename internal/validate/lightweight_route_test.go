@@ -64,14 +64,14 @@ func startFixture(t *testing.T) (string, string) {
 }
 
 // Case: the start-time --route surface is a lightweight-only declaration, not a
-// generic route picker. Valid routeModes values (full/custom) and garbage are
+// generic route picker. Valid routeModes values (default/full/custom) and garbage are
 // rejected at start with the lightweight-or-empty error; "lightweight" is
 // accepted case-insensitively and pins RouteMode lightweight. Leaving --route
 // empty keeps the regular intake, which still demands the explicit split
 // declaration.
 func TestStartRouteDeclarationAcceptsOnlyLightweightOrEmpty(t *testing.T) {
 	root, pkg := startFixture(t)
-	for _, route := range []string{"full", "custom", "bogus"} {
+	for _, route := range []string{"default", "full", "custom", "bogus"} {
 		_, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "r-" + route, Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: route})
 		if err == nil || !strings.Contains(err.Error(), "--route must be lightweight or empty") {
 			t.Fatalf("route %q: expected lightweight-or-empty rejection, got %v", route, err)

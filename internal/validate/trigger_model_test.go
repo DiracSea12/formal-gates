@@ -114,12 +114,12 @@ func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 }
 
 // Case: after the complete requirement and solution are confirmed, intake
-// proceeds into the formal flow; full/custom stays undecided until after the
+// proceeds into the formal flow; default/full/custom stays undecided until after the
 // slicing decision and lightweight skips slicing and route selection.
 func TestSkillStepFourEntersAfterConfirmation(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
 	assertHasText(t, skill, "用户明确确认完整需求与方案后进入正式流程")
-	assertHasText(t, skill, "正式路线（`full`/`custom`）本阶段不定，拆分决定之后确认")
+	assertHasText(t, skill, "正式路线（`default`/`full`/`custom`）本阶段不定，拆分决定之后确认")
 	assertHasText(t, skill, "不经拆分决定与路线选择")
 	assertLacksText(t, skill, "询问用户是否进入正式流程")
 }
@@ -233,9 +233,9 @@ func TestSkillManagedRuleBlockDeclaresIntake(t *testing.T) {
 	assertLacksText(t, rule, "必须先执行 formal-gates 受理流程")
 }
 
-// Case: agents/openai.yaml default_prompt must encode the V2 intake sequencing
+// agents/openai.yaml default_prompt declares intake sequencing and the distinct route choices
 // — mention once, do not self-trigger, enter after the confirmed intake,
-// full/custom confirmed after the slicing decision, lightweight skips slicing
+// default/full/custom confirmed after the slicing decision, lightweight skips slicing
 // and route selection and seals without verification.
 func TestOpenAIDefaultPromptStatesModel(t *testing.T) {
 	openai := readWorktreeFile(t, "agents/openai.yaml")
@@ -244,7 +244,14 @@ func TestOpenAIDefaultPromptStatesModel(t *testing.T) {
 	assertHasText(t, openai, "on explicit user request")
 	assertHasText(t, openai, "then enter the formal flow")
 	assertLacksText(t, openai, "ask whether to enter the formal flow")
-	assertHasText(t, openai, "route full/custom is confirmed after the slicing decision")
+	assertHasText(t, openai, "route default/full/custom is confirmed after the slicing decision")
+	assertHasText(t, openai, "Present three independent options: 默认/default")
+	assertHasText(t, openai, "recommended: every ordinary gate, no blackbox or whitebox QA")
+	assertHasText(t, openai, "full（QA 阶段较重，适合大型任务）")
+	assertHasText(t, openai, "custom (choose at least one candidate, including the full list)")
+	assertHasText(t, openai, "The recommendation requires user confirmation")
+	assertHasText(t, openai, "child default/full select every ordinary gate")
+	assertHasText(t, openai, "master merge QA and merge gate remain mandatory")
 	assertHasText(t, openai, "lightweight")
 }
 
