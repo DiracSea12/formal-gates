@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/host"
 )
 
 func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
@@ -55,19 +57,19 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve %s: %v", project, err)
 		}
-		if admission.RecordID == global.ID {
-			t.Fatalf("resolve %s selected canonical global record: %+v", project, admission)
+		if admission.RecordID == global.ID || admission.Provider != host.Claude {
+			t.Fatalf("resolve %s lost the project or host binding: %+v", project, admission)
 		}
 	}
 	admission, err := ResolveEngineAdmission(t.TempDir(), target)
 	if err != nil {
 		t.Fatalf("resolve first invocation: %v", err)
 	}
-	if admission.RecordID != global.ID {
+	if admission.RecordID != global.ID || admission.Provider != host.Claude {
 		t.Fatalf("first invocation selected sibling: %+v", admission)
 	}
 	byRecord, err := ResolveEngineAdmissionByRecord(siblingTwo.ID)
-	if err != nil || byRecord.RecordID != siblingTwo.ID {
+	if err != nil || byRecord.RecordID != siblingTwo.ID || byRecord.Provider != host.Claude {
 		t.Fatalf("record-specific resolution = %+v, err=%v", byRecord, err)
 	}
 	conflicting := siblingOne
@@ -80,6 +82,56 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	}
 	if _, err := ResolveEngineAdmission(projectOne, target); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
 		t.Fatalf("identity conflict was not rejected: %v", err)
+	}
+}
+
+func TestEngineAdmissionNormalizesRegisteredHostAliases(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	target, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := PackageReceipt(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := admissionRepairRecord(target, filepath.Join(home, "bin", "formal-gates"), home)
+	record.PackageDigest, record.InstalledDigest = "sha256:package", installed.Digest
+	path := filepath.Join(home, ".formal-gates", "registry.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, descriptor := range host.All() {
+		if !descriptor.Installable {
+			continue
+		}
+		for _, alias := range descriptor.Aliases {
+			t.Run(descriptor.ID+"/"+alias, func(t *testing.T) {
+				record.Host = " " + strings.ToUpper(alias) + " "
+				for filename, value := range map[string]any{
+					path:                     RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: []RegistryRecord{record}},
+					path + ".bootstrap.json": BootstrapReceipt{Accepted: true, PackageDigest: record.PackageDigest, Records: []RegistryRecord{record}},
+				} {
+					data, err := json.Marshal(value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filename, data, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				admission, err := ResolveEngineAdmission(t.TempDir(), target)
+				if err != nil || admission.Provider != descriptor.ID || admission.RecordID != record.ID {
+					t.Fatalf("host %q: admission=%+v err=%v", record.Host, admission, err)
+				}
+				byRecord, err := ResolveEngineAdmissionByRecord(record.ID)
+				if err != nil || byRecord != admission {
+					t.Fatalf("exact record changed admission: %+v != %+v, err=%v", byRecord, admission, err)
+				}
+			})
+		}
 	}
 }
 

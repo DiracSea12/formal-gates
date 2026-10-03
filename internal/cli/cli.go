@@ -433,7 +433,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
 	split := fs.String("split", "", "required split intent: yes or no; yes requires --retained-overall (保留总任务实例) or --master (切片实例); skipped for --route lightweight")
 	master := fs.String("master", "", "retained-overall master run id for a slice instance start (with --split yes)")
-	route := fs.String("route", "", "lightweight route declaration: --route lightweight creates the run but performs no verification (start → 需求登记 → Seal 三步直达, 只留记录); empty starts the regular intake")
+	route := fs.String("route", "", "--route lightweight performs no verification (start → 需求登记 → Seal 三步直达, 只留记录); candidate --intake-receipt also accepts regular with --base-snapshot and defaults to lightweight; empty starts the ordinary regular intake")
 	intakePath := fs.String("intake-receipt", "", "typed intakeConfirmationReceipt JSON path (candidate engine start)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
@@ -445,8 +445,9 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		if hasFlag(args, "split") || hasFlag(args, "master") || hasFlag(args, "retained-overall") {
 			return 1, fmt.Errorf("candidate engine start does not accept --split, --retained-overall, or --master")
 		}
-		if route := strings.ToLower(strings.TrimSpace(*route)); route != "" && route != "lightweight" {
-			return 1, fmt.Errorf("candidate engine start only supports --route lightweight")
+		candidateRoute := strings.ToLower(strings.TrimSpace(*route))
+		if candidateRoute != "" && candidateRoute != "lightweight" && candidateRoute != "regular" {
+			return 1, fmt.Errorf("candidate engine start only supports --route lightweight or regular")
 		}
 		receipt, err := readEngineIntakeReceipt(*intakePath)
 		if err != nil {
@@ -464,8 +465,12 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		candidateBase := ""
+		if candidateRoute == "regular" {
+			candidateBase = *base
+		}
 		_, run, err := facade.Start(facade.StartOptions{Root: *root, Request: facade.StartRequest{
-			RunID: runID, Route: "lightweight", Provider: "engine", DefinitionSource: facade.DefaultDefinitionSource,
+			RunID: runID, Route: candidateRoute, BaseSnapshot: candidateBase, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 		if err != nil {

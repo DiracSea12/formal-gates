@@ -186,7 +186,7 @@ func startAdmittedEngineRun(t *testing.T, root string) *facade.Facade {
 		t.Fatalf("resolve admission: %v", err)
 	}
 	f, _, err := facade.Start(facade.StartOptions{Root: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
-		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot,
+		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot, Provider: admission.Provider,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: facade.IntakeConfirmationReceipt{
 			Source:            facade.DefaultIntakeSource,

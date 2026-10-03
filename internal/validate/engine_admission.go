@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 // EngineAdmission is the immutable runtime identity selected by the stable
@@ -16,6 +18,7 @@ type EngineAdmission struct {
 	RegistryPath  string
 	RecordID      string
 	Target        string
+	Provider      string // Canonical host ID from the selected registry record.
 	PackageDigest string
 	Generation    uint64
 	Lease         string
@@ -160,7 +163,11 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (Engine
 	if err := verifyEngineBootstrapReceipt(registryPath, record, packageDigest); err != nil {
 		return EngineAdmission{}, err
 	}
-	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token}, nil
+	descriptor, err := host.Lookup(record.Host)
+	if err != nil {
+		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: registry host cannot be resolved: %w", err)
+	}
+	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token}, nil
 }
 
 // admissionRecordRootMatch reports whether a record can serve root.  Global
