@@ -178,3 +178,16 @@ root独立原生费用负控FAIL2.637s；实际SPAWNED+lifecycle+parser已知答
 主代理逐项核正确性/质量/当前需求完整性/最简简洁/耦合维护可读/优雅设计一致/无不当硬编码窄逻辑过拟合/无过度设计防御抽象/测试业务隔离，另核唯一事实/显式携带者/四计数/normal恢复同接纳/协议保真/诚实夹具/原始内容/替代删除/注释命名；每项当前源码与执行证据见完整表。state.json为批准§5.9例外，不宣称通用数据库条款实现；master当前无普通development plan，原Guard尚未开启，不冒称真实merge预算已验证。没有未解决范围内已证实问题，接纳当前收据块，继续后续工作。
 
 这不是阶段5退出或正式流程PASS：独立child工作区/Controller创建、组容量/依赖、native主线integration、mergeQA/gate/受影响补门、组级需求变化/abort/guarantee/cleanup、实际installed公共面及ZCode大量non-happy实跑仍未完成，阶段6–7随后推进。真实native模型调用0、本块live canary0。协作代理不当作实机ZCode或付费模型证据。
+
+
+## 公共启动与规范宿主身份（137b0ba）
+
+固定6ba24cf→137b0ba3a682cf1f9af1172ff4ebd3b708999e1e，5路径481+/10-，生产仅17+/5-；完整593行diff SHA256 3d9ce5dc2d04cbc30703f8b05531929370fc52344e43be8c3b809d2c95a95ccf。候选公共regular沿既有Start/native base；RegistryRecord.Host经现host.Lookup.ID由EngineAdmission.Provider携带至原request/State.RunProvider，所有重开复用现opener，无新状态/driver/重复宿主检测。lightweight和default/full/custom原产品裁定保留。
+
+主代理先核真实安装负控FAIL：同包lightweight成功、regular被拒；原样oracle修后actual installed PASS real6.28s/pkg5.649s/test3.39s，package ddcda1653f8110ca2e8f517473262d1662dbc6cce442501c622035191c4d80b4；再独立3个安装边界PASS real17.80s/pkg17.061s。核完整request/state/Envelope/receipt/bootstrap/base/provider、拒绝无写/readonly/重复/同ID并发/request-only恢复，未用存在性替代内容。完整原始失败、错误期望纠正及日志存 installed-start-gates.md。
+
+开发七包整组原退出1/real453.64s，6包PASS而lifecycle受继承CODEX_CLI_PATH环境失败；root固定原6ba归档同环境FAIL、只清测试进程两个Codex信号后原基线与当前lifecycle PASS，相关源码无改动。此失败入账，不写全量绿、不扩展修无关fixture。开发相关race/build通过。
+
+手动两门均新fork_turns:none：复杂度PASS无阻塞或P3；质量五维PASS无阻塞或P3。各自固定137b隔离source，实际installed/host别名/CLI writer/相关facade及独立18、37命令实际公共安装探针；最初missing bin与探针不受原spec支持的预期原失败如实保留。首次质量派发因thread limit未执行，名额释放后另派新的零上下文代理，非复用。主代理全文报告+source/diff+原执行复核、逐项工程要求当前代码证据完整见上文；没有未解决范围内已证实问题，接纳本块。
+
+state.json仍按已批准§5.9例外；实际模型调用0/费用0，skip-hooks、人工typed intake/spawn和collector观察不冒充真宿主。未push，未启动正式流程。阶段五仍待Controller/工作区/依赖/容量/集成/mergeQA及门/受影响补门/组级生命周期/actual installed bridge和ZCode大量正常与非正常实跑，阶段六七尚未完成。root实际安装发现两条helper资产缺失，作为下一必要安装交付继续，不能据本块PASS宣称整个阶段通过。
