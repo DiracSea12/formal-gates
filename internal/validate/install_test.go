@@ -1,11 +1,76 @@
 package validate
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// Native script bytes participate in the same copy, switch, and rollback
+// transaction as every installed runtime file. The package fixture uses a
+// smoke stub; the public binary and real script execution are tested by harness.
+func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.T) {
+	for _, fault := range []string{
+		"copy-component:runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+		"copy-component:runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
+		"switched",
+		"verify-stage:installed-target",
+	} {
+		t.Run(fault, func(t *testing.T) {
+			source := copyPackageFixture(t)
+			options := InstallOptions{
+				Source: source, Host: "dsh", Scope: "project", Project: t.TempDir(),
+				RegistryPath: filepath.Join(t.TempDir(), "registry.json"),
+				BinaryTarget: filepath.Join(t.TempDir(), "bin", nativeBinaryName()),
+				Force:        true, SkipHooks: true,
+			}
+			installed, err := Install(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := installed.Targets[0].TargetPath
+			before, err := PackageReceipt(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+				path := filepath.Join(source, "runtime", "langgraph", "formal_gates_harness", name)
+				if err := os.WriteFile(path, []byte("candidate script "+name+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("FORMAL_GATES_INSTALL_FAULT", fault)
+			if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "deterministic install fault") {
+				t.Fatalf("replacement was not interrupted at %s: %v", fault, err)
+			}
+			after, err := PackageReceipt(target)
+			if err != nil || after.Digest != before.Digest {
+				t.Fatalf("interrupted replacement changed installed bytes: before=%s after=%s err=%v", before.Digest, after.Digest, err)
+			}
+			registry, err := LoadRegistry(options.RegistryPath)
+			if err != nil || len(registry.Records) != 1 || registry.Records[0].InstalledDigest != before.Digest {
+				t.Fatalf("rollback changed registered installed identity: %+v err=%v", registry, err)
+			}
+			t.Setenv("FORMAL_GATES_INSTALL_FAULT", "")
+			if _, err := Install(options); err != nil {
+				t.Fatalf("replacement after rollback failed: %v", err)
+			}
+			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+				rel := filepath.Join("runtime", "langgraph", "formal_gates_harness", name)
+				want, err := os.ReadFile(filepath.Join(source, rel))
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := os.ReadFile(filepath.Join(target, rel))
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("replacement did not install source script %s: %v", rel, err)
+				}
+			}
+		})
+	}
+}
 
 func TestInstallAllowsActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
 	source := copyPackageFixture(t)

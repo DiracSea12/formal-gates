@@ -116,6 +116,9 @@ func faultInstallSource(t *testing.T) string {
 	for _, relative := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		faultWriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), []byte(relative+"\n"), 0o600)
 	}
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+		copyValidateTestFile(t, repoRootValidateTest(t), root, "runtime/langgraph/formal_gates_harness/"+name)
+	}
 	return root
 }
 

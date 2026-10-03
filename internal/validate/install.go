@@ -130,6 +130,8 @@ var installRuntimeEntries = []string{
 	"gates",
 	"references",
 	"definitions",
+	"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+	"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
 }
 
 // Complete packages keep the source files required by the installed-binary

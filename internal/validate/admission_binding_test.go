@@ -100,6 +100,9 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "gates", "admission-gate.md"), "# sample gate\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "agents", "agent.md"), "agent\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "references", "reference.md"), "reference\n", 0o600)
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+		copyValidateTestFile(t, repoRootValidateTest(t), root, "runtime/langgraph/formal_gates_harness/"+name)
+	}
 	return root
 }
 

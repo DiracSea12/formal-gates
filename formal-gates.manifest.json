@@ -105,7 +105,9 @@
     "agents/",
     "prompts/",
     "gates/",
-    "definitions/"
+    "definitions/",
+    "runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+    "runtime/langgraph/formal_gates_harness/zcode_credential.mjs"
   ],
   "install_commands": [
     "./install.command --host claude --scope global --force",

@@ -37,6 +37,8 @@ var requiredFiles = []string{
 	"references/install-and-hooks.md",
 	"references/local-validation.md",
 	"references/vcs-snapshots.md",
+	"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+	"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
 }
 
 var requiredDirs = []string{
@@ -72,6 +74,8 @@ var knownManifestParts = []string{
 	"prompts/",
 	"gates/",
 	"definitions/",
+	"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+	"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
 }
 
 type manifest struct {

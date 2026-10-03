@@ -35,6 +35,40 @@ func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 	}
 }
 
+func TestPackageRequiresNativeHostScripts(t *testing.T) {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+		t.Run(name, func(t *testing.T) {
+			root := copyPackageFixture(t)
+			if result := Package(root); !result.OK() {
+				t.Fatalf("complete package is invalid: %+v", result.Failures)
+			}
+			rel := "runtime/langgraph/formal_gates_harness/" + name
+			if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+			result := Package(root)
+			if result.OK() || !resultHasPath(result, rel) {
+				t.Fatalf("package accepted a missing native host script %s: %+v", rel, result.Failures)
+			}
+		})
+	}
+}
+
+func TestPackageManifestRequiresNativeHostScripts(t *testing.T) {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+		t.Run(name, func(t *testing.T) {
+			root := copyPackageFixture(t)
+			rel := "runtime/langgraph/formal_gates_harness/" + name
+			// Remove only the package_parts member, keeping the actual script.
+			mutateFile(t, root, "formal-gates.manifest.json", ",\n    \""+rel+"\"", "")
+			result := Package(root)
+			if result.OK() || !resultHasPath(result, "formal-gates.manifest.json") {
+				t.Fatalf("manifest accepted an omitted native host script %s: %+v", rel, result.Failures)
+			}
+		})
+	}
+}
+
 func TestInstallableMetadataNoAutoIntake(t *testing.T) {
 	root := copyPackageFixture(t)
 	data, err := os.ReadFile(filepath.Join(root, "agents", "openai.yaml"))
