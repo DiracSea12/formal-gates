@@ -77,7 +77,7 @@ func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 			t.Fatalf("installed package entry %q was not copied: %v", installedPackageEntry, err)
 		}
 	}
-	assertNoScriptRuntimeFiles(t, target)
+	assertInstalledScriptInventory(t, source, target)
 }
 
 func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
@@ -106,6 +106,7 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 			assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
 			assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
 			assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
+			assertInstalledScriptInventory(t, source, target)
 		})
 	}
 }
@@ -952,6 +953,15 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "prompts", "reviewer-base.md"), "reviewer base\n")
 	mustWriteCLI(t, filepath.Join(source, "prompts", "actions", "sample-action.md"), "sample action\n")
 	mustWriteCLI(t, filepath.Join(source, "gates", "sample-gate.md"), "sample gate\n")
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate CLI test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+		rel := filepath.Join("runtime", "langgraph", "formal_gates_harness", name)
+		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))
+	}
 	return source
 }
 
@@ -1131,9 +1141,19 @@ func assertFileContains(t *testing.T, path, expected string) {
 	}
 }
 
-func assertNoScriptRuntimeFiles(t *testing.T, root string) {
+func assertInstalledScriptInventory(t *testing.T, source, root string) {
 	t.Helper()
-	var found []string
+	// Only these host assets are installed scripts, with the admitted source bytes.
+	nativeScripts := map[string]bool{
+		filepath.FromSlash("runtime/langgraph/formal_gates_harness/native_dsh.mjs"):       true,
+		filepath.FromSlash("runtime/langgraph/formal_gates_harness/zcode_credential.mjs"): true,
+	}
+	for rel := range nativeScripts {
+		if readFile(t, filepath.Join(root, rel)) != readFile(t, filepath.Join(source, rel)) {
+			t.Fatalf("installed native script differs from source: %s", rel)
+		}
+	}
+	var unexpected []string
 	scriptExts := map[string]bool{
 		".ps1": true,
 		".py":  true,
@@ -1152,14 +1172,20 @@ func assertNoScriptRuntimeFiles(t *testing.T, root string) {
 			return nil
 		}
 		if scriptExts[strings.ToLower(filepath.Ext(entry.Name()))] {
-			found = append(found, path)
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			if !nativeScripts[rel] {
+				unexpected = append(unexpected, path)
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(found) > 0 {
-		t.Fatalf("native install copied script runtime files: %v", found)
+	if len(unexpected) > 0 {
+		t.Fatalf("native install copied undeclared script files: %v", unexpected)
 	}
 }
