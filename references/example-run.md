@@ -61,14 +61,14 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 4. 预检通过后，展示绑定文件全文与精确 revision，单独请求并等待明确确认。修订时更新
    同一文件、重新预检并呈现；提出方案或推荐不等于确认。
 5. 用户确认同一 revision 后继续该 run，不另建第二个 run；按 Step 2 记录澄清 PASS 并
-   执行 requirement --confirmed。路线 full/custom 在拆分决定之后确认。
+   执行 requirement --confirmed。路线 default/full/custom 在拆分决定之后确认。
 
 ## 3. 进入正式流程
 
 1. 正式需求落盘、run 绑定和预检在最终确认之前完成；以下启动步骤是上述受理阶段所用
    操作的展开，不是在确认之后重复启动。
 2. 用户确认后若尚未明确模式，再选择 `lightweight` 或 `regular`；轻量路线不经拆分决定
-   与 full/custom 路线选择。普通请求不进入本示例的正式流程分支，按默认提醒后的常规方式处理。
+   与 default/full/custom 路线选择。普通请求不进入本示例的正式流程分支，按默认提醒后的常规方式处理。
 
 ## 4. 正式流程启动（Step 1）
 
@@ -148,10 +148,13 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 ## 9. 路线确认（Step 3 后半）
 
 1. 拆分决定之后确认路线，时序见 `SKILL.md` 正式流程开头。运行
-   `workflow route-candidates` 查看可选：full = 黑盒 QA + 白盒 QA + 全部已发现门；
-   custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项。
-2. 主代理给出统一默认推荐，用户拍板：`workflow route --mode full`。
-3. 开发开始之后不能再加入 QA；custom 未选中的部分获得路线跳过授权，Seal 时不会补做。
+   `workflow route-candidates` 查看可选：默认（default，推荐）选全部普通门、不选 QA；
+   full（QA 阶段较重，适合大型任务）选普通非分片 run 的双 QA 与全部门；custom 自选
+   候选项，至少一项，可选子集或全集。
+2. 主代理推荐默认（default），仍由用户确认；本示例需要展示 QA，用户选择
+   `workflow route --mode full`。选择默认的对应命令是 `workflow route --mode default`。
+3. 开发开始之后不能再加入 QA；default 未选中的 QA 与 custom 未选中的部分获得路线
+   跳过授权，Seal 时不会补做。
 
 ## 10. 开发（Step 5）
 

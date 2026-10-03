@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ type StartOptions struct {
 	// Route 是 workflow start 的轻量路线声明：Route == "lightweight" 时本 run 从 start
 	// 即走轻量路线——不拆分、不选 QA/门路线、不快照、不做任何验证，只留记录，三步直达
 	// （start → 需求登记 → Seal）。轻量 start 免去强制 --split 声明（不接受 --split yes /
-	// --retained-overall / --master）。留空走常规受理，full/custom 路线在拆分决定之后确认。
+	// --retained-overall / --master）。留空走常规受理，default/full/custom 路线在拆分决定之后确认。
 	Route string
 }
 
@@ -105,7 +106,7 @@ const (
 // routeModes 是 workflow route 与 start --route 可接受的路线模式集合。lightweight
 // 是正式流程内的轻量路线（创建 run 但跳过全部验证、只留记录，三步直达 Seal），在 start
 // 时显式声明，route 时经 SetRoute 也可选中零门。
-var routeModes = map[string]bool{"lightweight": true, "full": true, "custom": true}
+var routeModes = map[string]bool{"lightweight": true, "default": true, "full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
 	if strings.TrimSpace(options.FromSealedRun) != "" {
@@ -1245,10 +1246,15 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 		}
 		mode = strings.ToLower(strings.TrimSpace(mode))
 		if !routeModes[mode] {
-			return fmt.Errorf("route mode must be lightweight, full, or custom")
+			return fmt.Errorf("route mode must be lightweight, default, full, or custom")
 		}
 		candidates := catalog.RouteCandidates()
-		if mode == "full" {
+		if mode == "default" {
+			if len(selected) != 0 {
+				return fmt.Errorf("default route selects every ordinary gate without --gate")
+			}
+			selected = slices.DeleteFunc(slices.Clone(candidates), func(id string) bool { return id == blackboxQAID || id == whiteboxQAID })
+		} else if mode == "full" {
 			if len(selected) != 0 {
 				return fmt.Errorf("full route selects the complete discovered list without --gate")
 			}

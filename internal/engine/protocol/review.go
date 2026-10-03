@@ -22,8 +22,9 @@ const (
 	topologySplit   = "split"
 	topologyNoSplit = "no-split"
 
-	routeModeFull   = "full"
-	routeModeCustom = "custom"
+	routeModeDefault = "default"
+	routeModeFull    = "full"
+	routeModeCustom  = "custom"
 
 	grantOption   = "grant"
 	declineOption = "decline"
@@ -175,13 +176,16 @@ func sameGateSet(a, b []string) bool {
 }
 
 // validateRouteDecision 校验路线决定的形状：候选列表不得含合并验证（合并
-// 验证只在拆分运行中自动附加）；full 携带显式完整门全集且 Selected 为空；
-// custom 携带非空、无重复、逐项属于候选列表的选择，可选全集
-// （sliced-runs-confirmation-and-qa-refactor 需求9：至少选一项，可省略任
-// 一）。full 对内建 QA 模式的要求与 child 候选不含 QA 的约束依赖 run 形
+// 验证只在拆分运行中自动附加）；default/full 携带显式完整候选全集且
+// Selected 为空；custom 携带非空、无重复、逐项属于候选列表的选择，可选全集。
+// full 对内建 QA 模式的要求与 child 候选不含 QA 的约束依赖 run 形
 // 态，在 SELECT_ROUTE 接纳层判定（admitReviewDecision）。
 func validateRouteDecision(route *RouteDecision) error {
 	switch route.Mode {
+	case routeModeDefault:
+		if len(route.Selected) != 0 {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "default route selects every ordinary gate without a subset"}
+		}
 	case routeModeFull:
 		if len(route.Selected) != 0 {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route selects the complete gate list without a subset"}
@@ -203,7 +207,7 @@ func validateRouteDecision(route *RouteDecision) error {
 			}
 		}
 	default:
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route mode %q invalid for SELECT_ROUTE (closed set: full, custom)", route.Mode)}
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route mode %q invalid for SELECT_ROUTE (closed set: default, full, custom)", route.Mode)}
 	}
 	// 计划确认的两种形态不得混携：内联片内提案（child，摘要＝提案内容摘
 	// 要、结构复用 validateGranularity）与 readiness 引用（普通 run）。
@@ -543,12 +547,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if branch != "route" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "SELECT_ROUTE takes the route branch"}
 		}
-		// 选项锚定：choice id 恰为 full/custom 且与路线决定一致（同
+		// 选项锚定：choice id 恰为 default/full/custom 且与路线决定一致（同
 		// CONFIRM_TOPOLOGY 的锚定理由）。
-		if choice := string(decide.Choice); (choice != routeModeFull && choice != routeModeCustom) || choice != payload.Route.Mode {
+		if choice := string(decide.Choice); (choice != routeModeDefault && choice != routeModeFull && choice != routeModeCustom) || choice != payload.Route.Mode {
 			return &RejectedError{
 				Code:   CodeEventSchemaInvalid,
-				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: full, custom)", payload.Route.Mode, decide.Choice),
+				Detail: fmt.Sprintf("route payload mode %q does not match the chosen option %q (closed set: default, full, custom)", payload.Route.Mode, decide.Choice),
 			}
 		}
 		// §6.3.1：开发前可重选或追加，开发后只可追加普通门（不能新增 QA、
@@ -593,7 +597,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 			return err
 		}
 		selected := slices.Clone(route.Gates)
-		if route.Mode == routeModeCustom {
+		if route.Mode == routeModeDefault {
+			selected = slices.DeleteFunc(selected, func(gate string) bool { return gate == "blackbox" || gate == "whitebox" })
+		} else if route.Mode == routeModeCustom {
 			selected = nil
 			for _, gate := range route.Gates {
 				if slices.Contains(route.Selected, gate) {

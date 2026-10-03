@@ -259,8 +259,9 @@ type ACOwner struct {
 }
 
 // RouteDecision 是 SELECT_ROUTE 的显式门列表决定：候选列表不得含合并验证
-// （合并验证只在拆分运行中自动附加）；full 携带完整候选全集（Selected 必
-// 须为空），custom 携带非空、逐项属于候选列表的选择（可选全集）。门目录
+// （合并验证只在拆分运行中自动附加）；default/full 携带完整候选全集
+// （Selected 必须为空），default 选全部普通门，full 全选；custom 携带非空、
+// 逐项属于候选列表的选择（可选全集）。门目录
 // 发现不在协议层——全集与选择都由 payload 显式给出，引擎只做集合约束校
 // 验；full 必含双内建 QA（普通 run）与 child 候选不含 QA 依赖 run 形态，
 // 在接纳层判定。

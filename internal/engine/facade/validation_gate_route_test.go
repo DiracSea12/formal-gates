@@ -1,66 +1,109 @@
 package facade
 
 import (
-	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/engine/review"
+	"slices"
+	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/protocol"
 )
 
-// A custom route executes exactly its selected ordinary gates without QA obligations.
-func TestCustomGateRouteCompletesWithoutQA(t *testing.T) {
-	d := startValidationDriver(t, nil)
-	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		var id string
-		for key, p := range d.run.PendingActions {
-			if p.ReviewSeries == action {
-				id = key
+// Gate-only routes keep their confirmed identity and execute exactly their ordinary gates.
+func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
+	for _, mode := range []string{"default", "custom"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
+			passPreDevelopmentReviews(t, d, commandPlan())
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
+			route := protocol.RouteDecision{Mode: mode, Gates: []string{"blackbox", "quality", "whitebox", "security"}}
+			selected := []string{"quality", "security"}
+			if mode == "custom" {
+				route.Selected = []string{"quality"}
+				selected = route.Selected
 			}
-		}
-		d.receipt(id)
-		var plan *protocol.GranularityReview
-		if action == review.StartReadiness {
-			plan = commandPlan()
-		}
-		event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Checked exact current requirement and all acceptance conditions"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.submit(event)
+			d.confirmRoute(route)
+			d.reopen()
+			if d.run.Review.RouteMode != mode || !slices.Equal(d.run.Review.SelectedGates, selected) {
+				t.Fatalf("confirmed route = %s %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+			}
+			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+			d.drive()
+			id, in := d.action("engine.development.batch")
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement command", Build: []string{"go build passed"}, Tests: []string{"input validation tests passed"}}})
+			snapshotCommitOne(t, root, "implement public command")
+			d.materialize()
+			d.materialize()
+			d.reopen()
+			d.drive()
+			if len(d.run.Validation.Sets) != 0 {
+				t.Fatal("gate-only route created QA sets")
+			}
+			wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if len(wave.Targets) != len(selected) {
+				t.Fatalf("validation targets = %+v", wave.Targets)
+			}
+			for _, target := range wave.Targets {
+				if target.Kind != "GATE" || !slices.Contains(selected, target.Gate) {
+					t.Fatalf("unconfirmed validation target: %+v", target)
+				}
+			}
+			for _, gate := range selected {
+				id, in = d.gateAction(gate)
+				if in.Gate == nil || in.Gate.Gate != gate {
+					t.Fatalf("dispatch for %s has another gate identity: %+v", gate, in)
+				}
+				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
+				d.reopen()
+			}
+			d.drive()
+			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
+				t.Fatal("selected gates did not complete")
+			}
+			if _, err := d.f.PrepareCandidate("verified ordinary gate candidate"); err != nil {
+				t.Fatal(err)
+			}
+			d.drive()
+			d.reopen()
+			if d.run.Status != "COMPLETE" {
+				t.Fatalf("gate-only run status = %s", d.run.Status)
+			}
+			state := driverState(t, d)
+			if state.RouteMode != mode || !slices.Equal(state.SelectedGates, selected) {
+				t.Fatalf("persisted completed route = %s %v", state.RouteMode, state.SelectedGates)
+			}
+			for id, entry := range state.Cost.Dispatches {
+				if strings.Contains(entry.Target, "qa.") {
+					t.Fatalf("unselected QA cost entry %s: %+v", id, entry)
+				}
+			}
+			for id, binding := range state.DispatchBindings {
+				if strings.Contains(string(binding.Task.Step), "qa.") {
+					t.Fatalf("unselected QA dispatch %s: %+v", id, binding)
+				}
+			}
+			before := d.run.Revision
+			d.drive()
+			d.reopen()
+			if d.run.Revision != before || len(d.run.ValidationInputs) != 0 || len(d.run.AdapterIntents) != 0 {
+				t.Fatal("completed route generated more work")
+			}
+		})
 	}
+}
+
+func TestDefaultRouteRequiresConfirmedDevelopmentPlan(t *testing.T) {
+	d := startValidationDriver(t, nil)
+	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
-	d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "quality"}, Selected: []string{"quality"}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
-	d.drive()
-	id, in := d.action("engine.development.batch")
-	t.Logf("accepted route=%s selected=%v development=%s", d.run.Review.RouteMode, d.run.Review.SelectedGates, id)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement command", Build: []string{"go build passed"}, Tests: []string{"input validation tests passed"}}})
-	d.materialize()
-	d.materialize()
+	route := protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}}
+	if err := controlError(t, d, protocol.ControlSelectRoute, "default", protocol.ReviewDecisionPayload{Route: &route}); err == nil || !strings.Contains(err.Error(), "plan") {
+		t.Fatalf("unconfirmed default development plan = %v", err)
+	}
 	d.reopen()
-	d.drive()
-	if len(d.run.Validation.Sets) != 0 {
-		t.Fatal("gate-only route created QA sets")
-	}
-	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	if len(wave.Targets) != 1 {
-		t.Fatalf("unexpected validation targets: %+v", wave.Targets)
-	}
-	for _, target := range wave.Targets {
-		if target.Kind != "GATE" || target.Gate != "quality" {
-			t.Fatal("unconfirmed QA obligation")
-		}
-	}
-	id, in = d.gateAction("quality")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
-	d.reopen()
-	d.drive()
-	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-		t.Fatal("selected gate did not complete")
-	}
-	before := d.run.Revision
-	d.drive()
-	d.reopen()
-	if d.run.Revision != before || len(d.run.ValidationInputs) != 0 || len(d.run.AdapterIntents) != 0 {
-		t.Fatal("completed route generated more work")
+	state := driverState(t, d)
+	if state.RouteMode != "" || len(state.SelectedGates) != 0 {
+		t.Fatalf("unconfirmed plan bound default route: %s %v", state.RouteMode, state.SelectedGates)
 	}
 }

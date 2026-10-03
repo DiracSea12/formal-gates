@@ -17,7 +17,7 @@ package validate
 //     --retained-overall, --master) and never records a split declaration;
 //   - SetRoute restores lightweight into the route-mode set and selects zero
 //     gates (rejecting any --gate selection);
-//   - the invalid-mode error message enumerates lightweight/full/custom;
+//   - the invalid-mode error message enumerates lightweight/default/full/custom;
 //   - the seal transition is waived for lightweight runs while the identical
 //     missing state on a regular run is rejected;
 //   - the seal summary annotates lightweight runs with 「本 run 未经任何验证」
@@ -156,16 +156,15 @@ func TestSetRouteLightweightSelectsZeroGates(t *testing.T) {
 	}
 }
 
-// Case: the route-mode set is restored to {lightweight, full, custom}, and the
-// invalid-mode error message enumerates all three legal modes.
-func TestRouteModesRestoreAndInvalidModeMessage(t *testing.T) {
-	for _, mode := range []string{"lightweight", "full", "custom"} {
+// The route-mode set and invalid-mode error enumerate every accepted mode.
+func TestRouteModesAndInvalidModeMessage(t *testing.T) {
+	for _, mode := range []string{"lightweight", "default", "full", "custom"} {
 		if !routeModes[mode] {
 			t.Fatalf("routeModes must accept %q", mode)
 		}
 	}
-	if len(routeModes) != 3 {
-		t.Fatalf("routeModes must contain exactly lightweight/full/custom, got %v", routeModes)
+	if len(routeModes) != 4 {
+		t.Fatalf("routeModes must contain exactly lightweight/default/full/custom, got %v", routeModes)
 	}
 	root, pkg := startFixture(t)
 	state := mustStart(t, root, pkg, "route-mode-invalid")
@@ -173,7 +172,7 @@ func TestRouteModesRestoreAndInvalidModeMessage(t *testing.T) {
 	state = recordProductReview(t, root, pkg, state)
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	if _, err := SetRoute(root, pkg, state.RunID, "bogus", nil); err == nil || !strings.Contains(err.Error(), "route mode must be lightweight, full, or custom") {
+	if _, err := SetRoute(root, pkg, state.RunID, "bogus", nil); err == nil || !strings.Contains(err.Error(), "route mode must be lightweight, default, full, or custom") {
 		t.Fatalf("invalid route mode accepted: %v", err)
 	}
 }

@@ -474,6 +474,19 @@ func TestActiveGuaranteeRepairUsesAffectedThenFinalFull(t *testing.T) {
 }
 
 func TestRequirementGuaranteeRouteArtifactAndRevisionBehavior(t *testing.T) {
+	t.Run("default without QA keeps the actual selection as the guarantee owner", func(t *testing.T) {
+		root, pkg, state := readyGuaranteeRoute(t, "default-no-qa", false)
+		state = recordSlicing(t, root, pkg, state, "no-split")
+		state = setRoute(t, root, pkg, state, "default", nil)
+		state, err := LoadRunState(root, state.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.RequirementGuarantee.Activation != guaranteeNotGuaranteed || state.RequirementGuarantee.Reason != "the confirmed route selected no QA mode" || isSelectedQA(state) {
+			t.Fatalf("default no-QA guarantee = %+v", state.RequirementGuarantee)
+		}
+		assertItemizedGuaranteeReport(t, state.RequirementGuarantee.Report, guaranteeNotGuaranteed, "INCOMPLETE")
+	})
 	t.Run("custom without QA is explicit not guaranteed and full is active", func(t *testing.T) {
 		root, pkg, state := readyGuaranteeRoute(t, "custom-no-qa", false)
 		state = recordSlicing(t, root, pkg, state, "no-split")

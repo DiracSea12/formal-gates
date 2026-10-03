@@ -460,6 +460,7 @@ func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 // 落账并进入新门的验证。
 func TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges(t *testing.T) {
 	nonAdditive := []protocol.RouteDecision{
+		{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}},
 		{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality"}},
 		{Mode: "custom", Gates: []string{"blackbox", "whitebox", "security"}, Selected: []string{"blackbox", "security"}},
 		{Mode: "custom", Gates: []string{"blackbox", "quality"}, Selected: []string{"blackbox"}},
@@ -499,6 +500,42 @@ func TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges(t *testing.T) {
 	}
 	d.drive()
 	d.gateAction("security")
+}
+
+func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing.T) {
+	d := startValidationDriver(t, nil)
+	passPreDevelopmentReviews(t, d, commandPlan())
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
+	route := protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}}
+	d.confirmRoute(route)
+	d.confirmRoute(route)
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+	d.drive()
+	id, in := d.action("engine.development.batch")
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
+	d.materialize()
+	d.materialize()
+	d.drive()
+	d.confirmRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "quality", "whitebox", "security"}})
+	d.reopen()
+	if d.run.Review.RouteMode != "default" || !slices.Equal(d.run.Review.SelectedGates, []string{"quality", "security"}) {
+		t.Fatalf("developed default addition = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	}
+	d.drive()
+	d.gateAction("security")
+	full := protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality", "security"}}
+	preview, err := d.f.DevelopmentPlan(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full.DevelopmentPlan = &preview.Confirmation
+	if err := controlError(t, d, protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &full}); err == nil || !strings.Contains(err.Error(), "development has started") {
+		t.Fatalf("default acquired QA after development: %v", err)
+	}
+	d.reopen()
+	if d.run.Review.RouteMode != "default" || !slices.Equal(d.run.Review.SelectedGates, []string{"quality", "security"}) {
+		t.Fatal("rejected QA addition changed default obligations")
+	}
 }
 
 func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {

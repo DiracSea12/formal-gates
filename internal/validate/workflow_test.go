@@ -2266,6 +2266,50 @@ func TestCustomRouteAcceptsWholeCandidateList(t *testing.T) {
 	}
 }
 
+func TestDefaultRouteSelectsEveryDiscoveredOrdinaryGate(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	writeTestFile(t, filepath.Join(pkg, "gates", "delivery.md"), "delivery checks\n")
+	ready := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "route-default"))
+	ready = recordProductReview(t, root, pkg, ready)
+	ready = recordReadiness(t, root, pkg, ready)
+	ready = recordSlicing(t, root, pkg, ready, "no-split")
+	for _, selected := range [][]string{{"quality"}, {blackboxQAID, whiteboxQAID, "architecture", "delivery", "quality"}} {
+		if _, err := SetRoute(root, pkg, ready.RunID, "default", selected); err == nil || !strings.Contains(err.Error(), "without --gate") {
+			t.Fatalf("default accepted manual selection %v: %v", selected, err)
+		}
+		persisted, err := LoadRunState(root, ready.RunID)
+		if err != nil || persisted.RouteMode != "" || len(persisted.SelectedGates) != 0 {
+			t.Fatalf("rejected manual selection changed route: %+v, %v", persisted, err)
+		}
+	}
+	state, err := SetRoute(root, pkg, ready.RunID, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = LoadRunState(root, state.RunID)
+	want := []string{"architecture", "delivery", "quality"}
+	if err != nil || state.RouteMode != "default" || !reflect.DeepEqual(state.SelectedGates, want) {
+		t.Fatalf("persisted default route = %q %v, %v", state.RouteMode, state.SelectedGates, err)
+	}
+	for _, id := range []string{blackboxQAID, whiteboxQAID} {
+		auth := state.SkipAuthorizations[id]
+		if auth.Origin != "ROUTE" || auth.Status != "UNSELECTED" {
+			t.Fatalf("unselected default QA %s = %+v", id, auth)
+		}
+	}
+	for _, id := range want {
+		if _, skipped := state.SkipAuthorizations[id]; skipped {
+			t.Fatalf("selected ordinary gate %s was skipped", id)
+		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
+		t.Fatalf("default development requires unselected QA: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil {
+		t.Fatal("default route dispatched unselected QA")
+	}
+}
+
 // TestTwoSpeedSchedulingBothPathsReachDevelopment verifies both scheduling
 // paths: the fast path records a no-split decision and runs as a single run, and
 // the split path records a split decision then confirms the route per slice.

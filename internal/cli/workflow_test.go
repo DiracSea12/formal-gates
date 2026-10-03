@@ -230,6 +230,27 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	}
 }
 
+func TestCLIWorkflowDefaultRouteAndHelp(t *testing.T) {
+	help := runCLI(t, "workflow", "route", "--help")
+	for _, label := range []string{"default (all ordinary gates, no QA; recommended)", "full (QA 阶段较重，适合大型任务)", "custom (select at least one candidate)", "lightweight (record only)"} {
+		if !strings.Contains(help, label) {
+			t.Fatalf("route help missing %q: %s", label, help)
+		}
+	}
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-default")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
+	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "one cohesive command")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "default")
+	state, err := validate.LoadRunState(root, state.RunID)
+	if err != nil || state.RouteMode != "default" || !reflect.DeepEqual(state.SelectedGates, []string{"quality"}) {
+		t.Fatalf("CLI default route = %q %v, %v", state.RouteMode, state.SelectedGates, err)
+	}
+}
+
 // TestCLIQARerunScopeDecision verifies through the CLI: a QA execution
 // rerun is refused at prepare-action until a scope decision is recorded with
 // workflow qa-execution-scope, and invalid decisions are rejected.

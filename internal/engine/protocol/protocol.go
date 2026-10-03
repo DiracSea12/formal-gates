@@ -594,7 +594,7 @@ type State struct {
 	// §8.1.1 绑定点：确认后不得重切）。child run 落账的是从 master 继承的
 	// 拓扑副本（同样不可重切）。nil 表示尚未确认。
 	Topology *TopologyBinding `json:"topology,omitempty"`
-	// RouteMode/SelectedGates 是拓扑绑定后的验证路线（full/custom）。
+	// RouteMode/SelectedGates 是拓扑绑定后的验证路线（default/full/custom）。
 	// lightweight 是 run 级路线、start 时已定，不经这两个字段；split 绑定
 	// 同事务锁定 merge 路线（保留总任务实例不涉常规路线选择）。
 	RouteMode     string   `json:"routeMode,omitempty"`

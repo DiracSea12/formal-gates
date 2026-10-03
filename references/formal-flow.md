@@ -121,14 +121,16 @@ formal-gates workflow settle-findings --root <repo> --package-root <package> \
   --run-id <id> --action <product-review|start-readiness> \
   [--confirm '<settled-message>' ...] [--dismiss '<settled-message>' ...]
 
-# 路线在拆分决定之后确认；full = 黑盒 QA + 白盒 QA +
-# 全部已发现门；custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项；lightweight 选中
-# 零门（不选 QA、不选门，只留记录，通常由 start --route lightweight 声明）。合并门/合并
-# QA 不进正常选择列表。
+# 路线在拆分决定之后由用户确认；默认（default，推荐）= 全部已发现普通门，不选 QA；
+# full（QA 阶段较重，适合大型任务）= 普通非分片 run 的黑盒 QA + 白盒 QA + 全部门；
+# custom 自选候选项，至少一项，可选子集或全集。candidate engine 的切片 default/full
+# 均选全部普通门，普通 QA 不进候选、不选择、不执行；总任务强制 merge QA/merge gate。
+# lightweight 独立在 start 声明（不选 QA、不选门，只留记录），不属于 default。
+# 合并门/合并 QA 不进正常选择列表。
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <lightweight|full|custom> [--gate <gate-id> ...]
+  --run-id <id> --mode <default|full|custom|lightweight> [--gate <gate-id> ...]
 formal-gates workflow route-add --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
 ```
@@ -271,8 +273,8 @@ formal-gates workflow requirement --root "$repo" --package-root "$package" \
 impact。单纯阅读期间时间流逝不代表状态变化。
 
 拆分与路线细节（SKILL 第 3 步的执行机制）：
-- 路线跳过授权：custom 未选中的部分获得路线跳过授权（`ROUTE` 来源），Seal 期间不会
-  补做；custom 的省略不延伸到合并验证。
+- 路线跳过授权：default 未选中的 QA 与 custom 未选中的部分获得路线跳过授权
+  （`ROUTE` 来源），Seal 期间不会补做；custom 的省略不延伸到合并验证。
 - 后续新增需要用户明确指示；开发开始之后不能再加入 QA。
 - 分片 >= 2 时保留总任务实例自动附加合并门与合并 QA，不涉常规路线选择。
 

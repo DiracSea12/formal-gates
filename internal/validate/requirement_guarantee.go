@@ -292,7 +292,7 @@ func updateGuaranteeForRoute(state *RunState) {
 	}
 	if !isSelectedQA(*state) {
 		g.Activation = guaranteeNotGuaranteed
-		g.Reason = "the confirmed custom route selected no QA mode"
+		g.Reason = "the confirmed route selected no QA mode"
 		return
 	}
 	if len(state.RequirementArtifacts) != 1 {

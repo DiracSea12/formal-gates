@@ -5,6 +5,7 @@
 package protocol
 
 import (
+	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/decision"
@@ -94,20 +95,23 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	}
 }
 
-// TestSliceChildFullRouteBindsEveryDiscoveredGate：QA-free 候选的 full 路线
+// TestSliceChildCompleteOrdinaryRoutesBindEveryDiscoveredGate：QA-free 候选的 default/full 路线
 // 全选绑定（候选即全部已发现门，不含 QA）；账本 residue 使加载边界在
 // DEVELOPMENT_PARALLEL 上重算通过（隐含于 LoadMustSucceed）。
-func TestSliceChildFullRouteBindsEveryDiscoveredGate(t *testing.T) {
-	engine, _ := sliceChildEngine(t)
-	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-full", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"gate.quality", "gate.security"},
-	}})
-	snap := engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeFull || snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.security" {
-		t.Fatalf("child full route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
-	}
-	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
-		t.Fatalf("phase after child full route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+func TestSliceChildCompleteOrdinaryRoutesBindEveryDiscoveredGate(t *testing.T) {
+	for _, mode := range []string{"default", "full"} {
+		t.Run(mode, func(t *testing.T) {
+			engine, _ := sliceChildEngine(t)
+			gates := []string{"gate.quality", "gate.security", "gate.delivery"}
+			askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), AskOptionID(mode), &ReviewDecisionPayload{Route: &RouteDecision{Mode: mode, Gates: gates}})
+			snap := engine.LoadMustSucceed(t)
+			if snap.State.RouteMode != mode || !slices.Equal(snap.State.SelectedGates, gates) || !snap.State.routeHasNoQAModes() {
+				t.Fatalf("child %s route binding = %q %v", mode, snap.State.RouteMode, snap.State.SelectedGates)
+			}
+			if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+				t.Fatalf("phase after child %s route = %s, want DEVELOPMENT_PARALLEL", mode, snap.State.Phase)
+			}
+		})
 	}
 }
 

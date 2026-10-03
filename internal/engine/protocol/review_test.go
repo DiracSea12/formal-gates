@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	definition "formal-gates/internal/engine/testkit/workflow"
@@ -280,7 +282,127 @@ func topologyOptions() []AskOption {
 
 // routeOptions 是 SELECT_ROUTE 的标准选项集。
 func routeOptions() []AskOption {
-	return []AskOption{{ID: "full", Label: "全部门"}, {ID: "custom", Label: "自定义子集"}}
+	return []AskOption{{ID: "default", Label: "默认（推荐：全部普通门，不选 QA）"}, {ID: "full", Label: "full（QA 阶段较重，适合大型任务）"}, {ID: "custom", Label: "custom（自选至少一项，可选全集）"}}
+}
+
+func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *testing.T) {
+	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+	engine, dir := reviewEngine(t, cd, reg)
+	product := issueReady(t, engine)[0]
+	submitReviewResult(t, engine, "result-product", product, reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
+	readiness := pendingActionID(t, engine)
+	submitReviewResult(t, engine, "result-readiness", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
+	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one cohesive deliverable"}})
+	pinned := []string{"blackbox", "gate.quality", "whitebox", "gate.delivery", "gate.security"}
+	request, err := NewRouteRequestEvent("req-default", pinned, routeOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := fingerprintOf(t, engine)
+	if _, err := engine.Submit(request, fp); err != nil {
+		t.Fatal(err)
+	}
+	token, err := engine.Freshness("req-default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, route := range map[string]RouteDecision{
+		"hand-selected subset": {Mode: "default", Gates: pinned, Selected: []string{"gate.quality"}},
+		"hand-selected all":    {Mode: "default", Gates: pinned, Selected: pinned},
+	} {
+		if _, err := NewReviewDecideEvent(EventID(name), "req-default", token, "default", ReviewDecisionPayload{Route: &route}); err == nil {
+			t.Fatalf("default accepted %s", name)
+		}
+	}
+	for name, choice := range map[string]AskOptionID{"choice mismatch": "custom", "missing candidate": "default"} {
+		gates := pinned
+		if name == "missing candidate" {
+			gates = pinned[:len(pinned)-1]
+		}
+		event, err := NewReviewDecideEvent(EventID(name), "req-default", token, choice, ReviewDecisionPayload{Route: &RouteDecision{Mode: "default", Gates: gates}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(event, fp); err == nil {
+			t.Fatalf("default accepted %s", name)
+		}
+		if !bytes.Equal(before, stateBytesOf(t, dir)) {
+			t.Fatalf("%s changed persisted state", name)
+		}
+	}
+	event, err := NewReviewDecideEvent("evt-default", "req-default", token, "default", ReviewDecisionPayload{Route: &RouteDecision{Mode: "default", Gates: pinned}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Concurrent submissions share one business acceptance; a CAS conflict retries the exact event.
+	beforeConcurrent := engine.LoadMustSucceed(t)
+	var wg sync.WaitGroup
+	results := make(chan struct {
+		acceptance Acceptance
+		err        error
+	}, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			accepted, err := engine.Submit(event, fp)
+			results <- struct {
+				acceptance Acceptance
+				err        error
+			}{accepted, err}
+		}()
+	}
+	wg.Wait()
+	var first Acceptance
+	for i := 0; i < 2; i++ {
+		result := <-results
+		if result.err != nil {
+			var conflict *persistence.RevisionConflictError
+			if !errors.As(result.err, &conflict) {
+				t.Fatal(result.err)
+			}
+			continue
+		}
+		if first.EventID != "" && first.Revision != result.acceptance.Revision {
+			t.Fatalf("concurrent replay changed acceptance: %+v %+v", first, result.acceptance)
+		}
+		first = result.acceptance
+	}
+	afterConcurrent := engine.LoadMustSucceed(t)
+	if first.EventID != string(event.ID) || first.Revision != beforeConcurrent.Revision+1 || afterConcurrent.Revision != first.Revision || len(afterConcurrent.State.Events) != len(beforeConcurrent.State.Events)+1 {
+		t.Fatalf("concurrent decision wrote more than once: %+v revision=%d events=%d", first, afterConcurrent.Revision, len(afterConcurrent.State.Events))
+	}
+	beforeReplay := stateBytesOf(t, dir)
+	if replay, err := engine.Submit(event, fp); err != nil || replay.Revision != first.Revision || replay.EventID != first.EventID {
+		t.Fatalf("CAS replay = %+v, %v", replay, err)
+	}
+	if !bytes.Equal(beforeReplay, stateBytesOf(t, dir)) {
+		t.Fatal("CAS replay changed persisted state")
+	}
+	reopened, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := stateBytesOf(t, dir)
+	if replay, err := reopened.Submit(event, fp); err != nil || replay.Revision != first.Revision {
+		t.Fatalf("restart replay = %+v, %v", replay, err)
+	}
+	if !bytes.Equal(before, stateBytesOf(t, dir)) {
+		t.Fatal("restart replay changed persisted state")
+	}
+	state := reopened.LoadMustSucceed(t).State
+	want := []string{"gate.quality", "gate.delivery", "gate.security"}
+	if state.RouteMode != "default" || !slices.Equal(state.SelectedGates, want) || !state.routeHasNoQAModes() {
+		t.Fatalf("persisted default route = %q %v", state.RouteMode, state.SelectedGates)
+	}
+	decision := state.Decisions["req-default"]
+	if decision.Choice != "default" || decision.Review.Route.Mode != "default" || !slices.Equal(decision.Review.Route.Gates, pinned) {
+		t.Fatalf("persisted default decision = %+v", decision)
+	}
+	if len(state.Decisions) != 2 || !state.PendingAsks["req-default"].Resolved {
+		t.Fatalf("concurrent decision bookkeeping = %+v", state.Decisions)
+	}
 }
 
 func findingOption(t *testing.T, engine *Engine, action review.Action, index int, decision string) AskOption {
