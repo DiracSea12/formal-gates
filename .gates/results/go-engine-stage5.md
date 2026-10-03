@@ -161,3 +161,20 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
 | 命名/注释 | 新源码/测试按 slice checkpoint/request 行为命名，无阶段/修复/审查轮次标记；注释只说当前身份/约束。 |
 
 最终全新零上下文手动复杂度门与实现质量门均 PASS，未发现 P0/P1/P2。主代理读完整返回并核原始执行输出：复杂度门 protocol59.413s/facade511.806s/cost3.552s/vcs3.773s、race109.871s与构建/diff-check通过；质量门原整包 exit143 主动中止、未记全包通过，随后 facade47.316s/race17.784s通过，三包为 Go cache、非重跑，protocol83.616s来自被中止组合。所有原始输入/返回/输出副本在 slice-checkpoint-gates.md。复杂度门排序 helper 复用建议经主代理源值核对是 P3 等价表达（没有行为后果），只记录，不能据此写“完全最简”或不存在一切建议。本块已核的范围内功能和工程条件闭合，可以推进 master 接纳；这不是整个收据合同完成、正式流程 PASS 或阶段5退出。没有收费 native 模型/安装副本/ZCode canary。费用：本块实施一次、返修一次，另有四个零上下文门派发；本记录不把协作代理当实际 ZCode 调用证据。
+
+
+## 主运行冻结收据接纳（d2bd49a）
+
+授权：已批准完整收据合同与全部剩余阶段 goal；本次不走正式流程、每块二门每次零上下文。实施代码由开发子代理完成，使用完整 development-worker 提示词与全部硬标准；主代理亲读完整原生diff/测试、独立原生负控与修后核验，再手动新二门及逐项验收。没有push或真实收费ZCode调用。
+
+原生冻结 f546a8cb8bdb900a14e7a99cdc9b5a3b8b50861e → d2bd49aa0d5a4a333de5c9505d36495e533beaf1，9文件734+/10-；diff SHA-256 2cd42a1c9dee02140e0a65a370a68240f5cd3274f82b428266b60cc222cc0ad7。完整事实/两门原返回/原日志/独立输入证据文本与主代理逐项表在 master-receipt-gates.md。新增State.SliceReceipts为完整值接纳与幂等唯一事实，cases在原载荷；原cost.Merge namespaced dispatch与最小AddChildOwner同commit，不覆盖masterOwner、原spawn/attempt、不重估child guard。child锁释放后handoff，master只沿exact claims discovery；两入口共用原Recover+AcceptSliceReceipt，历史自完整性与当前资格分开，全部齐仍等待integration。
+
+开发原生正常公开链负控FAIL2.759s；一次测试draft编译失败、两多提交Gitfixture漏squashmessageFAIL19.657s如实保留；随后behavior21.384s、扩展22.559s、最终22.815s、原protocol44.729s/cost1.638s、相关facade45.962s、race50.306s/最终并发8.642s及构建/diff-check均退出0。没有调低原断言或生产测试分支。
+
+root独立原生费用负控FAIL2.637s；实际SPAWNED+lifecycle+parser已知答案负控FAIL2.979s，先核child真实输入与Owner再见master未导入。一次overlay未执行、provider夹具错误、等待投影/summary路径误猜如实记账，不冒充产品失败。最终3独立行为PASS7.203s：精确38input/7hit/31miss/19out，dispatch tokens32不含Owner；原Envelope/完整receipt/cases/QA/cost、原主账保留、缺片非终态、查询/reopen重放全字节不变；合法P2repair原FAIL仍FAIL且master正确接纳。root并发/exactpair拒绝/三个持久故障/需求三scope变更/ordinary终态边界PASS19.010s。
+
+两新fork_turns:none门独立固定d2：复杂度PASS无P0/P1/P2/P3，protocol96.277s/facade471.366s/cost2.389s/race44.980s/build/diff-check退出0。质量五维分别PASS无P0/P1/P2/P3，behavior47.684s、cost0.752s/protocol94.400s、race29.816s、child/ordinary回归22.137s、屏障放弃变更探针3.006s及build/diff-check0；探针首次Ask遗漏abort选项正确INVALID_CHOICE，FAIL2.369s保留。无运行中止，count=1非测试结果缓存；非-v完整包不能证明逐项无skip。
+
+主代理逐项核正确性/质量/当前需求完整性/最简简洁/耦合维护可读/优雅设计一致/无不当硬编码窄逻辑过拟合/无过度设计防御抽象/测试业务隔离，另核唯一事实/显式携带者/四计数/normal恢复同接纳/协议保真/诚实夹具/原始内容/替代删除/注释命名；每项当前源码与执行证据见完整表。state.json为批准§5.9例外，不宣称通用数据库条款实现；master当前无普通development plan，原Guard尚未开启，不冒称真实merge预算已验证。没有未解决范围内已证实问题，接纳当前收据块，继续后续工作。
+
+这不是阶段5退出或正式流程PASS：独立child工作区/Controller创建、组容量/依赖、native主线integration、mergeQA/gate/受影响补门、组级需求变化/abort/guarantee/cleanup、实际installed公共面及ZCode大量non-happy实跑仍未完成，阶段6–7随后推进。真实native模型调用0、本块live canary0。协作代理不当作实机ZCode或付费模型证据。
