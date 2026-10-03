@@ -120,6 +120,18 @@ type SliceRequestIdentity struct {
 // sidecar whitespace. The Git tree identity remains the native content digest.
 func (r SliceTerminalReceipt) CanonicalDigest() string { return digestOfCanonical(r) }
 
+// requestDigest preserves the canonical event identity of external requests.
+// Engine-generated requests are owned by PendingAsks; their offer excludes the
+// settlement flag, so deciding or retiring an Ask does not change its evidence.
+func (s *State) requestDigest(requestID string) string {
+	if event, external := s.Events[requestID]; external {
+		return event.Digest
+	}
+	ask := s.PendingAsks[requestID]
+	ask.Resolved = false
+	return digestOfCanonical(ask)
+}
+
 // CheckpointSlice commits successful child evidence, phase, owner cost and its
 // closed interval together. Native observation and measurement belong to facade;
 // this transaction rechecks the existing validation/promotion admission owner.
@@ -205,7 +217,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	}
 	for _, decision := range state.Decisions {
 		if r.LastRequest == nil || decision.Revision > r.LastRequest.Revision {
-			r.LastRequest = &SliceRequestIdentity{RequestID: decision.RequestID, EventID: decision.EventID, RequestDigest: state.Events[decision.RequestID].Digest, DecisionDigest: state.Events[decision.EventID].Digest, Revision: decision.Revision}
+			r.LastRequest = &SliceRequestIdentity{RequestID: decision.RequestID, EventID: decision.EventID, RequestDigest: state.requestDigest(decision.RequestID), DecisionDigest: state.Events[decision.EventID].Digest, Revision: decision.Revision}
 		}
 	}
 	// Detach the frozen evidence from the run's mutable maps and cost projection.
@@ -213,10 +225,11 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(data, &r); err != nil {
+	var frozen SliceTerminalReceipt
+	if err := json.Unmarshal(data, &frozen); err != nil {
 		return err
 	}
-	state.SliceReceipt = &SliceReceipt{Receipt: r, Digest: r.CanonicalDigest()}
+	state.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest()}
 	if state.Phase == runtime.PhaseDevelopmentParallel {
 		if err := state.TransitionPhase(runtime.PhaseSnapshotReady); err != nil {
 			return err

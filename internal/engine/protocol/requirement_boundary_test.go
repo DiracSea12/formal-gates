@@ -137,6 +137,10 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 			if ask.Control != ControlReviewRoundGrant || ask.RoundGrant == nil || *ask.RoundGrant != state.reviewGrantBinding(review.ProductReview) || ask.RoundGrant.Completed != 3 {
 				t.Fatalf("unbound grant offer: %+v", ask)
 			}
+			wantRequestDigest := digestOfCanonical(ask)
+			if _, external := state.Events[requestID]; external || state.requestDigest(requestID) != wantRequestDigest {
+				t.Fatal("generated grant request lost its complete offer evidence")
+			}
 			before := stateBytesOf(t, dir)
 			engine, err = New(mustStore(t, dir), engine.cfg, nil)
 			if err != nil {
@@ -176,7 +180,7 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 				t.Fatal("grant decision replay changed durable state")
 			}
 			state = engine.LoadMustSucceed(t).State
-			if !state.PendingAsks[requestID].Resolved || state.Decisions[requestID].Choice != AskOptionID(choice) {
+			if !state.PendingAsks[requestID].Resolved || state.Decisions[requestID].Choice != AskOptionID(choice) || state.requestDigest(requestID) != wantRequestDigest {
 				t.Fatal("decision did not settle its exact request")
 			}
 			if choice == grantOption {

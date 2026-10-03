@@ -2,6 +2,7 @@ package facade
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,6 +83,65 @@ func promotedSlice(t *testing.T, mode string, owner OwnerBinding) *validationDri
 		t.Fatal(err)
 	}
 	return child
+}
+
+func promotedSliceWithAuthorizedRetry(t *testing.T, mode string, owner OwnerBinding) (*validationDriver, protocol.PendingAsk, protocol.Event) {
+	t.Helper()
+	child := reviewReadySlice(t, mode, owner)
+	for _, gate := range driverState(t, child).SelectedGates {
+		if gate != "security" {
+			id, input := child.gateAction(gate)
+			child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		id, _ := child.gateAction("security")
+		child.receipt(id)
+		child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, PayloadDigest: id + "-unavailable", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
+		child.drive()
+	}
+	face := child.validationAsk("RETRY")
+	offer := driverState(t, child).PendingAsks[face.RequestID]
+	if offer.Resolved || offer.Validation == nil || offer.Validation.Digest == "" {
+		t.Fatal("retry does not own a current validation offer")
+	}
+	event := decideValidation(child, face, "approve")
+	child.drive()
+	id, input := child.gateAction("security")
+	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+	if _, err := child.f.PrepareCandidate(""); err != nil {
+		t.Fatal(err)
+	}
+	return child, offer, event
+}
+
+func assertSliceRequestEvidence(t *testing.T, child *validationDriver, receipt protocol.SliceReceipt, offer protocol.PendingAsk, event protocol.Event) {
+	t.Helper()
+	var canonical bytes.Buffer
+	enc := json.NewEncoder(&canonical)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(offer); err != nil {
+		t.Fatal(err)
+	}
+	decisionDigest, err := event.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := driverState(t, child)
+	if _, external := state.Events[offer.RequestID]; external {
+		t.Fatal("generated request was manufactured as an external event")
+	}
+	want := &protocol.SliceRequestIdentity{RequestID: offer.RequestID, EventID: string(event.ID), RequestDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(canonical.Bytes())), DecisionDigest: decisionDigest, Revision: state.Decisions[offer.RequestID].Revision}
+	if !reflect.DeepEqual(receipt.Receipt.LastRequest, want) {
+		t.Fatalf("frozen request evidence = %+v, want %+v", receipt.Receipt.LastRequest, want)
+	}
+}
+
+func TestSliceReceiptBindsTheAuthorizedGeneratedRequest(t *testing.T) {
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{})
+	child.drive()
+	assertSliceRequestEvidence(t, child, readSliceReceipt(t, child), offer, event)
 }
 
 func assertNoSuccessfulSliceReceipt(t *testing.T, child *validationDriver) {
@@ -170,7 +230,7 @@ func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
 func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
-	child := promotedSlice(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	if _, _, err := child.f.engine.Drive(emptyFingerprint()); err != nil {
 		t.Fatal(err)
@@ -207,7 +267,7 @@ func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 	if after.Revision != before.Revision+1 || after.State.Cost.Owner == nil || after.State.Cost.TotalInputTokens != before.State.Cost.TotalInputTokens+17 || after.State.Cost.OutputTokens != before.State.Cost.OutputTokens+8 {
 		t.Fatalf("concurrent checkpoint did not freeze exactly once: before=%d after=%d cost=%+v", before.Revision, after.Revision, after.State.Cost)
 	}
-	readSliceReceipt(t, child)
+	assertSliceRequestEvidence(t, child, readSliceReceipt(t, child), offer, event)
 }
 
 func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
@@ -287,10 +347,11 @@ func readSliceReceipt(t *testing.T, child *validationDriver) protocol.SliceRecei
 func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
-	child := promotedSlice(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	child.drive()
 	receipt := readSliceReceipt(t, child)
+	assertSliceRequestEvidence(t, child, receipt, offer, event)
 	if receipt.Receipt.Cost.Owner == nil || *receipt.Receipt.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 17, InputCacheHitTokens: 2, InputCacheMissTokens: 15, OutputTokens: 8}) || receipt.Receipt.OwnerTranscript != path || receipt.Receipt.OwnerStartedAt == "" || receipt.Receipt.OwnerEndedAt == "" {
 		t.Fatalf("owner receipt = %+v", receipt.Receipt)
 	}
@@ -350,7 +411,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 		t.Run(string(point), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "owner.jsonl")
 			writeTranscript(t, path, []string{intervalBaseLine})
-			child := promotedSlice(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
+			child, offer, event := promotedSliceWithAuthorizedRetry(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			// Settle the engine's internal frontier before injecting the checkpoint transaction.
 			if _, _, err := child.f.engine.Drive(emptyFingerprint()); err != nil {
@@ -393,6 +454,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 			child.reopen()
 			child.drive()
 			receipt := readSliceReceipt(t, child)
+			assertSliceRequestEvidence(t, child, receipt, offer, event)
 			if frozen != nil && !reflect.DeepEqual(&receipt, frozen) {
 				t.Fatal("recovery replaced the committed receipt")
 			}

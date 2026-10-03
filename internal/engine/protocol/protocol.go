@@ -203,8 +203,8 @@ type PendingAction struct {
 	ReviewSeries review.Action   `json:"reviewSeries,omitempty"`
 }
 
-// PendingAsk 是受限 REQUEST_* 事件创建的待决 Ask：request
-// ID、控制类型与选项集落账。freshness token 不静态存储——它确定性绑定
+// PendingAsk 是外部受限 REQUEST_* 事件或引擎义务创建的请求：request
+// ID、控制类型与完整 offer 落账。freshness token 不静态存储——它确定性绑定
 // (当前 revision, requestID)，随 Freshness/Submit 即时求值，因此任何
 // 后续提交都自然使旧 token 失效。决定后仍保留 PendingAsks 条目并置
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。

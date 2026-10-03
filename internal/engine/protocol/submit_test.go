@@ -137,6 +137,10 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 		decision.EventID != "evt-decide-1" || decision.Revision != 3 {
 		t.Fatalf("recorded decision = %+v", decision)
 	}
+	wantRequestDigest, err := cancelAbortRequest(t, "req-abort-1").Digest()
+	if err != nil || snap.State.requestDigest("req-abort-1") != wantRequestDigest {
+		t.Fatalf("external request lost its canonical event digest: %s, %v", snap.State.requestDigest("req-abort-1"), err)
+	}
 
 	// 决定事件重放：稳定 acceptance、revision 不变、不二次落账。
 	replay, err := engine.Submit(decide, fp)
@@ -150,6 +154,49 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	if snap2.Revision != 3 || len(snap2.State.Events) != 2 || len(snap2.State.Decisions) != 1 {
 		t.Fatalf("replay changed durable state: rev=%d events=%d decisions=%d",
 			snap2.Revision, len(snap2.State.Events), len(snap2.State.Decisions))
+	}
+}
+
+func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
+	engine, dir, _, _ := preparedEngine(t)
+	action := issueReady(t, engine)[0]
+	plan, _, err := engine.RecoverAttempt(action, Interruption{}, fingerprintOf(t, engine))
+	if err != nil || plan.Action != RecoveryAsk {
+		t.Fatalf("recovery request = %+v, %v", plan, err)
+	}
+	state := engine.LoadMustSucceed(t).State
+	ask := state.PendingAsks[plan.RequestID]
+	if ask.Control != ControlRecovery || ask.RequestID != plan.RequestID || ask.Resolved {
+		t.Fatalf("recovery offer = %+v", ask)
+	}
+	want := digestOfCanonical(ask)
+	if _, external := state.Events[plan.RequestID]; external || state.requestDigest(plan.RequestID) != want {
+		t.Fatal("generated recovery request lost its offer identity")
+	}
+	token, err := engine.Freshness(RequestID(plan.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := NewDecideEvent("resume-original", RequestID(plan.RequestID), token, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := engine.Submit(event, fingerprintOf(t, engine))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := stateBytesOf(t, dir)
+	engine, err = New(mustStore(t, dir), engine.cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := engine.Submit(event, fingerprintOf(t, engine))
+	if err != nil || !reflect.DeepEqual(replay, accepted) || !reflect.DeepEqual(before, stateBytesOf(t, dir)) {
+		t.Fatal("replayed recovery decision changed its durable evidence")
+	}
+	state = engine.LoadMustSucceed(t).State
+	if !state.PendingAsks[plan.RequestID].Resolved || state.requestDigest(plan.RequestID) != want || state.Decisions[plan.RequestID].EventID != string(event.ID) {
+		t.Fatal("settlement or reopen changed the original recovery request evidence")
 	}
 }
 
