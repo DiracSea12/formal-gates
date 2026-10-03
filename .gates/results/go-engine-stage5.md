@@ -70,3 +70,7 @@ sliceID→childRunID 认领）、继承（child 不自增审查轮，相位门/�
 ## 批 1 补缝（683bd10）：child 计划换约纪律收敛
 
 机主追问「是否根因级而非摞补丁」触发自查：主代理独立探针（/tmp/probe_child_plan_swap_test.go）坐实 F1 有一条缝没打穿——child 已确认计划、开发已派发后，追加普通门的路线重选携带内容不同的片内计划被静默接纳（普通 run 的逐批用户决定纪律被 child 分支提前 return 跳过）。修＝纪律收敛不分流：child 分支只留确认形态检查，prior-plan 换约比对对两种 run 形态同一条判定；连带闭合同源缝——child 计划确认的绑定 revision 此前返回空，派发绑定与 work-decision 形状校验断链，现回填确认决定时点的权威需求 revision。验证：探针 PASS（拒绝语与普通 run 同族）、protocol/facade 定向与全包绿（coordination 组合跑一次 FAIL 未捕获用例名、单独＋组合复跑两遍全绿，按满载 flike 如实记录）。教训：**新增形态的"特殊分支"每提前 return 一次，就是一条既有纪律的旁路——分支只许分流形态，不许分流纪律。**
+
+## 批 1 二轮返修（本轮提交）：终态证据误删＋full 门链
+
+外部复核再判 FAIL（P1 终态证据误删＋P2 full 分片门链＋2 P3 注释），主代理以复核 oracle 亲复现双红后派原子代理。修：①「run 已成立」单一谓词（state.json ∨ terminal-summary.json ∨ 发布窗 intent），Start already-exists 与 recoverStartIntent 共用——同 ID 重试只清过期 intent、终态证据零写；request-only 真半启动重建保留。②「无 QA」判据语义化（routeHasNoQAModes＝validationKinds 为空），三处 custom 模式名判据收敛为单一归属；QA-free full child 端到端到 wave COMPLETE。③两处 P3 注释失配更正。主代理独立复核：P1 oracle 以修后 facade 重建同点位 exit86 注入（首跑误注失败清理路径自纠）真进程重跑 PASS（摘要 1357 字节保留、Open 可用、重试拒）；P2 oracle 双子例 PASS；绕行 oracle 红＝其前提（MISSING_COVERAGE 卡死）已消失，按设计判；round-1 边界探针红＝其无计划选路线先于 F1 必填语义，陈旧期望。全量 engine＋coordination 亲跑绿。教训：**「无 X」类语义判据不得绑在模式/入口名上（custom≠无 QA 的充要），生命周期判据必须枚举同一事实的全部合法形态（活动态＋终态回落是 Open 侧早已承认的一组文件）。**
