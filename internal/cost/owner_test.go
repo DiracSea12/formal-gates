@@ -137,3 +137,16 @@ func TestOwnerAndDispatchTotalsAreIndependentAndIdempotent(t *testing.T) {
 		t.Fatal("restored projection re-added owner cost")
 	}
 }
+
+func TestChildOwnerContributesWithoutReplacingThisRunsOwner(t *testing.T) {
+	var run RunCost
+	owner := OwnerCost{Source: SourceTranscript, TotalInputTokens: 60, InputCacheHitTokens: 5, InputCacheMissTokens: 55, OutputTokens: 4}
+	child := OwnerCost{Source: SourceTranscript, TotalInputTokens: 17, InputCacheHitTokens: 2, InputCacheMissTokens: 15, OutputTokens: 8}
+	RecordOwner(&run, owner)
+	AddChildOwner(&run, &child)
+	AddChildOwner(&run, &OwnerCost{Source: SourceUnavailable})
+	AddChildOwner(&run, nil)
+	if *run.Owner != owner || run.TotalInputTokens != 77 || run.InputCacheHitTokens != 7 || run.InputCacheMissTokens != 70 || run.OutputTokens != 12 || run.Dispatches != nil {
+		t.Fatalf("child owner replaced this run's owner or dispatches: %+v", run)
+	}
+}

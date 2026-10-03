@@ -1,0 +1,72 @@
+package facade
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+
+	"formal-gates/internal/coordination"
+	"formal-gates/internal/engine/protocol"
+)
+
+// handoffSliceReceipt runs after the child checkpoint/publisher has released
+// its store, owner and promotion locks. The master acceptance owns its run lock.
+func (f *Facade) handoffSliceReceipt(receipt protocol.SliceReceipt) error {
+	master, err := Open(f.root, receipt.Receipt.MasterRunID)
+	if err != nil {
+		return err
+	}
+	return master.acceptSliceReceipt(receipt)
+}
+
+func (f *Facade) acceptSliceReceipt(receipt protocol.SliceReceipt) error {
+	unlock, err := coordination.AcquireRunWaiting(f.root, f.runID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := f.store.Recover(); err != nil {
+		return err
+	}
+	return f.engine.AcceptSliceReceipt(receipt, emptyFingerprint())
+}
+
+// discoverSliceReceipts reads only exact claims, never scans for new members.
+// It does not hold the master run lock or acquire a child run lock while loading
+// and publishing child evidence. All mutations use the same acceptance entry.
+func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
+	if state.SliceChild != nil || state.Topology == nil {
+		return nil
+	}
+	for _, sliceID := range state.Topology.Slices {
+		childID := state.SliceChildren[sliceID]
+		if childID == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(EngineNamespace), childID, "state.json")); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		child, err := Open(f.root, childID)
+		if err != nil {
+			return err
+		}
+		snapshot, err := child.engine.Load()
+		if err != nil {
+			return err
+		}
+		receipt := snapshot.State.SliceReceipt
+		if receipt == nil || !state.SliceReceiptCurrent(*receipt) {
+			continue
+		}
+		if err := child.publishSliceReceipt(receipt); err != nil {
+			return err
+		}
+		if err := f.acceptSliceReceipt(*receipt); err != nil {
+			return err
+		}
+	}
+	return nil
+}

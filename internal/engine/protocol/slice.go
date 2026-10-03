@@ -248,6 +248,11 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 }
 
 func (s *State) verifySliceReceipt() error {
+	for childID, receipt := range s.SliceReceipts {
+		if receipt.Receipt.ChildRunID != childID || receipt.Receipt.MasterRunID != s.RunID || receipt.verify() != nil {
+			return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "accepted slice receipt differs from its frozen identity or digest"}
+		}
+	}
 	if s.SliceReceipt == nil {
 		if s.Phase == runtime.PhaseSliceReady {
 			return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "SLICE_READY requires its frozen receipt"}
@@ -262,6 +267,83 @@ func (s *State) verifySliceReceipt() error {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "slice receipt does not match its frozen child identity and digest"}
 	}
 	return nil
+}
+
+// verify checks the frozen receipt's own bindings. Current master eligibility
+// is separate: a legal requirement or topology decision may supersede evidence.
+// Gate results retain their original identities, including repair/carry evidence;
+// the child loader and checkpoint own whether the final obligations concluded.
+func (r SliceReceipt) verify() error {
+	v := r.Receipt
+	route := State{RouteMode: v.RouteMode, SelectedGates: v.SelectedGates, Topology: &v.Topology}
+	if r.Digest != v.CanonicalDigest() || v.Status != runtime.PhaseSliceReady || v.ChildRunID == "" || v.MasterRunID == "" || v.SliceID == "" ||
+		v.Snapshot == "" || v.Tree == "" || v.Digest != v.Tree || v.Validation.Status != "COMPLETE" || v.Validation.Candidate.Digest != v.Tree ||
+		v.RequirementRevision == "" || v.Validation.RequirementRevision != v.RequirementRevision || v.Validation.RouteDigest != route.validationRouteDigest() {
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt has inconsistent frozen bindings"}
+	}
+	return nil
+}
+
+// AcceptSliceReceipt is the sole master acceptance transaction. Its receipt map
+// owns deduplication for cases and both cost contributions; no caller supplies
+// increments. Discovery supplies the frozen evidence of a loader-validated child.
+func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint string) error {
+	revision, state, err := e.load()
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if err := receipt.verify(); err != nil {
+		return err
+	}
+	r := receipt.Receipt
+	if accepted, exists := state.SliceReceipts[r.ChildRunID]; exists {
+		if accepted.Digest == receipt.Digest {
+			return nil
+		}
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "child has a different accepted slice receipt"}
+	}
+	if err := state.errWriteBarrier("slice receipt acceptance"); err != nil {
+		return err
+	}
+	if !state.SliceReceiptCurrent(receipt) || r.Envelope != e.store.Envelope() {
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt does not match the active master's exact claim, requirement, topology or version"}
+	}
+	if state.SliceReceipts == nil {
+		state.SliceReceipts = map[string]SliceReceipt{}
+	}
+	state.SliceReceipts[r.ChildRunID] = receipt
+	ledger := state.costLedger()
+	cost.Merge(ledger, r.ChildRunID, r.Cost)
+	if r.Cost != nil {
+		cost.AddChildOwner(ledger, r.Cost.Owner)
+	}
+	_, err = e.commit(state, revision, expectedFingerprint)
+	return err
+}
+
+// SliceReceiptCurrent derives eligibility from the current master context;
+// historical accepted evidence remains readable when that context changes.
+func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
+	r := receipt.Receipt
+	return s.SliceChild == nil && s.Phase != runtime.PhaseTerminal && !s.abortRequested() && s.errWriteBarrier("slice receipt acceptance") == nil &&
+		s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
+		r.MasterRunID == s.RunID && slices.Contains(s.Topology.Slices, r.SliceID) && s.SliceChildren[r.SliceID] == r.ChildRunID &&
+		r.RequirementRevision == s.RequirementRevision() && digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology)
+}
+
+func (s *State) sliceReceiptProgress() (ready, expected int) {
+	if s.Topology == nil || s.Topology.Decision != topologySplit || s.RouteMode != routeModeMerge {
+		return 0, 0
+	}
+	for _, sliceID := range s.Topology.Slices {
+		if receipt, accepted := s.SliceReceipts[s.SliceChildren[sliceID]]; accepted && receipt.Receipt.SliceID == sliceID && s.SliceReceiptCurrent(receipt) {
+			ready++
+		}
+	}
+	return ready, len(s.Topology.Slices)
 }
 
 // validSliceID 报告分片名是否为可作 AC 责任 owner 引用与 child 认领键的

@@ -610,6 +610,10 @@ type State struct {
 	// 积运行事实）。它不放进 TopologyBinding：拓扑是不可变的确认决定，
 	// children 是运行期累积——一个控制事实只有一个权威来源。
 	SliceChildren map[string]string `json:"sliceChildren,omitempty"`
+	// SliceReceipts is the master's immutable accepted child evidence, keyed by
+	// child run. Receipt insertion, its cases payload and cost contribution share
+	// one transaction; historical evidence survives requirement/topology changes.
+	SliceReceipts map[string]SliceReceipt `json:"sliceReceipts,omitempty"`
 	// Guard 是从签发/结果账本派生的额度投影（requestAllowance/retryAllowance/
 	// totalAllowance/budgetBasisDigest＋used 事实与 token cap 面）。事实源是账本
 	// 本身，本投影只在提交点重derive写入，加载边界重算比对；受理前的 run（包络

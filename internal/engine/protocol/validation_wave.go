@@ -45,10 +45,14 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		_, p, _ := s.confirmedDevelopmentPlan()
 		return p == nil || !s.developmentPlanCurrent(p)
 	}
-	if s.RouteMode == routeModeMerge {
+	if s.Topology != nil && s.RouteMode == routeModeMerge {
 		// split 绑定锁定合并路线：保留总任务实例不涉常规路线与开发计划，
 		// 停等 children（合并门＋合并 QA 属收尾）。
-		message = "the retained master run waits for its slice children; merge verification runs after the slices complete"
+		ready, expected := s.sliceReceiptProgress()
+		message = fmt.Sprintf("the retained master run waits for slice receipts: %d/%d accepted", ready, expected)
+		if ready == expected {
+			message += "; all expected slices are ready, waiting for integration"
+		}
 	} else if s.SliceChild != nil && s.RouteMode == "" {
 		message = "select the slice route (the topology is inherited from the master)"
 	} else if s.SliceChild == nil && (s.Topology == nil || s.RouteMode == "") {

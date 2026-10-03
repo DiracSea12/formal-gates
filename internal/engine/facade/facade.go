@@ -136,8 +136,10 @@ type Run struct {
 	PendingAsks []PendingAskFace `json:"pendingAsks,omitempty"`
 	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计）；owner 项缺源
 	// 时缺席。engine run 的 cost 只来自引擎权威 State。
-	Cost         *cost.RunCost          `json:"cost,omitempty"`
-	SliceReceipt *protocol.SliceReceipt `json:"sliceReceipt,omitempty"`
+	Cost          *cost.RunCost                    `json:"cost,omitempty"`
+	SliceReceipt  *protocol.SliceReceipt           `json:"sliceReceipt,omitempty"`
+	SliceChildren map[string]string                `json:"sliceChildren,omitempty"`
+	SliceReceipts map[string]protocol.SliceReceipt `json:"sliceReceipts,omitempty"`
 	// GuardBudget 是 dispatch 额度投影（额度数字、basis digest 与已用事实）；
 	// 受理前（包络未就位）为 nil。
 	GuardBudget *protocol.GuardBudget `json:"guardBudget,omitempty"`
@@ -860,7 +862,13 @@ func (f *Facade) Drive() (Run, error) {
 		if err := f.publishSliceReceipt(snap.State.SliceReceipt); err != nil {
 			return Run{}, err
 		}
+		if err := f.handoffSliceReceipt(*snap.State.SliceReceipt); err != nil {
+			return Run{}, err
+		}
 		return f.project()
+	}
+	if err := f.discoverSliceReceipts(snap.State); err != nil {
+		return Run{}, err
 	}
 	if snap.State.IntakeReceipt == nil {
 		confirmation := snap.State.IntakeConfirmationReceipt
@@ -906,6 +914,15 @@ func (f *Facade) Drive() (Run, error) {
 			}
 			if deliveryErr != nil {
 				return Run{}, deliveryErr
+			}
+			if current.State.SliceChild != nil {
+				checkpoint, err := f.engine.Load()
+				if err != nil {
+					return Run{}, err
+				}
+				if err := f.handoffSliceReceipt(*checkpoint.State.SliceReceipt); err != nil {
+					return Run{}, err
+				}
 			}
 		}
 	}
@@ -1274,6 +1291,8 @@ func (f *Facade) project() (Run, error) {
 		Review:           reviewFace(snap.State),
 		Cost:             snap.State.Cost,
 		SliceReceipt:     snap.State.SliceReceipt,
+		SliceChildren:    snap.State.SliceChildren,
+		SliceReceipts:    snap.State.SliceReceipts,
 		GuardBudget:      snap.State.Guard,
 		SummaryPath:      filepath.Join(f.stateDir, "terminal-summary.json"),
 		Unverified:       snap.State.Route == "lightweight",

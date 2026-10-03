@@ -86,12 +86,20 @@ func transcriptDigest(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// RecordOwner records the terminal interval at most once. Slice Merge only
-// copies dispatches; child owner aggregation belongs to the later engine stage.
+// RecordOwner records this run's terminal interval at most once.
 func RecordOwner(run *RunCost, entry OwnerCost) {
 	if run == nil || run.Owner != nil {
 		return
 	}
 	run.Owner = &entry
 	run.addTokens(entry.TotalInputTokens, entry.InputCacheHitTokens, entry.InputCacheMissTokens, entry.OutputTokens)
+}
+
+// AddChildOwner adds a frozen child interval without assigning this run's Owner.
+// The receipt owner must admit that child exactly once in the same transaction.
+func AddChildOwner(run *RunCost, owner *OwnerCost) {
+	if run == nil || owner == nil {
+		return
+	}
+	run.addTokens(owner.TotalInputTokens, owner.InputCacheHitTokens, owner.InputCacheMissTokens, owner.OutputTokens)
 }

@@ -16,8 +16,9 @@ const (
 )
 
 // RunCost is the cost projection of a run: per-dispatch entries and the
-// run totals accumulated from them and this run's owner. Token categories follow the host pricing
-// rules: input with cache hit, input without cache hit, and output.
+// run totals accumulated from them, this run's owner and accepted child owners.
+// Token categories follow the host pricing rules: input with cache hit, input
+// without cache hit, and output.
 // TotalInputTokens is the input-side total (cache hit + cache miss); output
 // is recorded separately and never added into the total. Cache write tokens
 // are not a priced category and are not recorded.
@@ -91,8 +92,7 @@ func (run *RunCost) addTokens(input, hit, miss, output int64) {
 // incoming dispatch entries under "<ns>/<dispatch-id>" so dispatch ids from
 // different runs never collide. Totals are accumulated per entry; an entry
 // already merged under the same namespaced key is not re-added (idempotent),
-// so re-merging a run never double-counts. It is used to fold sealed slice
-// instances' costs into their retained-overall master's final seal ledger.
+// so re-merging a run never double-counts. Owner contributions remain separate.
 func Merge(run *RunCost, ns string, other *RunCost) {
 	if run == nil || other == nil {
 		return
