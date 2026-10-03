@@ -702,8 +702,8 @@ func TestSliceChildRequiresExplicitRegularRoute(t *testing.T) {
 }
 
 // TestSplitTopologyRequiresDistinctSliceNames：split 的 Slices 列表逐项唯一
-// （分片名是 child 认领键），重复声明在 schema 层拒绝、零写；no-split 不
-// 受影响。
+// （分片名是 child 认领键），重复声明在绑定校验（slice.go splitACOwners）
+// 可区分拒绝、零写；no-split 不受影响。
 func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 	master := splitMasterDriver(t)
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
@@ -808,5 +808,67 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	}
 	if !strings.Contains(in.Development.Batch.Deliverable, "(swapped execution contract)") {
 		t.Fatalf("re-dispatched batch contract = %q, want the swapped plan", in.Development.Batch.Deliverable)
+	}
+}
+
+// TestSliceChildSelectedGatesExecuteToCompletion：QA-free 路线（含 full——
+// 覆盖豁免判据按「路线没选任何 QA 模式」而非模式名）所选普通门真实可执
+// 行：开发完成→候选推进至 REVIEW_READY→门派发→门结果接纳→wave COMPLETE，
+// 全程不产生 QA 派发。
+func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
+	for _, mode := range []string{"full", "custom"} {
+		t.Run(mode, func(t *testing.T) {
+			master := splitMaster(t)
+			f, run, err := Start(sliceChildStart(master, "child-gates-"+mode, "lane-core", sliceChildReceipt(master.revision)))
+			if err != nil {
+				t.Fatalf("slice child start: %v", err)
+			}
+			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: master.git, frozen: master.frozen}
+			route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality"}}
+			if mode == "custom" {
+				route.Selected = route.Gates
+			}
+			child.confirmSliceRoute(route, sliceLanePlan())
+			child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
+				Subject:    child.revision,
+				Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
+			}})
+			child.drive()
+			id, in := planBatchAction(child, "command")
+			if in.Binding.RequirementRevision == "" {
+				t.Fatal("development dispatch has no bound revision")
+			}
+			child.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
+			// 候选逐段冻结直至 REVIEW_READY（开发交付物进候选，片内计划收口）。
+			for {
+				child.drive()
+				if len(child.run.AdapterIntents) == 0 {
+					break
+				}
+				child.materialize()
+			}
+			child.drive()
+			if child.run.Validation == nil || child.run.Validation.Candidate == nil {
+				t.Fatalf("REVIEW_READY candidate missing after development: candidate=%v", child.run.Validation.Candidate)
+			}
+			// 所选门真实派发并接纳。
+			gate, gateInput := child.gateAction("quality")
+			if gateInput.Gate == nil || gateInput.Gate.Gate != "quality" {
+				t.Fatalf("selected gate dispatch = %+v", gateInput.Gate)
+			}
+			child.business(gate, protocol.ValidationResult{Binding: gateInput.Binding, Status: "PASS"})
+			child.drive()
+			child.reopen()
+			child.drive()
+			waves := child.run.Validation.Waves
+			if len(waves) == 0 || waves[len(waves)-1].Status != "COMPLETE" {
+				t.Fatalf("selected gates did not complete: %+v", waves)
+			}
+			for _, input := range child.run.ValidationInputs {
+				if input.Handler == "engine.qa.execution" || input.Handler == "engine.qa.design" {
+					t.Fatalf("QA-free route dispatched QA work: %+v", input)
+				}
+			}
+		})
 	}
 }

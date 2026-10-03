@@ -331,6 +331,13 @@ func (s *State) validationKinds() []coverage.ReviewKind {
 	slices.Sort(kinds)
 	return kinds
 }
+
+// routeHasNoQAModes 报告所选路线是否不含任何 QA 审查模式——覆盖义务豁免
+// 的唯一语义判据（QA-free custom 与 QA-free full child 同判；普通 full 必
+// 含双内建 QA，由路线接纳层强制，不会落入本形态）。
+func (s *State) routeHasNoQAModes() bool {
+	return len(s.validationKinds()) == 0
+}
 func (s *State) validationRole(key runtime.TaskKey, cd *compiler.CompiledDefinition) string {
 	for _, step := range cd.Steps {
 		if step.Header.ID == key.Step {

@@ -38,8 +38,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		return
 	}
 	message := ""
-	// 开发计划提示只对普通 run 成立：child 的路线确认不绑定开发计划
-	//（development_plan.go），选完路线后直接进入需求文档/波次边界。
+	// 开发计划提示只对普通 run 成立：普通 run 的计划经路线决定引用
+	// readiness 提案（无待确认提案即提示）；child 的片内计划随路线决定内
+	// 联确认（development_plan.go），选完路线即进入需求文档/波次边界。
 	developmentPlanPending := func() bool {
 		_, p, _ := s.confirmedDevelopmentPlan()
 		return p == nil || !s.developmentPlanCurrent(p)
@@ -204,7 +205,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 }
 
 func (s *State) validateFinalCoverage() error {
-	if s.RouteMode == "custom" && len(s.validationKinds()) == 0 {
+	if s.routeHasNoQAModes() {
 		return nil
 	}
 	if err := s.coverageContract(s.Validation.Candidate).Validate(); err != nil {

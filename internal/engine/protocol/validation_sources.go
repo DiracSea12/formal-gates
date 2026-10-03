@@ -90,7 +90,7 @@ func (s *State) validateConfirmedCoverage() error {
 // validateCoverageRelations checks the selected modes' union against the
 // confirmed obligations; each mode may provide only part of that coverage.
 func (s *State) validateCoverageRelations() error {
-	if s.Validation == nil || s.RouteMode == "custom" && len(s.validationKinds()) == 0 {
+	if s.Validation == nil || s.routeHasNoQAModes() {
 		return nil
 	}
 	covered := map[SourcePoint]bool{}

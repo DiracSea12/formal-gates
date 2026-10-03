@@ -350,7 +350,7 @@ func (s *State) ValidationNotGuaranteed() bool {
 	if s.Validation == nil {
 		return false
 	}
-	if s.RouteMode == "custom" && len(s.validationKinds()) == 0 {
+	if s.routeHasNoQAModes() {
 		return true
 	}
 	for _, mode := range s.validationKinds() {

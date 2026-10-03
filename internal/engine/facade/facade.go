@@ -602,12 +602,14 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		sliceStart = claim
 	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), req.RunID)
-	// already-exists 与恢复共用同一完成判据：state.json 存在才判已建（终态
-	// 清理后的目录仍被下方 Mkdir 预约拦截，不可重启已完成 run）。
-	if _, err := os.Stat(filepath.Join(stateDir, "state.json")); err == nil {
+	// already-exists 与恢复共用同一成立判据：活动 state 或终态证据任一在
+	// 即拒——已完成 run 不可重启，终态证据不动。
+	established, statErr := runDirectoryEstablished(stateDir)
+	if statErr != nil {
+		return nil, Run{}, statErr
+	}
+	if established {
 		return nil, Run{}, fmt.Errorf("engine start: run %q already exists", req.RunID)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, Run{}, err
 	}
 	intentPath := startIntentPath(root, req.RunID)
 	if err := writeJSONAtomic(intentPath, startIntent{RunID: req.RunID, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
@@ -1618,11 +1620,26 @@ func startIntentPath(root, runID string) string {
 	return filepath.Join(root, filepath.FromSlash(EngineNamespace), runID+startIntentSuffix)
 }
 
-// recoverStartIntent 清理未完成启动的残留：启动完成判据是 state.json 存
-// 在（request.json 只是 StartRequest 的纯投影——无 state 即无 run，「request
-// 先于 state」的不变量不受影响）。intent 在而 state.json 不在＝半启动残
-// 留：stateDir 内容与 intent 一并清除，让同一 Start 路径重建（分片认领同
-// childRunID 幂等已备）；state.json 已在则启动完成，只清过期 intent。
+// runDirectoryEstablished 报告 run 目录是否承载已成立的 run 事实：活动
+// state.json，或终态清理后保留的不可变终态摘要（terminal-summary.json 及
+// 其发布窗 intent）。无 active state ≠ 无 run——半启动判别必须把终态证据
+// 当作已成立（Open 的终态回落读同一组文件）。
+func runDirectoryEstablished(stateDir string) (bool, error) {
+	for _, name := range []string{"state.json", "terminal-summary.json", terminalIntentName} {
+		if _, err := os.Stat(filepath.Join(stateDir, name)); err == nil {
+			return true, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// recoverStartIntent 清理未完成启动的残留：run 已成立（活动 state 或终态
+// 证据）时只清过期 intent，目录不动；三者皆无而 intent 在＝真半启动残留
+// （request.json 只是 StartRequest 的纯投影——无 state 即无 run，「request
+// 先于 state」的不变量不受影响），stateDir 内容与 intent 一并清除，让同
+// 一 Start 路径重建（分片认领同 childRunID 幂等已备）。
 func recoverStartIntent(root, runID string) error {
 	path := startIntentPath(root, runID)
 	data, err := os.ReadFile(path)
@@ -1640,17 +1657,18 @@ func recoverStartIntent(root, runID string) error {
 		return fmt.Errorf("engine start intent run id mismatch")
 	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), runID)
-	if _, statErr := os.Stat(filepath.Join(stateDir, "state.json")); statErr == nil {
-		return os.Remove(path)
-	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return statErr
+	established, err := runDirectoryEstablished(stateDir)
+	if err != nil {
+		return err
 	}
-	if _, statErr := os.Stat(stateDir); statErr == nil {
-		if err := os.RemoveAll(stateDir); err != nil {
-			return err
+	if !established {
+		if _, statErr := os.Stat(stateDir); statErr == nil {
+			if err := os.RemoveAll(stateDir); err != nil {
+				return err
+			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return statErr
 		}
-	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return statErr
 	}
 	return os.Remove(path)
 }

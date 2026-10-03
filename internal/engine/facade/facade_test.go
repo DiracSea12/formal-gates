@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -197,6 +198,50 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 	}
 	if _, err := os.Stat(startIntentPath(root, runID)); !os.IsNotExist(err) {
 		t.Fatalf("start intent remained after successful start: %v", err)
+	}
+}
+
+// TestCompletedRunEvidenceSurvivesSameIDStartRetry：run 已完成（终态清理删
+// state.json、留不可变 terminal-summary.json）后同 ID Start 重试不得把终态
+// 当半启动清除——可区分 already-exists 拒绝、终态摘要字节不变、Open 仍可
+// 用、过期 intent 被清。
+func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
+	root := t.TempDir()
+	options := StartOptions{Root: root, Request: StartRequest{
+		RunID: "summary-retention", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}}
+	f, _, err := Start(options)
+	if err != nil {
+		t.Fatalf("initial start: %v", err)
+	}
+	run, err := f.Drive()
+	if err != nil || run.Status != "COMPLETE" {
+		t.Fatalf("drive to completion = %+v err=%v", run, err)
+	}
+	summaryPath := filepath.Join(root, EngineNamespace, run.RunID, "terminal-summary.json")
+	before, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 重造 start intent：代表成功启动后、清理 intent 前中断所遗留的持久盘
+	// 面（该窗口内 state.json 已写、run 已成立；终态清理只删 state，不清
+	// 此残留）。
+	if err := writeJSONAtomic(startIntentPath(root, run.RunID), startIntent{RunID: run.RunID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Start(options); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("same-ID start on the completed run = %v", err)
+	}
+	after, readErr := os.ReadFile(summaryPath)
+	if readErr != nil || !bytes.Equal(before, after) {
+		t.Fatal("same-ID start retry destroyed or rewrote the completed run's terminal evidence")
+	}
+	if _, err := Open(root, run.RunID); err != nil {
+		t.Fatalf("open after the rejected retry: %v", err)
+	}
+	if _, err := os.Stat(startIntentPath(root, run.RunID)); !os.IsNotExist(err) {
+		t.Fatal("stale start intent survived the rejected retry")
 	}
 }
 
