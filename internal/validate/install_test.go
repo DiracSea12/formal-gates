@@ -8,6 +8,46 @@ import (
 	"testing"
 )
 
+func TestCopyDirExcludesScriptRuntimeAndCaches(t *testing.T) {
+	source, target := t.TempDir(), filepath.Join(t.TempDir(), "installed")
+	files := map[string]string{
+		"guide.md":                  "guide\n",
+		"nested/schema.go":          "package schema\n",
+		"directory.mjs/config.json": "{}\n",
+		"__pycache__/cache.txt":     "cache\n",
+		"nested/__PYCACHE__/cache":  "cache\n",
+	}
+	for _, ext := range []string{".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs"} {
+		files["nested/helper"+ext] = "script " + ext + "\n"
+		files["helper"+strings.ToUpper(ext)] = "script " + ext + "\n"
+	}
+	for rel, data := range files {
+		path := filepath.Join(source, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyDir(source, target); err != nil {
+		t.Fatal(err)
+	}
+	for rel, data := range files {
+		got, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(rel)))
+		switch rel {
+		case "guide.md", "nested/schema.go", "directory.mjs/config.json":
+			if err != nil || string(got) != data {
+				t.Fatalf("ordinary package file was not copied intact: %s: %v", rel, err)
+			}
+		default:
+			if !os.IsNotExist(err) {
+				t.Fatalf("script or cache file was copied: %s: %v", rel, err)
+			}
+		}
+	}
+}
+
 // Native script bytes participate in the same copy, switch, and rollback
 // transaction as every installed runtime file. The package fixture uses a
 // smoke stub; the public binary and real script execution are tested by harness.

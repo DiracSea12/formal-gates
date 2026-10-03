@@ -1866,7 +1866,11 @@ func shouldSkipNativeInstallEntry(rel string, entry os.DirEntry) bool {
 	if entry.IsDir() {
 		return name == "__pycache__"
 	}
-	switch filepath.Ext(name) {
+	return isScriptRuntimeExtension(name)
+}
+
+func isScriptRuntimeExtension(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
 	case ".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs":
 		return true
 	default:

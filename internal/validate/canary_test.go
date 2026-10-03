@@ -7,6 +7,75 @@ import (
 	"testing"
 )
 
+func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{
+		"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
+		"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
+		"references/host.md",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(rel+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := filepath.Join(t.TempDir(), "hooks.json")
+	if err := os.WriteFile(hook, []byte(`{"command":"formal-gates hook decide"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := InstallReport{Targets: []InstallTargetReport{{TargetPath: root, HookConfig: hook}}}
+	if detail := installedScriptRuntimeDetail(report); detail != "" {
+		t.Fatalf("declared native host assets were rejected: %s", detail)
+	}
+}
+
+func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
+	paths := []string{
+		"native_dsh.mjs",
+		"runtime/native_dsh.mjs",
+		"runtime/langgraph/formal_gates_harness/nested/zcode_credential.mjs",
+		"runtime/langgraph/formal_gates_harness/Native_dsh.mjs",
+	}
+	for _, ext := range []string{".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs"} {
+		paths = append(paths, "runtime/langgraph/formal_gates_harness/other"+ext, "references/other"+strings.ToUpper(ext))
+	}
+	for _, rel := range paths {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(rel+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			detail := installedScriptRuntimeDetail(InstallReport{Targets: []InstallTargetReport{{TargetPath: root}}})
+			if detail != "installed script runtime files: "+filepath.ToSlash(path) {
+				t.Fatalf("undeclared script was not identified: %q", detail)
+			}
+		})
+	}
+}
+
+func TestInstalledScriptRuntimeRejectsScriptHookCommands(t *testing.T) {
+	for _, marker := range []string{".ps1", "powershell", "pwsh", "python", "node", "bash"} {
+		t.Run(marker, func(t *testing.T) {
+			root := t.TempDir()
+			hook := filepath.Join(t.TempDir(), "hooks.json")
+			if err := os.WriteFile(hook, []byte(`{"command":"`+strings.ToUpper(marker)+` helper"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			detail := installedScriptRuntimeDetail(InstallReport{Targets: []InstallTargetReport{{TargetPath: root, HookConfig: hook}}})
+			if detail != "hook config contains script runtime marker "+marker {
+				t.Fatalf("script hook marker was not identified: %q", detail)
+			}
+		})
+	}
+}
+
 func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 	dir := t.TempDir()
 	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":"formal-gates workflow record-gate --gate complexity-gate --status PASS --run-id wf"}}`)

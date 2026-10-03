@@ -743,7 +743,13 @@ func installedScriptRuntimeDetail(report InstallReport) string {
 				return nil
 			}
 			if isScriptRuntimeExtension(entry.Name()) {
-				found = append(found, slash(path))
+				rel, err := filepath.Rel(target.TargetPath, path)
+				if err != nil {
+					return err
+				}
+				if !contains(installRuntimeEntries, filepath.ToSlash(rel)) {
+					found = append(found, slash(path))
+				}
 			}
 			return nil
 		})
@@ -813,14 +819,6 @@ func uninstalledInstallDetail(report UninstallReport) string {
 		}
 	}
 	return ""
-}
-func isScriptRuntimeExtension(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs":
-		return true
-	default:
-		return false
-	}
 }
 func resultSummary(result Result) string {
 	messages := make([]string, 0, len(result.Failures))

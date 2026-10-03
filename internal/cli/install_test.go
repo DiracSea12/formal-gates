@@ -50,6 +50,9 @@ func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
 
 func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	source := writeInstallSource(t, "source v1")
+	for _, ext := range []string{".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs"} {
+		mustWriteCLI(t, filepath.Join(source, "references", "helper"+ext), "script "+ext+"\n")
+	}
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
@@ -1155,14 +1158,19 @@ func assertInstalledScriptInventory(t *testing.T, source, root string) {
 	}
 	var unexpected []string
 	scriptExts := map[string]bool{
-		".ps1": true,
-		".py":  true,
-		".sh":  true,
-		".bat": true,
-		".cmd": true,
-		".js":  true,
-		".mjs": true,
-		".cjs": true,
+		".ps1":  true,
+		".psm1": true,
+		".psd1": true,
+		".py":   true,
+		".pyc":  true,
+		".pyo":  true,
+		".sh":   true,
+		".bash": true,
+		".bat":  true,
+		".cmd":  true,
+		".js":   true,
+		".mjs":  true,
+		".cjs":  true,
 	}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
