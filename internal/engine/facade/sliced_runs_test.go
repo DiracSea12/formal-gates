@@ -146,7 +146,7 @@ func sliceChildStart(d *validationDriver, childRunID, sliceID string, receipt In
 		RunID: childRunID, Route: "regular", BaseSnapshot: frozenSnapshot,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt, MasterRunID: d.f.runID, SliceID: sliceID,
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}}
+	}, Admission: &d.f.admission}
 }
 
 // sliceChildReceipt 构造 child 受理回执（revision 与 master 当前确认对齐时
@@ -623,7 +623,7 @@ func TestSliceChildStartRebuildsAfterRequestOnlyPersistence(t *testing.T) {
 	if _, err := master.f.engine.ClaimSlice(req.SliceID, req.RunID, master.revision, req.BaseSnapshot, emptyFingerprint()); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSONAtomic(startIntentPath(master.f.root, req.RunID), startIntent{RunID: req.RunID, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
+	if err := writeJSONAtomic(startIntentPath(master.f.root, req.RunID), startIntent{RunID: req.RunID, Admission: *opts.Admission, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(master.f.root, filepath.FromSlash(EngineNamespace), req.RunID)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/compiler"
@@ -20,6 +22,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 )
 
 func testReceipt() IntakeConfirmationReceipt {
@@ -39,7 +42,7 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 		RunID: "lightweight-replay", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}
-	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 		RunID:            "invalid-intake",
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err == nil || err.Error() == "" || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
 		t.Fatalf("invalid receipt error = %v", err)
 	}
@@ -128,7 +131,7 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 		RunID: "concurrent-start", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}
-	admission := &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}
+	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
 	start := make(chan struct{})
 	type result struct {
 		f   *Facade
@@ -186,13 +189,13 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "partial-state"), []byte("incomplete\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID}); err != nil {
+	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID, Admission: *testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)}); err != nil {
 		t.Fatal(err)
 	}
 	f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
 		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil || f == nil || run.Status != "ACTIVE" {
 		t.Fatalf("recovered start = facade=%v run=%+v err=%v", f != nil, run, err)
 	}
@@ -210,7 +213,7 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 	options := StartOptions{Root: root, Request: StartRequest{
 		RunID: "summary-retention", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}}
+	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)}
 	f, _, err := Start(options)
 	if err != nil {
 		t.Fatalf("initial start: %v", err)
@@ -227,7 +230,7 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 	// 重造 start intent：代表成功启动后、清理 intent 前中断所遗留的持久盘
 	// 面（该窗口内 state.json 已写、run 已成立；终态清理只删 state，不清
 	// 此残留）。
-	if err := writeJSONAtomic(startIntentPath(root, run.RunID), startIntent{RunID: run.RunID}); err != nil {
+	if err := writeJSONAtomic(startIntentPath(root, run.RunID), startIntent{RunID: run.RunID, Admission: f.admission}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Start(options); err == nil || !strings.Contains(err.Error(), "already exists") {
@@ -247,35 +250,55 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 
 func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 	root := t.TempDir()
-	registry := filepath.Join(root, "registry.json")
-	registryData := `{"records":[{"id":"target-1","status":"active","packageDigest":"sha256:package","generation":2,"lease":"lease-2","token":"token-2"}]}`
-	if err := os.WriteFile(registry, []byte(registryData), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := coordination.AcquirePath(registry+".lock", "admission")
+	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
+	unlock, err := coordination.AcquirePath(admission.RegistryPath+".lock", "admission")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: "admission-lock", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
-		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: &Admission{RegistryPath: registry, PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: 2, Lease: "lease-2", Token: "token-2"}})
-	unlock()
-	if err == nil || !strings.Contains(err.Error(), "admission lock is held") {
-		t.Fatalf("start under admission lock error = %v", err)
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
+			RunID: "admission-lock", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+		}, Admission: admission})
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		unlock()
+		t.Fatalf("start did not wait for its admission window: %v", err)
+	case <-time.After(40 * time.Millisecond):
 	}
 	if _, statErr := os.Stat(filepath.Join(root, EngineNamespace, "admission-lock")); !os.IsNotExist(statErr) {
+		unlock()
 		t.Fatalf("admission-locked start created state: %v", statErr)
 	}
-	if err := os.WriteFile(registry, []byte(strings.Replace(registryData, `"generation":2`, `"generation":3`, 1)), 0o600); err != nil {
+	data, err := os.ReadFile(admission.RegistryPath)
+	if err != nil {
+		unlock()
 		t.Fatal(err)
 	}
-	_, _, err = Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: "admission-generation", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
-		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: &Admission{RegistryPath: registry, PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: 2, Lease: "lease-2", Token: "token-2"}})
-	if err == nil || !strings.Contains(err.Error(), "admission changed") {
-		t.Fatalf("stale admission error = %v", err)
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	document["records"].([]any)[0].(map[string]any)["generation"] = admission.Generation + 1
+	if err := writeJSONAtomic(admission.RegistryPath, document); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	select {
+	case err := <-result:
+		if !errors.Is(err, errStaleFencingToken) {
+			t.Fatalf("stale admission error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("start admission window did not release")
+	}
+	if _, err := os.Stat(startIntentPath(root, "admission-lock")); !os.IsNotExist(err) {
+		t.Fatalf("stale start left intent: %v", err)
 	}
 }
 
@@ -285,7 +308,7 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
 		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -421,7 +444,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
 		RunID: "canonical-artifacts", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start with valid normalized bindings: %v", err)
 	}
@@ -465,7 +488,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	_, _, err = Start(StartOptions{Root: badRoot, ArtifactRoot: badRoot, Request: StartRequest{
 		RunID: "bad-solution-digest", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: testAdmission(t, badRoot, "target-1", "sha256:package", DefaultProvider)})
 	if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
 		t.Fatalf("bad solution digest error = %v", err)
 	}
@@ -640,3 +663,29 @@ func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
 		t.Fatalf("status with pending asks = %d %v", len(statusRun.PendingAsks), err)
 	}
 }
+
+// testAdmission supplies the same immutable registry/bootstrap contract used by
+// installed runs. Only the installed payload and VCS/host execution are fixtures.
+func testAdmission(t *testing.T, root, recordID, packageDigest, provider string) *Admission {
+	t.Helper()
+	admissionFixtureMutex.Lock()
+	defer admissionFixtureMutex.Unlock()
+	key := strings.Join([]string{root, recordID, provider}, "\x00")
+	if a := admissionFixtures[key]; a != nil {
+		return a
+	}
+	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, provider)
+	a := &Admission{RegistryPath: registryPath, Target: target, Root: root,
+		Provider: provider, PackageDigest: packageDigest, InstalledTargetIdentity: recordID,
+		Generation: generation, Lease: lease, Token: token}
+	admissionFixtures[key] = a
+	t.Cleanup(func() {
+		admissionFixtureMutex.Lock()
+		defer admissionFixtureMutex.Unlock()
+		delete(admissionFixtures, key)
+	})
+	return a
+}
+
+var admissionFixtures = map[string]*Admission{}
+var admissionFixtureMutex sync.Mutex

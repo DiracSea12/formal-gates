@@ -11,7 +11,7 @@ import (
 
 func TestRegularStartRequiresNativeBaseBeforeWriting(t *testing.T) {
 	root := t.TempDir()
-	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-base", Route: "regular", IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "package", InstalledTargetIdentity: "target"}})
+	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-base", Route: "regular", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "target", "package", DefaultProvider)})
 	if err == nil {
 		t.Fatal("regular run without native base accepted")
 	}

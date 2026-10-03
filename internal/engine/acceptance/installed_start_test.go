@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
@@ -361,7 +362,11 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	partial := referenceRequest
 	partial.RunID = runID
 	writeInstalledJSON(t, filepath.Join(dir, "request.json"), partial)
-	writeInstalledJSON(t, dir+".start.intent.json", map[string]string{"runId": runID, "packageDigest": partial.PackageDigest, "installedTargetIdentity": partial.InstalledTargetIdentity, "definitionSource": partial.DefinitionSource, "definitionDigest": partial.DefinitionDigest})
+	writeInstalledJSON(t, dir+".start.intent.json", map[string]any{"runId": runID, "admission": facade.Admission{
+		RegistryPath: partial.AdmissionRegistryPath, Target: partial.AdmissionTarget, Root: partial.AdmissionRoot, Provider: partial.Provider,
+		PackageDigest: partial.PackageDigest, InstalledTargetIdentity: partial.InstalledTargetIdentity,
+		Generation: partial.AdmissionGeneration, Lease: partial.AdmissionLease, Token: partial.AdmissionToken,
+	}, "definitionSource": partial.DefinitionSource, "definitionDigest": partial.DefinitionDigest})
 	p.call(t, nil, p.startArgs(runID, "regular")...)
 	recoveredRequest, recoveredState := p.bindings(t, runID, "zcode")
 	if _, err := os.Stat(dir + ".start.intent.json"); !os.IsNotExist(err) {
@@ -404,4 +409,93 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("repeated start changed established state")
 	}
+}
+
+// Submit reads its typed event only after the installed CLI has opened the run.
+// Filling that input pipe with JSON whitespace proves the process crossed that
+// boundary while leaving the business event pending until normal reinstall.
+func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
+	p := newInstalledStartProject(t)
+	p.install(t, "zcode", "global")
+	runID := "delayed-submit"
+	p.call(t, nil, p.startArgs(runID, "regular")...)
+	p.run(t, "drive", runID)
+	request, _ := p.bindings(t, runID, "zcode")
+	files := func() map[string]string {
+		t.Helper()
+		result := map[string]string{}
+		for _, dir := range []string{filepath.Join(p.project, facade.EngineNamespace, runID), filepath.Join(p.project, ".gates", "tmp", runID)} {
+			err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !entry.IsDir() {
+					result[path] = string(readInstalledFile(t, path))
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result
+	}
+	before := files()
+	cmd := p.command(nil, "workflow", "submit", "--root", p.project, "--run-id", runID)
+	cmd.Stdin = nil
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	readPending := make(chan error, 1)
+	go func() {
+		_, err := input.Write(bytes.Repeat([]byte(" "), 2*1024*1024))
+		readPending <- err
+	}()
+	select {
+	case err := <-readPending:
+		if err != nil {
+			t.Fatalf("CLI did not reach event input after Open: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CLI did not consume event input after Open")
+	}
+	p.install(t, "zcode", "global")
+	document, err := validate.LoadRegistry(request.AdmissionRegistryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced := false
+	for _, record := range document.Records {
+		if record.ID == request.InstalledTargetIdentity {
+			fenced = record.Generation != request.AdmissionGeneration && record.Token != request.AdmissionToken
+		}
+	}
+	if !fenced {
+		t.Fatal("normal reinstall did not advance the owning token")
+	}
+	event, err := protocol.NewRequestEvent("delayed-abort", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(input).Encode(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil || !strings.Contains(output.String(), "STALE_FENCING_TOKEN") {
+		t.Fatalf("retained CLI token: err=%v output=%s", err, &output)
+	}
+	if !reflect.DeepEqual(before, files()) {
+		t.Fatal("stale CLI changed owning state, intent, receipt or sidecar bytes")
+	}
+	p.call(t, nil, p.startArgs("current-installation", "regular")...)
+	p.bindings(t, "current-installation", "zcode")
 }

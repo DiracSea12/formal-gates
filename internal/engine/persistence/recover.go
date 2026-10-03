@@ -56,6 +56,36 @@ type intentRecord struct {
 //     fsync 目录）并复核，recovered；
 //   - 其余 → 判定残留，清除 intent 与 temp，residual。
 func (s *Store) Recover() (RecoveryReport, error) {
+	// A clean observation has no write window. In particular a stable replay
+	// must not create locks or refresh evidence just to check fencing.
+	current, err := s.readDocument()
+	if err != nil {
+		return RecoveryReport{}, err
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil && !os.IsNotExist(err) {
+		return RecoveryReport{}, err
+	}
+	residue := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == intentFileName || strings.HasPrefix(name, tempPrefix) && strings.HasSuffix(name, tempSuffix) {
+			residue = true
+			break
+		}
+	}
+	if !residue {
+		var revision uint64
+		if current != nil {
+			revision = current.Revision
+		}
+		return RecoveryReport{Outcome: RecoveryClean, Revision: revision}, nil
+	}
+	admissionRelease, err := s.acquireAdmission()
+	if err != nil {
+		return RecoveryReport{}, err
+	}
+	defer admissionRelease()
 	processLock := transactionLock(s.dir)
 	processLock.Lock()
 	defer processLock.Unlock()
@@ -65,7 +95,7 @@ func (s *Store) Recover() (RecoveryReport, error) {
 	}
 	defer unlock()
 
-	current, err := s.readDocument()
+	current, err = s.readDocument()
 	if err != nil {
 		return RecoveryReport{}, err
 	}

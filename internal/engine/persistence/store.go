@@ -34,6 +34,11 @@ type Config struct {
 	DefinitionSource        string
 	InstalledTargetIdentity string
 	FaultInjector           func(FaultPoint) error
+	// AcquireAdmission admits the owning installation before any Store lock.
+	// Its release keeps that admission valid through the actual write window.
+	// Standalone persistence/protocol callers can omit installation integration;
+	// a candidate facade always supplies its immutable run binding.
+	AcquireAdmission func() (func(), error)
 }
 
 // Snapshot 是一次成功 Load 的只读结果：revision、内容摘要与内容字节。
@@ -81,6 +86,13 @@ func (s *Store) inject(point FaultPoint) error {
 	return s.cfg.FaultInjector(point)
 }
 
+func (s *Store) acquireAdmission() (func(), error) {
+	if s.cfg.AcquireAdmission == nil {
+		return func() {}, nil
+	}
+	return s.cfg.AcquireAdmission()
+}
+
 // NewStore 构造状态目录的 Store。PackageDigest 必填：没有安装身份就
 // 不存在合法信封，任何读写都会被信封校验拒绝，与其在每次操作晚失败，
 // 不如在构造期直接拒绝。
@@ -122,6 +134,14 @@ func (s *Store) CleanupTerminal() error {
 	if s == nil {
 		return fmt.Errorf("persistence: cleanup: nil store")
 	}
+	if complete, err := s.terminalCleanupComplete(); err != nil || complete {
+		return err
+	}
+	admissionRelease, err := s.acquireAdmission()
+	if err != nil {
+		return err
+	}
+	defer admissionRelease()
 	processLock := transactionLock(s.dir)
 	processLock.Lock()
 	defer processLock.Unlock()
@@ -170,6 +190,38 @@ func (s *Store) CleanupTerminal() error {
 		return fmt.Errorf("persistence: cleanup: residue remains: %s", strings.Join(residue, ", "))
 	}
 	return os.Remove(s.cleanupIntentPath())
+}
+
+// terminalCleanupComplete observes the immutable receipt and actual directory;
+// a repeated cleanup with nothing left to remove does not refresh evidence.
+func (s *Store) terminalCleanupComplete() (bool, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != "request.json" && name != "terminal-summary.json" && name != "terminal-summary.intent.json" &&
+			name != filepath.Base(s.cleanupReceiptPath()) && name != lockFileName && name != "promotion.lock" {
+			return false, nil
+		}
+	}
+	data, err := os.ReadFile(s.cleanupReceiptPath())
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var receipt struct {
+		Status  string   `json:"status"`
+		Residue bool     `json:"residue"`
+		Entries []string `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		return false, err
+	}
+	return receipt.Status == "reconciled" && !receipt.Residue && len(receipt.Entries) == 0, nil
 }
 
 // Load 读取并校验当前 state。文件不存在时返回包装的 fs.ErrNotExist；
@@ -233,6 +285,11 @@ func (s *Store) Save(tx Transaction) (SaveResult, error) {
 	if strings.TrimSpace(tx.ExpectedFingerprint) == "" {
 		return SaveResult{}, fmt.Errorf("persistence: save: ExpectedFingerprint is required")
 	}
+	admissionRelease, err := s.acquireAdmission()
+	if err != nil {
+		return SaveResult{}, err
+	}
+	defer admissionRelease()
 	processLock := transactionLock(s.dir)
 	processLock.Lock()
 	defer processLock.Unlock()

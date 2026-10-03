@@ -20,7 +20,7 @@ const intervalLaterLine = `{"type":"assistant","uuid":"later","message":{"usage"
 
 func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 	t.Helper()
-	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start %s: %v", id, err)
 	}
@@ -56,7 +56,7 @@ func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 		wg.Add(1)
 		go func(i int, e entry) {
 			defer wg.Done()
-			facades[i], _, errs[i] = Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: e.transcript, Provider: meteredProvider}, Request: StartRequest{RunID: e.id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+			facades[i], _, errs[i] = Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: e.transcript, Provider: meteredProvider}, Request: StartRequest{RunID: e.id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 		}(i, e)
 	}
 	wg.Wait()

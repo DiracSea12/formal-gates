@@ -27,6 +27,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -71,6 +72,9 @@ type StartRequest struct {
 	Provider                  string                    `json:"provider,omitempty"`
 	PackageDigest             string                    `json:"packageDigest"`
 	InstalledTargetIdentity   string                    `json:"installedTargetIdentity"`
+	AdmissionRegistryPath     string                    `json:"admissionRegistryPath"`
+	AdmissionTarget           string                    `json:"admissionTarget"`
+	AdmissionRoot             string                    `json:"admissionRoot"`
 	AdmissionGeneration       uint64                    `json:"admissionGeneration"`
 	AdmissionLease            string                    `json:"admissionLease"`
 	AdmissionToken            string                    `json:"admissionToken"`
@@ -372,11 +376,10 @@ type TerminalSummary struct {
 }
 
 type startIntent struct {
-	RunID                   string `json:"runId"`
-	PackageDigest           string `json:"packageDigest"`
-	InstalledTargetIdentity string `json:"installedTargetIdentity"`
-	DefinitionSource        string `json:"definitionSource"`
-	DefinitionDigest        string `json:"definitionDigest"`
+	RunID            string    `json:"runId"`
+	Admission        Admission `json:"admission"`
+	DefinitionSource string    `json:"definitionSource"`
+	DefinitionDigest string    `json:"definitionDigest"`
 }
 
 type StartOptions struct {
@@ -406,15 +409,19 @@ type StartOptions struct {
 // separate from StartRequest so user input cannot select a package digest or
 // installed identity.
 type Admission struct {
-	RegistryPath            string
-	PackageDigest           string
-	InstalledTargetIdentity string
-	Generation              uint64
-	Lease                   string
-	Token                   string
+	RegistryPath            string `json:"registryPath"`
+	Target                  string `json:"target"`
+	Root                    string `json:"root"`
+	Provider                string `json:"provider"`
+	PackageDigest           string `json:"packageDigest"`
+	InstalledTargetIdentity string `json:"installedTargetIdentity"`
+	Generation              uint64 `json:"generation"`
+	Lease                   string `json:"lease"`
+	Token                   string `json:"token"`
 }
 
 type Facade struct {
+	admission  Admission
 	root       string
 	runID      string
 	stateDir   string
@@ -455,17 +462,6 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	defer runUnlock()
 	if err := recoverStartIntent(root, req.RunID); err != nil {
 		return nil, Run{}, err
-	}
-	var admissionUnlock func()
-	if options.Admission != nil && strings.TrimSpace(options.Admission.RegistryPath) != "" {
-		admissionUnlock, err = coordination.AcquirePath(options.Admission.RegistryPath+".lock", "admission")
-		if err != nil {
-			return nil, Run{}, err
-		}
-		defer admissionUnlock()
-		if err := verifyAdmissionSnapshot(*options.Admission); err != nil {
-			return nil, Run{}, err
-		}
 	}
 	// Legacy and candidate runtimes share the run-id namespace. Refuse a
 	// candidate writer before creating any engine files when the legacy run
@@ -514,11 +510,19 @@ func Start(options StartOptions) (*Facade, Run, error) {
 			return nil, Run{}, fmt.Errorf("base snapshot %s: %w", req.BaseSnapshot, err)
 		}
 	}
-	if strings.TrimSpace(req.Provider) == "" {
-		req.Provider = DefaultProvider
-	}
-	if options.Admission == nil || strings.TrimSpace(options.Admission.PackageDigest) == "" || strings.TrimSpace(options.Admission.InstalledTargetIdentity) == "" {
+	if options.Admission == nil {
 		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: candidate start requires launcher admission")
+	}
+	admission := *options.Admission
+	admission.Root = root
+	if strings.TrimSpace(req.Provider) == "" {
+		req.Provider = admission.Provider
+	}
+	if req.Provider != admission.Provider {
+		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: provider does not match admitted target")
+	}
+	if err := verifyAdmissionSnapshot(admission); err != nil {
+		return nil, Run{}, err
 	}
 	if strings.TrimSpace(req.PackageDigest) != "" && req.PackageDigest != options.Admission.PackageDigest {
 		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: package digest does not match admitted target")
@@ -526,7 +530,10 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if strings.TrimSpace(req.InstalledTargetIdentity) != "" && req.InstalledTargetIdentity != options.Admission.InstalledTargetIdentity {
 		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: installed target identity does not match admitted target")
 	}
-	req.PackageDigest = options.Admission.PackageDigest
+	req.AdmissionRegistryPath = admission.RegistryPath
+	req.AdmissionTarget = admission.Target
+	req.AdmissionRoot = admission.Root
+	req.PackageDigest = admission.PackageDigest
 	req.InstalledTargetIdentity = options.Admission.InstalledTargetIdentity
 	req.AdmissionGeneration = options.Admission.Generation
 	req.AdmissionLease = options.Admission.Lease
@@ -615,36 +622,40 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		return nil, Run{}, fmt.Errorf("engine start: run %q already exists", req.RunID)
 	}
 	intentPath := startIntentPath(root, req.RunID)
-	if err := writeJSONAtomic(intentPath, startIntent{RunID: req.RunID, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
-		return nil, Run{}, err
-	}
-	intentWritten := true
-	defer func() {
-		if intentWritten {
-			_ = os.Remove(intentPath)
+	// The admitted prefix is one bounded local write window. The intent carries
+	// its own binding so recovery and failed-start cleanup cannot adopt a caller.
+	if err := admission.write(func() error {
+		if err := writeJSONAtomic(intentPath, startIntent{RunID: req.RunID, Admission: admission, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
+			return err
 		}
-	}()
-	// Atomically reserve the run directory. A separate Stat followed by
-	// MkdirAll lets concurrent starts race past the collision check; when one
-	// then fails its cleanup could remove the other process's active directory.
-	// Creating the parent is safe to share, while Mkdir on the final component
-	// gives exactly one starter ownership of this run id.
-	if err := os.MkdirAll(filepath.Dir(stateDir), 0o700); err != nil {
-		return nil, Run{}, err
-	}
-	if err := os.Mkdir(stateDir, 0o700); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return nil, Run{}, fmt.Errorf("engine start: run %q already exists", req.RunID)
+		if err := os.MkdirAll(filepath.Dir(stateDir), 0o700); err != nil {
+			return err
 		}
+		if err := os.Mkdir(stateDir, 0o700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return fmt.Errorf("engine start: run %q already exists", req.RunID)
+			}
+			return err
+		}
+		return writeJSONAtomic(filepath.Join(stateDir, "request.json"), req)
+	}); err != nil {
 		return nil, Run{}, err
 	}
-	// 启动身份先于任何 state 落盘：任何有 state.json 的 engine run 必有
-	// request.json——peer 的区间标记经 facade.Open 读它，bootstrap 期的 peer
-	// 永远合法可开，并行启动不因身份未就绪失败。失败清理 RemoveAll 覆盖同
-	// 目录文件，不变量双向成立。
-	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+	// Any failure after the prefix retains its evidence if installation moved.
+	// Established state and side effects stay available for normal reconciliation.
+	cleanupFailedStart := func(cause error) error {
+		if err := admission.write(func() error {
+			if err := os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID)); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(stateDir); err != nil {
+				return err
+			}
+			return os.Remove(intentPath)
+		}); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
 	env := Envelope{
 		Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion,
@@ -654,16 +665,14 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	store, err := persistence.NewStore(stateDir, persistence.Config{
 		PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource,
-		InstalledTargetIdentity: req.InstalledTargetIdentity,
+		InstalledTargetIdentity: req.InstalledTargetIdentity, AcquireAdmission: admission.acquire,
 	})
 	if err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: DispatchClaimBridge(root)}, nil)
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
 	if err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, cleanupFailedStart(err)
 	}
 	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
 	// SELECT_ROUTE）。
@@ -673,12 +682,10 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	view, err := decision.NewState(cd.Version, phase)
 	if err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, cleanupFailedStart(err)
 	}
 	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, sliceStart); err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, cleanupFailedStart(err)
 	}
 	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
 	// lockOwnerCost（与 legacy 同路径＝两代共同的区间协调能力）内执行：锁内
@@ -699,34 +706,24 @@ func Start(options StartOptions) (*Facade, Run, error) {
 			return err
 		}
 		// 区间重叠事实双边持久：把重叠补写进每个共享 owner transcript 的活动
-		// engine peer（幂等；失败即中止启动——静默跳过会让 peer 终态记出精确
-		// 的假数字，与 legacy beginOwnerCost 同一形状）。
+		// engine peer。被安装 fence 的 peer 不再写；自身相交事实照常保守
+		// 报告 unavailable，其他写失败上抛。
 		return markOverlappingEnginePeers(root, req.RunID, binding.Transcript)
 	}
 	if err := bindOwnerCost(); err != nil {
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, cleanupFailedStart(err)
 	}
-	if err := lifecycle.BeginRun(root, req.RunID); err != nil {
-		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
-		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+	if err := admission.write(func() error { return lifecycle.BeginRun(root, req.RunID) }); err != nil {
+		return nil, Run{}, cleanupFailedStart(err)
 	}
-	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
-	// BeginRun 之后失败的清理同时移除 lifecycle run 标记（active 标记会截获
-	// 宿主 capture 事件，失败的 run 不得残留）。request.json 已随不变量先行
-	// 落盘，随目录一并清理。
-	cleanupFailedStart := func() {
-		_ = os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID))
-		_ = os.RemoveAll(stateDir)
-	}
+	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
 	run, err := f.project()
 	if err != nil {
-		cleanupFailedStart()
+		return nil, Run{}, cleanupFailedStart(err)
+	}
+	if err := admission.write(func() error { return os.Remove(intentPath) }); err != nil {
 		return nil, Run{}, err
 	}
-	intentWritten = false
-	_ = os.Remove(intentPath)
 	return f, run, nil
 }
 
@@ -789,7 +786,8 @@ func Open(root, runID string) (*Facade, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource, InstalledTargetIdentity: req.InstalledTargetIdentity})
+	admission := admissionFromRequest(req)
+	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: req.PackageDigest, DefinitionSource: req.DefinitionSource, InstalledTargetIdentity: req.InstalledTargetIdentity, AcquireAdmission: admission.acquire})
 	if err != nil {
 		return nil, err
 	}
@@ -820,12 +818,18 @@ func Open(root, runID string) (*Facade, error) {
 			}
 		}
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: DispatchClaimBridge(root)}, nil)
+	if err := admission.validate(); err != nil {
+		return nil, err
+	}
+	if !admission.matchesRoot(root) {
+		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
+	}
+	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
 	if err != nil {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(root, req.Route)}, nil
+	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(root, req.Route)}, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -854,6 +858,9 @@ func (f *Facade) Drive() (Run, error) {
 			return Run{}, err
 		}
 		if summary, sumErr := f.readSummary(); sumErr == nil {
+			if err := f.endLifecycle(); err != nil {
+				return Run{}, err
+			}
 			return runFromSummary(summary), nil
 		}
 		return Run{}, err
@@ -959,7 +966,7 @@ func (f *Facade) Drive() (Run, error) {
 		}
 		// 终态收口：移除 lifecycle active 标记（幂等）——终态后晚到的宿主
 		// 事件归属无 run，与终态语义一致。
-		if err := lifecycle.EndRun(f.root, f.runID); err != nil {
+		if err := f.endLifecycle(); err != nil {
 			return Run{}, err
 		}
 	}
@@ -1075,7 +1082,7 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 	}
 	var published protocol.SliceReceipt
 	if err != nil || json.Unmarshal(data, &published) != nil || published.Digest != receipt.Digest || published.Receipt.CanonicalDigest() != receipt.Digest {
-		if err := writeJSONAtomic(path, receipt); err != nil {
+		if err := f.admission.write(func() error { return writeJSONAtomic(path, receipt) }); err != nil {
 			return err
 		}
 	}
@@ -1439,7 +1446,7 @@ func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return writeJSONAtomic(path, summary)
+	return f.admission.write(func() error { return writeJSONAtomic(path, summary) })
 }
 
 func (f *Facade) readTerminalIntent() (TerminalSummary, error) {
@@ -1480,17 +1487,19 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 	if err := f.writeSummaryValue(summary); err != nil {
 		return err
 	}
-	if err := os.Remove(terminalIntentPath(f.stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
+	return f.admission.write(func() error {
+		if err := os.Remove(terminalIntentPath(f.stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
 		summary = summaryForRun(run, interval)
-		err = writeJSONAtomic(terminalIntentPath(f.stateDir), summary)
+		err = f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) })
 	}
 	if err != nil {
 		return err
@@ -1795,24 +1804,87 @@ func recoverStartIntent(root, runID string) error {
 	if err != nil {
 		return err
 	}
-	if !established {
-		if _, statErr := os.Stat(stateDir); statErr == nil {
+	if !intent.Admission.matchesRoot(root) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: start intent root does not match its admitted root")
+	}
+	return intent.Admission.write(func() error {
+		if !established {
 			if err := os.RemoveAll(stateDir); err != nil {
 				return err
 			}
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return statErr
 		}
-	}
-	return os.Remove(path)
+		return os.Remove(path)
+	})
 }
 
-// verifyAdmissionSnapshot closes the admission read/commit gap: the caller's
-// admission was resolved before Start, but the registry is rechecked while
-// the shared admission lock is held so install/uninstall cannot replace the
-// target between resolution and the first engine write.
+var errStaleFencingToken = errors.New("STALE_FENCING_TOKEN")
+
+func admissionFromRequest(req StartRequest) Admission {
+	return Admission{RegistryPath: req.AdmissionRegistryPath, Target: req.AdmissionTarget, Root: req.AdmissionRoot,
+		Provider: req.Provider, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity,
+		Generation: req.AdmissionGeneration, Lease: req.AdmissionLease, Token: req.AdmissionToken}
+}
+
+func (admission Admission) validate() error {
+	if !filepath.IsAbs(admission.RegistryPath) || !filepath.IsAbs(admission.Target) || !filepath.IsAbs(admission.Root) ||
+		strings.TrimSpace(admission.Provider) == "" || strings.TrimSpace(admission.PackageDigest) == "" ||
+		strings.TrimSpace(admission.InstalledTargetIdentity) == "" || admission.Generation == 0 ||
+		strings.TrimSpace(admission.Lease) == "" || strings.TrimSpace(admission.Token) == "" {
+		return fmt.Errorf("UNREGISTERED_INSTALL: candidate writer requires a complete immutable installation binding")
+	}
+	return nil
+}
+
+func (admission Admission) matchesRoot(root string) bool {
+	if admission.Root == root {
+		return true
+	}
+	actual, actualErr := os.Stat(root)
+	bound, boundErr := os.Stat(admission.Root)
+	return actualErr == nil && boundErr == nil && os.SameFile(actual, bound)
+}
+
+// acquire owns each bounded installation write window. Business coordination
+// locks are acquired before it; Store process/state locks are acquired after it.
+// Callers release it before invoking another Store or facade writer, acquiring
+// a business lock, or waiting for host work. The request carries the original
+// namespace/token; registry records alone determine whether that token can write.
+func (admission Admission) acquire() (func(), error) {
+	if err := admission.validate(); err != nil {
+		return nil, err
+	}
+	// Missing registries cannot create a namespace merely by rejecting a writer.
+	if _, err := os.Stat(admission.RegistryPath); err != nil {
+		return nil, fmt.Errorf("UNREGISTERED_INSTALL: admission registry is unavailable: %w", err)
+	}
+	release, err := coordination.AcquirePathWaiting(admission.RegistryPath+".lock", "admission")
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyAdmissionSnapshot(admission); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func (admission Admission) write(write func() error) error {
+	release, err := admission.acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return write()
+}
+
+// verifyAdmissionSnapshot checks the exact owning binding without resolving a
+// replacement token or hashing the installed tree. Public launcher resolution
+// owns the package verification; the per-operation check owns registry fencing.
 func verifyAdmissionSnapshot(admission Admission) error {
-	data, err := os.ReadFile(filepath.Clean(admission.RegistryPath))
+	if err := admission.validate(); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(admission.RegistryPath)
 	if err != nil {
 		return fmt.Errorf("UNREGISTERED_INSTALL: admission registry cannot be read: %w", err)
 	}
@@ -1820,6 +1892,10 @@ func verifyAdmissionSnapshot(admission Admission) error {
 		Records []struct {
 			ID              string `json:"id"`
 			Status          string `json:"status"`
+			Target          string `json:"target"`
+			Host            string `json:"host"`
+			Scope           string `json:"scope"`
+			ProjectRoot     string `json:"projectRoot"`
 			PackageDigest   string `json:"packageDigest"`
 			InstalledDigest string `json:"installedDigest"`
 			Generation      uint64 `json:"generation"`
@@ -1834,17 +1910,48 @@ func verifyAdmissionSnapshot(admission Admission) error {
 		if record.ID != admission.InstalledTargetIdentity {
 			continue
 		}
+		if record.Generation != admission.Generation || record.Lease != admission.Lease || record.Token != admission.Token || !strings.EqualFold(record.Status, "active") {
+			return fmt.Errorf("%w: owning installation is no longer active", errStaleFencingToken)
+		}
 		packageDigest := record.PackageDigest
 		if packageDigest == "" {
 			packageDigest = record.InstalledDigest
 		}
-		if !strings.EqualFold(record.Status, "active") || packageDigest != admission.PackageDigest ||
-			record.Generation != admission.Generation || record.Lease != admission.Lease || record.Token != admission.Token {
-			return fmt.Errorf("UNREGISTERED_INSTALL: candidate admission changed before start")
+		if packageDigest != admission.PackageDigest || filepath.Clean(record.Target) != filepath.Clean(admission.Target) || !admissionProviderMatches(record.Host, admission.Provider) ||
+			(record.Scope != "project" && record.Scope != "global") {
+			return fmt.Errorf("UNREGISTERED_INSTALL: owning installation binding does not match registry record")
+		}
+		if record.Scope == "project" {
+			root, rootErr := filepath.EvalSymlinks(admission.Root)
+			project, projectErr := filepath.EvalSymlinks(record.ProjectRoot)
+			if rootErr != nil || projectErr != nil {
+				return fmt.Errorf("UNREGISTERED_INSTALL: project binding cannot be resolved: %w", errors.Join(rootErr, projectErr))
+			}
+			if root != project {
+				return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match owning run")
+			}
 		}
 		return nil
 	}
-	return fmt.Errorf("UNREGISTERED_INSTALL: candidate admission record %q is no longer active", admission.InstalledTargetIdentity)
+	return fmt.Errorf("UNREGISTERED_INSTALL: candidate admission record %q is missing", admission.InstalledTargetIdentity)
+}
+
+func admissionProviderMatches(registered, provider string) bool {
+	if registered == provider {
+		return true
+	}
+	descriptor, err := host.Lookup(registered)
+	return err == nil && descriptor.ID == provider
+}
+
+func (f *Facade) endLifecycle() error {
+	path := filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active")
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return f.admission.write(func() error { return lifecycle.EndRun(f.root, f.runID) })
 }
 
 func emptyFingerprint() string {

@@ -417,7 +417,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 			if _, _, err := child.f.engine.Drive(emptyFingerprint()); err != nil {
 				t.Fatal(err)
 			}
-			store, err := persistence.NewStore(child.f.stateDir, persistence.Config{PackageDigest: child.f.envelope.PackageDigest, DefinitionSource: child.f.envelope.DefinitionSource, InstalledTargetIdentity: child.f.envelope.InstalledTargetIdentity, FaultInjector: func(at persistence.FaultPoint) error {
+			store, err := persistence.NewStore(child.f.stateDir, persistence.Config{PackageDigest: child.f.envelope.PackageDigest, DefinitionSource: child.f.envelope.DefinitionSource, InstalledTargetIdentity: child.f.envelope.InstalledTargetIdentity, AcquireAdmission: child.f.admission.acquire, FaultInjector: func(at persistence.FaultPoint) error {
 				if at == point {
 					return &persistence.InjectedCrashError{Point: at}
 				}
@@ -426,7 +426,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			eng, err := protocol.New(store, protocol.Config{Definition: child.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(child.f.root, child.f.runID), ClaimDispatch: DispatchClaimBridge(child.f.root)}, nil)
+			eng, err := protocol.New(store, protocol.Config{Definition: child.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(child.f.root, child.f.runID), ClaimDispatch: dispatchClaimBridge(child.f.root, child.f.runID, child.f.admission)}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -54,6 +54,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -266,6 +267,8 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 		},
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
+	packageDigest := "sha256:" + hex.EncodeToString(packageSum[:])
+	registryPath, target, generation, lease, token := testkit.Installation(t, project, "frob-fixture-project", packageDigest, canaryProvider)
 	f, run, err := facade.Start(facade.StartOptions{
 		Capacity: 16, Root: project,
 		Request: facade.StartRequest{
@@ -273,7 +276,9 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 			BaseSnapshot: base, IntakeConfirmationReceipt: receipt,
 		},
 		Admission: &facade.Admission{
-			PackageDigest:           "sha256:" + hex.EncodeToString(packageSum[:]),
+			RegistryPath: registryPath, Target: target, Root: project, Provider: canaryProvider,
+			Generation: generation, Lease: lease, Token: token,
+			PackageDigest:           packageDigest,
 			InstalledTargetIdentity: "frob-fixture-project",
 		},
 	})

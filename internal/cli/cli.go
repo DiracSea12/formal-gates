@@ -472,7 +472,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		_, run, err := facade.Start(facade.StartOptions{Root: *root, Request: facade.StartRequest{
 			RunID: runID, Route: candidateRoute, BaseSnapshot: candidateBase, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
-		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 		if err != nil {
 			return 1, err
 		}
@@ -2234,7 +2234,7 @@ func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
 	// conflict. The façade is opened before the root binding check so malformed
 	// copies still surface their UNSUPPORTED_RUN_VERSION barrier rather than a
 	// misleading admission error.
-	admission, err := validate.ResolveEngineAdmissionByRecord(request.InstalledTargetIdentity)
+	admission, err := validate.ResolveEngineAdmissionByRecord(request.InstalledTargetIdentity, request.AdmissionRegistryPath)
 	if err != nil {
 		return nil, true, err
 	}
@@ -2249,7 +2249,7 @@ func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
 	// Once the envelope has passed its version/identity barrier, enforce the
 	// current project's target binding. This catches a run copied into another
 	// project while preserving the more specific version diagnostic above.
-	bound, bindingErr := validate.ResolveEngineAdmission(root, admission.Target)
+	bound, bindingErr := validate.ResolveEngineAdmission(root, admission.Target, request.AdmissionRegistryPath)
 	if bindingErr != nil {
 		return nil, true, bindingErr
 	}

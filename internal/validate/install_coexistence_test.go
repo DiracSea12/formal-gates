@@ -75,7 +75,7 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 			DefinitionDigest:          definition.WorkflowDefinitionDigest,
 			IntakeConfirmationReceipt: receipt,
 		},
-		Admission: &facade.Admission{PackageDigest: "sha256:coexistence-candidate", InstalledTargetIdentity: "coexistence-candidate-target"},
+		Admission: engineAdmissionFixture(t, project, "sha256:coexistence-candidate", "coexistence-candidate-target"),
 	})
 	if err != nil {
 		t.Fatalf("create candidate fixture: %v", err)

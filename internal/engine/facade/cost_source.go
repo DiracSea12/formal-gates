@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"fmt"
 	"strings"
 
 	"formal-gates/internal/cost"
@@ -44,12 +45,15 @@ func CostSourceBridge(root, runID string) protocol.CostSourceResolver {
 	}
 }
 
-// DispatchClaimBridge 是 engine 派发的 lifecycle 认领实现：派发签出落账时以
+// dispatchClaimBridge 是 engine 派发的 lifecycle 认领实现：派发签出落账时以
 // 实际派发身份（宿主回执声明的相关性）建立 sidecar 绑定——绑定 identity 不可
 // 变且宿主 start/stop 事件按它配对，claim 语义与 legacy 的实际身份绑定一致
 // （internal/validate/workflow.go 的 resolveClaimIdentity/bindClaimDispatch 先例）。
-func DispatchClaimBridge(root string) protocol.DispatchClaim {
+func dispatchClaimBridge(root, owningRunID string, admission Admission) protocol.DispatchClaim {
 	return func(runID, actionID, identity, provider string) error {
-		return lifecycle.BindDispatchWithProvider(root, runID, actionID, identity, provider)
+		if runID != owningRunID || provider != admission.Provider {
+			return fmt.Errorf("UNREGISTERED_INSTALL: dispatch claim does not match its owning run/provider")
+		}
+		return admission.write(func() error { return lifecycle.BindDispatchWithProvider(root, runID, actionID, identity, provider) })
 	}
 }

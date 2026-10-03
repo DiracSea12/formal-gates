@@ -10,6 +10,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/testkit"
 )
 
 func fixtureQAReceipt() facade.IntakeConfirmationReceipt {
@@ -39,11 +40,11 @@ func fixtureStartRequest(runID string) facade.StartRequest {
 	}
 }
 
-func fixtureAdmission() *facade.Admission {
-	return &facade.Admission{
-		PackageDigest:           "sha256:fixture-package",
-		InstalledTargetIdentity: "fixture-target",
-	}
+func fixtureAdmission(t *testing.T, root, packageDigest, recordID string) *facade.Admission {
+	t.Helper()
+	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, "engine")
+	return &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: "engine",
+		PackageDigest: packageDigest, InstalledTargetIdentity: recordID, Generation: generation, Lease: lease, Token: token}
 }
 
 // TestFacadeOpenMissingReceiptHidesFilesystemPath covers the normal
@@ -133,7 +134,7 @@ func TestCandidateStartRejectsRetainedLegacyResult(t *testing.T) {
 	}
 
 	_, _, err := facade.Start(facade.StartOptions{
-		Root: root, Request: fixtureStartRequest(runID), Admission: fixtureAdmission(),
+		Root: root, Request: fixtureStartRequest(runID), Admission: fixtureAdmission(t, root, "sha256:fixture-package", "fixture-target"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "already has a retained legacy result") {
 		t.Fatalf("candidate start retained-result error = %v", err)

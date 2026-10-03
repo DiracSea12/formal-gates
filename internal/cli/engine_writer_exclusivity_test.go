@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/validate"
 )
 
@@ -70,7 +71,7 @@ func startEngineRunForWriterTest(t *testing.T) (*facade.Facade, string, string) 
 		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
-	}, Admission: &facade.Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	}, Admission: engineWriterAdmission(t, root)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func startAdmittedEngineRun(t *testing.T, root string) *facade.Facade {
 			Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: "rev-1"}},
 			SolutionRevision: "solution-rev", SolutionDigest: "sha256:solution",
 		},
-	}, Admission: &facade.Admission{PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,4 +343,12 @@ func TestAlternatingLegacyAndEngineEntriesKeepBindingLocked(t *testing.T) {
 	if !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(requestBefore, requestAfter) {
 		t.Fatal("alternating entries changed the writer/schema/definition binding bytes")
 	}
+}
+
+func engineWriterAdmission(t *testing.T, root string) *facade.Admission {
+	t.Helper()
+	registryPath, target, generation, lease, token := testkit.Installation(t, root, "target-1", "sha256:package", "engine")
+	a := &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: "engine",
+		PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: generation, Lease: lease, Token: token}
+	return a
 }

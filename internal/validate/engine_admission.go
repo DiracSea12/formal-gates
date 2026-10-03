@@ -31,8 +31,8 @@ type EngineAdmission struct {
 // registry.  Any missing, inactive, conflicting, or unverifiable record is a
 // stable UNREGISTERED_INSTALL rejection before the engine state directory is
 // created.
-func ResolveEngineAdmission(root, packageRoot string) (EngineAdmission, error) {
-	return resolveEngineAdmission(root, packageRoot, "")
+func ResolveEngineAdmission(root, packageRoot string, registryPath ...string) (EngineAdmission, error) {
+	return resolveEngineAdmission(root, packageRoot, "", registryPath...)
 }
 
 // ResolveEngineAdmissionByRecord resolves the immutable launcher admission
@@ -41,11 +41,11 @@ func ResolveEngineAdmission(root, packageRoot string) (EngineAdmission, error) {
 // select the project binding even when one stable launcher owns several
 // global/project records.  The caller may perform the root-specific binding
 // check separately after the run envelope has passed its version barrier.
-func ResolveEngineAdmissionByRecord(recordID string) (EngineAdmission, error) {
-	return resolveEngineAdmission("", "", strings.TrimSpace(recordID))
+func ResolveEngineAdmissionByRecord(recordID string, registryPath ...string) (EngineAdmission, error) {
+	return resolveEngineAdmission("", "", strings.TrimSpace(recordID), registryPath...)
 }
 
-func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (EngineAdmission, error) {
+func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registryNamespace ...string) (EngineAdmission, error) {
 	root = strings.TrimSpace(root)
 	packageRoot = strings.TrimSpace(packageRoot)
 	requestedRecordID = strings.TrimSpace(requestedRecordID)
@@ -58,7 +58,12 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (Engine
 			return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: resolve candidate package root: %w", err)
 		}
 	}
-	registryPath := installRegistryPath(InstallOptions{})
+	registryPath := ""
+	if len(registryNamespace) != 0 {
+		registryPath = strings.TrimSpace(registryNamespace[0])
+	} else {
+		registryPath = installRegistryPath(InstallOptions{})
+	}
 	if strings.TrimSpace(registryPath) == "" {
 		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: stable launcher registry path is unavailable")
 	}
@@ -94,7 +99,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (Engine
 		if (autoResolve || requestedRecordID != "") && !isTestBinary() && (launcher == "" || canonicalRegistryPath(record.LauncherPath) != launcher) {
 			continue
 		}
-		exactRoot, applicable := admissionRecordRootMatch(record, root)
+		exactRoot, applicable := admissionRecordRootMatch(record, root, len(registryNamespace) != 0)
 		if !applicable {
 			continue
 		}
@@ -175,7 +180,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (Engine
 // project-local sibling thereafter; project installs are bound to their
 // registered project root.  Returning exactRoot lets the resolver prefer a
 // sibling over the canonical global fallback when both are present.
-func admissionRecordRootMatch(record RegistryRecord, root string) (exactRoot, applicable bool) {
+func admissionRecordRootMatch(record RegistryRecord, root string, explicitNamespace bool) (exactRoot, applicable bool) {
 	if strings.TrimSpace(root) == "" {
 		return false, true
 	}
@@ -190,6 +195,11 @@ func admissionRecordRootMatch(record RegistryRecord, root string) (exactRoot, ap
 	}
 	if projectRoot == canonicalRoot {
 		return true, true
+	}
+	if explicitNamespace {
+		// Global records serve multiple projects. The run's own request binds
+		// its project root; explicit namespaces never consult ambient HOME.
+		return false, true
 	}
 	home, err := installHomeDir()
 	if err == nil && projectRoot == canonicalRegistryPath(home) {

@@ -241,7 +241,7 @@ func startEngineOwnerRun(t *testing.T, root, id, transcript string) *facade.Faca
 				SolutionRevision: "sol", SolutionDigest: "sha256:sol",
 			},
 		},
-		Admission: &facade.Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"},
+		Admission: engineAdmissionFixture(t, root, "sha256:package", "candidate"),
 	})
 	if err != nil {
 		t.Fatal(err)

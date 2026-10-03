@@ -260,7 +260,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := Start(StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	f, r, err := Start(StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: testAdmission(t, root, "candidate", "sha256:package", provider)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -311,8 +311,9 @@ func ownerOverlap(root, runID, transcript, startedAt string) bool {
 // markOverlappingEnginePeers 在自身来源绑定后把重叠事实补写进每个重叠 engine
 // peer 的 owner 投影（区间事实双边持久：先启动 run 的启动布尔不随后续重叠更
 // 新，其终态报告也必须携带重叠）。写失败上抛——重叠事实是 peer 终态成本报告
-// 正确性的保证，静默跳过会让 peer 记出精确的假数字；与 legacy beginOwnerCost
-// 失败即中止启动同一形状。peer 标记幂等（无绑定＝无操作、已标记＝零变化）。
+// 正确性的保证。已被安装 fence 的 peer 不能再写，当前 run 的相交事实仍
+// 由自身 Overlapped 保守报告 UNAVAILABLE；其余错误上抛。peer 标记幂等
+// （无绑定＝无操作、已标记＝零变化）。
 func markOverlappingEnginePeers(root, runID, transcript string) error {
 	peers, resolvable := engineOverlapPeers(root, runID, transcript)
 	if !resolvable {
@@ -324,6 +325,9 @@ func markOverlappingEnginePeers(root, runID, transcript string) error {
 			return fmt.Errorf("engine start: open overlapping peer run %q: %w", peer, err)
 		}
 		if err := peerFacade.engine.MarkOwnerOverlapped(emptyFingerprint()); err != nil {
+			if errors.Is(err, errStaleFencingToken) {
+				continue
+			}
 			return fmt.Errorf("engine start: mark overlapping peer run %q: %w", peer, err)
 		}
 	}

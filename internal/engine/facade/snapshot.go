@@ -146,7 +146,7 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		if message == "" {
 			return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
 		}
-		if err := f.vcs.Commit(message); err != nil {
+		if err := f.admission.write(func() error { return f.vcs.Commit(message) }); err != nil {
 			return "", err
 		}
 		if head, err = f.vcs.Resolve(); err != nil {
@@ -165,7 +165,7 @@ func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
 		if message == "" {
 			return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
 		}
-		if err := f.vcs.SquashToBase(snap.State.BaseSnapshot, message); err != nil {
+		if err := f.admission.write(func() error { return f.vcs.SquashToBase(snap.State.BaseSnapshot, message) }); err != nil {
 			return "", err
 		}
 		if head, err = f.vcs.Resolve(); err != nil {

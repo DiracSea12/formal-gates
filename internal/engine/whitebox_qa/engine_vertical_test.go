@@ -56,8 +56,8 @@ func verticalStartRequest(runID string, receipt facade.IntakeConfirmationReceipt
 // routes, invalid run IDs, and negative capacity are rejected before the
 // engine namespace is created.
 func TestPhase3FacadeAdmissionAndPreWriteInputFence(t *testing.T) {
-	admission := &facade.Admission{PackageDigest: "sha256:admitted", InstalledTargetIdentity: "target-qa"}
 	root := t.TempDir()
+	admission := fixtureAdmission(t, root, "sha256:admitted", "target-qa")
 	_, run, err := facade.Start(facade.StartOptions{
 		Root: root, Request: verticalStartRequest("admission-ok", verticalQAReceipt()), Admission: admission,
 	})
@@ -102,7 +102,7 @@ func TestPhase3FacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			caseRoot := t.TempDir()
-			options := facade.StartOptions{Root: caseRoot, Admission: admission}
+			options := facade.StartOptions{Root: caseRoot, Admission: fixtureAdmission(t, caseRoot, admission.PackageDigest, admission.InstalledTargetIdentity)}
 			request := row.mutate(verticalStartRequest("reject-"+strings.ReplaceAll(row.name, " ", "-"), verticalQAReceipt()), &options)
 			options.Request = request
 			if row.setup != nil {
@@ -212,7 +212,7 @@ func TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	runID := "terminal-open-replay"
 	f, _, err := facade.Start(facade.StartOptions{
 		Root: root, Request: verticalStartRequest(runID, verticalQAReceipt()),
-		Admission: &facade.Admission{PackageDigest: "sha256:pkg", InstalledTargetIdentity: "target"},
+		Admission: fixtureAdmission(t, root, "sha256:pkg", "target"),
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)

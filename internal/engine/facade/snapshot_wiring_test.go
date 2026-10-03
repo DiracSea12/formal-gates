@@ -91,7 +91,7 @@ func startSnapshotRun(t *testing.T, root, runID, base string) *Facade {
 		RunID: runID, Route: "regular", BaseSnapshot: base,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
-	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+	}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 				RunID: "snapshot-reject-" + strings.ReplaceAll(strings.ReplaceAll(name, " ", "-"), "/", "-"), Route: "regular", BaseSnapshot: tc.base,
 				DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 				IntakeConfirmationReceipt: testReceipt(),
-			}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "candidate"}})
+			}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("start error = %v, want %q", err, tc.wantErr)
 			}

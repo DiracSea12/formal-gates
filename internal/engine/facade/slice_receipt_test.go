@@ -57,18 +57,21 @@ func meterReceiptDispatches(d *validationDriver, hit, miss, output int64) {
 		}
 		return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
 	}
-	eng, err := protocol.New(d.f.store, protocol.Config{Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: DispatchClaimBridge(d.f.root)}, nil)
+	eng, err := protocol.New(d.f.store, protocol.Config{Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)}, nil)
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	d.f.engine = eng
 }
 
-func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string, owner OwnerBinding) *validationDriver {
+func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string, owner OwnerBinding, admission ...*Admission) *validationDriver {
 	t.Helper()
 	options := sliceChildStart(master, childID, sliceID, sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = master.run.BaseSnapshot
 	options.Owner = owner
+	if len(admission) != 0 {
+		options.Admission = admission[0]
+	}
 	f, run, err := Start(options)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +360,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "" {
-				store, err := persistence.NewStore(master.f.stateDir, persistence.Config{PackageDigest: master.f.envelope.PackageDigest, DefinitionSource: master.f.envelope.DefinitionSource, InstalledTargetIdentity: master.f.envelope.InstalledTargetIdentity, FaultInjector: func(at persistence.FaultPoint) error {
+				store, err := persistence.NewStore(master.f.stateDir, persistence.Config{PackageDigest: master.f.envelope.PackageDigest, DefinitionSource: master.f.envelope.DefinitionSource, InstalledTargetIdentity: master.f.envelope.InstalledTargetIdentity, AcquireAdmission: master.f.admission.acquire, FaultInjector: func(at persistence.FaultPoint) error {
 					if at == point {
 						return &persistence.InjectedCrashError{Point: at}
 					}
@@ -366,7 +369,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				eng, err := protocol.New(store, protocol.Config{Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: DispatchClaimBridge(master.f.root)}, nil)
+				eng, err := protocol.New(store, protocol.Config{Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission)}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}

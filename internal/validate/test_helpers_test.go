@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -76,4 +78,11 @@ func stubParallelCooldown(t *testing.T, duration time.Duration) {
 	prior := parallelCooldown
 	parallelCooldown = duration
 	t.Cleanup(func() { parallelCooldown = prior })
+}
+
+func engineAdmissionFixture(t *testing.T, root, packageDigest, recordID string) *facade.Admission {
+	t.Helper()
+	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, facade.DefaultProvider)
+	return &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: facade.DefaultProvider,
+		PackageDigest: packageDigest, InstalledTargetIdentity: recordID, Generation: generation, Lease: lease, Token: token}
 }
