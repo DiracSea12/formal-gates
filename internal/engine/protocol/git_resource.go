@@ -319,11 +319,12 @@ func (e *Engine) applyResourceReceipt(s *State, intent HostActionIntent, receipt
 	case "op.workspace":
 		var v WorkspaceEvidence
 		_ = decodeAdapterValues(receipt, &v)
-		applicable := s.resourceUsable(v.Resource.ID) && s.candidateInputsCurrent(intent, e.cfg.Definition)
+		applicable := s.nativeEffectApplicable(intent, e.cfg.Definition)
+		project := applicable && !s.abortRequested() && v.Resource.Role == "blackbox-design" && s.candidateInputsCurrent(intent, e.cfg.Definition)
 		if applicable {
 			s.GitResources[v.Resource.ID] = v.Resource
 		}
-		if applicable && v.Resource.Role == "blackbox-design" {
+		if project {
 			s.QAWorktree = v.Resource.Path
 		}
 	case "op.cleanup":

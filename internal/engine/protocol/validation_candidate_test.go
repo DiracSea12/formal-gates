@@ -2,11 +2,84 @@ package protocol
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 )
+
+// A carried artifact needs a complete original version witness and unchanged
+// source-to-case content. Independent QA progress does not change its inputs.
+func TestCarriedCandidateReceiptVerifiesFullManifest(t *testing.T) {
+	for _, change := range []string{"route", "requirement", "source", "point", "edge", "test-reference", "missing-witness"} {
+		t.Run(change, func(t *testing.T) {
+			original := coverage.AcceptanceManifest{
+				Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "signed-requirement", SolutionRevision: "signed-solution"}, ReviewKind: coverage.ReviewWhitebox, RouteScope: "signed-route", TopologyScope: "signed-topology"},
+				Sources: []string{"requirement"},
+				Points:  []coverage.AcceptancePoint{{PointID: "behavior", ObservableBehavior: "valid input is accepted", Oracle: "accepted"}},
+				Cases:   []coverage.AcceptanceCase{{CaseID: "valid", Mode: coverage.CaseWhitebox, TestRef: "app_test.go::TestValid", Oracle: "accepted"}},
+				Edges:   []coverage.CoverageEdge{{SourceID: "requirement", PointID: "behavior", CaseID: "valid"}},
+			}
+			design := runtime.TaskKey{Node: "validation", Step: "qa.design", Scope: "signed-design"}
+			binding := WorkBinding{Task: design, RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route"}
+			params := CandidateParameters{Stage: "QA_ARTIFACT", Base: "development", RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route", Paths: []string{"app_test.go"}, SourceTasks: []runtime.TaskKey{design}, DesignTasks: map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: design}, CaseVersions: map[coverage.ReviewKind]string{coverage.ReviewWhitebox: digestOfCanonical(original)}}
+			data, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var current coverage.AcceptanceManifest
+			if err := json.Unmarshal(data, &current); err != nil {
+				t.Fatal(err)
+			}
+			current.Binding.RouteScope = "added-gate-route"
+			generation := uint64(1)
+			revision := "signed-requirement"
+			if change != "route" {
+				generation, revision = 2, "confirmed-requirement"
+				current.Binding.RequirementRevision = revision
+			}
+			switch change {
+			case "source":
+				current.Sources[0] = "different-requirement"
+			case "point":
+				current.Points[0].Oracle = "different-outcome"
+			case "edge":
+				current.Edges[0].PointID = "different-behavior"
+			case "test-reference":
+				current.Cases[0].TestRef = "app_test.go::TestDifferent"
+			}
+			state := &State{Validation: &Validation{RequirementRevision: revision, Generation: generation, DevelopmentSnapshot: "development", Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: {DesignTask: design, Status: "REVIEW", Manifest: current, Version: digestOfCanonical(current)}}}, DispatchBindings: map[string]WorkBinding{"design": binding}, Results: map[string]WorkerResult{"design": {ActionID: "design", Validation: &ValidationResult{Binding: binding, Manifest: &original}}}, RequirementRevisions: []ConfirmedRevision{{Revision: revision, WorkDecisions: []RequirementWorkDecision{{Work: RequirementWork{ActionID: "design", Task: design, IssuedRevision: 1, RequirementRevision: "signed-requirement"}, Disposition: RequirementWorkCarry, Reason: "retain unchanged design"}}}}}
+			if change == "missing-witness" {
+				state.Results = nil
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			intent := HostActionIntent{PayloadDigest: "signed-parameters", Adapter: &AdapterHostAction{Operation: "op.candidate", Params: fields}}
+			receipt := HostActionReceipt{AdapterEvidence: &AdapterEvidence{Values: map[string]any{"parametersDigest": "signed-parameters", "identity": "qa-artifact", "digest": "artifact-content", "paths": params.Paths, "testOnly": true, "productionViewEqual": true}}}
+			engine := &Engine{}
+			if err := engine.applyCandidateReceipt(state, intent, receipt); err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if change == "route" || change == "requirement" {
+				want = "qa-artifact"
+			}
+			if got := state.Validation.Sets[coverage.ReviewWhitebox].Candidate; got != want {
+				t.Fatalf("artifact projection = %q, want %q", got, want)
+			}
+			if !reflect.DeepEqual(state.Validation.Sets[coverage.ReviewWhitebox].Manifest, current) || change != "missing-witness" && !reflect.DeepEqual(*state.Results["design"].Validation.Manifest, original) {
+				t.Fatal("receipt changed its original or current manifest evidence")
+			}
+		})
+	}
+}
 
 // A completed artifact can project across route context changes; superseded
 // case inputs settle without promoting the old artifact.

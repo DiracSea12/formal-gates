@@ -180,6 +180,144 @@ func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.Com
 	return err == nil && ready && s.candidateContextCurrent(p) && candidateCorrelation(p) == candidateCorrelation(current) && p.WorkspaceID == current.WorkspaceID
 }
 
+// nativeEffectApplicable projects an observed effect through its original
+// inputs. The next planner stage and its execution allowance own new writes.
+func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if intent.Adapter == nil {
+		return false
+	}
+	if effect := s.ReconciledEffects[intent.ActionID]; effect.Status == "SUPERSEDED" || effect.Status == "WITHDRAWN" {
+		return false
+	}
+	switch intent.Adapter.Operation {
+	case "op.workspace":
+		var p WorkspaceParameters
+		raw, err := json.Marshal(intent.Adapter.Params)
+		if err != nil || json.Unmarshal(raw, &p) != nil || !s.resourceUsable(p.Resource.ID) {
+			return false
+		}
+		r := s.GitResources[p.Resource.ID]
+		return r.Owner == p.Resource.Owner && r.Path == p.Resource.Path && r.Ref == p.Resource.Ref && r.Source == p.Resource.Source
+	case "op.cleanup":
+		return s.cleanupStarted(cd)
+	case "op.candidate":
+		p, err := candidateParameters(intent)
+		if err != nil {
+			return false
+		}
+		if p.Stage == "PROMOTION" {
+			return s.promotionAuthorized(p)
+		}
+		return s.candidateEffectApplicable(p, cd)
+	}
+	return false
+}
+
+func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.CompiledDefinition) bool {
+	v := s.Validation
+	if s.abortRequested() || !s.candidateContextCurrent(p) || p.WorkspaceID != "" && !s.resourceUsable(p.WorkspaceID) {
+		return false
+	}
+	if p.Stage == "DEVELOPMENT" {
+		sources, paths, base, complete := s.developmentSources(cd)
+		if s.NativeRoot != "" {
+			base = s.GitResources[p.WorkspaceID].Source
+		}
+		return complete && sameTaskSet(p.SourceTasks, sources) && slices.Equal(p.Paths, paths) && p.Base == base
+	}
+	if p.Base != v.DevelopmentSnapshot {
+		return false
+	}
+	switch p.Stage {
+	case "AUTHORING":
+		return true
+	case "QA_ARTIFACT":
+		set := v.Sets[coverage.ReviewWhitebox]
+		return set != nil && set.Status == "REVIEW" && s.candidateManifestCurrent(p, coverage.ReviewWhitebox)
+	case "REVIEW_READY":
+		if !p.Finalize || p.ReviewBase != s.BaseSnapshot {
+			return false
+		}
+		sources, paths, _, complete := s.developmentSources(cd)
+		if !complete || !sameTaskSet(p.SourceTasks, sources) {
+			return false
+		}
+		paths = slices.Clone(paths)
+		for _, mode := range s.validationKinds() {
+			if !s.caseSetReady(mode) || !s.candidateManifestCurrent(p, mode) {
+				return false
+			}
+			set := v.Sets[mode]
+			if len(set.Paths) > 0 {
+				artifact := p.QAArtifacts[mode]
+				if artifact.Identity != set.Candidate || !slices.Equal(artifact.Paths, set.Paths) {
+					return false
+				}
+				for _, path := range set.Paths {
+					if !slices.Contains(paths, path) {
+						paths = append(paths, path)
+					}
+				}
+			}
+		}
+		if p.BlackboxManifest != nil {
+			paths = append(paths, ".gates/results/"+s.RunID+".blackbox-cases.md")
+		}
+		slices.Sort(paths)
+		return slices.Equal(p.Paths, paths) && s.validateFinalCoverage() == nil
+	}
+	return false
+}
+
+// candidateManifestCurrent verifies all content against the signed version.
+// Carried context comes from retained manifests; a missing witness stays audit-only.
+func (s *State) candidateManifestCurrent(p CandidateParameters, mode coverage.ReviewKind) bool {
+	set := s.Validation.Sets[mode]
+	if set == nil || set.DesignTask != p.DesignTasks[mode] {
+		return false
+	}
+	if p.Generation == s.Validation.Generation {
+		return digestOfCanonical(manifestAtRoute(set.Manifest, p.RouteScope)) == p.CaseVersions[mode]
+	}
+	matches := func(original coverage.AcceptanceManifest) bool {
+		if original.Binding.ReviewKind != mode {
+			return false
+		}
+		original = manifestAtRoute(original, p.RouteScope)
+		original.Binding.RequirementRevision = p.RequirementRevision
+		if digestOfCanonical(original) != p.CaseVersions[mode] {
+			return false
+		}
+		current := set.Manifest
+		current.Binding = original.Binding
+		return digestOfCanonical(current) == p.CaseVersions[mode]
+	}
+	if mode == coverage.ReviewBlackbox && p.BlackboxManifest != nil && matches(*p.BlackboxManifest) {
+		return true
+	}
+	for action, record := range s.Results {
+		if record.Validation != nil && record.Validation.Binding == s.DispatchBindings[action] && record.Validation.Binding.Task == p.DesignTasks[mode] && record.Validation.Manifest != nil && matches(*record.Validation.Manifest) {
+			return true
+		}
+	}
+	for _, prior := range set.ReviewHistory {
+		if matches(prior.Manifest) {
+			return true
+		}
+	}
+	for _, wave := range s.Validation.Waves {
+		if wave.Generation != p.Generation || wave.RequirementRevision != p.RequirementRevision {
+			continue
+		}
+		for _, manifest := range wave.Coverage.Manifests {
+			if matches(manifest) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // candidateContextCurrent retains only explicitly carried source duties.
 // Output equality alone cannot authorize work from another requirement occurrence.
 func (s *State) candidateContextCurrent(p CandidateParameters) bool {

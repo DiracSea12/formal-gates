@@ -361,40 +361,26 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	if effect := s.ReconciledEffects[intent.ActionID]; effect.Status == "SUPERSEDED" || effect.Status == "WITHDRAWN" {
 		return nil
 	}
-	if params.WorkspaceID != "" && !s.resourceUsable(params.WorkspaceID) {
-		return nil
-	}
 	v := s.Validation
-	if s.abortRequested() || v == nil || !s.candidateInputsCurrent(intent, e.cfg.Definition) {
+	if !s.nativeEffectApplicable(intent, e.cfg.Definition) {
 		return nil
 	}
-	if params.Stage != "DEVELOPMENT" && params.Base != v.DevelopmentSnapshot {
-		return nil
-	}
-	if params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
-		modes := s.validationKinds()
-		if params.Stage == "QA_ARTIFACT" {
-			modes = []coverage.ReviewKind{coverage.ReviewWhitebox}
+	switch params.Stage {
+	case "DEVELOPMENT":
+		if v.DevelopmentSnapshot != "" {
+			return nil
 		}
-		for _, mode := range modes {
-			set := v.Sets[mode]
-			if set == nil || set.DesignTask != params.DesignTasks[mode] {
-				return nil
-			}
-			original := manifestAtRoute(set.Manifest, params.RouteScope)
-			original.Binding.RequirementRevision = params.RequirementRevision
-			if params.CaseVersions[mode] != digestOfCanonical(original) {
-				return nil
-			}
-			if params.Stage == "QA_ARTIFACT" && set.Status != "REVIEW" || params.Stage == "REVIEW_READY" && !s.caseSetReady(mode) {
-				return nil
-			}
-			if params.Stage == "REVIEW_READY" && len(set.Paths) > 0 {
-				artifact := params.QAArtifacts[mode]
-				if artifact.Identity != set.Candidate || !slices.Equal(artifact.Paths, set.Paths) {
-					return nil
-				}
-			}
+	case "AUTHORING":
+		if v.AuthoringWorkspace != "" {
+			return nil
+		}
+	case "QA_ARTIFACT":
+		if v.Sets[coverage.ReviewWhitebox].Candidate != "" {
+			return nil
+		}
+	case "REVIEW_READY":
+		if v.Candidate != nil {
+			return nil
 		}
 	}
 	if params.WorkspaceID != "" {
