@@ -108,8 +108,8 @@ func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 	return value
 }
 
-// repairAskDetail 按 wave 定位返修义务并展开授权摘要所需的全部事实；目标
-// wave 不在账时返回 nil（Detail 为空即无当前义务，Ask 不可授权）。
+// repairAskDetail 展开当前返修责任的完整授权摘要；请求的 wave 必须由
+// nextRepairWork 持有。
 func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 	work := s.nextRepairWork()
 	if work == nil || work.wave.ID != r.Target {
@@ -150,6 +150,7 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 // rebindValidationAsks binds every unresolved validation Ask to the committed
 // revision and its decision basis after dispatch and allowance projection.
 func rebindValidationAsks(s *State, revision uint64) {
+	s.reconcileRepairAsks()
 	for id, ask := range s.PendingAsks {
 		if ask.Resolved || ask.Validation == nil {
 			continue
@@ -161,6 +162,27 @@ func rebindValidationAsks(s *State, revision uint64) {
 		s.PendingAsks[id] = ask
 	}
 }
+
+// reconcileRepairAsks retires requests outside the current repair responsibility.
+// Request evidence remains intact; retirement grants no decision or task outcome.
+func (s *State) reconcileRepairAsks() bool {
+	work := s.nextRepairWork()
+	changed := false
+	for id, ask := range s.PendingAsks {
+		r := ask.Validation
+		if ask.Resolved || r == nil || r.Kind != "REPAIR" {
+			continue
+		}
+		if work != nil && r.Target == work.wave.ID && r.Binding.Task == work.task && !s.repairExtraAuthorized(work) {
+			continue
+		}
+		ask.Resolved = true
+		s.PendingAsks[id] = ask
+		changed = true
+	}
+	return changed
+}
+
 func (s *State) ensureValidationAsk(r ValidationRequest, nextRevision uint64) bool {
 	var options []AskOption
 	r, options = s.validationOffer(r)

@@ -2,6 +2,7 @@ package facade
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,142 @@ import (
 	"formal-gates/internal/engine/review"
 	"slices"
 )
+
+// An unsigned repair follows its current wave; historical requests retain
+// evidence without presenting a second executable authorization.
+func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
+	d := postwaveRepairOffer(t)
+	ask := d.validationAsk("REPAIR")
+	problems := slices.Clone(ask.Validation.Obligations)
+	if len(problems) != 2 {
+		t.Fatal("setup must retain both original problems")
+	}
+	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	var qa *protocol.ValidationTarget
+	for _, target := range wave.Targets {
+		if target.Kind == "QA" {
+			qa = target
+		}
+	}
+	if qa == nil {
+		t.Fatal("current QA target is missing")
+	}
+	choice := decideValidation(d, ask, "retry_qa", qa.Task.String())
+	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+	d.reopen()
+	d.drive()
+	id, input := d.action("engine.qa.execution")
+	d.receipt(id)
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prior protocol.PendingAsk
+	for _, pending := range before.State.PendingAsks {
+		if !pending.Resolved && pending.Validation != nil && pending.Validation.Kind == "REPAIR" && pending.Validation.Target == wave.ID {
+			if prior.RequestID != "" {
+				t.Fatal("unsigned repair already has duplicate current offers")
+			}
+			prior = pending
+		}
+	}
+	if prior.RequestID == "" {
+		t.Fatal("unsigned repair has no offer while QA is pending")
+	}
+	report := executionFor(input)
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"}}})
+	d.reopen()
+	d.drive()
+	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if current.Repair == nil || !reflect.DeepEqual(current.Repair.Problems, problems) {
+		t.Fatal("QA retry discarded retained problems")
+	}
+	var offers []PendingAskFace
+	for _, face := range d.run.PendingAsks {
+		if face.Validation != nil && face.Validation.Kind == "REPAIR" {
+			offers = append(offers, face)
+		}
+	}
+	if len(offers) != 1 || offers[0].Validation.Target != current.ID || offers[0].Validation.Binding.Task != current.Repair.Task || offers[0].Token == "" || !reflect.DeepEqual(offers[0].Validation.Obligations, problems) {
+		t.Fatalf("public repair offer does not identify one complete current duty: %+v", offers)
+	}
+	var summary struct{ Detail *json.RawMessage }
+	if err := json.Unmarshal(offers[0].Validation.Summary, &summary); err != nil || summary.Detail == nil {
+		t.Fatalf("current authorization lacks its repair summary: %s %v", offers[0].Validation.Summary, err)
+	}
+	after, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired := after.State.PendingAsks[prior.RequestID]
+	if !retired.Resolved {
+		t.Fatal("superseded request remains an active control obligation")
+	}
+	retired.Resolved = false
+	if !reflect.DeepEqual(retired, prior) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
+		t.Fatal("request retirement rewrote original request or decision evidence")
+	}
+	if _, fabricated := after.State.Decisions[prior.RequestID]; fabricated {
+		t.Fatal("request retirement fabricated a user decision")
+	}
+	if _, err := d.f.Freshness(prior.RequestID); err == nil {
+		t.Fatal("retired request still offers a fresh authorization token")
+	} else {
+		var rejection *protocol.RejectedError
+		if !errors.As(err, &rejection) || rejection.Code != protocol.CodeRequestResolved {
+			t.Fatalf("retired request freshness: %v", err)
+		}
+	}
+	beforeReplay := after
+	d.submit(choice)
+	afterReplay, err := d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(afterReplay, beforeReplay) {
+		t.Fatalf("recorded QA choice replay changed responsibility: %v", err)
+	}
+	var readers []*Facade
+	for i := 0; i < 2; i++ {
+		f, err := Open(d.f.root, d.run.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readers = append(readers, f)
+	}
+	type driveOutcome struct {
+		run Run
+		err error
+	}
+	outcomes := make(chan driveOutcome, len(readers))
+	for _, f := range readers {
+		go func(f *Facade) {
+			run, err := f.Drive()
+			outcomes <- driveOutcome{run, err}
+		}(f)
+	}
+	for range readers {
+		outcome := <-outcomes
+		if outcome.err != nil || outcome.run.Revision != after.Revision || len(outcome.run.PendingAsks) != 1 || outcome.run.PendingAsks[0].RequestID != offers[0].RequestID {
+			t.Fatalf("concurrent unchanged drive duplicated responsibility or authorization: %+v %v", outcome.run, outcome.err)
+		}
+	}
+	decideValidation(d, offers[0], "approve")
+	d.reopen()
+	d.drive()
+	id, input = d.action("engine.repair")
+	if input.Binding.WaveID != current.ID || input.Repair == nil || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
+		t.Fatal("approved repair lost its actual wave or retained problem input")
+	}
+	d.business(id, gateRepairResult(input))
+	d.reopen()
+	d.drive()
+	completed, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, found := completed.State.Results[id]
+	if !found || result.Validation == nil || result.Validation.Binding != input.Binding || !completed.State.PendingAsks[prior.RequestID].Resolved {
+		t.Fatal("repair completion or reopen lost actual input or retired request evidence")
+	}
+}
 
 func failCaseReviews(d *validationDriver, count int) {
 	d.t.Helper()

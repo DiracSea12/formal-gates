@@ -111,6 +111,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return e.advanceAbort(s, nextRevision)
 	}
 	changed := e.ensureRetryAsks(s, nextRevision)
+	changed = s.reconcileRepairAsks() || changed
 	// token cap 到达＝预算边界：落账 DISPATCH_BUDGET_DISPOSITION Ask（零签发由
 	// 签发闸执行、Ask 经本收尾单点）。cap 属派发预算包络——包络未就位（受理
 	// 前）不产生该边界；无配置时 cap 维度不参与判定。

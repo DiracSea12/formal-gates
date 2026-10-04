@@ -533,26 +533,8 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 // （wave 逐 target 状态与必跑用例）、已用/剩余轮数、dispatch signature/
 // TaskKey、engine allowance（权威 Guard 投影）与 owner cost/token cap 可用性。
 func TestRepairAskSummaryCarriesAuthorizationFacts(t *testing.T) {
-	engine, state, _ := guardPipelineFixture(t)
-	cd := engine.cfg.Definition
+	engine, state := guardRepairFixture(t)
 	w := &state.Validation.Waves[0]
-	for _, target := range w.Targets {
-		if target.Kind == "GATE" {
-			target.Status = "FAIL"
-			target.ResultAction = "act:gate-1"
-		} else {
-			target.Status = "PASS"
-			target.ResultAction = "act:qa-1"
-			target.RequiredCases = []string{"normal"}
-		}
-	}
-	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair", "native-1"), Problems: []string{"problem-1"}}
-	state.Validation.Findings["finding-1"] = &ValidationFinding{
-		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
-		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", Reason: "broken normal path", AcceptedRevision: 2}},
-	}
-	state.Validation.Problems["problem-1"] = &ValidationProblem{ID: "problem-1", FindingIDs: []string{"finding-1"}}
 	budget, err := engine.deriveGuardBudget(state)
 	if err != nil {
 		t.Fatal(err)
@@ -606,11 +588,38 @@ func TestRepairAskSummaryCarriesAuthorizationFacts(t *testing.T) {
 	}
 }
 
+// guardRepairFixture supplies the collected targets and adjudicated problem
+// owned by a current unsigned repair, without consuming a repair authorization.
+func guardRepairFixture(t *testing.T) (*Engine, *State) {
+	t.Helper()
+	engine, state, _ := guardPipelineFixture(t)
+	cd := engine.cfg.Definition
+	w := &state.Validation.Waves[0]
+	for _, target := range w.Targets {
+		if target.Kind == "GATE" {
+			target.Status = "FAIL"
+			target.ResultAction = "act:gate-1"
+		} else {
+			target.Status = "PASS"
+			target.ResultAction = "act:qa-1"
+			target.RequiredCases = []string{"normal"}
+		}
+	}
+	w.Status = "REPAIR"
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair", "native-1"), Problems: []string{"problem-1"}}
+	state.Validation.Findings["finding-1"] = &ValidationFinding{
+		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
+		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", Reason: "broken normal path", AcceptedRevision: 2}},
+	}
+	state.Validation.Problems["problem-1"] = &ValidationProblem{ID: "problem-1", FindingIDs: []string{"finding-1"}}
+	return engine, state
+}
+
 // TestValidationAskDigestBindsCommittedState：Ask 摘要 digest 在提交点重绑为
 // 已提交状态——同事务签发改变额度投影后，未决 Ask 的 digest 与重算一致
 // （DECIDE 的摘要重核可用）。
 func TestValidationAskDigestBindsCommittedState(t *testing.T) {
-	engine, state, _ := guardPipelineFixture(t)
+	engine, state := guardRepairFixture(t)
 	state.PendingAsks = map[string]PendingAsk{}
 	if !state.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: state.Validation.Waves[0].ID}, 7) {
 		t.Fatal("ask not created")
@@ -630,6 +639,9 @@ func TestValidationAskDigestBindsCommittedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	rebindValidationAsks(state, 8)
+	if state.PendingAsks[ask.RequestID].Resolved || ask.Validation.Binding.Task != state.Validation.Waves[0].Repair.Task {
+		t.Fatal("current repair offer lost its executable obligation")
+	}
 	if ask.Validation.StateRevision != 8 {
 		t.Fatalf("Ask revision = %d, want committed revision 8", ask.Validation.StateRevision)
 	}

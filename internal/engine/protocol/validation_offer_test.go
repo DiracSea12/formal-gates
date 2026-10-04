@@ -13,6 +13,11 @@ func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s := &State{PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
 			request := ValidationRequest{Kind: kind, Target: "obligation", Mode: coverage.ReviewBlackbox}
+			if kind == "REPAIR" {
+				_, s = guardRepairFixture(t)
+				request.Target = s.Validation.Waves[0].ID
+			}
+			decisions := digestOfCanonical(s.Decisions)
 			if !s.ensureValidationAsk(request, 1) {
 				t.Fatal("initial offer not created")
 			}
@@ -29,8 +34,8 @@ func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
 				if len(s.PendingAsks) != 1 || ask.Resolved || ask.Validation.StateRevision != revision {
 					t.Fatalf("current offer lost identity or revision: %+v", ask)
 				}
-				if len(s.Decisions) != 0 {
-					t.Fatal("revision advance consumed user authorization")
+				if digestOfCanonical(s.Decisions) != decisions {
+					t.Fatal("revision advance changed user authorization")
 				}
 				if digestOfCanonical(s.validationRequestBasis(*ask.Validation)) != ask.Validation.Digest {
 					t.Fatal("current revision retained a different decision basis")
