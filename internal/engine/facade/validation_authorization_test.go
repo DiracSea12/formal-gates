@@ -1419,7 +1419,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 					}
 					d.submit(fact)
 				}
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), intent.Terminate.Identity, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 				if err != nil {
 					t.Fatal(err)
 				}

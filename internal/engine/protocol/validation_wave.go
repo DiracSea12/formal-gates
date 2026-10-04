@@ -180,18 +180,8 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			changed = true
 		}
 	}
-	if w != nil && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE") {
-		settled, err := e.settleValidationWave(s, w)
-		if err != nil {
-			return changed, err
-		}
-		changed = settled || changed
-	}
-	for _, work := range s.repairWork() {
-		if work.result != nil || work.wave == w {
-			continue
-		}
-		settled, err := e.settleValidationWave(s, work.wave)
+	for i := range v.Waves {
+		settled, err := e.settleValidationWave(s, &v.Waves[i])
 		if err != nil {
 			return changed, err
 		}
@@ -664,7 +654,14 @@ func (s *State) validationDispositionReady(w *ValidationWave) bool {
 }
 
 func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error) {
-	if w == nil || !s.validationFindingsAdjudicated(w) {
+	if w == nil {
+		return false, nil
+	}
+	// Settlement belongs to the current adjudicating projection or an unfinished
+	// original repair. Replacement tasks retain their source wave as evidence.
+	current := w == s.currentValidationWave() && w.Generation == s.Validation.Generation && w.RequirementRevision == s.Validation.RequirementRevision && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE")
+	pending := s.validationRepairPending(w) && s.developmentResultRecord(w.Repair.Task) == nil
+	if !current && !pending || !s.validationFindingsAdjudicated(w) {
 		return false, nil
 	}
 	problems := []string{}
