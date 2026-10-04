@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"testing"
 
-	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 )
@@ -33,12 +32,25 @@ func TestPendingAskProjectionKeepsOneSnapshot(t *testing.T) {
 		if !exists {
 			t.Fatal("failed execution has no signed responsibility")
 		}
+		var failed protocol.HostActionReceipt
+		var issuedRevision uint64
+		for _, history := range snapshot.State.HostActionFailures {
+			for _, receipt := range history {
+				original := snapshot.State.PendingHostActions[receipt.ActionID]
+				if receipt.Correlation == intent.Correlation && original.Revision > issuedRevision {
+					failed, issuedRevision = receipt, original.Revision
+				}
+			}
+		}
+		if failed.ActionID == "" {
+			t.Fatal("failed native call has no recorded receipt")
+		}
 		if correlation == "" {
 			correlation = intent.Correlation
 		} else if intent.Correlation != correlation {
 			t.Fatal("same native responsibility changed its allowance identity")
 		}
-		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusFailed, authoring.FailureTransientEngine, map[string]any{})
+		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), failed.ActionID, failed.AdapterOperation, failed.Provider, failed.Correlation, failed.PayloadDigest, failed.Status, failed.FailureClass, failed.AdapterEvidence.Values)
 		if err != nil {
 			t.Fatal(err)
 		}

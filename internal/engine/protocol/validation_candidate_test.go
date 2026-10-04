@@ -21,9 +21,15 @@ func TestCarriedCandidateReceiptVerifiesFullManifest(t *testing.T) {
 				Cases:   []coverage.AcceptanceCase{{CaseID: "valid", Mode: coverage.CaseWhitebox, TestRef: "app_test.go::TestValid", Oracle: "accepted"}},
 				Edges:   []coverage.CoverageEdge{{SourceID: "requirement", PointID: "behavior", CaseID: "valid"}},
 			}
-			design := runtime.TaskKey{Node: "validation", Step: "qa.design", Scope: "signed-design"}
-			binding := WorkBinding{Task: design, RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route"}
-			params := CandidateParameters{Stage: "QA_ARTIFACT", Base: "development", RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route", Paths: []string{"app_test.go"}, SourceTasks: []runtime.TaskKey{design}, DesignTasks: map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: design}, CaseVersions: map[coverage.ReviewKind]string{coverage.ReviewWhitebox: digestOfCanonical(original)}}
+			development := runtime.TaskKey{Node: "validation", Step: "development.worker", Scope: "plan:command"}
+			design := runtime.TaskKey{Node: "validation", Step: "qa.design", Scope: "1:WHITEBOX"}
+			binding := WorkBinding{Task: design, RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route", Candidate: "development"}
+			params := CandidateParameters{
+				Stage: "QA_ARTIFACT", Base: "development", RequirementRevision: "signed-requirement", Generation: 1, RouteScope: "signed-route",
+				Paths: []string{"app_test.go"}, SourceTasks: []runtime.TaskKey{development},
+				DesignTasks:  map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: design},
+				CaseVersions: map[coverage.ReviewKind]string{coverage.ReviewWhitebox: digestOfCanonical(original)},
+			}
 			data, err := json.Marshal(original)
 			if err != nil {
 				t.Fatal(err)
@@ -49,7 +55,19 @@ func TestCarriedCandidateReceiptVerifiesFullManifest(t *testing.T) {
 			case "test-reference":
 				current.Cases[0].TestRef = "app_test.go::TestDifferent"
 			}
-			state := &State{Validation: &Validation{RequirementRevision: revision, Generation: generation, DevelopmentSnapshot: "development", Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: {DesignTask: design, Status: "REVIEW", Manifest: current, Version: digestOfCanonical(current)}}}, DispatchBindings: map[string]WorkBinding{"design": binding}, Results: map[string]WorkerResult{"design": {ActionID: "design", Validation: &ValidationResult{Binding: binding, Manifest: &original}}}, RequirementRevisions: []ConfirmedRevision{{Revision: revision, WorkDecisions: []RequirementWorkDecision{{Work: RequirementWork{ActionID: "design", Task: design, IssuedRevision: 1, RequirementRevision: "signed-requirement"}, Disposition: RequirementWorkCarry, Reason: "retain unchanged design"}}}}}
+			result := &ValidationResult{Binding: binding, Status: "PASS", Manifest: &original}
+			state := &State{
+				Validation: &Validation{
+					RequirementRevision: revision, Generation: generation, DevelopmentSnapshot: "development",
+					Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: {DesignTask: design, Status: "REVIEW", Manifest: current, Version: digestOfCanonical(current)}},
+				},
+				DispatchBindings: map[string]WorkBinding{"design": binding},
+				Results:          map[string]WorkerResult{"design": {ActionID: "design", Outcome: OutcomePass, Digest: digestOfCanonical(result), Validation: result}},
+				RequirementRevisions: []ConfirmedRevision{{Revision: revision, WorkDecisions: []RequirementWorkDecision{
+					{Work: RequirementWork{ActionID: "development", Task: development, IssuedRevision: 1, RequirementRevision: "signed-requirement"}, Disposition: RequirementWorkCarry, Reason: "retain unchanged development"},
+					{Work: RequirementWork{ActionID: "design", Task: design, IssuedRevision: 2, RequirementRevision: "signed-requirement"}, Disposition: RequirementWorkCarry, Reason: "retain unchanged design"},
+				}}},
+			}
 			if change == "missing-witness" {
 				state.Results = nil
 			}

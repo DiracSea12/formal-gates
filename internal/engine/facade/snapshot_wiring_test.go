@@ -125,7 +125,7 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(root, "git", "checkout", "-q", "master"); err != nil {
+	if _, err := runner.Run(root, "git", "checkout", "-q", "--detach", head); err != nil {
 		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct {

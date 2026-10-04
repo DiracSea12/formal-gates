@@ -6,8 +6,9 @@ import (
 	"slices"
 )
 
-// repairWork is a read-only view of a frozen obligation and its current Task.
-// WorkDecisions replace identity; Results alone discharges the current duty.
+// repairWork selects one frozen obligation per Task. WorkDecisions replace
+// identity; Results discharge the duty. Issued work retains its original wave;
+// unissued work follows its latest projection.
 type repairWork struct {
 	wave   *ValidationWave
 	task   runtime.TaskKey
@@ -40,7 +41,14 @@ func (s *State) repairWork() []repairWork {
 		if record == nil && !owed {
 			continue
 		}
-		work = append(work, repairWork{wave: w, task: task, result: record})
+		current := repairWork{wave: w, task: task, result: record}
+		if prior := slices.IndexFunc(work, func(previous repairWork) bool { return previous.task == task }); prior >= 0 {
+			if work[prior].result == nil && s.repairIssueRevision(task) == 0 {
+				work[prior] = current
+			}
+			continue
+		}
+		work = append(work, current)
 	}
 	return work
 }
