@@ -6,19 +6,21 @@ import (
 	"slices"
 )
 
-// repairIssueRevision freezes a logical repair's adjudication input at its first
-// actual issue. Retries and explicitly replaced attempts retain that boundary.
-func (s *State) repairIssueRevision(task runtime.TaskKey) uint64 {
+// repairIssue freezes a logical repair's wave and adjudication input at its
+// first actual issue. Retries and explicitly replaced attempts retain it.
+func (s *State) repairIssue(task runtime.TaskKey) (WorkBinding, uint64) {
 	task = s.sourceValidationTask(task)
+	var binding WorkBinding
 	var first uint64
 	for id, b := range s.DispatchBindings {
 		if s.sourceValidationTask(b.Task) == task {
 			if r := s.DispatchIssueRevisions[id]; r != 0 && (first == 0 || r < first) {
+				binding = b
 				first = r
 			}
 		}
 	}
-	return first
+	return binding, first
 }
 
 func findingResolutionAt(f *ValidationFinding, revision uint64) (FindingResolution, bool) {

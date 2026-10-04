@@ -27,6 +27,10 @@ func (s *State) repairWork() []repairWork {
 			continue
 		}
 		task := s.replacementFold(w.Repair.Task)
+		binding, issued := s.repairIssue(task)
+		if issued != 0 && binding.WaveID != w.ID {
+			continue
+		}
 		record := s.developmentResultRecord(task)
 		if record != nil {
 			b := record.Validation.Binding
@@ -43,9 +47,7 @@ func (s *State) repairWork() []repairWork {
 		}
 		current := repairWork{wave: w, task: task, result: record}
 		if prior := slices.IndexFunc(work, func(previous repairWork) bool { return previous.task == task }); prior >= 0 {
-			if work[prior].result == nil && s.repairIssueRevision(task) == 0 {
-				work[prior] = current
-			}
+			work[prior] = current
 			continue
 		}
 		work = append(work, current)
@@ -64,8 +66,11 @@ func (s *State) repairTaskFinished(task runtime.TaskKey) bool {
 func (s *State) signedCandidateRepair(w *ValidationWave) *ValidationWave {
 	for i := range s.Validation.Waves {
 		original := &s.Validation.Waves[i]
-		if original.Candidate == w.Candidate && original.Repair != nil && s.repairIssueRevision(original.Repair.Task) != 0 {
-			return original
+		if original.Candidate == w.Candidate && original.Repair != nil {
+			binding, issued := s.repairIssue(original.Repair.Task)
+			if issued != 0 && binding.WaveID == original.ID {
+				return original
+			}
 		}
 	}
 	return nil
@@ -151,7 +156,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 			continue
 		}
 		input := &RepairInput{Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
-		cutoff := s.repairIssueRevision(task)
+		_, cutoff := s.repairIssue(task)
 		for _, id := range w.wave.Repair.Problems {
 			problem := ValidationProblem{ID: id}
 			for _, f := range s.Validation.Findings {

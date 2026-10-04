@@ -756,3 +756,67 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 		t.Fatal("explicit artifact correction required a duplicate authorization")
 	}
 }
+
+// A repair first issued after a QA retry keeps that actual wave and its evidence.
+func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
+	d := postwaveRepairOffer(t)
+	ask := d.validationAsk("REPAIR")
+	if len(ask.Validation.Obligations) != 2 {
+		t.Fatalf("offered problems=%v", ask.Validation.Obligations)
+	}
+	first, second := ask.Validation.Obligations[0], ask.Validation.Obligations[1]
+	wave := d.run.Validation.Waves[2]
+	var qa, gate *protocol.ValidationTarget
+	for _, target := range wave.Targets {
+		if target.Kind == "QA" {
+			qa = target
+		} else {
+			gate = target
+		}
+	}
+	chosen := decideValidation(d, ask, "waive", first)
+	d.submit(chosen)
+	d.reopen()
+	d.drive()
+	current := d.run.Validation.Waves[2]
+	if current.Status != "REPAIR" || !reflect.DeepEqual(current.Repair.Problems, []string{second}) || current.Targets[gate.Task.String()].Status != "FAIL" {
+		t.Fatal("waiver discarded another problem or changed the raw verdict")
+	}
+	ask = d.validationAsk("REPAIR")
+	decideValidation(d, ask, "retry_qa", qa.Task.String())
+	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+	d.reopen()
+	d.drive()
+	id, in := d.action("engine.qa.execution")
+	report := executionFor(in)
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.reopen()
+	d.drive()
+	current = d.run.Validation.Waves[3]
+	if current.Status != "REPAIR" || !reflect.DeepEqual(current.Repair.Problems, []string{second}) || current.Targets[gate.Task.String()].ResultAction != gate.ResultAction || current.Counted {
+		t.Fatalf("QA retry lost a remaining gate obligation or counted the snapshot twice: status=%s repair=%+v gateAction=%s expected=%s counted=%t", current.Status, current.Repair, current.Targets[gate.Task.String()].ResultAction, gate.ResultAction, current.Counted)
+	}
+	ask = d.validationAsk("REPAIR")
+	if !reflect.DeepEqual(ask.Validation.Obligations, []string{second}) {
+		t.Fatal("already waived problem was reoffered")
+	}
+	issuedWave := current.ID
+	decideValidation(d, ask, "approve")
+	d.reopen()
+	d.drive()
+	id, in = d.action("engine.repair")
+	if in.Binding.WaveID != issuedWave || in.Repair == nil || !reflect.DeepEqual(in.Repair.Obligation.Problems, []string{second}) {
+		t.Fatalf("newly issued repair changed its current obligation: binding=%+v intendedWave=%s input=%+v", in.Binding, issuedWave, in.Repair)
+	}
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair input validation", Build: []string{"build passed"}, Tests: []string{"input checks passed"}, AffectedCases: []string{"invalid"}}})
+	d.reopen()
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, found := snapshot.State.Results[id]
+	if !found || result.Validation == nil || result.Validation.Binding != in.Binding {
+		t.Fatal("completed repair lost its actual signed input after recovery")
+	}
+}
