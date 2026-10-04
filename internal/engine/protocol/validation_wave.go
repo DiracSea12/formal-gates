@@ -111,7 +111,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return e.advanceAbort(s, nextRevision)
 	}
 	changed := e.ensureRetryAsks(s, nextRevision)
-	changed = s.reconcileRepairAsks() || changed
+	changed = s.reconcileValidationRemedyAsks(nextRevision) || changed
 	// token cap 到达＝预算边界：落账 DISPATCH_BUDGET_DISPOSITION Ask（零签发由
 	// 签发闸执行、Ask 经本收尾单点）。cap 属派发预算包络——包络未就位（受理
 	// 前）不产生该边界；无配置时 cap 维度不参与判定。
@@ -181,7 +181,17 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		}
 	}
 	if w != nil && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE") {
-		settled, err := e.settleValidationWave(s)
+		settled, err := e.settleValidationWave(s, w)
+		if err != nil {
+			return changed, err
+		}
+		changed = settled || changed
+	}
+	for _, work := range s.repairWork() {
+		if work.result != nil || work.wave == w {
+			continue
+		}
+		settled, err := e.settleValidationWave(s, work.wave)
 		if err != nil {
 			return changed, err
 		}
@@ -653,8 +663,7 @@ func (s *State) validationDispositionReady(w *ValidationWave) bool {
 	return w != nil && (s.validationRepairPending(w) || w.Status == "ADJUDICATING" && len(s.validationObligations(w)) > 0 && s.validationFindingsAdjudicated(w))
 }
 
-func (e *Engine) settleValidationWave(s *State) (bool, error) {
-	w := s.currentValidationWave()
+func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error) {
 	if w == nil || !s.validationFindingsAdjudicated(w) {
 		return false, nil
 	}
@@ -701,16 +710,25 @@ func (e *Engine) settleValidationWave(s *State) (bool, error) {
 		return false, nil
 	}
 
-	changed := w.Status != "REPAIR" || w.Repair == nil || !slices.Equal(w.Repair.Problems, problems) || w.Repair.PureP2 != pureP2
+	task := pipelineTask(e.cfg.Definition, "engine.repair", w.Candidate.Identity)
+	// Native identities may contain separators; the logical snapshot key uses
+	// its content digest, never a platform path embedded in TaskKey syntax.
+	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")
+	current := s.replacementFold(task)
+	_, issued := s.repairIssue(current)
+	requeued := issued == 0 && s.developmentResultRecord(current) == nil && s.repairTaskFinished(current)
+	if requeued {
+		// New findings continue the unique unsigned plan. No issued execution or
+		// ended retry is reopened; the waiver decision retains its original scope.
+		s.Tasks[current] = runtime.TaskQueued
+	}
+	changed := requeued || w.Status != "REPAIR" || w.Repair == nil || !slices.Equal(w.Repair.Problems, problems) || w.Repair.PureP2 != pureP2
 	if !changed {
 		return false, nil
 	}
 	w.Counted = w.Counted || s.validationWaveCountable(w)
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(e.cfg.Definition, "engine.repair", w.Candidate.Identity), Problems: problems, PureP2: pureP2}
-	// Native identities may contain separators; the logical snapshot key uses
-	// its content digest, never a platform path embedded in TaskKey syntax.
-	w.Repair.Task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")
+	w.Repair = &ValidationRepair{Task: task, Problems: problems, PureP2: pureP2}
 	return changed, nil
 }
 

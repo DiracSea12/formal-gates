@@ -31,8 +31,7 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 		r.Remedies = []string{"FRESH_REVIEW", "REDESIGN", "WAIVE", "REQUEST_REQUIREMENT_CHANGE", "ABORT"}
 	case "REPAIR":
 		options[0].Label = "One additional repair"
-		options = append(options, AskOption{ID: "retry_qa", Label: "Retry selected QA on this candidate"}, AskOption{ID: "waive", Label: "Waive selected exact obligations"})
-		r.Remedies = []string{"REPAIR", "RETRY_QA", "WAIVE", "REQUEST_REQUIREMENT_CHANGE", "ABORT"}
+		r.Remedies = []string{"REPAIR"}
 		if work := s.nextRepairWork(); work != nil {
 			r.Obligations = s.validationObligations(work.wave)
 			r.Binding.WaveID = work.wave.ID
@@ -41,6 +40,22 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 			if work.task != work.wave.Repair.Task {
 				r.Binding.Candidate = s.Validation.DevelopmentSnapshot
 			}
+			if targets, err := s.retryableValidationQA(work.wave, s.currentValidationWave()); err == nil && len(targets) > 0 {
+				options = append(options, AskOption{ID: "retry_qa", Label: "Retry selected QA on this candidate"})
+				r.Remedies = append(r.Remedies, "RETRY_QA")
+			}
+			if (work.wave.Status == "REPAIR" || work.wave.Status == "ADJUDICATING") && len(r.Obligations) > 0 {
+				options = append(options, AskOption{ID: "waive", Label: "Waive selected exact obligations"})
+				r.Remedies = append(r.Remedies, "WAIVE")
+			}
+		}
+		r.Remedies = append(r.Remedies, "REQUEST_REQUIREMENT_CHANGE", "ABORT")
+	case "QA_RETRY":
+		w := s.currentValidationWave()
+		if w == nil || r.Target != w.ID || r.Binding.WaveID != w.ID {
+			options = nil
+		} else if targets, err := s.retryableValidationQA(w, w); err != nil || len(targets) == 0 {
+			options = nil
 		}
 	case "DISPOSE":
 		if w := s.currentValidationWave(); w != nil {
@@ -217,7 +232,7 @@ func (s *State) caseSetReady(mode coverage.ReviewKind) bool {
 	return set != nil && (set.Status == "FROZEN" || s.caseSetWaiver(mode) != "")
 }
 
-func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision) error {
+func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision, w *ValidationWave) error {
 	r := ask.Validation
 	if r.Kind == "QA_REVIEW" || r.Kind == "RETRY" && r.Mode != "" && r.Binding.WaveID == "" {
 		set := s.Validation.Sets[r.Mode]
@@ -238,7 +253,6 @@ func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision
 		}
 		return nil
 	}
-	w := s.currentValidationWave()
 	if w == nil || w.ID != r.Binding.WaveID || len(d.Obligations) == 0 {
 		return validationError("waiver requires exact current obligations")
 	}
@@ -285,31 +299,28 @@ func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision
 
 // Rerunning QA creates a new semantic obligation on the same snapshot. The
 // original request identifies it; attempts and repairs keep their own identities.
-func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecision) error {
-	old := s.currentValidationWave()
-	if old == nil || old.ID != ask.Validation.Target || len(d.Obligations) == 0 {
+func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecision, source *ValidationWave) error {
+	if source == nil || source.ID != ask.Validation.Target || len(d.Obligations) == 0 {
 		return validationError("QA retry needs selected targets on the current wave")
+	}
+	projection := s.currentValidationWave()
+	eligible, err := s.retryableValidationQA(source, projection)
+	if err != nil {
+		return err
 	}
 	selected := map[string]bool{}
 	for _, id := range d.Obligations {
-		target := old.Targets[id]
-		if selected[id] || target == nil || target.Kind != "QA" || target.Status == "AUTHORIZED_SKIP" || target.Status == "DISPOSED" {
+		target := source.Targets[id]
+		if selected[id] || target == nil || !slices.Contains(eligible, target) {
 			return validationError("QA retry target must be a selected approved QA obligation")
 		}
-		if _, _, err := s.executionContract(target.Mode, old); err != nil {
+		if _, _, err := s.executionContract(target.Mode, source); err != nil {
 			return err
 		}
 		selected[id] = true
-	}
-	// An in-flight repair still owns its snapshot. QA retry cannot replace that
-	// issued action or create a second implementation repair for the candidate.
-	for _, work := range s.repairWork() {
-		if work.result != nil {
-			continue
-		}
-		for action, binding := range s.DispatchBindings {
-			if binding.Task == work.task && (s.liveDispatch(action) || s.EndedAttempts[binding.Task].AwaitingResult) {
-				return validationError("wait for the issued candidate repair before QA retry")
+		for key, current := range projection.Targets {
+			if current.Kind == target.Kind && current.Mode == target.Mode {
+				selected[key] = true
 			}
 		}
 	}
@@ -318,14 +329,22 @@ func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecisi
 			s.retireAction(action, "", "user requested fresh QA on the same snapshot")
 		}
 	}
-	if !e.freezeValidationWave(s, old.Scope, ask.RequestID, old.SourceTasks) {
+	for _, wave := range []*ValidationWave{source, projection} {
+		for key, target := range wave.Targets {
+			if selected[key] {
+				delete(s.EndedAttempts, target.Task)
+			}
+		}
+	}
+	projectionID := projection.ID
+	if !e.freezeValidationWave(s, projection.Scope, ask.RequestID, projection.SourceTasks) {
 		return validationError("confirmed coverage relations are incomplete")
 	}
 	current := s.currentValidationWave()
 	// Appending can relocate the wave slice; source identity stays explicit.
-	old = s.validationWave(ask.Validation.Target)
+	projection = s.validationWave(projectionID)
 	for key, target := range current.Targets {
-		for oldKey, previous := range old.Targets {
+		for oldKey, previous := range projection.Targets {
 			if target.Kind != previous.Kind || target.Mode != previous.Mode || target.Gate != previous.Gate {
 				continue
 			}
@@ -346,6 +365,41 @@ func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecisi
 		Scope     coverage.ScopeMode
 	}{current.Candidate, current.Versions, current.RouteDigest, sortedTargetKeys(current), current.Scope})
 	return nil
+}
+
+// Eligibility compares frozen prospective duties, without granting carry or
+// validating contracts again. Accepted results keep their physical bindings;
+// contract errors are returned by the existing selected-action acceptor.
+func (s *State) retryableValidationQA(source, projection *ValidationWave) ([]*ValidationTarget, error) {
+	if source == nil || projection == nil || projection.Status == "INVALIDATED" || projection.Status == "REPAIRED" {
+		return nil, validationError("QA retry needs selected targets on the current wave")
+	}
+	for _, work := range s.repairWork() {
+		if work.result != nil {
+			continue
+		}
+		for action, binding := range s.DispatchBindings {
+			if binding.Task == work.task && (s.liveDispatch(action) || s.EndedAttempts[binding.Task].AwaitingResult) {
+				return nil, validationError("wait for the issued candidate repair before QA retry")
+			}
+		}
+	}
+	var targets []*ValidationTarget
+	for _, target := range source.Targets {
+		if target.Kind != "QA" || target.Status == "AUTHORIZED_SKIP" || target.Status == "DISPOSED" {
+			continue
+		}
+		if !s.sameValidationDuty(WorkBinding{WaveID: source.ID, Task: target.Task}, projection) {
+			continue
+		}
+		for _, current := range projection.Targets {
+			if current.Kind == target.Kind && current.Mode == target.Mode && current.Status != "AUTHORIZED_SKIP" && current.Status != "DISPOSED" {
+				targets = append(targets, target)
+				break
+			}
+		}
+	}
+	return targets, nil
 }
 
 // ValidationNotGuaranteed reports current explicit exceptions without converting

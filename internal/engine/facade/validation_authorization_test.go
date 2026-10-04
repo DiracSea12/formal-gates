@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/runtime"
 	"slices"
 )
 
@@ -956,4 +957,596 @@ func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
 	if !found || result.Validation == nil || result.Validation.Binding != in.Binding {
 		t.Fatal("completed repair lost its actual signed input after recovery")
 	}
+}
+
+func authorizationSnapshot(d *validationDriver) protocol.Snapshot {
+	d.t.Helper()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	return snapshot
+}
+
+func repairOfferQA(d *validationDriver, ask PendingAskFace) *protocol.ValidationTarget {
+	d.t.Helper()
+	for _, wave := range d.run.Validation.Waves {
+		if wave.ID == ask.Validation.Binding.WaveID {
+			for _, target := range wave.Targets {
+				if target.Kind == "QA" {
+					return target
+				}
+			}
+		}
+	}
+	d.t.Fatal("repair offer must display a real source QA target")
+	return nil
+}
+
+func repeatRepairQA(d *validationDriver) {
+	d.t.Helper()
+	ask := d.validationAsk("REPAIR")
+	qa := repairOfferQA(d, ask)
+	decideValidation(d, ask, "retry_qa", qa.Task.String())
+	d.reopen()
+	d.drive()
+}
+
+func assertResolvedAuthorization(d *validationDriver, prior protocol.PendingAsk, choice protocol.Event) {
+	d.t.Helper()
+	after := authorizationSnapshot(d)
+	retired := after.State.PendingAsks[prior.RequestID]
+	if !retired.Resolved || after.State.Decisions[prior.RequestID].EventID != string(choice.ID) || after.State.Decisions[prior.RequestID].Choice != choice.Decide.Choice {
+		d.t.Fatal("choice lost its resolved request or actual decision")
+	}
+	retired.Resolved = prior.Resolved
+	if !reflect.DeepEqual(retired, prior) || !reflect.DeepEqual(after.State.Decisions[prior.RequestID].Validation, choice.Decide.Validation) {
+		d.t.Fatal("accepted choice rewrote the original request or typed decision")
+	}
+}
+
+func assertAuthorizationReplay(d *validationDriver, event protocol.Event) {
+	d.t.Helper()
+	d.reopen()
+	d.drive()
+	before := authorizationSnapshot(d)
+	d.submit(event)
+	d.reopen()
+	d.drive()
+	if after := authorizationSnapshot(d); !reflect.DeepEqual(after, before) {
+		d.t.Fatal("recorded choice replay or reopen changed business facts")
+	}
+	type outcome struct{ err error }
+	results := make(chan outcome, 2)
+	for i := 0; i < 2; i++ {
+		reader, err := Open(d.f.root, d.run.RunID)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		go func() { _, err := reader.Drive(); results <- outcome{err} }()
+	}
+	for i := 0; i < 2; i++ {
+		if result := <-results; result.err != nil {
+			d.t.Fatal(result.err)
+		}
+	}
+	if after := authorizationSnapshot(d); !reflect.DeepEqual(after, before) {
+		d.t.Fatal("concurrent drive duplicated authorization, work or evidence")
+	}
+}
+
+func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
+	for _, choice := range []string{"approve", "waive", "retry_qa"} {
+		t.Run(choice, func(t *testing.T) {
+			d := postwaveRepairOffer(t)
+			repeatRepairQA(d)
+			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+			qaAction, qaInput := d.action("engine.qa.execution")
+			d.receipt(qaAction)
+			d.reopen()
+			d.drive()
+			ask := d.validationAsk("REPAIR")
+			for _, legal := range []string{"approve", "waive", "retry_qa"} {
+				if !slices.ContainsFunc(ask.Options, func(option protocol.AskOption) bool { return string(option.ID) == legal }) {
+					t.Fatalf("pending QA lost legal displayed choice %s", legal)
+				}
+			}
+			if ask.Validation.Target == qaInput.Binding.WaveID || len(ask.Validation.Obligations) != 2 {
+				t.Fatal("fixture must have an older owed repair and two displayed problems")
+			}
+			before := authorizationSnapshot(d)
+			var selected []string
+			if choice == "waive" {
+				selected = []string{ask.Validation.Obligations[0]}
+			} else if choice == "retry_qa" {
+				selected = []string{repairOfferQA(d, ask).Task.String()}
+			}
+			event := decideValidation(d, ask, choice, selected...)
+			assertResolvedAuthorization(d, before.State.PendingAsks[ask.RequestID], event)
+			after := authorizationSnapshot(d)
+			if !reflect.DeepEqual(before.State.Validation.Findings, after.State.Validation.Findings) || !reflect.DeepEqual(before.State.Results, after.State.Results) {
+				t.Fatal("authorization changed actual findings or completed results")
+			}
+			if choice == "retry_qa" {
+				if _, retired := after.State.ObsoleteActions[qaAction]; !retired {
+					t.Fatal("retry did not retire the actual current selected QA")
+				}
+				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+				fresh, input := d.action("engine.qa.execution")
+				if fresh == qaAction || input.Binding.Task == qaInput.Binding.Task || input.Binding.Candidate != qaInput.Binding.Candidate {
+					t.Fatal("retry reused the selected execution or changed candidate")
+				}
+			} else {
+				if !reflect.DeepEqual(before.State.DispatchBindings[qaAction], after.State.DispatchBindings[qaAction]) || !reflect.DeepEqual(before.State.SpawnReceipts[qaAction], after.State.SpawnReceipts[qaAction]) || after.State.PendingActions[qaAction].ActionID != qaAction {
+					t.Fatal("repair choice cancelled or changed unselected running QA")
+				}
+				problems := slices.Clone(ask.Validation.Obligations)
+				if choice == "waive" {
+					problems = problems[1:]
+					current := d.validationAsk("REPAIR")
+					if !reflect.DeepEqual(current.Validation.Obligations, problems) {
+						t.Fatal("partial waiver did not project the exact remaining problem")
+					}
+					decideValidation(d, current, "approve")
+				}
+				_, input := d.action("engine.repair")
+				if input.Binding.WaveID != ask.Validation.Binding.WaveID || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
+					t.Fatal("actual signed repair input differs from current displayed obligations")
+				}
+			}
+			assertAuthorizationReplay(d, event)
+		})
+	}
+}
+
+func TestQARetryReplacesSelectedExecution(t *testing.T) {
+	for _, life := range []string{"unissued", "running", "awaiting-result", "completed"} {
+		t.Run(life, func(t *testing.T) {
+			d := postwaveRepairOffer(t)
+			repeatRepairQA(d)
+			var action string
+			var input protocol.ValidationInput
+			if life != "unissued" {
+				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+				action, input = d.action("engine.qa.execution")
+				d.receipt(action)
+			}
+			if life == "awaiting-result" {
+				attempt := d.run.PendingActions[action].AttemptID
+				for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+					progress, err := protocol.NewTaskEvent(d.eventID(), input.Binding.Task, attempt, status)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(progress)
+				}
+			} else if life == "completed" {
+				report := executionFor(input)
+				d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+			}
+			d.reopen()
+			d.drive()
+			ask := d.validationAsk("REPAIR")
+			before := authorizationSnapshot(d)
+			projection := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if life == "awaiting-result" && !before.State.EndedAttempts[input.Binding.Task].AwaitingResult {
+				t.Fatal("fixture did not reach actual awaiting-result transport state")
+			}
+			if life == "unissued" {
+				for _, in := range d.run.ValidationInputs {
+					if in.Handler == "engine.qa.execution" {
+						t.Fatal("unissued QA already has an actual execution")
+					}
+				}
+			}
+			event := decideValidation(d, ask, "retry_qa", repairOfferQA(d, ask).Task.String())
+			assertResolvedAuthorization(d, before.State.PendingAsks[ask.RequestID], event)
+			after := authorizationSnapshot(d)
+			current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if current.AuthorizationRequest != ask.RequestID || current.Counted || current.Candidate != projection.Candidate {
+				t.Fatal("retry lost request authority or counted the same candidate again")
+			}
+			for key, target := range projection.Targets {
+				if target.Kind != "QA" && !reflect.DeepEqual(current.Targets[key], target) {
+					t.Fatal("retry replaced unselected current gate evidence")
+				}
+			}
+			if action != "" {
+				if !reflect.DeepEqual(before.State.SpawnReceipts[action], after.State.SpawnReceipts[action]) || !reflect.DeepEqual(before.State.DispatchBindings[action], after.State.DispatchBindings[action]) || before.State.IssueRevisions[action] != after.State.IssueRevisions[action] {
+					t.Fatal("replacement rewrote actual dispatch identity or receipt")
+				}
+				if life == "completed" {
+					if !reflect.DeepEqual(before.State.Results[action], after.State.Results[action]) {
+						t.Fatal("retry erased a completed selected result")
+					}
+					if _, retired := after.State.ObsoleteActions[action]; retired {
+						t.Fatal("completed execution was retired as still live")
+					}
+				} else {
+					retired, found := after.State.ObsoleteActions[action]
+					if !found || retired.Task != input.Binding.Task {
+						t.Fatal("retry left selected actual execution active")
+					}
+					if life == "awaiting-result" && retired.AttemptID != before.State.EndedAttempts[input.Binding.Task].ID {
+						t.Fatal("retirement lost known ended attempt identity")
+					}
+					if _, ended := after.State.EndedAttempts[input.Binding.Task]; ended {
+						t.Fatal("selected awaiting result remains reusable")
+					}
+				}
+			}
+			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+			fresh, freshInput := d.action("engine.qa.execution")
+			if fresh == action || freshInput.Binding.Task == input.Binding.Task {
+				t.Fatal("fresh QA continued a replaced execution")
+			}
+			if action != "" {
+				if life == "completed" {
+					raw := before.State.Results[action]
+					accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: raw.Provider, Outcome: raw.Outcome, PayloadDigest: raw.PayloadDigest, Validation: raw.Validation}})
+					if accepted.Status != "DUPLICATE" {
+						t.Fatal("completed original result cannot be replayed exactly")
+					}
+				} else {
+					report := executionFor(input)
+					accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "selected-qa-late-result", Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"}}})
+					late := authorizationSnapshot(d)
+					if accepted.Status != "OBSOLETE_RESULT" || len(late.State.ObsoleteResults[action]) != 1 || late.State.ObsoleteResults[action][0].Validation.Binding != input.Binding || late.State.ObsoleteResults[action][0].PayloadDigest != "selected-qa-late-result" {
+						t.Fatal("late selected result was not retained solely as its original obsolete fact")
+					}
+					if _, effective := late.State.Results[action]; effective {
+						t.Fatal("obsolete QA became an effective result")
+					}
+				}
+			}
+			report := executionFor(freshInput)
+			d.business(fresh, protocol.ValidationResult{Binding: freshInput.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+			assertAuthorizationReplay(d, event)
+		})
+	}
+}
+
+func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
+	for _, extent := range []string{"partial", "all"} {
+		for _, verdict := range []string{"PASS", "FAIL"} {
+			t.Run(extent+"/"+verdict, func(t *testing.T) {
+				d := postwaveRepairOffer(t)
+				repeatRepairQA(d)
+				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+				qa, input := d.action("engine.qa.execution")
+				d.receipt(qa)
+				ask := d.validationAsk("REPAIR")
+				before := authorizationSnapshot(d)
+				selected := slices.Clone(ask.Validation.Obligations)
+				var remaining []string
+				if extent == "partial" {
+					remaining = selected[1:]
+					selected = selected[:1]
+				}
+				event := decideValidation(d, ask, "waive", selected...)
+				assertResolvedAuthorization(d, before.State.PendingAsks[ask.RequestID], event)
+				afterWaive := authorizationSnapshot(d)
+				if extent == "all" && afterWaive.State.Tasks[ask.Validation.Binding.Task] != runtime.TaskTerminal {
+					t.Fatal("whole waiver resolved only the request, leaving its unsigned task owed")
+				}
+				if _, live := afterWaive.State.PendingActions[qa]; !live {
+					t.Fatal("waiver cancelled unselected fresh QA")
+				}
+				report := executionFor(input)
+				if verdict == "FAIL" {
+					failed := false
+					for i := range report.Records {
+						if report.Records[i].CaseID == "invalid" && report.Records[i].Provenance == coverage.ProvenanceExecuted {
+							report.Records[i].Result = coverage.ExecutedFail
+							report.Records[i].Observation = "malformed command exits successfully on this fresh execution"
+							report.Records[i].Comparison = "specified invalid-input oracle requires rejection"
+							failed = true
+						}
+					}
+					if !failed {
+						t.Fatal("fixture must fail a newly executed case, never an inherited row")
+					}
+				}
+				d.business(qa, protocol.ValidationResult{Binding: input.Binding, Status: verdict, Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+				if verdict == "FAIL" {
+					found := false
+					for id, finding := range d.run.Validation.Findings {
+						if finding.ExecutionFailure != nil && finding.ExecutionFailure.ResultAction == qa {
+							resolution := executionFailureResolution(id)
+							resolution.RootCause = "fresh execution exposes an independent malformed-command parser failure"
+							d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: input.Binding.WaveID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
+							finding = d.run.Validation.Findings[id]
+							if len(finding.History) != 1 || slices.Contains(ask.Validation.Obligations, finding.History[0].ProblemID) {
+								t.Fatal("new QA failure did not retain independent source responsibility")
+							}
+							remaining = append(remaining, finding.History[0].ProblemID)
+							found = true
+						}
+					}
+					if !found {
+						t.Fatal("fresh actual FAIL did not create its execution finding")
+					}
+				}
+				d.reopen()
+				d.drive()
+				slices.Sort(remaining)
+				current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				after := authorizationSnapshot(d)
+				for id, result := range before.State.Results {
+					if !reflect.DeepEqual(after.State.Results[id], result) {
+						t.Fatal("waiver or fresh result rewrote original completed evidence")
+					}
+				}
+				for id, finding := range before.State.Validation.Findings {
+					if !reflect.DeepEqual(after.State.Validation.Findings[id], finding) {
+						t.Fatal("waiver or fresh result rewrote original failure facts")
+					}
+				}
+				if after.State.Results[qa].Validation.Binding != input.Binding || !reflect.DeepEqual(after.State.Results[qa].Validation.Execution, &report) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], afterWaive.State.Decisions[ask.RequestID]) {
+					t.Fatal("actual fresh result or waiver decision lost its complete content")
+				}
+				if len(remaining) > 0 {
+					if current.Repair == nil || current.Repair.Task != ask.Validation.Binding.Task || !reflect.DeepEqual(current.Repair.Problems, remaining) || current.Counted {
+						t.Fatal("fresh result lost unique unsigned plan or exact unwaived obligations")
+					}
+					offer := d.validationAsk("REPAIR")
+					if !reflect.DeepEqual(offer.Validation.Obligations, remaining) {
+						t.Fatal("repair authorization omits remaining or fresh obligations")
+					}
+					decideValidation(d, offer, "approve")
+					repair, repairInput := d.action("engine.repair")
+					if repairInput.Binding.Task != ask.Validation.Binding.Task || repairInput.Binding.WaveID != current.ID || !reflect.DeepEqual(repairInput.Repair.Obligation.Problems, remaining) {
+						t.Fatal("actual repair input differs from unique current plan")
+					}
+					result := gateRepairResult(repairInput)
+					d.business(repair, result)
+					d.reopen()
+					d.drive()
+					completed := authorizationSnapshot(d).State.Results[repair]
+					if !reflect.DeepEqual(completed.Validation, &result) {
+						t.Fatal("persisted repair result lost its signed input or development evidence")
+					}
+				} else {
+					if current.Scope == coverage.ScopeFull && current.Status == "COLLECTING" {
+						full, fullInput := d.action("engine.qa.execution")
+						fullReport := executionFor(fullInput)
+						d.business(full, protocol.ValidationResult{Binding: fullInput.Binding, Status: "PASS", Execution: &fullReport, Tool: "app-v1", Environment: "isolated-project"})
+					}
+					d.reopen()
+					d.drive()
+					current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+					if current.Status != "COMPLETE" || !d.run.NotGuaranteed || authorizationSnapshot(d).State.Tasks[ask.Validation.Binding.Task] != runtime.TaskTerminal {
+						t.Fatal("whole waiver with fresh PASS failed to complete full validation as not guaranteed")
+					}
+				}
+				assertAuthorizationReplay(d, event)
+			})
+		}
+	}
+}
+
+func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
+	d := postwaveRepairOffer(t)
+	repeatRepairQA(d)
+	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+	qa, qaInput := d.action("engine.qa.execution")
+	d.receipt(qa)
+	ask := d.validationAsk("REPAIR")
+	event := decideValidation(d, ask, "approve")
+	repair, input := d.action("engine.repair")
+	d.receipt(repair)
+	before := authorizationSnapshot(d)
+	report := executionFor(qaInput)
+	d.business(qa, protocol.ValidationResult{Binding: qaInput.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.reopen()
+	d.drive()
+	after := authorizationSnapshot(d)
+	actual, actualInput := d.action("engine.repair")
+	if actual != repair || !reflect.DeepEqual(actualInput, input) || after.State.DispatchBindings[repair] != before.State.DispatchBindings[repair] || after.State.IssueRevisions[repair] != before.State.IssueRevisions[repair] || !reflect.DeepEqual(after.State.PendingAsks[ask.RequestID], before.State.PendingAsks[ask.RequestID]) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
+		t.Fatal("fresh QA result moved an already signed repair, request or decision")
+	}
+	result := gateRepairResult(input)
+	d.business(repair, result)
+	d.reopen()
+	d.drive()
+	if !reflect.DeepEqual(authorizationSnapshot(d).State.Results[repair].Validation, &result) {
+		t.Fatal("signed repair completion lost its exact original input and evidence")
+	}
+	assertAuthorizationReplay(d, event)
+}
+
+func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
+	for _, choice := range []string{"decline", "requirement", "abort"} {
+		t.Run(choice, func(t *testing.T) {
+			d := postwaveRepairOffer(t)
+			repeatRepairQA(d)
+			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
+			qa, _ := d.action("engine.qa.execution")
+			d.receipt(qa)
+			ask := d.validationAsk("REPAIR")
+			before := authorizationSnapshot(d)
+			var event protocol.Event
+			if choice == "decline" {
+				event = protocol.Event{ID: d.eventID(), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "decline"}}
+				d.submit(event)
+			} else {
+				event = decideValidation(d, ask, choice)
+			}
+			assertResolvedAuthorization(d, before.State.PendingAsks[ask.RequestID], event)
+			if choice == "requirement" {
+				var request PendingAskFace
+				for _, pending := range d.run.PendingAsks {
+					if pending.Control == protocol.ControlRequestRequirementChange {
+						request = pending
+					}
+				}
+				if request.RequestID == "" {
+					t.Fatal("requirement choice did not create its actual confirmation request")
+				}
+				d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.RequestID), Token: request.Token, Choice: "abort"}})
+				if authorizationSnapshot(d).State.RequirementRevision() != before.State.RequirementRevision() {
+					t.Fatal("cancelled requirement changed approved requirement")
+				}
+			}
+			if choice != "abort" {
+				after := authorizationSnapshot(d)
+				if after.State.Tasks[ask.Validation.Binding.Task] == runtime.TaskTerminal || !reflect.DeepEqual(after.State.Results, before.State.Results) {
+					t.Fatal("control choice fabricated repair completion or rewrote results")
+				}
+				for _, in := range d.run.ValidationInputs {
+					if in.Handler == "engine.repair" {
+						t.Fatal("decline or requirement granted repair authorization")
+					}
+				}
+				assertAuthorizationReplay(d, event)
+				return
+			}
+			intents := make(map[string]protocol.HostActionIntent)
+			for id, intent := range d.run.AdapterIntents {
+				intents[id] = intent
+			}
+			if len(intents) == 0 || d.run.Status != "ABORTING" {
+				t.Fatal("abort did not enter actual termination lifecycle")
+			}
+			for id, intent := range intents {
+				if intent.Terminate == nil {
+					t.Fatal("abort emitted a business adapter action")
+				}
+				for _, lifecycle := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+					fact, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, lifecycle)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(fact)
+				}
+				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(receipt)
+			}
+			d.drive()
+			if d.run.Status != "ABORTED" {
+				t.Fatal("abort did not complete actual cleanup")
+			}
+			path := filepath.Join(d.f.stateDir, "terminal-summary.json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var summary TerminalSummary
+			if err := json.Unmarshal(raw, &summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary.Termination == nil || summary.Termination.Decisions[ask.RequestID].EventID != string(event.ID) || !reflect.DeepEqual(summary.Termination.Decisions[ask.RequestID].Validation, event.Decide.Validation) {
+				t.Fatal("terminal artifact lost actual original decision content")
+			}
+			d.reopen()
+			d.drive()
+			again, err := os.ReadFile(path)
+			if err != nil || !reflect.DeepEqual(raw, again) {
+				t.Fatal("terminal reopen rewrote durable termination evidence")
+			}
+		})
+	}
+}
+
+func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
+	d := postwaveRepairOffer(t)
+	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY", Target: wave.ID}}})
+	prior := d.validationAsk("QA_RETRY")
+	if !slices.ContainsFunc(prior.Options, func(option protocol.AskOption) bool { return option.ID == "approve" }) {
+		t.Fatal("current QA retry initially has no legal approval")
+	}
+	before := authorizationSnapshot(d)
+	ask := d.validationAsk("REPAIR")
+	decideValidation(d, ask, "approve")
+	d.action("engine.repair")
+	after := authorizationSnapshot(d)
+	retired := after.State.PendingAsks[prior.RequestID]
+	if !retired.Resolved {
+		t.Fatal("commit refreshed the old QA retry despite an in-flight repair")
+	}
+	retired.Resolved = false
+	if !reflect.DeepEqual(retired, before.State.PendingAsks[prior.RequestID]) {
+		t.Fatal("choice replacement rewrote the retired request evidence")
+	}
+	if _, decision := after.State.Decisions[prior.RequestID]; decision {
+		t.Fatal("choice replacement fabricated user authorization")
+	}
+	current := d.validationAsk("QA_RETRY")
+	if current.RequestID == prior.RequestID || current.Token == "" || len(current.Options) != 1 || current.Options[0].ID != "decline" {
+		t.Fatal("current QA retry does not expose only its actual legal choice")
+	}
+	bad := protocol.Event{ID: d.eventID(), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(prior.RequestID), Token: prior.Token, Choice: "approve", Validation: &protocol.ValidationDecision{Digest: prior.Validation.Digest, StateRevision: prior.Validation.StateRevision, Reason: "Request from the retired face", Obligations: []string{repairOfferQA(d, ask).Task.String()}}}}
+	_, _, err := d.f.Submit(bad)
+	if err == nil || !reflect.DeepEqual(authorizationSnapshot(d), after) {
+		t.Fatal("retired choices were accepted or changed state")
+	}
+	d.reopen()
+	d.drive()
+	if again := d.validationAsk("QA_RETRY"); again.RequestID != current.RequestID || !reflect.DeepEqual(again.Options, current.Options) {
+		t.Fatal("drive refreshed an ineligible choice or duplicated its request")
+	}
+}
+
+func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
+	dev, devInput := d.action("engine.development.batch")
+	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command", Build: []string{"build passed"}, Tests: []string{"input tests passed"}}})
+	d.materialize()
+	d.materialize()
+	black, blackInput := qaModeAction(d, "engine.qa.design", coverage.ReviewBlackbox)
+	blackManifest := simpleManifest(blackInput)
+	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Manifest: &blackManifest})
+	black, blackInput = qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewBlackbox)
+	blackReview := approvedReview(blackManifest)
+	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Review: &blackReview})
+	white, whiteInput := qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)
+	whiteManifest := whiteInput.Manifest
+	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestInvalid", Oracle: "invalid input is rejected"}}
+	whiteManifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
+	d.business(white, protocol.ValidationResult{Binding: whiteInput.Binding, Status: "PASS", Manifest: &whiteManifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
+	d.materialize()
+	white, whiteInput = qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewWhitebox)
+	whiteReview := approvedReview(whiteManifest)
+	d.business(white, protocol.ValidationResult{Binding: whiteInput.Binding, Status: "PASS", Review: &whiteReview})
+	d.materialize()
+	black, blackInput = qaModeAction(d, "engine.qa.execution", coverage.ReviewBlackbox)
+	white, whiteInput = qaModeAction(d, "engine.qa.execution", coverage.ReviewWhitebox)
+	d.receipt(white)
+	before := authorizationSnapshot(d)
+	whitePending := d.run.PendingActions[white]
+	d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY"}}})
+	ask := d.validationAsk("QA_RETRY")
+	event := decideValidation(d, ask, "approve", blackInput.Binding.Task.String())
+	after := authorizationSnapshot(d)
+	if !reflect.DeepEqual(d.run.PendingActions[white], whitePending) || !reflect.DeepEqual(d.run.ValidationInputs[white], whiteInput) || !reflect.DeepEqual(before.State.SpawnReceipts[white], after.State.SpawnReceipts[white]) || before.State.DispatchBindings[white] != after.State.DispatchBindings[white] || before.State.IssueRevisions[white] != after.State.IssueRevisions[white] {
+		t.Fatal("selected QA retry replaced unselected QA's actual running identity, input or receipt")
+	}
+	if _, obsolete := after.State.ObsoleteActions[white]; obsolete {
+		t.Fatal("unselected QA was retired")
+	}
+	fresh, freshInput := qaModeAction(d, "engine.qa.execution", coverage.ReviewBlackbox)
+	if fresh == black || freshInput.Binding.Task == blackInput.Binding.Task {
+		t.Fatal("selected blackbox QA was not replaced")
+	}
+	for _, item := range []struct {
+		action string
+		input  protocol.ValidationInput
+	}{{fresh, freshInput}, {white, whiteInput}} {
+		report := executionFor(item.input)
+		result := protocol.ValidationResult{Binding: item.input.Binding, Status: "PASS", Execution: &report, Tool: "case-runner", Environment: "isolated-project"}
+		d.business(item.action, result)
+		if !reflect.DeepEqual(authorizationSnapshot(d).State.Results[item.action].Validation, &result) {
+			t.Fatal("QA result lost its actual frozen input and report")
+		}
+	}
+	gate, gateInput := d.gateAction("quality")
+	d.business(gate, protocol.ValidationResult{Binding: gateInput.Binding, Status: "PASS"})
+	if current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; current.Status != "COMPLETE" || current.Targets[whiteInput.Binding.Task.String()].ResultAction != white {
+		t.Fatal("unselected QA did not settle with its original actual result")
+	}
+	assertAuthorizationReplay(d, event)
 }

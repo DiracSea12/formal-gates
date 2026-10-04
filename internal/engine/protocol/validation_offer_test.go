@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -13,9 +14,10 @@ func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s := &State{PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
 			request := ValidationRequest{Kind: kind, Target: "obligation", Mode: coverage.ReviewBlackbox}
-			if kind == "REPAIR" {
+			if kind == "REPAIR" || kind == "QA_RETRY" {
 				_, s = guardRepairFixture(t)
 				request.Target = s.Validation.Waves[0].ID
+				request.Binding.WaveID = request.Target
 			}
 			decisions := digestOfCanonical(s.Decisions)
 			if !s.ensureValidationAsk(request, 1) {
@@ -72,6 +74,65 @@ func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
 			}
 			if kind != "VALIDATION_DETAIL_DISPOSITION" && s.ensureValidationAsk(request, 9) {
 				t.Fatal("real user decision was treated as display supersession")
+			}
+		})
+	}
+}
+
+func TestRepairChoicesRefreshAtBothCommitSeams(t *testing.T) {
+	for _, seam := range []string{"advance", "rebind"} {
+		t.Run(seam, func(t *testing.T) {
+			_, state := guardRepairFixture(t)
+			source := state.Validation.Waves[0]
+			state.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: source.ID}, 7)
+			var prior PendingAsk
+			for _, ask := range state.PendingAsks {
+				if ask.Validation != nil && !ask.Resolved {
+					prior = ask
+				}
+			}
+			if !prior.hasOption("retry_qa") || !prior.hasOption("waive") {
+				t.Fatal("real repair fixture lacks legal original choices")
+			}
+			projection := source
+			projection.ID = "wave-full-validation"
+			projection.Scope = coverage.ScopeFull
+			if source.Scope == projection.Scope {
+				projection.Scope = coverage.ScopeAffected
+			}
+			projection.Status, projection.Repair = "COLLECTING", nil
+			state.Validation.Waves = append(state.Validation.Waves, projection)
+			decisions := digestOfCanonical(state.Decisions)
+			if seam == "advance" {
+				if !state.reconcileValidationRemedyAsks(8) {
+					t.Fatal("eligibility change did not count as business advancement")
+				}
+			} else {
+				rebindValidationAsks(state, 8)
+			}
+			retired := state.PendingAsks[prior.RequestID]
+			if !retired.Resolved {
+				t.Fatal("ineligible source QA choice received another fresh binding")
+			}
+			retired.Resolved = false
+			if !reflect.DeepEqual(retired, prior) || digestOfCanonical(state.Decisions) != decisions {
+				t.Fatal("choice replacement rewrote request or decision evidence")
+			}
+			pending := 0
+			for _, ask := range state.PendingAsks {
+				if ask.Resolved {
+					continue
+				}
+				pending++
+				if ask.hasOption("retry_qa") || !ask.hasOption("approve") || !ask.hasOption("waive") {
+					t.Fatal("replacement choices disagree with actual source eligibility")
+				}
+				if digestOfCanonical(state.validationRequestBasis(*ask.Validation)) != ask.Validation.Digest {
+					t.Fatal("replacement has a different complete decision basis")
+				}
+			}
+			if pending != 1 {
+				t.Fatal("choice replacement did not keep exactly one owner")
 			}
 		})
 	}

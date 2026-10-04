@@ -150,7 +150,7 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 // rebindValidationAsks binds every unresolved validation Ask to the committed
 // revision and its decision basis after dispatch and allowance projection.
 func rebindValidationAsks(s *State, revision uint64) {
-	s.reconcileRepairAsks()
+	s.reconcileValidationRemedyAsks(revision)
 	for id, ask := range s.PendingAsks {
 		if ask.Resolved || ask.Validation == nil {
 			continue
@@ -163,22 +163,31 @@ func rebindValidationAsks(s *State, revision uint64) {
 	}
 }
 
-// reconcileRepairAsks retires requests outside the current repair responsibility.
-// Request evidence remains intact; retirement grants no decision or task outcome.
-func (s *State) reconcileRepairAsks() bool {
+// Remedy requests retain their evidence when their duty or legal choices change.
+// Retirement grants no decision or task outcome; replacements use the offer owner.
+func (s *State) reconcileValidationRemedyAsks(revision uint64) bool {
 	work := s.nextRepairWork()
+	wave := s.currentValidationWave()
 	changed := false
 	for id, ask := range s.PendingAsks {
 		r := ask.Validation
-		if ask.Resolved || r == nil || r.Kind != "REPAIR" {
+		if ask.Resolved || r == nil || r.Kind != "REPAIR" && r.Kind != "QA_RETRY" {
 			continue
 		}
-		if work != nil && r.Target == work.wave.ID && r.Binding.Task == work.task && !s.repairExtraAuthorized(work) {
+		current := work != nil && r.Target == work.wave.ID && r.Binding.Task == work.task && !s.repairExtraAuthorized(work)
+		if r.Kind == "QA_RETRY" {
+			current = wave != nil && r.Target == wave.ID && r.Binding.WaveID == wave.ID && wave.Status != "INVALIDATED" && wave.Status != "REPAIRED"
+		}
+		if !current {
+			ask.Resolved = true
+			s.PendingAsks[id] = ask
+			changed = true
 			continue
 		}
-		ask.Resolved = true
-		s.PendingAsks[id] = ask
-		changed = true
+		offer, options := s.validationOffer(*r)
+		if !slices.Equal(ask.Options, options) || !slices.Equal(r.Remedies, offer.Remedies) {
+			changed = s.ensureValidationAsk(offer, revision) || changed
+		}
 	}
 	return changed
 }
@@ -194,13 +203,13 @@ func (s *State) ensureValidationAsk(r ValidationRequest, nextRevision uint64) bo
 		if a.Control != ControlValidation || a.Validation == nil || a.Validation.Kind != r.Kind || a.Validation.Target != r.Target {
 			continue
 		}
-		if _, decided := s.Decisions[id]; decided && a.Validation.Digest == r.Digest && r.Kind != "VALIDATION_DETAIL_DISPOSITION" {
+		if _, decided := s.Decisions[id]; decided && a.Validation.Digest == r.Digest && slices.Equal(a.Options, options) && r.Kind != "VALIDATION_DETAIL_DISPOSITION" {
 			return false
 		}
 		if a.Resolved {
 			continue
 		}
-		if a.Validation.Digest == r.Digest {
+		if a.Validation.Digest == r.Digest && slices.Equal(a.Options, options) {
 			return false
 		}
 		superseded = append(superseded, id)
@@ -376,6 +385,15 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 	if d == nil || strings.TrimSpace(d.Reason) == "" || d.StateRevision != revision || r.StateRevision != revision || d.Digest != r.Digest || digestOfCanonical(s.validationRequestBasis(*r)) != r.Digest {
 		return validationError("authorization needs the current state revision, exact summary digest and non-empty reason")
 	}
+	wave := s.currentValidationWave()
+	var work *repairWork
+	if r.Kind == "REPAIR" {
+		work = s.nextRepairWork()
+		if work == nil || work.wave.ID != r.Target || work.task != r.Binding.Task || s.repairExtraAuthorized(work) {
+			return validationError("repair offer is no longer current")
+		}
+		wave = work.wave
+	}
 	if p.Choice == "requirement" {
 		id := fmt.Sprintf("requirement:%s:%d", r.Target, nextRevision)
 		s.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Options: []AskOption{{ID: requirementProceedOption, Label: "Confirm revised requirement"}, {ID: requirementAbortOption, Label: "Keep current requirement"}}}
@@ -385,10 +403,10 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		return nil
 	}
 	if p.Choice == "retry_qa" || r.Kind == "QA_RETRY" {
-		return e.retryValidationQA(s, ask, d)
+		return e.retryValidationQA(s, ask, d, wave)
 	}
 	if p.Choice == "waive" {
-		return e.waiveValidation(s, ask, d)
+		return e.waiveValidation(s, ask, d, wave)
 	}
 	switch r.Kind {
 	case KindDispatchBudgetDisposition:
@@ -454,10 +472,6 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			return validationError("unsupported pre-wave remedy")
 		}
 	case "REPAIR":
-		work := s.nextRepairWork()
-		if work == nil || work.wave.ID != r.Target || work.task != r.Binding.Task || s.repairExtraAuthorized(work) {
-			return validationError("repair offer is no longer current")
-		}
 		if work.task == work.wave.Repair.Task {
 			work.wave.ExtraAuthorized = true
 		}
@@ -485,7 +499,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 	case "DISPOSE":
 		copy := *d
 		copy.Obligations = []string{r.Target}
-		return e.waiveValidation(s, ask, &copy)
+		return e.waiveValidation(s, ask, &copy, wave)
 	case "VALIDATION_DETAIL_DISPOSITION":
 		if !slices.Contains(r.Remedies, d.Remedy) {
 			return validationError("selected remedy is not in the bound offer")
@@ -516,7 +530,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			if len(copy.Obligations) == 0 {
 				copy.Obligations = slices.Clone(r.Obligations)
 			}
-			return e.waiveValidation(s, ask, &copy)
+			return e.waiveValidation(s, ask, &copy, w)
 		}
 
 	default:

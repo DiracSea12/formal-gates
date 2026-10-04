@@ -185,6 +185,9 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 	if !current {
 		attempt = s.EndedAttempts[pending.Task]
 	}
+	if pending.AttemptID == "" && attempt.ActionID == actionID {
+		pending.AttemptID = attempt.ID
+	}
 	delete(s.PendingActions, actionID)
 	delete(s.Attempts, pending.Task)
 	if result, staged := s.StagedResults[actionID]; staged {
