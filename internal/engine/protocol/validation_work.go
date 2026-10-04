@@ -173,7 +173,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 	}
 	target := wave.Targets[b.Task.String()]
 	if wave != current || wave.Status != "COLLECTING" {
-		if !s.validationWorkCarryAuthorized("", b.Task) || wave.Status != "INVALIDATED" {
+		if !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
 			return false
 		}
 		if wave != current {

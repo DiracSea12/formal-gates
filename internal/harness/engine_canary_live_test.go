@@ -9,21 +9,11 @@ package harness
 // call with real spend: the gate exists so no ordinary test run ever spends
 // one.
 //
-// The whole pass drives the engine through its public facade surface only
-// (Start/Drive/Submit/DevelopmentPlan/PrepareCandidate/RegisterQAWorktree) and
-// never imports the facade test fixtures — driver independence from the test
-// fixtures is itself part of what the canary accepts. Real model turns run
-// through zcodeExecute; real Git work goes through real git — stage candidate
-// commits (development, authoring, the whitebox test artifact and
-// review-ready) by this host bridge, the final candidate's organization
-// through public candidate promotion. Whitebox authoring happens in its own
-// registered workspace: a detached worktree created from the exact
-// development snapshot, where the design agent authors the tests, the QA
-// artifact is committed and finally copied into the review-ready candidate.
-// Read-only dispatches stay read-only; behavior commands for gates and
-// acceptance cases — argv probes for blackbox, the designed Go tests for
-// whitebox — are executed by this host bridge and handed to the judging
-// turns as captured observations.
+// The pass uses the installed public start/drive/submit commands and read-only
+// semantic decision previews. Workers
+// edit only their issued workspace and report semantic results. The engine
+// owns native workspace creation, candidate freezing, promotion and cleanup.
+// Behavior commands and Go tests are captured here for the judging turns.
 //
 // Bounded spend: each dispatch gets at most three turns (answer-shape
 // refusals consume another turn), the repair loop is authorized at most once,
@@ -48,14 +38,13 @@ import (
 	"testing"
 	"time"
 
-	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
-	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/validate"
 )
 
 // canaryRequirementDocument is the confirmed REQ/AC document of the fixture
@@ -147,17 +136,15 @@ type canaryMaterials struct {
 
 // engineCanary is the host execution bridge and user stand-in for one pass.
 type engineCanary struct {
-	t         *testing.T
-	f         *facade.Facade
-	run       facade.Run
-	project   string
-	worktree  string
-	whitebox  string // QA worktree registered for whitebox execution
-	authoring string // authoring worktree the whitebox design authors tests in
-	jobs      string
-	binding   map[string]any
-	deadline  time.Time
-	seq       int
+	t            *testing.T
+	f            *facade.Facade
+	binary, home string
+	run          facade.Run
+	project      string
+	jobs         string
+	binding      map[string]any
+	deadline     time.Time
+	seq          int
 
 	revision  string // confirmed requirement revision (bare hex)
 	doc       []byte
@@ -232,13 +219,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	c.jobs = filepath.Join(dir, "jobs")
 	t.Logf("engine canary evidence directory: %s", dir)
 
-	// The blackbox execution face: an isolated worktree the executor checks
-	// candidates out into. The whitebox face is a separately registered QA
-	// worktree, created when the confirmed route selects it.
 	base := c.buildFixtureProject()
-	worktree := filepath.Join(t.TempDir(), "qa-worktree")
-	c.git("worktree", "add", "--detach", worktree, base)
-	c.worktree = worktree
 
 	var err error
 	c.binding, err = zcodeCaptureBinding()
@@ -255,7 +236,6 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	c.revision = hex.EncodeToString(reqSum[:])
 	frobSum := sha256.Sum256([]byte(canaryFrobSource))
 	frobRevision := hex.EncodeToString(frobSum[:])
-	packageSum := sha256.Sum256(append(append([]byte(canaryFrobSource), c.doc...), []byte("module frob\n\ngo 1.22\n")...))
 	receipt := facade.IntakeConfirmationReceipt{
 		Source:            facade.DefaultIntakeSource,
 		Authority:         facade.DefaultIntakeAuthority,
@@ -267,26 +247,12 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 		},
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
-	packageDigest := "sha256:" + hex.EncodeToString(packageSum[:])
-	registryPath, target, generation, lease, token := testkit.Installation(t, project, "frob-fixture-project", packageDigest, canaryProvider)
-	f, run, err := facade.Start(facade.StartOptions{
-		Capacity: 16, Root: project,
-		Request: facade.StartRequest{
-			RunID: "engine-canary", Route: "regular", Provider: canaryProvider,
-			BaseSnapshot: base, IntakeConfirmationReceipt: receipt,
-		},
-		Admission: &facade.Admission{
-			RegistryPath: registryPath, Target: target, Root: project, Provider: canaryProvider,
-			Generation: generation, Lease: lease, Token: token,
-			PackageDigest:           packageDigest,
-			InstalledTargetIdentity: "frob-fixture-project",
-		},
-	})
+	c.install(filepath.Dir(filepath.Dir(filepath.Dir(file))), base, receipt)
+	f, err := facade.Open(project, "engine-canary")
 	if err != nil {
-		t.Fatalf("engine start: %v", err)
+		t.Fatal(err)
 	}
 	c.f = f
-	c.run = run
 	c.drive()
 	c.loop()
 	c.assertTerminal(base, dir)
@@ -328,7 +294,7 @@ func (c *engineCanary) loop() {
 		case decision.KindReady:
 			c.dispatchPending()
 		case decision.KindHostAction:
-			c.materializeIntents()
+			c.drive()
 		case decision.KindAsk:
 			c.answerAsks()
 		case decision.KindOperator:
@@ -364,10 +330,18 @@ func (c *engineCanary) submit(event protocol.Event) protocol.Acceptance {
 	if event.ID == "" {
 		event.ID = c.eventID()
 	}
-	acceptance, run, err := c.f.Submit(event)
+	data, err := json.Marshal(event)
 	if err != nil {
-		c.fail("submit %s %s: %v", event.Kind, event.ID, err)
+		c.fail("marshal event: %v", err)
 	}
+	var response struct {
+		Acceptance protocol.Acceptance `json:"acceptance"`
+		Run        facade.Run          `json:"run"`
+	}
+	if err := json.Unmarshal(c.cli(data, "workflow", "submit", "--root", c.project, "--run-id", "engine-canary"), &response); err != nil {
+		c.fail("decode submit: %v", err)
+	}
+	acceptance, run := response.Acceptance, response.Run
 	if strings.Contains(acceptance.Status, "REJECTED") {
 		c.fail("event %s (%s %s) was rejected: %s", event.ID, event.Kind, acceptance.ActionID, acceptance.Status)
 	}
@@ -380,11 +354,7 @@ func (c *engineCanary) drive() {
 	if time.Now().After(c.deadline) {
 		c.fail("canary exceeded its %s budget", canaryRunBudget)
 	}
-	run, err := c.f.Drive()
-	if err != nil {
-		c.fail("drive: %v", err)
-	}
-	c.run = run
+	c.run = c.readRun("drive")
 }
 
 func (c *engineCanary) fail(format string, args ...any) {
@@ -575,7 +545,7 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 		}
 		return nil
 	}
-	c.turn(id, "QA case design", c.prompt("QA case design", materials, instructions, true), canaryDesignSchema(false), true, shape)
+	c.turnIn(c.workspace(input), id, "QA case design", c.prompt("QA case design", materials, instructions, true), canaryDesignSchema(false), true, shape)
 	for _, designed := range answer.Cases {
 		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
 			CaseID: designed.CaseID, Mode: coverage.CaseBlackbox, Scenario: designed.Scenario,
@@ -595,7 +565,7 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 // evidence — they become the immutable QA artifact the case review freezes.
 func (c *engineCanary) whiteboxDesignResult(id string, input protocol.ValidationInput, materials canaryMaterials, manifest coverage.AcceptanceManifest, pointKnown func(string) bool, sourceFor func(string) string) protocol.ValidationResult {
 	c.t.Helper()
-	if c.authoring == "" {
+	if input.Workspace == nil {
 		c.fail("whitebox design %s has no registered authoring workspace", id)
 	}
 	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths."
@@ -620,7 +590,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 			return fmt.Errorf("whitebox design lacks authored paths, summary, build or test evidence")
 		}
 		for index, path := range answer.Paths {
-			relative, err := canaryWorkspacePath(c.authoring, path)
+			relative, err := canaryWorkspacePath(c.workspace(input), path)
 			if err != nil {
 				return err
 			}
@@ -636,7 +606,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 		}
 		return nil
 	}
-	c.turnIn(c.authoring, id, "QA case design", c.prompt("QA case design", materials, instructions, false), canaryDesignSchema(true), false, shape)
+	c.turnIn(c.workspace(input), id, "QA case design", c.prompt("QA case design", materials, instructions, false), canaryDesignSchema(true), false, shape)
 	for _, designed := range answer.Cases {
 		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
 			CaseID: designed.CaseID, Mode: coverage.CaseWhitebox, Scenario: designed.Scenario,
@@ -734,14 +704,14 @@ func (c *engineCanary) caseReviewResult(id string, input protocol.ValidationInpu
 		}
 		return nil
 	}
-	workspace := c.project
+	workspace := c.workspace(input)
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 		// The whitebox case review judges the tests of the frozen QA
 		// artifact — the authoring workspace's committed head.
-		if c.authoring == "" {
+		if input.Workspace == nil {
 			c.fail("whitebox case review %s has no registered authoring workspace", id)
 		}
-		workspace = c.authoring
+		workspace = c.workspace(input)
 	}
 	c.turnIn(workspace, id, "QA case review", c.prompt("QA case review", materials, instructions, true), canaryCaseReviewSchema(), true, shape)
 	result := coverage.ReviewResult{Binding: input.Manifest.Binding, Scope: coverage.ScopeFull,
@@ -794,27 +764,20 @@ func (c *engineCanary) modelReviewDecisions(layer string, decisions []canaryRevi
 	return rows
 }
 
-// executionResult builds the candidate in the mode's isolated QA worktree at
-// the frozen candidate — the registered worktree for whitebox, the blackbox
-// face for blackbox — runs every required case for real (an argv probe, or
-// the case's Go test for whitebox), hands the captured observations to the
-// judging turn and assembles the per-edge execution report from its verdicts.
+// executionResult consumes the engine's exact registered Qn workspace, runs
+// each approved command or Go test, and records the captured per-case verdict.
 func (c *engineCanary) executionResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	if input.Execution == nil || input.Whitelist == nil {
 		c.fail("execution dispatch %s carries no frozen execution contract", id)
 	}
 	whitebox := input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
-	dir := c.worktree
+	dir := c.workspace(input)
 	runFace := "the captured command run"
 	if whitebox {
-		if c.whitebox == "" {
-			c.fail("whitebox execution %s has no registered QA worktree", id)
-		}
-		dir = c.whitebox
 		runFace = "the captured go test run"
 	}
-	c.checkout(dir, input.Execution.Candidate.Identity)
+
 	var binary string
 	if !whitebox {
 		binary = c.buildCandidate(dir, id)
@@ -865,7 +828,7 @@ func (c *engineCanary) executionResult(id string, input protocol.ValidationInput
 		}
 		return nil
 	}
-	c.turn(id, "QA case execution", c.prompt("QA case execution", materials, instructions, true), canaryExecutionSchema(), true, shape)
+	c.turnIn(dir, id, "QA case execution", c.prompt("QA case execution", materials, instructions, true), canaryExecutionSchema(), true, shape)
 	byCase := map[string]int{}
 	for index, record := range answer.Records {
 		byCase[record.CaseID] = index
@@ -898,17 +861,17 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 	if input.Gate == nil {
 		c.fail("gate dispatch %s carries no gate input", id)
 	}
-	head := c.git("rev-parse", "HEAD")
+	head := c.gitAt(c.workspace(input), "rev-parse", "HEAD")
 	if head != input.Gate.Candidate.Identity {
-		c.fail("gate %s judges candidate %s but the project head is %s", input.Gate.Gate, input.Gate.Candidate.Identity, head)
+		c.fail("gate %s judges candidate %s but the registered workspace head is %s", input.Gate.Gate, input.Gate.Candidate.Identity, head)
 	}
-	binary := c.buildCandidate(c.project, id)
+	binary := c.buildCandidate(c.workspace(input), id)
 	materials := canaryMaterials{
 		Role: "regression gate", ActionID: id,
 		RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input,
 	}
 	materials.HostObservations = append(materials.HostObservations,
-		c.observe("regression gate flag-contract probe", c.project, append([]string{binary}, canaryGateArgs...)))
+		c.observe("regression gate flag-contract probe", c.workspace(input), append([]string{binary}, canaryGateArgs...)))
 	instructions := "The regression gate judges the public flag contract: unknown flags must be rejected with a nonzero exit and no frob: output (requirement AC-002). Judge the host-captured command run against that contract; on violation report status FAIL with a finding carrying severity, rationale, requirement, normal path, actual error, deferral impact and locations."
 	var answer struct {
 		Status   string                `json:"status"`
@@ -926,7 +889,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 		}
 		return nil
 	}
-	c.turn(id, "regression gate", c.prompt("regression gate", materials, instructions, true), canaryGateSchema(), true, shape)
+	c.turnIn(c.workspace(input), id, "regression gate", c.prompt("regression gate", materials, instructions, true), canaryGateSchema(), true, shape)
 	result := protocol.ValidationResult{Binding: input.Binding, Status: answer.Status}
 	for _, found := range answer.Findings {
 		result.Findings = append(result.Findings, found.finding())
@@ -938,7 +901,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := canaryMaterials{Role: "development batch", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
-	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not run git commit or git push — the host organizes commits."
+	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not run git commit or git push — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -946,7 +909,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 		}
 		return canaryDevelopmentShape(&answer, true)
 	}
-	turn := c.turn(id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
+	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
 	return c.developmentEvidence(id, input.Binding, &answer, turn.digest, true)
 }
 
@@ -954,7 +917,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := canaryMaterials{Role: "repair", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
-	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not run git commit or git push — the host organizes commits."
+	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not run git commit or git push — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -962,7 +925,7 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 		}
 		return canaryDevelopmentShape(&answer, false)
 	}
-	turn := c.turn(id, "repair", c.prompt("repair", materials, instructions, false), canaryDevelopmentSchema(false), false, shape)
+	turn := c.turnIn(c.workspace(input), id, "repair", c.prompt("repair", materials, instructions, false), canaryDevelopmentSchema(false), false, shape)
 	return c.developmentEvidence(id, input.Binding, &answer, turn.digest, false)
 }
 
@@ -1242,156 +1205,6 @@ func (c *engineCanary) prompt(role string, materials canaryMaterials, instructio
 	return b.String()
 }
 
-// --- HOST_ACTION: real git work for op.candidate ----------------------------
-
-// materializeIntents executes the engine's op.candidate intents with real
-// host git. Whitebox authoring has its own registered workspace — a detached
-// worktree at the exact development snapshot where the whitebox design agent
-// authors the tests — so the AUTHORING stage creates that workspace, the
-// QA_ARTIFACT stage commits the test-only artifact in it, and REVIEW_READY
-// carries the authored tests into the project's final candidate. Candidate
-// promotion is admitted only after the final wave is COMPLETE, so it is
-// never reachable from here.
-func (c *engineCanary) materializeIntents() {
-	c.t.Helper()
-	ids := make([]string, 0, len(c.run.AdapterIntents))
-	for id := range c.run.AdapterIntents {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	for _, id := range ids {
-		intent := c.run.AdapterIntents[id]
-		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
-			c.fail("no canary bridge for host action %q on %s", intent.Operation, id)
-		}
-		var params protocol.CandidateParameters
-		data, _ := json.Marshal(intent.Adapter.Params)
-		if err := json.Unmarshal(data, &params); err != nil {
-			c.fail("candidate parameters for %s: %v", id, err)
-		}
-		var identity string
-		switch params.Stage {
-		case "AUTHORING":
-			identity = c.materializeAuthoringWorkspace(id, params)
-		case "QA_ARTIFACT":
-			if c.authoring == "" {
-				c.fail("QA artifact %s has no registered authoring workspace", id)
-			}
-			identity = c.commitDeclared(c.authoring, params)
-			// The whitebox artifact receipt claims a test-only,
-			// production-equivalent range; the host verifies that claim
-			// against the worktree's real committed diff before submitting
-			// it.
-			c.assertTestOnlyArtifact(params.Base, identity, params.Paths)
-		case "DEVELOPMENT":
-			identity = c.commitDeclared(c.project, params)
-		case "REVIEW_READY":
-			// The final candidate lives in the project and must carry the
-			// authored tests; the stage's declared paths include the
-			// artifact paths.
-			c.copyAuthoredTests(id, params)
-			identity = c.commitDeclared(c.project, params)
-		default:
-			c.fail("no canary bridge for candidate stage %q", params.Stage)
-		}
-		digest := c.git("rev-parse", identity+"^{tree}")
-		evidence := protocol.CandidateEvidence{
-			ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, Paths: params.Paths,
-		}
-		if params.Stage == "QA_ARTIFACT" {
-			evidence.TestOnly, evidence.ProductionViewEqual = true, true
-		}
-		if params.Stage == "REVIEW_READY" {
-			// The final range's test-owned paths are the whitebox QA
-			// artifact's files; a route without whitebox owns none.
-			owned := slices.Clone(params.QAArtifacts[coverage.ReviewWhitebox].Paths)
-			slices.Sort(owned)
-			evidence.GateView = &protocol.GateReviewView{TestOwnedPaths: owned}
-		}
-		fields := map[string]any{}
-		raw, _ := json.Marshal(evidence)
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			c.fail("candidate evidence for %s: %v", id, err)
-		}
-		event, err := protocol.NewAdapterHostActionReceiptEvent(c.eventID(), intent.ActionID, authoring.OperationID(intent.Adapter.Operation), canaryProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", fields)
-		if err != nil {
-			c.fail("candidate receipt for %s: %v", id, err)
-		}
-		c.submit(event)
-		c.drive()
-		if c.run.Status == "COMPLETE" {
-			return
-		}
-	}
-}
-
-// materializeAuthoringWorkspace creates whitebox authoring's separate
-// registered workspace: a real detached worktree at the exact development
-// snapshot. The engine issues the whitebox QA design only after this receipt
-// lands, so the workspace exists before the design turn runs; its head —
-// the development snapshot itself, nothing is authored yet — is the receipt
-// identity the engine records as the authoring workspace.
-func (c *engineCanary) materializeAuthoringWorkspace(id string, params protocol.CandidateParameters) string {
-	c.t.Helper()
-	if head := c.git("rev-parse", "HEAD"); head != params.Base {
-		c.fail("authoring workspace %s branches from %s but the project head is %s", id, params.Base, head)
-	}
-	worktree := filepath.Join(c.t.TempDir(), "qa-authoring")
-	c.git("worktree", "add", "--detach", worktree, params.Base)
-	c.authoring = worktree
-	c.t.Cleanup(func() { c.git("worktree", "remove", "--force", worktree) })
-	return params.Base
-}
-
-// commitDeclared materializes one stage's declared paths in the target tree:
-// the declared paths are the change — development output and repair rounds
-// in the project, the authored whitebox tests in the authoring workspace,
-// all arriving as working-tree changes — while undeclared untracked files
-// (build outputs left behind by writable model turns) are residue, removed
-// so later tree checks stay clean. A tree without a declared change keeps
-// the current HEAD.
-func (c *engineCanary) commitDeclared(dir string, params protocol.CandidateParameters) string {
-	c.t.Helper()
-	identity := c.gitAt(dir, "rev-parse", "HEAD")
-	if c.gitAt(dir, "status", "--porcelain") != "" {
-		c.gitAt(dir, append([]string{"add", "--"}, params.Paths...)...)
-		if c.gitAt(dir, "diff", "--cached", "--name-only") != "" {
-			c.gitAt(dir, "commit", "-m", "candidate: "+strings.Join(params.Paths, ", "))
-			identity = c.gitAt(dir, "rev-parse", "HEAD")
-		}
-		c.gitAt(dir, "clean", "-fd")
-	}
-	return identity
-}
-
-// copyAuthoredTests carries the whitebox artifact's authored test files from
-// the authoring workspace into the project, so the review-ready candidate
-// commits them among its declared paths; identical already-committed content
-// leaves the project tree unchanged.
-func (c *engineCanary) copyAuthoredTests(id string, params protocol.CandidateParameters) {
-	c.t.Helper()
-	artifact := params.QAArtifacts[coverage.ReviewWhitebox]
-	if len(artifact.Paths) == 0 {
-		return
-	}
-	if c.authoring == "" {
-		c.fail("review-ready candidate %s carries whitebox artifact paths without an authoring workspace", id)
-	}
-	for _, path := range artifact.Paths {
-		body, err := os.ReadFile(filepath.Join(c.authoring, path))
-		if err != nil {
-			c.fail("authored test %s is missing in the authoring workspace: %v", path, err)
-		}
-		target := filepath.Join(c.project, path)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			c.fail("authored test directory for %s: %v", path, err)
-		}
-		if err := os.WriteFile(target, body, 0o644); err != nil {
-			c.fail("copy authored test %s into the project: %v", path, err)
-		}
-	}
-}
-
 // --- ASK: the user stand-in --------------------------------------------------
 
 func (c *engineCanary) answerAsks() {
@@ -1441,13 +1254,7 @@ func (c *engineCanary) serveOperator() {
 		c.adjudicate()
 	case strings.Contains(fact.Value, "EXECUTION_SCOPE observation"):
 		c.executionScope()
-	case strings.Contains(fact.Value, "candidate promotion"):
-		// The wave-COMPLETE promotion wait is the only route into candidate
-		// promotion; the post-repair range holds multiple commits, so the
-		// squash message is required and real.
-		if _, err := c.f.PrepareCandidate("organized final candidate"); err != nil {
-			c.fail("organize final candidate: %v", err)
-		}
+
 	default:
 		c.fail("unexpected operator fact %q = %q", fact.Key, fact.Value)
 	}
@@ -1514,25 +1321,6 @@ func (c *engineCanary) confirmRoute() {
 		c.fail("route decision: %v", err)
 	}
 	c.submit(event)
-	if slices.Contains(gates, "whitebox") {
-		c.registerWhiteboxWorktree()
-	}
-}
-
-// registerWhiteboxWorktree mirrors the legacy whitebox host mechanics: a real
-// detached worktree at the run's base snapshot from the projection, registered
-// through the facade so the native-identity and requirement-artifact checks
-// really gate it. The registered worktree is the whitebox execution face; the
-// blackbox face keeps its own worktree.
-func (c *engineCanary) registerWhiteboxWorktree() {
-	c.t.Helper()
-	worktree := filepath.Join(c.t.TempDir(), "qa-whitebox")
-	c.git("worktree", "add", "--detach", worktree, c.run.BaseSnapshot)
-	if err := c.f.RegisterQAWorktree(worktree); err != nil {
-		c.fail("register whitebox QA worktree: %v", err)
-	}
-	c.whitebox = worktree
-	c.t.Cleanup(func() { c.git("worktree", "remove", "--force", worktree) })
 }
 
 // adjudicate closes the collected wave: it first verifies the wave really
@@ -1736,33 +1524,6 @@ func (c *engineCanary) gitAt(dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// checkout moves an isolated QA worktree to a candidate identity.
-func (c *engineCanary) checkout(dir, identity string) {
-	c.t.Helper()
-	cmd := exec.Command("git", "-C", dir, "checkout", "--quiet", "--detach", identity)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		c.fail("checkout candidate %s in %s: %v: %s", identity, dir, err, out)
-	}
-}
-
-// assertTestOnlyArtifact verifies a QA artifact range before its receipt
-// claims it: every declared path is a Go test file and the committed range
-// touches nothing else, so the production view equals the base.
-func (c *engineCanary) assertTestOnlyArtifact(base, identity string, paths []string) {
-	c.t.Helper()
-	for _, path := range paths {
-		if !strings.HasSuffix(path, "_test.go") {
-			c.fail("QA artifact path %s is not a Go test file", path)
-		}
-	}
-	changed := strings.Split(strings.TrimSpace(c.git("diff", "--name-only", base, identity)), "\n")
-	for _, path := range changed {
-		if path != "" && !slices.Contains(paths, path) {
-			c.fail("QA artifact range touches non-test path %s", path)
-		}
-	}
-}
-
 // buildCandidate compiles the candidate under judgment into the dispatch
 // evidence tree; the binary is what behavior probes really run.
 func (c *engineCanary) buildCandidate(dir, actionID string) string {
@@ -1812,6 +1573,20 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if diff := c.git("diff", "--name-only", base, head); !strings.Contains(diff, "analytics.go") || !strings.Contains(diff, "frob.go") {
 		c.fail("final candidate does not carry both the development and repair changes: %s", diff)
 	}
+	if final.Termination == nil || !final.Termination.ResourcesCleaned() {
+		c.fail("terminal resource cleanup proof is missing")
+	}
+	if trees := c.git("worktree", "list", "--porcelain"); strings.Count(trees, "worktree ") != 1 {
+		c.fail("native worktree residuals: %s", trees)
+	}
+	for _, resource := range final.Termination.GitResources {
+		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+			c.fail("native resource directory remains: %s %v", resource.Path, err)
+		}
+		if ref := c.git("for-each-ref", "--format=%(objectname)", resource.Ref); ref != "" {
+			c.fail("native resource ref remains: %s", ref)
+		}
+	}
 	// The repaired behavior really holds at the final candidate.
 	probe := c.observe("final flag probe", c.project, append([]string{c.buildCandidate(c.project, "final-probe")}, canaryGateArgs...))
 	if probe.ExitCode == 0 {
@@ -1825,10 +1600,7 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if err != nil {
 		c.fail("terminal summary: %v", err)
 	}
-	replay, err := c.f.Drive()
-	if err != nil {
-		c.fail("terminal replay drive: %v", err)
-	}
+	replay := c.readRun("drive")
 	after, err := os.ReadFile(summaryPath)
 	if err != nil {
 		c.fail("terminal summary after replay: %v", err)
@@ -1836,10 +1608,7 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if string(before) != string(after) || replay.Revision != final.Revision || replay.Status != "COMPLETE" {
 		c.fail("terminal replay mutated the run or its summary")
 	}
-	shown, err := c.f.Show()
-	if err != nil {
-		c.fail("terminal show: %v", err)
-	}
+	shown := c.readRun("show")
 	if len(shown.PendingAsks) != 0 || shown.PendingRequirementAsk != nil {
 		c.fail("terminal run retains pending asks: %+v %+v", shown.PendingAsks, shown.PendingRequirementAsk)
 	}
@@ -2111,4 +1880,75 @@ func canaryDevelopmentSchema(batch bool) map[string]any {
 		required = append(required, "affectedCases")
 	}
 	return canarySchema(required, properties)
+}
+
+// workspace is a read-only use of the engine's issued native resource pointer.
+func (c *engineCanary) workspace(input protocol.ValidationInput) string {
+	c.t.Helper()
+	if input.Workspace == nil || input.Workspace.Status != "READY" || input.Binding.WorkspaceID != input.Workspace.ID {
+		c.fail("dispatch lacks its exact ready workspace")
+	}
+	return input.Workspace.Path
+}
+
+func (c *engineCanary) cli(input []byte, args ...string) []byte {
+	cmd := exec.Command(c.binary, args...)
+	cmd.Dir = c.project
+	cmd.Stdin = bytes.NewReader(input)
+	cmd.Env = append(os.Environ(), "HOME="+c.home, "USERPROFILE="+c.home, "AI_AGENT=", "CODEX_HOME=", "DSH_HOME=", "DSH_PROJECT_DIR=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		c.fail("installed %v: %v %s", args, err, output)
+	}
+	return output
+}
+func (c *engineCanary) readRun(command string) facade.Run {
+	var run facade.Run
+	if err := json.Unmarshal(c.cli(nil, "workflow", command, "--root", c.project, "--run-id", "engine-canary"), &run); err != nil {
+		c.fail("decode %s: %v", command, err)
+	}
+	return run
+}
+func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmationReceipt) {
+	c.home = c.t.TempDir()
+	c.binary = filepath.Join(c.home, ".local", "bin", "formal-gates")
+	if err := os.MkdirAll(filepath.Dir(c.binary), 0700); err != nil {
+		c.fail("binary directory: %v", err)
+	}
+	build := exec.Command("go", "build", "-o", c.binary, "./cmd/formal-gates")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		c.fail("build installed candidate: %v %s", err, output)
+	}
+	receipt, err := validate.PackageReceipt(root)
+	if err != nil {
+		c.fail("package receipt: %v", err)
+	}
+	source := c.t.TempDir()
+	copyFile := func(from, to string, mode os.FileMode) {
+		data, err := os.ReadFile(from)
+		if err != nil {
+			c.fail("read package: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(to), 0700); err != nil {
+			c.fail("package directory: %v", err)
+		}
+		if err := os.WriteFile(to, data, mode); err != nil {
+			c.fail("package copy: %v", err)
+		}
+	}
+	for _, entry := range receipt.Entries {
+		rel := filepath.FromSlash(entry.Path)
+		copyFile(filepath.Join(root, rel), filepath.Join(source, rel), os.FileMode(entry.Mode))
+	}
+	copyFile(c.binary, filepath.Join(source, "bin", "formal-gates"), 0755)
+	args := []string{"install", "--source", source, "--host", canaryProvider, "--scope", "global", "--binary-target", c.binary, "--force", "--skip-hooks"}
+	c.cli(nil, args...)
+	c.cli(nil, append(args, "--bootstrap")...)
+	path := filepath.Join(c.jobs, "intake.json")
+	data, _ := json.Marshal(intake)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		c.fail("intake: %v", err)
+	}
+	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--base-snapshot", base, "--intake-receipt", path)
 }

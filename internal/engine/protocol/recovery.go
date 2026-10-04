@@ -379,7 +379,19 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 // external facts. fulfilled=true commits only the reconciliation result and
 // never invokes ExecuteHostAction again; conflict routes to Operator; an
 // unfulfilled but non-conflicting observation remains WAIT/pending.
-func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfilled, conflict bool, expectedFingerprint string) (RecoveryPlan, uint64, error) {
+type HostActionObservation struct {
+	Promotion *PromotionObservation `json:"promotion,omitempty"`
+	Resource  *ResourceObservation  `json:"resource,omitempty"`
+}
+
+func (o HostActionObservation) Digest() string {
+	if o.Promotion != nil && o.Resource == nil {
+		return o.Promotion.Digest()
+	}
+	return digestOfCanonical(o)
+}
+
+func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfilled, conflict bool, expectedFingerprint string, observations ...HostActionObservation) (RecoveryPlan, uint64, error) {
 	revision, state, err := e.load()
 	if err != nil {
 		return RecoveryPlan{}, 0, err
@@ -399,6 +411,38 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
 	}
+	if len(observations) == 1 && state.abortRequested() && observations[0].Resource != nil && observations[0].Promotion == nil {
+		intent, ok := state.PendingHostActions[actionID]
+		observation := observations[0]
+		if !ok || observationDigest != observation.Digest() {
+			return RecoveryPlan{}, 0, validationError("resource withdrawal requires an exact original observation")
+		}
+		if err := state.validateResourceObservation(intent, *observation.Resource); err != nil {
+			return RecoveryPlan{}, 0, err
+		}
+		state.retireNative(intent, "WITHDRAWN", observationDigest, &observation, revision+1)
+		plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "aborted native remainder withdrawn from its exact resource prefix"}
+		committed, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+		return plan, committed, err
+	}
+	if len(observations) == 1 && state.abortRequested() && observations[0].Promotion != nil && observations[0].Resource == nil {
+		intent, ok := state.PendingHostActions[actionID]
+		params, parseErr := candidateParameters(intent)
+		observation := *observations[0].Promotion
+		if !ok || parseErr != nil || params.Promotion == nil || observation.Head == "" || observation.Tree == "" || observation.IndexTree == "" || !observation.Clean && !observation.StagedOnly || observationDigest != digestOfCanonical(observation) {
+			return RecoveryPlan{}, 0, validationError("promotion withdrawal requires the original intent and exact native observation")
+		}
+		chain, err := state.PromotionChain(intent)
+		if err != nil {
+			return RecoveryPlan{}, 0, err
+		}
+		for _, original := range chain {
+			state.retireNative(original, "WITHDRAWN", observationDigest, &HostActionObservation{Promotion: &observation}, revision+1)
+		}
+		plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "aborted promotion remainder withdrawn from the exact native prefix"}
+		committed, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+		return plan, committed, err
+	}
 	receipt, hasReceipt := state.HostActionReceipts[actionID]
 	if !hasReceipt || receipt.Status != HostActionStatusUnknown {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("host action UNKNOWN receipt %q does not exist", actionID)}
@@ -412,9 +456,9 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 	if conflict {
 		plan.Action = RecoveryOperator
 		plan.Detail = "external observation conflicts with the pending host action intent"
-	} else if fulfilled && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+	} else if fulfilled && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
 		plan.Action = RecoveryWait
-		plan.Detail = "candidate completion requires the original typed adapter evidence; submit its EXECUTED receipt"
+		plan.Detail = "native completion requires the original typed adapter evidence; submit its EXECUTED receipt"
 	} else if fulfilled {
 		plan.Detail = "external observation already satisfies the intent; result committed without re-execution"
 		var adapterOperation authoring.OperationID

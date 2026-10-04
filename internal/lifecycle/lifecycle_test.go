@@ -424,7 +424,7 @@ func TestProviderFromExecutable(t *testing.T) {
 }
 
 func TestProviderFromEnvironmentRecognizesZCode(t *testing.T) {
-	for _, key := range []string{"AI_AGENT", "ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"} {
+	for _, key := range ProviderEnvironmentKeys() {
 		t.Setenv(key, "")
 	}
 	t.Setenv("AI_AGENT", "zcode")

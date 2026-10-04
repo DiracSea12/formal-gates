@@ -34,7 +34,7 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 		if strings.TrimPrefix(o.RequirementRevision, "sha256:") != doc.ContentDigest {
 			return validationError("document bytes differ from the confirmed requirement revision")
 		}
-		if s.Validation != nil && s.Validation.RequirementRevision == o.RequirementRevision {
+		if s.Validation != nil && s.Validation.RequirementRevision == o.RequirementRevision && s.Validation.Generation == s.requirementGeneration() {
 			return validationError("requirement inventory is already frozen")
 		}
 		if s.Validation == nil {

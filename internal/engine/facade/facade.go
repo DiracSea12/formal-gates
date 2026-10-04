@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -117,8 +118,8 @@ type Run struct {
 	// PromotedSnapshot 是终态晋升绑定的候选快照（validation 完成后经
 	// PrepareCandidate 落账）。
 	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
-	// QAWorktree 是 QA 隔离工作区的登记事实（经 RegisterQAWorktree 校验落账；
-	// 物理建区归宿主）。
+	// QAWorktree projects the current blackbox design resource; GitResources
+	// retains its cleanup ownership after this role is retired.
 	QAWorktree                string                     `json:"qaWorktree,omitempty"`
 	IntakeConfirmationReceipt *IntakeConfirmationReceipt `json:"intakeConfirmationReceipt,omitempty"`
 	IntakeReceipt             *IntakeReceipt             `json:"intakeReceipt,omitempty"`
@@ -637,6 +638,15 @@ func Start(options StartOptions) (*Facade, Run, error) {
 			}
 			return err
 		}
+		lock, err := os.OpenFile(filepath.Join(stateDir, "promotion.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err != nil {
+			return err
+		}
+		_, writeErr := lock.WriteAt([]byte("0"), 0)
+		closeErr := lock.Close()
+		if err := errors.Join(writeErr, closeErr); err != nil {
+			return err
+		}
 		return writeJSONAtomic(filepath.Join(stateDir, "request.json"), req)
 	}); err != nil {
 		return nil, Run{}, err
@@ -670,50 +680,11 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
-	// SELECT_ROUTE）。
-	phase := runtime.PhaseIntakeRegistered
-	if sliceStart != nil {
-		phase = runtime.PhaseTopologyAndRoute
-	}
-	view, err := decision.NewState(cd.Version, phase)
-	if err != nil {
-		return nil, Run{}, cleanupFailedStart(err)
-	}
-	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, sliceStart); err != nil {
-		return nil, Run{}, cleanupFailedStart(err)
-	}
-	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
-	// lockOwnerCost（与 legacy 同路径＝两代共同的区间协调能力）内执行：锁内
-	// 的绑定提交使后到者的扫描必见先到者的 owner 来源，并行启动的区间判定因
-	// 此闭合。锁序＝协调锁→run store 锁（与 legacy mutateRun 同序）。无 owner
-	// 来源时无区间操作，不取锁。
-	bindOwnerCost := func() error {
-		if strings.TrimSpace(options.Owner.Transcript) == "" || strings.TrimSpace(options.Owner.Provider) == "" {
-			return eng.BindCostSources(captureOwnerBinding(root, req.RunID, options.Owner), tokenCap, emptyFingerprint())
-		}
-		release, err := lockOwnerCost(root)
-		if err != nil {
-			return err
-		}
-		defer release()
-		binding := captureOwnerBinding(root, req.RunID, options.Owner)
-		if err := eng.BindCostSources(binding, tokenCap, emptyFingerprint()); err != nil {
-			return err
-		}
-		// 区间重叠事实双边持久：把重叠补写进每个共享 owner transcript 的活动
-		// engine peer。被安装 fence 的 peer 不再写；自身相交事实照常保守
-		// 报告 unavailable，其他写失败上抛。
-		return markOverlappingEnginePeers(root, req.RunID, binding.Transcript)
-	}
-	if err := bindOwnerCost(); err != nil {
-		return nil, Run{}, cleanupFailedStart(err)
-	}
-	if err := admission.write(func() error { return lifecycle.BeginRun(root, req.RunID) }); err != nil {
+	if err := initializeRun(eng, root, req, sliceStart, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
 	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
@@ -725,6 +696,55 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		return nil, Run{}, err
 	}
 	return f, run, nil
+}
+
+// initializeRun owns the initial workflow, cost envelope and lifecycle binding.
+// The configured engine carries the native root and definition; initial cost
+// and lifecycle facts are bound before any workflow dispatch.
+func initializeRun(eng *protocol.Engine, root string, req StartRequest, sliceStart *protocol.SliceRunStart, owner OwnerBinding, tokenCap *int64, admission Admission, cd *compiler.CompiledDefinition) error {
+	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
+	// SELECT_ROUTE）。
+	phase := runtime.PhaseIntakeRegistered
+	if sliceStart != nil {
+		phase = runtime.PhaseTopologyAndRoute
+	}
+	view, err := decision.NewState(cd.Version, phase)
+	if err != nil {
+		return err
+	}
+	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, sliceStart); err != nil {
+		return err
+	}
+	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
+	// lockOwnerCost（与 legacy 同路径＝两代共同的区间协调能力）内执行：锁内
+	// 的绑定提交使后到者的扫描必见先到者的 owner 来源，并行启动的区间判定因
+	// 此闭合。锁序＝协调锁→run store 锁（与 legacy mutateRun 同序）。无 owner
+	// 来源时无区间操作，不取锁。
+	bindOwnerCost := func() error {
+		if strings.TrimSpace(owner.Transcript) == "" || strings.TrimSpace(owner.Provider) == "" {
+			return eng.BindCostSources(captureOwnerBinding(root, req.RunID, owner), tokenCap, emptyFingerprint())
+		}
+		release, err := lockOwnerCost(root)
+		if err != nil {
+			return err
+		}
+		defer release()
+		binding := captureOwnerBinding(root, req.RunID, owner)
+		if err := eng.BindCostSources(binding, tokenCap, emptyFingerprint()); err != nil {
+			return err
+		}
+		// 区间重叠事实双边持久：把重叠补写进每个共享 owner transcript 的活动
+		// engine peer。被安装 fence 的 peer 不再写；自身相交事实照常保守
+		// 报告 unavailable，其他写失败上抛。
+		return markOverlappingEnginePeers(root, req.RunID, binding.Transcript)
+	}
+	if err := bindOwnerCost(); err != nil {
+		return err
+	}
+	if err := admission.write(func() error { return lifecycle.BeginRun(root, req.RunID) }); err != nil {
+		return err
+	}
+	return nil
 }
 
 // claimMasterSlice 在 master run 锁内完成 child run 的分片认领并返回继承
@@ -824,7 +844,7 @@ func Open(root, runID string) (*Facade, error) {
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -838,6 +858,13 @@ func Open(root, runID string) (*Facade, error) {
 func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
+	}
+	if f.vcs != nil {
+		unlock, err := f.acquireNativeWindow()
+		if err != nil {
+			return Run{}, err
+		}
+		defer unlock()
 	}
 	// Recovery is a write-side reconciliation step: it may create/remove the
 	// protocol lock and orphan temp files.  Keep it out of Open/Show/Status/Next
@@ -896,7 +923,36 @@ func (f *Facade) Drive() (Run, error) {
 			return Run{}, err
 		}
 	} else {
-		plan, _, err = f.engine.Drive(emptyFingerprint())
+		for {
+			plan, _, err = f.engine.Drive(emptyFingerprint())
+			if err != nil {
+				break
+			}
+			progress, nativeErr := f.driveNative()
+			if nativeErr != nil {
+				return Run{}, nativeErr
+			}
+			if progress {
+				continue
+			}
+			current, loadErr := f.engine.Load()
+			if loadErr != nil {
+				return Run{}, loadErr
+			}
+			if current.State.NativeRoot != "" && !current.State.DeliveryComplete(f.definition) && current.State.FinalValidationComplete(f.definition) {
+				if _, promoteErr := f.prepareCandidate("formal-gates delivery " + f.runID); promoteErr != nil {
+					return Run{}, promoteErr
+				}
+				continue
+			}
+			if !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
+				if err := f.engine.BeginCleanup(emptyFingerprint()); err != nil {
+					return Run{}, err
+				}
+				continue
+			}
+			break
+		}
 		if err != nil {
 			// 修订屏障冻结签发＝等待用户决定，不是错误：照常投影 ask 边界。
 			var rejected *protocol.RejectedError
@@ -915,7 +971,7 @@ func (f *Facade) Drive() (Run, error) {
 		if _, aborted := current.State.AbortDecision(); !aborted {
 			var deliveryErr error
 			if current.State.SliceChild != nil {
-				deliveryErr = f.checkpointDelivered()
+				deliveryErr = f.checkpointDeliveredInWindow()
 			} else {
 				deliveryErr = f.sealDelivered()
 			}
@@ -954,7 +1010,7 @@ func (f *Facade) Drive() (Run, error) {
 		if err != nil {
 			return Run{}, err
 		}
-		if run.Route == "lightweight" || run.Status == "ABORTED" {
+		if run.Route == "lightweight" || run.Status == "ABORTED" || run.Status == "COMPLETE" && run.Termination.NativeRoot != "" {
 			if err := f.finalizeTerminal(run, interval); err != nil {
 				return Run{}, err
 			}
@@ -993,6 +1049,9 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	if !snap.State.DeliveryComplete(f.definition) {
+		return "", "", fmt.Errorf("engine delivery: current final validation and exact promotion mapping are incomplete")
+	}
 	head, err := f.vcs.Resolve()
 	if err != nil {
 		return "", "", err
@@ -1005,6 +1064,13 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 	}
 	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
 		return "", "", err
+	}
+	count, err := f.vcs.CommitCount(snap.State.BaseSnapshot, head)
+	if err != nil {
+		return "", "", err
+	}
+	if count > 1 {
+		return "", "", fmt.Errorf("engine delivery: native delivery requires at most one commit")
 	}
 	tree, err := f.vcs.TreeDigest(head)
 	if err != nil {
@@ -1020,11 +1086,14 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 // admission, then freezes owner measurement and its endpoint under their owner
 // coordination lock. A committed receipt is replayed without another measurement.
 func (f *Facade) checkpointDelivered() error {
-	unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+	unlock, err := f.acquireNativeWindow()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	return f.checkpointDeliveredInWindow()
+}
+func (f *Facade) checkpointDeliveredInWindow() error {
 	snap, err := f.engine.Load()
 	if err != nil {
 		return err
@@ -1099,23 +1168,26 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 	return nil
 }
 
-// Submit accepts one typed protocol event and immediately computes the next
-// boundary.  The event itself remains the only external write channel.
-// 每个撤销晋升资格的控制接纳与晋升执行窗在同一把等待式锁上互斥：需求变化
-// （Phase A 载体：KindRequestControl ∧ Control==ControlRequestRequirementChange）
-// 与 abort 决定（词表权威 internal/engine/protocol/abort.go：对 ControlAbort/
-// ControlValidation/ControlRecovery 未决 Ask 的 Choice=="abort" DECIDE）——窗
-// 口内到达的接纳等待至窗口关闭、作用于已提交事实，任何此类接纳之后不再有
-// 窗口内的新 Git 写。abort 的 REQUEST 不加锁（只落未决 Ask、不记决定，资格
-// 不变）；等待过的 DECIDE 可能携带 stale freshness token（窗口内的晋升提交
-// 已推进 revision），按既有 STALE_FRESHNESS 拒绝与重取指引处理——设计内的
-// 新鲜度行为。其余事件不加锁（不阻断常规控制/结果流）。
+// Submit accepts one typed event within the native window when it changes
+// control admission. The current State owns pending requests and decisions.
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
-	if (event.Kind == protocol.KindRequestControl && event.Request != nil && event.Request.Control == protocol.ControlRequestRequirementChange) || f.recordsAbortDecision(event) {
-		unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+	accepted, recorded, err := f.engine.RecordedEvent(event)
+	if err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if recorded {
+		run, err := f.projectOrSummary()
+		return accepted, run, err
+	}
+	control, err := f.controlsNativeWindow(event)
+	if err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if control {
+		unlock, err := f.acquireNativeWindow()
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
@@ -1136,32 +1208,30 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	return acceptance, run, err
 }
 
-// recordsAbortDecision 报告事件是否落账一条 abort 决定——撤销晋升资格的第
-// 二接纳族。词表权威在 internal/engine/protocol/abort.go：Choice=="abort" 且
-// 控制为 ControlAbort/ControlValidation/ControlRecovery 三者之一。DECIDE 载
-// 荷不携带控制：控制随请求创建固定在未决 Ask 上，此处按 request ID 查账；
-// Ask 不在账时事件必被接纳层拒绝（零状态变化），无需等待。
-func (f *Facade) recordsAbortDecision(event protocol.Event) bool {
-	if event.Kind != protocol.KindDecide || event.Decide == nil || event.Decide.Choice != "abort" {
-		return false
+func (f *Facade) controlsNativeWindow(event protocol.Event) (bool, error) {
+	if event.Kind == protocol.KindRequestControl {
+		return true, nil
+	}
+	if event.Kind != protocol.KindDecide || event.Decide == nil {
+		return false, nil
 	}
 	snap, err := f.engine.Load()
+	if isMissingEngineState(err) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	ask, ok := snap.State.PendingAsks[string(event.Decide.Request)]
 	if !ok {
-		return false
+		return false, nil
 	}
-	switch ask.Control {
-	case protocol.ControlAbort, protocol.ControlValidation, protocol.ControlRecovery:
-		return true
-	}
-	return false
+	return ask.Control == protocol.ControlRequestRequirementChange || ask.Control == protocol.ControlAbort || ask.Control == protocol.ControlValidation || ask.Control == protocol.ControlRecovery, nil
 }
 
-// replayTerminalEvent reads the last stable receipt while cleanup is pending
-// or complete. Only Drive may finish the terminal intent.
+// replayTerminalEvent reads accepted receipts from the retained State while
+// cleanup is pending or complete. LastEvent also supports summaries without
+// the State event ledger. Only Drive may finish the terminal intent.
 func (f *Facade) replayTerminalEvent(event protocol.Event) (protocol.Acceptance, error) {
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1174,17 +1244,17 @@ func (f *Facade) replayTerminalEvent(event protocol.Event) (protocol.Acceptance,
 		return protocol.Acceptance{}, err
 	}
 	record := summary.LastEvent
+	if summary.Termination != nil && summary.Termination.Events != nil {
+		accepted, ok := summary.Termination.Events[string(event.ID)]
+		if !ok {
+			return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeNotInitialized, Detail: "event is not recorded in the terminal run"}
+		}
+		record = &accepted
+	}
 	if record == nil || record.Acceptance.EventID != string(event.ID) {
 		return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeNotInitialized, Detail: "event is not the final recorded terminal event"}
 	}
-	digest, err := event.Digest()
-	if err != nil {
-		return protocol.Acceptance{}, err
-	}
-	if digest != record.Digest {
-		return protocol.Acceptance{}, &protocol.RejectedError{Code: protocol.CodeDuplicateEventMismatch, Detail: fmt.Sprintf("event %q replayed with different payload digest (recorded %s, submitted %s)", event.ID, record.Digest, digest)}
-	}
-	return record.Acceptance, nil
+	return record.Replay(event)
 }
 
 func (f *Facade) Next() (decision.NextResult, error) {
@@ -1200,36 +1270,30 @@ func (f *Facade) Status() (Run, error) { return f.projectOrSummary() }
 
 func (f *Facade) projectOrSummary() (Run, error) {
 	run, err := f.project()
-	if err != nil && !isMissingEngineState(err) {
-		return Run{}, err
-	}
-	intent, intentErr := f.readTerminalIntent()
-	if intentErr != nil && !errors.Is(intentErr, fs.ErrNotExist) {
-		return Run{}, intentErr
-	}
-	if intentErr == nil {
-		if err != nil {
-			run = runFromSummary(intent)
-		}
-		run.Status = "FINALIZING_CLEANUP"
-		run.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
-		run.SummaryPath = filepath.Join(f.stateDir, "terminal-summary.json")
-		return run, nil
-	}
 	if err == nil && run.Status != "COMPLETE" && run.Status != "ABORTED" {
 		return run, nil
+	}
+	if err != nil && !isMissingEngineState(err) {
+		return Run{}, err
 	}
 	summary, summaryErr := f.readSummary()
 	if summaryErr == nil {
 		run = runFromSummary(summary)
-		run.SummaryPath = filepath.Join(f.stateDir, "terminal-summary.json")
+		run.SummaryPath = terminalSummaryPath(f.stateDir)
 		return run, nil
 	}
 	if !errors.Is(summaryErr, fs.ErrNotExist) {
 		return Run{}, summaryErr
 	}
 	if err != nil {
-		return Run{}, err
+		intent, intentErr := f.readTerminalIntent()
+		if intentErr != nil {
+			return Run{}, intentErr
+		}
+		if !f.terminalEvidenceComplete(intent) {
+			return Run{}, fmt.Errorf("engine state is missing with unfinished terminal evidence")
+		}
+		run = runFromSummary(intent)
 	}
 	run.Status = "FINALIZING_CLEANUP"
 	run.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
@@ -1261,6 +1325,9 @@ func (f *Facade) project() (Run, error) {
 	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复），lightweight 的
 	// CompleteAll 已在引擎内相变。
 	status := "ACTIVE"
+	if snap.State.Phase == runtime.PhaseFinalizingCleanup && snap.State.CleanupEligible(f.definition) {
+		status = "FINALIZING_CLEANUP"
+	}
 	if snap.State.Phase == runtime.PhaseSliceReady {
 		status = "SLICE_READY"
 	}
@@ -1309,12 +1376,21 @@ func (f *Facade) project() (Run, error) {
 	}
 
 	for _, event := range snap.State.Events {
+		if event.Acceptance.Kind == string(protocol.KindHostActionReceipt) || event.Acceptance.Kind == string(protocol.KindLifecycleEvent) || event.Acceptance.Kind == string(protocol.KindSpawnReceipt) {
+			continue
+		}
 		if run.lastEvent == nil || event.Acceptance.Revision > run.lastEvent.Acceptance.Revision {
 			record := event
 			run.lastEvent = &record
 		}
 	}
-	if _, aborted := snap.State.AbortDecision(); aborted {
+	if abort, aborted := snap.State.AbortDecision(); aborted {
+		// The accepted decision owns abort identity; later effect receipts remain
+		// in Events without replacing the terminal business receipt.
+		record := snap.State.Events[abort.EventID]
+		run.lastEvent = &record
+		run.Termination = snap.State
+	} else if snap.State.Phase == runtime.PhaseTerminal {
 		run.Termination = snap.State
 	}
 	run.ValidationDecisions = map[string]protocol.RecordedDecision{}
@@ -1350,7 +1426,7 @@ func (f *Facade) pendingRequirementAskFace(snap protocol.Snapshot) *PendingRequi
 		if ask.Control != protocol.ControlRequestRequirementChange || ask.Resolved {
 			continue
 		}
-		token, err := f.engine.Freshness(protocol.RequestID(id))
+		token, err := snap.Freshness(protocol.RequestID(id))
 		if err != nil {
 			token = ""
 		}
@@ -1382,7 +1458,7 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 	faces := make([]PendingAskFace, 0, len(ids))
 	for _, id := range ids {
 		ask := snap.State.PendingAsks[id]
-		token, err := f.engine.Freshness(protocol.RequestID(id))
+		token, err := snap.Freshness(protocol.RequestID(id))
 		if err != nil {
 			token = ""
 		}
@@ -1469,6 +1545,27 @@ func (f *Facade) readTerminalIntent() (TerminalSummary, error) {
 
 // recoverTerminalIntent finishes a terminal cleanup whose process response
 // was lost. It is called only by Drive, keeping Show/Status/Next read-only.
+func (f *Facade) terminalEvidenceComplete(summary TerminalSummary) bool {
+	s := summary.Termination
+	if s == nil || s.Phase != runtime.PhaseTerminal || !s.ResourcesCleaned() || len(s.PendingActions) != 0 || len(s.PendingHostActions) != 0 {
+		return false
+	}
+	for _, ask := range s.PendingAsks {
+		if !ask.Resolved {
+			return false
+		}
+	}
+	for _, attempt := range s.EndedAttempts {
+		if attempt.AwaitingResult {
+			return false
+		}
+	}
+	if d, abort := s.AbortDecision(); abort {
+		record, ok := s.Events[d.EventID]
+		return ok && summary.Status == "ABORTED" && summary.LastEvent != nil && record.Digest == summary.LastEvent.Digest && reflect.DeepEqual(record.Acceptance, summary.LastEvent.Acceptance)
+	}
+	return summary.Status == "COMPLETE" && (s.Route == "lightweight" || s.DeliveryComplete(f.definition))
+}
 func (f *Facade) recoverTerminalIntent() error {
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1476,6 +1573,14 @@ func (f *Facade) recoverTerminalIntent() error {
 	}
 	if err != nil {
 		return err
+	}
+	if _, err := f.engine.Load(); err == nil {
+		return nil
+	} else if !isMissingEngineState(err) {
+		return err
+	}
+	if !f.terminalEvidenceComplete(summary) {
+		return fmt.Errorf("engine state is missing with unfinished terminal evidence")
 	}
 	return f.commitTerminalCleanup(summary)
 }
@@ -1495,14 +1600,45 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 	})
 }
 
-func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
-	summary, err := f.readTerminalIntent()
-	if errors.Is(err, fs.ErrNotExist) {
-		summary = summaryForRun(run, interval)
-		err = f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) })
+// freezeCleanupSummary preserves the intended terminal evidence before native
+// resource deletion. The State registry remains authoritative; typed cleanup
+// evidence is attached when that intent is finalized.
+func (f *Facade) freezeCleanupSummary(s *protocol.State) error {
+	if _, err := f.readTerminalIntent(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
+	interval, err := f.finishOwnerCost()
 	if err != nil {
 		return err
+	}
+	run, err := f.project()
+	if err != nil {
+		return err
+	}
+	run.Termination = s
+	run.Status = "COMPLETE"
+	if _, aborted := s.AbortDecision(); aborted {
+		run.Status = "ABORTED"
+	}
+	run.Next = decision.NextResult{Kind: decision.KindComplete}
+	return f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run, interval)) })
+}
+
+func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
+	summary := summaryForRun(run, interval)
+	existing, err := f.readTerminalIntent()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err == nil && f.terminalEvidenceComplete(existing) {
+		summary = existing
+	} else {
+		if !f.terminalEvidenceComplete(summary) {
+			return fmt.Errorf("terminal publication requires the actual completed State and authority")
+		}
+		if err := f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) }); err != nil {
+			return err
+		}
 	}
 	return f.commitTerminalCleanup(summary)
 }
@@ -1523,7 +1659,15 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	return Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
+	run := Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
+	if s := summary.Termination; s != nil {
+		run.BaseSnapshot = s.BaseSnapshot
+		run.PromotedSnapshot = s.PromotedSnapshot
+		run.Validation = s.Validation
+		run.DispatchBindings = s.DispatchBindings
+		run.RecoveryRecords = s.RecoveryRecords
+	}
+	return run
 }
 
 // Diagnose is deliberately raw and read-only.  It reports malformed/old
@@ -1836,12 +1980,7 @@ func (admission Admission) validate() error {
 }
 
 func (admission Admission) matchesRoot(root string) bool {
-	if admission.Root == root {
-		return true
-	}
-	actual, actualErr := os.Stat(root)
-	bound, boundErr := os.Stat(admission.Root)
-	return actualErr == nil && boundErr == nil && os.SameFile(actual, bound)
+	return vcs.SamePath(admission.Root, root)
 }
 
 // acquire owns each bounded installation write window. Business coordination
@@ -1857,7 +1996,10 @@ func (admission Admission) acquire() (func(), error) {
 	if _, err := os.Stat(admission.RegistryPath); err != nil {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: admission registry is unavailable: %w", err)
 	}
-	release, err := coordination.AcquirePathWaiting(admission.RegistryPath+".lock", "admission")
+	if err := verifyAdmissionSnapshot(admission); err != nil {
+		return nil, err
+	}
+	release, err := coordination.AcquireExistingPathWaiting(admission.RegistryPath+".lock", "admission")
 	if err != nil {
 		return nil, err
 	}
@@ -1969,6 +2111,10 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	data = append(data, '\n')
+	return writeFileAtomic(path, data, 0o600)
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -1978,7 +2124,7 @@ func writeJSONAtomic(path string, value any) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
 		return err
 	}

@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"formal-gates/internal/coordination"
@@ -50,7 +52,7 @@ const promotionLockDescription = "candidate promotion window"
 
 // promotionLockPath 是晋升执行窗互斥锁（等待式文件锁）的路径：放在 run 状态
 // 目录内（.gates/engine/ 属 porcelain 的运行期未跟踪排除清单，锁文件不污染
-// 就绪检查）。窗口＝PrepareCandidate 的准入→执行→观察→提交；撤销晋升资格的
+// 就绪检查）。Drive、PrepareCandidate 的原生执行与观察共用此窗口；撤销资格的
 // 接纳（需求变化与 abort 决定）在同一把锁上等待至窗口关闭（等待式文件锁本
 // 体：持锁冲突时阻塞、由内核在持锁释放时唤醒的等待者，与 owner 区间串行使
 // 用同款原语）。
@@ -58,133 +60,374 @@ func (f *Facade) promotionLockPath() string {
 	return filepath.Join(f.stateDir, "promotion.lock")
 }
 
-// PrepareCandidate 组织终态候选（镜像 legacy PrepareCandidate：区间单提交＝确
-// 认当前 HEAD；多提交需 squash 消息，squash 后重解析绑定；晋升后区间再度累
-// 积提交时可重复组织）。晋升走完整副作用协议 intent→execute→observe→
-// commit，整个窗口（准入→执行→观察→提交）持 run 级晋升锁与撤销晋升资格的
-// 接纳（需求变化、abort 决定）互斥：接纳要么先于窗口落账（准入处拒绝、零
-// Git 副作用）、要么等待至窗口关闭后作用于已提交事实——接纳之后不再有窗口
-// 内的新 Git 写。恢复只按持久事实
-// （引擎状态＋观察到的 Git 状态）对账，零内存恢复事实跨调用：内容前置门核对
-// 暂存树等于已验证最终候选 digest，squash 与续行 commit 只组织已验证内容；
-// 意图存活期间重入＝续行而非重开，squash 的 reset 已完成、commit 未执行的中
-// 断由「未提交内容恰为纯暂存形态」识别并以 Commit 完成组织，区间已是单提交
-// 且树＝候选时只提交结果（不重复 squash）；工作区含未暂存/未跟踪的修改不是
-// 本操作的中断中间态——拒绝并指明先处理，绝不把用户脏区提交成晋升。已在位
-// 且 HEAD==PromotedSnapshot 时幂等直返。track/commit 是候选 freeze 的宿主侧
-// 动作，不在此自动执行。
-func (f *Facade) PrepareCandidate(squashMessage string) (string, error) {
+// acquireNativeWindow observes the original installation binding before waiting.
+// Every actual write rechecks it under the registry lock in Admission.acquire.
+func (f *Facade) acquireNativeWindow() (func(), error) {
+	if err := verifyAdmissionSnapshot(f.admission); err != nil {
+		return nil, err
+	}
+	return coordination.AcquireExistingPathWaiting(f.promotionLockPath(), promotionLockDescription)
+}
+
+// PrepareCandidate completes the signed native effect for the current FULL
+// candidate. Observation and execution use the same handler as Drive recovery.
+func (f *Facade) PrepareCandidate(message string) (string, error) {
 	if f.vcs == nil {
 		return "", fmt.Errorf("candidate promotion requires a regular run with a git provider")
 	}
-	snap, err := f.engine.Load()
-	if err != nil {
-		return "", err
-	}
-	head, err := f.vcs.Resolve()
-	if err != nil {
-		return "", err
-	}
-	if snap.State.PromotedSnapshot == head {
-		return head, nil
-	}
-	unlock, err := coordination.AcquirePathWaiting(f.promotionLockPath(), promotionLockDescription)
+	unlock, err := f.acquireNativeWindow()
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
-	// 窗口可能等待过：以窗口内事实重新对账（引擎状态与 Git 状态都可能已变）。
-	if snap, err = f.engine.Load(); err != nil {
-		return "", err
-	}
-	if head, err = f.vcs.Resolve(); err != nil {
-		return "", err
-	}
-	if snap.State.PromotedSnapshot == head {
-		return head, nil
-	}
-	// 内容前置门（先于任何 Git 写）：净内容（暂存树——干净工作区即 HEAD
-	// 树）必须等于当前终 wave 候选 digest；不等＝内容漂移，错误上抛、零 Git
-	// 副作用（恢复＝恢复内容后重入）。
-	staged, err := f.vcs.StagedTreeDigest()
+	return f.prepareCandidate(message)
+}
+func (f *Facade) prepareCandidate(message string) (string, error) {
+	snap, err := f.engine.Load()
 	if err != nil {
 		return "", err
 	}
-	var verified string
-	if snap.State.Validation != nil && len(snap.State.Validation.Waves) > 0 {
-		verified = snap.State.Validation.Waves[len(snap.State.Validation.Waves)-1].Candidate.Digest
-	}
-	if staged != verified {
-		return "", fmt.Errorf("candidate promotion content %s does not match the verified final candidate %s", staged, verified)
-	}
-	// 未决意图存活期间重入＝续行而非重开（重试不得覆盖未决目标）；为空才
-	// OpenPromotion——准入在先，被拒时零 Git 副作用。
-	intent := snap.State.PendingPromotion
-	if intent == "" {
-		if err := f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
-			return "", err
-		}
-		intent = head
-	}
-	if err := f.vcs.VerifyReady(); err != nil {
-		if head == intent {
-			return "", err
-		}
-		// head 已离开意图目标且工作区不净：本意图组织的精确中断中间态＝
-		// 「未提交内容恰为纯暂存形态」（squash 的 reset --soft 已完成、
-		// commit 未执行——保树保 index，暂存树＝候选已由前置门核对），以
-		// Commit 完成组织并绑定原意图。其余形状（未暂存/未跟踪的用户修
-		// 改）不是本操作的中间态：拒绝并指明先处理工作区。
-		stagedOnly, classErr := f.vcs.StagedOnly()
-		if classErr != nil {
-			return "", classErr
-		}
-		if !stagedOnly {
-			return "", fmt.Errorf("candidate promotion cannot resume over workspace changes it did not stage (unstaged or untracked); commit, stage or clean them and re-enter")
-		}
-		message := strings.TrimSpace(squashMessage)
-		if message == "" {
-			return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
-		}
-		if err := f.admission.write(func() error { return f.vcs.Commit(message) }); err != nil {
-			return "", err
-		}
-		if head, err = f.vcs.Resolve(); err != nil {
-			return "", err
-		}
-	}
-	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
+	s := snap.State
+	if err := s.AdmitPromotion(f.definition); err != nil {
 		return "", err
 	}
-	count, err := f.vcs.CommitCount(snap.State.BaseSnapshot, head)
+	if s.DeliveryComplete(f.definition) {
+		tree, err := f.vcs.TreeDigest("HEAD")
+		if err != nil {
+			return "", err
+		}
+		if tree != s.PromotedDigest {
+			return "", fmt.Errorf("candidate content does not match the verified final candidate")
+		}
+		head, _, err := f.verifyDelivered()
+		return head, err
+	}
+	source := s.Validation.Waves[len(s.Validation.Waves)-1].Candidate
+	intent, pending := s.PromotionIntent()
+	if pending {
+		var old protocol.CandidateParameters
+		if err := decodeNativeParams(intent, &old); err != nil {
+			return "", err
+		}
+		if old.Promotion.Source != source.Identity || old.Promotion.SourceDigest != source.Digest || len(s.HostActionFailures[intent.ActionID]) != 0 {
+			result, complete, err := f.nativeEvidence(s, intent, false)
+			if err != nil {
+				return "", err
+			}
+			if complete {
+				if err := f.engine.RecordCandidatePromotion(intent.ActionID, *result.Candidate.Promotion, emptyFingerprint()); err != nil {
+					return "", err
+				}
+				return f.prepareCandidate(message)
+			}
+			if _, err := f.promotionPrefix(*old.Promotion); err != nil {
+				return "", err
+			}
+			pending = false
+		}
+	}
+	if !pending {
+		observed, err := f.observePromotion()
+		if err != nil {
+			return "", err
+		}
+		p := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: f.root, TargetBase: s.BaseSnapshot, TargetStart: observed, Message: strings.TrimSpace(message)}
+		if s.NativeRoot != "" {
+			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
+		}
+		if p.Message == "" {
+			count, err := f.vcs.CommitCount(s.BaseSnapshot, observed.Head)
+			if err != nil {
+				return "", err
+			}
+			if count > 1 {
+				return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
+			}
+			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
+		}
+		if intent.ActionID != "" {
+			p.SupersedesActionID = intent.ActionID
+		} else {
+			expected := s.BaseSnapshot
+			if s.CandidatePromotion != nil {
+				expected = s.CandidatePromotion.Final
+			}
+			if observed.Head != expected && !(s.NativeRoot == "" && observed.Tree == source.Digest) {
+				return "", fmt.Errorf("promotion target drifted from its accepted delivery %s to %s", expected, observed.Head)
+			}
+			if !observed.Clean {
+				return "", fmt.Errorf("promotion target has unsubmitted git changes")
+			}
+		}
+		for _, r := range s.GitResources {
+			if r.Role == "candidate" && r.Identity == source.Identity && r.Status == "READY" && !s.ResourceCleanupPending(r.ID) {
+				p.SourceWorkspace = r.ID
+				break
+			}
+		}
+		if s.NativeRoot != "" && p.SourceWorkspace == "" {
+			return "", fmt.Errorf("candidate promotion requires its registered source workspace")
+		}
+		if err := f.engine.OpenPromotion(p, emptyFingerprint()); err != nil {
+			return "", err
+		}
+		snap, err = f.engine.Load()
+		if err != nil {
+			return "", err
+		}
+		s = snap.State
+		intent, pending = s.PromotionIntent()
+	}
+	if !pending {
+		return "", fmt.Errorf("candidate promotion has no signed intent")
+	}
+	if !s.NativeActionCurrent(intent, f.definition) {
+		return "", fmt.Errorf("candidate promotion is not current")
+	}
+	result, complete, err := f.nativeEvidence(s, intent, true)
 	if err != nil {
 		return "", err
 	}
-	if count > 1 {
-		message := strings.TrimSpace(squashMessage)
-		if message == "" {
-			return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
-		}
-		if err := f.admission.write(func() error { return f.vcs.SquashToBase(snap.State.BaseSnapshot, message) }); err != nil {
-			return "", err
-		}
-		if head, err = f.vcs.Resolve(); err != nil {
-			return "", err
-		}
+	if !complete {
+		return "", fmt.Errorf("candidate promotion remains incomplete")
 	}
-	digest, err := f.vcs.TreeDigest(head)
-	if err != nil {
+	proof := *result.Candidate.Promotion
+	if err := f.engine.RecordCandidatePromotion(intent.ActionID, proof, emptyFingerprint()); err != nil {
 		return "", err
 	}
-	if err := f.engine.RecordCandidatePromotion(head, digest, emptyFingerprint()); err != nil {
-		return "", err
-	}
-	return head, nil
+	return proof.Final, nil
 }
 
-// RegisterQAWorktree 登记 QA 隔离工作区（镜像 legacy RegisterQAWorktree：工作
-// 区原生身份必须解析为 run 的 BaseSnapshot，隔离区内需求产物哈希必须等于登记
-// 修订——防 host 遗忘刷新注入）。物理建区归宿主；登记经引擎事务落账。
+func (f *Facade) observePromotion() (protocol.PromotionObservation, error) {
+	return observeNativePrefix(f.vcs)
+}
+
+func observeNativePrefix(native *vcs.Provider) (protocol.PromotionObservation, error) {
+	var o protocol.PromotionObservation
+	head, err := native.Resolve()
+	if err != nil {
+		return o, err
+	}
+	o.Head = head
+	if o.Tree, err = native.TreeDigest(head); err != nil {
+		return o, err
+	}
+	if o.IndexTree, err = native.StagedTreeDigest(); err != nil {
+		return o, err
+	}
+	if o.Changes, err = native.Changes(head, o.IndexTree); err != nil {
+		return o, err
+	}
+	status, err := native.Status()
+	if err != nil {
+		return o, err
+	}
+	o.Clean = status == ""
+	if !o.Clean {
+		o.StagedOnly, err = native.StagedOnly()
+	}
+	return o, err
+}
+
+// promotionPrefix accepts only the signed initial state or exact native
+// prefixes whose entries and organization are explained by this responsibility.
+func (f *Facade) promotionPrefix(p protocol.PromotionParameters) (protocol.PromotionObservation, error) {
+	o, err := f.observePromotion()
+	if err != nil {
+		return o, err
+	}
+	tree, err := f.vcs.TreeDigest(p.Source)
+	if err != nil {
+		return o, err
+	}
+	if tree != p.SourceDigest {
+		return o, fmt.Errorf("candidate promotion source does not match the verified final candidate")
+	}
+	if err := f.vcs.IsAncestorOrEqual(p.TargetBase, o.Head); err != nil {
+		return o, err
+	}
+	if !o.Clean && !o.StagedOnly {
+		return o, fmt.Errorf("candidate promotion cannot resume over changes it did not stage (unstaged or untracked)")
+	}
+	if o.Head == p.TargetStart.Head {
+		expected, err := f.vcs.Changes(p.TargetStart.IndexTree, p.Source)
+		if err != nil {
+			return o, err
+		}
+		actual, err := f.vcs.Changes(p.TargetStart.IndexTree, o.IndexTree)
+		if err != nil {
+			return o, err
+		}
+		for _, change := range actual {
+			if !slices.Contains(expected, change) {
+				return o, fmt.Errorf("promotion contains an unexplained staged change: %s", change.Path)
+			}
+		}
+		return o, nil
+	}
+	if o.IndexTree != p.SourceDigest || o.Clean && o.Tree != p.SourceDigest {
+		return o, fmt.Errorf("promotion target does not match the verified final candidate")
+	}
+	if o.Head == p.TargetBase || o.Head == p.Source {
+		return o, nil
+	}
+	message, err := f.vcs.Message(o.Head)
+	if err != nil {
+		return o, err
+	}
+	count, err := f.vcs.CommitCount(p.TargetBase, o.Head)
+	if err != nil {
+		return o, err
+	}
+	if message != p.Message {
+		return o, fmt.Errorf("promotion target has no signed organization message")
+	}
+	if count != 1 {
+		if err := f.vcs.IsAncestorOrEqual(p.TargetStart.Head, o.Head); err != nil {
+			return o, err
+		}
+		delta, err := f.vcs.CommitCount(p.TargetStart.Head, o.Head)
+		if err != nil {
+			return o, err
+		}
+		if delta != 1 {
+			return o, fmt.Errorf("promotion has an unexpected organization range")
+		}
+	}
+	return o, nil
+}
+
+func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostActionIntent, mayWrite bool, invoked *bool) (nativeResult, bool, error) {
+	var params protocol.CandidateParameters
+	if err := decodeNativeParams(intent, &params); err != nil {
+		return nativeResult{}, false, err
+	}
+	if params.Promotion == nil {
+		return nativeResult{}, false, fmt.Errorf("promotion has no typed parameters")
+	}
+	p := *params.Promotion
+	o, err := f.promotionPrefix(p)
+	if err != nil {
+		if latest, exists := s.PromotionIntent(); exists && latest.ActionID != intent.ActionID {
+			chain, chainErr := s.PromotionChain(latest)
+			if chainErr == nil && slices.ContainsFunc(chain, func(original protocol.HostActionIntent) bool { return original.ActionID == intent.ActionID }) {
+				var current protocol.CandidateParameters
+				if decodeErr := decodeNativeParams(latest, &current); decodeErr != nil {
+					return nativeResult{}, false, decodeErr
+				}
+				if _, prefixErr := f.promotionPrefix(*current.Promotion); prefixErr == nil {
+					return nativeResult{}, false, nil
+				}
+			}
+		}
+		return nativeResult{}, false, err
+	}
+	count, err := f.vcs.CommitCount(p.TargetBase, o.Head)
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	complete := o.Clean && o.Tree == p.SourceDigest && o.IndexTree == p.SourceDigest && count <= 1
+	if !complete {
+		if !mayWrite {
+			return nativeResult{}, false, nil
+		}
+		if !s.NativeActionWritable(intent, f.definition) {
+			return nativeResult{}, false, fmt.Errorf("native responsibility has no current execution allowance")
+		}
+		if p.SourceWorkspace != "" {
+			r, ok := s.GitResources[p.SourceWorkspace]
+			if !ok || r.Identity != p.Source || r.Status != "READY" || s.ResourceCleanupPending(r.ID) {
+				return nativeResult{}, false, fmt.Errorf("promotion source workspace is not available")
+			}
+			native := f.vcs.At(r.Path)
+			if err := native.VerifyReady(); err != nil {
+				return nativeResult{}, false, err
+			}
+			head, err := native.Resolve()
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			if head != p.Source {
+				return nativeResult{}, false, fmt.Errorf("promotion source identity drifted")
+			}
+		}
+		if o.IndexTree != p.SourceDigest {
+			if o.Clean && o.Head == p.TargetBase && p.SupersedesActionID == "" && p.TargetStart.Head == p.TargetBase {
+				if err := f.admission.write(func() error {
+					*invoked = true
+					return f.vcs.FastForward(p.Source)
+				}); err != nil {
+					return nativeResult{}, false, err
+				}
+			} else {
+				changes, err := f.vcs.Changes(o.IndexTree, p.Source)
+				if err != nil {
+					return nativeResult{}, false, err
+				}
+				paths := make([]string, 0, len(changes))
+				for _, change := range changes {
+					paths = append(paths, change.Path)
+				}
+				if err := f.admission.write(func() error {
+					*invoked = true
+					return f.vcs.ApplyArtifact(p.Source, paths)
+				}); err != nil {
+					return nativeResult{}, false, err
+				}
+			}
+			o, err = f.observePromotion()
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+		}
+		if o.IndexTree != p.SourceDigest {
+			return nativeResult{}, false, fmt.Errorf("promotion index does not match the verified final candidate")
+		}
+		if !o.Clean {
+			if !o.StagedOnly {
+				return nativeResult{}, false, fmt.Errorf("promotion has unstaged or untracked changes")
+			}
+			if err := f.admission.write(func() error {
+				*invoked = true
+				return f.vcs.Commit(p.Message)
+			}); err != nil {
+				return nativeResult{}, false, err
+			}
+			o, err = f.observePromotion()
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+		}
+		count, err = f.vcs.CommitCount(p.TargetBase, o.Head)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if count > 1 {
+			if err := f.admission.write(func() error {
+				*invoked = true
+				return f.vcs.SquashToBase(p.TargetBase, p.Message)
+			}); err != nil {
+				return nativeResult{}, false, err
+			}
+			o, err = f.observePromotion()
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+		}
+		count, err = f.vcs.CommitCount(p.TargetBase, o.Head)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if !o.Clean || o.Tree != p.SourceDigest || o.IndexTree != p.SourceDigest || count > 1 {
+			return nativeResult{}, false, fmt.Errorf("promotion final native tree is incomplete")
+		}
+	}
+	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: "git", SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
+	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
+}
+
+// RegisterQAWorktree validates a base workspace and its confirmed intake
+// artifacts. Native workflow resources are created and owned by Drive.
 func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if f.vcs == nil {
 		return fmt.Errorf("QA worktree registration requires a regular run with a git provider")
@@ -225,9 +468,8 @@ func (f *Facade) RegisterQAWorktree(worktree string) error {
 	return f.engine.RecordQAWorktree(worktree, emptyFingerprint())
 }
 
-// requirementArtifactRevision 计算需求工件的内容哈希（裸 hex，镜像 legacy
-// RequirementRevision，与 intake 工件绑定校验同一修订语言；行尾先规范化
-// CRLF→LF——Windows checkout 不改变工件身份）。
+// requirementArtifactRevision uses the intake artifact hash language: bare
+// hexadecimal SHA256 with CRLF normalized to LF.
 func requirementArtifactRevision(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -1,0 +1,255 @@
+package vcs
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+// Worktree is the native registration, rather than a directory-existence claim.
+type Worktree struct{ Path, Identity string }
+
+func (p *Provider) At(root string) *Provider { return New(root, p.runner) }
+
+func (p *Provider) Worktrees() ([]Worktree, error) {
+	out, err := p.runner.Run(p.root, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var result []Worktree
+	var item Worktree
+	for _, line := range strings.Split(out+"\n\n", "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			item.Path = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "HEAD "):
+			item.Identity = strings.TrimPrefix(line, "HEAD ")
+		case line == "" && item.Path != "":
+			result = append(result, item)
+			item = Worktree{}
+		}
+	}
+	return result, nil
+}
+func (p *Provider) AddWorktree(path, base string) error {
+	_, err := p.runner.Run(p.root, "git", "worktree", "add", "--detach", path, base)
+	return err
+}
+func (p *Provider) RemoveWorktree(path string) error {
+	_, err := p.runner.Run(p.root, "git", "worktree", "remove", "--force", path)
+	return err
+}
+func (p *Provider) Pin(ref, identity string) error {
+	_, err := p.runner.Run(p.root, "git", "update-ref", ref, identity)
+	return err
+}
+func (p *Provider) RemoveRef(ref string) error {
+	_, err := p.runner.Run(p.root, "git", "update-ref", "-d", ref)
+	return err
+}
+func (p *Provider) Ref(ref string) (string, error) {
+	out, err := p.runner.Run(p.root, "git", "for-each-ref", "--format=%(objectname)", ref)
+	return strings.TrimSpace(out), err
+}
+func (p *Provider) FastForward(identity string) error {
+	_, err := p.runner.Run(p.root, "git", "merge", "--ff-only", identity)
+	return err
+}
+func (p *Provider) Message(identity string) (string, error) {
+	out, err := p.runner.Run(p.root, "git", "show", "-s", "--format=%B", identity)
+	return strings.TrimSpace(out), err
+}
+func nulPaths(out string) []string {
+	var paths []string
+	for _, path := range strings.Split(out, "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+func (p *Provider) ChangedPaths() ([]string, error) {
+	tracked, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	staged, err := p.runner.Run(p.root, "git", "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	untracked, err := p.runner.Run(p.root, "git", "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	paths := append(nulPaths(tracked), nulPaths(staged)...)
+	for _, path := range nulPaths(untracked) {
+		runtime := false
+		for _, dir := range runtimeGitStatusDirs {
+			runtime = runtime || strings.HasPrefix(path, dir)
+		}
+		if !runtime {
+			paths = append(paths, path)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
+}
+
+// Track stages only declared differences between the working files and index.
+// An artifact's already staged removal or addition is an observed prefix.
+func (p *Provider) Track(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	changed, err := p.runner.Run(p.root, "git", append([]string{"diff", "--name-only", "--no-renames", "-z", "--"}, paths...)...)
+	if err != nil {
+		return err
+	}
+	untracked, err := p.runner.Run(p.root, "git", append([]string{"ls-files", "--others", "-z", "--"}, paths...)...)
+	if err != nil {
+		return err
+	}
+	remaining := append(nulPaths(changed), nulPaths(untracked)...)
+	slices.Sort(remaining)
+	remaining = slices.Compact(remaining)
+	if len(remaining) == 0 {
+		return nil
+	}
+	_, err = p.runner.Run(p.root, "git", append([]string{"add", "--all", "--force", "--"}, remaining...)...)
+	return err
+}
+
+// ApplyArtifact uses Git's tree checkout, including executable and symlink modes.
+// Missing entries are removals; both endpoints of a rename are declared paths.
+func (p *Provider) ApplyArtifact(identity string, paths []string) error {
+	for _, path := range paths {
+		working, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", identity, "--", path)
+		if err != nil {
+			return err
+		}
+		staged, err := p.runner.Run(p.root, "git", "diff", "--cached", "--name-only", "--no-renames", "-z", identity, "--", path)
+		if err != nil {
+			return err
+		}
+		if working == "" && staged == "" {
+			continue
+		}
+		entry, err := p.Entry(identity, path)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(entry) == "" {
+			if _, err = p.runner.Run(p.root, "git", "rm", "--force", "--ignore-unmatch", "--", path); err != nil {
+				return err
+			}
+		} else if _, err = p.runner.Run(p.root, "git", "restore", "--source="+identity, "--staged", "--worktree", "--", path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InputOwnership returns nil,nil when this root has no resolver capability or
+// usable graph; a nonnil map (including an empty map) is a successful graph.
+// Errors report actual query or decoding failures. Test inputs are true,
+// production inputs false, and absent keys UNKNOWN; production takes precedence.
+func (p *Provider) InputOwnership() (map[string]bool, error) {
+	configuration, err := p.runner.Run(p.root, "go", "env", "-json", "GOMOD", "GOWORK")
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var env struct{ GOMOD, GOWORK string }
+	if err := json.Unmarshal([]byte(configuration), &env); err != nil {
+		return nil, err
+	}
+	if env.GOMOD == os.DevNull && (env.GOWORK == "" || env.GOWORK == "off") {
+		return nil, nil
+	}
+	out, err := p.runner.Run(p.root, "go", "list", "-test", "-json", "./...")
+	if err != nil {
+		return nil, fmt.Errorf("test ownership is unavailable: %w", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(out))
+	owned := map[string]bool{}
+	production := map[string]bool{}
+	for {
+		var pkg struct {
+			Dir                                                                                                                                                                             string
+			ForTest                                                                                                                                                                         string
+			Match                                                                                                                                                                           []string
+			GoFiles, CgoFiles, CFiles, CXXFiles, MFiles, HFiles, FFiles, SFiles, SwigFiles, SwigCXXFiles, SysoFiles, EmbedFiles, TestGoFiles, XTestGoFiles, TestEmbedFiles, XTestEmbedFiles []string
+		}
+		if err := decoder.Decode(&pkg); err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		// Test variants mix production and test fields; generated test mains
+		// have no command-line match. The matched original packages describe
+		// both input sets, including embed files resolved by -test.
+		if pkg.ForTest != "" || len(pkg.Match) == 0 {
+			continue
+		}
+		relative, err := filepath.Rel(canonicalPath(p.root), canonicalPath(pkg.Dir))
+		if err != nil {
+			return nil, err
+		}
+		add := func(target map[string]bool, lists ...[]string) {
+			for _, list := range lists {
+				for _, name := range list {
+					target[filepath.ToSlash(filepath.Join(relative, name))] = true
+				}
+			}
+		}
+		add(owned, pkg.TestGoFiles, pkg.XTestGoFiles, pkg.TestEmbedFiles, pkg.XTestEmbedFiles)
+		add(production, pkg.GoFiles, pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles, pkg.FFiles, pkg.SFiles, pkg.SwigFiles, pkg.SwigCXXFiles, pkg.SysoFiles, pkg.EmbedFiles)
+	}
+	for path := range production {
+		owned[path] = false
+	}
+	return owned, nil
+}
+
+func (p *Provider) Entry(identity, path string) (string, error) {
+	return p.runner.Run(p.root, "git", "ls-tree", identity, "--", path)
+}
+
+// Change is the complete native tree entry transition. Rename endpoints are
+// represented as a deletion and addition so neither path can be omitted.
+type Change struct {
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	BaseMode   string `json:"baseMode"`
+	Mode       string `json:"mode"`
+	BaseObject string `json:"baseObject"`
+	Object     string `json:"object"`
+}
+
+func (p *Provider) Changes(base, identity string) ([]Change, error) {
+	out, err := p.runner.Run(p.root, "git", "diff", "--raw", "--no-abbrev", "--no-renames", "-z", base, identity, "--")
+	if err != nil {
+		return nil, err
+	}
+	fields := nulPaths(out)
+	if len(fields)%2 != 0 {
+		return nil, fmt.Errorf("native change inventory is incomplete")
+	}
+	var changes []Change
+	for i := 0; i < len(fields); i += 2 {
+		metadata := strings.Fields(strings.TrimPrefix(fields[i], ":"))
+		if len(metadata) != 5 {
+			return nil, fmt.Errorf("native change metadata is incomplete")
+		}
+		changes = append(changes, Change{Path: fields[i+1], Kind: metadata[4], BaseMode: metadata[0], Mode: metadata[1], BaseObject: metadata[2], Object: metadata[3]})
+	}
+	return changes, nil
+}

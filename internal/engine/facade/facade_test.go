@@ -504,12 +504,13 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	t.Helper()
 	root := t.TempDir()
 	stateDir := filepath.Join(root, EngineNamespace, runID)
+	admission := testAdmission(t, root, "target-1", "sha256:package", "provider.test")
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 	store, err := persistence.NewStore(stateDir, persistence.Config{
-		PackageDigest: "sha256:package", DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: "target-1",
+		PackageDigest: "sha256:package", DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: "target-1", AcquireAdmission: admission.acquire,
 	})
 	if err != nil {
 		t.Fatalf("store: %v", err)
@@ -538,10 +539,16 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	if _, err := engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
 		t.Fatalf("intake receipt: %v", err)
 	}
-	return &Facade{
+	f := &Facade{
 		root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"),
-		store: store, engine: engine, envelope: Envelope{}, definition: cd, capacity: 4,
+		store: store, engine: engine, envelope: Envelope{}, definition: cd, capacity: 4, admission: *admission,
 	}
+	release, err := coordination.AcquirePath(f.promotionLockPath(), promotionLockDescription)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	return f
 }
 
 // TestFacadeProjectsThePendingRequirementAsk：修订屏障在位时，未决需求变

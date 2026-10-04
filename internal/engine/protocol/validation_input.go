@@ -10,6 +10,7 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
+	Workspace                *GitResource                `json:"workspace,omitempty"`
 	Interruption             *RecoveryRecord             `json:"interruption,omitempty"`
 	Gate                     *GateInput                  `json:"gate,omitempty"`
 	InheritableSharedReviews []coverage.ReviewDecision   `json:"inheritableSharedReviews,omitempty"`
@@ -51,6 +52,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	mode := s.validationMode(pending.Task)
 	role := s.validationRole(pending.Task, cd)
 	input := ValidationInput{Binding: binding, Handler: role}
+	if r, ok := s.GitResources[binding.WorkspaceID]; ok {
+		input.Workspace = &r
+	}
 	for i := len(s.RecoveryRecords) - 1; i >= 0; i-- {
 		record := s.RecoveryRecords[i]
 		if record.Task == pending.Task && (record.RequestID != "" || s.RejectedResults[record.ActionID].Payload.Outcome == OutcomeRuntimeError) {

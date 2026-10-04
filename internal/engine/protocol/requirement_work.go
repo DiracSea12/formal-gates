@@ -294,3 +294,19 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 	e.reconcileWorkerRetryAsks(state)
 	return nil
 }
+
+func (s *State) requirementWorkReplacement(task runtime.TaskKey) (runtime.TaskKey, bool) {
+	authorized := false
+	for _, entry := range s.RequirementRevisions {
+		for i, choice := range entry.WorkDecisions {
+			if choice.Work.Task != task {
+				continue
+			}
+			authorized = true
+			if choice.Disposition == RequirementWorkRedo {
+				task = replacementWorkTask(entry, i)
+			}
+		}
+	}
+	return task, authorized
+}

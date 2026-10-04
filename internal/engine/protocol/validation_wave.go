@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
+
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
@@ -23,16 +25,19 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 			continue
 		}
 		view.RequiredTasks[step.Header.ID] = nil
-		for _, intent := range s.ExecutableHostActions() {
+		for _, intent := range s.PendingHostActions {
 			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation {
-				view.RequiredTasks[step.Header.ID] = []decision.RequiredTask{{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}}}
+				task := decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}}
+				if _, executable := s.ExecutableHostActions()[intent.ActionID]; !executable || !s.NativeActionCurrent(intent, cd) {
+					task.BlockedBy = decision.WaitDependencies
+				}
+				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], task)
 			}
 		}
 	}
 
-	if fact := s.candidateFailureFact(); fact != nil {
-		view.OperatorFacts = []decision.Fact{*fact}
-		return
+	if fact := s.candidateFailureFact(cd); fact != nil {
+		view.OperatorFacts = append(view.OperatorFacts, *fact)
 	}
 	if !s.dualReviewPass() {
 		return
@@ -69,7 +74,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 				message = "validation obligations remain unresolved; request VALIDATION_DETAIL_DISPOSITION with a justified legal remedy"
 			}
 		case "COMPLETE":
-			if s.promotionPending() {
+			if s.promotionPending(cd) {
 				message = "organize the final candidate with engine candidate promotion before terminal completion"
 			}
 		}
@@ -97,7 +102,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		}
 	}
 	if message != "" {
-		view.OperatorFacts = []decision.Fact{{Source: decision.SourceReceipt, Key: "validation", Value: message}}
+		view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: "validation", Value: message})
 	}
 }
 
@@ -112,8 +117,15 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	if e.guardEngaged(s) && e.tokenCapExceeded(s) {
 		changed = s.ensureDispatchBudgetAsk(budgetDispositionTarget, nextRevision) || changed
 	}
-	changed = e.advanceCandidateFailures(s, nextRevision) || changed
+	if made, err := e.advanceCandidateFailures(s, nextRevision); err != nil {
+		return changed, err
+	} else if made {
+		return true, nil
+	}
 	if !pipelineEnabled(s, e.cfg.Definition) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+		return changed, nil
+	}
+	if s.validationConcluded(e.cfg.Definition) {
 		return changed, nil
 	}
 	for _, ask := range s.PendingAsks {
@@ -121,8 +133,17 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			changed = s.ensureValidationAsk(*ask.Validation, nextRevision) || changed
 		}
 	}
+	if made, err := e.advanceWorkspaces(s, nextRevision); err != nil || made {
+		return changed || made, err
+	}
 	v := s.Validation
 	changed = s.carryCaseBindings() || changed
+	if prior := s.currentValidationWave(); v.Candidate != nil && prior != nil && prior.Generation != v.Generation {
+		sources, _, _, complete := s.developmentSources(e.cfg.Definition)
+		if complete && s.validateFinalCoverage() == nil {
+			changed = e.freezeValidationWave(s, prior.Scope, "", sources) || changed
+		}
+	}
 	if w := s.currentValidationWave(); w != nil && w.RouteDigest != s.validationRouteDigest() && w.Status != "INVALIDATED" && w.Status != "REPAIRED" {
 		e.rebindValidationRoute(s)
 		changed = true
@@ -133,8 +154,8 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			continue
 		}
 		changed = advanceCaseReview(set) || changed
-		// 黑盒用例集审过冻结后隔离工作区登记随之清空（镜像 legacy 审过清
-		// 空点；host 重建工作区时重新登记）。
+		// A frozen blackbox set retires its design-role projection; its resource
+		// remains registered until native cleanup proves removal.
 		if mode == coverage.ReviewBlackbox && set.Status == "FROZEN" && s.QAWorktree != "" {
 			s.QAWorktree = ""
 			changed = true
@@ -187,7 +208,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return changed, nil
 	}
 	for _, intent := range s.PendingHostActions {
-		if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" && s.candidateInputsCurrent(intent, e.cfg.Definition) {
 			return changed, nil
 		}
 	}
@@ -199,6 +220,20 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	params, ready, err := s.currentCandidateParameters(e.cfg.Definition)
 	if err != nil || !ready {
 		return changed, err
+	}
+	if s.NativeRoot != "" {
+		if params.Stage == "QA_ARTIFACT" {
+			base := s.resource("candidate", params.Base, "ownership:"+candidateCorrelation(params)+":"+strconv.FormatUint(s.Validation.Generation, 10))
+			if r, ok := s.GitResources[base.ID]; !ok || r.Status != "READY" || s.ResourceCleanupPending(base.ID) {
+				made, err := e.ensureWorkspace(s, base, nextRevision)
+				return changed || made, err
+			}
+		}
+		r := s.candidateResource(params, e.cfg.Definition)
+		if registered, ok := s.GitResources[r.ID]; !ok || registered.Status != "READY" || !s.resourceUsable(r.ID) {
+			made, err := e.ensureWorkspace(s, r, nextRevision)
+			return changed || made, err
+		}
 	}
 	intent, err := e.prepareAdapterIntent(s, nextRevision, "op.candidate", params, "")
 	if err != nil {
@@ -256,7 +291,7 @@ func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt
 	if err != nil {
 		return params, CandidateEvidence{}, err
 	}
-	if evidence.ParametersDigest != intent.PayloadDigest || evidence.Identity == "" || evidence.Digest == "" {
+	if evidence.WorkspaceID != params.WorkspaceID || evidence.ParametersDigest != intent.PayloadDigest || evidence.Identity == "" || evidence.Digest == "" {
 		return params, CandidateEvidence{}, validationError("candidate receipt lacks exact intent digest and native identity/digest")
 	}
 	expected := slices.Clone(params.Paths)
@@ -280,6 +315,11 @@ func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt
 		return params, CandidateEvidence{}, validationError("gate ownership evidence belongs to the issued REVIEW_READY range")
 	}
 	switch params.Stage {
+	case "PROMOTION":
+		p, proof := params.Promotion, evidence.Promotion
+		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != "git" || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
+			return params, CandidateEvidence{}, validationError("promotion receipt lacks the signed native source, target prefix and final mapping")
+		}
 	case "DEVELOPMENT", "AUTHORING":
 	case "QA_ARTIFACT":
 		if !evidence.TestOnly || !evidence.ProductionViewEqual {
@@ -315,8 +355,17 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	if err != nil {
 		return err
 	}
+	if params.Stage == "PROMOTION" {
+		return e.applyPromotionReceipt(s, intent, params, evidence, receipt)
+	}
+	if effect := s.ReconciledEffects[intent.ActionID]; effect.Status == "SUPERSEDED" || effect.Status == "WITHDRAWN" {
+		return nil
+	}
+	if params.WorkspaceID != "" && !s.resourceUsable(params.WorkspaceID) {
+		return nil
+	}
 	v := s.Validation
-	if s.abortRequested() || v == nil || params.Generation != v.Generation || params.RequirementRevision != v.RequirementRevision {
+	if s.abortRequested() || v == nil || !s.candidateInputsCurrent(intent, e.cfg.Definition) {
 		return nil
 	}
 	if params.Stage != "DEVELOPMENT" && params.Base != v.DevelopmentSnapshot {
@@ -329,7 +378,12 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		}
 		for _, mode := range modes {
 			set := v.Sets[mode]
-			if set == nil || set.DesignTask != params.DesignTasks[mode] || params.CaseVersions[mode] != digestOfCanonical(manifestAtRoute(set.Manifest, params.RouteScope)) {
+			if set == nil || set.DesignTask != params.DesignTasks[mode] {
+				return nil
+			}
+			original := manifestAtRoute(set.Manifest, params.RouteScope)
+			original.Binding.RequirementRevision = params.RequirementRevision
+			if params.CaseVersions[mode] != digestOfCanonical(original) {
 				return nil
 			}
 			if params.Stage == "QA_ARTIFACT" && set.Status != "REVIEW" || params.Stage == "REVIEW_READY" && !s.caseSetReady(mode) {
@@ -342,6 +396,11 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 				}
 			}
 		}
+	}
+	if params.WorkspaceID != "" {
+		r := s.GitResources[params.WorkspaceID]
+		r.Identity = evidence.Identity
+		s.GitResources[r.ID] = r
 	}
 	switch params.Stage {
 	case "DEVELOPMENT":
@@ -434,7 +493,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			target.Kind = "QA"
 			target.Gate = ""
 		}
-		target.Task = s.validationRequiredTask(pipelineTask(e.cfg.Definition, handler, w.ID+":"+part), e.cfg.Definition)
+		target.Task = s.validationRequiredTask(pipelineTask(e.cfg.Definition, handler, w.ID+":"+part), &w, e.cfg.Definition)
 		if prior != nil {
 			if prior.Generation != w.Generation {
 				s.carryRequirementTarget(target, prior, &w)
@@ -711,4 +770,36 @@ func (s *State) validationWaveCountable(w *ValidationWave) bool {
 
 	}
 	return true
+}
+
+func (e *Engine) applyPromotionReceipt(s *State, intent HostActionIntent, params CandidateParameters, evidence CandidateEvidence, receipt HostActionReceipt) error {
+	if effect := s.ReconciledEffects[intent.ActionID]; effect.Status == "SUPERSEDED" || effect.Status == "WITHDRAWN" {
+		return nil
+	}
+	if !s.promotionAuthorized(params) {
+		return validationError("promotion receipt has no originally qualified FULL source")
+	}
+	p := evidence.Promotion
+	chain, err := s.PromotionChain(intent)
+	if err != nil {
+		return err
+	}
+	for _, previous := range chain[1:] {
+		s.retireNative(previous, "SUPERSEDED", receipt.Digest, nil, intent.Revision)
+	}
+	if s.CandidatePromotion != nil {
+		if latest, ok := s.hostIntent(s.CandidatePromotion.OperationID); ok && latest.Revision > intent.Revision {
+			return nil
+		}
+	}
+	s.CandidatePromotion = p
+	s.PromotedSnapshot, s.PromotedDigest = p.Final, p.FinalDigest
+	for _, step := range e.cfg.Definition.Steps {
+		if payload, ok := step.Payload.(compiler.CompiledHostActionStep); ok && payload.Operation == "op.candidate" && !slices.Contains(s.Completed, step.Header.ID) {
+			if err := s.CompleteStep(step.Header.ID, e.cfg.Definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

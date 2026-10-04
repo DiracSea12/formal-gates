@@ -604,7 +604,7 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 		if s.developmentResult(key) != nil {
 			continue
 		}
-		blocked := !slices.Contains(allowed, key)
+		blocked := !slices.Contains(allowed, key) || !s.workspaceReady(key, cd)
 		group := runtime.Batch{ID: runtime.BatchID(b.ID)}
 		for _, dep := range b.DependsOn {
 			task := s.currentPlanTask(cd, p, dep)

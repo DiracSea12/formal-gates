@@ -680,7 +680,7 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 				t.Fatal(err)
 			}
 			if window != "before-intent" {
-				if err := d.f.engine.OpenPromotion(head, emptyFingerprint()); err != nil {
+				if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, head, "organized delivery"), emptyFingerprint()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -736,7 +736,7 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if snapshot.State.PendingPromotion != head || snapshot.State.PromotedSnapshot != "" {
+				if pendingPromotionSource(snapshot.State) != head || snapshot.State.PromotedSnapshot != "" {
 					t.Fatal("executed fact lost its original unresolved intent")
 				}
 			}

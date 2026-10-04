@@ -33,7 +33,7 @@ func (s *State) repairWork() []repairWork {
 				record = nil
 			}
 		}
-		owed := slices.Contains(required, task) || w == s.currentValidationWave() && s.validationRepairPending(w) && task == w.Repair.Task
+		owed := slices.Contains(required, task) || s.validationRepairPending(w) && task == w.Repair.Task
 		if record == nil && s.repairTaskFinished(task) {
 			owed = false
 		}

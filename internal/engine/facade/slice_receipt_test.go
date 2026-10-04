@@ -72,7 +72,7 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	if len(admission) != 0 {
 		options.Admission = admission[0]
 	}
-	f, run, err := Start(options)
+	f, run, err := semanticValidationFacade(t, options)
 	if err != nil {
 		t.Fatal(err)
 	}

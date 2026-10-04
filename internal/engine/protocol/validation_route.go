@@ -68,7 +68,9 @@ func (e *Engine) rebindValidationRoute(s *State) {
 	if w.Status == "REPAIRED" {
 		return
 	}
-	w.Status = "INVALIDATED"
+	if w.Status != "COMPLETE" {
+		w.Status = "INVALIDATED"
+	}
 	if s.validationRepairPending(w) {
 		return
 	}

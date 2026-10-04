@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -155,6 +156,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
+	before := driverState(t, d)
 	original := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	for i := 0; i < 2; i++ {
 		unlockRouteByRequirementRedo(d)
@@ -163,8 +165,24 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 		d.drive()
 	}
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	if len(d.run.Validation.Waves) != 1 || current.ID != original.ID || current.ExpectedDigest != original.ExpectedDigest {
-		t.Fatal("repeating the identical decision changed frozen obligation")
+	after := driverState(t, d)
+	if d.run.Validation.Waves[0].ID != original.ID || d.run.Validation.Waves[0].ExpectedDigest != original.ExpectedDigest || current.Candidate != original.Candidate || current.Scope != original.Scope || current.Generation != after.Validation.Generation || current.RequirementRevision != after.RequirementRevision() {
+		t.Fatal("confirmed revision changed original evidence or failed to bind current qualification")
+	}
+	for key, target := range original.Targets {
+		if current.Targets[key] == nil || current.Targets[key].Task != target.Task || !reflect.DeepEqual(before.Attempts[target.Task], after.Attempts[target.Task]) {
+			t.Fatal("unchanged responsibility replaced its original task or attempt")
+		}
+	}
+	for action, result := range before.Results {
+		if !reflect.DeepEqual(result, after.Results[action]) {
+			t.Fatal("revision carry rewrote original result evidence")
+		}
+	}
+	for id, event := range before.Events {
+		if !reflect.DeepEqual(event, after.Events[id]) {
+			t.Fatal("new requirement facts rewrote an accepted event")
+		}
 	}
 	id, in := d.action("engine.qa.execution")
 	report := executionFor(in)
@@ -172,7 +190,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
-	if d.run.Validation.Waves[0].Status != "COMPLETE" {
+	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 		t.Fatal("identical decision prevented normal completion")
 	}
 }

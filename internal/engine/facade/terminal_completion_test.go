@@ -30,8 +30,8 @@ func concludePromoted(t *testing.T) *validationDriver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.State.PendingPromotion != "" {
-		t.Fatalf("rejected promotion left an intent behind: %q", snap.State.PendingPromotion)
+	if pendingPromotionSource(snap.State) != "" {
+		t.Fatalf("rejected promotion left an intent behind: %q", pendingPromotionSource(snap.State))
 	}
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
@@ -98,8 +98,8 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 		if snap.State.Phase == runtime.PhaseTerminal {
 			t.Fatal("engine phase reached TERMINAL with the wave unresolved")
 		}
-		if snap.State.PromotedSnapshot != "" || snap.State.PendingPromotion != "" {
-			t.Fatalf("rejected promotion bound state: promoted=%q pending=%q", snap.State.PromotedSnapshot, snap.State.PendingPromotion)
+		if snap.State.PromotedSnapshot != "" || pendingPromotionSource(snap.State) != "" {
+			t.Fatalf("rejected promotion bound state: promoted=%q pending=%q", snap.State.PromotedSnapshot, pendingPromotionSource(snap.State))
 		}
 	})
 	t.Run("wave conclusion without promotion", func(t *testing.T) {

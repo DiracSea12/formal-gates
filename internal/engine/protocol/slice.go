@@ -155,7 +155,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err := state.errWriteBarrier("slice checkpoint"); err != nil {
 		return err
 	}
-	if state.Phase == runtime.PhaseTerminal || state.abortRequested() || !state.validationConcluded(e.cfg.Definition) {
+	if state.Phase == runtime.PhaseTerminal || state.abortRequested() || state.pendingControl() || state.nativeDebt() || !state.validationConcluded(e.cfg.Definition) {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "slice checkpoint requires the concluded validation pipeline without an abort decision"}
 	}
 	if snapshot == "" || snapshot != state.PromotedSnapshot || tree == "" || tree != state.PromotedDigest {

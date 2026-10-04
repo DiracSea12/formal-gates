@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
@@ -773,11 +774,14 @@ func phaseRank(phase runtime.RunPhase) int {
 // phase 越过账本 residue 能证明的最远位置（手工拨过门）即拒绝。落后于
 // residue 的 phase 不拒绝——下一次提交会沿门控补进，兼容审查账本字段
 // 上线前落盘的既有 run。
-func (s *State) verifyPhaseAgainstLedgers() error {
+func (s *State) verifyPhaseAgainstLedgers(cd *compiler.CompiledDefinition) error {
 	if s.Phase == runtime.PhaseTerminal {
 		return nil
 	}
 	if s.Phase == runtime.PhaseSliceReady && s.SliceReceipt != nil {
+		return nil
+	}
+	if s.Phase == runtime.PhaseFinalizingCleanup && s.cleanupStarted(cd) {
 		return nil
 	}
 	if phaseRank(s.Phase) > s.phaseLedgerFloor() {
@@ -792,7 +796,7 @@ func (s *State) verifyPhaseAgainstLedgers() error {
 // verifyReviewIntegrity 在加载/提交边界重算审查账本的全部投影与身份链、
 // 需求 revision 账本的结构链并校验 phase 一致性：篡改的账本或越门的
 // phase 在此可区分拒绝。
-func verifyReviewIntegrity(state *State) error {
+func verifyReviewIntegrity(state *State, cd *compiler.CompiledDefinition) error {
 	if err := review.Validate(state.RunID, state.ReviewSeries); err != nil {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: fmt.Sprintf("review ledger: %v", err)}
 	}
@@ -840,5 +844,5 @@ func verifyReviewIntegrity(state *State) error {
 			Detail: "review series fresh-round obligations do not match the requirement confirmation ledger",
 		}
 	}
-	return state.verifyPhaseAgainstLedgers()
+	return state.verifyPhaseAgainstLedgers(cd)
 }

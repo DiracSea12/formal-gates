@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "6"
+const Version authoring.DefinitionVersion = "8"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -46,12 +46,14 @@ var (
 		{"engine.gate", authoring.RunnerAgentWorker},
 		{"engine.repair", authoring.RunnerAgentWorker},
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
+		{"engine.workspace", authoring.RunnerHostAdapter},
+		{"engine.cleanup", authoring.RunnerHostAdapter},
 	}
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range"}
-	workflowOperations = []authoring.OperationID{"op.candidate"}
+	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range", "schema.workspace", "schema.cleanup"}
+	workflowOperations = []authoring.OperationID{"op.candidate", "op.workspace", "op.cleanup"}
 	workflowAskKinds   = []authoring.AskKindID{}
 )
 
@@ -129,9 +131,14 @@ func Workflow() *compiler.Definition {
 		must(spec.id, err)
 		steps = append(steps, step)
 	}
-	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryAgentDispatchAPI, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: time.Minute})
+	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryExternalCapability, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: time.Minute})
 	must("candidate.materialize", err)
 	steps = append(steps, candidate)
+	for _, name := range []string{"workspace", "cleanup"} {
+		step, err := authoring.NewHostActionStep(header(name+".materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: authoring.HandlerID("engine." + name), Boundary: authoring.BoundaryExternalCapability, Operation: authoring.OperationID("op." + name), Schema: authoring.SchemaID("schema." + name), Timeout: time.Minute})
+		must(name, err)
+		steps = append(steps, step)
+	}
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}
 }
 

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"formal-gates/internal/coordination"
 )
 
 // Installation supplies the registry identity and accepted bootstrap material
@@ -39,5 +41,10 @@ func Installation(t testing.TB, root, recordID, packageDigest, provider string) 
 			t.Fatal(err)
 		}
 	}
+	release, err := coordination.AcquirePath(registryPath+".lock", "registry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
 	return
 }

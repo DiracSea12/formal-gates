@@ -22,6 +22,14 @@ func (s *State) AbortDecision() (RecordedDecision, bool) {
 }
 func (s *State) abortRequested() bool { _, ok := s.AbortDecision(); return ok }
 
+func (s *State) cleanupRetryRequest(r *ValidationRequest) bool {
+	if r == nil || r.Kind != "RETRY" {
+		return false
+	}
+	intent := s.PendingHostActions[r.Target]
+	return intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" && len(s.HostActionFailures[intent.ActionID]) != 0
+}
+
 // advanceAbort stops business progression and reconciles signed external work.
 // Termination uses the same typed intent and receipt path as TerminateAgent.
 func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
@@ -30,23 +38,27 @@ func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
 		return false, nil
 	}
 	changed := false
-	for id, intent := range s.PendingHostActions {
-		if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" && len(s.HostActionFailures[id]) > 0 {
-			if receipt, ok := s.HostActionReceipts[id]; !ok || receipt.Status != HostActionStatusUnknown {
-				delete(s.PendingHostActions, id)
-				changed = true
-			}
-		}
-	}
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
+			if ask.Control == ControlValidation && s.cleanupRetryRequest(ask.Validation) {
+				continue
+			}
 			ask.Resolved = true
 			s.PendingAsks[id] = ask
 			changed = true
 		}
 	}
 	changed = e.executeHeldFailureRoutes(s, nextRevision) || changed
-	changed = e.executeHeldSettles(s, nextRevision) || changed
+	settled, err := e.executeHeldSettles(s, nextRevision)
+	if err != nil {
+		return changed, err
+	}
+	changed = settled || changed
+	if made, err := e.advanceCandidateFailures(s, nextRevision); err != nil {
+		return changed, err
+	} else if made {
+		return true, nil
+	}
 	actions := map[string]bool{}
 	for id := range s.PendingActions {
 		actions[id] = true
@@ -96,7 +108,7 @@ func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
 	for _, attempt := range s.EndedAttempts {
 		waiting = waiting || attempt.AwaitingResult
 	}
-	if !waiting {
+	if !waiting && !s.pendingControl() && s.ResourcesCleaned() {
 		if err := s.TransitionPhase(runtime.PhaseTerminal); err != nil {
 			return changed, err
 		}
@@ -110,8 +122,11 @@ func (s *State) abortPlan(plan *decision.Plan) {
 		return
 	}
 	plan.Frontier = nil
+	if plan.Next.Kind == decision.KindAsk || plan.Next.Kind == decision.KindOperator {
+		return
+	}
 	plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitTasksInFlight}}
-	if len(s.PendingHostActions) > 0 {
+	if len(s.ExecutableHostActions()) > 0 {
 		plan.Next = decision.NextResult{Kind: decision.KindHostAction, HostAction: &decision.HostActionPayload{}}
 	}
 }

@@ -47,7 +47,8 @@ const (
 	// PhaseMergeValidation：合并 QA 与合并门并行执行段。
 	PhaseMergeValidation RunPhase = "MERGE_VALIDATION"
 	// PhaseTerminal：终态（SEALED/ABORTED 后经统一 cleanup 进入；无出边）。
-	PhaseTerminal RunPhase = "TERMINAL"
+	PhaseTerminal          RunPhase = "TERMINAL"
+	PhaseFinalizingCleanup RunPhase = "FINALIZING_CLEANUP"
 )
 
 // phases 是全部合法 phase 值，顺序即建议图的主线顺序。枚举校验与终止
@@ -56,7 +57,7 @@ var phases = []RunPhase{
 	PhaseIntakeRegistered, PhaseProductReview, PhaseTechnicalReview,
 	PhaseStartReadiness, PhaseTopologyAndRoute, PhaseDevelopmentParallel,
 	PhaseSnapshotReady, PhasePostReview, PhaseRepair, PhaseSliceReady,
-	PhaseMainlineIntegration, PhaseMergeValidation, PhaseTerminal,
+	PhaseMainlineIntegration, PhaseMergeValidation, PhaseFinalizingCleanup, PhaseTerminal,
 }
 
 // Valid 报告 p 是否属于封闭 phase 集合。
@@ -148,6 +149,9 @@ func buildPhaseTransitionTable() []PhaseEdge {
 	for _, p := range phases {
 		if p != PhaseTerminal {
 			add(PhaseEdge{From: p, To: PhaseTerminal})
+			if p != PhaseFinalizingCleanup {
+				add(PhaseEdge{From: p, To: PhaseFinalizingCleanup})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -3,6 +3,7 @@ package facade
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -28,6 +29,14 @@ func (d *validationDriver) validationAsk(kind string) PendingAskFace {
 	d.t.Helper()
 	for _, ask := range d.run.PendingAsks {
 		if ask.Validation != nil && ask.Validation.Kind == kind {
+			snapshot, err := d.f.engine.Load()
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			stored := snapshot.State.PendingAsks[ask.RequestID]
+			if snapshot.Revision != d.run.Revision || ask.Validation.StateRevision != d.run.Revision || !reflect.DeepEqual(stored.Validation, ask.Validation) || ask.Validation.Digest == "" || len(ask.Validation.Summary) == 0 {
+				d.t.Fatal("current validation offer differs from its committed authorization")
+			}
 			return ask
 		}
 	}
@@ -132,6 +141,9 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	d.reopen()
 	d.drive()
 	ask := d.validationAsk("RETRY")
+	if ask.Validation.StateRevision != d.run.Revision {
+		t.Fatal("independent progress left a stale authorization revision")
+	}
 	revision := d.run.Revision
 	d.drive()
 	if d.run.Revision != revision || d.validationAsk("RETRY").RequestID != ask.RequestID {

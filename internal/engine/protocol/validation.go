@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
 )
 
@@ -93,6 +94,7 @@ type ValidationResult struct {
 // WorkBinding accompanies every issued business task and its result. Revision
 // is the confirmed content identity; Generation distinguishes its occurrence.
 type WorkBinding struct {
+	WorkspaceID         string          `json:"workspaceId,omitempty"`
 	PlanRequest         string          `json:"planRequest,omitempty"`
 	BatchID             string          `json:"batchId,omitempty"`
 	RouteScope          string          `json:"routeScope,omitempty"`
@@ -218,6 +220,9 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	Promotion           *PromotionParameters                      `json:"promotion,omitempty"`
+	WorkspaceID         string                                    `json:"workspaceId,omitempty"`
+	BlackboxManifest    *coverage.AcceptanceManifest              `json:"blackboxManifest,omitempty"`
 	ReviewBase          string                                    `json:"reviewBase,omitempty"`
 	ReviewCases         map[string]string                         `json:"reviewCases,omitempty"`
 	SourceTasks         []runtime.TaskKey                         `json:"sourceTasks,omitempty"`
@@ -252,14 +257,17 @@ type GateReviewView struct {
 }
 
 type CandidateEvidence struct {
-	GateView            *GateReviewView           `json:"gateView,omitempty"`
-	ReviewViews         map[string]CaseReviewView `json:"reviewViews,omitempty"`
-	ParametersDigest    string                    `json:"parametersDigest"`
-	Identity            string                    `json:"identity"`
-	Digest              string                    `json:"digest"`
-	Paths               []string                  `json:"paths"`
-	TestOnly            bool                      `json:"testOnly"`
-	ProductionViewEqual bool                      `json:"productionViewEqual"`
+	Promotion           *CandidatePromotionReceipt `json:"promotion,omitempty"`
+	Changes             []vcs.Change               `json:"changes,omitempty"`
+	WorkspaceID         string                     `json:"workspaceId,omitempty"`
+	GateView            *GateReviewView            `json:"gateView,omitempty"`
+	ReviewViews         map[string]CaseReviewView  `json:"reviewViews,omitempty"`
+	ParametersDigest    string                     `json:"parametersDigest"`
+	Identity            string                     `json:"identity"`
+	Digest              string                     `json:"digest"`
+	Paths               []string                   `json:"paths"`
+	TestOnly            bool                       `json:"testOnly"`
+	ProductionViewEqual bool                       `json:"productionViewEqual"`
 }
 
 type ValidationRequest struct {
@@ -460,6 +468,9 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		b.WaveID = wave.ID
 		b.Candidate = wave.Candidate.Identity
 	}
+	if r := s.taskResource(key, cd); r.Status == "READY" {
+		b.WorkspaceID = r.ID
+	}
 	return b
 }
 
@@ -493,7 +504,8 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 	}
 	v := s.Validation
 	add := func(handler, scope string, blocked bool) {
-		key := s.validationRequiredTask(pipelineTask(cd, handler, scope), cd)
+		key := s.validationRequiredTask(pipelineTask(cd, handler, scope), s.currentValidationWave(), cd)
+		blocked = blocked || !s.workspaceReady(key, cd)
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies
@@ -538,7 +550,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 	}
 	if work := s.nextRepairWork(); work != nil {
-		blocked := !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
+		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies

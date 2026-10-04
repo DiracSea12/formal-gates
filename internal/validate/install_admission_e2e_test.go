@@ -178,6 +178,10 @@ func e2eInstallLockChild(t *testing.T) bool {
 			fmt.Fprint(os.Stdout, "unexpected-acquire")
 			return true
 		}
+		var held *LockHeldError
+		if !errors.As(err, &held) || held.Operation != "install/uninstall" || held.Path != installLockPath(target) {
+			t.Fatalf("held install lock identity: %v", err)
+		}
 		fmt.Fprintf(os.Stdout, "held-error:%v", err)
 	case "free":
 		if err != nil {
@@ -796,23 +800,38 @@ func TestInstallLockSerializesInstallAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(unlock)
+	lockPath := installLockPath(target)
+	contents := e2eReadFile(t, lockPath)
+	before, err := os.Stat(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLockUnchanged := func() {
+		t.Helper()
+		after, err := os.Stat(lockPath)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatalf("install lock identity changed: %v", err)
+		}
+		if data := e2eReadFile(t, lockPath); data != contents {
+			t.Fatalf("install lock contents changed: before=%q after=%q", contents, data)
+		}
+	}
 	childOutput := e2eRunInstallLockChild(t, target, "held")
 	if !strings.Contains(childOutput, "held-error:") || !strings.Contains(childOutput, "lock is held") {
 		unlock()
 		t.Fatalf("cross-process install/uninstall acquired the same lock: %s", childOutput)
 	}
-	lockPath := installLockPath(target)
-	if data := e2eReadFile(t, lockPath); !strings.Contains(data, fmt.Sprintf("pid=%d", os.Getpid())) {
-		unlock()
-		t.Fatalf("lock does not identify its owner: %q", data)
-	}
+	assertLockUnchanged()
 	unlock()
+	assertLockUnchanged()
 	// 释放即关闭描述符：锁文件持久保留（内核文件锁永不删除），能否被
 	// 第二个进程获取才是释放语义。
 	childOutput = e2eRunInstallLockChild(t, target, "free")
 	if !strings.Contains(childOutput, "free-acquired") {
 		t.Fatalf("lock could not be acquired by a second process after release: %s", childOutput)
 	}
+	assertLockUnchanged()
 }
 
 func TestInstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {

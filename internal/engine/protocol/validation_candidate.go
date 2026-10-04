@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -11,6 +12,10 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
 )
+
+func nativeOperation(operation authoring.OperationID) bool {
+	return operation == "op.candidate" || operation == "op.workspace" || operation == "op.cleanup"
+}
 
 func candidateParameters(intent HostActionIntent) (CandidateParameters, error) {
 	var p CandidateParameters
@@ -29,6 +34,10 @@ func candidateParameters(intent HostActionIntent) (CandidateParameters, error) {
 func candidateCorrelation(p CandidateParameters) string {
 	key := CandidateParameters{Stage: p.Stage}
 	switch p.Stage {
+	case "PROMOTION":
+		if p.Promotion != nil {
+			key.Promotion = &PromotionParameters{TargetRoot: p.Promotion.TargetRoot, TargetBase: p.Promotion.TargetBase, SourceDigest: p.Promotion.SourceDigest}
+		}
 	case "DEVELOPMENT":
 		key.SourceTasks, key.Paths, key.Base = p.SourceTasks, p.Paths, p.Base
 	case "AUTHORING":
@@ -38,6 +47,7 @@ func candidateCorrelation(p CandidateParameters) string {
 		key.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: p.DesignTasks[coverage.ReviewWhitebox]}
 	case "REVIEW_READY":
 		key.ReviewBase = p.ReviewBase
+		key.BlackboxManifest = p.BlackboxManifest
 		key.Base, key.Paths, key.DesignTasks, key.QAArtifacts, key.Finalize = p.Base, p.Paths, p.DesignTasks, p.QAArtifacts, p.Finalize
 	default:
 		key = p
@@ -45,93 +55,207 @@ func candidateCorrelation(p CandidateParameters) string {
 	return "candidate:" + digestOfCanonical(key)
 }
 
+func (s *State) latestNativeIntent(correlation string) HostActionIntent {
+	var latest HostActionIntent
+	for _, intent := range s.PendingHostActions {
+		if intent.Correlation == correlation && intent.Revision > latest.Revision {
+			latest = intent
+		}
+	}
+	return latest
+}
+
+// nativeExecutionAllowed combines qualification with the original finite
+// allowance. Observing completion does not consume another execution slot.
+func (s *State) nativeExecutionAllowed(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if !s.NativeActionCurrent(intent, cd) || s.latestNativeIntent(intent.Correlation).ActionID != intent.ActionID {
+		return false
+	}
+	if receipt, ok := s.HostActionReceipts[intent.ActionID]; ok && receipt.Status == HostActionStatusUnknown {
+		return false
+	}
+	route, used, max := s.candidateFailureRoute(intent)
+	return used < max && (route.Class == "" || route.Action == RecoveryResumeAttempt)
+}
+
+func (s *State) NativeActionWritable(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	return len(s.HostActionFailures[intent.ActionID]) == 0 && s.nativeExecutionAllowed(intent, cd)
+}
+
+func (s *State) admitNativeSigning(intent HostActionIntent) error {
+	route, used, max := s.candidateFailureRoute(intent)
+	if used >= max || route.Class != "" && route.Action != RecoveryResumeAttempt {
+		return validationError("native responsibility has no remaining execution allowance")
+	}
+	for _, old := range s.PendingHostActions {
+		if old.Correlation != intent.Correlation {
+			continue
+		}
+		if receipt, ok := s.HostActionReceipts[old.ActionID]; ok && receipt.Status == HostActionStatusUnknown {
+			return validationError("native responsibility is UNKNOWN and requires observation")
+		}
+		if len(s.HostActionFailures[old.ActionID]) == 0 {
+			return validationError("native responsibility already has an unresolved writer")
+		}
+	}
+	return nil
+}
+
 func (s *State) candidateFailures(correlation string) []HostActionReceipt {
 	var failures []HostActionReceipt
 	for _, records := range s.HostActionFailures {
 		for _, receipt := range records {
-			if receipt.AdapterOperation == "op.candidate" && receipt.Correlation == correlation {
+			if nativeOperation(receipt.AdapterOperation) && receipt.Correlation == correlation {
 				failures = append(failures, receipt)
 			}
 		}
 	}
-	slices.SortFunc(failures, func(a, b HostActionReceipt) int {
-		if a.ActionID < b.ActionID {
-			return -1
-		}
-		if a.ActionID > b.ActionID {
-			return 1
-		}
-		return 0
+	slices.SortStableFunc(failures, func(a, b HostActionReceipt) int {
+		left, _ := s.hostIntent(a.ActionID)
+		right, _ := s.hostIntent(b.ActionID)
+		return cmp.Compare(left.Revision, right.Revision)
 	})
 	return failures
 }
 
-func (s *State) candidateRetryGranted(correlation string) bool {
+func (s *State) candidateRetryGrantTarget(correlation string) string {
 	for request, d := range s.Decisions {
 		ask := s.PendingAsks[request].Validation
 		if ask == nil || ask.Kind != "RETRY" || d.Choice != "approve" {
 			continue
 		}
 		for _, receipt := range s.HostActionFailures[ask.Target] {
-			if receipt.AdapterOperation == "op.candidate" && receipt.Correlation == correlation {
-				return true
+			if nativeOperation(receipt.AdapterOperation) && receipt.Correlation == correlation {
+				return ask.Target
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 func (s *State) candidateFailureRoute(intent HostActionIntent) (FailureRoute, int, int) {
 	failures := s.candidateFailures(intent.Correlation)
 	max := 2
-	if s.candidateRetryGranted(intent.Correlation) {
-		max++
+	grant := s.candidateRetryGrantTarget(intent.Correlation)
+	for i, failure := range failures {
+		if failure.ActionID == grant {
+			max = i + 2
+			break
+		}
 	}
-	latest := s.HostActionFailures[intent.ActionID]
-	if len(latest) == 0 {
-		return FailureRoute{}, len(failures), max
+	if len(failures) == 0 {
+		return FailureRoute{}, 0, max
 	}
-	return RouteFailure(latest[len(latest)-1].FailureClass), len(failures), max
+	route := RouteFailure(failures[len(failures)-1].FailureClass)
+	if route.Class == authoring.FailureUserActionRequired && grant != "" && len(failures) < max {
+		route.Action = RecoveryResumeAttempt
+	}
+	return route, len(failures), max
 }
 
 func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" {
+		var p WorkspaceParameters
+		raw, _ := json.Marshal(intent.Adapter.Params)
+		if json.Unmarshal(raw, &p) != nil {
+			return false
+		}
+		return s.workspaceParametersCurrent(p, cd)
+	}
+	if intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" {
+		return !s.ResourcesCleaned() && s.CleanupEligible(cd)
+	}
 	p, err := candidateParameters(intent)
 	if err != nil || s.Validation == nil {
 		return false
 	}
+	if p.Stage == "PROMOTION" {
+		if p.Promotion == nil || !s.FinalValidationComplete(cd) {
+			return false
+		}
+		latest, ok := s.PromotionIntent()
+		return (!ok || latest.ActionID == intent.ActionID) && p.Promotion.Source == s.currentValidationWave().Candidate.Identity && p.Promotion.SourceDigest == s.currentValidationWave().Candidate.Digest
+	}
 	current, ready, err := s.currentCandidateParameters(cd)
-	return err == nil && ready && candidateCorrelation(p) == candidateCorrelation(current)
+	return err == nil && ready && s.candidateContextCurrent(p) && candidateCorrelation(p) == candidateCorrelation(current) && p.WorkspaceID == current.WorkspaceID
 }
 
-func (e *Engine) advanceCandidateFailures(s *State, nextRevision uint64) bool {
+// candidateContextCurrent retains only explicitly carried source duties.
+// Output equality alone cannot authorize work from another requirement occurrence.
+func (s *State) candidateContextCurrent(p CandidateParameters) bool {
+	if s.Validation == nil {
+		return false
+	}
+	if p.Generation == s.Validation.Generation {
+		return p.RequirementRevision == s.Validation.RequirementRevision
+	}
+	if len(p.SourceTasks) == 0 {
+		return false
+	}
+	for _, task := range p.SourceTasks {
+		if !s.validationWorkCarryAuthorized("", task) {
+			return false
+		}
+	}
+	for _, task := range p.DesignTasks {
+		if !s.validationWorkCarryAuthorized("", task) {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Engine) advanceCandidateFailures(s *State, nextRevision uint64) (bool, error) {
 	changed := false
-	for action, intent := range s.PendingHostActions {
-		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+	ids := make([]string, 0, len(s.PendingHostActions))
+	for action := range s.PendingHostActions {
+		ids = append(ids, action)
+	}
+	slices.Sort(ids)
+	for _, action := range ids {
+		intent := s.PendingHostActions[action]
+		if intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation) {
 			continue
 		}
 		route, used, max := s.candidateFailureRoute(intent)
 		if route.Class == "" {
 			continue
 		}
-		if receipt, ok := s.HostActionReceipts[action]; ok && receipt.Status == HostActionStatusUnknown {
+		if receipt, ok := s.HostActionReceipts[action]; ok && (receipt.Status == HostActionStatusUnknown || receipt.Status == HostActionStatusExecuted) {
 			continue
 		}
-		terminalBug := route.Class == authoring.FailureBlockedBug || route.Class == authoring.FailureInvariantViolation
-		if !terminalBug && (!s.candidateInputsCurrent(intent, e.cfg.Definition) || s.abortRequested()) {
-			delete(s.PendingHostActions, action)
-			changed = true
+		if s.latestNativeIntent(intent.Correlation).ActionID != action || !s.NativeActionCurrent(intent, e.cfg.Definition) {
 			continue
 		}
-		if route.Action == RecoveryResumeAttempt {
-			if used < max {
-				delete(s.PendingHostActions, action)
-				changed = true
-			} else {
-				changed = s.ensureValidationAsk(ValidationRequest{Kind: "RETRY", Target: action}, nextRevision) || changed
+		if route.Action == RecoveryAsk || route.Action == RecoveryResumeAttempt && used >= max {
+			changed = s.ensureValidationAsk(ValidationRequest{Kind: "RETRY", Target: action}, nextRevision) || changed
+		} else if route.Action == RecoveryResumeAttempt && len(s.HostActionFailures[action]) != 0 {
+			params := any(intent.Adapter.Params)
+			if intent.Adapter.Operation == "op.candidate" {
+				p, err := candidateParameters(intent)
+				if err != nil {
+					return changed, err
+				}
+				if p.Promotion == nil {
+					current, ready, err := s.currentCandidateParameters(e.cfg.Definition)
+					if err != nil || !ready {
+						return changed, err
+					}
+					params = current
+				} else {
+					p.Promotion.SupersedesActionID = intent.ActionID
+					params = p
+				}
 			}
+			next, err := e.prepareAdapterIntent(s, nextRevision, intent.Adapter.Operation, params, "")
+			if err != nil {
+				return changed, err
+			}
+			s.PendingHostActions[next.ActionID] = next
+			return true, nil
 		}
 	}
-	return changed
+	return changed, nil
 }
 
 // ExecutableHostActions exposes only operations whose original effect has not
@@ -139,7 +263,16 @@ func (e *Engine) advanceCandidateFailures(s *State, nextRevision uint64) bool {
 func (s *State) ExecutableHostActions() map[string]HostActionIntent {
 	result := map[string]HostActionIntent{}
 	for id, intent := range s.PendingHostActions {
-		if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+			if params, err := candidateParameters(intent); err == nil && params.Promotion != nil {
+				latest, _ := s.PromotionIntent()
+				if latest.ActionID != id {
+					continue
+				}
+			}
+			if s.latestNativeIntent(intent.Correlation).ActionID != id {
+				continue
+			}
 			if receipt, ok := s.HostActionReceipts[id]; ok && receipt.Status == HostActionStatusUnknown {
 				continue
 			}
@@ -152,7 +285,7 @@ func (s *State) ExecutableHostActions() map[string]HostActionIntent {
 	return result
 }
 
-func (s *State) candidateFailureFact() *decision.Fact {
+func (s *State) candidateFailureFact(cd *compiler.CompiledDefinition) *decision.Fact {
 	ids := make([]string, 0, len(s.PendingHostActions))
 	for id := range s.PendingHostActions {
 		ids = append(ids, id)
@@ -160,15 +293,15 @@ func (s *State) candidateFailureFact() *decision.Fact {
 	slices.Sort(ids)
 	for _, id := range ids {
 		intent := s.PendingHostActions[id]
-		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+		if intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation) || !s.NativeActionCurrent(intent, cd) || s.latestNativeIntent(intent.Correlation).ActionID != id {
 			continue
 		}
 		if receipt, ok := s.HostActionReceipts[id]; ok && receipt.Status == HostActionStatusUnknown {
-			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: "candidate effect is UNKNOWN; observe and submit its typed completion evidence"}
+			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: "native effect is UNKNOWN; observe and submit its typed completion evidence"}
 		}
 		route, used, max := s.candidateFailureRoute(intent)
 		if route.Class != "" {
-			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: fmt.Sprintf("%s; candidate attempts %d/%d", route.ActionDetail(), used, max)}
+			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: fmt.Sprintf("%s; native attempts %d/%d", route.ActionDetail(), used, max)}
 		}
 	}
 	return nil
@@ -242,12 +375,40 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 				params.ReviewCases[c.CaseID] = c.TestRef
 			}
 		}
+		params.CaseVersions = map[coverage.ReviewKind]string{}
+		params.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{}
+		for mode, set := range v.Sets {
+			if params.Stage == "QA_ARTIFACT" && mode != coverage.ReviewWhitebox {
+				continue
+			}
+			params.CaseVersions[mode] = set.Version
+			params.DesignTasks[mode] = set.DesignTask
+		}
 	}
-	params.CaseVersions = map[coverage.ReviewKind]string{}
-	params.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{}
-	for mode, set := range v.Sets {
-		params.CaseVersions[mode] = set.Version
-		params.DesignTasks[mode] = set.DesignTask
+	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" {
+		params.Base = s.candidateResource(params, cd).Source
+	}
+	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" {
+		if set := v.Sets[coverage.ReviewBlackbox]; set != nil && set.Status == "FROZEN" {
+			manifest := set.Manifest
+			params.BlackboxManifest = &manifest
+			params.Paths = append(params.Paths, ".gates/results/"+s.RunID+".blackbox-cases.md")
+			slices.Sort(params.Paths)
+		}
+	}
+	if s.NativeRoot != "" {
+		r := s.candidateResource(params, cd)
+		params.WorkspaceID = r.ID
 	}
 	return params, true, nil
+}
+
+func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if s.requirementChangePending() {
+		return false
+	}
+	if s.abortRequested() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
+		return false
+	}
+	return s.candidateInputsCurrent(intent, cd)
 }

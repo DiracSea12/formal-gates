@@ -2,20 +2,15 @@
 // exclusive cross-process lock adjudicated by the kernel on each opener's own
 // descriptor (flock on POSIX, a one-byte LockFile range on Windows). A holder
 // that dies has its lock released by the kernel, and a leftover lock file
-// never blocks a new acquirer. The lock file records the owning pid and token
-// as a diagnostic for humans only; it participates in no locking decision
-// and is never deleted.
+// never blocks a new acquirer. Lock files are never deleted or rewritten
+// when an existing lock is acquired.
 package coordination
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync/atomic"
-	"time"
 )
-
-var sequence atomic.Uint64
 
 // AcquireRun serializes creation of a run id across the legacy and candidate
 // namespaces.
@@ -40,7 +35,7 @@ func AcquireRunWaiting(root, runID string) (func(), error) {
 // the lock; a holder that exits without releasing is freed by the kernel, so
 // recovery needs no staleness rules and the lock file can stay forever.
 func AcquirePath(path, description string) (func(), error) {
-	return acquirePathLock(path, description, false)
+	return acquirePathLock(path, description, false, true)
 }
 
 // LockHeldError 表示路径锁被其他持有者占用（不可抢占）。Operation 是
@@ -58,23 +53,37 @@ func (e *LockHeldError) Error() string {
 // 持锁冲突时等待而不是立即失败（flock 阻塞模式／LockFileEx 去掉
 // FAIL_IMMEDIATELY）。持有者死亡由内核释放，等待者随之取得锁。用于需要互斥
 // 而不是快速失败的临界段（owner 区间协调：并行启动的扫描＋标记段必须串行闭
-// 合，不能把并发竞争当失败上抛）。诊断记录与 AcquirePath 相同。
+// 合，不能把并发竞争当失败上抛）。
 func AcquirePathWaiting(path, description string) (func(), error) {
-	return acquirePathLock(path, description, true)
+	return acquirePathLock(path, description, true, true)
 }
 
-// acquirePathLock 是两个公开获取入口共用的内部段：打开（或创建）锁文件、按
-// 等待策略取得内核锁并写入持有者诊断。等待者由内核唤醒；快速失败者把持锁冲
-// 突归一为 LockHeldError。诊断记录只标明当前持有者，便于人工排障；不参与任
-// 何判定，写失败不影响持锁。
-func acquirePathLock(path, description string, waiting bool) (func(), error) {
+// AcquireExistingPathWaiting acquires the same kernel lock without creating
+// a directory or file. Its admitted creation owner establishes the lock file.
+func AcquireExistingPathWaiting(path, description string) (func(), error) {
+	return acquirePathLock(path, description, true, false)
+}
+
+// acquirePathLock shares acquisition and release across creation and existing
+// callers. File contents participate in no locking decision.
+func acquirePathLock(path, description string, waiting, create bool) (func(), error) {
 	path = filepath.Clean(path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+	flags := os.O_RDWR
+	if create {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, err
+		}
+		flags |= os.O_CREATE
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if create {
+		if err := initializeLockFile(f); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 	var lockErr error
 	if waiting {
@@ -89,7 +98,5 @@ func acquirePathLock(path, description string, waiting bool) (func(), error) {
 		}
 		return nil, lockErr
 	}
-	_ = f.Truncate(0)
-	_, _ = f.WriteAt([]byte(fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), sequence.Add(1))), 0)
 	return func() { _ = f.Close() }, nil
 }

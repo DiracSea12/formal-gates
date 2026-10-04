@@ -9,32 +9,45 @@ import (
 // 分片/合并支路）+ 每个非 TERMINAL phase 的终止闭包边，按 (From, To)
 // 排序。表结构变化必须以有意识的黄金表更新留痕。
 var goldenPhaseEdges = []PhaseEdge{
+	{PhaseDevelopmentParallel, PhaseFinalizingCleanup},
 	{PhaseDevelopmentParallel, PhaseMainlineIntegration},
 	{PhaseDevelopmentParallel, PhaseSnapshotReady},
 	{PhaseDevelopmentParallel, PhaseTerminal},
+	{PhaseFinalizingCleanup, PhaseTerminal},
+	{PhaseIntakeRegistered, PhaseFinalizingCleanup},
 	{PhaseIntakeRegistered, PhaseProductReview},
 	{PhaseIntakeRegistered, PhaseTerminal},
+	{PhaseMainlineIntegration, PhaseFinalizingCleanup},
 	{PhaseMainlineIntegration, PhaseMergeValidation},
 	{PhaseMainlineIntegration, PhaseTerminal},
+	{PhaseMergeValidation, PhaseFinalizingCleanup},
 	{PhaseMergeValidation, PhaseRepair},
 	{PhaseMergeValidation, PhaseTerminal},
+	{PhasePostReview, PhaseFinalizingCleanup},
 	{PhasePostReview, PhaseRepair},
 	{PhasePostReview, PhaseSliceReady},
 	{PhasePostReview, PhaseSnapshotReady},
 	{PhasePostReview, PhaseTerminal},
+	{PhaseProductReview, PhaseFinalizingCleanup},
 	{PhaseProductReview, PhaseTechnicalReview},
 	{PhaseProductReview, PhaseTerminal},
+	{PhaseRepair, PhaseFinalizingCleanup},
 	{PhaseRepair, PhaseMainlineIntegration},
 	{PhaseRepair, PhaseSnapshotReady},
 	{PhaseRepair, PhaseTerminal},
+	{PhaseSliceReady, PhaseFinalizingCleanup},
 	{PhaseSliceReady, PhaseTerminal},
+	{PhaseSnapshotReady, PhaseFinalizingCleanup},
 	{PhaseSnapshotReady, PhasePostReview},
 	{PhaseSnapshotReady, PhaseTerminal},
+	{PhaseStartReadiness, PhaseFinalizingCleanup},
 	{PhaseStartReadiness, PhaseTerminal},
 	{PhaseStartReadiness, PhaseTopologyAndRoute},
+	{PhaseTechnicalReview, PhaseFinalizingCleanup},
 	{PhaseTechnicalReview, PhaseStartReadiness},
 	{PhaseTechnicalReview, PhaseTerminal},
 	{PhaseTopologyAndRoute, PhaseDevelopmentParallel},
+	{PhaseTopologyAndRoute, PhaseFinalizingCleanup},
 	{PhaseTopologyAndRoute, PhaseTerminal},
 }
 
@@ -78,8 +91,8 @@ func TestPhaseTransitionsExhaustive(t *testing.T) {
 }
 
 func TestPhaseValid(t *testing.T) {
-	if len(phases) != 13 {
-		t.Fatalf("phase count = %d, want 13", len(phases))
+	if len(phases) != 14 {
+		t.Fatalf("phase count = %d, want 14", len(phases))
 	}
 	for _, p := range phases {
 		if !p.Valid() {

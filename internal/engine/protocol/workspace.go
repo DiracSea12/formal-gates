@@ -1,18 +1,19 @@
 package protocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
-// RecordQAWorktree 把已通过 facade 校验（worktree resolve==BaseSnapshot＋
-// 隔离区内需求产物修订核对）的 QA 隔离工作区登记为持久事实（镜像 legacy
-// RegisterQAWorktree 的落点；物理建区归宿主，engine 只持登记）。重复登记同
-// 一工作区幂等；每轮黑盒设计可重建工作区，换路径覆盖登记。
+// RecordQAWorktree records the public QA role projection. Native resources
+// remain in GitResources until their typed cleanup evidence is accepted.
 func (e *Engine) RecordQAWorktree(worktree, expectedFingerprint string) error {
 	worktree = strings.TrimSpace(worktree)
 	revision, state, err := e.load()
@@ -36,13 +37,9 @@ func (e *Engine) RecordQAWorktree(worktree, expectedFingerprint string) error {
 	return err
 }
 
-// admitPromotion 是候选晋升两段（意图 OpenPromotion／提交
-// RecordCandidatePromotion）共用的接纳判定：run 在成功收口之前（TERMINAL 与
-// SLICE_READY 拒）、无未决
-// 需求变化屏障（Phase A 停止 candidate promotion）、无 abort、当前 wave 存在
-// 且 Status==COMPLETE（晋升是解除 promotion-wait 边界的动作，验证收集期不存
-// 在可晋升的终候选）。
-func (s *State) admitPromotion() error {
+// AdmitPromotion applies the shared final validation qualification before
+// opening or committing a promotion. Terminal and child checkpoints are closed.
+func (s *State) AdmitPromotion(cd *compiler.CompiledDefinition) error {
 	if s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhaseSliceReady {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires an active run"}
 	}
@@ -52,89 +49,94 @@ func (s *State) admitPromotion() error {
 	if s.abortRequested() {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires a run without an abort decision"}
 	}
-	if w := s.currentValidationWave(); w == nil || w.Status != "COMPLETE" {
-		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires the final validation wave to be COMPLETE"}
+	if !s.FinalValidationComplete(cd) {
+		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires the final validation wave to be COMPLETE and FULL for the complete current development plan"}
 	}
 	return nil
 }
 
-// OpenPromotion 落账候选晋升的执行前意图（intent→execute→observe→commit 的
-// intent 段）：准入在先——被拒时调用方不得执行任何 Git 副作用。无意图＝幂等
-// 记录；同 target 重开幂等；不同 target 覆盖（前次执行已被超越）。
-func (e *Engine) OpenPromotion(target, expectedFingerprint string) error {
-	target = strings.TrimSpace(target)
-	revision, state, err := e.load()
+// OpenPromotion signs the current verified source and the exact observed
+// target prefix. A superseded responsibility remains pending until completion.
+func (e *Engine) OpenPromotion(p PromotionParameters, expectedFingerprint string) error {
+	revision, s, err := e.load()
 	if err != nil {
 		return err
 	}
-	if state == nil {
+	if s == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if err := state.admitPromotion(); err != nil {
+	if err := s.AdmitPromotion(e.cfg.Definition); err != nil {
 		return err
 	}
-	if target == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "candidate promotion intent requires the target snapshot identity"}
+	source := s.currentValidationWave().Candidate
+	if p.Source != source.Identity || p.SourceDigest != source.Digest || p.TargetBase != s.BaseSnapshot || p.TargetRoot == "" || s.NativeRoot != "" && p.TargetRoot != s.NativeRoot || p.TargetStart.Head == "" || p.TargetStart.Tree == "" || p.TargetStart.IndexTree == "" {
+		return validationError("promotion requires the exact verified source, fixed target and native prefix")
 	}
-	if state.PendingPromotion == target {
-		return nil
+	if latest, pending := s.PromotionIntent(); pending {
+		params, err := candidateParameters(latest)
+		if err != nil {
+			return err
+		}
+		if params.Promotion.Source == p.Source && params.Promotion.SourceDigest == p.SourceDigest && len(s.HostActionFailures[latest.ActionID]) == 0 {
+			return nil
+		}
+		if latest.ActionID != p.SupersedesActionID {
+			return validationError("promotion must account for its unresolved predecessor")
+		}
+		chain, err := s.PromotionChain(latest)
+		if err != nil {
+			return err
+		}
+		if params.Promotion.TargetRoot != p.TargetRoot || params.Promotion.TargetBase != p.TargetBase {
+			return validationError("superseded promotion belongs to a different target")
+		}
+		for _, pending := range s.PendingHostActions {
+			candidate, err := candidateParameters(pending)
+			if err != nil || candidate.Promotion == nil {
+				continue
+			}
+			if !slices.ContainsFunc(chain, func(original HostActionIntent) bool { return original.ActionID == pending.ActionID }) {
+				return validationError("promotion has an unrelated unresolved writer")
+			}
+		}
+	} else if p.SupersedesActionID != "" {
+		return validationError("superseded promotion is not pending")
 	}
-	state.PendingPromotion = target
-	_, err = e.commit(state, revision, expectedFingerprint)
+	v := s.Validation
+	params := CandidateParameters{Stage: "PROMOTION", Promotion: &p, WorkspaceID: p.SourceWorkspace, RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), SourceTasks: slices.Clone(s.currentValidationWave().SourceTasks)}
+	intent, err := e.prepareAdapterIntent(s, revision+1, "op.candidate", params, "")
+	if err != nil {
+		return err
+	}
+	s.PendingHostActions[intent.ActionID] = intent
+	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }
 
-// RecordCandidatePromotion 提交候选晋升（intent→execute→observe→commit 的
-// commit 段）：原子重检接纳（活动/屏障/abort/wave COMPLETE）＋须消费未决意图
-// （PendingPromotion 非空；无意图的直达调用拒绝——不存在绕过 OpenPromotion 的
-// 第二入口）＋内容绑定（digest 必须等于当前 wave 已验证最终候选的 digest：晋
-// 升证明的是已验证内容，不是任意原生身份）。落账：清意图、写
-// PromotedSnapshot/PromotedDigest、收口 op.candidate 步骤。同值重放幂等。
-// 就绪检查、区间计数与 squash 归 facade 经注入的 Git provider 完成，本入口只
-// 落权威事实。
-func (e *Engine) RecordCandidatePromotion(snapshot, digest, expectedFingerprint string) error {
-	snapshot = strings.TrimSpace(snapshot)
-	digest = strings.TrimSpace(digest)
-	revision, state, err := e.load()
+// RecordCandidatePromotion submits a completed native proof through ordinary
+// typed receipt admission. It does not write delivery facts directly.
+func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromotionReceipt, expectedFingerprint string) error {
+	_, s, err := e.load()
 	if err != nil {
 		return err
 	}
-	if state == nil {
+	if s == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if err := state.admitPromotion(); err != nil {
+	intent, ok := s.hostIntent(actionID)
+	if !ok {
+		return validationError("promotion requires its original intent")
+	}
+	evidence := CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: proof.SourceWorkspace, Identity: proof.Final, Digest: proof.FinalDigest, Promotion: &proof}
+	values, err := normalizeHostActionParams(evidence)
+	if err != nil {
 		return err
 	}
-	if snapshot == "" || digest == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "candidate promotion requires the promoted snapshot identity and content digest"}
+	event, err := NewAdapterHostActionReceiptEvent(EventID("native:"+actionID), actionID, "op.candidate", s.RunProvider, intent.Correlation, intent.PayloadDigest, HostActionStatusExecuted, "", values)
+	if err != nil {
+		return err
 	}
-	if state.PromotedSnapshot == snapshot && state.PromotedDigest == digest {
-		return nil
-	}
-	if state.PendingPromotion == "" {
-		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires an open promotion intent"}
-	}
-	if digest != state.currentValidationWave().Candidate.Digest {
-		return &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("candidate promotion content %s does not match the verified final candidate %s", digest, state.currentValidationWave().Candidate.Digest)}
-	}
-	state.PendingPromotion = ""
-	state.PromotedSnapshot = snapshot
-	state.PromotedDigest = digest
-	// 晋升绑定是 op.candidate 步骤的收口事实（settle 对该操作保持开放）：
-	// 终审回执已在账时完成该步骤，终态边界随之解除，run 可推进到 terminal。
-	for i := range e.cfg.Definition.Steps {
-		step := e.cfg.Definition.Steps[i]
-		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || payload.Operation != "op.candidate" {
-			continue
-		}
-		if !slices.Contains(state.Completed, step.Header.ID) && state.hasSettledHostActionForStep(step.Header.ID) {
-			if err := state.CompleteStep(step.Header.ID, e.cfg.Definition); err != nil {
-				return err
-			}
-		}
-	}
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.Submit(event, expectedFingerprint)
 	return err
 }
 
@@ -175,6 +177,20 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 	if !state.validationConcluded(e.cfg.Definition) {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal sealing requires the concluded validation pipeline"}
 	}
+	if state.pendingControl() {
+		return validationError("terminal sealing requires all control asks resolved")
+	}
+	if state.nativeDebt() || len(state.PendingHostActions) != 0 || len(state.PendingActions) != 0 {
+		return validationError("terminal sealing requires native and worker reconciliation")
+	}
+	for _, attempt := range state.EndedAttempts {
+		if attempt.AwaitingResult {
+			return validationError("terminal sealing requires worker reconciliation")
+		}
+	}
+	if !state.ResourcesCleaned() {
+		return validationError("terminal sealing requires native resource cleanup")
+	}
 	if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
 		return err
 	}
@@ -184,24 +200,281 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 
 // promotionPending 报告 validation 边界是否在等待终态晋升：最终 wave 已
 // COMPLETE 且尚未绑定晋升快照。
-func (s *State) promotionPending() bool {
-	if s.PromotedSnapshot != "" {
-		return false
-	}
-	w := s.currentValidationWave()
-	return w != nil && w.Status == "COMPLETE"
+func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
+	return s.FinalValidationComplete(cd) && !s.validationDeliveryComplete(cd)
 }
 
-// validationConcluded 报告验证管线是否已收口——验证期 agent 步的过程级完成
-// 事实。前置门与 advanceValidation 的管线门同形（门未开时收口事实不存在）；
-// 收口只消费两个既有权威：终 wave COMPLETE（obligations 全解，由
-// settleValidationWave 单点定义）＋候选晋升已绑定且内容与该 wave 已验证最终候
-// 选相等（由 RecordCandidatePromotion 单点写入，谓词在此复核当前 wave——单一
-// 谓词仍是唯一判定位）。
-func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
+// FinalValidationComplete derives delivery qualification from the current
+// confirmed plan and its complete source set. A checkpoint only releases later
+// development; an AFFECTED wave still owes FULL validation of the same candidate.
+func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
 	if !pipelineEnabled(s, cd) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return false
 	}
+	_, plan, _ := s.confirmedDevelopmentPlan()
+	if plan == nil || !s.developmentPlanCurrent(plan) || s.abortRequested() || s.nextRepairWork() != nil {
+		return false
+	}
+	for _, task := range s.planTasks(cd) {
+		if s.developmentResult(task) == nil {
+			return false
+		}
+	}
 	w := s.currentValidationWave()
-	return w != nil && w.Status == "COMPLETE" && s.PromotedSnapshot != "" && s.PromotedDigest == w.Candidate.Digest
+	if w == nil || w.Status != "COMPLETE" || w.Scope != "FULL" || w.RequirementRevision != s.Validation.RequirementRevision || w.Generation != s.Validation.Generation || w.RouteDigest != s.validationRouteDigest() || s.Validation.Candidate == nil || w.Candidate != *s.Validation.Candidate {
+		return false
+	}
+	sources, _, _, complete := s.developmentSources(cd)
+	return complete && sameTaskSet(w.SourceTasks, sources)
+}
+
+func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
+	return s.validationDeliveryComplete(cd)
+}
+
+func (s *State) validationDeliveryComplete(cd *compiler.CompiledDefinition) bool {
+	w := s.currentValidationWave()
+	p := s.CandidatePromotion
+	return s.FinalValidationComplete(cd) && p != nil && p.Source == w.Candidate.Identity && p.SourceDigest == w.Candidate.Digest && p.TargetBase == s.BaseSnapshot && (s.NativeRoot == "" || p.TargetRoot == s.NativeRoot) && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == w.Candidate.Digest && !s.nonCleanupNativeDebt()
+}
+
+// CandidatePromotionReceipt binds the observed source and final native trees.
+// The signed candidate intent owns execution; this value retains its proof.
+type PromotionObservation struct {
+	Head       string       `json:"head"`
+	Tree       string       `json:"tree"`
+	IndexTree  string       `json:"indexTree"`
+	Changes    []vcs.Change `json:"changes,omitempty"`
+	Clean      bool         `json:"clean"`
+	StagedOnly bool         `json:"stagedOnly"`
+}
+
+type PromotionParameters struct {
+	SourceWorkspace    string               `json:"sourceWorkspace,omitempty"`
+	Source             string               `json:"source"`
+	SourceDigest       string               `json:"sourceDigest"`
+	TargetRoot         string               `json:"targetRoot"`
+	TargetBase         string               `json:"targetBase"`
+	TargetStart        PromotionObservation `json:"targetStart"`
+	SupersedesActionID string               `json:"supersedesActionId,omitempty"`
+	Message            string               `json:"message"`
+}
+
+type CandidatePromotionReceipt struct {
+	TargetStart        PromotionObservation `json:"targetStart"`
+	SupersedesActionID string               `json:"supersedesActionId,omitempty"`
+	OperationID        string               `json:"operationId"`
+	Provider           string               `json:"provider"`
+	SourceWorkspace    string               `json:"sourceWorkspace"`
+	Source             string               `json:"source"`
+	SourceDigest       string               `json:"sourceDigest"`
+	TargetRoot         string               `json:"targetRoot"`
+	TargetBase         string               `json:"targetBase"`
+	Final              string               `json:"final"`
+	FinalDigest        string               `json:"finalDigest"`
+}
+
+func (s *State) DeliveryComplete(cd *compiler.CompiledDefinition) bool {
+	return s.validationDeliveryComplete(cd)
+}
+func (s *State) nonCleanupNativeDebt() bool {
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) && intent.Adapter.Operation != "op.cleanup" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) nativeDebt() bool {
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+			return true
+		}
+	}
+	return false
+}
+
+// retireNative preserves the original signed responsibility and its actual
+// settlement evidence. It never fabricates a receipt or discards a failure.
+func (s *State) retireNative(intent HostActionIntent, status, digest string, observation *HostActionObservation, revision uint64) {
+	if _, pending := s.PendingHostActions[intent.ActionID]; !pending {
+		return
+	}
+	effect := ReconciledEffect{UnknownReceipt: s.ReconciledEffects[intent.ActionID].UnknownReceipt, Intent: &intent, ActionID: intent.ActionID, Operation: intent.Operation, AdapterOperation: intent.Adapter.Operation, ObservationDigest: digest, Status: status, Revision: revision}
+	if observation != nil {
+		effect.Promotion, effect.Resource = observation.Promotion, observation.Resource
+	}
+	if receipt, ok := s.HostActionReceipts[intent.ActionID]; ok && receipt.Status == HostActionStatusUnknown {
+		effect.UnknownReceipt = &receipt
+	}
+	s.ReconciledEffects[intent.ActionID] = effect
+	delete(s.PendingHostActions, intent.ActionID)
+}
+
+// validateCurrentPromotion is signing qualification; historical receipt
+// authorization remains tied to the original COMPLETE FULL wave.
+func (s *State) validateCurrentPromotion(p CandidateParameters, cd *compiler.CompiledDefinition) error {
+	if err := s.AdmitPromotion(cd); err != nil {
+		return err
+	}
+	v, w := s.Validation, s.currentValidationWave()
+	if p.Promotion == nil || p.RequirementRevision != v.RequirementRevision || p.Generation != v.Generation || p.RouteScope != s.validationRouteDigest() || !sameTaskSet(p.SourceTasks, w.SourceTasks) {
+		return validationError("promotion differs from current FULL qualification")
+	}
+	target := p.Promotion
+	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly {
+		return validationError("promotion differs from current source and exact target prefix")
+	}
+	if s.NativeRoot != "" {
+		r := s.GitResources[target.SourceWorkspace]
+		if p.WorkspaceID != r.ID || r.Role != "candidate" || r.Identity != target.Source || r.Status != "READY" || !s.resourceUsable(r.ID) {
+			return validationError("promotion source is not a current registered workspace")
+		}
+	}
+	if latest, pending := s.PromotionIntent(); pending {
+		if latest.ActionID != target.SupersedesActionID {
+			return validationError("promotion must bind its original predecessor")
+		}
+		old, err := candidateParameters(latest)
+		if err != nil || old.Promotion.TargetRoot != target.TargetRoot || old.Promotion.TargetBase != target.TargetBase {
+			return validationError("promotion predecessor belongs to another target")
+		}
+		if receipt, ok := s.HostActionReceipts[latest.ActionID]; ok && receipt.Status == HostActionStatusUnknown && candidateCorrelation(old) == candidateCorrelation(CandidateParameters{Stage: "PROMOTION", Promotion: target}) {
+			return validationError("promotion predecessor is UNKNOWN")
+		}
+	} else if target.SupersedesActionID != "" {
+		return validationError("promotion predecessor is not pending")
+	}
+	return nil
+}
+
+func (s *State) hostIntent(actionID string) (HostActionIntent, bool) {
+	if intent, ok := s.PendingHostActions[actionID]; ok {
+		return intent, true
+	}
+	effect, ok := s.ReconciledEffects[actionID]
+	if ok && effect.Intent != nil {
+		return *effect.Intent, true
+	}
+	return HostActionIntent{}, false
+}
+func (s *State) PromotionIntent() (HostActionIntent, bool) {
+	var selected HostActionIntent
+	found := false
+	for _, intent := range s.PendingHostActions {
+		p, err := candidateParameters(intent)
+		if err != nil || p.Promotion == nil {
+			continue
+		}
+		if !found || intent.Revision > selected.Revision {
+			selected, found = intent, true
+		}
+	}
+	return selected, found
+}
+
+// PromotionChain follows the signed predecessor identities for one target.
+func (s *State) PromotionChain(intent HostActionIntent) ([]HostActionIntent, error) {
+	first, err := candidateParameters(intent)
+	if err != nil || first.Promotion == nil {
+		return nil, validationError("promotion chain requires its original intent")
+	}
+	var chain []HostActionIntent
+	for {
+		p, err := candidateParameters(intent)
+		if err != nil || p.Promotion == nil || p.Promotion.TargetRoot != first.Promotion.TargetRoot || p.Promotion.TargetBase != first.Promotion.TargetBase {
+			return nil, validationError("promotion predecessor belongs to a different target")
+		}
+		chain = append(chain, intent)
+		if p.Promotion.SupersedesActionID == "" {
+			return chain, nil
+		}
+		previous, ok := s.hostIntent(p.Promotion.SupersedesActionID)
+		if !ok || previous.Revision >= intent.Revision {
+			return nil, validationError("promotion predecessor has no original earlier intent")
+		}
+		intent = previous
+	}
+}
+
+func (s *State) promotionAuthorized(p CandidateParameters) bool {
+	if p.Promotion == nil || s.Validation == nil {
+		return false
+	}
+	for _, w := range s.Validation.Waves {
+		if w.Status == "COMPLETE" && w.Scope == coverage.ScopeFull && w.Generation == p.Generation && w.RequirementRevision == p.RequirementRevision && w.RouteDigest == p.RouteScope && w.Candidate.Identity == p.Promotion.Source && w.Candidate.Digest == p.Promotion.SourceDigest && sameTaskSet(w.SourceTasks, p.SourceTasks) {
+			return true
+		}
+	}
+	return false
+}
+
+func (o PromotionObservation) Digest() string { return digestOfCanonical(o) }
+
+func (s *State) pendingControl() bool {
+	for _, ask := range s.PendingAsks {
+		if !ask.Resolved {
+			return true
+		}
+	}
+	return false
+}
+
+// nativeReplacementAuthorized requires the signed exact output or a confirmed
+// work replacement. The caller supplies a genuinely completed current effect.
+func (s *State) nativeReplacementAuthorized(old, current HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if old.Adapter == nil || current.Adapter == nil || old.Adapter.Operation != current.Adapter.Operation {
+		return false
+	}
+	if old.PayloadDigest == current.PayloadDigest && old.Correlation == current.Correlation {
+		return true
+	}
+	switch old.Adapter.Operation {
+	case "op.workspace":
+		if old.Revision >= current.Revision {
+			return false
+		}
+		var before, after WorkspaceParameters
+		a, _ := json.Marshal(old.Adapter.Params)
+		b, _ := json.Marshal(current.Adapter.Params)
+		if json.Unmarshal(a, &before) != nil || json.Unmarshal(b, &after) != nil {
+			return false
+		}
+		for _, binding := range s.DispatchBindings {
+			if binding.WorkspaceID != before.Resource.ID {
+				continue
+			}
+			replacement, authorized := s.requirementWorkReplacement(binding.Task)
+			if authorized && s.taskResource(replacement, cd).ID == after.Resource.ID {
+				return true
+			}
+		}
+	case "op.candidate":
+		before, aerr := candidateParameters(old)
+		after, berr := candidateParameters(current)
+		if aerr != nil || berr != nil || before.Promotion != nil || after.Promotion != nil || before.Stage != after.Stage || len(before.SourceTasks) == 0 {
+			return false
+		}
+		if candidateCorrelation(before) == candidateCorrelation(after) && before.WorkspaceID == after.WorkspaceID && s.candidateContextCurrent(before) && s.candidateContextCurrent(after) {
+			return true
+		}
+		if old.Revision >= current.Revision {
+			return false
+		}
+		for _, source := range before.SourceTasks {
+			replacement, authorized := s.requirementWorkReplacement(source)
+			if !authorized || !slices.Contains(after.SourceTasks, replacement) {
+				return false
+			}
+		}
+		for kind, task := range before.DesignTasks {
+			replacement, authorized := s.requirementWorkReplacement(task)
+			if task != after.DesignTasks[kind] && (!authorized || replacement != after.DesignTasks[kind]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

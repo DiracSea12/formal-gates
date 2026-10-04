@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -11,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
@@ -36,6 +39,7 @@ const frozenTree = "0123456789abcdef0123456789abcdef01234568"
 type frozenGitRepo struct {
 	commits []string
 	trees   map[string]string
+	objects map[string]string
 	// sequence 是身份发生的单调计数：squash 截断链后仍不复用已出现的提交
 	// 身份（悬空提交与新提交是不同对象）。
 	sequence int
@@ -45,7 +49,7 @@ type frozenGitRepo struct {
 }
 
 func newFrozenGitRepo() *frozenGitRepo {
-	repo := &frozenGitRepo{trees: map[string]string{}}
+	repo := &frozenGitRepo{trees: map[string]string{}, objects: map[string]string{frozenTree: "abcdef0123456789abcdef0123456789abcdef0123"}}
 	repo.commits = append(repo.commits, frozenSnapshot)
 	repo.trees[frozenSnapshot] = frozenTree
 	return repo
@@ -58,6 +62,7 @@ func (r *frozenGitRepo) advance() string {
 	commit := fmt.Sprintf("%040d", r.sequence)
 	r.commits = append(r.commits, commit)
 	r.trees[commit] = fmt.Sprintf("%064d", r.sequence)
+	r.objects[r.trees[commit]] = fmt.Sprintf("%040x", r.sequence+1000000)
 	return commit
 }
 
@@ -103,7 +108,32 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 		}
 		return r.commits[b], nil
 	case joined == "status --porcelain=v1 --untracked-files=all":
+		if r.pendingTree != "" && r.pendingTree != r.trees[head] {
+			return "M  app.go", nil
+		}
 		return "", nil
+	case joined == "status --porcelain=v1 --branch --untracked-files=all":
+		if r.pendingTree != "" && r.pendingTree != r.trees[head] {
+			return "## HEAD (no branch)\nM  app.go", nil
+		}
+		return "## HEAD (no branch)", nil
+	case len(args) == 8 && strings.Join(args[:5], " ") == "diff --raw --no-abbrev --no-renames -z" && args[7] == "--":
+		object := func(identity string) (string, bool) {
+			if tree, ok := r.trees[identity]; ok {
+				identity = tree
+			}
+			entry, ok := r.objects[identity]
+			return entry, ok
+		}
+		base, baseExists := object(args[5])
+		next, nextExists := object(args[6])
+		if !baseExists || !nextExists {
+			return "", fmt.Errorf("frozen git fixture: unknown diff endpoint %v", args)
+		}
+		if base == next {
+			return "", nil
+		}
+		return ":100644 100644 " + base + " " + next + " M\x00app.go\x00", nil
 	case joined == "write-tree":
 		// 暂存区树：reset --soft 后 index 保留截链前内容（pendingTree）；干净
 		// index 的暂存树＝HEAD 提交的树。
@@ -127,6 +157,7 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 		tree := r.pendingTree
 		if tree == "" {
 			tree = fmt.Sprintf("%064d", r.sequence)
+			r.objects[tree] = fmt.Sprintf("%040x", r.sequence+1000000)
 		}
 		r.pendingTree = ""
 		r.commits = append(r.commits, commit)
@@ -260,7 +291,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := Start(StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: testAdmission(t, root, "candidate", "sha256:package", provider)})
+	f, r, err := abstractValidationFacade(t, root, provider, runner, base, receipt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,12 +417,15 @@ func (d *validationDriver) materialize() {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
 			continue
 		}
-		assertCandidateStep(d.t, d, intent)
 		data, _ := json.Marshal(intent.Adapter.Params)
 		var p protocol.CandidateParameters
 		if err := json.Unmarshal(data, &p); err != nil {
 			d.t.Fatal(err)
 		}
+		if p.Stage == "PROMOTION" {
+			continue
+		}
+		assertCandidateStep(d.t, d, intent)
 		// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
 		// 冻结场景把每次候选冻结建模为一次宿主提交（阶段性产物入树，候选
 		// 身份随冻结推进）；真仓场景直接读真实 HEAD 与其树摘要。
@@ -777,6 +811,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 				}
 			}
 			oldAction := d.run.PendingActions[action]
+			before := driverState(t, d)
 			revision := d.carryFormattingChange()
 			if d.run.PendingActions[action] != oldAction {
 				t.Fatal("carry replaced the signed execution")
@@ -805,8 +840,17 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 				if len(set.ReviewHistory) != 1 || set.ReviewHistory[0].Review.Binding != result.Review.Binding {
 					t.Fatal("raw review history lost the original binding")
 				}
-			} else if handler == "engine.gate" && d.run.Validation.Waves[0].Status != "COMPLETE" {
-				t.Fatal("carried gate did not complete the frozen wave")
+			} else if handler == "engine.gate" {
+				current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				state := driverState(t, d)
+				if current.Status != "COMPLETE" || current.Scope != coverage.ScopeFull || current.RequirementRevision != revision || current.Generation != state.Validation.Generation || current.Candidate != before.Validation.Waves[0].Candidate || d.run.Validation.Waves[0].ExpectedDigest != before.Validation.Waves[0].ExpectedDigest || !reflect.DeepEqual(state.Results[action].Validation, &result) {
+					t.Fatal("carried gate did not fulfill current FULL qualification with original evidence")
+				}
+				for id, original := range before.Results {
+					if !reflect.DeepEqual(original, state.Results[id]) {
+						t.Fatal("carry changed a previously accepted raw result")
+					}
+				}
 			}
 			for _, pending := range d.run.PendingActions {
 				if pending.Task == oldAction.Task {
@@ -908,4 +952,66 @@ func gateReviewView(params protocol.CandidateParameters) *protocol.GateReviewVie
 	}
 	slices.Sort(view.TestOwnedPaths)
 	return view
+}
+
+// abstractValidationFacade composes the protocol and injected Git facts for
+// semantic admission tests. Native workspace effects have real-repository
+// public-chain coverage; these fixtures provide typed operation observations.
+func abstractValidationFacade(t *testing.T, root, provider string, runner vcs.Runner, base string, receipt IntakeConfirmationReceipt) (*Facade, Run, error) {
+	return semanticValidationFacade(t, StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+}
+
+// semanticValidationFacade supplies typed native observations in owner tests.
+// Start's business initializer retains the actual budget and lifecycle rules;
+// installed public tests own the physical workspace lifecycle coverage.
+func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run, error) {
+	t.Helper()
+	root := options.Root
+	admitted := *options.Admission
+	req := options.Request
+	req.DefinitionSource = DefaultDefinitionSource
+	req.DefinitionDigest = definition.WorkflowDefinitionDigest
+	req.PackageDigest, req.InstalledTargetIdentity = admitted.PackageDigest, admitted.InstalledTargetIdentity
+	req.AdmissionRegistryPath, req.AdmissionTarget, req.AdmissionRoot = admitted.RegistryPath, admitted.Target, admitted.Root
+	req.AdmissionGeneration, req.AdmissionLease, req.AdmissionToken = admitted.Generation, admitted.Lease, admitted.Token
+	var sliceStart *protocol.SliceRunStart
+	var err error
+	if req.MasterRunID != "" {
+		sliceStart, err = claimMasterSlice(root, req)
+		if err != nil {
+			return nil, Run{}, err
+		}
+	}
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		return nil, Run{}, err
+	}
+	stateDir := filepath.Join(root, EngineNamespace, req.RunID)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, Run{}, err
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "promotion.lock"), []byte("0"), 0o600); err != nil {
+		return nil, Run{}, err
+	}
+	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: admitted.PackageDigest, DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: admitted.InstalledTargetIdentity, AcquireAdmission: admitted.acquire})
+	if err != nil {
+		return nil, Run{}, err
+	}
+	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted)}, nil)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	tokenCap, err := readTokenCap(root)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	if err := initializeRun(engine, root, req, sliceStart, options.Owner, tokenCap, admitted, cd); err != nil {
+		return nil, Run{}, err
+	}
+	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {
+		return nil, Run{}, err
+	}
+	f := &Facade{admission: admitted, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: engine, envelope: store.Envelope(), definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcs.New(root, options.VCSRunner)}
+	run, err := f.project()
+	return f, run, err
 }

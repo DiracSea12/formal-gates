@@ -166,6 +166,18 @@ func TestCandidateTransientAttemptsRequireOneBoundExtra(t *testing.T) {
 			if onlyCandidate(t, d, stage).ActionID != second.ActionID {
 				t.Fatal("duplicate failure repeated execution")
 			}
+			before := driverState(t, d)
+			for i := 0; i < 3; i++ {
+				d.drive()
+				d.reopen()
+				if onlyCandidate(t, d, stage).ActionID != second.ActionID {
+					t.Fatal("unfailed retry was signed again by drive or recovery")
+				}
+			}
+			after := driverState(t, d)
+			if !reflect.DeepEqual(before.PendingHostActions, after.PendingHostActions) || !reflect.DeepEqual(before.HostActionFailures, after.HostActionFailures) {
+				t.Fatal("observation consumed or reset the finite native allowance")
+			}
 			candidateFailure(t, d, second, authoring.FailureTransientEngine)
 			d.reopen()
 			d.drive()

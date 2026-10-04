@@ -55,10 +55,14 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			case compiler.CompiledHumanAskStep:
 				settle = s.hasDecisionForStep(step.Header.ID)
 			case compiler.CompiledHostActionStep:
-				if payload.Operation == "op.candidate" {
+				if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" {
+					settle = s.validationConcluded(compiled) && (payload.Operation != "op.cleanup" || s.SliceChild != nil || s.ResourcesCleaned())
+				} else if payload.Operation == "op.candidate" {
 					continue
 				}
-				settle = s.hasSettledHostActionForStep(step.Header.ID)
+				if payload.Operation != "op.workspace" && payload.Operation != "op.cleanup" {
+					settle = s.hasSettledHostActionForStep(step.Header.ID)
+				}
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
 			case compiler.CompiledAgentStep:
@@ -138,7 +142,7 @@ func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operat
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate") {
+		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate" && payload.Operation != "op.workspace" && payload.Operation != "op.cleanup") {
 			continue
 		}
 		return step.Header.ID

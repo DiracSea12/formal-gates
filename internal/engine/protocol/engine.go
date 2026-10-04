@@ -40,6 +40,7 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
+	NativeRoot    string
 	Definition    *compiler.CompiledDefinition
 	Registry      *compiler.Registry
 	Capacity      int
@@ -108,7 +109,7 @@ func (e *Engine) load() (uint64, *State, error) {
 	}
 	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的
 	// phase 在读取侧即可区分拒绝。
-	if err := verifyReviewIntegrity(&state); err != nil {
+	if err := verifyReviewIntegrity(&state, e.cfg.Definition); err != nil {
 		return 0, nil, err
 	}
 	if err := state.verifySliceReceipt(); err != nil {
@@ -153,6 +154,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.RunID = runID
 	state.Route = route
 	state.BaseSnapshot = baseSnapshot
+	state.NativeRoot = e.cfg.NativeRoot
 	state.IntakeConfirmationReceipt = confirmation
 	if sliceStart != nil {
 		binding := sliceStart.Binding
@@ -235,11 +237,11 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	if err := e.refreshGuardBudget(state); err != nil {
 		return 0, nil, err
 	}
-	rebindValidationAskSummaries(state)
+	rebindValidationAsks(state, expectedRevision+1)
 	if err := state.advanceReviewPhases(); err != nil {
 		return 0, nil, err
 	}
-	if err := verifyReviewIntegrity(state); err != nil {
+	if err := verifyReviewIntegrity(state, e.cfg.Definition); err != nil {
 		return 0, nil, err
 	}
 	if err := state.verifySliceReceipt(); err != nil {
@@ -299,7 +301,10 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	}
 	e.reconcileReviewGrantAsks(state)
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
-	heldSettled := e.executeHeldSettles(state, nextRevision)
+	heldSettled, err := e.executeHeldSettles(state, nextRevision)
+	if err != nil {
+		return nil, err
+	}
 	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
 	if err := e.advanceRecoveries(state, nextRevision); err != nil {
 		return nil, err
@@ -349,31 +354,47 @@ func (e *Engine) executeHeldFailureRoutes(state *State, nextRevision uint64) boo
 
 // executeHeldSettles applies completed effects and settles their frontier at
 // the transaction boundary, after any requirement barrier has been resolved.
-func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) bool {
+func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) (bool, error) {
 	if len(state.HeldHostSettles) == 0 && !state.FrontierSettleHeld {
-		return false
+		return false, nil
 	}
 	for _, actionID := range state.HeldHostSettles {
-		if err := e.applyCandidateReceipt(state, state.PendingHostActions[actionID], state.HostActionReceipts[actionID]); err != nil {
-			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Detail: err.Error(), Revision: nextRevision})
-			continue
+		intent, ok := state.hostIntent(actionID)
+		if !ok {
+			return false, validationError("held effect has no original intent")
+		}
+		applicable := state.NativeActionCurrent(intent, e.cfg.Definition)
+		if err := e.applyNativeReceipt(state, intent, state.HostActionReceipts[actionID]); err != nil {
+			return false, err
+		}
+		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+			state.retireNative(intent, "FULFILLED", state.HostActionReceipts[actionID].Digest, nil, nextRevision)
+		}
+		if applicable && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+			for _, old := range state.PendingHostActions {
+				if old.ActionID == intent.ActionID {
+					continue
+				}
+				if receipt, ok := state.HostActionReceipts[old.ActionID]; ok && receipt.Status == HostActionStatusUnknown {
+					continue
+				}
+				if state.nativeReplacementAuthorized(old, intent, e.cfg.Definition) {
+					state.retireNative(old, "SUPERSEDED", state.HostActionReceipts[actionID].Digest, nil, nextRevision)
+				}
+			}
 		}
 		delete(state.PendingHostActions, actionID)
 	}
 	state.HeldHostSettles = nil
 	state.FrontierSettleHeld = false
 	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
-		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-			Detail:   fmt.Sprintf("commit-boundary frontier settle failed: %v", err),
-			Revision: nextRevision,
-		})
-		return true
+		return false, err
 	}
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 		Detail:   "settled host action intents were cleared and the frontier settled at the commit boundary",
 		Revision: nextRevision,
 	})
-	return true
+	return true, nil
 }
 
 // Snapshot 是一次 Load 的只读结果。
@@ -428,7 +449,7 @@ func (e *Engine) Load() (Snapshot, error) {
 // live dispatches retain their actual task identity, including replacement tasks.
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
-	view.Suspended = s.requirementChangePending()
+	view.Suspended = s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl()
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
@@ -519,6 +540,7 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 	s.projectValidationTasks(&view, compiled)
 	s.projectRetryTasks(&view, compiled)
 	s.projectValidationBoundary(&view, compiled)
+	s.projectResourceBoundary(&view, compiled)
 	return view
 }
 
@@ -1009,6 +1031,39 @@ func (s *State) retainExpected(ready *decision.ReadyPayload) {
 	}
 }
 
+// RecordedEvent reads the accepted event ledger without opening a write window.
+// A missing event still needs Submit's current admission and commit checks.
+func (e *Engine) RecordedEvent(ev Event) (Acceptance, bool, error) {
+	if err := ev.Validate(); err != nil {
+		return Acceptance{}, false, err
+	}
+	_, state, err := e.load()
+	if err != nil || state == nil {
+		return Acceptance{}, false, err
+	}
+	record, seen := state.Events[string(ev.ID)]
+	if !seen {
+		return Acceptance{}, false, nil
+	}
+	acceptance, err := record.Replay(ev)
+	return acceptance, true, err
+}
+
+// Replay verifies one immutable accepted record, including terminal fallback.
+func (record EventRecord) Replay(ev Event) (Acceptance, error) {
+	if err := ev.Validate(); err != nil {
+		return Acceptance{}, err
+	}
+	digest, err := ev.Digest()
+	if err != nil {
+		return Acceptance{}, err
+	}
+	if record.Acceptance.EventID != string(ev.ID) || record.Digest != digest {
+		return Acceptance{}, &RejectedError{Code: CodeDuplicateEventMismatch, Detail: fmt.Sprintf("event %q replayed with different payload digest (recorded %s, submitted %s)", ev.ID, record.Digest, digest)}
+	}
+	return record.Acceptance, nil
+}
+
 // Submit 是唯一的外部事件接纳入口。顺序固定：
 //
 //	事件 schema 校验 → 幂等台账检查（同 ID 同 digest 重放返回稳定
@@ -1034,13 +1089,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 	// 幂等台账优先于一切接纳校验：重放不得因 token 已轮换或任务已推进
 	// 而被误拒（同 ID 同 digest 返回稳定 acceptance/status）。
 	if record, seen := state.Events[string(ev.ID)]; seen {
-		if record.Digest != digest {
-			return Acceptance{}, &RejectedError{
-				Code:   CodeDuplicateEventMismatch,
-				Detail: fmt.Sprintf("event %q replayed with different payload digest (recorded %s, submitted %s)", ev.ID, record.Digest, digest),
-			}
-		}
-		return record.Acceptance, nil
+		return record.Replay(ev)
 	}
 	if state.Phase == runtime.PhaseTerminal {
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
@@ -1090,7 +1139,14 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 // 事务收尾（见 admit），各分支不做。
 func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
 	if state.abortRequested() && (ev.Kind == KindRequestControl || ev.Kind == KindDecide || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil) {
-		return Acceptance{}, nil, false, validationError("run abort has stopped business controls")
+		cleanupRecovery := false
+		if ev.Kind == KindDecide {
+			ask := state.PendingAsks[string(ev.Decide.Request)]
+			cleanupRecovery = ask.Control == ControlValidation && state.cleanupRetryRequest(ask.Validation) && (ev.Decide.Choice == "approve" || ev.Decide.Choice == "decline")
+		}
+		if !cleanupRecovery {
+			return Acceptance{}, nil, false, validationError("run abort has stopped business controls")
+		}
 	}
 	switch ev.Kind {
 	case KindRequestControl:
@@ -1118,9 +1174,6 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 					return Acceptance{}, nil, false, err
 				}
 			}
-			// Phase A「立即撤销未完成 Seal intent」：需求变化 REQUEST 落账
-			// 的同一事务撤销未完成的晋升意图——屏障期内不得有候选晋升在途。
-			state.PendingPromotion = ""
 			// Ask 落账创建时的权威基线：任何后续确认都使本 Ask 过期
 			//（DECIDE 三方相等校验）。
 			ask.BaseRevision = state.RequirementRevision()
@@ -1494,6 +1547,10 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				}, nil, false, nil
 			}
 		}
+
+		if original, known := state.hostIntent(actionID); known && original.Adapter != nil && nativeOperation(original.Adapter.Operation) && len(state.HostActionFailures[actionID]) != 0 && (ev.HostAction.Status == HostActionStatusFailed || ev.HostAction.Status == HostActionStatusUnknown) {
+			return Acceptance{}, nil, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("native call %q already has its failure fact", actionID)}
+		}
 		if reconciled, ok := state.ReconciledEffects[actionID]; ok && reconciled.UnknownReceipt != nil && reconciled.UnknownReceipt.Digest == payloadDigest {
 			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, nil, false, nil
 		}
@@ -1505,8 +1562,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("action %q host action receipt conflicts with recorded completion", actionID)}
 			}
 		}
-		intent, pending := state.PendingHostActions[actionID]
-		if !pending {
+		intent, exists := state.hostIntent(actionID)
+		_, pending := state.PendingHostActions[actionID]
+		if !exists {
 			return Acceptance{}, nil, false, &RejectedError{
 				Code:   CodeUnknownAction,
 				Detail: fmt.Sprintf("host action receipt references unknown or settled intent %q", actionID),
@@ -1537,6 +1595,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.HostAction.Status == HostActionStatusFailed {
 			state.HostActionFailures[actionID] = append(state.HostActionFailures[actionID], receipt)
+			if !pending {
+				return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision, ActionID: actionID}, state, true, nil
+			}
 			// 回执是观察事实照常落账；失败路由与 intent 清算是业务后果
 			//——屏障期挂起至解除事务统一执行。
 			if state.requirementChangePending() {
@@ -1559,13 +1620,25 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				ActionID: actionID, FailureClass: string(route.Class), RecoveryAction: string(route.Action),
 			}, state, true, nil
 		}
+		if ev.HostAction.Status == HostActionStatusExecuted && intent.Adapter != nil {
+			if err := validateResourceReceipt(intent, receipt); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
 		if ev.HostAction.Status == HostActionStatusExecuted && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
 			if _, _, err := validateCandidateReceipt(intent, receipt); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
 		if previous, ok := state.HostActionReceipts[actionID]; ok && previous.Status == HostActionStatusUnknown && receipt.Status == HostActionStatusExecuted {
-			state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: receipt.AdapterOperation, ObservationDigest: receipt.Digest, Status: "FULFILLED", Revision: nextRevision, UnknownReceipt: &previous}
+			effect := state.ReconciledEffects[actionID]
+			if effect.Status != "SUPERSEDED" && effect.Status != "WITHDRAWN" {
+				effect = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: receipt.AdapterOperation, ObservationDigest: receipt.Digest, Status: "FULFILLED", Revision: nextRevision, UnknownReceipt: &previous}
+			}
+			if effect.UnknownReceipt == nil {
+				effect.UnknownReceipt = &previous
+			}
+			state.ReconciledEffects[actionID] = effect
 		}
 		state.HostActionReceipts[actionID] = receipt
 		// 恢复执行的 EXECUTED 回执是执行证据：在目标任务的 Attempt 账本同点
@@ -2150,7 +2223,8 @@ func (e *Engine) applyFailedSpawnRouting(s *State, actionID string, receipt Spaw
 			s.routingReleasedCapacity = true
 		}
 	}
-	if route.Action == RecoveryReconcile {
+	intent := s.PendingHostActions[actionID]
+	if route.Action == RecoveryReconcile && (intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation)) {
 		// Keep the wire-level FAILED receipt in SpawnFailures, while exposing
 		// an UNKNOWN ledger entry for external reconciliation.
 		unknown := receipt
@@ -2161,7 +2235,7 @@ func (e *Engine) applyFailedSpawnRouting(s *State, actionID string, receipt Spaw
 }
 
 // applyFailedHostActionRouting 执行一条 FAILED host action 回执的失败路由：
-// 路由留痕、RECOVER 路由的 UNKNOWN 账面桥接、FAIL 路由的 intent 清算。
+// 原生 FAILED 保留原状态；其它 adapter 按既有恢复契约对账。
 // 立即接纳与屏障解除的统一执行共用本函数。
 func (s *State) applyFailedHostActionRouting(actionID string, receipt HostActionReceipt, nextRevision uint64) FailureRoute {
 	route := RouteFailure(receipt.FailureClass)
@@ -2169,7 +2243,8 @@ func (s *State) applyFailedHostActionRouting(actionID string, receipt HostAction
 		ActionID: actionID, Class: route.Class, Action: route.Action,
 		Detail: route.ActionDetail(), Revision: nextRevision,
 	})
-	if route.Action == RecoveryReconcile {
+	intent := s.PendingHostActions[actionID]
+	if route.Action == RecoveryReconcile && (intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation)) {
 		// Keep the wire-level FAILED receipt in HostActionFailures while
 		// exposing an UNKNOWN ledger entry, mirroring the spawn-side bridge:
 		// without it the declared RECOVER route has no reconciliation entry
@@ -2181,7 +2256,7 @@ func (s *State) applyFailedHostActionRouting(actionID string, receipt HostAction
 	}
 	if route.Action == RecoveryFail {
 		intent := s.PendingHostActions[actionID]
-		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+		if intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation) {
 			delete(s.PendingHostActions, actionID)
 		}
 	}
@@ -2342,7 +2417,7 @@ func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActio
 }
 
 func (e *Engine) persistHostAction(state *State, revision uint64, intent HostActionIntent, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	if state.abortRequested() && intent.Operation != HostActionTerminateAgent {
+	if state.abortRequested() && intent.Operation != HostActionTerminateAgent && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
 		return HostActionIntent{}, 0, validationError("run abort permits only outstanding effect reconciliation")
 	}
 	// Submit 之外的落账路径同样只经处置表：屏障在位时新的 HostAction
@@ -2355,13 +2430,7 @@ func (e *Engine) persistHostAction(state *State, revision uint64, intent HostAct
 	if _, exists := state.PendingHostActions[intent.ActionID]; exists {
 		return HostActionIntent{}, 0, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("host action %q already exists", intent.ActionID)}
 	}
-	if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
-		for _, existing := range state.PendingHostActions {
-			if existing.Adapter != nil && existing.Adapter.Operation == "op.candidate" && existing.Correlation == intent.Correlation {
-				return HostActionIntent{}, 0, validationError("candidate responsibility already has a pending execution or failure disposition")
-			}
-		}
-	}
+
 	state.PendingHostActions[intent.ActionID] = intent
 	commitRevision, err := e.commit(state, revision, expectedFingerprint)
 	if err != nil {
@@ -2469,6 +2538,18 @@ func validateAdapterPayload(schema authoring.SchemaID, label string, value map[s
 	}
 	var decodeErr error
 	switch schema {
+	case authoring.SchemaID("schema.workspace"):
+		if label == "adapter parameters" {
+			decodeErr = decode(&WorkspaceParameters{})
+		} else {
+			decodeErr = decode(&WorkspaceEvidence{})
+		}
+	case authoring.SchemaID("schema.cleanup"):
+		if label == "adapter parameters" {
+			decodeErr = decode(&CleanupParameters{})
+		} else {
+			decodeErr = decode(&WorkspaceCleanupReceipt{})
+		}
 	case authoring.SchemaID("schema.candidate.review-range"):
 		if label == "adapter parameters" {
 			decodeErr = decode(&CandidateParameters{})
@@ -2578,12 +2659,17 @@ func (e *Engine) Freshness(request RequestID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if state == nil {
+	return (Snapshot{Revision: revision, State: state}).Freshness(request)
+}
+
+// Freshness returns a pending request's token from this snapshot alone.
+func (s Snapshot) Freshness(request RequestID) (string, error) {
+	if s.State == nil {
 		return "", &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	ask, exists := state.PendingAsks[string(request)]
+	ask, exists := s.State.PendingAsks[string(request)]
 	if !exists {
-		if _, decided := state.Decisions[string(request)]; decided {
+		if _, decided := s.State.Decisions[string(request)]; decided {
 			return "", &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", request)}
 		}
 		return "", &RejectedError{Code: CodeUnknownRequest, Detail: fmt.Sprintf("request %q does not exist", request)}
@@ -2591,7 +2677,7 @@ func (e *Engine) Freshness(request RequestID) (string, error) {
 	if ask.Resolved {
 		return "", &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", request)}
 	}
-	return freshnessToken(revision, request), nil
+	return freshnessToken(s.Revision, request), nil
 }
 
 // hasOption 报告选项是否在落账选项集内。
@@ -2644,26 +2730,76 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 	if err := validateAdapterPayload(schema, "adapter parameters", normalized); err != nil {
 		return HostActionIntent{}, err
 	}
-	if operation == "op.candidate" && state.Validation != nil {
-		var p CandidateParameters
-		raw, _ := json.Marshal(normalized)
-		if err := json.Unmarshal(raw, &p); err != nil {
+	if nativeOperation(operation) {
+		if state.requirementChangePending() {
+			return HostActionIntent{}, validationError("native signing is frozen by requirement control")
+		}
+		switch operation {
+		case "op.candidate":
+			var p CandidateParameters
+			raw, _ := json.Marshal(normalized)
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return HostActionIntent{}, err
+			}
+			if p.Stage == "PROMOTION" {
+				if err := state.validateCurrentPromotion(p, e.cfg.Definition); err != nil {
+					return HostActionIntent{}, err
+				}
+			} else {
+				expected, ready, err := state.currentCandidateParameters(e.cfg.Definition)
+				if err != nil || !ready || digestOfCanonical(p) != digestOfCanonical(expected) {
+					return HostActionIntent{}, validationError("candidate parameters differ from current effect inputs")
+				}
+			}
+			correlation = candidateCorrelation(p)
+		case "op.workspace":
+			var p WorkspaceParameters
+			raw, _ := json.Marshal(normalized)
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return HostActionIntent{}, err
+			}
+			if !state.workspaceParametersCurrent(p, e.cfg.Definition) {
+				return HostActionIntent{}, validationError("workspace parameters differ from current registered inputs")
+			}
+			r := p.Resource
+			r.Identity, r.Status, r.MirrorDigest = "", "", ""
+			mirror := ""
+			if p.Manifest != nil {
+				mirror = BlackboxCasesDigest(state.RunID, *p.Manifest)
+			}
+			correlation = "workspace:" + digestOfCanonical(struct {
+				Resource GitResource
+				Mirror   string
+			}{r, mirror})
+		case "op.cleanup":
+			var p CleanupParameters
+			raw, _ := json.Marshal(normalized)
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return HostActionIntent{}, err
+			}
+			if !state.CleanupEligible(e.cfg.Definition) || !state.cleanupParametersCurrent(p) {
+				return HostActionIntent{}, validationError("cleanup parameters differ from its exact eligible resources")
+			}
+			targets := slices.Clone(p.Resources)
+			for i := range targets {
+				targets[i].Role, targets[i].Source, targets[i].Identity, targets[i].Status, targets[i].MirrorDigest = "", "", "", "", ""
+			}
+			slices.SortFunc(targets, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
+			correlation = "cleanup:" + digestOfCanonical(targets)
+		}
+		if err := state.admitNativeSigning(HostActionIntent{Correlation: correlation}); err != nil {
 			return HostActionIntent{}, err
 		}
-		expected, ready, err := state.currentCandidateParameters(e.cfg.Definition)
-		if err != nil || !ready {
-			return HostActionIntent{}, validationError("no current candidate effect is ready")
-		}
-		if digestOfCanonical(p) != digestOfCanonical(expected) {
-			return HostActionIntent{}, validationError("candidate parameters differ from current effect inputs")
-		}
-		normalized, err = normalizeHostActionParams(expected)
-		if err != nil {
-			return HostActionIntent{}, err
-		}
-		correlation = candidateCorrelation(p)
 	}
 	step := state.nextHostActionStep(e.cfg.Definition, operation)
+	if step == "" && nativeOperation(operation) {
+		for _, compiled := range e.cfg.Definition.Steps {
+			if owner, ok := compiled.Payload.(compiler.CompiledHostActionStep); ok && owner.Operation == operation {
+				step = compiled.Header.ID
+				break
+			}
+		}
+	}
 	adapter := &AdapterHostAction{Operation: operation, Schema: schema, Params: normalized}
 	action := fmt.Sprintf("hact:%s:%d", HostActionExecuteAdapterOperation, nextRevision)
 	return HostActionIntent{ActionID: action, Operation: HostActionExecuteAdapterOperation, Step: step, Adapter: adapter, PayloadDigest: digestOfCanonical(adapter), Correlation: strings.TrimSpace(correlation), Revision: nextRevision}, nil

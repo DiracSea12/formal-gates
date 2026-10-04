@@ -353,9 +353,12 @@ type RecoveryRecord struct {
 	Revision           uint64                 `json:"revision"`
 }
 
-// ReconciledEffect 记录 UNKNOWN 本地副作用已由外部事实满足后的结算。
-// 结算只提交结果，不再次执行原动作。
+// ReconciledEffect retains the disposition of a settled host responsibility.
+// Its original intent admits late evidence without reopening that responsibility.
 type ReconciledEffect struct {
+	Intent            *HostActionIntent     `json:"intent,omitempty"`
+	Promotion         *PromotionObservation `json:"promotion,omitempty"`
+	Resource          *ResourceObservation  `json:"resource,omitempty"`
 	UnknownReceipt    *HostActionReceipt    `json:"unknownReceipt,omitempty"`
 	ActionID          string                `json:"actionId"`
 	Operation         HostActionOperation   `json:"operation"`
@@ -484,24 +487,21 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	NativeRoot   string                 `json:"nativeRoot,omitempty"`
+	GitResources map[string]GitResource `json:"gitResources,omitempty"`
 	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
 	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
-	// PendingPromotion 是候选晋升的执行前意图：指向待组织的原生身份。组
-	// 织（squash/确认）先于引擎落账执行，意图是「一次执行正在进行」的持
-	// 久事实——需求变化屏障落账的同一事务撤销它（Phase A 停止 candidate
-	// promotion），RecordCandidatePromotion 消费它完成提交。
-	PendingPromotion string `json:"pendingPromotion,omitempty"`
 	// PromotedSnapshot 是已绑定晋升的候选快照身份（与 PromotedDigest 同
 	// 事务写入）；终态边界在两者绑定前保持等待。
 	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
 	// PromotedDigest 是晋升绑定的内容身份（原生树摘要）：与当前 wave 已
 	// 验证最终候选的 digest 相等才构成收口事实——晋升证明的是「这份已验
 	// 证内容」，不是任意一个原生身份。
-	PromotedDigest string `json:"promotedDigest,omitempty"`
-	// QAWorktree 是 QA 隔离工作区的登记事实（resolve==BaseSnapshot＋需求产
-	// 物修订核对由 facade 在登记前完成；物理建区归宿主）。最终路线不含黑盒
-	// 或黑盒用例集审过冻结时清空。
+	PromotedDigest     string                     `json:"promotedDigest,omitempty"`
+	CandidatePromotion *CandidatePromotionReceipt `json:"candidatePromotion,omitempty"`
+	// QAWorktree projects the active blackbox design role. GitResources owns
+	// the native registration and cleanup obligation after the projection clears.
 	QAWorktree       string                      `json:"qaWorktree,omitempty"`
 	Validation       *Validation                 `json:"validation,omitempty"`
 	DispatchBindings map[string]WorkBinding      `json:"dispatchBindings,omitempty"`

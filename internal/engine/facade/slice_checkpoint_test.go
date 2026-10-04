@@ -36,7 +36,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	options := sliceChildStart(master, "child", "lane-core", sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = base
 	options.Owner = owner
-	f, run, err := Start(options)
+	f, run, err := semanticValidationFacade(t, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,13 @@ func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
 			child := promotedSlice(t, mode, OwnerBinding{})
 			before := driverState(t, child)
 			wave := before.Validation.Waves[len(before.Validation.Waves)-1]
-			lastID := fmt.Sprintf("event-%d", child.seq)
+			var lastID string
+			var lastRevision uint64
+			for id, event := range before.Events {
+				if event.Acceptance.Revision > lastRevision {
+					lastID, lastRevision = id, event.Acceptance.Revision
+				}
+			}
 			child.drive()
 			state := driverState(t, child)
 			if state.Phase != runtime.PhaseSliceReady || child.run.Status != "SLICE_READY" {

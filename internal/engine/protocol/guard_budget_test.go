@@ -629,7 +629,10 @@ func TestValidationAskDigestBindsCommittedState(t *testing.T) {
 	if err := engine.refreshGuardBudget(state); err != nil {
 		t.Fatal(err)
 	}
-	rebindValidationAskSummaries(state)
+	rebindValidationAsks(state, 8)
+	if ask.Validation.StateRevision != 8 {
+		t.Fatalf("Ask revision = %d, want committed revision 8", ask.Validation.StateRevision)
+	}
 	rebound := state.validationRequestBasis(*ask.Validation)
 	if got := digestOfCanonical(rebound); got != ask.Validation.Digest {
 		t.Fatalf("digest mismatch after rebind: %s != %s", got, ask.Validation.Digest)

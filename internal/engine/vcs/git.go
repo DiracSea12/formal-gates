@@ -1,9 +1,4 @@
-// Package vcs 是 engine 侧的 Git 快照与提交操作面：值级镜像 internal/validate
-// vcs.go 的 git 分支语义（快照身份、就绪检查、祖先、区间计数、squash），并补
-// 候选 freeze/promotion 所需的 track/commit/diff（legacy 无对应实现，宿主侧
-// 唯一先例是 internal/validate canary.go 的 git add --all＋commit）。protocol
-// 层零 exec：本包经 Runner 注入（生产 exec、测试替身），engine 只消费结果。
-// SVN/P4 不在本阶段。
+// Package vcs owns native Git operations and their observed content identities.
 package vcs
 
 import (
@@ -17,8 +12,8 @@ import (
 	"strings"
 )
 
-// Runner 执行一条工作区命令并返回 stdout（与 legacy vcs.go 的
-// nativeCommandRunner 同形状）。dir 允许为空表示当前目录。
+// Runner executes a native command in its workspace and returns stdout.
+// An empty directory selects the calling process working directory.
 type Runner interface {
 	Run(dir, command string, args ...string) (string, error)
 }
@@ -28,6 +23,9 @@ type ExecRunner struct{}
 
 func (ExecRunner) Run(dir, command string, args ...string) (string, error) {
 	cmd := exec.Command(command, args...)
+	if cmd.Err != nil {
+		return "", fmt.Errorf("%s: %w", command, cmd.Err)
+	}
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -236,7 +234,7 @@ func (p *Provider) TrackAll() error {
 	return nil
 }
 
-// Commit 以 message 提交暂存区（与 TrackAll 配对使用）。
+// Commit records the exact staged tree with its bound operation message.
 func (p *Provider) Commit(message string) error {
 	if _, err := p.runner.Run(p.root, "git", "commit", "-m", message); err != nil {
 		return fmt.Errorf("cannot commit: %w", err)
@@ -262,7 +260,7 @@ func (p *Provider) verifyRoot() error {
 	if err != nil {
 		return fmt.Errorf("cannot resolve git working root (the directory may not be a git working copy): %w", err)
 	}
-	if !samePath(resolved, p.root) {
+	if !SamePath(resolved, p.root) {
 		return fmt.Errorf("git working root %q does not match repository root %q", resolved, p.root)
 	}
 	return nil
@@ -301,20 +299,35 @@ func isRuntimeStatusPath(path string) bool {
 	return false
 }
 
-// samePath 比较两个路径的绝对规范化形态（符号链接解析后；Windows 大小写不
-// 敏感）。
-func samePath(a, b string) bool {
-	a, b = absPath(a), absPath(b)
-	if resolved, err := filepath.EvalSymlinks(a); err == nil {
-		a = resolved
+// SamePath compares native directory identity, including a missing leaf whose
+// existing parent resolves through a symlink. Cleanup uses it after deletion.
+func SamePath(a, b string) bool {
+	actual, actualErr := os.Stat(a)
+	bound, boundErr := os.Stat(b)
+	if actualErr == nil && boundErr == nil && os.SameFile(actual, bound) {
+		return true
 	}
-	if resolved, err := filepath.EvalSymlinks(b); err == nil {
-		b = resolved
-	}
+	a, b = canonicalPath(a), canonicalPath(b)
 	if os.PathSeparator == '\\' {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+func canonicalPath(path string) string {
+	path = absPath(path)
+	parent := path
+	for {
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			suffix, _ := filepath.Rel(parent, path)
+			return filepath.Join(resolved, suffix)
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return path
+		}
+		parent = next
+	}
 }
 
 func absPath(path string) string {

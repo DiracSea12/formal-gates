@@ -51,7 +51,7 @@ func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 	var detail any
 	switch r.Kind {
 	case "RETRY":
-		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
 			_, _, max := s.candidateFailureRoute(intent)
 			detail = struct {
 				Intent      HostActionIntent
@@ -147,16 +147,15 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 	return face
 }
 
-// rebindValidationAskSummaries 在提交点把一切未决 validation Ask 的摘要与
-// digest 重算为「已提交状态」：同事务内的签发/额度投影更新会改变摘要内容，
-// 不重算会使 DECIDE 的摘要 digest 重核（acceptValidationDecision）与落账
-// digest 永不匹配。StateRevision 语义不变（仍为 Ask 落账代数）。
-func rebindValidationAskSummaries(s *State) {
+// rebindValidationAsks binds every unresolved validation Ask to the committed
+// revision and its decision basis after dispatch and allowance projection.
+func rebindValidationAsks(s *State, revision uint64) {
 	for id, ask := range s.PendingAsks {
 		if ask.Resolved || ask.Validation == nil {
 			continue
 		}
 		summary := s.validationRequestBasis(*ask.Validation)
+		ask.Validation.StateRevision = revision
 		ask.Validation.Summary = summary
 		ask.Validation.Digest = digestOfCanonical(summary)
 		s.PendingAsks[id] = ask
@@ -179,7 +178,7 @@ func (s *State) ensureValidationAsk(r ValidationRequest, nextRevision uint64) bo
 		if a.Resolved {
 			continue
 		}
-		if a.Validation.Digest == r.Digest && a.Validation.StateRevision >= nextRevision-1 {
+		if a.Validation.Digest == r.Digest {
 			return false
 		}
 		superseded = append(superseded, id)
@@ -210,7 +209,7 @@ func (e *Engine) reconcileWorkerRetryAsks(s *State) bool {
 		if ask.Resolved || r == nil || r.Kind != "RETRY" || current[r.Target] {
 			continue
 		}
-		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
 			continue
 		}
 		ask.Resolved = true
@@ -382,9 +381,9 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 		}
 		return validationError("budget disposition accepts only continue, retry, skip or abort")
 	case "RETRY":
-		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
 			route, used, max := s.candidateFailureRoute(intent)
-			if route.Action != RecoveryResumeAttempt || used < max || s.candidateRetryGranted(intent.Correlation) {
+			if (route.Action != RecoveryAsk && (route.Action != RecoveryResumeAttempt || used < max)) || s.candidateRetryGrantTarget(intent.Correlation) != "" {
 				return validationError("candidate retry is not an unused exhausted responsibility")
 			}
 			return nil

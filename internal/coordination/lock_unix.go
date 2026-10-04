@@ -24,3 +24,5 @@ func lockFileBlocking(f *os.File) error {
 func isLockHeld(err error) bool {
 	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
+
+func initializeLockFile(f *os.File) error { return nil }

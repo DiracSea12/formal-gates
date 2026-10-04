@@ -349,3 +349,44 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 		t.Fatalf("pure P2 repair or final FULL consumed extra business waves: %d", counted)
 	}
 }
+
+// Explicit carry creates a current FULL obligation without changing the
+// original worker results, native delivery proof or completed-wave history.
+func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
+	root := t.TempDir()
+	identities := snapshotRepoCommits(t, root, "implementation", "review input")
+	d := completePromotionPipeline(t, nil, root, identities[0])
+	final, err := d.f.PrepareCandidate("confirmed delivery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.run = run
+	old, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := old.State.CandidatePromotion
+	waves := len(old.State.Validation.Waves)
+	confirmValidationWork(d, "")
+	d.drive()
+	current, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.State.Validation.Waves) != waves+1 || current.State.Validation.Waves[0].Status != "COMPLETE" || !current.State.FinalValidationComplete(d.f.definition) {
+		t.Fatalf("current FULL/history lost after carry: %+v", current.State.Validation)
+	}
+	if !reflect.DeepEqual(current.State.CandidatePromotion, original) || current.State.PromotedSnapshot != final {
+		t.Fatal("carry changed an executed native delivery fact")
+	}
+	if count, err := d.f.vcs.CommitCount(identities[0], final); err != nil || count != 1 {
+		t.Fatalf("carry reorganized delivery: %d %v", count, err)
+	}
+	if current.State.Validation.Waves[waves].Generation == old.State.Validation.Waves[0].Generation {
+		t.Fatal("carry reused the historical wave identity")
+	}
+}

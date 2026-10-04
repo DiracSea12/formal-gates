@@ -20,12 +20,12 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	}
 	return key
 }
-func (s *State) validationRequiredTask(key runtime.TaskKey, cd *compiler.CompiledDefinition) runtime.TaskKey {
+func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave, cd *compiler.CompiledDefinition) runtime.TaskKey {
 	if s.validationRole(key, cd) == "engine.development.batch" {
 		return key
 	}
 	for action, pending := range s.PendingActions {
-		if !s.prewaveDispatchCurrent(action, cd) {
+		if !s.prewaveDispatchCurrent(action, cd) || !s.sameValidationDuty(s.DispatchBindings[action], wave) {
 			continue
 		}
 		if pending.Task.Step == key.Step && s.validationMode(pending.Task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(pending.Task).Scope) == lastScopePart(key.Scope)) {
@@ -33,7 +33,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, cd *compiler.Compile
 		}
 	}
 	for task, attempt := range s.EndedAttempts {
-		if !s.endedWorkCurrent(attempt, cd) {
+		if !s.endedWorkCurrent(attempt, cd) || attempt.Work != nil && !s.sameValidationDuty(*attempt.Work, wave) {
 			continue
 		}
 		if task.Step == key.Step && s.validationMode(task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(task).Scope) == lastScopePart(key.Scope)) {
@@ -44,7 +44,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, cd *compiler.Compile
 		current := true
 		for _, binding := range s.DispatchBindings {
 			if binding.Task == required {
-				current = s.prewaveWorkCurrent(binding, cd)
+				current = s.prewaveWorkCurrent(binding, cd) && s.sameValidationDuty(binding, wave)
 				break
 			}
 		}
@@ -60,6 +60,23 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, cd *compiler.Compile
 		}
 	}
 	return key
+}
+
+// sameValidationDuty distinguishes a carried frozen target from a new scope
+// on the same candidate. It does not grant requirement carry authority.
+func (s *State) sameValidationDuty(binding WorkBinding, current *ValidationWave) bool {
+	if binding.WaveID == "" || current == nil {
+		return true
+	}
+	original := s.validationWave(binding.WaveID)
+	if original == nil || original.Candidate != current.Candidate || original.Scope != current.Scope {
+		return false
+	}
+	target := original.Targets[binding.Task.String()]
+	if target == nil {
+		target = original.Targets[s.sourceValidationTask(binding.Task).String()]
+	}
+	return target != nil && (target.Kind != "QA" || sameWaveCases(original, current, target.Mode))
 }
 func lastScopePart(scope string) string {
 	for i := len(scope) - 1; i >= 0; i-- {

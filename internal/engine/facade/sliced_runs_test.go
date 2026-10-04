@@ -143,7 +143,7 @@ func driverState(t *testing.T, d *validationDriver) *protocol.State {
 // 夹具 runner、受理 revision 与 master 当前确认对齐）。
 func sliceChildStart(d *validationDriver, childRunID, sliceID string, receipt IntakeConfirmationReceipt) StartOptions {
 	return StartOptions{Capacity: 16, Root: d.f.root, VCSRunner: d.f.vcsRunner, Request: StartRequest{
-		RunID: childRunID, Route: "regular", BaseSnapshot: frozenSnapshot,
+		RunID: childRunID, Route: "regular", Provider: d.host(), BaseSnapshot: frozenSnapshot,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt, MasterRunID: d.f.runID, SliceID: sliceID,
 	}, Admission: &d.f.admission}
@@ -371,7 +371,7 @@ func TestSliceChildStartValidations(t *testing.T) {
 // 确认后推进开发段；继承拓扑不可重切。
 func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	master := splitMaster(t)
-	f, run, err := Start(sliceChildStart(master, "child-lane-core", "lane-core", sliceChildReceipt(master.revision)))
+	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-lane-core", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
@@ -444,7 +444,7 @@ func operatorBoundary(t *testing.T, d *validationDriver) string {
 // 计划提示。
 func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 	master := splitMaster(t)
-	f, run, err := Start(sliceChildStart(master, "child-boundary", "lane-core", sliceChildReceipt(master.revision)))
+	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-boundary", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 	for _, mode := range []string{"full", "custom"} {
 		t.Run(mode, func(t *testing.T) {
 			master := splitMaster(t)
-			f, run, err := Start(sliceChildStart(master, "child-dispatch-"+mode, "lane-core", sliceChildReceipt(master.revision)))
+			f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-dispatch-"+mode, "lane-core", sliceChildReceipt(master.revision)))
 			if err != nil {
 				t.Fatalf("slice child start: %v", err)
 			}
@@ -575,7 +575,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 // 为空）可区分拒绝、零写；摘要与提案不一致同样拒绝。
 func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
 	master := splitMaster(t)
-	f, run, err := Start(sliceChildStart(master, "child-unplanned", "lane-core", sliceChildReceipt(master.revision)))
+	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-unplanned", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 // 划重选照常（用户决定本身即确认）。
 func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	master := splitMaster(t)
-	f, run, err := Start(sliceChildStart(master, "child-plan-swap", "lane-core", sliceChildReceipt(master.revision)))
+	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-plan-swap", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
@@ -819,7 +819,7 @@ func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
 	for _, mode := range []string{"full", "custom"} {
 		t.Run(mode, func(t *testing.T) {
 			master := splitMaster(t)
-			f, run, err := Start(sliceChildStart(master, "child-gates-"+mode, "lane-core", sliceChildReceipt(master.revision)))
+			f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-gates-"+mode, "lane-core", sliceChildReceipt(master.revision)))
 			if err != nil {
 				t.Fatalf("slice child start: %v", err)
 			}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "6",
+  "version": "8",
   "stateSchemaVersion": "1",
   "writer": "engine",
   "transactionOwner": "validate",
@@ -17,7 +17,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -33,7 +33,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "entry.parse"
       ],
@@ -66,7 +66,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "entry.persist"
       ],
@@ -100,7 +100,7 @@
       "nodeId": "review",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.worker"
       ],
@@ -134,7 +134,7 @@
       "nodeId": "validation",
       "ordinal": 4,
       "kind": "HOST_ACTION",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -153,18 +153,48 @@
       },
       "payload": {
         "handler": "engine.candidate.review-range",
-        "boundary": "AGENT_DISPATCH_API",
+        "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
         "operation": "op.candidate",
         "schema": "schema.candidate.review-range",
         "timeoutNs": 60000000000
       }
     },
     {
-      "id": "development.repair",
+      "id": "cleanup.materialize",
       "nodeId": "validation",
       "ordinal": 5,
+      "kind": "HOST_ACTION",
+      "definitionVersion": "8",
+      "dependencies": [
+        "review.readiness"
+      ],
+      "authority": "ENGINE",
+      "runner": "HOST_ADAPTER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "review.readiness",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.cleanup",
+        "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
+        "operation": "op.cleanup",
+        "schema": "schema.cleanup",
+        "timeoutNs": 60000000000
+      }
+    },
+    {
+      "id": "development.repair",
+      "nodeId": "validation",
+      "ordinal": 6,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -198,9 +228,9 @@
     {
       "id": "development.worker",
       "nodeId": "validation",
-      "ordinal": 6,
+      "ordinal": 7,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -234,9 +264,9 @@
     {
       "id": "qa.design",
       "nodeId": "validation",
-      "ordinal": 7,
+      "ordinal": 8,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -270,9 +300,9 @@
     {
       "id": "qa.execution",
       "nodeId": "validation",
-      "ordinal": 8,
+      "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -306,9 +336,9 @@
     {
       "id": "qa.review",
       "nodeId": "validation",
-      "ordinal": 9,
+      "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -343,9 +373,9 @@
     {
       "id": "validation.gate",
       "nodeId": "validation",
-      "ordinal": 10,
+      "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "6",
+      "definitionVersion": "8",
       "dependencies": [
         "review.readiness"
       ],
@@ -375,6 +405,36 @@
         "retry": {
           "maxAttempts": 2
         }
+      }
+    },
+    {
+      "id": "workspace.materialize",
+      "nodeId": "validation",
+      "ordinal": 12,
+      "kind": "HOST_ACTION",
+      "definitionVersion": "8",
+      "dependencies": [
+        "review.readiness"
+      ],
+      "authority": "ENGINE",
+      "runner": "HOST_ADAPTER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "review.readiness",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.workspace",
+        "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
+        "operation": "op.workspace",
+        "schema": "schema.workspace",
+        "timeoutNs": 60000000000
       }
     }
   ]

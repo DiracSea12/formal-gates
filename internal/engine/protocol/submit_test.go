@@ -345,3 +345,55 @@ func reopenEngine(t *testing.T, dir string) *Engine {
 	}
 	return engine
 }
+
+// Snapshot token queries remain read-only and retain the supplied revision
+// even when a later request commits through the same engine.
+func TestSnapshotFreshnessRetainsItsRevision(t *testing.T) {
+	engine, _, _, _ := preparedEngine(t)
+	fp := fingerprintOf(t, engine)
+	accepted, err := engine.Submit(cancelAbortRequest(t, "original-request"), fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := engine.LoadMustSucceed(t)
+	if _, err := engine.Submit(cancelAbortRequest(t, "parallel-request"), fp); err != nil {
+		t.Fatal(err)
+	}
+	before := engine.LoadMustSucceed(t)
+	token, err := old.Freshness("original-request")
+	if err != nil || token != accepted.FreshnessToken {
+		t.Fatalf("snapshot token = %q, %v", token, err)
+	}
+	current, err := engine.Freshness("original-request")
+	if err != nil || current == token {
+		t.Fatal("current token did not advance")
+	}
+	for _, request := range []RequestID{"original-request", "unknown"} {
+		fromSnapshot, snapshotErr := before.Freshness(request)
+		fromEngine, engineErr := engine.Freshness(request)
+		if fromSnapshot != fromEngine || !reflect.DeepEqual(snapshotErr, engineErr) {
+			t.Fatal("engine and snapshot freshness semantics differ")
+		}
+	}
+	if _, err := (Snapshot{}).Freshness("original-request"); rejectionCode(t, err) != CodeNotInitialized {
+		t.Fatal("empty snapshot lost not-initialized error")
+	}
+	decision, err := NewDecideEvent("accepted-decision", "original-request", current, "cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(decision, fp); err != nil {
+		t.Fatal(err)
+	}
+	resolved := engine.LoadMustSucceed(t)
+	if _, err := resolved.Freshness("original-request"); rejectionCode(t, err) != CodeRequestResolved {
+		t.Fatal("resolved snapshot retained a token")
+	}
+	if token, err := old.Freshness("original-request"); err != nil || token != accepted.FreshnessToken {
+		t.Fatal("decision changed the earlier snapshot")
+	}
+	after := engine.LoadMustSucceed(t)
+	if resolved.Revision != after.Revision || !reflect.DeepEqual(resolved.State, after.State) {
+		t.Fatal("snapshot query changed durable state")
+	}
+}

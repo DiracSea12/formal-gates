@@ -50,8 +50,8 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 		}
 	case "RETRY":
 		options[0].Label = "One additional execution attempt"
-		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
-			if s.candidateRetryGranted(intent.Correlation) {
+		if intent, ok := s.PendingHostActions[r.Target]; ok && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+			if s.candidateRetryGrantTarget(intent.Correlation) != "" {
 				options = nil
 			}
 			r.Remedies = []string{"RETRY", "REQUEST_REQUIREMENT_CHANGE", "ABORT"}
@@ -88,6 +88,10 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 		options = append(options, AskOption{ID: "requirement", Label: "Revise the requirement"}, AskOption{ID: "abort", Label: "Abort this run"})
 	}
 	options = append(options, AskOption{ID: "decline", Label: "Keep the obligation blocked"})
+	if s.abortRequested() && s.cleanupRetryRequest(&r) {
+		options = slices.DeleteFunc(options, func(o AskOption) bool { return o.ID != "approve" && o.ID != "decline" })
+		r.Remedies = []string{"RETRY"}
+	}
 	return r, options
 }
 
