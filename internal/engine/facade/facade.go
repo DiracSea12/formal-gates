@@ -1175,6 +1175,10 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
 	accepted, recorded, err := f.engine.RecordedEvent(event)
+	if isMissingEngineState(err) {
+		accepted, err = f.replayTerminalEvent(event)
+		recorded = err == nil
+	}
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1195,14 +1199,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
-		var rejected *protocol.RejectedError
-		if !errors.As(err, &rejected) || rejected.Code != protocol.CodeNotInitialized {
-			return protocol.Acceptance{}, Run{}, err
-		}
-		acceptance, err = f.replayTerminalEvent(event)
-		if err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
+		return protocol.Acceptance{}, Run{}, err
 	}
 	run, err := f.projectOrSummary()
 	return acceptance, run, err

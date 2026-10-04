@@ -69,14 +69,14 @@ func (s *State) sameValidationDuty(binding WorkBinding, current *ValidationWave)
 		return true
 	}
 	original := s.validationWave(binding.WaveID)
-	if original == nil || original.Candidate != current.Candidate || original.Scope != current.Scope {
+	if original == nil || original.Candidate != current.Candidate {
 		return false
 	}
 	target := original.Targets[binding.Task.String()]
 	if target == nil {
 		target = original.Targets[s.sourceValidationTask(binding.Task).String()]
 	}
-	return target != nil && (target.Kind != "QA" || sameWaveCases(original, current, target.Mode))
+	return target != nil && (target.Kind != "QA" || original.Scope == current.Scope && sameWaveCases(original, current, target.Mode))
 }
 func lastScopePart(scope string) string {
 	for i := len(scope) - 1; i >= 0; i-- {
@@ -177,10 +177,14 @@ func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current 
 		return false
 	}
 	for _, previous := range prior.Targets {
-		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) || !s.validationWorkCarryAuthorized(previous.ResultAction, previous.Task) {
+		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
 			continue
 		}
-		if target.Kind == "QA" && !sameWaveCases(prior, current, target.Mode) {
+		_, responsibility := s.targetResponsibility(prior, previous)
+		if !s.validationWorkCarryAuthorized(responsibility.ResultAction, responsibility.Task) {
+			continue
+		}
+		if target.Kind == "QA" && (prior.Scope != current.Scope || !sameWaveCases(prior, current, target.Mode)) {
 			return false
 		}
 		return s.carryValidationTarget(target, previous, current)
@@ -194,22 +198,14 @@ func (s *State) carryRequirementTargets(current *ValidationWave) bool {
 		if target.Status != "PENDING" && target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
 			continue
 		}
-		for i := len(s.Validation.Waves) - 1; i >= 0; i-- {
-			prior := &s.Validation.Waves[i]
-			if prior.ID == current.ID {
-				continue
-			}
-			if prior.Generation == current.Generation {
-				if previous := prior.Targets[target.Task.String()]; previous != nil && prior.Candidate == current.Candidate && (previous.Status == "PASS" || previous.Status == "FAIL" || previous.Status == "AUTHORIZED_SKIP") {
-					changed = s.carryValidationTarget(target, previous, current) || changed
-				}
-				continue
-			}
-
-			if s.carryRequirementTarget(target, prior, current) {
-				changed = true
-			}
-			break
+		prior, previous := s.targetResponsibility(current, target)
+		if prior == current || prior.Candidate != current.Candidate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
+			continue
+		}
+		if prior.Generation != current.Generation {
+			changed = s.carryRequirementTarget(target, prior, current) || changed
+		} else if target.Kind != "QA" || prior.Scope == current.Scope && sameWaveCases(prior, current, target.Mode) {
+			changed = s.carryValidationTarget(target, previous, current) || changed
 		}
 	}
 	return changed

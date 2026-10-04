@@ -197,18 +197,21 @@ func (s *State) inheritedExecutionRecord(wave *ValidationWave, mode coverage.Rev
 }
 
 func (s *State) carryExecutionScope(target *ValidationTarget, previous, current *ValidationWave) {
-	if target.Kind != "QA" || current.Scope != coverage.ScopeAffected || previous.Scope != current.Scope || previous.Candidate != current.Candidate || !sameWaveCases(previous, current, target.Mode) || slices.Contains(s.requiredWorkTasks(), target.Task) {
+	if target.Kind != "QA" || current.Scope != coverage.ScopeAffected || slices.Contains(s.requiredWorkTasks(), target.Task) {
 		return
 	}
-	for _, old := range previous.Targets {
-		if old.Mode != target.Mode || old.Kind != "QA" {
-			continue
+	original, old := s.targetResponsibility(current, target)
+	if original == current {
+		for _, prior := range previous.Targets {
+			if prior.Mode == target.Mode && prior.Kind == "QA" {
+				original, old = s.targetResponsibility(previous, prior)
+				break
+			}
 		}
-		if previous.Generation != current.Generation && !s.validationWorkCarryAuthorized(old.ResultAction, old.Task) {
-			return
-		}
-		target.RequiredCases = slices.Clone(old.RequiredCases)
-		target.ScopeReason = old.ScopeReason
+	}
+	if original == current || original.Scope != current.Scope || original.Candidate != current.Candidate || !sameWaveCases(original, current, target.Mode) || original.Generation != current.Generation && !s.validationWorkCarryAuthorized(old.ResultAction, old.Task) {
 		return
 	}
+	target.RequiredCases = slices.Clone(old.RequiredCases)
+	target.ScopeReason = old.ScopeReason
 }

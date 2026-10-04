@@ -145,8 +145,8 @@ func (s *State) carryValidationTarget(target, previous *ValidationTarget, curren
 	return true
 }
 
-// targetResponsibility follows a repair-derived verdict back to the original
-// gate duty. The frozen reference identifies responsibility; it grants no reuse.
+// targetResponsibility locates the frozen duty behind a current projection or
+// repair-derived verdict. Identity lookup grants no result or scope reuse.
 func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTarget) (*ValidationWave, *ValidationTarget) {
 	if target.GateImpact != nil {
 		if source := s.validationWave(target.GateImpact.SourceWave); source != nil {
@@ -159,6 +159,9 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 	}
 	binding, known := s.DispatchBindings[target.ResultAction]
 	if !known {
+		if original := s.validationWaveForTask(target.Task); original != nil && original.ID != wave.ID {
+			return s.targetResponsibility(original, original.Targets[target.Task.String()])
+		}
 		return wave, target
 	}
 	source := s.sourceValidationTask(binding.Task)
@@ -171,6 +174,11 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 			if prior.Kind == target.Kind && prior.Gate == target.Gate && prior.Mode == target.Mode && prior.ResultAction != target.ResultAction {
 				return s.targetResponsibility(original, prior)
 			}
+		}
+	}
+	if original := s.validationWave(binding.WaveID); original != nil {
+		if prior := original.Targets[binding.Task.String()]; prior != nil {
+			return original, prior
 		}
 	}
 	return wave, target

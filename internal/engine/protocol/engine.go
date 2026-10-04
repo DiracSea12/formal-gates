@@ -363,7 +363,7 @@ func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) (bool, er
 		if !ok {
 			return false, validationError("held effect has no original intent")
 		}
-		applicable := state.NativeActionCurrent(intent, e.cfg.Definition)
+		applicable := state.nativeEffectApplicable(intent, e.cfg.Definition)
 		if err := e.applyNativeReceipt(state, intent, state.HostActionReceipts[actionID]); err != nil {
 			return false, err
 		}
@@ -1038,8 +1038,11 @@ func (e *Engine) RecordedEvent(ev Event) (Acceptance, bool, error) {
 		return Acceptance{}, false, err
 	}
 	_, state, err := e.load()
-	if err != nil || state == nil {
+	if err != nil {
 		return Acceptance{}, false, err
+	}
+	if state == nil {
+		return Acceptance{}, false, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
 	record, seen := state.Events[string(ev.ID)]
 	if !seen {
