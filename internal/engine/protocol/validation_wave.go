@@ -659,9 +659,9 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 	}
 	// Settlement belongs to the current adjudicating projection or an unfinished
 	// original repair. Replacement tasks retain their source wave as evidence.
-	current := w == s.currentValidationWave() && w.Generation == s.Validation.Generation && w.RequirementRevision == s.Validation.RequirementRevision && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE")
+	currentProjection := w == s.currentValidationWave() && w.Generation == s.Validation.Generation && w.RequirementRevision == s.Validation.RequirementRevision && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE")
 	pending := s.validationRepairPending(w) && s.developmentResultRecord(w.Repair.Task) == nil
-	if !current && !pending || !s.validationFindingsAdjudicated(w) {
+	if !currentProjection && !pending || !s.validationFindingsAdjudicated(w) {
 		return false, nil
 	}
 	problems := []string{}
