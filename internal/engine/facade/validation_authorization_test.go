@@ -1152,7 +1152,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 				}
 			}
 			if action != "" {
-				if !reflect.DeepEqual(before.State.SpawnReceipts[action], after.State.SpawnReceipts[action]) || !reflect.DeepEqual(before.State.DispatchBindings[action], after.State.DispatchBindings[action]) || before.State.IssueRevisions[action] != after.State.IssueRevisions[action] {
+				if !reflect.DeepEqual(before.State.SpawnReceipts[action], after.State.SpawnReceipts[action]) || !reflect.DeepEqual(before.State.DispatchBindings[action], after.State.DispatchBindings[action]) || before.State.DispatchIssueRevisions[action] != after.State.DispatchIssueRevisions[action] {
 					t.Fatal("replacement rewrote actual dispatch identity or receipt")
 				}
 				if life == "completed" {
@@ -1342,7 +1342,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.drive()
 	after := authorizationSnapshot(d)
 	actual, actualInput := d.action("engine.repair")
-	if actual != repair || !reflect.DeepEqual(actualInput, input) || after.State.DispatchBindings[repair] != before.State.DispatchBindings[repair] || after.State.IssueRevisions[repair] != before.State.IssueRevisions[repair] || !reflect.DeepEqual(after.State.PendingAsks[ask.RequestID], before.State.PendingAsks[ask.RequestID]) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
+	if actual != repair || !reflect.DeepEqual(actualInput, input) || after.State.DispatchBindings[repair] != before.State.DispatchBindings[repair] || after.State.DispatchIssueRevisions[repair] != before.State.DispatchIssueRevisions[repair] || !reflect.DeepEqual(after.State.PendingAsks[ask.RequestID], before.State.PendingAsks[ask.RequestID]) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
 		t.Fatal("fresh QA result moved an already signed repair, request or decision")
 	}
 	result := gateRepairResult(input)
@@ -1522,7 +1522,7 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	ask := d.validationAsk("QA_RETRY")
 	event := decideValidation(d, ask, "approve", blackInput.Binding.Task.String())
 	after := authorizationSnapshot(d)
-	if !reflect.DeepEqual(d.run.PendingActions[white], whitePending) || !reflect.DeepEqual(d.run.ValidationInputs[white], whiteInput) || !reflect.DeepEqual(before.State.SpawnReceipts[white], after.State.SpawnReceipts[white]) || before.State.DispatchBindings[white] != after.State.DispatchBindings[white] || before.State.IssueRevisions[white] != after.State.IssueRevisions[white] {
+	if !reflect.DeepEqual(d.run.PendingActions[white], whitePending) || !reflect.DeepEqual(d.run.ValidationInputs[white], whiteInput) || !reflect.DeepEqual(before.State.SpawnReceipts[white], after.State.SpawnReceipts[white]) || before.State.DispatchBindings[white] != after.State.DispatchBindings[white] || before.State.DispatchIssueRevisions[white] != after.State.DispatchIssueRevisions[white] {
 		t.Fatal("selected QA retry replaced unselected QA's actual running identity, input or receipt")
 	}
 	if _, obsolete := after.State.ObsoleteActions[white]; obsolete {
