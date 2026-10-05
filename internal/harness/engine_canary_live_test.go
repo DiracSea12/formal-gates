@@ -3,7 +3,7 @@
 package harness
 
 // Engine canary — one real-host pass of the candidate engine over a real Git
-// repository on the no-split regular route, covering at least one FAIL ->
+// repository on regular no-split or ordinary split routes. No-split covers FAIL ->
 // repair -> new candidate -> revalidation -> terminal cycle. Skipped unless
 // FORMAL_GATES_ENGINE_CANARY=1, because every dispatched turn is a real host
 // call with real spend: the gate exists so no ordinary test run ever spends
@@ -17,7 +17,7 @@ package harness
 //
 // Bounded spend: each dispatch gets at most three turns (answer-shape
 // refusals consume another turn), the repair loop is authorized at most once,
-// the whole pass has a forty-minute budget, and any unexpected Ask/Wait
+// the whole pass has a forty-minute budget, and any unexpected Ask
 // boundary fails the pass with the run projection dumped. Every spent turn
 // prints its provider, session identity and native usage. A typed event the
 // engine rejects fails the pass outright — no reshaped retries over the gate.
@@ -50,17 +50,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
@@ -151,6 +155,9 @@ type canaryObservation struct {
 type canaryMaterials struct {
 	Role                string                    `json:"role"`
 	ActionID            string                    `json:"actionId"`
+	RunID               string                    `json:"runId"`
+	Slice               string                    `json:"slice,omitempty"`
+	Pending             *protocol.PendingAction   `json:"pending,omitempty"`
 	ReviewAction        string                    `json:"reviewAction,omitempty"`
 	RequirementPath     string                    `json:"requirementPath"`
 	RequirementRevision string                    `json:"requirementRevision"`
@@ -161,7 +168,6 @@ type canaryMaterials struct {
 // engineCanary is the host execution bridge and user stand-in for one pass.
 type engineCanary struct {
 	t              *testing.T
-	f              *facade.Facade
 	binary, home   string
 	run            facade.Run
 	project        string
@@ -174,6 +180,14 @@ type engineCanary struct {
 	approvalInput  *bufio.Reader
 	approvalOutput io.Writer
 	execute        func(any, string, bool) (map[string]any, error)
+	approvalMu     *sync.Mutex
+	callContext    context.Context
+	stopCalls      context.CancelFunc
+	worker         bool
+	transcript     string
+	split          bool
+	masterPlan     *protocol.GranularityReview
+	slice          string
 
 	revision  string // confirmed requirement revision (bare hex)
 	doc       []byte
@@ -286,11 +300,6 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
 	c.install(base, receipt)
-	f, err := facade.Open(c.project, "engine-canary")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.f = f
 	c.drive()
 	c.loop()
 	c.assertTerminal(base, dir)
@@ -301,7 +310,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 // nothing exposes the seeded defect before validation runs.
 func (c *engineCanary) buildFixtureProject() string {
 	c.t.Helper()
-	c.git("init", "--initial-branch=main", "--quiet")
+	c.initFixtureRepository()
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(c.project, name), []byte(content), 0o600); err != nil {
 			c.t.Fatal(err)
@@ -316,44 +325,152 @@ func (c *engineCanary) buildFixtureProject() string {
 	return c.git("rev-parse", "HEAD")
 }
 
-// loop is the boundary dispatcher: Drive, then answer whatever boundary the
-// engine projects until the run completes. Completion is only ever reached
-// through Drive, and drive fails the pass on any error — so the terminal
-// Drive's nil error (its pre-transition identity and clean-tree seal) is
-// asserted, not assumed.
+// The controller alone mutates projections and submits results. Workers carry
+// one issued run snapshot and return through the same public submission path.
 func (c *engineCanary) loop() {
 	c.t.Helper()
-	for c.run.Status != "COMPLETE" {
+	masterID := c.currentRunID()
+	runs := map[string]facade.Run{masterID: c.run}
+	active := map[string]bool{}
+	completed := make(chan canaryCompletion)
+	c.approvalMu = &sync.Mutex{}
+	c.callContext, c.stopCalls = context.WithCancel(context.Background())
+	defer c.stopCalls()
+	accept := func(done canaryCompletion) {
+		c.run = c.readRunID("show", done.runID)
+		delete(active, done.runID+"/"+done.actionID)
+		if done.transcript != "" {
+			c.captureDispatchLifecycle(done.actionID, done.transcript)
+		}
+		maps.Copy(c.caseArgs, done.caseArgs)
+		maps.Copy(c.caseTests, done.caseTests)
+		if done.event.Result != nil && done.event.Result.Review != nil && done.event.Result.Review.GranularityReview != nil {
+			c.masterPlan = done.event.Result.Review.GranularityReview
+		}
+		c.submit(done.event)
+		c.drive()
+		if c.run.Status == "SLICE_READY" {
+			frozen, _ := json.MarshalIndent(c.run, "", "  ")
+			if err := os.WriteFile(filepath.Join(c.jobs, c.run.RunID, "checkpoint.json"), frozen, 0600); err != nil {
+				c.fail("checkpoint evidence: %v", err)
+			}
+			before := c.run
+			c.drive()
+			if c.run.Revision != before.Revision || !canaryValuesEqual(c.run.SliceReceipt, before.SliceReceipt) {
+				c.fail("slice checkpoint replay changed frozen receipt")
+			}
+		}
+		runs[done.runID] = c.run
+		if done.runID != masterID {
+			c.run = c.readRunID("drive", masterID)
+			runs[masterID] = c.run
+		}
+	}
+	for runs[masterID].Status != "COMPLETE" {
+		if c.callContext.Err() != nil {
+			if len(active) == 0 {
+				c.fail("host call authorization stopped the pass")
+			}
+			accept(<-completed)
+			continue
+		}
 		c.rounds++
 		if c.rounds > canaryLoopLimit {
 			c.fail("canary exceeded %d drive rounds", canaryLoopLimit)
 		}
-		switch c.run.Next.Kind {
-		case decision.KindReady:
-			c.dispatchPending()
-		case decision.KindHostAction:
-			c.drive()
-		case decision.KindAsk:
-			c.answerAsks()
-		case decision.KindOperator:
-			c.serveOperator()
-		case decision.KindWait:
-			// TASKS_IN_FLIGHT means the engine already issued its dispatches
-			// and they await host execution — serve them. Any other wait
-			// reason, or an in-flight wait with nothing dispatchable, is a
-			// stuck pass.
-			if c.run.Next.Wait == nil || c.run.Next.Wait.Reason != decision.WaitTasksInFlight {
-				c.fail("unexpected WAIT boundary: %+v", c.run.Next.Wait)
-			}
-			if len(c.run.PendingActions) == 0 {
-				c.fail("TASKS_IN_FLIGHT wait without dispatchable actions: %+v", c.run.Next.Wait)
-			}
-			c.dispatchPending()
+		select {
+		case done := <-completed:
+			accept(done)
 		default:
-			c.fail("unexpected boundary kind %q", c.run.Next.Kind)
 		}
-		c.drive()
+		master := runs[masterID]
+		for _, childID := range master.SliceChildren {
+			if _, found := runs[childID]; !found {
+				runs[childID] = c.readRunID("drive", childID)
+			}
+		}
+		ids := []string{masterID}
+		children := []string{}
+		for id := range runs {
+			if id != masterID {
+				children = append(children, id)
+			}
+		}
+		slices.Sort(children)
+		ids = append(ids, children...)
+		progressed := false
+		for _, runID := range ids {
+			c.run = runs[runID]
+			c.slice = ""
+			for slice, childID := range runs[masterID].SliceChildren {
+				if childID == runID {
+					c.slice = slice
+				}
+			}
+			if c.run.Status == "COMPLETE" || c.run.Status == "SLICE_READY" {
+				continue
+			}
+			if c.dispatchPending(active, completed) {
+				progressed = true
+			}
+			switch c.run.Next.Kind {
+			case decision.KindReady, decision.KindWait:
+			case decision.KindHostAction:
+				c.drive()
+				progressed = true
+			case decision.KindAsk:
+				if c.answerAsks() {
+					c.drive()
+					progressed = true
+				}
+			case decision.KindOperator:
+				if c.run.Next.Operator != nil && len(c.run.Next.Operator.Facts) > 0 && strings.Contains(c.run.Next.Operator.Facts[0].Value, "waits for slice receipts") {
+					break
+				}
+				if c.serveOperator() {
+					c.drive()
+					progressed = true
+				}
+			default:
+				c.fail("unexpected boundary kind %q", c.run.Next.Kind)
+			}
+			runs[runID] = c.run
+		}
+		if !progressed {
+			if len(active) == 0 {
+				// An unhandled run boundary does not end independently issued
+				// work. Report it after all eligible frontiers have settled.
+				for _, runID := range ids {
+					if runs[runID].Next.Kind == decision.KindAsk {
+						c.run = runs[runID]
+						c.fail("unexpected ask boundary for %s: %+v", runID, c.run.Next)
+					}
+				}
+				for _, runID := range ids {
+					next := runs[runID].Next
+					if next.Kind == decision.KindOperator && (next.Operator == nil || len(next.Operator.Facts) == 0 || !strings.Contains(next.Operator.Facts[0].Value, "waits for slice receipts")) {
+						c.run = runs[runID]
+						c.fail("unexpected operator boundary for %s: %+v", runID, next)
+					}
+				}
+				c.run = c.readRunID("drive", masterID)
+				if c.run.Revision == runs[masterID].Revision && c.run.Status != "COMPLETE" {
+					c.fail("graph has no dispatchable work or in-flight call")
+				}
+				runs[masterID] = c.run
+				continue
+			}
+			timer := time.NewTimer(time.Until(c.deadline))
+			select {
+			case done := <-completed:
+				timer.Stop()
+				accept(done)
+			case <-timer.C:
+				c.fail("canary exceeded its %s budget", canaryRunBudget)
+			}
+		}
 	}
+	c.run = runs[masterID]
 }
 
 // --- submission and driving -------------------------------------------------
@@ -376,7 +493,7 @@ func (c *engineCanary) submit(event protocol.Event) protocol.Acceptance {
 		Acceptance protocol.Acceptance `json:"acceptance"`
 		Run        facade.Run          `json:"run"`
 	}
-	if err := json.Unmarshal(c.cli(data, "workflow", "submit", "--root", c.project, "--run-id", "engine-canary"), &response); err != nil {
+	if err := json.Unmarshal(c.cli(data, "workflow", "submit", "--root", c.project, "--run-id", c.currentRunID()), &response); err != nil {
 		c.fail("decode submit: %v", err)
 	}
 	acceptance, run := response.Acceptance, response.Run
@@ -396,7 +513,20 @@ func (c *engineCanary) drive() {
 }
 
 func (c *engineCanary) fail(format string, args ...any) {
+	c.failWithClass(authoring.FailureBlockedBug, format, args...)
+}
+
+// The interruption contract carries both the source class and its diagnostic
+// across the worker completion seam; the engine owns the resulting recovery.
+type canaryWorkerFailure protocol.Interruption
+
+func (e canaryWorkerFailure) Error() string { return e.InterruptionReason }
+
+func (c *engineCanary) failWithClass(class authoring.FailureClass, format string, args ...any) {
 	c.t.Helper()
+	if c.worker {
+		panic(canaryWorkerFailure{Class: class, InterruptionReason: fmt.Sprintf("engine canary: "+format, args...)})
+	}
 	if data, err := json.MarshalIndent(c.run, "", "  "); err == nil {
 		c.t.Logf("run projection at failure:\n%s", data)
 	}
@@ -405,48 +535,75 @@ func (c *engineCanary) fail(format string, args ...any) {
 
 // --- READY: dispatch every issued action through a real host turn ----------
 
-func (c *engineCanary) dispatchPending() {
-	c.t.Helper()
+type canaryCompletion struct {
+	runID, actionID, transcript string
+	event                       protocol.Event
+	caseArgs                    map[string][]string
+	caseTests                   map[string]string
+}
+
+func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- canaryCompletion) bool {
 	ids := make([]string, 0, len(c.run.PendingActions))
 	for id := range c.run.PendingActions {
 		ids = append(ids, id)
 	}
-	slices.SortFunc(ids, func(a, b string) int {
-		rank := func(id string) int {
-			switch c.run.PendingActions[id].ReviewSeries {
-			case review.ProductReview:
-				return 0
-			case review.StartReadiness:
-				return 1
-			}
-			return 2
-		}
-		if rank(a) != rank(b) {
-			return rank(a) - rank(b)
-		}
-		return strings.Compare(a, b)
-	})
+	slices.Sort(ids)
+	launched := false
 	for _, id := range ids {
+		key := c.currentRunID() + "/" + id
+		if active[key] {
+			continue
+		}
 		pending := c.run.PendingActions[id]
-		if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
-			c.dispatchReview(id, pending.ReviewSeries)
-		} else if input, ok := c.run.ValidationInputs[id]; ok && input.Handler != "" {
-			c.dispatchPipeline(id, input)
-		} else {
-			c.fail("issued action %s (%s) has no dispatchable obligation", id, pending.Task)
+		input, pipeline := c.run.ValidationInputs[id]
+		if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness && (!pipeline || input.Handler == "") {
+			continue
 		}
-		c.drive()
-		if c.run.Status == "COMPLETE" {
-			return
+		c.receipt(id)
+		active[key] = true
+		worker := *c
+		worker.worker = true
+		worker.caseArgs, worker.caseTests = maps.Clone(c.caseArgs), maps.Clone(c.caseTests)
+		if input.Handler == "engine.repair" {
+			c.sawRepair = true
 		}
+		go func() { completed <- worker.dispatch(id, pending, input) }()
+		launched = true
 	}
+	return launched
+}
+
+func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input protocol.ValidationInput) (done canaryCompletion) {
+	done.runID, done.actionID = c.currentRunID(), id
+	defer func() {
+		done.transcript, done.caseArgs, done.caseTests = c.transcript, c.caseArgs, c.caseTests
+		if failure := recover(); failure != nil {
+			interruption := canaryWorkerFailure{Class: authoring.FailureBlockedBug, InterruptionReason: fmt.Sprint(failure)}
+			if source, ok := failure.(canaryWorkerFailure); ok {
+				interruption = source
+			}
+			c.t.Logf("canary worker failure: run=%s action=%s class=%s error=%v", done.runID, id, interruption.Class, interruption)
+			event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomeRuntimeError, resultDigest(protocol.ValidationResult{Status: interruption.Error()}), interruption.Class)
+			if err != nil {
+				panic(err)
+			}
+			event.ID = ""
+			event.Result.InterruptionReason = interruption.InterruptionReason
+			done.event = event
+		}
+	}()
+	if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
+		done.event = c.dispatchReview(id, pending.ReviewSeries)
+	} else {
+		done.event = c.dispatchPipeline(id, input)
+	}
+	return done
 }
 
 // dispatchReview runs one review-series turn (product review or start
 // readiness) and submits its typed review evidence.
-func (c *engineCanary) dispatchReview(id string, series review.Action) {
+func (c *engineCanary) dispatchReview(id string, series review.Action) protocol.Event {
 	c.t.Helper()
-	c.receipt(id)
 	var (
 		role         string
 		instructions string
@@ -459,7 +616,7 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) {
 		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	}
 	materials := canaryMaterials{
-		Role: role, ActionID: id, ReviewAction: string(series),
+		Role: role, ActionID: id, RunID: c.currentRunID(), ReviewAction: string(series), Pending: canaryPending(c.run, id),
 		RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision,
 	}
 	var answer struct {
@@ -488,7 +645,7 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) {
 	}
 	turn := c.turn(id, role, c.prompt(role, materials, instructions, true), canaryReviewSchema(series == review.StartReadiness), true, shape)
 	if answer.Status != protocol.OutcomePass || len(answer.Findings) > 0 {
-		c.fail("canary review %s returned %s with %d findings; the fixture requirement must review green", series, answer.Status, len(answer.Findings))
+		c.failWithClass(authoring.FailureBusinessReject, "canary review %s returned %s with %d findings; the fixture requirement must review green", series, answer.Status, len(answer.Findings))
 	}
 	evidence := protocol.ReviewResultEvidence{
 		GranularityReview: answer.Plan, Action: series, DispatchID: id,
@@ -496,18 +653,18 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) {
 		Findings:     []review.Finding{},
 		Verification: review.OperatorVerification{Checks: answer.Verification.Checks, Evidence: answer.Verification.Evidence},
 	}
-	event, err := protocol.NewReviewWorkerResultEvent(c.eventID(), id, canaryProvider, turn.digest, evidence)
+	event, err := protocol.NewReviewWorkerResultEvent("worker-result", id, canaryProvider, turn.digest, evidence)
 	if err != nil {
 		c.fail("review event for %s: %v", id, err)
 	}
-	c.submit(event)
+	event.ID = ""
+	return event
 }
 
 // dispatchPipeline runs one validation-pipeline turn and submits its typed
 // business result.
-func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInput) {
+func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInput) protocol.Event {
 	c.t.Helper()
-	c.receipt(id)
 	var result protocol.ValidationResult
 	switch input.Handler {
 	case "engine.qa.design":
@@ -520,15 +677,20 @@ func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInpu
 		result = c.gateResult(id, input)
 	case "engine.development.batch":
 		result = c.developmentResult(id, input)
+	case "engine.merge.resolve":
+		result = c.conflictResult(id, input)
 	case "engine.repair":
-		c.sawRepair = true
 		result = c.repairResult(id, input)
 	default:
 		c.fail("no canary bridge for handler %q", input.Handler)
 	}
-	c.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{
-		ActionID: id, Provider: canaryProvider, Outcome: protocol.OutcomePass, PayloadDigest: resultDigest(result), Validation: &result,
-	}})
+	event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomePass, resultDigest(result), "")
+	if err != nil {
+		c.fail("pipeline event for %s: %v", id, err)
+	}
+	event.ID = ""
+	event.Result.Validation = &result
+	return event
 }
 
 // designResult runs the QA design turn for the dispatch's mode and assembles
@@ -539,7 +701,7 @@ func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInpu
 // for the executor.
 func (c *engineCanary) designResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
-	materials := canaryMaterials{Role: "QA case design", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
+	materials := c.materials(id, "QA case design", input)
 	pointKnown := func(point string) bool {
 		for _, link := range input.SourcePoints {
 			if link.PointID == point {
@@ -560,7 +722,7 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 		return c.whiteboxDesignResult(id, input, materials, manifest, pointKnown, sourceFor)
 	}
-	instructions := "Design the blackbox acceptance cases for every acceptance point in input.manifest.points. Each case names its pointId exactly, carries runnable args (the argv after the frob program, e.g. [\"hello\"] or [\"--unknown-flag\",\"hello\"]), a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY), preconditions, steps and a precise oracle. Every point needs at least one non-SUCCESS case; the oracle states the exact observable outcome."
+	instructions := "Design the blackbox or MERGE acceptance cases for every acceptance point in input.manifest.points. Each case names its pointId exactly, carries runnable args (the argv after the frob program, e.g. [\"hello\"] or [\"--unknown-flag\",\"hello\"]), a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY), preconditions, steps and a precise oracle. Every point needs at least one non-SUCCESS case; the oracle states the exact observable outcome."
 	var answer struct {
 		Cases []struct {
 			CaseID        string   `json:"caseId"`
@@ -586,12 +748,12 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 	c.turnIn(c.workspace(input), id, "QA case design", c.prompt("QA case design", materials, instructions, true), canaryDesignSchema(false), true, shape)
 	for _, designed := range answer.Cases {
 		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
-			CaseID: designed.CaseID, Mode: coverage.CaseBlackbox, Scenario: designed.Scenario,
+			CaseID: designed.CaseID, Mode: canaryCaseMode(input), Scenario: designed.Scenario,
 			PublicEntry:   "frob " + strings.Join(designed.Args, " "),
 			Preconditions: designed.Preconditions, Steps: designed.Steps, Oracle: designed.Oracle,
 		})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
-		c.caseArgs[designed.CaseID] = designed.Args
+		c.caseArgs[c.caseKey(designed.CaseID)] = designed.Args
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest}
 }
@@ -651,7 +813,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 			TestRef: designed.TestRef, Oracle: designed.Oracle,
 		})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
-		c.caseTests[designed.CaseID] = designed.TestRef
+		c.caseTests[c.caseKey(designed.CaseID)] = designed.TestRef
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest,
 		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests}}
@@ -704,7 +866,7 @@ type canaryReviewDecision struct {
 // derived, defaulted or rewritten on the way.
 func (c *engineCanary) caseReviewResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
-	materials := canaryMaterials{Role: "QA case review", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
+	materials := c.materials(id, "QA case review", input)
 	caseFace := "its public entry, preconditions and oracle"
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 		caseFace = "its test reference and oracle"
@@ -795,7 +957,7 @@ func (c *engineCanary) modelReviewDecisions(layer string, decisions []canaryRevi
 	rows := make([]coverage.ReviewDecision, 0, len(decisions))
 	for _, decision := range decisions {
 		if decision.Status != string(coverage.StatusPass) {
-			c.fail("case review judged %s %s %s: %s", layer, decision.ID, decision.Status, decision.Reason)
+			c.failWithClass(authoring.FailureBusinessReject, "case review judged %s %s %s: %s", layer, decision.ID, decision.Status, decision.Reason)
 		}
 		rows = append(rows, coverage.ReviewDecision{ID: decision.ID, Status: coverage.DecisionStatus(decision.Status), Reason: decision.Reason})
 	}
@@ -820,13 +982,10 @@ func (c *engineCanary) executionResult(id string, input protocol.ValidationInput
 	if !whitebox {
 		binary = c.buildCandidate(dir, id)
 	}
-	materials := canaryMaterials{
-		Role: "QA case execution", ActionID: id,
-		RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input,
-	}
+	materials := c.materials(id, "QA case execution", input)
 	for _, caseID := range input.RequiredCases {
 		if whitebox {
-			testRef, ok := c.caseTests[caseID]
+			testRef, ok := c.caseTests[c.caseKey(caseID)]
 			if !ok {
 				c.fail("required case %s has no designed test reference on record", caseID)
 			}
@@ -834,7 +993,7 @@ func (c *engineCanary) executionResult(id string, input protocol.ValidationInput
 				c.observe(fmt.Sprintf("case %s", caseID), dir, []string{"go", "test", "-count=1", "-run", "^" + testRef + "$", "."}))
 			continue
 		}
-		args, ok := c.caseArgs[caseID]
+		args, ok := c.caseArgs[c.caseKey(caseID)]
 		if !ok {
 			c.fail("required case %s has no designed argv on record", caseID)
 		}
@@ -903,14 +1062,33 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 	if head != input.Gate.Candidate.Identity {
 		c.fail("gate %s judges candidate %s but the registered workspace head is %s", input.Gate.Gate, input.Gate.Candidate.Identity, head)
 	}
-	binary := c.buildCandidate(c.workspace(input), id)
-	materials := canaryMaterials{
-		Role: "regression gate", ActionID: id,
-		RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input,
+	materials := c.materials(id, input.Gate.Gate+" gate", input)
+	instructions := "Judge the exact issued gate and its complete native range against the bound requirement. Report findings for actual violations with severity, rationale, requirement, normal path, actual error, deferral impact and locations."
+	if !c.split && input.Gate.Gate == "regression" {
+		binary := c.buildCandidate(c.workspace(input), id)
+		materials.HostObservations = append(materials.HostObservations, c.observe("regression gate flag-contract probe", c.workspace(input), append([]string{binary}, canaryGateArgs...)))
+		instructions += " The regression contract is AC-002: unknown flags must exit nonzero and emit no frob: output."
+	} else {
+		switch input.Gate.Gate {
+		case "regression":
+			materials.HostObservations = append(materials.HostObservations, c.observe("regression build", c.workspace(input), []string{"go", "build", "-o", filepath.Join(c.jobDirectory(id), "gate-build"), "./..."}))
+			instructions += " The regression contract is a successful go build ./... over the issued candidate."
+		case "correctness", "merge-gate":
+			binary := c.buildCandidate(c.workspace(input), id)
+			for _, word := range []string{"héLLo", ""} {
+				materials.HostObservations = append(materials.HostObservations, c.observe("command contract", c.workspace(input), []string{binary, word}))
+			}
+			if c.childSlice() == "uppercase" {
+				instructions += " Judge AC-001 uppercase output; the other slice's size function is outside this slice obligation."
+			} else if c.childSlice() == "word-size" {
+				instructions += " Judge AC-002 UTF-8 byte size output; the other slice's uppercase function is outside this slice obligation."
+			} else {
+				instructions += " Judge every bound AC, including the composed AC-003 output."
+			}
+		default:
+			c.fail("fixture has no contract for issued gate %q", input.Gate.Gate)
+		}
 	}
-	materials.HostObservations = append(materials.HostObservations,
-		c.observe("regression gate flag-contract probe", c.workspace(input), append([]string{binary}, canaryGateArgs...)))
-	instructions := "The regression gate judges the public flag contract: unknown flags must be rejected with a nonzero exit and no frob: output (requirement AC-002). Judge the host-captured command run against that contract; on violation report status FAIL with a finding carrying severity, rationale, requirement, normal path, actual error, deferral impact and locations."
 	var answer struct {
 		Status   string                `json:"status"`
 		Findings []canaryFindingAnswer `json:"findings"`
@@ -927,7 +1105,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 		}
 		return nil
 	}
-	c.turnIn(c.workspace(input), id, "regression gate", c.prompt("regression gate", materials, instructions, true), canaryGateSchema(), true, shape)
+	c.turnIn(c.workspace(input), id, materials.Role, c.prompt(materials.Role, materials, instructions, true), canaryGateSchema(), true, shape)
 	result := protocol.ValidationResult{Binding: input.Binding, Status: answer.Status}
 	for _, found := range answer.Findings {
 		result.Findings = append(result.Findings, found.finding())
@@ -938,7 +1116,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 // developmentResult runs the writable development turn for one batch.
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
-	materials := canaryMaterials{Role: "development batch", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
+	materials := c.materials(id, "development batch", input)
 	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not run git commit or git push — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
@@ -954,7 +1132,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 // repairResult runs the writable repair turn for the adjudicated problems.
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
-	materials := canaryMaterials{Role: "repair", ActionID: id, RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision, Input: &input}
+	materials := c.materials(id, "repair", input)
 	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not run git commit or git push — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
@@ -999,12 +1177,19 @@ type canaryTurnResult struct {
 // receipt declares the dispatch on the engine before the turn runs.
 func (c *engineCanary) receipt(actionID string) {
 	c.t.Helper()
-	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, canaryProvider, actionID, protocol.SpawnStatusSpawned)
+	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, canaryProvider, c.dispatchKey(actionID), protocol.SpawnStatusSpawned)
 	if err != nil {
 		c.fail("spawn receipt for %s: %v", actionID, err)
 	}
+	data, _ := json.MarshalIndent(event, "", "  ")
+	if err := os.MkdirAll(c.jobDirectory(actionID), 0700); err != nil {
+		c.fail("receipt directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(c.jobDirectory(actionID), "spawn-receipt.json"), data, 0600); err != nil {
+		c.fail("receipt evidence: %v", err)
+	}
 	c.submit(event)
-	c.dispatched = append(c.dispatched, actionID)
+	c.dispatched = append(c.dispatched, c.dispatchKey(actionID))
 }
 
 // canaryAttemptUsage books one failed attempt's spend from its own evidence:
@@ -1040,38 +1225,67 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 	return c.turnIn(c.project, actionID, role, prompt, schema, readOnly, shape)
 }
 
-// turnIn is turn against an explicit workspace: the whitebox design and case
-// review turns run in the registered authoring workspace, every other turn
-// in the project.
+// turnIn uses the exact issued workspace. Approval serializes only the human
+// decision; approved calls execute independently under the shared pass deadline.
 func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema map[string]any, readOnly bool, shape func(map[string]any) error) canaryTurnResult {
 	c.t.Helper()
 	if time.Now().After(c.deadline) {
-		c.fail("canary exceeded its %s budget", canaryRunBudget)
+		c.failWithClass(authoring.FailureUserActionRequired, "canary exceeded its %s budget", canaryRunBudget)
 	}
 	if !canaryPathWithin(filepath.Join(c.home, ".formal-gates-resources"), workspace) {
 		c.fail("issued workspace is outside candidate resources: %s", workspace)
 	}
 	schema = c.plainSchema(actionID, schema)
 	var lastErr error
+	var lastClass authoring.FailureClass
 	for attempt := 1; attempt <= canaryTurnBudget; attempt++ {
 		promptNow := prompt
 		if attempt > 1 {
 			promptNow = prompt + "\n\nYour previous answer was refused: " + lastErr.Error() + "\nReturn one corrected JSON object only."
 		}
-		dir := filepath.Join(c.jobs, canaryName(actionID), fmt.Sprintf("attempt-%d", attempt))
+		dir := filepath.Join(c.jobDirectory(actionID), fmt.Sprintf("attempt-%d", attempt))
 		request := map[string]any{
 			"provider": canaryProvider, "binding": c.binding, "workspace": workspace,
 			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
 		}
-		if err := c.authorizeCall(request, actionID, role, attempt); err != nil {
-			c.fail("dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
+		if c.approvalMu != nil {
+			c.approvalMu.Lock()
+		}
+		if c.callContext != nil && c.callContext.Err() != nil {
+			c.approvalMu.Unlock()
+			c.failWithClass(authoring.FailureUserActionRequired, "host call authorization stopped the pass")
+		}
+		authorization := c.authorizeCall(request, c.dispatchKey(actionID), role, attempt)
+		if authorization != nil && c.stopCalls != nil {
+			c.stopCalls()
+		}
+		if c.approvalMu != nil {
+			c.approvalMu.Unlock()
+		}
+		if err := authorization; err != nil {
+			c.failWithClass(authoring.FailureUserActionRequired, "dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
 		}
 		watchCtx, stopWatcher := context.WithCancel(context.Background())
 		go c.answerHeldInteractions(watchCtx, dir)
 		source, err := c.execute(request, dir, false)
 		stopWatcher()
+		if c.worker {
+			c.transcript = dir
+		}
 		if err != nil {
 			lastErr = err
+			lastClass = authoring.FailureTransientEngine
+			switch source := err.(type) {
+			case *bindingError:
+				lastClass = authoring.FailureInvariantViolation
+			case *blockedError, *sessionUnavailableError:
+				lastClass = authoring.FailureUserActionRequired
+			case *nativeRefusal:
+				lastClass = authoring.FailureUserActionRequired
+				if source.kind == "binding" {
+					lastClass = authoring.FailureInvariantViolation
+				}
+			}
 			// The call is spent even when it fails: book its native usage
 			// from the attempt's own event stream, zero when unreadable.
 			identity, usage := canaryAttemptUsage(dir)
@@ -1081,6 +1295,12 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 			c.t.Logf("canary dispatch %s (%s) attempt %d failed: %v", actionID, role, attempt, err)
 			continue
 		}
+		if c.run.RunID != "" {
+			identity, identityErr := readJSONFile(filepath.Join(dir, "identity.json"))
+			if identityErr != nil || canaryCanonicalPath(textOf(getOf(identity, "workspace"))) != canaryCanonicalPath(workspace) || textOf(getOf(identity, "identity")) != textOf(getOf(source, "identity")) {
+				c.fail("native identity does not match issued workspace/source: %v", identityErr)
+			}
+		}
 		// The call is spent the moment it returns — every real attempt gets
 		// its spend line here, including the ones refused below.
 		usage, _ := json.Marshal(getOf(source, "usage_evidence"))
@@ -1089,30 +1309,42 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		rawAnswer, err := readJSONFile(filepath.Join(dir, "answer.json"))
 		if err != nil {
 			lastErr = fmt.Errorf("native answer is unavailable: %w", err)
+			lastClass = authoring.FailureAgentRecoverable
+			var unavailable *os.PathError
+			if errors.As(err, &unavailable) {
+				lastClass = authoring.FailureTransientEngine
+			}
 			continue
 		}
 		answer, ok := rawAnswer.(map[string]any)
 		if !ok {
 			lastErr = fmt.Errorf("native answer is not a JSON object")
+			lastClass = authoring.FailureAgentRecoverable
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, "answer.raw.txt"))
 		if err != nil {
 			lastErr = err
+			lastClass = authoring.FailureTransientEngine
 			continue
 		}
 		if shape != nil {
 			if err := shape(answer); err != nil {
 				lastErr = err
+				lastClass = authoring.FailureAgentRecoverable
 				c.t.Logf("canary dispatch %s (%s) attempt %d was refused: %v", actionID, role, attempt, err)
 				continue
 			}
 		}
-		c.captureDispatchLifecycle(actionID, dir)
+		if c.worker {
+			c.transcript = dir
+		} else {
+			c.captureDispatchLifecycle(actionID, dir)
+		}
 		sum := sha256.Sum256(raw)
 		return canaryTurnResult{digest: "sha256:" + hex.EncodeToString(sum[:])}
 	}
-	c.fail("dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
+	c.failWithClass(lastClass, "dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
 	return canaryTurnResult{}
 }
 
@@ -1263,11 +1495,11 @@ func firstOfferedOption(options any) string {
 // resolves from real lifecycle evidence instead of staying pending.
 func (c *engineCanary) captureDispatchLifecycle(actionID, transcriptDir string) {
 	c.t.Helper()
-	start := fmt.Sprintf(`{"tool_use_id":%q}`, actionID)
+	start := fmt.Sprintf(`{"tool_use_id":%q}`, c.dispatchKey(actionID))
 	if _, err := lifecycle.Capture(c.project, canaryProvider, "PreToolUse", []byte(start)); err != nil {
 		c.fail("lifecycle start for %s: %v", actionID, err)
 	}
-	stop := fmt.Sprintf(`{"tool_use_id":%q,"transcript_path":%q}`, actionID, filepath.Join(transcriptDir, "native-events.jsonl"))
+	stop := fmt.Sprintf(`{"tool_use_id":%q,"transcript_path":%q}`, c.dispatchKey(actionID), filepath.Join(transcriptDir, "native-events.jsonl"))
 	if _, err := lifecycle.Capture(c.project, canaryProvider, "PostToolUse", []byte(stop)); err != nil {
 		c.fail("lifecycle stop for %s: %v", actionID, err)
 	}
@@ -1276,7 +1508,16 @@ func (c *engineCanary) captureDispatchLifecycle(actionID, transcriptDir string) 
 // prompt assembles one role prompt over the dispatch's real material paths.
 func (c *engineCanary) prompt(role string, materials canaryMaterials, instructions string, readOnly bool) string {
 	c.t.Helper()
-	path := filepath.Join(c.jobs, canaryName(materials.ActionID), "materials.json")
+	path := filepath.Join(c.jobDirectory(materials.ActionID), "materials.json")
+	if materials.Input != nil {
+		materials.RequirementPath = filepath.Join(c.jobDirectory(materials.ActionID), "requirements.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			c.fail("materials directory: %v", err)
+		}
+		if err := os.WriteFile(materials.RequirementPath, []byte(materials.Input.RequirementDocument.Content), 0o600); err != nil {
+			c.fail("issued requirement material: %v", err)
+		}
+	}
 	body, err := json.MarshalIndent(materials, "", "  ")
 	if err != nil {
 		c.fail("materials for %s: %v", materials.ActionID, err)
@@ -1305,12 +1546,13 @@ func (c *engineCanary) prompt(role string, materials canaryMaterials, instructio
 
 // --- ASK: the user stand-in --------------------------------------------------
 
-func (c *engineCanary) answerAsks() {
+func (c *engineCanary) answerAsks() bool {
 	c.t.Helper()
+	handled := false
 	for _, ask := range c.run.PendingAsks {
 		if ask.Control == protocol.ControlValidation && ask.Validation != nil && ask.Validation.Kind == "REPAIR" {
 			if c.repairAllowances <= 0 {
-				c.fail("second repair authorization asked; the canary allows exactly one")
+				continue
 			}
 			c.repairAllowances--
 			c.t.Logf("answering repair authorization %s with approve", ask.RequestID)
@@ -1318,18 +1560,19 @@ func (c *engineCanary) answerAsks() {
 				Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "approve",
 				Validation: &protocol.ValidationDecision{Reason: "one repair round is authorized for this pass", Digest: ask.Validation.Digest, StateRevision: c.run.Revision},
 			}})
+			handled = true
 			continue
 		}
-		c.fail("unexpected ask %s (control %s): %+v", ask.RequestID, ask.Control, ask)
 	}
+	return handled
 }
 
 // --- OPERATOR: facts the host bridge serves ----------------------------------
 
-func (c *engineCanary) serveOperator() {
+func (c *engineCanary) serveOperator() bool {
 	c.t.Helper()
 	if c.run.Next.Operator == nil || len(c.run.Next.Operator.Facts) == 0 {
-		c.fail("OPERATOR boundary without facts")
+		return false
 	}
 	fact := c.run.Next.Operator.Facts[0]
 	switch {
@@ -1337,30 +1580,36 @@ func (c *engineCanary) serveOperator() {
 		// The merged boundary message covers both stages (topology, then
 		// route); route by what the projection actually has bound.
 		if c.run.Review.Topology == nil {
+			if c.split && (c.run.Validation == nil || c.run.Validation.Document.Content == "") {
+				c.confirmRequirement()
+				return true
+			}
 			c.confirmTopology()
 		} else {
 			c.confirmRoute()
 		}
-	case strings.Contains(fact.Value, "development plan with the route"):
+	case strings.Contains(fact.Value, "development plan with the route"), strings.Contains(fact.Value, "select the slice route"):
 		c.confirmRoute()
 	case strings.Contains(fact.Value, "REQUIREMENT document"):
-		c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-			Subject:    c.revision,
-			Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: c.revision, Document: string(c.doc)},
-		}})
+		c.confirmRequirement()
 	case strings.Contains(fact.Value, "per-finding ADJUDICATE"):
 		c.adjudicate()
 	case strings.Contains(fact.Value, "EXECUTION_SCOPE observation"):
 		c.executionScope()
 
 	default:
-		c.fail("unexpected operator fact %q = %q", fact.Key, fact.Value)
+		return false
 	}
+	return true
 }
 
 func (c *engineCanary) confirmTopology() {
 	c.t.Helper()
-	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "no-split", Label: "no-split"})
+	topology := protocol.TopologyDecision{Decision: "no-split", Note: "one small command project with a single cohesive deliverable"}
+	if c.split {
+		topology = canarySplitTopology()
+	}
+	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: protocol.AskOptionID(topology.Decision), Label: topology.Decision})
 	if err != nil {
 		c.fail("topology request: %v", err)
 	}
@@ -1374,8 +1623,8 @@ func (c *engineCanary) confirmTopology() {
 	if token == "" {
 		c.fail("topology ask %s is not pending", request.ID)
 	}
-	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, "no-split", protocol.ReviewDecisionPayload{
-		Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one small command project with a single cohesive deliverable"},
+	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, protocol.AskOptionID(topology.Decision), protocol.ReviewDecisionPayload{
+		Topology: &topology,
 	})
 	if err != nil {
 		c.fail("topology decision: %v", err)
@@ -1383,13 +1632,18 @@ func (c *engineCanary) confirmTopology() {
 	c.submit(event)
 }
 
-// confirmRoute asks SELECT_ROUTE over the fixture's candidate gate universe,
-// then decides the full route with exactly the gate list the ask pinned back:
-// the ask's pinned set is the one authority the decide repeats, so the whitebox
-// face joins the pass.
+// confirmRoute repeats the ask's pinned candidate set. Child proposals derive
+// from the accepted master plan and carry their own full or custom decision.
 func (c *engineCanary) confirmRoute() {
 	c.t.Helper()
-	request, err := protocol.NewRouteRequestEvent(c.eventID(), canaryRouteCandidates, protocol.AskOption{ID: "full", Label: "full"})
+	candidates, mode := canaryRouteCandidates, "full"
+	if c.run.MasterRunID != "" {
+		candidates = []string{"regression", "correctness"}
+		if c.childSlice() == "word-size" {
+			mode = "custom"
+		}
+	}
+	request, err := protocol.NewRouteRequestEvent(c.eventID(), candidates, protocol.AskOption{ID: protocol.AskOptionID(mode), Label: mode})
 	if err != nil {
 		c.fail("route request: %v", err)
 	}
@@ -1408,13 +1662,23 @@ func (c *engineCanary) confirmRoute() {
 	if len(gates) == 0 {
 		c.fail("route ask %s pinned no candidate gate set", request.ID)
 	}
-	route := protocol.RouteDecision{Mode: "full", Gates: gates}
-	preview, err := c.f.DevelopmentPlan(route)
+	route := protocol.RouteDecision{Mode: mode, Gates: gates}
+	if mode == "custom" {
+		route.Selected = []string{"correctness"}
+	}
+	if c.run.MasterRunID != "" {
+		route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: c.sliceProposal()}
+	}
+	f, err := facade.Open(c.project, c.currentRunID())
+	if err != nil {
+		c.fail("open plan owner: %v", err)
+	}
+	preview, err := f.DevelopmentPlan(route)
 	if err != nil {
 		c.fail("development plan preview: %v", err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, "full", protocol.ReviewDecisionPayload{Route: &route})
+	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, protocol.AskOptionID(mode), protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		c.fail("route decision: %v", err)
 	}
@@ -1606,15 +1870,21 @@ func (c *engineCanary) git(args ...string) string {
 	return c.gitAt(c.project, args...)
 }
 
+// Fixture helpers and the installed CLI share the repository's native config,
+// including every worktree created by the engine.
+func (c *engineCanary) initFixtureRepository() {
+	c.t.Helper()
+	c.git("init", "--initial-branch=main", "--quiet")
+	c.git("config", "--local", "user.name", "engine-canary")
+	c.git("config", "--local", "user.email", "engine-canary@localhost")
+	c.git("config", "--local", "commit.gpgsign", "false")
+}
+
 // gitAt runs one git command in an arbitrary tree of the fixture repository
 // — the project or one of its worktrees.
 func (c *engineCanary) gitAt(dir string, args ...string) string {
 	c.t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=engine-canary", "GIT_AUTHOR_EMAIL=engine-canary@localhost",
-		"GIT_COMMITTER_NAME=engine-canary", "GIT_COMMITTER_EMAIL=engine-canary@localhost",
-		"commit.gpgsign=false")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		c.fail("git %v: %v: %s", args, err, out)
@@ -1626,7 +1896,7 @@ func (c *engineCanary) gitAt(dir string, args ...string) string {
 // evidence tree; the binary is what behavior probes really run.
 func (c *engineCanary) buildCandidate(dir, actionID string) string {
 	c.t.Helper()
-	binary := filepath.Join(c.jobs, canaryName(actionID), "frob-candidate")
+	binary := filepath.Join(c.jobDirectory(actionID), "frob-candidate")
 	cmd := exec.Command("go", "build", "-o", binary, ".")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1657,7 +1927,7 @@ func (c *engineCanary) observe(label, dir string, argv []string) canaryObservati
 
 func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	c.t.Helper()
-	final := c.run
+	final := c.terminalRun()
 	if final.Status != "COMPLETE" || final.Next.Kind != decision.KindComplete {
 		c.fail("canary ended at status %s (next %s)", final.Status, final.Next.Kind)
 	}
@@ -1690,31 +1960,15 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if probe.ExitCode == 0 {
 		c.fail("final candidate still accepts unknown flags: %+v", probe)
 	}
-	summaryPath := final.SummaryPath
-	if summaryPath == "" {
-		summaryPath = filepath.Join(c.project, ".gates", "engine", final.RunID, "terminal-summary.json")
-	}
-	before, err := os.ReadFile(summaryPath)
-	if err != nil {
-		c.fail("terminal summary: %v", err)
-	}
-	replay := c.readRun("drive")
-	after, err := os.ReadFile(summaryPath)
-	if err != nil {
-		c.fail("terminal summary after replay: %v", err)
-	}
-	if string(before) != string(after) || replay.Revision != final.Revision || replay.Status != "COMPLETE" {
-		c.fail("terminal replay mutated the run or its summary")
-	}
-	shown := c.readRun("show")
-	if len(shown.PendingAsks) != 0 || shown.PendingRequirementAsk != nil {
-		c.fail("terminal run retains pending asks: %+v %+v", shown.PendingAsks, shown.PendingRequirementAsk)
+	c.assertTerminalReplay(final)
+	if len(final.PendingAsks) != 0 || final.PendingRequirementAsk != nil {
+		c.fail("terminal run retains pending asks: %+v %+v", final.PendingAsks, final.PendingRequirementAsk)
 	}
 	entries := 0
-	if shown.Cost != nil {
-		entries = len(shown.Cost.Dispatches)
+	if final.Cost != nil {
+		entries = len(final.Cost.Dispatches)
 		for _, actionID := range c.dispatched {
-			if _, ok := shown.Cost.Dispatches[actionID]; !ok {
+			if _, ok := final.Cost.Dispatches[strings.TrimPrefix(actionID, final.RunID+"/")]; !ok {
 				c.fail("dispatch %s has no cost entry", actionID)
 			}
 		}
@@ -1729,6 +1983,42 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 		c.fail("the pass never dispatched the repair")
 	}
 	c.t.Logf("engine canary complete: run=%s promoted=%s dispatches=%d evidence=%s", final.RunID, final.PromotedSnapshot, len(c.dispatched), evidenceDir)
+}
+
+// Show owns the terminal material path. Compare the durable terminal facts;
+// the active review face and Complete payload are not retained in the summary.
+func (c *engineCanary) terminalRun() facade.Run {
+	c.t.Helper()
+	final := c.readRun("show")
+	expected := c.run
+	if final.SummaryPath == "" || final.RunID != expected.RunID || final.Runtime != expected.Runtime || final.Route != expected.Route ||
+		final.Status != expected.Status || final.Next.Kind != expected.Next.Kind || final.Revision != expected.Revision || final.Envelope != expected.Envelope ||
+		final.NotGuaranteed != expected.NotGuaranteed || final.Unverified != expected.Unverified ||
+		!canaryValuesEqual(final.Termination, expected.Termination) || !canaryValuesEqual(final.Cost, expected.Cost) ||
+		!canaryValuesEqual(final.IntakeReceipt, expected.IntakeReceipt) || !canaryValuesEqual(final.GuardBudget, expected.GuardBudget) ||
+		!canaryValuesEqual(final.ValidationDecisions, expected.ValidationDecisions) || !canaryValuesEqual(final.ValidationRequests, expected.ValidationRequests) {
+		c.fail("terminal show differs from completed drive")
+	}
+	return final
+}
+
+func (c *engineCanary) assertTerminalReplay(final facade.Run) {
+	c.t.Helper()
+	before, err := os.ReadFile(final.SummaryPath)
+	if err != nil {
+		c.fail("terminal summary: %v", err)
+	}
+	for _, command := range []string{"drive", "drive", "show"} {
+		replay := c.readRun(command)
+		after, err := os.ReadFile(final.SummaryPath)
+		// Drive projects the summary without a material path; Show binds it.
+		if command == "drive" {
+			replay.SummaryPath = final.SummaryPath
+		}
+		if err != nil || !bytes.Equal(before, after) || !canaryValuesEqual(replay, final) {
+			c.fail("terminal replay changed frozen facts")
+		}
+	}
 }
 
 // --- shared helpers ----------------------------------------------------------
@@ -1997,15 +2287,36 @@ func (c *engineCanary) cli(input []byte, args ...string) []byte {
 	for key, value := range c.hostEnvironment() {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
+	started := time.Now()
 	output, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		exit = 1
+		if failure, ok := err.(*exec.ExitError); ok {
+			exit = failure.ExitCode()
+		}
+	}
+	record, _ := json.Marshal(map[string]any{"argv": append([]string{c.binary}, args...), "cwd": cmd.Dir, "startedUTC": started.UTC().Format(time.RFC3339Nano), "elapsedSeconds": time.Since(started).Seconds(), "exit": exit, "input": string(input), "output": string(output)})
+	journal, writeErr := os.OpenFile(filepath.Join(c.jobs, "installed-commands.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if writeErr != nil {
+		c.fail("command evidence: %v", writeErr)
+	}
+	_, writeErr = journal.Write(append(record, '\n'))
+	closeErr := journal.Close()
+	if writeErr != nil || closeErr != nil {
+		c.fail("command evidence write: %v %v", writeErr, closeErr)
+	}
 	if err != nil {
 		c.fail("installed %v: %v %s", args, err, output)
 	}
 	return output
 }
 func (c *engineCanary) readRun(command string) facade.Run {
+	return c.readRunID(command, c.currentRunID())
+}
+func (c *engineCanary) readRunID(command, runID string) facade.Run {
 	var run facade.Run
-	if err := json.Unmarshal(c.cli(nil, "workflow", command, "--root", c.project, "--run-id", "engine-canary"), &run); err != nil {
+	if err := json.Unmarshal(c.cli(nil, "workflow", command, "--root", c.project, "--run-id", runID), &run); err != nil {
 		c.fail("decode %s: %v", command, err)
 	}
 	return run
