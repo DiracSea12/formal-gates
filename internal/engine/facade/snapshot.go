@@ -423,7 +423,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
 }
 
-// RegisterQAWorktree validates a base workspace and its confirmed intake
+// RegisterQAWorktree validates a base workspace and its confirmed current
 // artifacts. Native workflow resources are created and owned by Drive.
 func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if f.vcs == nil {
@@ -452,14 +452,25 @@ func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if receipt == nil {
 		return fmt.Errorf("QA worktree registration requires the run's intake artifacts")
 	}
+	requirementPath := filepath.Clean(receipt.RequirementSource)
+	if filepath.IsAbs(requirementPath) {
+		requirementPath, err = filepath.Rel(f.root, requirementPath)
+		if err != nil {
+			return err
+		}
+	}
 	for _, artifact := range receipt.Artifacts {
+		expected := artifact.Revision
+		if filepath.Clean(filepath.FromSlash(artifact.Path)) == requirementPath {
+			expected = strings.TrimPrefix(snap.State.RequirementRevision(), "sha256:")
+		}
 		path := filepath.Join(worktree, filepath.FromSlash(artifact.Path))
 		revision, err := requirementArtifactRevision(path)
 		if err != nil {
 			return fmt.Errorf("QA isolation worktree requirement artifact %s: %w", artifact.Path, err)
 		}
-		if revision != artifact.Revision {
-			return fmt.Errorf("QA isolation worktree requirement artifact %s does not match the run revision %s", artifact.Path, artifact.Revision)
+		if revision != expected {
+			return fmt.Errorf("QA isolation worktree requirement artifact %s does not match the run revision %s", artifact.Path, expected)
 		}
 	}
 	return f.engine.RecordQAWorktree(worktree, emptyFingerprint())

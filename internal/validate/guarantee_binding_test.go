@@ -247,10 +247,13 @@ func TestRequirementProjectionAcceptsNaturalProseFencesAndExactFiniteSet(t *test
 	if !reflect.DeepEqual(projection.Requirements, wantRequirements) {
 		t.Fatalf("requirement projection mismatch:\ngot:  %#v\nwant: %#v", projection.Requirements, wantRequirements)
 	}
-	if strings.Contains(fmt.Sprintf("%#v", projection), "REQ-999") || strings.Contains(fmt.Sprintf("%#v", projection), "AC-999") {
+	if strings.Contains(fmt.Sprintf("%#v", projection.Requirements), "REQ-999") || strings.Contains(fmt.Sprintf("%#v", projection.Requirements), "AC-999") {
 		t.Fatalf("fenced examples entered the projection: %#v", projection)
 	}
 	normalized := strings.ReplaceAll(document, "\r\n", "\n")
+	if projection.Content != normalized {
+		t.Fatalf("confirmed content differs from the complete normalized document: %q", projection.Content)
+	}
 	sum := sha256.Sum256([]byte(normalized))
 	if projection.ContentDigest != hex.EncodeToString(sum[:]) {
 		t.Fatalf("content digest = %s, want normalized document digest", projection.ContentDigest)

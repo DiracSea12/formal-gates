@@ -3,6 +3,7 @@ package facade
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -107,5 +108,39 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 				}
 			}
 		})
+	}
+}
+
+// A base worktree registers the current confirmed material without changing
+// its native source or borrowing the immutable intake's earlier identity.
+func TestQAWorktreeRegistrationUsesConfirmedMaterial(t *testing.T) {
+	d := nativeMasterDriver(t)
+	passPreDevelopmentReviews(t, d, commandPlan())
+	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(d.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	confirmValidationDocument(d, "", nil, document)
+	d.revision = driverState(t, d).RequirementRevision()
+	path := filepath.Join(t.TempDir(), "baseline")
+	if err := d.f.vcs.AddWorktree(path, d.run.BaseSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.f.RegisterQAWorktree(path); err != nil {
+		t.Fatal("current confirmed QA material was rejected", err)
+	}
+	d.reopen()
+	if state := driverState(t, d); state.QAWorktree != path || state.RequirementRevision() != d.revision {
+		t.Fatal("registered material lost current identity on reopen")
+	}
+	before := installationFiles(t, d.f.stateDir)
+	if err := d.f.RegisterQAWorktree(path); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, installationFiles(t, d.f.stateDir)) {
+		t.Fatal("registration replay rewrote the current material binding")
 	}
 }
