@@ -27,7 +27,7 @@ func TestDSHDispatch(t *testing.T) {
 		}
 	}
 	err := dshDispatch("ghost")
-	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude" {
+	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex" {
 		t.Fatalf("unsupported text = %v", err)
 	}
 }
@@ -506,7 +506,7 @@ func TestRunNativeEntryFailureShapes(t *testing.T) {
 		{"numeric provider", `{"provider": 5}`,
 			"provider must be a string"},
 		{"unsupported provider", `{"provider": "ghost"}`,
-			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude"},
+			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

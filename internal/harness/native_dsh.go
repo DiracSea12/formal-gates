@@ -26,7 +26,7 @@ const dshStartupTimeout = 40 * time.Second
 // executionAdapters lists the providers this Go binary implements, in the
 // order the unsupported-host refusal names them. The routing table that pairs
 // with it lives in native_zcode.go (nativeImplementations).
-var executionAdapters = []string{"dsh", "zcode", "claude"}
+var executionAdapters = []string{"dsh", "zcode", "claude", "codex"}
 
 // dshDispatch refuses every provider this binary does not implement.
 func dshDispatch(provider string) error {

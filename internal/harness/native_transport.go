@@ -578,6 +578,7 @@ type nativeReply struct {
 type nativeAnswerChoice struct {
 	Cancel   bool
 	OptionID string
+	Answers  any
 }
 
 // nativeInteractionSpec is one host's declaration of a client-directed request
@@ -653,6 +654,8 @@ type nativeHooks struct {
 	respond      func(method string, params any) (*nativeReply, error)
 	classify     func(method string, errValue any, params map[string]any) error
 	notification func(message any)
+	// received records each original inbound frame, including held requests.
+	received func(message any)
 }
 
 func (h nativeHooks) closedKeyOr() string {
@@ -1006,6 +1009,9 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 			c.invalidatePendings()
 			return nil, c.blocked(reason)
 		}
+		if c.hooks.received != nil {
+			c.hooks.received(message)
+		}
 		if method, hasMethod := object["method"]; hasMethod && isLiveMethod(method) {
 			if _, hasID := object["id"]; hasID {
 				if err := c.answerReverse(object); err != nil {
@@ -1224,7 +1230,7 @@ func (c *nativeClient) deliverOneAnswer() bool {
 	}
 	requestID, _ := getOrOf(record, "request_id", "").(string)
 	option, _ := getOrOf(record, "option", "").(string)
-	choice := nativeAnswerChoice{Cancel: getOf(record, "cancel") == true, OptionID: option}
+	choice := nativeAnswerChoice{Cancel: getOf(record, "cancel") == true, OptionID: option, Answers: getOf(record, "answers")}
 
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
