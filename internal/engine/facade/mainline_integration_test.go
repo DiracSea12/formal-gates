@@ -83,6 +83,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 			plan.Batches[0].Artifacts = []string{"app.go"}
 		}
 		child.confirmSliceRoute(route, plan)
+		child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
 		child.drive()
 		id, in := planBatchAction(child, "command")
 		path := sliceID + ".go"
