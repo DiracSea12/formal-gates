@@ -208,6 +208,13 @@ func (s *State) AcceptedNativeSnapshot() string {
 	if s.CandidatePromotion != nil {
 		return s.CandidatePromotion.Final
 	}
+	if reset, ok := s.resetDecision(); ok && reset.Reset.Applied {
+		preview := s.PendingAsks[reset.RequestID].Reset
+		if preview == nil && s.SliceChild != nil && s.SliceChild.ParentReset != nil {
+			preview = &s.SliceChild.ParentReset.Preview
+		}
+		return preview.Current
+	}
 	return s.InitialSnapshot
 }
 

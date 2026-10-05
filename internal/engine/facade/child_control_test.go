@@ -64,7 +64,7 @@ func confirmResetControl(t *testing.T, d *validationDriver) {
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoProductReview: pkg.RedoProductReview, RedoStartReadiness: pkg.RedoStartReadiness, ResetRequestID: pkg.ResetRequestID, Reason: "confirm the complete registered requirement and solution"}}})
 }
 func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
-	master, child := controlChildren(t)
+	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
 	before := driverState(t, child)
 	parentBefore := driverState(t, master)
 	raw, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "requirements.md"))
@@ -78,11 +78,20 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(raw, after) || state.BaseSnapshot != before.BaseSnapshot || state.InitialSnapshot != before.InitialSnapshot || !reflect.DeepEqual(state.Topology, before.Topology) || state.SliceChild.RequirementRevision != before.SliceChild.RequirementRevision {
+	if !bytes.Equal(raw, after) || state.BaseSnapshot != before.BaseSnapshot || state.InitialSnapshot != before.InitialSnapshot || state.Validation.DevelopmentSnapshot != before.Validation.DevelopmentSnapshot || state.AcceptedNativeSnapshot() != before.AcceptedNativeSnapshot() || state.RouteMode != before.RouteMode || !reflect.DeepEqual(state.SelectedGates, before.SelectedGates) || !reflect.DeepEqual(state.Topology, before.Topology) || state.SliceChild.RequirementRevision != before.SliceChild.RequirementRevision {
 		t.Fatal("reset changed native content or child origin")
 	}
 	if !reflect.DeepEqual(driverState(t, master).ReviewSeries, parentBefore.ReviewSeries) || len(state.ReviewSeries.ProductReview.RawCandidates) != 0 {
 		t.Fatal("child reset changed parent review authority")
+	}
+	parent := driverState(t, master)
+	if parent.SliceReceipts[child.f.runID].Digest != ready.Digest || parent.SliceReceiptCurrent(ready) || parent.SliceResetAuthorities[child.f.runID].Decision.RequestID != string(reset.Decide.Request) {
+		t.Fatal("child reset changed immutable evidence or retained its successful qualification")
+	}
+	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
+	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
+	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
+		t.Fatal("reset changed accepted executable content or mode", err, modeErr)
 	}
 	if _, _, err = child.f.Submit(reset); err != nil {
 		t.Fatal("reset replay was not stable", err)

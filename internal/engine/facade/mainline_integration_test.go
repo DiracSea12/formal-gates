@@ -487,7 +487,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		if in.Handler == "engine.qa.execution" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
 			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
 		}
-		if in.Handler == "engine.gate" && in.Gate.Scope != coverage.ScopeFull {
+		if in.Handler == "engine.gate" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
 			t.Fatal("QA scope narrowed the ordinary gate")
 		}
 		master.receipt(id)
