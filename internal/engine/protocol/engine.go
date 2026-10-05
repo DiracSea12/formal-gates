@@ -1211,6 +1211,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			if ev.resetPreview != nil {
 				preview.RequirementRevision = ev.resetPreview.RequirementRevision
 				preview.Children = ev.resetPreview.Children
+				preview.ChildPreviews = ev.resetPreview.ChildPreviews
 				preview.Digest = preview.CanonicalDigest()
 			}
 			ask.Reset = &preview

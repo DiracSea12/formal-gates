@@ -17,7 +17,15 @@ func (f *Facade) acquireWriteWindow() (func(), error) {
 		return nil, err
 	}
 	if snap.State.SliceChild == nil {
-		return f.acquireNativeWindow()
+		u, err := f.acquireNativeWindow()
+		if err != nil {
+			return nil, err
+		}
+		if err = f.syncReleasedChildren(); err != nil {
+			u()
+			return nil, err
+		}
+		return u, nil
 	}
 	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID)
 	if err != nil {
@@ -88,7 +96,9 @@ func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, err
 		for i, w := range work {
 			decisions[i].Work = w
 		}
-		out = append(out, actual.State.ChildRequirementMaterial(decisions))
+		material := actual.State.ChildRequirementMaterial(decisions)
+		material.EnteredMainline = snap.State.SliceEnteredMainline(plan.RunID)
+		out = append(out, material)
 	}
 	return out, nil
 }
@@ -105,10 +115,16 @@ func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisi
 	}
 	for i, want := range actual {
 		got := pkg.Children[i]
-		if got.ChildRunID != want.ChildRunID || got.SliceID != want.SliceID || got.RequirementRevision != want.RequirementRevision || got.ReceiptDigest != want.ReceiptDigest || got.CandidateDigest != want.CandidateDigest || got.RouteDigest != want.RouteDigest || got.Reason == "" || !disposition(got.RouteDisposition) || want.ReceiptDigest != "" && !disposition(got.ReceiptDisposition) || want.CandidateDigest != "" && !disposition(got.CandidateDisposition) || len(got.WorkDecisions) != len(want.WorkDecisions) {
+		if got.EnteredMainline != want.EnteredMainline || got.ChildRunID != want.ChildRunID || got.SliceID != want.SliceID || got.RequirementRevision != want.RequirementRevision || got.ReceiptDigest != want.ReceiptDigest || got.CandidateDigest != want.CandidateDigest || got.RouteDigest != want.RouteDigest || got.Reason == "" || !disposition(got.RouteDisposition) || want.ReceiptDigest != "" && !disposition(got.ReceiptDisposition) || want.CandidateDigest != "" && !disposition(got.CandidateDisposition) || len(got.WorkDecisions) != len(want.WorkDecisions) {
 			return fmt.Errorf("child requirement decision does not match exact work/material inventory: %s", want.ChildRunID)
 		}
+		if got.EnteredMainline && !pkg.RedoTopology && (got.ReceiptDisposition == protocol.RequirementWorkRedo || got.CandidateDisposition == protocol.RequirementWorkRedo || got.RouteDisposition == protocol.RequirementWorkRedo) {
+			return fmt.Errorf("entered slice %s is retained as source evidence; decide affected master obligations", got.ChildRunID)
+		}
 		for j, work := range got.WorkDecisions {
+			if got.EnteredMainline && !pkg.RedoTopology && work.Disposition == protocol.RequirementWorkRedo {
+				return fmt.Errorf("entered child work is owned by the master candidate/repair obligations: %s", got.ChildRunID)
+			}
 			if work.Work != want.WorkDecisions[j].Work || !disposition(work.Disposition) || work.Reason == "" {
 				return fmt.Errorf("child requirement work decision does not match %s", want.ChildRunID)
 			}
@@ -131,6 +147,13 @@ func (f *Facade) syncReleasedChildren() error {
 		return nil
 	}
 	for _, plan := range snap.State.ChildCreation.Children {
+		established, err := runDirectoryEstablished(f.root + "/" + EngineNamespace + "/" + plan.RunID)
+		if err != nil {
+			return err
+		}
+		if !established {
+			continue
+		}
 		child, err := Open(f.root, plan.RunID)
 		if err != nil {
 			return err
@@ -173,4 +196,46 @@ func (f *Facade) recordChildReset() error {
 		return err
 	}
 	return parent.engine.RecordChildReset(snap.State, emptyFingerprint())
+}
+
+func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
+	for _, id := range preview.Children {
+		child, err := Open(f.root, id)
+		if err != nil {
+			return err
+		}
+		snap, err := child.engine.Load()
+		if isMissingEngineState(err) {
+			summary, e := child.readSummary()
+			err = e
+			snap.State = summary.Termination
+		}
+		if err != nil {
+			return err
+		}
+		p := snap.State.ResetPreview()
+		p.RequirementRevision = preview.RequirementRevision
+		p.Digest = p.CanonicalDigest()
+		preview.ChildPreviews = append(preview.ChildPreviews, p)
+	}
+	return nil
+}
+func (f *Facade) validateResetChildren(request string) error {
+	snap, err := f.engine.Load()
+	if err != nil {
+		return err
+	}
+	approved := snap.State.PendingAsks[request].Reset
+	if approved == nil || len(approved.Children) == 0 {
+		return nil
+	}
+	current := *approved
+	current.ChildPreviews = nil
+	if err := f.resetChildrenPreview(&current); err != nil {
+		return err
+	}
+	if current.CanonicalDigest() != approved.Digest {
+		return fmt.Errorf("child reset scope changed; request a fresh complete preview")
+	}
+	return nil
 }

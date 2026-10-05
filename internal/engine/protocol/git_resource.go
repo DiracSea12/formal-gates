@@ -398,7 +398,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		if json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 {
 			return false
 		}
-		authority := s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd)
+		authority := s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd)
 		if p.Checkpoint != nil {
 			authority = s.checkpointCleanupCurrent(p.Checkpoint)
 		}
@@ -574,7 +574,7 @@ func (s *State) cleanupQuiescent() bool {
 }
 
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
-	return s.cleanupQuiescent() && (s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(cd))
+	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(cd))
 }
 
 func (s *State) ResourceCleanupPending(id string) bool {

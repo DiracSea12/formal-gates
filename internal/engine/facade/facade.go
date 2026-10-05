@@ -1004,7 +1004,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 			return Run{}, err
 		}
 		if run.Status == "ABORTED" {
-			if err := f.engine.FreezeAbortedSlice(emptyFingerprint()); err != nil {
+			if err := f.engine.FreezeAbortedSlice(interval.endedAt, emptyFingerprint()); err != nil {
 				return Run{}, err
 			}
 		}
@@ -1041,6 +1041,68 @@ func (f *Facade) driveInWindow() (Run, error) {
 func (f *Facade) sealDelivered() error {
 	identity, _, err := f.verifyDelivered()
 	if err != nil {
+		return err
+	}
+	interval, err := f.finishOwnerCost()
+	if err != nil {
+		return err
+	}
+	run, err := f.project()
+	if err != nil {
+		return err
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		return err
+	}
+	run.Termination = snapshot.State
+	if run.Termination.Phase == runtime.PhaseTerminal {
+		return nil
+	}
+	// The intended terminal projection is materialized while the live State
+	// remains at its recoverable cleanup boundary. Seal is the final authority.
+	data, err := json.Marshal(run.Termination)
+	if err != nil {
+		return err
+	}
+	var terminal protocol.State
+	if err := json.Unmarshal(data, &terminal); err != nil {
+		return err
+	}
+	live := run.Termination
+	terminal.Phase = runtime.PhaseTerminal
+	run.Termination = &terminal
+	run.Status = "COMPLETE"
+	run.Revision++
+	run.Next = decision.NextResult{Kind: decision.KindComplete}
+	summary := summaryForRun(run, interval)
+	if existing, readErr := f.readTerminalIntent(); readErr == nil && f.terminalEvidenceComplete(existing) && existing.Revision == summary.Revision {
+		summary = existing
+	} else if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return readErr
+	}
+	if summary.SliceGuarantee == nil {
+		summary.SliceGuarantee, err = f.materializeSliceGuarantee(live)
+		if err != nil {
+			return err
+		}
+	}
+	if !f.terminalEvidenceComplete(summary) {
+		return fmt.Errorf("terminal material requires concluded delivery and cleanup")
+	}
+	if err := f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) }); err != nil {
+		return err
+	}
+	if err := f.cleanupCheckpoints(summary); err != nil {
+		return err
+	}
+	if err := f.endLifecycle(); err != nil {
+		return err
+	}
+	if err := f.writeSummaryValue(summary); err != nil {
+		return err
+	}
+	if _, _, err := f.verifyDelivered(); err != nil {
 		return err
 	}
 	return f.engine.SealTerminal(identity, emptyFingerprint())
@@ -1222,6 +1284,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			}
 			preview.RequirementRevision = revision
 		}
+		if err := f.resetChildrenPreview(&preview); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
 		preview.Digest = preview.CanonicalDigest()
 		event = event.WithResetPreview(preview)
 	}
@@ -1230,10 +1295,15 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			return protocol.Acceptance{}, Run{}, err
 		}
 	}
+	if event.Decide != nil && event.Decide.Reset != nil {
+		if err := f.validateResetChildren(string(event.Decide.Request)); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+	}
 	if event.Decide != nil && event.Decide.Requirement != nil {
 		pkg := event.Decide.Requirement
 		if len(pkg.Children) > 0 {
-			view := protocol.RequirementDecisionPackage{Children: pkg.Children, Impact: pkg.Impact}
+			view := protocol.RequirementDecisionPackage{Children: pkg.Children, Impact: pkg.Impact, RedoTopology: pkg.RedoTopology}
 			if err := f.validateChildRequirementPackage(&view); err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}

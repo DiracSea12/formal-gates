@@ -340,6 +340,9 @@ func (s *State) candidateContextCurrent(p CandidateParameters) bool {
 	if p.Generation == s.Validation.Generation {
 		return p.RequirementRevision == s.Validation.RequirementRevision
 	}
+	if p.Integration != nil {
+		return s.integrationCarryAuthorized(p)
+	}
 	if len(p.SourceTasks) == 0 {
 		return false
 	}

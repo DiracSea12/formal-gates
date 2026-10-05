@@ -459,7 +459,7 @@ func (s *State) inheritedReviewPass(series review.Series) bool {
 // FreezeAbortedSlice replaces a success checkpoint with the abort authority only
 // after registered cleanup is proven. Its frozen value survives state deletion
 // in the ordinary terminal summary and is discovered through the same claim.
-func (e *Engine) FreezeAbortedSlice(expectedFingerprint string) error {
+func (e *Engine) FreezeAbortedSlice(endedAt, expectedFingerprint string) error {
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -475,7 +475,10 @@ func (e *Engine) FreezeAbortedSlice(expectedFingerprint string) error {
 	if s.SliceReceipt != nil && s.SliceReceipt.Receipt.Status == "ABORTED" {
 		return nil
 	}
-	r := SliceTerminalReceipt{Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteMode: s.RouteMode, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
+	r := SliceTerminalReceipt{Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteMode: s.RouteMode, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
+	if s.SliceChild.ParentAbort != nil {
+		r.Abort = s.SliceChild.ParentAbort
+	}
 	data, err := json.Marshal(r)
 	if err != nil {
 		return err

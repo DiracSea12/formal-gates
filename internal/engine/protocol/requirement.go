@@ -490,7 +490,8 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if payload.Source == RequirementSourceReset && (ask.ResetRequestID == "" || payload.ResetRequestID != ask.ResetRequestID) {
 		return reject("reset confirmation must bind the accepted reset request")
 	}
-	if payload.Source != RequirementSourceUserInitiated && payload.Source != RequirementSourceReset {
+	parentConfirmed := state.SliceChild != nil && state.SliceChild.ParentChange != nil && state.SliceChild.ParentChange.Confirmation != nil && state.SliceChild.ParentChange.Confirmation.RequestID == requestID && state.SliceChild.ParentChange.Confirmation.Revision == payload.CandidateRevision
+	if payload.Source != RequirementSourceUserInitiated && payload.Source != RequirementSourceReset && !parentConfirmed {
 		owner, decision, severity, found := review.FindingDecision(state.ReviewSeries, payload.FindingDigest)
 		if !found {
 			return reject(fmt.Sprintf("requirement decision binds finding digest %q that no recorded review evidence contains", payload.FindingDigest))

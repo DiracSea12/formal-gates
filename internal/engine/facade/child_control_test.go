@@ -2,8 +2,11 @@ package facade
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -174,5 +177,149 @@ func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
 	master.drive()
 	if driverState(t, master).SliceReceipts[child.f.runID].Digest != accepted.Digest {
 		t.Fatal("terminal discovery lost aborted evidence")
+	}
+}
+
+func requirementChildChoices(t *testing.T, d *validationDriver) []protocol.ChildRequirementDecision {
+	t.Helper()
+	choices, err := d.f.requirementChildren()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range choices {
+		c := &choices[i]
+		c.ReceiptDisposition, c.CandidateDisposition, c.RouteDisposition = protocol.RequirementWorkCarry, protocol.RequirementWorkCarry, protocol.RequirementWorkCarry
+		c.Reason = "explicitly preserve unaffected child responsibilities"
+		for j := range c.WorkDecisions {
+			c.WorkDecisions[j].Disposition = protocol.RequirementWorkCarry
+			c.WorkDecisions[j].Reason = c.Reason
+		}
+	}
+	return choices
+}
+
+func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
+	_, child := controlChildren(t)
+	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+	child.drive()
+	id, input := planBatchAction(child, "command")
+	child.receipt(id)
+	reset := resetControl(t, child)
+	state := driverState(t, child)
+	if _, pending := state.PendingActions[id]; !pending {
+		t.Fatal("reset dropped the active worker responsibility")
+	}
+	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)}
+	child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: child.host(), Outcome: protocol.OutcomePass, PayloadDigest: "completed-before-stop", Validation: &result}})
+	child.reopen()
+	child.drive()
+	var terminated bool
+	for action, intent := range child.run.AdapterIntents {
+		if intent.Terminate == nil || intent.Terminate.WorkerActionID != id {
+			continue
+		}
+		terminated = true
+		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+			event, err := protocol.NewLifecycleEventEvent(child.eventID(), child.host(), intent.Terminate.Identity, edge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child.submit(event)
+		}
+		event, err := protocol.NewAgentHostActionReceiptEvent(child.eventID(), action, intent.Operation, child.host(), action, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child.submit(event)
+	}
+	if !terminated {
+		t.Fatal("reset omitted original termination intent")
+	}
+	confirmResetControl(t, child)
+	state = driverState(t, child)
+	if _, accepted := state.Results[id]; accepted {
+		t.Fatal("pre-reset result requalified after reset")
+	}
+	if state.ResetPending() || len(state.PendingHostActions) != 0 {
+		t.Fatal("reset did not settle the original responsibilities")
+	}
+	if _, _, err := child.f.Submit(reset); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalMaterialsFinishBeforeSeal(t *testing.T) {
+	master, _ := mainlineChildren(t, "")
+	passMainlineTargets(t, master)
+	path := filepath.Join(master.f.stateDir, "terminal-summary.json")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := master.f.Drive(); err == nil {
+		t.Fatal("terminal material failure was hidden")
+	}
+	snap, err := master.f.engine.Load()
+	if err != nil || snap.State.Phase == runtime.PhaseTerminal {
+		t.Fatal("failed terminal material left SEALED", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	master.reopen()
+	master.drive()
+	if master.run.Status != "COMPLETE" {
+		t.Fatal("same terminal handler did not recover")
+	}
+	summary, err := master.f.readSummary()
+	if err != nil || summary.SliceGuarantee == nil {
+		t.Fatal("active guarantee was omitted", err)
+	}
+	data, err := os.ReadFile(summary.SliceGuarantee.Path)
+	if err != nil || !bytes.Contains(data, []byte("activation")) || !bytes.Contains(data, []byte("receipts")) || !bytes.Contains(data, []byte("validation")) {
+		t.Fatal("guarantee sidecar omitted required content", err)
+	}
+}
+
+func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
+	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
+	before := driverState(t, master)
+	choices := requirementChildChoices(t, master)
+	for i := range choices {
+		if choices[i].ChildRunID != child.f.runID {
+			choices[i].RouteDisposition = protocol.RequirementWorkRedo
+			choices[i].Reason = "replace the affected slice route"
+			for j := range choices[i].WorkDecisions {
+				choices[i].WorkDecisions[j].Disposition = protocol.RequirementWorkRedo
+			}
+		}
+	}
+	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:topology", ImpactDigest: "sha256:affected-slice", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: true, Children: choices, Impact: &protocol.RequirementImpact{ChangedItems: []string{"affected slice boundary"}, TransitiveImpacts: []string{"replacement route"}, CarryReasons: []string{"core evidence and ownership unchanged"}}}
+	for _, work := range master.run.RequirementWork {
+		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master obligation"})
+	}
+	request, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm complete topology impact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(request)
+	ask := master.run.PendingRequirementAsk
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route"}}})
+	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	master.reopen()
+	master.drive()
+	state := driverState(t, master)
+	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-ui"] == before.SliceChildren["lane-ui"] || state.ChildCreation.Previous == nil {
+		t.Fatal("topology rebuild discarded carried origin or reused the affected child")
+	}
+	carried := driverState(t, child)
+	if carried.SliceChild.RequirementRevision != ready.Receipt.RequirementRevision || carried.SliceReceipt.Digest != ready.Digest {
+		t.Fatal("topology carry rewrote frozen child evidence")
 	}
 }

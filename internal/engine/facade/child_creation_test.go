@@ -190,7 +190,8 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 					t.Fatal(err)
 				}
 				revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-				pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
+				children := requirementChildChoices(t, master)
+				pkg := protocol.RequirementDecisionPackage{Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"topology"}}, CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
 				event, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 				if err != nil {
 					t.Fatal(err)
@@ -198,7 +199,7 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 				master.submit(event)
 				if withdrawn {
 					ask := master.run.PendingRequirementAsk
-					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
+					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: pkg.Children, Impact: pkg.Impact, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
 					if driverState(t, master).Topology != nil {
 						t.Fatal("normal topology reconsideration did not clear the current binding")
 					}

@@ -20,6 +20,7 @@ type ResetPreview struct {
 	RouteMode           string           `json:"routeMode"`
 	Gates               []string         `json:"gates"`
 	Children            []string         `json:"children"`
+	ChildPreviews       []ResetPreview   `json:"childPreviews,omitempty"`
 	Preserve            []string         `json:"preserve"`
 	Clear               []string         `json:"clear"`
 	Resources           []GitResource    `json:"resources"`
@@ -83,6 +84,7 @@ func (e *Engine) acceptResetDecision(s *State, ask PendingAsk, d *DecidePayload)
 	current := s.ResetPreview()
 	current.RequirementRevision = ask.Reset.RequirementRevision
 	current.Children = ask.Reset.Children
+	current.ChildPreviews = ask.Reset.ChildPreviews
 	current.Digest = current.CanonicalDigest()
 	if current.Digest != ask.Reset.Digest {
 		return validationError("reset preview is superseded; request a fresh preview")
@@ -272,6 +274,12 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 		return err
 	}
 	local := s.ResetPreview()
+	for _, approved := range preview.ChildPreviews {
+		if approved.RunID == s.RunID {
+			local = approved
+			break
+		}
+	}
 	local.RequirementRevision = preview.RequirementRevision
 	local.Digest = local.CanonicalDigest()
 	copy := d

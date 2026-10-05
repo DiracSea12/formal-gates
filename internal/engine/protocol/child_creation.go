@@ -65,7 +65,7 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 	if s.ChildCreation != nil && digestOfCanonical(s.ChildCreation.Topology) == digestOfCanonical(s.Topology) {
 		return nil
 	}
-	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != topologySplit || s.abortRequested() || s.Phase == runtime.PhaseTerminal || s.NativeRoot == "" || sourceDigest == "" {
+	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != topologySplit && s.ChildCreation == nil || s.abortRequested() || s.Phase == runtime.PhaseTerminal || s.NativeRoot == "" || sourceDigest == "" {
 		return validationError("child preparation requires an active native split master")
 	}
 	var previous *ChildCreation
@@ -89,7 +89,7 @@ sliceLoop:
 	for _, sliceID := range c.Topology.Slices {
 		if previous != nil {
 			_, choice := s.childRequirementDecision(s.SliceChildren[sliceID])
-			if choice != nil && choice.ReceiptDisposition == RequirementWorkCarry && choice.RouteDisposition == RequirementWorkCarry {
+			if choice != nil && choice.ReceiptDisposition == RequirementWorkCarry && choice.RouteDisposition == RequirementWorkCarry && !slices.ContainsFunc(choice.WorkDecisions, func(w RequirementWorkDecision) bool { return w.Disposition != RequirementWorkCarry }) {
 				for _, child := range previous.Children {
 					if child.SliceID == sliceID {
 						child.Carried = true
@@ -258,7 +258,7 @@ func (e *Engine) ReleaseChildren(children []*State, expectedFingerprint string) 
 		return nil
 	}
 	for i, child := range s.ChildCreation.Children {
-		if !s.preparedChild(child, children[i]) || !child.Carried && (children[i].Phase != runtime.PhasePreparing || children[i].abortRequested()) || children[i].InitialSnapshot != s.ChildCreation.Source {
+		if !s.preparedChild(child, children[i]) || !child.Carried && (children[i].Phase != runtime.PhasePreparing || children[i].abortRequested()) || !child.Carried && children[i].InitialSnapshot != s.ChildCreation.Source {
 			return validationError("child release lacks a live prepared child")
 		}
 		if _, proven := s.ChildWorkspaceProof(child); !child.Carried && !proven {
@@ -425,7 +425,16 @@ func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) 
 	if !ok {
 		return validationError("topology replacement lacks original user decision")
 	}
-	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event}
+	var authorization *ConfirmedRevision
+	for i := range parent.RequirementRevisions {
+		if parent.RequirementRevisions[i].RequestID == c.RequestID {
+			authorization = &parent.RequirementRevisions[i]
+		}
+	}
+	if authorization == nil || !slices.Contains(authorization.DecidedScope, "topology") {
+		return validationError("child replacement lacks confirmed topology scope")
+	}
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event, Requirement: authorization}
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }

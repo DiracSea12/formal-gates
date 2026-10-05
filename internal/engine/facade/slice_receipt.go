@@ -12,6 +12,11 @@ func (f *Facade) handoffSliceReceipt(receipt protocol.SliceReceipt) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := master.acquireWriteWindow()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return master.acceptSliceReceipt(receipt)
 }
 
@@ -45,6 +50,9 @@ func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
 		}
 		snapshot, err := child.engine.Load()
 		if isMissingEngineState(err) {
+			if accepted, ok := state.SliceReceipts[childID]; ok && accepted.Receipt.Status == "SLICE_READY" && state.ResourcesCleaned() {
+				continue
+			}
 			summary, e := child.readSummary()
 			if e != nil {
 				return e

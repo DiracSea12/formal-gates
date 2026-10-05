@@ -16,6 +16,7 @@ type RequirementImpact struct {
 // the parent's confirmation. Evidence digests identify original bytes, not a
 // rewritten copy of those bytes under the new revision.
 type ChildRequirementDecision struct {
+	EnteredMainline      bool                      `json:"enteredMainline,omitempty"`
 	ChildRunID           string                    `json:"childRunId"`
 	SliceID              string                    `json:"sliceId"`
 	RequirementRevision  string                    `json:"requirementRevision"`
@@ -105,7 +106,7 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 			if s.RequirementRevision() != entry.Revision {
 				pkg := RequirementDecisionPackage{Coverage: entry.Coverage, CandidateRevision: entry.Revision, DeltaDigest: entry.DeltaDigest, ImpactDigest: digestOfCanonical(entry.Impact), Source: entry.Source, Classification: entry.Classification, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
 				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
-				s.SliceChild.ParentChange = nil
+				s.SliceChild.ParentChange = authority
 				ask := PendingAsk{Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: &pkg}
 				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint); err != nil {
 					return err

@@ -76,7 +76,45 @@ func (s *State) integrationResource() GitResource {
 	if existing, ok := s.GitResources[r.ID]; ok {
 		return existing
 	}
+	var original HostActionIntent
+	for _, receipt := range s.HostActionReceipts {
+		intent, exists := s.hostIntent(receipt.ActionID)
+		p, err := candidateParameters(intent)
+		if exists && err == nil && receipt.Status == HostActionStatusExecuted && p.Integration != nil && s.candidateContextCurrent(p) && p.Integration.MapDigest == digestOfCanonical(s.SliceChildren) && p.Integration.TopologyDigest == digestOfCanonical(s.Topology) && intent.Revision > original.Revision {
+			original = intent
+		}
+	}
+	if original.ActionID != "" {
+		p, _ := candidateParameters(original)
+		return s.GitResources[p.WorkspaceID]
+	}
 	return r
+}
+
+// A confirmed child CARRY preserves the original native merge effect. Its
+// workspace and prefix are facts of the original candidate intent and receipt.
+func (s *State) integrationCarryAuthorized(p CandidateParameters) bool {
+	if p.Integration == nil || !s.mergeMaster() || p.RouteScope != s.validationRouteDigest() || p.Integration.TopologyDigest != digestOfCanonical(s.Topology) || p.Integration.MapDigest != digestOfCanonical(s.SliceChildren) {
+		return false
+	}
+	child, ok := s.SliceReceipts[p.Integration.ChildRunID]
+	return ok && child.Digest == p.Integration.ChildReceiptDigest && child.Receipt.Snapshot == p.Integration.Incoming && child.Receipt.Tree == p.Integration.IncomingTree && s.childReceiptCarried(child)
+}
+
+// SliceEnteredMainline reports an actual accepted merge intent/receipt, even
+// while a later control is deciding its continued qualification.
+func (s *State) SliceEnteredMainline(childID string) bool {
+	for action, receipt := range s.HostActionReceipts {
+		intent, exists := s.hostIntent(action)
+		p, err := candidateParameters(intent)
+		if exists && err == nil && p.Stage == "MERGE_FINISH" && p.Integration != nil && p.Integration.ChildRunID == childID && receipt.Status == HostActionStatusExecuted {
+			proof, err := decodeCandidateEvidence(receipt)
+			if err == nil && sValidateIntegrationReceipt(p, proof) == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *State) integrationReceipt(stage, sliceID string) (HostActionIntent, CandidateEvidence, bool) {

@@ -107,7 +107,11 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 			t.Fatal(err)
 		}
 		if !identical {
-			if err := os.WriteFile(filepath.Join(in.Workspace.Path, sliceID+".go"), []byte("package main\n"), 0644); err != nil {
+			module := []byte("package main\n")
+			if conflict == "delete" && index == 0 {
+				module = []byte("package main\n\nfunc parseCommand(value string) string { return value }\n")
+			}
+			if err := os.WriteFile(filepath.Join(in.Workspace.Path, sliceID+".go"), module, 0644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -128,6 +132,13 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 			t.Fatal(err)
 		}
 		child.drive()
+		if conflict == "delete" && index == 0 {
+			proof := readSliceReceipt(t, child)
+			diff, err := runner.Run(root, "git", "diff", "--summary", state.ChildCreation.Source, proof.Receipt.Snapshot)
+			if err != nil || !strings.Contains(diff, "delete mode") || strings.Contains(diff, "rename") {
+				t.Fatal("delete fixture must have a native deletion without rename", diff, err)
+			}
+		}
 		children = append(children, child)
 	}
 	return master, children
@@ -224,7 +235,9 @@ func passMainlineTargets(t *testing.T, master *validationDriver) {
 			result.Environment = "native isolated candidate"
 		}
 		master.business(id, result)
-		master.drive()
+		if len(master.run.ValidationInputs) > 0 {
+			master.drive()
+		}
 	}
 }
 
@@ -480,7 +493,10 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	for _, event := range events {
 		master.submit(event)
 	}
-	master.drive()
+	master.run, err = master.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if master.run.Validation.Waves[len(master.run.Validation.Waves)-1].Status != "COMPLETE" {
 		t.Fatal("parallel results did not join")
 	}
@@ -562,7 +578,11 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 			if err := validateConflictEdits(native, input.Workspace.Path, input.Conflict.Evidence); err == nil {
 				t.Fatal("worker edit outside conflict authority was admitted")
 			}
-			if err := os.WriteFile(outside, []byte("package main\n"), 0644); err != nil {
+			original := []byte("package main\n")
+			if kind == "delete" {
+				original = []byte("package main\n\nfunc parseCommand(value string) string { return value }\n")
+			}
+			if err := os.WriteFile(outside, original, 0644); err != nil {
 				t.Fatal(err)
 			}
 			master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Resolution: &protocol.ConflictResolution{Paths: []string{conflict.Path}, Summary: "choose the documented native content outcome"}})
