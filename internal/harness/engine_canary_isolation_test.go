@@ -251,6 +251,147 @@ func TestCanaryPreparationPreservesNativeSelection(t *testing.T) {
 	}
 }
 
+func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is not available")
+	}
+	consumer := canaryNativeReleaseConsumer(t)
+	_, file, _, _ := runtime.Caller(0)
+	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	for _, layout := range []string{"script-directory", "source-tree", "resources"} {
+		for _, existing := range []bool{false, true} {
+			name := layout + "/missing-active"
+			if existing {
+				name = layout + "/private-active"
+			}
+			t.Run(name, func(t *testing.T) {
+				for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+					t.Setenv(key, "")
+				}
+				candidate := zcodeTestStore(t, []string{"account-provider:coding-plan:p2:account:u2:api-key", "account-provider:coding-plan:p1:account:u1:api-key"})
+				base := t.TempDir()
+				runtimeRoot := filepath.Join(base, "a", "b", "c", "app")
+				script := filepath.Join(runtimeRoot, "glm", "zcode.cjs")
+				bundled := filepath.Join(runtimeRoot, "glm", "provider", "zcode-builtin.json")
+				if layout == "source-tree" {
+					bundled = filepath.Join(base, "config", "provider", "zcode-builtin.json")
+				} else if layout == "resources" {
+					bundled = filepath.Join(runtimeRoot, "config", "provider", "zcode-builtin.json")
+				}
+				for _, path := range []string{script, bundled} {
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(script, []byte("// native runtime fixture\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				release := objectOrEmpty(decodeTestJSON(t, readTestFile(t, zcodeTestCatalogue(t, "7"))))
+				config := objectOrEmpty(release["config"])
+				config["providers"] = map[string]any{"fixture": "bundled"}
+				config["providerTemplates"], config["modelConfigRules"] = map[string]any{}, []any{}
+				bundleContent := mustMarshalCanary(t, release)
+				if err := os.WriteFile(bundled, []byte(bundleContent), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
+				c := &engineCanary{t: t}
+				if err := c.prepareHome(candidate, t.TempDir(), sourceRoot); err != nil {
+					t.Fatal(err)
+				}
+				if existing {
+					release["revision"] = 9
+					config["providers"] = map[string]any{"fixture": "private-active"}
+					active := c.hostPaths()["catalogue"]
+					if err := os.MkdirAll(filepath.Dir(active), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(active, []byte(mustMarshalCanary(t, release)), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for repeat := 0; repeat < 2; repeat++ {
+					if err := c.captureBinding(); err != nil {
+						t.Fatal(err)
+					}
+					environment := zcodeLaunchEnvironment(c.binding)
+					if environment[zcodeBuiltinCatalogueEnv] != c.hostPaths()["catalogue"] || environment["ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"] != canaryCanonicalPath(bundled) || zcodePinnedCatalogue(c.binding) != environment[zcodeBuiltinCatalogueEnv] {
+						t.Fatalf("active/bundled binding identities: %#v", environment)
+					}
+					cmd := exec.Command("node", consumer)
+					output, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("native read: %v %s", err, output)
+					}
+					native := objectOrEmpty(decodeTestJSON(t, string(output)))
+					revision, err := zcodeBuiltinProviderRevision(environment[zcodeBuiltinCatalogueEnv])
+					if err != nil || native["revision"] != revision || native["activeFilePath"] != environment[zcodeBuiltinCatalogueEnv] || native["bundledFilePath"] != canaryCanonicalPath(bundled) || !valuesEqual(native["providers"], config["providers"]) || !valuesEqual(decodeTestJSON(t, readTestFile(t, c.hostPaths()["catalogue"])), release) {
+						t.Fatalf("native persistent release/revision identity: native=%#v error=%v", native, err)
+					}
+					overlay, err := zcodeAccountProviderConfiguration(zcodePinnedCatalogue(c.binding), nil)
+					if err != nil || getOf(overlay, "based_on") != native["revision"] || getOf(overlay, "current") != "p2" || getOf(overlay, "current_source") != "provisioning-order" || getOf(getOf(overlay, "configuration"), "basedOnZCodeBuiltinRevision") != native["revision"] {
+						t.Fatalf("native account revision identity: %#v %v", overlay, err)
+					}
+					if readTestFile(t, bundled) != bundleContent {
+						t.Fatal("native active read changed the shared bundled release")
+					}
+					if layout != "resources" {
+						lookup, err := exec.Command("node", consumer, "lookup", script).CombinedOutput()
+						if err != nil || strings.TrimSpace(string(lookup)) != canaryCanonicalPath(bundled) {
+							t.Fatalf("original native lookup: %v %s", err, lookup)
+						}
+					}
+					t.Logf("native release layout=%s existing_active=%t capture=%d observation=%s account_revision=%s", layout, existing, repeat+1, strings.TrimSpace(string(output)), textOf(getOf(overlay, "based_on")))
+				}
+			})
+		}
+	}
+}
+
+// The consumer runs the native file read, release selection, active write and
+// revision path hash. Schema parsing and locking are local fixture substitutes;
+// it starts no app-server, credential helper or model request.
+func canaryNativeReleaseConsumer(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(zcodeDefaultScript)
+	if os.IsNotExist(err) {
+		t.Skip("native ZCode release consumer is not available")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(data)
+	_, functions, found := strings.Cut(source, "async function MWt(")
+	functions, ended := strings.Cut(functions, "var Snr,")
+	_, class, classFound := strings.Cut(source, "UO=class")
+	class, classEnded := strings.Cut(class, ";r(MWt,")
+	_, lookup, lookupFound := strings.Cut(source, "async function fQi(")
+	lookup, lookupEnded := strings.Cut(lookup, "function mQi(")
+	if !found || !ended || !classFound || !classEnded || !lookupFound || !lookupEnded {
+		t.Fatal("native release consumer source markers are missing")
+	}
+	prelude := `const Snr=require('node:fs'),wnr=require('node:crypto'),rZe=require('node:fs/promises'),bee=require('node:path'),Zj=bee,bmr=Snr;
+const r=()=>{},Spe=x=>x,bV=x=>JSON.stringify(x),OWt=x=>x,lw=async(p,fn)=>fn(),qL=(p,data)=>rZe.writeFile(p,data);
+`
+	driver := `
+async function consume() {
+  if (process.argv[2] === 'lookup') { console.log(await fQi({entrypoint:process.argv[3]})); return; }
+  const bundledFilePath=process.env.ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE;
+  const activeFilePath=process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
+  const consumer=new UO({bundledFilePath,activeFilePath,watch:false});
+  try { console.log(JSON.stringify({...await consumer.read(),activeFilePath:consumer.activeFilePath,bundledFilePath})); }
+  finally { consumer.dispose(); }
+}
+consume().catch(error=>{console.error(error);process.exitCode=1});
+`
+	path := filepath.Join(t.TempDir(), "native-release-consumer.cjs")
+	if err := os.WriteFile(path, []byte(prelude+"async function MWt("+functions+"const UO=class"+class+";async function fQi("+lookup+driver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("native release consumer source=%s sha256=%x", zcodeDefaultScript, sha256.Sum256(data))
+	return path
+}
+
 func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
@@ -291,7 +432,18 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	t.Setenv(zcodeBuiltinCatalogueEnv, filepath.Join(stable, ".zcode", "v2", "runtime", "provider", "zcode-builtin.json"))
 	t.Setenv("ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", os.Getenv(zcodeBuiltinCatalogueEnv))
 	t.Setenv(zcodeCredentialHelperEnv, filepath.Join(stable, ".zcode", "v2", zcodeCredentialsFile))
-	peer := filepath.Join(t.TempDir(), "zcode.cjs")
+	runtimeRoot := t.TempDir()
+	peer := filepath.Join(runtimeRoot, "glm", "zcode.cjs")
+	bundled := filepath.Join(runtimeRoot, "config", "provider", "zcode-builtin.json")
+	bundledContent := readTestFileBytes(t, zcodeTestCatalogue(t, "7"))
+	for _, path := range []string{peer, bundled} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(bundled, bundledContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(peer, []byte(canaryNativePathPeer), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -389,6 +541,9 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 				t.Fatalf("native %s=%v, want %s", key, got, want)
 			}
 		}
+		if getOf(observation["nativeRuntime"], "bundledCatalogue") != canaryCanonicalPath(bundled) || getOf(observation["nativeRuntime"], "bundledRevision") != json.Number("7") || observation["activeRevision"] != json.Number("1") {
+			t.Fatalf("native bundled/active identity: %#v", observation)
+		}
 		for key, got := range objectOrEmpty(observation["paths"]) {
 			if !canaryPathWithin(c.home, textOf(got)) {
 				t.Fatalf("native observed %s outside candidate: %s", key, got)
@@ -399,6 +554,9 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	proof := objectOrEmpty(decodeTestJSON(t, readTestFile(t, filepath.Join(c.jobs, "host-isolation.json"))))
 	if getOf(proof["separateRoots"], "source") != canaryCanonicalPath(sourceRoot) || !valuesEqual(proof["installReport"], decodeTestJSON(t, mustMarshalCanary(t, c.installed))) || getOf(proof["observed"], "projectState") != true || getOf(proof["observed"], "log") != false {
 		t.Fatalf("proof lost actual installation or observed/prospective distinction: %#v", proof)
+	}
+	if getOf(proof["nativeRuntime"], "bundledCatalogue") != canaryCanonicalPath(bundled) || getOf(proof["nativeRuntime"], "bundledCatalogueObserved") != true || canaryPathWithin(c.home, bundled) || string(readTestFileBytes(t, bundled)) != string(bundledContent) {
+		t.Fatalf("read-only native bundle ownership: %#v", proof["nativeRuntime"])
 	}
 	t.Logf("local canonical isolation proof: %s", readTestFile(t, filepath.Join(c.jobs, "host-isolation.json")))
 	for name, want := range stableFiles {
@@ -430,6 +588,8 @@ const config = path.join(process.env.ZCODE_DATA_BASE_DIR, '.zcode', 'v2');
 const paths = Object.fromEntries(['ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT'].map(key => [key, fs.realpathSync(process.env[key])]));
 const settings = JSON.parse(fs.readFileSync(path.join(config, 'setting.json')));
 const provider = JSON.parse(fs.readFileSync(process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE)).fixtureProvider;
+const nativeRuntime = {bundledCatalogue:fs.realpathSync(process.env.ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE),bundledRevision:JSON.parse(fs.readFileSync(process.env.ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE)).revision};
+const activeRevision = JSON.parse(fs.readFileSync(process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE)).revision;
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   let result;
@@ -437,7 +597,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     const workspace = fs.realpathSync(request.params.workspace.workspacePath);
     const argvWorkspace = fs.realpathSync(process.argv[process.argv.indexOf('--cwd')+1]);
     if (request.params.persistence !== 'immediate' || request.params.titleGenerationEnabled !== false || workspace !== fs.realpathSync(process.cwd()) || workspace !== argvWorkspace) process.exit(4);
-    fs.writeFileSync(path.join(workspace,'native-observation.json'), JSON.stringify({environment,paths,workspace,argvWorkspace,provider}));
+    fs.writeFileSync(path.join(workspace,'native-observation.json'), JSON.stringify({environment,paths,workspace,argvWorkspace,provider,nativeRuntime,activeRevision}));
     result = {protocol:{name:'ZCode Protocol',version:1},session:{sessionId:'fixture-'+workspace},settings};
   } else if (request.method === 'session/close') {
     result = {};

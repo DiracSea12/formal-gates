@@ -38,7 +38,8 @@ package harness
 // UI settings, provider readiness and selection remain native responsibilities.
 // The same root carries HOME, CLI
 // storage, hooks, rules, installation and business resources. Shared Node and
-// app-server code are runtime files; the formal-gates launcher and helper
+// app-server code and bundled provider release are read-only runtime files;
+// the active catalogue stays private. The formal-gates launcher and helper
 // come from this private installation. jobs/host-isolation.json records the
 // canonical paths and actual install report without configuration contents.
 
@@ -2103,7 +2104,7 @@ func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) err
 		"stable state":     filepath.Join(stableHome, ".gates"),
 		"stable resources": filepath.Join(stableHome, ".formal-gates-resources"),
 	}
-	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
 		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
 			separate["stable "+key] = path
 		}
@@ -2164,9 +2165,30 @@ func (c *engineCanary) hostPaths() map[string]string {
 // hostEnvironment is shared by the installed CLI and the native binding.
 // Only known data overrides are replaced; Node and the app-server remain the
 // operator's native runtime. The credential helper uses the actual installed
-// target after the installer has reported it.
+// target after the installer has reported it. The native script layout owns
+// the read-only bundled release; the active catalogue stays in the host root.
 func (c *engineCanary) hostEnvironment() map[string]string {
 	paths := c.hostPaths()
+	script := textOf(getOf(getOf(c.binding, "launch"), "script"))
+	if script == "" {
+		var configured bool
+		script, configured = os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT")
+		if !configured {
+			script = zcodeDefaultScript
+		}
+	}
+	script = resolveNativePath(zcodeExpandUser(script))
+	bundled := zcodeBundledProviderCatalogue(script)
+	directory := filepath.Dir(script)
+	for _, path := range []string{
+		filepath.Join(directory, "provider", "zcode-builtin.json"),
+		filepath.Join(directory, "..", "..", "..", "..", "..", "config", "provider", "zcode-builtin.json"),
+	} {
+		if zcodeIsRegularFile(path) {
+			bundled = resolveNativePath(path)
+			break
+		}
+	}
 	searchPath := os.Getenv("PATH")
 	binPrefix := filepath.Dir(paths["launcher"]) + string(os.PathListSeparator)
 	if !strings.HasPrefix(searchPath, binPrefix) {
@@ -2177,7 +2199,7 @@ func (c *engineCanary) hostEnvironment() map[string]string {
 		"ZCODE_HOME": paths["host"], "ZCODE_STORAGE_DIR": paths["host"],
 		"ZCODE_LOG_DIR": paths["log"], "ZCODE_MAILBOX_ROOT": paths["mailbox"],
 		zcodeBuiltinCatalogueEnv:                     paths["catalogue"],
-		"ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE": paths["catalogue"],
+		"ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE": bundled,
 		zcodePersonalConfigEnv:                       paths["personal"], zcodeCredentialHelperEnv: paths["credentials"],
 		"PATH":     searchPath,
 		"AI_AGENT": "", "CODEX_HOME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
@@ -2226,8 +2248,13 @@ func (c *engineCanary) recordIsolation() error {
 			}
 		}
 	}
+	bundled := zcodeLaunchEnvironment(c.binding)["ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"]
+	if bundled != "" {
+		bundled = canaryCanonicalPath(bundled)
+	}
 	return writeAtomicJSON(filepath.Join(c.jobs, "host-isolation.json"), map[string]any{
 		"provider": canaryProvider, "separateRoots": c.separateRoots, "candidate": paths,
 		"observed": observed, "installReport": c.installed, "binding": c.binding["launch"],
+		"nativeRuntime": map[string]any{"bundledCatalogue": bundled, "bundledCatalogueObserved": zcodeIsRegularFile(bundled)},
 	})
 }
