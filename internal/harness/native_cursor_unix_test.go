@@ -554,6 +554,10 @@ func TestCursorNativeRefusals(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(s.directory, "identity.json")); !os.IsNotExist(err) {
 					t.Fatal("unpersisted native identity was published")
 				}
+				if _, ok := err.(*bindingError); !ok {
+					t.Fatalf("native initialization failure %T %v", err, err)
+				}
+				writeNativeError(s.directory, err, &bytes.Buffer{})
 				failure, err := readJSONFile(filepath.Join(s.directory, "native-error.json"))
 				if err != nil || getOf(failure, "error_kind") == "SESSION_UNAVAILABLE" {
 					t.Fatal("native initialization failure became a lost saved session")
@@ -732,12 +736,14 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				if cancel == "initializing" && !os.IsNotExist(identityErr) || cancel == "initialized" && identityErr != nil {
 					t.Fatal("cancel crossed the native identity publication boundary")
 				}
-				wantIdentity := ""
 				if cancel == "initialized" {
-					wantIdentity = s.peer.UUID
+					identity, err := readJSONFile(filepath.Join(s.directory, "identity.json"))
+					if err != nil || getOf(identity, "identity") != s.peer.UUID || getOf(identity, "native_store") != s.peer.Store {
+						t.Fatal("cancel recovery lost the initialized native identity")
+					}
 				}
-				if turnIdentity(s.directory) != wantIdentity {
-					t.Fatal("cancel recovery read an identity outside its publication boundary")
+				if turnIdentity(s.directory) != "" {
+					t.Fatal("cancel recovery treated an unaccepted native identity as a completed turn")
 				}
 				if _, err := cursorReconcile(s.directory, receipt); err == nil {
 					t.Fatal("cancelled native trajectory reconciled as completed")
