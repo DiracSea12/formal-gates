@@ -2,6 +2,7 @@ package facade
 
 import (
 	"errors"
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 	"os"
 	"path/filepath"
@@ -20,10 +21,17 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			master, child, parent, receipt := deliveredChildCheckpoint(t, validationDocument)
 			event := abortCreationChild(t, master.f)
-			authority, ok := driverState(t, master).AbortEvent()
+			acceptedParent := driverState(t, master)
+			authority, ok := acceptedParent.AbortEvent()
 			if !ok {
 				t.Fatal("parent abort has no accepted authority")
 			}
+			decision, ok := acceptedParent.AbortDecision()
+			request, requested := acceptedParent.Events[decision.RequestID]
+			if !ok || !requested {
+				t.Fatal("parent abort has no accepted decision and request")
+			}
+			abort := &protocol.AbortAuthority{Decision: decision, Event: authority, RequestDigest: request.Digest}
 			if lost {
 				if err := child.f.engine.CancelChild(driverState(t, master), emptyFingerprint()); err != nil {
 					t.Fatal(err)
@@ -61,6 +69,10 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 			if master.run.Status != "ABORTED" {
 				t.Fatal("parent cancellation did not finish", master.run.Status)
 			}
+			terminal := master.run.Termination
+			if terminal == nil || !terminal.ResourcesCleaned() || len(terminal.SliceReceiptHistory) != 1 || !reflect.DeepEqual(terminal.SliceReceiptHistory[0], receipt) {
+				t.Fatal("master audit lost the complete original checkpoint or cleanup")
+			}
 			for _, plan := range parent.ChildCreation.Children {
 				f, err := Open(master.f.root, plan.RunID)
 				if err != nil {
@@ -76,8 +88,21 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 				if _, copied := run.Termination.Events[string(event.ID)]; copied {
 					t.Fatal("child copied parent replay identity")
 				}
-				if plan.RunID == child.f.runID && (run.Termination.SliceReceipt == nil || !reflect.DeepEqual(*run.Termination.SliceReceipt, receipt)) {
-					t.Fatal("audit summary lost the actual checkpoint")
+				current := run.Termination.SliceReceipt
+				if current == nil || current.Receipt.Status != "ABORTED" || !reflect.DeepEqual(*current, terminal.SliceReceipts[plan.RunID]) || !reflect.DeepEqual(current.Receipt.Abort, abort) || run.Termination.SliceChild == nil || !reflect.DeepEqual(run.Termination.SliceChild.ParentAbort, abort) {
+					t.Fatal("current child receipt lost the exact accepted abort authority")
+				}
+				if plan.RunID == child.f.runID {
+					ready, aborted := receipt.Receipt, current.Receipt
+					if aborted.Snapshot != ready.Snapshot || aborted.Tree != ready.Tree || aborted.Digest != ready.Digest {
+						t.Fatal("abort changed the checkpoint's native identity")
+					}
+					if aborted.RequirementRevision != ready.RequirementRevision || aborted.OriginRequirementRevision != ready.OriginRequirementRevision || aborted.ChildRunID != ready.ChildRunID || aborted.SliceID != ready.SliceID || aborted.MasterRunID != ready.MasterRunID || aborted.Envelope != ready.Envelope || !reflect.DeepEqual(aborted.Topology, ready.Topology) {
+						t.Fatal("abort changed the checkpoint's requirement, ownership or version bindings")
+					}
+					if aborted.RouteMode != ready.RouteMode || !reflect.DeepEqual(aborted.SelectedGates, ready.SelectedGates) || !reflect.DeepEqual(aborted.Cost, ready.Cost) {
+						t.Fatal("abort changed the checkpoint's route or cost")
+					}
 				}
 				for _, name := range []string{"slice-receipt.json", "state.json", "cleanup.intent.json", "terminal-summary.intent.json"} {
 					if _, err := os.Stat(filepath.Join(f.stateDir, name)); !errors.Is(err, os.ErrNotExist) {
@@ -115,9 +140,12 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 				}
 			}
 			before := installationFiles(t, master.f.stateDir)
+			if err := child.f.handoffSliceReceipt(receipt); err != nil {
+				t.Fatal(err)
+			}
 			master.reopen()
 			master.drive()
-			if master.run.Status != "ABORTED" || !reflect.DeepEqual(before, installationFiles(t, master.f.stateDir)) {
+			if master.run.Status != "ABORTED" || master.run.Termination.SliceReceiptCurrent(receipt) || !reflect.DeepEqual(before, installationFiles(t, master.f.stateDir)) {
 				t.Fatal("terminal replay rewrote parent audit")
 			}
 		})
