@@ -50,13 +50,13 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		_, p, _ := s.confirmedDevelopmentPlan()
 		return p == nil || !s.developmentPlanCurrent(p)
 	}
-	if s.Topology != nil && s.RouteMode == routeModeMerge {
+	if s.Topology != nil && s.RouteMode == routeModeMerge && s.Validation != nil && s.Validation.DevelopmentSnapshot == "" {
 		// split 绑定锁定合并路线：保留总任务实例不涉常规路线与开发计划，
 		// 停等 children（合并门＋合并 QA 属收尾）。
 		ready, expected := s.sliceReceiptProgress()
 		message = fmt.Sprintf("the retained master run waits for slice receipts: %d/%d accepted", ready, expected)
 		if ready == expected {
-			message += "; all expected slices are ready, waiting for integration"
+			message = ""
 		}
 	} else if s.SliceChild != nil && s.RouteMode == "" {
 		message = "select the slice route (the topology is inherited from the master)"
@@ -206,6 +206,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		return e.freezeValidationWave(s, coverage.ScopeFull, "", w.SourceTasks) || changed, nil
 	}
 	if _, _, _, complete := s.developmentSources(e.cfg.Definition); !complete {
+		if _, integration := s.integrationParameters(e.cfg.Definition); integration {
+			return e.advanceIntegration(s, nextRevision)
+		}
 		return changed, nil
 	}
 	for _, intent := range s.PendingHostActions {
@@ -321,6 +324,10 @@ func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt
 		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != "git" || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
 			return params, CandidateEvidence{}, validationError("promotion receipt lacks the signed native source, target prefix and final mapping")
 		}
+	case "MERGE_START", "MERGE_FINISH":
+		if err := sValidateIntegrationReceipt(params, evidence); err != nil {
+			return params, CandidateEvidence{}, err
+		}
 	case "DEVELOPMENT", "AUTHORING":
 	case "QA_ARTIFACT":
 		if !evidence.TestOnly || !evidence.ProductionViewEqual {
@@ -367,6 +374,13 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		return nil
 	}
 	switch params.Stage {
+	case "MERGE_START", "MERGE_FINISH":
+		if params.Stage == "MERGE_FINISH" {
+			r := s.GitResources[params.WorkspaceID]
+			r.Identity = evidence.Identity
+			s.GitResources[r.ID] = r
+		}
+		return nil
 	case "DEVELOPMENT":
 		if v.DevelopmentSnapshot != "" {
 			return nil
@@ -421,6 +435,9 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		return false
 	}
 	v := s.Validation
+	if s.mergeMaster() {
+		scope = coverage.ScopeFull
+	}
 	versions := map[coverage.ReviewKind]string{}
 	for _, mode := range s.validationKinds() {
 		versions[mode] = v.Sets[mode].Version
@@ -467,7 +484,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			mode = coverage.ReviewBlackbox
 		case "whitebox":
 			mode = coverage.ReviewWhitebox
-		case "merge":
+		case mergeQAGateID:
 			mode = coverage.ReviewMerge
 		}
 		target := &ValidationTarget{Status: "PENDING", Gate: gate, Kind: "GATE"}
@@ -502,15 +519,29 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		}
 		w.Targets[target.Task.String()] = target
 	}
-	w.ExpectedDigest = digestOfCanonical(struct {
+	s.addChildValidationTargets(&w, e.cfg.Definition)
+	w.ExpectedDigest = validationExpectedDigest(&w)
+	v.Waves = append(v.Waves, w)
+	return true
+}
+
+// The frozen expected set includes the current candidate and every native
+// child reuse proof. Result status and execution progress remain mutable.
+func validationExpectedDigest(w *ValidationWave) string {
+	reuse := map[string]*ValidationReuse{}
+	for key, target := range w.Targets {
+		if target.Reuse != nil {
+			reuse[key] = target.Reuse
+		}
+	}
+	return digestOfCanonical(struct {
 		Candidate coverage.ValidationCandidate
 		Versions  map[coverage.ReviewKind]string
 		Route     string
 		Targets   []string
 		Scope     coverage.ScopeMode
-	}{w.Candidate, w.Versions, w.RouteDigest, sortedTargetKeys(&w), scope})
-	v.Waves = append(v.Waves, w)
-	return true
+		Reuse     map[string]*ValidationReuse `json:"reuse,omitempty"`
+	}{w.Candidate, w.Versions, w.RouteDigest, sortedTargetKeys(w), w.Scope, reuse})
 }
 
 // A disposition applies to its candidate. P2 completion can carry only genuine
@@ -520,7 +551,7 @@ func (s *State) carryGateResult(target *ValidationTarget, prior, current *Valida
 		return
 	}
 	for _, previous := range prior.Targets {
-		if previous.Gate != target.Gate {
+		if !sameTarget(previous, target) {
 			continue
 		}
 		sourceWave, responsibility := s.targetResponsibility(prior, previous)
@@ -575,7 +606,7 @@ func (s *State) carryGateResult(target *ValidationTarget, prior, current *Valida
 			target.Status, target.ResultAction = "PASS", completion.ActionID
 			return
 		}
-		if previous.Status == "PASS" {
+		if previous.Status == "PASS" && !s.mergeMaster() {
 			target.GateImpact = &GateImpact{SourceWave: prior.ID}
 		}
 		return

@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "9"
+const Version authoring.DefinitionVersion = "10"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -47,6 +47,7 @@ var (
 		{"engine.qa.execution", authoring.RunnerAgentWorker},
 		{"engine.gate", authoring.RunnerAgentWorker},
 		{"engine.repair", authoring.RunnerAgentWorker},
+		{"engine.merge.resolve", authoring.RunnerAgentWorker},
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
 		{"engine.workspace", authoring.RunnerHostAdapter},
 		{"engine.cleanup", authoring.RunnerHostAdapter},
@@ -130,6 +131,7 @@ func Workflow() *compiler.Definition {
 		{"qa.execution", "engine.qa.execution", authoring.ReasonSemanticJudgment},
 		{"validation.gate", "engine.gate", authoring.ReasonIndependentReview},
 		{"development.repair", "engine.repair", authoring.ReasonCreativeImplementation},
+		{"merge.resolve", "engine.merge.resolve", authoring.ReasonCreativeImplementation},
 	} {
 		payload := authoring.AgentSpec{Handler: authoring.HandlerID(spec.handler), Reason: spec.reason, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
 		if spec.reason == authoring.ReasonIndependentReview {

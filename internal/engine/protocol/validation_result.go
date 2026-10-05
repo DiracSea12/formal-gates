@@ -295,12 +295,27 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
-	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil} {
+	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil, p.Resolution != nil} {
 		if present {
 			count++
 		}
 	}
 	switch role {
+	case "engine.merge.resolve":
+		input := s.conflictInput(b.Task.Scope)
+		if count != 1 || p.Status != "PASS" || p.Resolution == nil || input == nil || p.Resolution.Summary == "" {
+			return validationError("conflict resolution requires the original conflict input and complete manifest")
+		}
+		expected := []string{}
+		for _, conflict := range input.Evidence.Conflicts {
+			expected = append(expected, conflict.Path)
+		}
+		actual := slices.Clone(p.Resolution.Paths)
+		slices.Sort(expected)
+		slices.Sort(actual)
+		if len(expected) == 0 || !slices.Equal(actual, expected) {
+			return validationError("resolution manifest must cover exactly the original conflict paths")
+		}
 	case "engine.development.batch", "engine.repair":
 		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" || len(p.Development.Build) == 0 || len(p.Development.Tests) == 0 {
 			return validationError("development requires declared paths, summary, build and test evidence")

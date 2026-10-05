@@ -92,7 +92,7 @@ func (e *Engine) tokenCapExceeded(state *State) bool {
 }
 
 // guardEngaged 报告 guard 包络是否作用于当前状态：验证管线就位（拓扑、路
-// 线、确认计划与需求文档都在账）即生效，与是否已有签发事实无关。需求重走
+// 线、确认计划或主线拆分拓扑与需求文档都在账）即生效，与是否已有签发事实无关。需求重走
 // 解绑拓扑/路线的再确认窗口内包络不生效（basis 身份暂缺；该窗口内验证任
 // 务本就不可投影签发，不构成扩容通道）。受理前的审查系列派发不进包络
 // （plan:361「QA/开发/门的外部派发统一经过 guard」；系列轮次的权威是
@@ -102,12 +102,12 @@ func (e *Engine) guardEngaged(state *State) bool {
 		return false
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
-	return plan != nil
+	return plan != nil || state.mergeMaster()
 }
 
 // guardBasis 是 Basis 构造单点：从权威 State 构造 guard.Basis（guard 纯核心不
 // 重写不绕过）。来源按合同钉死：definition＝编译定义身份＋closed-world agent
-// steps；requirement＝确认账本末条；Batch＝确认计划 contract digest；route/
+// steps；requirement＝确认账本末条；Batch＝确认计划或主线拓扑 digest；route/
 // topology＝绑定 digest；approvedQA＝各选中 mode 的 case-set 版本；selectedGates
 // ＝路线＋所选门；established obligations/repairs 只接 adjudication 完成、wave
 // 收齐后的有效义务与返修 TaskKey。ExternalTasks＝已确认授权全集单一枚举
@@ -133,14 +133,18 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		return guard.Basis{}, fmt.Errorf("guard budget: topology and route bindings are required before the dispatch budget applies")
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
-	if plan == nil {
+	if plan == nil && !state.mergeMaster() {
 		return guard.Basis{}, fmt.Errorf("guard budget: no confirmed development plan backs the dispatch budget")
+	}
+	batchIdentity := guard.Identity{ID: "development-plan", Revision: planContractDigest(plan)}
+	if state.mergeMaster() {
+		batchIdentity = guard.Identity{ID: "merge-topology", Revision: digestOfCanonical(state.Topology)}
 	}
 	routeDigest := state.validationRouteDigest()
 	basis := guard.Basis{
 		SchemaVersion: 1,
 		Requirement:   guard.ConfirmedIdentity{Identity: guard.Identity{ID: requirementID, Revision: requirement}, ConfirmedRevision: requirement},
-		Batch:         guard.ConfirmedIdentity{Identity: guard.Identity{ID: "development-plan", Revision: planContractDigest(plan)}, ConfirmedRevision: planContractDigest(plan)},
+		Batch:         guard.ConfirmedIdentity{Identity: batchIdentity, ConfirmedRevision: batchIdentity.Revision},
 		Route:         guard.ConfirmedIdentity{Identity: guard.Identity{ID: state.RouteMode, Revision: routeDigest}, ConfirmedRevision: routeDigest},
 		Topology:      guard.ConfirmedIdentity{Identity: guard.Identity{ID: state.Topology.Decision, Revision: digestOfCanonical(state.Topology)}, ConfirmedRevision: digestOfCanonical(state.Topology)},
 		Definition: guard.Definition{
@@ -158,6 +162,15 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	for _, gate := range state.SelectedGates {
 		basis.SelectedGates = append(basis.SelectedGates, guard.Identity{ID: gate, Revision: routeDigest})
 	}
+	if state.mergeMaster() {
+		for _, sliceID := range state.Topology.Slices {
+			receipt := state.SliceReceipts[state.SliceChildren[sliceID]]
+			for _, gate := range receipt.Receipt.SelectedGates {
+				basis.SelectedGates = append(basis.SelectedGates, guard.Identity{ID: sliceID + ":" + gate, Revision: receipt.Digest})
+			}
+		}
+	}
+
 	if state.Validation != nil {
 		// 同一有效义务/返修 TaskKey 可能跨多个 wave 出现（继承/重开）：以
 		// 首个建立它的 wave 为其身份 revision（wave 追加有序，身份稳定），
@@ -230,6 +243,11 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		}
 	}
 	if state.Validation != nil {
+		if p, ready := state.integrationParameters(e.cfg.Definition); ready && p.Integration.StartAction != "" && len(state.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 {
+			if err := declare(pipelineTask(e.cfg.Definition, "engine.merge.resolve", p.Integration.StartAction)); err != nil {
+				return guard.Basis{}, err
+			}
+		}
 		// 桶 2：已建 wave 的全部 target（QA/门，含 PENDING 未签发槽位）。
 		for i := range state.Validation.Waves {
 			for _, key := range sortedTargetKeys(&state.Validation.Waves[i]) {
@@ -260,7 +278,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		for _, mode := range state.validationKinds() {
 			set := state.Validation.Sets[mode]
 			if set == nil {
-				if mode == coverage.ReviewBlackbox || state.Validation.AuthoringWorkspace != "" {
+				if mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge || state.Validation.AuthoringWorkspace != "" {
 					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
 						return guard.Basis{}, err
 					}
@@ -399,6 +417,12 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		maxAttempts = attempt.MaxAttempts
 	}
 	switch role {
+	case "engine.merge.resolve":
+		input := state.conflictInput(source.Scope)
+		if input == nil || len(input.Evidence.Conflicts) == 0 {
+			return guard.Provenance{}, 0, false
+		}
+		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
 	case "engine.development.batch":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
@@ -440,7 +464,11 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		}
 		for i := range state.Validation.Waves {
 			if target := state.Validation.Waves[i].Targets[source.String()]; target != nil && target.Gate != "" {
-				return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
+				identity := guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}
+				if target.SliceID != "" {
+					identity = guard.Identity{ID: target.SliceID + ":" + target.Gate, Revision: state.SliceReceipts[state.SliceChildren[target.SliceID]].Digest}
+				}
+				return guard.Provenance{Kind: guard.GateSource, Identity: identity}, maxAttempts, true
 			}
 		}
 		return guard.Provenance{}, 0, false

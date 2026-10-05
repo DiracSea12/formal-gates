@@ -52,6 +52,7 @@ type WorkspaceCleanupReceipt struct {
 // ResourceObservation binds an abort withdrawal to the original native root,
 // ref and actual prefix; it records no completion or cancellation receipt.
 type ResourceObservation struct {
+	Merge            *IntegrationEvidence  `json:"merge,omitempty"`
 	ParametersDigest string                `json:"parametersDigest"`
 	Resource         GitResource           `json:"resource"`
 	WorktreeExists   bool                  `json:"worktreeExists"`
@@ -75,10 +76,14 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 		if err != nil || p.Promotion != nil || p.WorkspaceID != o.Resource.ID {
 			return validationError("candidate withdrawal differs from original inputs")
 		}
+		if p.Integration != nil && o.WorktreeExists && (o.Merge == nil || o.Merge.Incoming != p.Integration.Incoming || o.Merge.Prefix != p.Base || o.Merge.MergeHead != "" && o.Merge.MergeHead != p.Integration.Incoming) {
+			return validationError("integration withdrawal differs from the original native prefix")
+		}
+
 	default:
 		return validationError("resource withdrawal is not a workspace or candidate")
 	}
-	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "") {
+	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "" && o.Merge == nil) {
 		return validationError("resource withdrawal has no exact observed prefix")
 	}
 	if o.RefIdentity != "" && o.RefIdentity != o.Resource.Source && (o.Prefix == nil || o.RefIdentity != o.Prefix.Head) {
@@ -120,6 +125,8 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			source = w.Candidate.Identity
 		}
 		role = "development"
+	case "engine.merge.resolve":
+		return s.integrationResource()
 	case "engine.repair":
 		for _, work := range s.repairWork() {
 			if work.task == key {
@@ -129,13 +136,16 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		role = "development"
 	case "engine.qa.design":
+		if s.validationMode(key) == coverage.ReviewMerge {
+			source = s.AcceptedNativeSnapshot()
+		}
 		if s.validationMode(key) == coverage.ReviewWhitebox {
 			role = "whitebox-authoring"
 			source = s.Validation.DevelopmentSnapshot
 			scope = key.Scope + ":" + strconv.FormatUint(s.Validation.Generation, 10)
 		} else {
 			scope += ":" + strconv.FormatUint(s.Validation.Generation, 10)
-			role = "blackbox-design"
+			role = strings.ToLower(string(s.validationMode(key))) + "-design"
 		}
 	case "engine.qa.review.rationale":
 		set := s.Validation.Sets[s.validationMode(key)]
@@ -176,7 +186,12 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 }
 func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) GitResource {
 	switch p.Stage {
+	case "MERGE_START", "MERGE_FINISH":
+		return s.integrationResource()
 	case "DEVELOPMENT":
+		if s.mergeMaster() && len(p.SourceTasks) == 0 {
+			return s.integrationResource()
+		}
 		var chosen GitResource
 		var latest uint64
 		for _, task := range p.SourceTasks {
@@ -414,6 +429,10 @@ func (s *State) resourceUsable(id string) bool {
 }
 
 func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition) bool {
+	if p.Resource.Role == "merge" {
+		r := s.integrationResource()
+		return s.Validation != nil && p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation && p.RouteScope == s.validationRouteDigest() && p.Resource == r && s.resourceUsable(r.ID)
+	}
 	if p.Resource.Role == "child-target" {
 		return s.creationWorkspaceCurrent(p)
 	}
@@ -575,8 +594,16 @@ func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.Compi
 // BlackboxCasesMarkdown renders the same complete manifest for the isolated
 // review mirror and the final tracked artifact.
 func BlackboxCasesMarkdown(runID string, m coverage.AcceptanceManifest) string {
+	return qaCasesMarkdown(runID, "Blackbox", m)
+}
+
+func MergeCasesMarkdown(runID string, m coverage.AcceptanceManifest) string {
+	return qaCasesMarkdown(runID, "Merge", m)
+}
+
+func qaCasesMarkdown(runID, kind string, m coverage.AcceptanceManifest) string {
 	data, _ := json.MarshalIndent(m, "", "  ")
-	return "# Blackbox QA cases (run: " + runID + ")\n\n```json\n" + string(data) + "\n```\n"
+	return "# " + kind + " QA cases (run: " + runID + ")\n\n```json\n" + string(data) + "\n```\n"
 }
 
 func (e *Engine) applyNativeReceipt(s *State, intent HostActionIntent, receipt HostActionReceipt) error {

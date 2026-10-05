@@ -55,7 +55,7 @@ func (s *State) validationFindingResponsibility(w *ValidationWave, f *Validation
 			continue
 		}
 		for _, target := range w.Targets {
-			if target.Kind == old.Kind && target.Mode == old.Mode && target.Gate == old.Gate {
+			if sameTarget(target, old) {
 				return target
 			}
 		}

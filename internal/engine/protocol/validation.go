@@ -78,6 +78,7 @@ type DevelopmentEvidence struct {
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
 // transport; Status and per-item results describe the business verdict.
 type ValidationResult struct {
+	Resolution  *ConflictResolution          `json:"resolution,omitempty"`
 	Binding     WorkBinding                  `json:"binding"`
 	Status      string                       `json:"status"`
 	Development *DevelopmentEvidence         `json:"development,omitempty"`
@@ -136,7 +137,9 @@ type GateImpact struct {
 }
 
 type ValidationTarget struct {
-	GateImpact *GateImpact `json:"gateImpact,omitempty"`
+	SliceID    string           `json:"sliceId,omitempty"`
+	Reuse      *ValidationReuse `json:"reuse,omitempty"`
+	GateImpact *GateImpact      `json:"gateImpact,omitempty"`
 	// RequiredCases and ScopeReason are the host's immutable AFFECTED execution decision.
 	RequiredCases     []string                  `json:"requiredCases,omitempty"`
 	ScopeReason       string                    `json:"scopeReason,omitempty"`
@@ -220,6 +223,8 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	Integration         *IntegrationParameters                    `json:"integration,omitempty"`
+	MergeManifest       *coverage.AcceptanceManifest              `json:"mergeManifest,omitempty"`
 	Promotion           *PromotionParameters                      `json:"promotion,omitempty"`
 	WorkspaceID         string                                    `json:"workspaceId,omitempty"`
 	BlackboxManifest    *coverage.AcceptanceManifest              `json:"blackboxManifest,omitempty"`
@@ -257,17 +262,19 @@ type GateReviewView struct {
 }
 
 type CandidateEvidence struct {
-	Promotion           *CandidatePromotionReceipt `json:"promotion,omitempty"`
-	Changes             []vcs.Change               `json:"changes,omitempty"`
-	WorkspaceID         string                     `json:"workspaceId,omitempty"`
-	GateView            *GateReviewView            `json:"gateView,omitempty"`
-	ReviewViews         map[string]CaseReviewView  `json:"reviewViews,omitempty"`
-	ParametersDigest    string                     `json:"parametersDigest"`
-	Identity            string                     `json:"identity"`
-	Digest              string                     `json:"digest"`
-	Paths               []string                   `json:"paths"`
-	TestOnly            bool                       `json:"testOnly"`
-	ProductionViewEqual bool                       `json:"productionViewEqual"`
+	Integration         *IntegrationEvidence           `json:"integration,omitempty"`
+	ChildViews          map[string]ChildValidationView `json:"childViews,omitempty"`
+	Promotion           *CandidatePromotionReceipt     `json:"promotion,omitempty"`
+	Changes             []vcs.Change                   `json:"changes,omitempty"`
+	WorkspaceID         string                         `json:"workspaceId,omitempty"`
+	GateView            *GateReviewView                `json:"gateView,omitempty"`
+	ReviewViews         map[string]CaseReviewView      `json:"reviewViews,omitempty"`
+	ParametersDigest    string                         `json:"parametersDigest"`
+	Identity            string                         `json:"identity"`
+	Digest              string                         `json:"digest"`
+	Paths               []string                       `json:"paths"`
+	TestOnly            bool                           `json:"testOnly"`
+	ProductionViewEqual bool                           `json:"productionViewEqual"`
 }
 
 type ValidationRequest struct {
@@ -297,7 +304,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair":
+	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair":
 		return string(p.Handler)
 	}
 	return ""
@@ -332,7 +339,7 @@ func (s *State) validationKinds() []coverage.ReviewKind {
 			kinds = append(kinds, coverage.ReviewBlackbox)
 		case "whitebox":
 			kinds = append(kinds, coverage.ReviewWhitebox)
-		case "merge":
+		case mergeQAGateID:
 			kinds = append(kinds, coverage.ReviewMerge)
 		}
 	}
@@ -429,6 +436,11 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	}
 	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), Task: key}
 	role := s.validationRole(key, cd)
+	if role == "engine.merge.resolve" {
+		if params, ready := s.integrationParameters(cd); ready && params.Integration != nil {
+			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
+		}
+	}
 	if role == "engine.development.batch" {
 		if request, _, batch, ok := s.developmentBatch(key, cd); ok {
 			b.PlanRequest, b.BatchID = request, batch.ID
@@ -443,7 +455,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if set := v.Sets[mode]; set != nil {
 		b.CaseVersion = set.Version
 	}
-	if role != "engine.development.batch" && !(role == "engine.qa.design" && mode == coverage.ReviewBlackbox) {
+	if role != "engine.development.batch" && role != "engine.merge.resolve" && !(role == "engine.qa.design" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
 		b.Candidate = v.DevelopmentSnapshot
 		if v.Candidate != nil {
 			b.Candidate = v.Candidate.Identity
@@ -516,13 +528,16 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: reason})
 	}
 	s.projectDevelopmentTasks(view, cd)
+	if p, ready := s.integrationParameters(cd); ready && p.Integration.StartAction != "" && len(s.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 && s.integrationResolution(p.Integration.StartAction) == nil {
+		add("engine.merge.resolve", p.Integration.StartAction, false)
+	}
 	for _, mode := range s.validationKinds() {
 		set := v.Sets[mode]
 		if s.caseSetWaiver(mode) != "" {
 			continue
 		}
 		if set == nil {
-			if mode == coverage.ReviewBlackbox || v.AuthoringWorkspace != "" {
+			if mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge || v.AuthoringWorkspace != "" {
 				add("engine.qa.design", s.nextDesignScope(mode, cd), false)
 			}
 			continue
