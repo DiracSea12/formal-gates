@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -161,7 +162,7 @@ func TestCanaryPreparedHomeSeparatesSourceAndProfile(t *testing.T) {
 				}
 			}
 			after, err := validate.PackageReceipt(actualSource)
-			if err != nil || before.Digest != after.Digest || !valuesEqual(before.Entries, after.Entries) {
+			if err != nil || before.Digest != after.Digest || !slices.Equal(before.Entries, after.Entries) {
 				t.Fatalf("preparation changed actual package input: %v", err)
 			}
 			if relationship == "disjoint" && (len(after.Entries) != 1 || after.Entries[0].Path != "source.txt") {
