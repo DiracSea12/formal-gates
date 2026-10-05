@@ -689,6 +689,32 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-io"] == before.SliceChildren["lane-tooling"] || state.SliceChildren["lane-io"] == "" || state.SliceChildren["lane-tooling"] != "" || state.ChildCreation.Previous == nil {
 		t.Fatal("topology rebuild discarded carried origin or reused the affected child")
 	}
+	for _, old := range before.ChildCreation.Children {
+		resource := state.GitResources[old.ResourceID]
+		if old.RunID == child.f.runID {
+			if resource != before.GitResources[old.ResourceID] {
+				t.Fatal("topology cleanup changed the carried target registry")
+			}
+			if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", resource.Ref); err != nil {
+				t.Fatal("topology cleanup removed the carried target ref", err)
+			}
+		} else {
+			if resource.Status != "CLEANED" {
+				t.Fatal("topology cleanup retained retired target debt")
+			}
+			if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+				t.Fatal("topology cleanup retained the retired worktree", err)
+			}
+			if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", resource.Ref); err == nil {
+				t.Fatal("topology cleanup retained the retired target ref")
+			}
+		}
+	}
+	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
+	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
+	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
+		t.Fatal("topology cleanup changed carried executable bytes or mode", err, modeErr)
+	}
 	carried := driverState(t, child)
 	if carried.SliceChild.RequirementRevision != ready.Receipt.RequirementRevision || carried.SliceReceipt.Digest != ready.Digest {
 		t.Fatal("topology carry rewrote frozen child evidence")
@@ -757,7 +783,8 @@ func TestMasterRequirementCarryRetainsOriginalNativePrefix(t *testing.T) {
 
 func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
-	origin := driverState(t, child).SliceChild.RequirementRevision
+	physical := driverState(t, child)
+	origin := physical.SliceChild.RequirementRevision
 	document := validationDocument + "\n"
 	if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
@@ -789,6 +816,21 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 	if driverState(t, master).SliceReceiptQualified(ready) || driverState(t, master).SliceReceipts[child.f.runID].Digest != ready.Digest {
 		t.Fatal("redo lost frozen evidence or retained its successful qualification")
+	}
+	redo := driverState(t, child)
+	if redo.AcceptedNativeSnapshot() != physical.AcceptedNativeSnapshot() || !reflect.DeepEqual(redo.CandidatePromotion, physical.CandidatePromotion) || redo.PromotedSnapshot != physical.PromotedSnapshot || redo.PromotedDigest != physical.PromotedDigest || redo.FinalValidationComplete(child.f.definition) || redo.DeliveryComplete(child.f.definition) || redo.SliceReceipt != nil {
+		t.Fatal("child redo confused accepted physical facts with current validation qualification")
+	}
+	if redo.ResetPreview().Current != physical.AcceptedNativeSnapshot() {
+		t.Fatal("child redo reset preview lost its accepted target")
+	}
+	if observed, err := child.f.vcs.Resolve(); err != nil || observed != physical.AcceptedNativeSnapshot() {
+		t.Fatal("child redo changed accepted native identity", observed, err)
+	}
+	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
+	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
+	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
+		t.Fatal("child redo changed accepted executable bytes or mode", err, modeErr)
 	}
 	child.reopen()
 	child.drive()

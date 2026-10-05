@@ -452,6 +452,23 @@ func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) 
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }
+
+// replacedTargetResources derives the outstanding cleanup debt from the frozen
+// predecessor and current child membership. Carried and new targets remain live.
+func (s *State) replacedTargetResources() []GitResource {
+	var resources []GitResource
+	for _, old := range s.ChildCreation.Previous.Children {
+		if !slices.ContainsFunc(s.ChildCreation.Children, func(c ChildPreparation) bool { return c.RunID == old.RunID }) {
+			r := s.GitResources[old.ResourceID]
+			if r.Status != "CLEANED" {
+				resources = append(resources, r)
+			}
+		}
+	}
+	slices.SortFunc(resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
+	return resources
+}
+
 func (e *Engine) CleanupReplacedTargets(expectedFingerprint string) error {
 	revision, s, err := e.load()
 	if err != nil {
@@ -465,19 +482,10 @@ func (e *Engine) CleanupReplacedTargets(expectedFingerprint string) error {
 			return nil
 		}
 	}
-	var resources []GitResource
-	for _, old := range s.ChildCreation.Previous.Children {
-		if !slices.ContainsFunc(s.ChildCreation.Children, func(c ChildPreparation) bool { return c.RunID == old.RunID }) {
-			r := s.GitResources[old.ResourceID]
-			if r.Status != "CLEANED" {
-				resources = append(resources, r)
-			}
-		}
-	}
+	resources := s.replacedTargetResources()
 	if len(resources) == 0 {
 		return nil
 	}
-	slices.SortFunc(resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
 	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", CleanupParameters{Resources: resources}, "")
 	if err != nil {
 		return err

@@ -123,9 +123,6 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 				}
 				if choice.CandidateDisposition == RequirementWorkRedo && s.Validation != nil {
 					s.Validation.Candidate = nil
-					s.PromotedSnapshot = ""
-					s.PromotedDigest = ""
-					s.CandidatePromotion = nil
 				}
 			}
 			s.SliceChild.ParentChange = authority

@@ -536,6 +536,8 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 				expected = append(expected, current)
 			}
 		}
+	} else if s.RebuildingChildren() {
+		expected = s.replacedTargetResources()
 	} else {
 		for _, r := range s.GitResources {
 			if r.Status != "CLEANED" {
@@ -550,11 +552,51 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 	return len(expected) != 0 && slices.Equal(actual, expected)
 }
 
+// cleanupResourcesQuiescent checks the existing execution bindings for the
+// resources being retired. Work on carried resources can continue independently.
+func (s *State) cleanupResourcesQuiescent(resources []GitResource) bool {
+	uses := func(id, path string) bool {
+		return slices.ContainsFunc(resources, func(r GitResource) bool { return r.ID == id || path != "" && r.Path == path })
+	}
+	for id := range s.PendingActions {
+		if uses(s.DispatchBindings[id].WorkspaceID, "") {
+			return false
+		}
+	}
+	for _, attempt := range s.EndedAttempts {
+		if attempt.AwaitingResult && attempt.Work != nil && uses(attempt.Work.WorkspaceID, "") {
+			return false
+		}
+	}
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter == nil {
+			continue
+		}
+		switch intent.Adapter.Operation {
+		case "op.workspace":
+			var p WorkspaceParameters
+			raw, _ := json.Marshal(intent.Adapter.Params)
+			if json.Unmarshal(raw, &p) != nil || uses(p.Resource.ID, p.Resource.Path) {
+				return false
+			}
+		case "op.candidate":
+			p, err := candidateParameters(intent)
+			if err != nil || uses(p.WorkspaceID, "") || p.Promotion != nil && uses(p.Promotion.SourceWorkspace, p.Promotion.TargetRoot) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (s *State) cleanupQuiescent() bool {
 	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
 	}
-	if s.RebuildingChildren() || s.resetPending() {
+	if s.RebuildingChildren() {
+		return s.cleanupResourcesQuiescent(s.replacedTargetResources())
+	}
+	if s.resetPending() {
 		return len(s.PendingActions) == 0
 	}
 	if s.pendingControl() || s.nonCleanupNativeDebt() || len(s.PendingActions) != 0 {

@@ -204,6 +204,8 @@ func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
 	return s.FinalValidationComplete(cd) && !s.validationDeliveryComplete(cd)
 }
 
+// AcceptedNativeSnapshot is the physical target accepted by native receipt
+// admission. Current candidate and FULL qualification are derived separately.
 func (s *State) AcceptedNativeSnapshot() string {
 	if s.CandidatePromotion != nil {
 		return s.CandidatePromotion.Final
