@@ -129,6 +129,7 @@ func startNativeProviderDriver(t *testing.T, name string) (*validationDriver, *n
 	root, base, runner := nativeProviderFixture(t, name)
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	receipt := testReceipt()
+	receipt.RequirementSource, receipt.Artifacts[0].Path = ".gates/requirements.md", ".gates/requirements.md"
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
 	f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: name, RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {

@@ -68,6 +68,11 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			if err := p.CreateWorkspace(path, base, "bound creation", h); err != nil || nativeIdentityAt(t, q) != created {
 				t.Fatalf("repetition changed identity: %v", err)
 			}
+			for _, message := range []string{"bound freeze", "bound creation"} {
+				if observed, found, err := q.ObservedCommit(created, message); err != nil || found || observed != "" {
+					t.Fatalf("no-effect prefix has a later commit: %q %t %v", observed, found, err)
+				}
+			}
 			if err := os.WriteFile(filepath.Join(path, "added"), []byte(" leading\n\n"), 0644); err != nil {
 				t.Fatal(err)
 			}
@@ -304,9 +309,22 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var body nativeEntry
-				if err := json.Unmarshal([]byte(values["body.txt"]), &body); err != nil || len(body.Layers) != 2 || values["duplicate.txt"] == "" {
-					t.Fatalf("immutable overlay/ditto values missing: %v %v", values, err)
+				// Native sync selects the overlay at body.txt and the ditto at
+				// duplicate.txt. Check their effective values and original origins.
+				for _, expected := range []struct{ path, content, origin string }{
+					{"body.txt", "overlay value\n", "//depot/overlay/body.txt"},
+					{"duplicate.txt", " leading\ntrailing\n\n", "//depot/main/body.txt"},
+				} {
+					var value nativeEntry
+					if err := json.Unmarshal([]byte(values[expected.path]), &value); err != nil || string(value.Content) != expected.content || value.Filetype != "text+x" || value.Origin != expected.origin {
+						t.Fatalf("effective mapping %s differs: %+v %v", expected.path, value, err)
+					}
+					for _, root := range []string{p.root, q.root} {
+						body, err := os.ReadFile(filepath.Join(root, expected.path))
+						if err != nil || string(body) != expected.content {
+							t.Fatalf("synced mapping %s differs at %s: %q %v", expected.path, root, body, err)
+						}
+					}
 				}
 			}
 			before, err := q.TreeEntries(created)

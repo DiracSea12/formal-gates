@@ -308,12 +308,13 @@ func (p *Provider) ObservedCommit(base, message string) (string, bool, error) {
 	}
 	if p.name == "svn" {
 		var log svnLog
-		if err = p.svnXML(&log, "log", "--xml", "-r", strconv.Itoa(id.Revision+1)+":HEAD", id.Scope); err != nil {
+		// HEAD is valid before the operation exists; base is excluded below.
+		if err = p.svnXML(&log, "log", "--xml", "-r", "HEAD:"+strconv.Itoa(id.Revision), id.Scope); err != nil {
 			return "", false, err
 		}
 		var found string
 		for _, entry := range log.Entries {
-			if entry.Message == message {
+			if entry.Revision > id.Revision && entry.Message == message {
 				if found != "" {
 					return "", false, fmt.Errorf("multiple native commits match one operation")
 				}
@@ -330,7 +331,11 @@ func (p *Provider) ObservedCommit(base, message string) (string, bool, error) {
 	}
 	var revision string
 	for _, record := range records {
-		if strings.TrimSuffix(record["desc"], "\n") == message {
+		change, err := strconv.Atoi(record["change"])
+		if err != nil {
+			return "", false, err
+		}
+		if change > id.Revision && strings.TrimSuffix(record["desc"], "\n") == message {
 			if revision != "" {
 				return "", false, fmt.Errorf("multiple P4 changes match one operation")
 			}

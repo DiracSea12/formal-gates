@@ -121,8 +121,9 @@ func normalizeP4View(view []string, client string, h WorkspaceHandle) []string {
 					source, _ := decodeNative(h.Source)
 					origin = source.Stream + "/"
 				}
-				left = marker + origin + strings.TrimPrefix(left, h.Depot+"/")
+				left = origin + strings.TrimPrefix(left, h.Depot+"/")
 			}
+			left = marker + left
 		}
 		right := strings.Replace(fields[1], "//"+client+"/", "//project/", 1)
 		result = append(result, viewRow(left, right))
@@ -497,6 +498,9 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 		return fmt.Errorf("P4 source client spec is not unique")
 	}
 	sourceSpec := map[string]string{"Client": h.Client, "Owner": id.User, "Root": workspace, "LineEnd": id.LineEnd, "Options": original[0]["Options"], "SubmitOptions": original[0]["SubmitOptions"]}
+	// Workers edit files directly; reconcile opens only the declared delivery.
+	// Native allwrite keeps synced files editable without changing their type.
+	sourceSpec["Options"] = strings.Replace(sourceSpec["Options"], "noallwrite", "allwrite", 1)
 	var view, branchView []string
 	if h.Stream != "" {
 		template, err := p.p4IdentityJSON(id, "stream", "-o", id.Stream)
