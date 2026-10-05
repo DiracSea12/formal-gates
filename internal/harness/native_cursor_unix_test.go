@@ -613,6 +613,58 @@ func TestCursorReconcileDoesNotReplayPrompt(t *testing.T) {
 		t.Fatal("interruption laundered")
 	}
 }
+
+func TestCursorResultLineEndings(t *testing.T) {
+	for _, newline := range []struct{ name, text string }{{"LF", "\n"}, {"CRLF", "\r\n"}, {"CR", "\r"}} {
+		t.Run(newline.name, func(t *testing.T) {
+			s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
+			terminal := objectOrEmpty(s.peer.Events[1])
+			answer := "{\n\"status\":\"PASS\",\n\"summary\":\"native " + s.peer.UUID + "\",\n\"findings\":[],\n\"check_ids\":[]\n}"
+			terminal["result"] = strings.ReplaceAll(answer, "\n", newline.text)
+			s.save(t)
+			source, err := runNativeJob(s.directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(readBytes(t, filepath.Join(s.directory, "answer.raw.txt"))) != terminal["result"] {
+				t.Fatal("native result bytes changed")
+			}
+			before := proofsOf(t, s.directory, nativeSourceFiles)
+			observed, err := cursorObserve(s.directory, true)
+			if err != nil || !valuesEqual(source, observed) || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
+				t.Fatalf("repeated materialization %v %v", observed, err)
+			}
+			for i := 0; i < 2; i++ {
+				if err := cursorVerifySource(s.directory, source); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
+				t.Fatal("verification changed original evidence")
+			}
+			if err := writeAtomicJSON(filepath.Join(s.directory, "native-error.json"), map[string]any{"error": "RuntimeBlocked: NATIVE_RESULT: could not frame output"}); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := cursorReconcile(s.directory, map[string]any{"exit_code": 1, "error": ""})
+			if err != nil || getOf(recovered["reconciliation"], "new_model_calls") != 0 || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) || cursorCalls(t, s) != 2 {
+				t.Fatalf("recovery changed original evidence or replayed: %v %v", recovered, err)
+			}
+			changed := strings.ReplaceAll(textOf(terminal["result"]), "PASS", "FAIL")
+			if err := os.WriteFile(filepath.Join(s.directory, "answer.raw.txt"), []byte(changed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, materialize := range []bool{false, true} {
+				if _, err := cursorObserve(s.directory, materialize); err == nil || err.Error() != "CURSOR_RESULT: saved output differs" {
+					t.Fatalf("different result accepted: %v", err)
+				}
+			}
+			if err := cursorVerifySource(s.directory, source); err == nil {
+				t.Fatal("changed evidence accepted")
+			}
+		})
+	}
+}
+
 func TestCursorParallelSourcesRemainIndependent(t *testing.T) {
 	first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", false)
 	second := newCursorScenario(t, "22222222-2222-4222-8222-222222222222", "model-b", "low", true)

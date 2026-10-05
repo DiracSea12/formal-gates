@@ -511,7 +511,7 @@ func cursorObserve(directory string, materialize bool) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if normalizeNewlines(string(saved)) != answer {
+		if normalizeNewlines(string(saved)) != normalizeNewlines(answer) {
 			return nil, &blockedError{message: "CURSOR_RESULT: saved output differs"}
 		}
 	}
