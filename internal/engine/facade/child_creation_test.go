@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -245,12 +246,18 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 		t.Fatal("checkpoint lost the assigned child identity")
 	}
 	for _, target := range []string{w, f.vcs.Root()} {
-		body, err := runner.Run(target, "git", "show", receipt.Receipt.Snapshot+":startup.txt")
-		developed, developmentErr := runner.Run(target, "git", "show", receipt.Receipt.Snapshot+":app_test.go")
+		for path, want := range map[string][]byte{"startup.txt": content, "app_test.go": []byte("package main\n")} {
+			command := exec.Command("git", "show", receipt.Receipt.Snapshot+":"+path)
+			command.Dir = target
+			body, err := command.Output()
+			if err != nil || !bytes.Equal(body, want) {
+				t.Fatalf("delivered blob %s lost its complete bytes: %q (%v)", path, body, err)
+			}
+		}
 		mode, modeErr := runner.Run(target, "git", "ls-tree", receipt.Receipt.Snapshot, "tool")
 		tree, treeErr := vcs.New(target, nil).TreeDigest(receipt.Receipt.Snapshot)
-		if err != nil || body != string(content) || developmentErr != nil || developed != "package main\n" || modeErr != nil || !strings.HasPrefix(mode, "100755 ") || treeErr != nil || tree != receipt.Receipt.Tree {
-			t.Fatal("candidate/promotion/checkpoint lost accepted startup content", target, err, modeErr, treeErr)
+		if modeErr != nil || !strings.HasPrefix(mode, "100755 ") || treeErr != nil || tree != receipt.Receipt.Tree {
+			t.Fatal("candidate/promotion/checkpoint lost accepted startup mode or tree", target, modeErr, treeErr)
 		}
 	}
 	accepted, err := d.f.engine.Load()

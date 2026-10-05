@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -412,11 +413,12 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	current := child.run.Validation.Waves[len(child.run.Validation.Waves)-1]
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: "INHERIT", Reason: "The ordering repair leaves the checked security boundaries unchanged"}}})
 	child.drive()
-	if _, err := child.f.PrepareCandidate("verified child delivery"); err != nil {
-		t.Fatal(err)
-	}
-	child.drive()
 	receipt := readSliceReceipt(t, child)
+	command := exec.Command("git", "show", receipt.Receipt.Snapshot+":app.go")
+	command.Dir = child.f.vcs.Root()
+	if body, err := command.Output(); err != nil || !bytes.Equal(body, []byte("package main // documented output order\n")) {
+		t.Fatalf("repair checkpoint lost its actual edited blob: %q (%v)", body, err)
+	}
 	for _, result := range receipt.Receipt.Validation.Results {
 		want := security
 		if result.Target.Gate == "quality" {
