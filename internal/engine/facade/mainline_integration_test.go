@@ -2,6 +2,7 @@ package facade
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -143,14 +144,21 @@ func mainlineChildren(t *testing.T, conflict string) (*validationDriver, []*vali
 
 type mergeInterruption struct {
 	vcs.Runner
-	point           string
-	root            string
-	interrupted     bool
-	promotionReset  bool
-	merges, commits int
+	point            string
+	root             string
+	interrupted      bool
+	promotionReset   bool
+	merges, commits  int
+	cleanupError     error
+	cleanupDirectory string
+	cleanupArguments []string
+	observeCleanup   func()
 }
 
 func (r *mergeInterruption) Run(dir, command string, args ...string) (string, error) {
+	if r.observeCleanup != nil {
+		r.observeCleanup()
+	}
 	out, err := r.Runner.Run(dir, command, args...)
 	merge := command == "git" && slices.Contains(args, "--no-commit")
 	commit := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates merge ")
@@ -161,7 +169,7 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	}
 	promotion := dir == r.root && r.promotionReset && command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates delivery ")
 	resolution := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, "app.go")
-	cleanup := dir == r.root && command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
+	cleanup := command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
 	if merge {
 		r.merges++
 	}
@@ -170,6 +178,12 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	}
 	if err == nil && !r.interrupted && (r.point == "merge" && merge || r.point == "commit" && commit || r.point == "later-commit" && commit && r.commits == 2 || r.point == "resolution" && resolution || r.point == "candidate" && candidate || r.point == "cases" && cases || r.point == "promotion" && promotion || r.point == "cleanup" && cleanup) {
 		r.interrupted = true
+		if r.point == "cleanup" {
+			r.cleanupDirectory, r.cleanupArguments = dir, slices.Clone(args)
+			if r.cleanupError != nil {
+				return out, r.cleanupError
+			}
+		}
 		panic("native response lost")
 	}
 	return out, err
@@ -211,27 +225,32 @@ func TestMainlineReopenAdmitsOriginalNativePrefixes(t *testing.T) {
 func passMainlineTargets(t *testing.T, master *validationDriver) {
 	t.Helper()
 	for len(master.run.ValidationInputs) > 0 {
-		var id string
-		var input protocol.ValidationInput
-		for action, in := range master.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
-				id, input = action, in
-				break
-			}
-		}
-		if id == "" {
-			t.Fatalf("unexpected mainline task: %+v", master.run.ValidationInputs)
-		}
-		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-		if input.Handler == "engine.qa.execution" {
-			report := executionFor(input)
-			result.Execution = &report
-			result.Tool = "actual command contract"
-			result.Environment = "native isolated candidate"
-		}
-		master.business(id, result)
+		submitMainlineTarget(t, master)
 		master.drive()
 	}
+}
+
+func submitMainlineTarget(t *testing.T, master *validationDriver) {
+	t.Helper()
+	var id string
+	var input protocol.ValidationInput
+	for action, in := range master.run.ValidationInputs {
+		if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
+			id, input = action, in
+			break
+		}
+	}
+	if id == "" {
+		t.Fatalf("unexpected mainline task: %+v", master.run.ValidationInputs)
+	}
+	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
+	if input.Handler == "engine.qa.execution" {
+		report := executionFor(input)
+		result.Execution = &report
+		result.Tool = "actual command contract"
+		result.Environment = "native isolated candidate"
+	}
+	master.business(id, result)
 }
 
 func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing.T) {
@@ -681,34 +700,77 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
-			master, _ := mainlineChildren(t, "")
+			master, children := mainlineChildren(t, "")
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point, root: master.f.root}
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
-			func() {
-				defer func() {
-					lost := recover()
-					if lost == nil {
-						t.Fatal("delivery interruption not reached")
+			if point == "cleanup" {
+				r.cleanupError = errors.New("native response lost")
+				var driveErr error
+				for len(master.run.ValidationInputs) > 0 {
+					submitMainlineTarget(t, master)
+					var run Run
+					run, driveErr = master.f.Drive()
+					if driveErr != nil {
+						break
 					}
-					if lost != "native response lost" || !r.interrupted {
-						t.Fatalf("delivery did not lose the successful %s response: %v", point, lost)
-					}
-				}()
-				// The final result's Drive performs promotion and cleanup.
-				passMainlineTargets(t, master)
-				if _, err := master.f.PrepareCandidate("validated integration"); err != nil {
-					t.Fatal(err)
+					master.run = run
 				}
-				_, _ = master.f.Drive()
-			}()
+				if !errors.Is(driveErr, r.cleanupError) || !r.interrupted {
+					t.Fatalf("delivery did not lose the successful child cleanup response: %v", driveErr)
+				}
+			} else {
+				func() {
+					defer func() {
+						lost := recover()
+						if lost == nil {
+							t.Fatal("delivery interruption not reached")
+						}
+						if lost != "native response lost" || !r.interrupted {
+							t.Fatalf("delivery did not lose the successful %s response: %v", point, lost)
+						}
+					}()
+					// The final result's Drive performs promotion and cleanup.
+					passMainlineTargets(t, master)
+					if _, err := master.f.PrepareCandidate("validated integration"); err != nil {
+						t.Fatal(err)
+					}
+					_, _ = master.f.Drive()
+				}()
+			}
 			operation := "op.candidate"
+			owner := master
+			masterState := driverState(t, master)
+			var cleanup protocol.CleanupParameters
 			if point == "cleanup" {
 				operation = "op.cleanup"
+				owner = nil
+				for _, child := range children {
+					state := driverState(t, child)
+					if state.NativeRoot != r.cleanupDirectory {
+						continue
+					}
+					for _, intent := range state.PendingHostActions {
+						if intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup" {
+							continue
+						}
+						if err := decodeNativeParams(intent, &cleanup); err != nil {
+							t.Fatal(err)
+						}
+						if slices.ContainsFunc(cleanup.Resources, func(resource protocol.NativeResource) bool {
+							return resource.Owner == state.RunID && state.NativeResources[resource.ID] == resource && slices.Contains(r.cleanupArguments, resource.Path)
+						}) {
+							owner = child
+						}
+					}
+				}
+				if owner == nil {
+					t.Fatal("first successful cleanup has no original child intent and registered resource")
+				}
 			}
-			original := nativeIncompleteState(t, master, operation)
-			state := driverState(t, master)
-			prefix, complete, err := master.f.nativeEvidence(state, original, false)
-			if err != nil || !state.FinalValidationComplete(master.f.definition) {
+			original := nativeIncompleteState(t, owner, operation)
+			state := driverState(t, owner)
+			prefix, complete, err := owner.f.nativeEvidence(state, original, false)
+			if err != nil || !masterState.FinalValidationComplete(master.f.definition) {
 				t.Fatal("delivery interruption lost its validated source", err)
 			}
 			if point == "promotion" && (!complete || prefix.Candidate == nil || prefix.Candidate.Promotion == nil) {
@@ -716,6 +778,28 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 			}
 			if point == "cleanup" && (complete || !prefix.observedEffect) {
 				t.Fatal("native cleanup did not leave a partial deletion prefix")
+			}
+			var admitted *protocol.State
+			if point == "cleanup" {
+				if cleanup.Checkpoint == nil || state.SliceChild == nil || state.SliceReceipt == nil || masterState.CandidatePromotion == nil || cleanup.Checkpoint.MasterRunID != masterState.RunID || state.SliceChild.MasterRunID != masterState.RunID || cleanup.Checkpoint.ReceiptDigest != state.SliceReceipt.Digest || cleanup.Checkpoint.ReceiptDigest != masterState.SliceReceipts[state.RunID].Digest || !reflect.DeepEqual(&cleanup.Checkpoint.Promotion, masterState.CandidatePromotion) {
+					t.Fatal("child cleanup lost its original delivered master and checkpoint authority")
+				}
+				for _, resource := range cleanup.Resources {
+					if resource.Owner != state.RunID || state.NativeResources[resource.ID] != resource {
+						t.Fatal("child cleanup intent differs from its original owner registry")
+					}
+				}
+				// Master completion retires child states. The next native command
+				// reads the child's actual admission before checkpoint retirement.
+				r.observeCleanup = func() {
+					if admitted != nil {
+						return
+					}
+					actual := driverState(t, owner)
+					if _, accepted := actual.HostActionReceipts[original.ActionID]; accepted {
+						admitted = actual
+					}
+				}
 			}
 			t.Logf("successful native %s response lost: action=%s correlation=%s payload=%s complete=%t observedEffect=%t", point, original.ActionID, original.Correlation, original.PayloadDigest, complete, prefix.observedEffect)
 			master.reopen()
@@ -728,8 +812,15 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 			if terminal == nil {
 				t.Fatal("delivery lost its terminal admission state")
 			}
-			receipt := terminal.HostActionReceipts[original.ActionID]
-			effect := terminal.ReconciledEffects[original.ActionID]
+			admission := terminal
+			if point == "cleanup" {
+				if admitted == nil || admitted.RunID != state.RunID {
+					t.Fatal("delivery lost the actual child cleanup admission state")
+				}
+				admission = admitted
+			}
+			receipt := admission.HostActionReceipts[original.ActionID]
+			effect := admission.ReconciledEffects[original.ActionID]
 			if !reflect.DeepEqual(effect.Intent, &original) || effect.Status != "FULFILLED" || effect.ObservationDigest != receipt.Digest {
 				t.Fatal("delivery recovery changed its original intent or settlement")
 			}
@@ -738,6 +829,41 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 			}
 			if point == "promotion" && !reflect.DeepEqual(terminal.CandidatePromotion, prefix.Candidate.Promotion) {
 				t.Fatal("delivery recovery changed the observed native promotion proof")
+			}
+			if point == "cleanup" {
+				var evidence protocol.WorkspaceCleanupReceipt
+				if receipt.AdapterEvidence == nil {
+					t.Fatal("child cleanup admission has no typed receipt content")
+				}
+				raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(raw, &evidence); err != nil {
+					t.Fatal(err)
+				}
+				expected := slices.Clone(cleanup.Resources)
+				for i := range expected {
+					expected[i].Status = "CLEANED"
+				}
+				if evidence.ParametersDigest != original.PayloadDigest || !reflect.DeepEqual(evidence.Resources, expected) || !admitted.ResourcesCleaned() {
+					t.Fatal("child cleanup receipt does not account for its original resource contents")
+				}
+				if directory := os.Getenv("NATIVE_VCS_EVIDENCE"); directory != "" {
+					for name, value := range map[string]any{
+						"cleanup-context":        map[string]any{"parent": masterState, "parameters": cleanup, "commandDirectory": r.cleanupDirectory, "command": append([]string{"git"}, r.cleanupArguments...), "complete": complete, "observedEffect": prefix.observedEffect},
+						"cleanup-admitted-state": admitted,
+					} {
+						body, err := json.MarshalIndent(value, "", "  ")
+						if err != nil {
+							t.Fatal(err)
+						}
+						path := filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+"-"+name+".json")
+						if err := os.WriteFile(path, body, 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
 			}
 			assertNoMainlineResources(t, master)
 			before, err := os.ReadFile(filepath.Join(master.f.stateDir, "terminal-summary.json"))
