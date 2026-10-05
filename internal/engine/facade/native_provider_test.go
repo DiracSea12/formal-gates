@@ -659,6 +659,9 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					if err != nil || digest != proof.Digest {
 						t.Fatal("child initial native values differ from its proof", err)
 					}
+					if _, err := child.Drive(); err != nil {
+						t.Fatal(err)
+					}
 				}
 				before := installationFiles(t, master.f.root)
 				reopenNativeProviderDriver(t, master, name, runner)

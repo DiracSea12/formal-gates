@@ -351,7 +351,7 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 			if isMissingEngineState(err) {
 				summary, err := child.readSummary()
 				if err == nil {
-					run = runFromSummary(summary)
+					states[i] = summary.Termination
 				}
 				return err
 			}
@@ -370,6 +370,9 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 		}()
 		if err != nil {
 			return err
+		}
+		if states[i] != nil {
+			continue
 		}
 		if run.Status != "ABORTED" && run.Status != "COMPLETE" {
 			settled = false
