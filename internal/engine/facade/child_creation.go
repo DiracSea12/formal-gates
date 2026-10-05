@@ -13,7 +13,6 @@ import (
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
-	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 )
 
