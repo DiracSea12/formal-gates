@@ -2169,7 +2169,7 @@ func (c *engineCanary) hostPaths() map[string]string {
 // the read-only bundled release; the active catalogue stays in the host root.
 func (c *engineCanary) hostEnvironment() map[string]string {
 	paths := c.hostPaths()
-	script := textOf(getOf(getOf(c.binding, "launch"), "script"))
+	script, _ := getOf(getOf(c.binding, "launch"), "script").(string)
 	if script == "" {
 		var configured bool
 		script, configured = os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT")
