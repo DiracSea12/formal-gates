@@ -77,14 +77,16 @@ func offeredIDs(options any) string {
 }
 
 // NativeRespond is `formal-gates harness native-respond --job <dir>
-// --request <id> (--option <optionId> | --cancel)`: validate that the request
-// is still pending and that the chosen option is one the host offered, then
+// --request <id> (--option <optionId> | --answers <JSON> | --cancel)`: validate that the request
+// is still pending and that a chosen option is one the host offered. Structured
+// answers are validated by the held native spec before delivery. Both paths
 // atomically write interaction-answer.json. The job process consumes the file
 // exactly once (rename) and replies to the original connection.
 func NativeRespond(args []string, errout io.Writer) int {
 	job := ""
 	request := ""
 	option := ""
+	var answers any
 	cancel := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -109,6 +111,22 @@ func NativeRespond(args []string, errout io.Writer) int {
 			}
 			i++
 			option = args[i]
+		case "--answers":
+			if i+1 >= len(args) {
+				fmt.Fprintln(errout, "--answers requires a JSON object")
+				return 2
+			}
+			i++
+			value, err := decodeUniqueKeys([]byte(args[i]))
+			if err != nil {
+				fmt.Fprintln(errout, err)
+				return 2
+			}
+			if _, ok := value.(map[string]any); !ok {
+				fmt.Fprintln(errout, "--answers must be a JSON object")
+				return 2
+			}
+			answers = value
 		case "--cancel":
 			cancel = true
 		default:
@@ -117,11 +135,11 @@ func NativeRespond(args []string, errout io.Writer) int {
 		}
 	}
 	if job == "" || request == "" {
-		fmt.Fprintln(errout, "usage: formal-gates harness native-respond --job <dir> --request <id> (--option <optionId> | --cancel)")
+		fmt.Fprintln(errout, "usage: formal-gates harness native-respond --job <dir> --request <id> (--option <optionId> | --answers <JSON> | --cancel)")
 		return 2
 	}
-	if cancel == (option != "") {
-		fmt.Fprintln(errout, "answer with exactly one of --option <optionId> or --cancel")
+	if (cancel && (option != "" || answers != nil)) || (!cancel && option == "" && answers == nil) {
+		fmt.Fprintln(errout, "answer with --option <optionId>, --answers <JSON>, or --cancel")
 		return 2
 	}
 	directory := resolveNativePath(job)
@@ -165,6 +183,9 @@ func NativeRespond(args []string, errout io.Writer) int {
 	}
 	if option != "" {
 		answer["option"] = option
+	}
+	if answers != nil {
+		answer["answers"] = answers
 	}
 	if err := writeAtomicJSON(nativeAnswerPath(directory), answer); err != nil {
 		fmt.Fprintf(errout, "cannot write the answer: %v\n", err)
