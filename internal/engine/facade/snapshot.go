@@ -75,7 +75,7 @@ func (f *Facade) PrepareCandidate(message string) (string, error) {
 	if f.vcs == nil {
 		return "", fmt.Errorf("candidate promotion requires a regular run with a git provider")
 	}
-	unlock, err := f.acquireNativeWindow()
+	unlock, err := f.acquireWriteWindow()
 	if err != nil {
 		return "", err
 	}

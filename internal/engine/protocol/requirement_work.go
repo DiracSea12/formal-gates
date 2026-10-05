@@ -187,7 +187,7 @@ func sameRequirementPackage(a, b RequirementDecisionPackage) bool {
 	return digestOfCanonical(a.Coverage) == digestOfCanonical(b.Coverage) && a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
 		a.Source == b.Source && a.Classification == b.Classification && a.RedoProductReview == b.RedoProductReview &&
 		a.RedoStartReadiness == b.RedoStartReadiness && a.RedoTopology == b.RedoTopology && a.RedoRoute == b.RedoRoute &&
-		a.FindingDigest == b.FindingDigest && slices.Equal(a.WorkDecisions, b.WorkDecisions)
+		a.FindingDigest == b.FindingDigest && a.ResetRequestID == b.ResetRequestID && digestOfCanonical(a.Children) == digestOfCanonical(b.Children) && digestOfCanonical(a.Impact) == digestOfCanonical(b.Impact) && slices.Equal(a.WorkDecisions, b.WorkDecisions)
 }
 
 // archiveDispatchResults keeps every available result on the same obsolete
@@ -269,7 +269,9 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 		work := choice.Work
 		delete(state.EndedAttempts, work.Task)
 		state.archiveDispatchResults(work.ActionID)
-		if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
+		if _, live := state.PendingActions[work.ActionID]; live {
+			state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
+		} else if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
 			if _, recorded := state.ObsoleteActions[work.ActionID]; !recorded {
 				state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
 			}

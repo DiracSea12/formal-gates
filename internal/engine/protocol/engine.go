@@ -40,12 +40,13 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
-	NativeRoot    string
-	Definition    *compiler.CompiledDefinition
-	Registry      *compiler.Registry
-	Capacity      int
-	CostSource    CostSourceResolver
-	ClaimDispatch DispatchClaim
+	RequirementGuarantee *GuaranteeActivation
+	NativeRoot           string
+	Definition           *compiler.CompiledDefinition
+	Registry             *compiler.Registry
+	Capacity             int
+	CostSource           CostSourceResolver
+	ClaimDispatch        DispatchClaim
 }
 
 // Engine 是提交协议内核：每个方法一次完整的「读 state → 变更 →
@@ -157,6 +158,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.InitialSnapshot = initialSnapshot
 	state.NativeRoot = e.cfg.NativeRoot
 	state.IntakeConfirmationReceipt = confirmation
+	state.RequirementGuarantee = e.cfg.RequirementGuarantee
 	if sliceStart != nil {
 		binding := sliceStart.Binding
 		state.SliceChild = &binding
@@ -289,6 +291,16 @@ func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) error {
 // 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、挂
 // 起配对扫描与容量补位。返回补位签发的 action ID。
 func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+	if len(state.RequirementRevisions) > 1 {
+		entry := state.RequirementRevisions[len(state.RequirementRevisions)-1]
+		if entry.StateRevision == nextRevision && len(entry.Children) > 0 {
+			return nil, nil
+		}
+	}
+	if state.resetPending() {
+		_, err := e.advanceReset(state, nextRevision)
+		return nil, err
+	}
 	if state.abortRequested() {
 		_, err := e.advanceAbort(state, nextRevision)
 		return nil, err
@@ -296,6 +308,9 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	if state.requirementChangePending() {
 		state.routingReleasedCapacity = false
 		return nil, nil
+	}
+	if _, err := e.stopControlledWorkers(state, "requirement-change", "Requirement work superseded: ", nextRevision, false); err != nil {
+		return nil, err
 	}
 	if _, err := e.advanceValidation(state, nextRevision); err != nil {
 		return nil, err
@@ -450,7 +465,7 @@ func (e *Engine) Load() (Snapshot, error) {
 // live dispatches retain their actual task identity, including replacement tasks.
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
-	view.Suspended = s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
+	view.Suspended = !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
@@ -501,6 +516,9 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 		}
 		if round := series.Issued + 1; round > 1 {
 			key.Scope = strconv.Itoa(round)
+		}
+		if boundary := s.resetRequestID(); boundary != "" {
+			key.Scope = "reset:" + boundary + ":" + strconv.Itoa(series.Issued+1)
 		}
 		var blockedBy decision.WaitReason
 		if !s.reviewRoundOwed(mark) {
@@ -1156,7 +1174,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 	}
 	switch ev.Kind {
 	case KindRequestControl:
-		if ev.Request.Control == ControlReset || ev.Request.Control == ControlRecovery {
+		if ev.Request.Control == ControlRecovery {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "control is not supported as a public request: " + string(ev.Request.Control)}
 		}
 		if ev.Request.Request != "" {
@@ -1169,6 +1187,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		requestID := string(ev.ID)
 		if _, exists := state.PendingAsks[requestID]; exists {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("pending ask %q already exists", requestID)}
+		}
+		if state.SliceChild != nil && ev.Request.Control == ControlRequestRequirementChange {
+			return Acceptance{}, nil, false, validationError("slice requirements are owned by master " + state.SliceChild.MasterRunID)
 		}
 		step := state.nextHumanAskStep(e.cfg.Definition)
 		ask := PendingAsk{
@@ -1184,6 +1205,16 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			//（DECIDE 三方相等校验）。
 			ask.BaseRevision = state.RequirementRevision()
 			ask.BaseGeneration = state.requirementGeneration()
+		}
+		if ev.Request.Control == ControlReset {
+			preview := state.ResetPreview()
+			if ev.resetPreview != nil {
+				preview.RequirementRevision = ev.resetPreview.RequirementRevision
+				preview.Children = ev.resetPreview.Children
+				preview.Digest = preview.CanonicalDigest()
+			}
+			ask.Reset = &preview
+			ask.Options = []AskOption{{ID: "proceed", Label: "Reset with this exact preservation and cleanup preview"}, {ID: "decline", Label: "Keep the current run"}}
 		}
 		if ev.Request.Control == ControlValidation {
 			value, err := e.acceptValidationRequest(state, ev.Request.Validation, nextRevision)
@@ -1239,9 +1270,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeUnknownRequest, Detail: fmt.Sprintf("request %q does not exist", requestID)}
 		}
-		if ask.Control == ControlReset {
-			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "RESET is not supported"}
-		}
+
 		if ask.Resolved {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", requestID)}
 		}
@@ -1260,6 +1289,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 审查类业务控制：选项合法后先校验 typed 载荷并执行账目变换
 		//（授权轮、纠正、拓扑、路线），再落决定。任一拒绝发生在 state
 		// 变更之前——零状态变化。
+		if ask.Control == ControlReset || ev.Decide.Reset != nil {
+			if err := e.acceptResetDecision(state, ask, ev.Decide); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
 		if reviewControl(ask.Control) || ev.Decide.Review != nil {
 			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide); err != nil {
 				return Acceptance{}, nil, false, err
@@ -1288,7 +1322,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		state.PendingAsks[requestID] = ask
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
-			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review,
+			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset,
 		}
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
@@ -1297,7 +1331,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 时 frontier settle 挂起至解除事务统一执行，补位签发属事务收尾单
 		// 点（commitEffects）；屏障不在位时先 settle 再补位。
 		var refill []string
-		if state.requirementChangePending() {
+		if state.requirementChangePending() || ev.Decide.Requirement != nil && len(ev.Decide.Requirement.Children) > 0 {
 			state.FrontierSettleHeld = true
 		} else {
 			if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
@@ -2737,7 +2771,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 		return HostActionIntent{}, err
 	}
 	if nativeOperation(operation) {
-		if state.requirementChangePending() {
+		if state.requirementChangePending() && !(state.resetPending() && operation == "op.cleanup") {
 			return HostActionIntent{}, validationError("native signing is frozen by requirement control")
 		}
 		switch operation {

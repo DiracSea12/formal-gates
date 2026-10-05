@@ -808,6 +808,9 @@ func verifyReviewIntegrity(state *State, cd *compiler.CompiledDefinition) error 
 	expectedFloor := func(action review.Action) uint64 {
 		var floor uint64
 		for _, entry := range state.RequirementRevisions {
+			if reset, ok := state.resetDecision(); ok && reset.Reset.Applied && entry.StateRevision <= reset.Revision {
+				continue
+			}
 			if entry.StateRevision > floor && slices.Contains(entry.DecidedScope, string(action)) {
 				floor = entry.StateRevision
 			}

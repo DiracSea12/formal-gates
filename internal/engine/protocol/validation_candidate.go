@@ -542,7 +542,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 }
 
 func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
-	if s.requirementChangePending() {
+	if s.requirementChangePending() && !(s.resetPending() && intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup") {
 		return false
 	}
 	if s.abortRequested() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {

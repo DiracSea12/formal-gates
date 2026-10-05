@@ -92,7 +92,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 	}
 	if !complete {
 		_, aborted := state.AbortDecision()
-		if aborted && operation != "op.cleanup" {
+		if (aborted || state.ResetPending()) && operation != "op.cleanup" {
 			var observed protocol.HostActionObservation
 			if params.Promotion != nil {
 				prefix, err := f.promotionPrefix(*params.Promotion)
@@ -306,7 +306,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	case "op.candidate":
 		return f.candidateEvidence(s, intent, mayWrite, &invoked)
 	case "op.cleanup":
-		if mayWrite {
+		if mayWrite && !s.ResetPending() && !s.RebuildingChildren() {
 			if err := f.freezeCleanupSummary(s); err != nil {
 				return nativeResult{}, false, err
 			}

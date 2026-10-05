@@ -462,9 +462,22 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 		}
 		return digestOfCanonical(p) == digestOfCanonical(original)
 	}
-	for _, r := range s.GitResources {
-		if r.Status != "CLEANED" {
-			expected = append(expected, r)
+	if s.resetPending() {
+		d, _ := s.resetDecision()
+		preview := s.PendingAsks[d.RequestID].Reset
+		if preview == nil {
+			return false
+		}
+		for _, r := range preview.Resources {
+			if current := s.GitResources[r.ID]; current.Status != "CLEANED" {
+				expected = append(expected, current)
+			}
+		}
+	} else {
+		for _, r := range s.GitResources {
+			if r.Status != "CLEANED" {
+				expected = append(expected, r)
+			}
 		}
 	}
 	actual := slices.Clone(p.Resources)
@@ -477,6 +490,12 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
 	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
+	}
+	if s.RebuildingChildren() {
+		return len(s.PendingActions) == 0
+	}
+	if s.resetPending() {
+		return len(s.PendingActions) == 0
 	}
 	if s.pendingControl() || s.nonCleanupNativeDebt() || s.SliceChild != nil && !s.abortRequested() || len(s.PendingActions) != 0 {
 		return false

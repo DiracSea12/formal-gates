@@ -41,6 +41,9 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 			s.Validation = &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}, Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}}
 		}
 		s.Validation.Document = doc
+		if s.RequirementGuarantee != nil {
+			s.RequirementGuarantee.ManifestDigest = digestOfCanonical(doc.Requirements)
+		}
 		s.Validation.RequirementRevision = o.RequirementRevision
 		s.Validation.Generation = s.requirementGeneration()
 		if err := s.validateConfirmedCoverage(); err != nil {

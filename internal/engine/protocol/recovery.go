@@ -404,7 +404,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 	}
 	// 屏障闸（FA）：host action 对账是权威写入——intent 结算、frontier
 	// settle 与补位签发在未决需求变化期间冻结（解除后照常）。
-	if err := state.errWriteBarrier("host action reconciliation"); err != nil {
+	if err := state.errWriteBarrier("host action reconciliation"); err != nil && !state.resetPending() {
 		return RecoveryPlan{}, 0, err
 	}
 	if effect, reconciled := state.ReconciledEffects[actionID]; reconciled {
@@ -414,7 +414,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
 	}
-	if len(observations) == 1 && state.abortRequested() && observations[0].Resource != nil && observations[0].Promotion == nil {
+	if len(observations) == 1 && (state.abortRequested() || state.resetPending()) && observations[0].Resource != nil && observations[0].Promotion == nil {
 		intent, ok := state.PendingHostActions[actionID]
 		observation := observations[0]
 		if !ok || observationDigest != observation.Digest() {
@@ -428,7 +428,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		committed, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
 		return plan, committed, err
 	}
-	if len(observations) == 1 && state.abortRequested() && observations[0].Promotion != nil && observations[0].Resource == nil {
+	if len(observations) == 1 && (state.abortRequested() || state.resetPending()) && observations[0].Promotion != nil && observations[0].Resource == nil {
 		intent, ok := state.PendingHostActions[actionID]
 		params, parseErr := candidateParameters(intent)
 		observation := *observations[0].Promotion

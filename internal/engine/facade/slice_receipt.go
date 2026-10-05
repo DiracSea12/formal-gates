@@ -1,11 +1,6 @@
 package facade
 
 import (
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
-
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/protocol"
 )
@@ -44,17 +39,18 @@ func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
 		if childID == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(EngineNamespace), childID, "state.json")); errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return err
-		}
 		child, err := Open(f.root, childID)
 		if err != nil {
 			return err
 		}
 		snapshot, err := child.engine.Load()
-		if err != nil {
+		if isMissingEngineState(err) {
+			summary, e := child.readSummary()
+			if e != nil {
+				return e
+			}
+			snapshot.State = summary.Termination
+		} else if err != nil {
 			return err
 		}
 		receipt := snapshot.State.SliceReceipt

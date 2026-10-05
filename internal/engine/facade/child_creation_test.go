@@ -42,7 +42,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 			Links:   []protocol.SourcePoint{{SourceID: source, PointID: point}},
 		}
 	}
-	original, current, local := inventory("SOL-ORIGINAL", "SP-ORIGINAL"), inventory("SOL-CURRENT", "SP-CURRENT"), inventory("SOL-LOCAL", "SP-LOCAL")
+	original, current := inventory("SOL-ORIGINAL", "SP-ORIGINAL"), inventory("SOL-CURRENT", "SP-CURRENT")
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	master := nativeMasterAt(t, root, base, original)
@@ -143,22 +143,19 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	confirmValidationDocument(sibling, "", local, document+"\n")
-	sibling.reopen()
+	request, err := protocol.NewRequestEvent("independent-child-change", protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Change child requirement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = other.Submit(request); err == nil {
+		t.Fatal("child independently accepted a requirement change")
+	}
 	state := driverState(t, sibling)
-	if state.RequirementRevision() == master.revision || state.RequirementRevisions[1].BaseRevision != master.revision || state.RequirementRevisions[1].StateRevision <= state.IntakeReceipt.Revision || !reflect.DeepEqual(state.RequirementRevisions[1].Coverage, local) || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) {
-		t.Fatal("local confirmation replaced the inherited evidence or used parent generations")
+	if state.RequirementRevision() != master.revision || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) {
+		t.Fatal("rejected child change rewrote origin or intake")
 	}
-	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
-	sibling.drive()
-	siblingID, siblingInput := planBatchAction(sibling, "command")
-	sibling.revision = state.RequirementRevision()
-	assertConfirmedMaterial(t, sibling, siblingInput, document+"\n")
 	if body, err := os.ReadFile(filepath.Join(root, "requirements.md")); err != nil || string(body) != document {
-		t.Fatal("child local confirmation changed the parent's material", err)
-	}
-	if siblingInput.Binding.RequirementRevision != state.RequirementRevision() || !slices.Contains(siblingInput.Manifest.Sources, "SOL-LOCAL") || slices.Contains(siblingInput.Manifest.Sources, "SOL-CURRENT") {
-		t.Fatal("local confirmation did not own the child's next dispatch")
+		t.Fatal("child change modified master artifact", err)
 	}
 	abortCreationChild(t, master.f)
 	master.drive()
