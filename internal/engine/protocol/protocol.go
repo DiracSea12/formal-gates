@@ -492,6 +492,9 @@ type State struct {
 	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
 	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
+	// InitialSnapshot is the immutable native HEAD accepted at regular Start.
+	// It owns the first development source and target identity before a promotion.
+	InitialSnapshot string `json:"initialSnapshot,omitempty"`
 	// PromotedSnapshot 是已绑定晋升的候选快照身份（与 PromotedDigest 同
 	// 事务写入）；终态边界在两者绑定前保持等待。
 	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`

@@ -204,6 +204,13 @@ func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
 	return s.FinalValidationComplete(cd) && !s.validationDeliveryComplete(cd)
 }
 
+func (s *State) AcceptedNativeSnapshot() string {
+	if s.CandidatePromotion != nil {
+		return s.CandidatePromotion.Final
+	}
+	return s.InitialSnapshot
+}
+
 // FinalValidationComplete derives delivery qualification from the current
 // confirmed plan and its complete source set. A checkpoint only releases later
 // development; an AFFECTED wave still owes FULL validation of the same candidate.

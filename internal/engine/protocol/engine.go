@@ -129,7 +129,7 @@ func (e *Engine) load() (uint64, *State, error) {
 // PROVIDER_MISMATCH 硬拒绝、不降级 default。已存在状态时
 // 拒绝且零变化。
 func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
-	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "", nil)
+	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "", "", nil)
 }
 
 // InitWithMetadata is the façade bootstrap variant.  It preserves Init's
@@ -137,7 +137,7 @@ func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint
 // the typed pre-start intake confirmation in the same authoritative state
 // write. sliceStart 非 nil 时是 child run 启动：继承事实与继承拓扑在首次
 // 状态写入一并落账（与受理 phase 同点），不存在无继承事实的 child 中间态。
-func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot string, sliceStart *SliceRunStart) error {
+func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
 	}
@@ -154,6 +154,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.RunID = runID
 	state.Route = route
 	state.BaseSnapshot = baseSnapshot
+	state.InitialSnapshot = initialSnapshot
 	state.NativeRoot = e.cfg.NativeRoot
 	state.IntakeConfirmationReceipt = confirmation
 	if sliceStart != nil {

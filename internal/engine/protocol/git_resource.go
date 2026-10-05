@@ -105,6 +105,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	scope := s.Validation.RequirementRevision
 	switch role {
 	case "engine.development.batch":
+		source = s.AcceptedNativeSnapshot()
 		request, _, _ := s.confirmedDevelopmentPlan()
 		scope = request + ":" + s.Validation.RequirementRevision + ":" + strconv.FormatUint(s.Validation.Generation, 10)
 		// Spike conclusions are dependencies; their edits remain outside delivery.

@@ -497,6 +497,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	// 的快照接线：base 必须可复现且是原生 HEAD 的祖先或相等）。lightweight 不
 	// 引入 VCS 依赖。
 	var vcsProvider *vcs.Provider
+	var initialSnapshot string
 	if req.Route == "regular" {
 		vcsProvider = vcs.New(root, options.VCSRunner)
 		current, err := vcsProvider.Resolve()
@@ -510,6 +511,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		if err := vcsProvider.IsAncestorOrEqual(req.BaseSnapshot, current); err != nil {
 			return nil, Run{}, fmt.Errorf("base snapshot %s: %w", req.BaseSnapshot, err)
 		}
+		initialSnapshot = current
 	}
 	if options.Admission == nil {
 		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: candidate start requires launcher admission")
@@ -684,7 +686,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	if err := initializeRun(eng, root, req, sliceStart, options.Owner, tokenCap, admission, cd); err != nil {
+	if err := initializeRun(eng, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
 	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
@@ -701,7 +703,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 // initializeRun owns the initial workflow, cost envelope and lifecycle binding.
 // The configured engine carries the native root and definition; initial cost
 // and lifecycle facts are bound before any workflow dispatch.
-func initializeRun(eng *protocol.Engine, root string, req StartRequest, sliceStart *protocol.SliceRunStart, owner OwnerBinding, tokenCap *int64, admission Admission, cd *compiler.CompiledDefinition) error {
+func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialSnapshot string, sliceStart *protocol.SliceRunStart, owner OwnerBinding, tokenCap *int64, admission Admission, cd *compiler.CompiledDefinition) error {
 	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
 	// SELECT_ROUTE）。
 	phase := runtime.PhaseIntakeRegistered
@@ -712,7 +714,7 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, sliceSta
 	if err != nil {
 		return err
 	}
-	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, sliceStart); err != nil {
+	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, initialSnapshot, sliceStart); err != nil {
 		return err
 	}
 	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
@@ -1168,17 +1170,13 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 	return nil
 }
 
-// Submit accepts one typed event within the native window when it changes
-// control admission. The current State owns pending requests and decisions.
+// Submit serializes new typed events with native execution. Exact accepted
+// replay stays read-only; waiting callers consult the current ledger again.
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
-	accepted, recorded, err := f.engine.RecordedEvent(event)
-	if isMissingEngineState(err) {
-		accepted, err = f.replayTerminalEvent(event)
-		recorded = err == nil
-	}
+	accepted, recorded, err := f.recordedEvent(event)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1186,16 +1184,18 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		run, err := f.projectOrSummary()
 		return accepted, run, err
 	}
-	control, err := f.controlsNativeWindow(event)
+	unlock, err := f.acquireNativeWindow()
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
-	if control {
-		unlock, err := f.acquireNativeWindow()
-		if err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
-		defer unlock()
+	defer unlock()
+	accepted, recorded, err = f.recordedEvent(event)
+	if err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if recorded {
+		run, err := f.projectOrSummary()
+		return accepted, run, err
 	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
@@ -1205,25 +1205,13 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	return acceptance, run, err
 }
 
-func (f *Facade) controlsNativeWindow(event protocol.Event) (bool, error) {
-	if event.Kind == protocol.KindRequestControl {
-		return true, nil
-	}
-	if event.Kind != protocol.KindDecide || event.Decide == nil {
-		return false, nil
-	}
-	snap, err := f.engine.Load()
+func (f *Facade) recordedEvent(event protocol.Event) (protocol.Acceptance, bool, error) {
+	accepted, recorded, err := f.engine.RecordedEvent(event)
 	if isMissingEngineState(err) {
-		return false, nil
+		accepted, err = f.replayTerminalEvent(event)
+		recorded = err == nil
 	}
-	if err != nil {
-		return false, err
-	}
-	ask, ok := snap.State.PendingAsks[string(event.Decide.Request)]
-	if !ok {
-		return false, nil
-	}
-	return ask.Control == protocol.ControlRequestRequirementChange || ask.Control == protocol.ControlAbort || ask.Control == protocol.ControlValidation || ask.Control == protocol.ControlRecovery, nil
+	return accepted, recorded, err
 }
 
 // replayTerminalEvent reads accepted receipts from the retained State while

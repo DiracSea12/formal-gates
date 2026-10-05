@@ -52,8 +52,8 @@ const promotionLockDescription = "candidate promotion window"
 
 // promotionLockPath 是晋升执行窗互斥锁（等待式文件锁）的路径：放在 run 状态
 // 目录内（.gates/engine/ 属 porcelain 的运行期未跟踪排除清单，锁文件不污染
-// 就绪检查）。Drive、PrepareCandidate 的原生执行与观察共用此窗口；撤销资格的
-// 接纳（需求变化与 abort 决定）在同一把锁上等待至窗口关闭（等待式文件锁本
+// 就绪检查）。Drive、PrepareCandidate 的原生执行与观察共用此窗口；公开新事件的
+// 接纳在同一把锁上等待至窗口关闭（等待式文件锁本
 // 体：持锁冲突时阻塞、由内核在持锁释放时唤醒的等待者，与 owner 区间串行使
 // 用同款原语）。
 func (f *Facade) promotionLockPath() string {
@@ -148,11 +148,8 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		if intent.ActionID != "" {
 			p.SupersedesActionID = intent.ActionID
 		} else {
-			expected := s.BaseSnapshot
-			if s.CandidatePromotion != nil {
-				expected = s.CandidatePromotion.Final
-			}
-			if observed.Head != expected && !(s.NativeRoot == "" && observed.Tree == source.Digest) {
+			expected := s.AcceptedNativeSnapshot()
+			if observed.Head != expected {
 				return "", fmt.Errorf("promotion target drifted from its accepted delivery %s to %s", expected, observed.Head)
 			}
 			if !observed.Clean {

@@ -33,11 +33,12 @@ const frozenTree = "0123456789abcdef0123456789abcdef01234568"
 // frozenGitRepo 是冻结场景的 Git 应答夹具：单链提交仓（链首即 base），按命令
 // 与参数精确区分身份——rev-parse HEAD 是当前提交，<rev>^{tree} 是该提交的树
 // 身份，merge-base 返回链上较早实参，区间计数＝链上距离（base==HEAD 如实为
-// 0）。宿主内容变化（开发/返修提交）经 advance 推进链上当前提交（真仓场景的
-// 对应动作是 git commit）；未推进时应答与单提交仓一致。真实 git 行为（含排除
+// 0）。候选冻结生成独立提交，目标 HEAD 只随原生 merge/commit/reset 推进。
+// 未推进时应答与单提交仓一致。真实 git 行为（含排除
 // 规则与 squash）由 internal/engine/vcs 的真仓冒烟覆盖。
 type frozenGitRepo struct {
 	commits []string
+	head    string
 	trees   map[string]string
 	objects map[string]string
 	// sequence 是身份发生的单调计数：squash 截断链后仍不复用已出现的提交
@@ -51,6 +52,7 @@ type frozenGitRepo struct {
 func newFrozenGitRepo() *frozenGitRepo {
 	repo := &frozenGitRepo{trees: map[string]string{}, objects: map[string]string{frozenTree: "abcdef0123456789abcdef0123456789abcdef0123"}}
 	repo.commits = append(repo.commits, frozenSnapshot)
+	repo.head = frozenSnapshot
 	repo.trees[frozenSnapshot] = frozenTree
 	return repo
 }
@@ -61,6 +63,7 @@ func (r *frozenGitRepo) advance() string {
 	r.sequence++
 	commit := fmt.Sprintf("%040d", r.sequence)
 	r.commits = append(r.commits, commit)
+	r.head = commit
 	r.trees[commit] = fmt.Sprintf("%064d", r.sequence)
 	r.objects[r.trees[commit]] = fmt.Sprintf("%040x", r.sequence+1000000)
 	return commit
@@ -80,7 +83,7 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 	if command != "git" {
 		return "", fmt.Errorf("frozen git fixture: unexpected command %s %s", command, joined)
 	}
-	head := r.commits[len(r.commits)-1]
+	head := r.head
 	switch {
 	case joined == "rev-parse --show-toplevel":
 		return dir, nil
@@ -141,13 +144,20 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 			return r.pendingTree, nil
 		}
 		return r.trees[head], nil
+	case len(args) == 3 && args[0] == "merge" && args[1] == "--ff-only":
+		if _, ok := r.indexOf(args[2]); !ok {
+			return "", fmt.Errorf("frozen git fixture: unknown merge source %s", args[2])
+		}
+		r.head = args[2]
+		return "", nil
 	case len(args) == 3 && args[0] == "reset" && args[1] == "--soft":
 		// squash 第一步：区间压回 base，当前树留给重提交。
 		bi, ok := r.indexOf(args[2])
 		if !ok {
 			return "", fmt.Errorf("frozen git fixture: unknown commit %s", args[2])
 		}
-		r.pendingTree = r.trees[strings.ToLower(r.commits[len(r.commits)-1])]
+		r.pendingTree = r.trees[r.head]
+		r.head = args[2]
 		r.commits = r.commits[:bi+1]
 		return "", nil
 	case len(args) == 3 && args[0] == "commit" && args[1] == "-m":
@@ -162,6 +172,7 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 		r.pendingTree = ""
 		r.commits = append(r.commits, commit)
 		r.trees[commit] = tree
+		r.head = commit
 		return "", nil
 	case len(args) == 3 && args[0] == "rev-list" && args[1] == "--count":
 		base, tip, ok := strings.Cut(args[2], "..")
@@ -189,8 +200,7 @@ type validationDriver struct {
 	provider string
 	// git 是本 driver 场景固定的 Git provider（root＋注入 runner）：候选回执
 	// 的身份/树摘要取自它——reopen 后的 façade 持生产 exec runner，测试替身
-	// 不随重开丢失。frozen 非空时场景用冻结链仓，materialize 把每次候选冻
-	// 结建模为一次宿主提交并推进链上当前提交。
+	// 不随重开丢失。frozen 非空时 materialize 冻结候选提交，保持目标 HEAD。
 	git    *vcs.Provider
 	frozen *frozenGitRepo
 	// routeRedos 记录本 driver 已走过的路线重走次数：每次重走需要一个
@@ -427,14 +437,16 @@ func (d *validationDriver) materialize() {
 		}
 		assertCandidateStep(d.t, d, intent)
 		// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
-		// 冻结场景把每次候选冻结建模为一次宿主提交（阶段性产物入树，候选
-		// 身份随冻结推进）；真仓场景直接读真实 HEAD 与其树摘要。
-		if d.frozen != nil {
-			d.frozen.advance()
-		}
+		// 冻结场景产生候选对象而不改变目标 HEAD；真仓语义夹具
+		// 从场景的 source provider 读取候选身份与其树摘要。
 		identity, err := d.git.Resolve()
 		if err != nil {
 			d.t.Fatal(err)
+		}
+		if d.frozen != nil {
+			target := d.frozen.head
+			identity = d.frozen.advance()
+			d.frozen.head = target
 		}
 		digest, err := d.git.TreeDigest(identity)
 		if err != nil {
@@ -1005,7 +1017,11 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err != nil {
 		return nil, Run{}, err
 	}
-	if err := initializeRun(engine, root, req, sliceStart, options.Owner, tokenCap, admitted, cd); err != nil {
+	initialSnapshot, err := vcs.New(root, options.VCSRunner).Resolve()
+	if err != nil {
+		return nil, Run{}, err
+	}
+	if err := initializeRun(engine, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admitted, cd); err != nil {
 		return nil, Run{}, err
 	}
 	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {

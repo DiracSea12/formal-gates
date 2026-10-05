@@ -38,7 +38,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &State{
-		RunID: "delivery", NativeRoot: t.TempDir(), BaseSnapshot: "base-identity",
+		RunID: "delivery", NativeRoot: t.TempDir(), BaseSnapshot: "base-identity", InitialSnapshot: "initial-identity",
 		Validation:   &Validation{RequirementRevision: "rev-1", Generation: 1},
 		GitResources: map[string]GitResource{}, DispatchBindings: map[string]WorkBinding{},
 		Decisions: map[string]RecordedDecision{"route": {Control: ControlSelectRoute, Revision: 5,
@@ -48,7 +48,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	}
 	spikeTask, commandTask, extensionTask := planTask(cd, plan, batch.ID), planTask(cd, plan, command.ID), planTask(cd, plan, extension.ID)
 	spike, delivery := s.taskResource(spikeTask, cd), s.taskResource(commandTask, cd)
-	if spike.ID == delivery.ID || spike.Path == delivery.Path || spike.Ref == delivery.Ref || spike.Source != s.BaseSnapshot || spike.Owner != s.RunID || spike.Role != "development" {
+	if spike.ID == delivery.ID || spike.Path == delivery.Path || spike.Ref == delivery.Ref || spike.Source != s.InitialSnapshot || spike.Owner != s.RunID || spike.Role != "development" {
 		t.Fatalf("spike lacks its own admitted development resource: %+v %+v", spike, delivery)
 	}
 	if got := s.taskResource(extensionTask, cd); got != delivery {

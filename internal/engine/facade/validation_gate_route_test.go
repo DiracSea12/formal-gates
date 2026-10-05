@@ -1,11 +1,13 @@
 package facade
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 )
 
 // Gate-only routes keep their confirmed identity and execute exactly their ordinary gates.
@@ -31,8 +33,13 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 			d.drive()
 			id, in := d.action("engine.development.batch")
+			author := filepath.Join(t.TempDir(), "author")
+			if err := d.git.AddWorktree(author, driverState(t, d).InitialSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			d.git = vcs.New(author, nil)
+			snapshotCommitOne(t, author, "implement public command")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement command", Build: []string{"go build passed"}, Tests: []string{"input validation tests passed"}}})
-			snapshotCommitOne(t, root, "implement public command")
 			d.materialize()
 			d.materialize()
 			d.reopen()

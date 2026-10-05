@@ -49,10 +49,15 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
 	child.drive()
 	id, input := planBatchAction(child, "command")
-	if err := os.WriteFile(filepath.Join(root, "app_test.go"), []byte("package main\n"), 0o600); err != nil {
+	author := filepath.Join(t.TempDir(), "author")
+	if err := child.git.AddWorktree(author, driverState(t, child).InitialSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, root, "implement command")
+	child.git = vcs.New(author, nil)
+	if err := os.WriteFile(filepath.Join(author, "app_test.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshotCommitOne(t, author, "implement command")
 	evidence := batchEvidence(input)
 	evidence.Paths = append(evidence.Paths, "app_test.go")
 	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})

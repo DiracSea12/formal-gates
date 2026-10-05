@@ -533,7 +533,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
-	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation, "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {

@@ -141,6 +141,10 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if tc.wantErr == "" {
 				f := startSnapshotRun(t, root, "snapshot-"+strings.ReplaceAll(strings.ReplaceAll(name, " ", "-"), "/", "-"), tc.base)
+				initial, err := f.engine.Load()
+				if err != nil || initial.State.InitialSnapshot != head {
+					t.Fatalf("accepted startup HEAD = %+v, %v; want %s", initial, err, head)
+				}
 				run, err := f.Drive()
 				if err != nil {
 					t.Fatal(err)

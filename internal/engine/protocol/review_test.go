@@ -139,7 +139,7 @@ func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *co
 	}
 	fp := fingerprintOf(t, engine)
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-review", "", confirmation, "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, fp, "run-review", "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
@@ -1864,7 +1864,7 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	err = engine.InitWithMetadata(view, testProvider, fingerprintOf(t, engine), "run-dial", "", reviewConfirmation(), "", nil)
+	err = engine.InitWithMetadata(view, testProvider, fingerprintOf(t, engine), "run-dial", "", reviewConfirmation(), "", "", nil)
 	if err == nil {
 		t.Fatal("dial-past init accepted")
 	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {

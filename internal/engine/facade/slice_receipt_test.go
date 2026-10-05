@@ -19,6 +19,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
 func receiptMaster(t *testing.T) *validationDriver {
@@ -86,11 +87,16 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, input := planBatchAction(d, "command")
-	path := childID + "_test.go"
-	if err := os.WriteFile(filepath.Join(f.root, path), []byte("package main\n"), 0o600); err != nil {
+	author := filepath.Join(t.TempDir(), "author")
+	if err := d.git.AddWorktree(author, driverState(t, d).InitialSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, f.root, "implement "+sliceID)
+	d.git = vcs.New(author, nil)
+	path := childID + "_test.go"
+	if err := os.WriteFile(filepath.Join(author, path), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshotCommitOne(t, author, "implement "+sliceID)
 	evidence := batchEvidence(input)
 	evidence.Paths = append(evidence.Paths, path)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
@@ -416,7 +422,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	}
 	resolveGateFinding(child, finding, wave.ID)
 	repair, input := child.action("engine.repair")
-	snapshotCommitOne(t, child.f.root, "correct documented output ordering")
+	snapshotCommitOne(t, child.git.Root(), "correct documented output ordering")
 	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"build passed"}, Tests: []string{"command regression passed"}}})
 	for {
 		child.drive()
