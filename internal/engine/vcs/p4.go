@@ -116,7 +116,12 @@ func normalizeP4View(view []string, client string, h WorkspaceHandle) []string {
 				marker, left = left[:1], left[1:]
 			}
 			if strings.HasPrefix(left, h.Depot+"/") {
-				left = marker + "//" + strings.TrimPrefix(left, h.Depot+"/")
+				origin := "//"
+				if h.Stream != "" {
+					source, _ := decodeNative(h.Source)
+					origin = source.Stream + "/"
+				}
+				left = marker + origin + strings.TrimPrefix(left, h.Depot+"/")
 			}
 		}
 		right := strings.Replace(fields[1], "//"+client+"/", "//project/", 1)
@@ -219,7 +224,7 @@ func (p *Provider) p4Resolve(revision string) (string, error) {
 		encoded, _ := json.Marshal(semantic)
 		identity.StreamSpec = string(encoded)
 	}
-	files, err := p.p4JSON("fstat", "-Op", "-Ol", "//"+client+"/...@"+strconv.Itoa(rev))
+	files, err := p.p4JSON("fstat", "-Om", "-Op", "-Ol", "//"+client+"/...@"+strconv.Itoa(rev))
 	if err != nil {
 		return "", err
 	}
@@ -907,7 +912,7 @@ func (p *Provider) p4Pending(base, expected string) (Pending, error) {
 						}
 						if len(files) == 1 {
 							revision, _ := strconv.Atoi(files[0]["rev"])
-							proven = proven || end == revision
+							proven = proven || end == revision && record["resolveAction"+strings.TrimPrefix(key, "resolveFromFile")] == "copy from"
 						}
 					}
 				}
@@ -945,7 +950,7 @@ func (p *Provider) p4Merge(incoming nativeIdentity) error {
 		return err
 	}
 	if incoming.Stream != "" && spec["Stream"] != "" {
-		if _, err = p.p4Raw(nil, "integrate", "-S", incoming.Stream, "//"+p.p4Client()+"/...@"+strconv.Itoa(incoming.Revision)); err != nil {
+		if _, err = p.p4JSON("integrate", "-S", incoming.Stream, "//"+p.p4Client()+"/...@"+strconv.Itoa(incoming.Revision)); err != nil {
 			return err
 		}
 	} else {
@@ -960,12 +965,12 @@ func (p *Provider) p4Merge(incoming nativeIdentity) error {
 			if position >= 0 {
 				targetPath = target.Files[position].Depot
 			}
-			if _, err = p.p4Raw(nil, "integrate", address.Depot+"@"+strconv.Itoa(incoming.Revision), targetPath); err != nil {
+			if _, err = p.p4JSON("integrate", address.Depot+"@"+strconv.Itoa(incoming.Revision), targetPath); err != nil {
 				return err
 			}
 		}
 	}
-	_, err = p.p4Raw(nil, "resolve", "-am")
+	_, err = p.p4JSON("resolve", "-am")
 	return err
 }
 func (p *Provider) p4ObserveIntegration(base, incoming string) (IntegrationObservation, error) {
@@ -988,9 +993,7 @@ func (p *Provider) p4ObserveIntegration(base, incoming string) (IntegrationObser
 				started = started || slices.ContainsFunc(id.Files, func(a nativeAddress) bool { return a.Depot == value })
 			}
 		}
-		if record["action"] == "integrate" || record["action"] == "branch" {
-			started = true
-		}
+
 	}
 	return IntegrationObservation{Started: started, Lineage: hashValue(records), Entries: entries}, nil
 }

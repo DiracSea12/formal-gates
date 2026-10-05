@@ -567,9 +567,13 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	if err != nil {
 		return nativeResult{}, false, err
 	}
+	workspaceBase := p.Base
+	if native.Name() != "git" && r.Role != "merge" {
+		workspaceBase = s.ResourceStartIdentity(r)
+	}
 	message := "formal-gates candidate " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
 	if native.Name() != "git" {
-		observed, found, err := native.ObservedCommit(p.Base, message)
+		observed, found, err := native.ObservedCommit(workspaceBase, message)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -587,8 +591,8 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 
-	completed := p.Stage == "AUTHORING" && head == p.Base
-	if head != p.Base {
+	completed := p.Stage == "AUTHORING" && head == workspaceBase
+	if head != workspaceBase {
 		observed, err := native.Message(head)
 		if err != nil {
 			return nativeResult{}, false, err
@@ -601,10 +605,10 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			}
 			return nativeResult{}, false, fmt.Errorf("candidate workspace HEAD %s is not the issued freeze at %s", head, p.Base)
 		}
-		if err := native.IsAncestorOrEqual(p.Base, head); err != nil {
+		if err := native.IsAncestorOrEqual(workspaceBase, head); err != nil {
 			return nativeResult{}, false, err
 		}
-		count, err := native.CommitCount(p.Base, head)
+		count, err := native.CommitCount(workspaceBase, head)
 		if err != nil {
 			return nativeResult{}, false, err
 		}

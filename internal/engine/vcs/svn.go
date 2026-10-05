@@ -285,6 +285,9 @@ func (p *Provider) svnMessage(id nativeIdentity) (string, error) {
 	return log.Entries[0].Message, nil
 }
 func (p *Provider) svnAncestor(a, b nativeIdentity) error {
+	if a.Revision > b.Revision {
+		return fmt.Errorf("SVN source revision is beyond descendant")
+	}
 	var log svnLog
 	if err := p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", svnURL(b)); err != nil {
 		return err
@@ -362,11 +365,26 @@ func (p *Provider) svnCreatedRevision(id nativeIdentity, h WorkspaceHandle, mess
 	}
 	return 0, fmt.Errorf("SVN candidate URL has no exact native copy lineage")
 }
-func (p *Provider) svnCreateWorkspace(workspace string, id nativeIdentity, message string, h WorkspaceHandle) error {
+
+// URL absence is an observed native result; other command failures remain I/O.
+func (p *Provider) svnURLExists(url string) (bool, error) {
 	var info svnInfo
-	exists := p.svnXML(&info, "info", "--xml", h.URL) == nil
+	err := p.svnXML(&info, "info", "--xml", url)
+	if err == nil {
+		return len(info.Entries) == 1, nil
+	}
+	if strings.Contains(err.Error(), "W170000") || strings.Contains(err.Error(), "E160013") {
+		return false, nil
+	}
+	return false, err
+}
+func (p *Provider) svnCreateWorkspace(workspace string, id nativeIdentity, message string, h WorkspaceHandle) error {
+	exists, err := p.svnURLExists(h.URL)
+	if err != nil {
+		return err
+	}
 	if !exists {
-		if _, err := p.runner.Run(p.root, "svn", "copy", "--parents", svnURL(id), h.URL, "-m", message); err != nil {
+		if _, err := p.runner.Run(p.root, "svn", "copy", svnURL(id), h.URL, "-m", message); err != nil {
 			return err
 		}
 	}
@@ -383,20 +401,26 @@ func (p *Provider) svnCreateWorkspace(workspace string, id nativeIdentity, messa
 	return err
 }
 func (p *Provider) svnWorkspaceAbsent(workspace string, h WorkspaceHandle) (bool, error) {
-	var info svnInfo
-	if p.svnXML(&info, "info", "--xml", h.URL) == nil {
-		return false, nil
+	exists, err := p.svnURLExists(h.URL)
+	if err != nil || exists {
+		return false, err
 	}
-	_, err := os.Stat(workspace)
-	return os.IsNotExist(err), nil
+	_, err = os.Stat(workspace)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return false, err
 }
 func (p *Provider) svnCleanupWorkspace(workspace, message string, h WorkspaceHandle) error {
 	source, err := decodeNative(h.Source)
 	if err != nil {
 		return err
 	}
-	var info svnInfo
-	if p.svnXML(&info, "info", "--xml", h.URL) == nil {
+	exists, err := p.svnURLExists(h.URL)
+	if err != nil {
+		return err
+	}
+	if exists {
 		var log svnLog
 		if err = p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", h.URL); err != nil {
 			return err
@@ -444,6 +468,9 @@ func (p *Provider) svnApply(id nativeIdentity, paths []string) error {
 				return err
 			}
 		} else {
+			if err = os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
 			if _, err = p.runner.Run(p.root, "svn", "export", "--force", "-r", strconv.Itoa(id.Revision), id.Scope+"/"+key+"@"+strconv.Itoa(id.Revision), target); err != nil {
 				return err
 			}
@@ -637,6 +664,13 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 	for _, target := range status.Targets {
 		for _, node := range target.Entries {
 			key := p.svnPath(node.Path)
+			if node.Status.Item == "deleted" || node.Status.Item == "missing" {
+				for path := range values {
+					if path == key || strings.HasPrefix(path, key+"/") {
+						delete(values, path)
+					}
+				}
+			}
 			if node.Status.Item == "conflicted" || node.Status.Props == "conflicted" || node.Status.TreeConflict {
 				conflicts[key] = node.Status.Item + ":" + node.Status.Props
 			}

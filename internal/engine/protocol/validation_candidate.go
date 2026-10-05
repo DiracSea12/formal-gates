@@ -570,9 +570,6 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	if s.NativeRoot != "" {
 		r := s.candidateResource(params, cd)
 		params.WorkspaceID = r.ID
-		if s.NativeVCS() != "git" && r.Identity != "" && params.Integration == nil {
-			params.Base = r.Identity
-		}
 	}
 	return params, true, nil
 }

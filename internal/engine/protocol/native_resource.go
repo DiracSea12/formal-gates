@@ -451,7 +451,7 @@ func (s *State) checkpointCleanupCurrent(p *CheckpointCleanup) bool {
 		return false
 	}
 	promotion := p.Promotion
-	return p.MasterRunID == s.SliceChild.MasterRunID && p.ReceiptDigest == s.SliceReceipt.Digest && p.ReceiptDigest == s.SliceReceipt.Receipt.CanonicalDigest() && promotion.OperationID != "" && promotion.Provider == "git" && promotion.Final != "" && promotion.FinalDigest == promotion.SourceDigest
+	return p.MasterRunID == s.SliceChild.MasterRunID && p.ReceiptDigest == s.SliceReceipt.Digest && p.ReceiptDigest == s.SliceReceipt.Receipt.CanonicalDigest() && promotion.OperationID != "" && promotion.Provider == s.NativeVCS() && promotion.Final != "" && promotion.FinalDigest == promotion.SourceDigest
 }
 
 func (s *State) cleanupAuthorized(p CleanupParameters, cd *compiler.CompiledDefinition, parents ...*State) bool {
@@ -690,7 +690,7 @@ func BlackboxCasesDigest(runID string, m coverage.AcceptanceManifest) string {
 
 // The original workspace receipt owns the created native baseline. The
 // resource's current Identity advances with accepted candidate receipts.
-func (s *State) resourceStartIdentity(resource NativeResource) string {
+func (s *State) ResourceStartIdentity(resource NativeResource) string {
 	if s.NativeVCS() == "git" {
 		return resource.Source
 	}

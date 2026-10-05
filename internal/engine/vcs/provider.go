@@ -91,7 +91,7 @@ func PlanWorkspace(name, source, run, id string) WorkspaceHandle {
 	}
 	switch name {
 	case "svn":
-		handle.URL = identity.Address + "/.formal-gates/" + run + "/" + id
+		handle.URL = identity.Address + "/formal-gates-" + run + "-" + id
 	case "p4":
 		handle.Client = "fg-" + run + "-" + id
 		handle.Branch = handle.Client

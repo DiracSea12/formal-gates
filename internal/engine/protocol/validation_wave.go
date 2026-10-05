@@ -285,7 +285,7 @@ func decodeCandidateEvidence(receipt HostActionReceipt) (CandidateEvidence, erro
 
 // validateCandidateReceipt checks the completed operation independently of
 // whether its input still applies, before any requirement barrier can hold it.
-func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt) (CandidateParameters, CandidateEvidence, error) {
+func validateCandidateReceipt(provider string, intent HostActionIntent, receipt HostActionReceipt) (CandidateParameters, CandidateEvidence, error) {
 	var params CandidateParameters
 	data, _ := json.Marshal(intent.Adapter.Params)
 	if err := json.Unmarshal(data, &params); err != nil {
@@ -321,7 +321,7 @@ func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt
 	switch params.Stage {
 	case "PROMOTION":
 		p, proof := params.Promotion, evidence.Promotion
-		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != s.NativeVCS() || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
+		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != provider || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
 			return params, CandidateEvidence{}, validationError("promotion receipt lacks the signed native source, target prefix and final mapping")
 		}
 	case "MERGE_START", "MERGE_FINISH":
@@ -359,7 +359,7 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
 		return nil
 	}
-	params, evidence, err := validateCandidateReceipt(intent, receipt)
+	params, evidence, err := validateCandidateReceipt(s.NativeVCS(), intent, receipt)
 	if err != nil {
 		return err
 	}

@@ -1637,7 +1637,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 		}
 		if ev.HostAction.Status == HostActionStatusExecuted && intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
-			if _, _, err := validateCandidateReceipt(intent, receipt); err != nil {
+			if _, _, err := validateCandidateReceipt(state.NativeVCS(), intent, receipt); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}

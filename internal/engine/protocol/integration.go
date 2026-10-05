@@ -113,7 +113,7 @@ func (s *State) integrationParameters(cd *compiler.CompiledDefinition) (Candidat
 	if ready != expected || expected == 0 {
 		return CandidateParameters{}, false
 	}
-	prefix := s.resourceStartIdentity(s.integrationResource())
+	prefix := s.ResourceStartIdentity(s.integrationResource())
 	for _, sliceID := range s.Topology.Slices {
 		if _, proof, complete := s.integrationReceipt("MERGE_FINISH", sliceID); complete {
 			prefix = proof.Identity
@@ -156,7 +156,7 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 		return nil, nil, "", false
 	}
 	var paths []string
-	prefix := s.resourceStartIdentity(s.integrationResource())
+	prefix := s.ResourceStartIdentity(s.integrationResource())
 	for _, sliceID := range s.Topology.Slices {
 		_, evidence, ok := s.integrationReceipt("MERGE_FINISH", sliceID)
 		if !ok {

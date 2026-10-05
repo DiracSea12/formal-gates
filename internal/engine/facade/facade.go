@@ -1067,12 +1067,14 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 	if err := f.vcs.IsAncestorOrEqual(snap.State.BaseSnapshot, head); err != nil {
 		return "", "", err
 	}
-	count, err := f.vcs.CommitCount(snap.State.BaseSnapshot, head)
-	if err != nil {
-		return "", "", err
-	}
-	if f.vcs.Name() == "git" && snap.State.SliceChild == nil && count > 1 {
-		return "", "", fmt.Errorf("engine delivery: native delivery requires at most one commit")
+	if f.vcs.Name() == "git" && snap.State.SliceChild == nil {
+		count, err := f.vcs.CommitCount(snap.State.BaseSnapshot, head)
+		if err != nil {
+			return "", "", err
+		}
+		if count > 1 {
+			return "", "", fmt.Errorf("engine delivery: native delivery requires at most one commit")
+		}
 	}
 	tree, err := f.vcs.TreeDigest(head)
 	if err != nil {
