@@ -2,6 +2,7 @@ package facade
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -254,7 +255,6 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 		}
 	}
 	assertMasterReceiptProjection(t, master, own, first, second)
-	before, _ := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
 	errs = make(chan error, 3)
 	for _, f := range []*Facade{core.f, tooling.f, master.f} {
 		wg.Add(1)
@@ -267,17 +267,105 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 			t.Fatal(err)
 		}
 	}
+	assertMasterReceiptProjection(t, master, own, first, second)
+	state := driverState(t, master)
+	if state.Validation.Candidate != nil || !reflect.DeepEqual(state.PendingActions, own.PendingActions) {
+		t.Fatal("native integration advanced the pending merge design")
+	}
+	var completed []protocol.ReconciledEffect
+	for _, effect := range state.ReconciledEffects {
+		if effect.Intent == nil || effect.AdapterOperation != "op.candidate" {
+			continue
+		}
+		raw, err := json.Marshal(effect.Intent.Adapter.Params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input protocol.CandidateParameters
+		if err := json.Unmarshal(raw, &input); err != nil {
+			t.Fatal(err)
+		}
+		if input.Stage == "MERGE_FINISH" {
+			completed = append(completed, effect)
+		}
+	}
+	slices.SortFunc(completed, func(a, b protocol.ReconciledEffect) int { return cmp.Compare(a.Intent.Revision, b.Intent.Revision) })
+	if len(completed) != len(state.Topology.Slices) {
+		t.Fatalf("completed integrations=%d, want %d", len(completed), len(state.Topology.Slices))
+	}
+	prefix := state.ChildCreation.Source
+	for i, effect := range completed {
+		intent := effect.Intent
+		raw, err := json.Marshal(intent.Adapter.Params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input protocol.CandidateParameters
+		if err := json.Unmarshal(raw, &input); err != nil {
+			t.Fatal(err)
+		}
+		sliceID := state.Topology.Slices[i]
+		child := state.SliceReceipts[state.SliceChildren[sliceID]]
+		binding := input.Integration
+		if binding == nil || binding.SliceID != sliceID || binding.ChildRunID != child.Receipt.ChildRunID || binding.ChildReceiptDigest != child.Digest || binding.Incoming != child.Receipt.Snapshot || binding.IncomingTree != child.Receipt.Tree || input.Base != prefix {
+			t.Fatal("integration lost its topology order or original child receipt", input)
+		}
+		start := state.ReconciledEffects[binding.StartAction]
+		if start.Intent == nil || start.Status != "FULFILLED" || start.Intent.Revision >= intent.Revision {
+			t.Fatal("integration finish lost its preceding native start", binding)
+		}
+		receipt := state.HostActionReceipts[intent.ActionID]
+		if effect.Status != "FULFILLED" || receipt.Status != protocol.HostActionStatusExecuted || receipt.AdapterEvidence == nil || receipt.PayloadDigest != intent.PayloadDigest {
+			t.Fatal("integration completion lost its original typed receipt", receipt)
+		}
+		raw, err = json.Marshal(receipt.AdapterEvidence.Values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var proof protocol.CandidateEvidence
+		if err := json.Unmarshal(raw, &proof); err != nil {
+			t.Fatal(err)
+		}
+		resource := state.NativeResources[input.WorkspaceID]
+		native := vcs.New(resource.Path, nil)
+		if resource.Role != "merge" || resource.Owner != master.f.runID || proof.WorkspaceID != resource.ID || proof.ParametersDigest != intent.PayloadDigest || proof.Integration == nil || proof.Integration.Incoming != binding.Incoming || proof.Integration.Prefix != prefix || proof.Integration.MergeHead != "" || len(proof.Integration.Conflicts) != 0 {
+			t.Fatal("integration proof differs from the original source and merge workspace", proof)
+		}
+		if err := native.IsAncestorOrEqual(binding.Incoming, proof.Identity); err != nil {
+			t.Fatal("integrated native prefix lost its child history", err)
+		}
+		if digest, err := native.TreeDigest(proof.Identity); err != nil || digest != proof.Digest {
+			t.Fatal("integration proof differs from its actual native tree", digest, err)
+		}
+		prefix = proof.Identity
+		if i == len(completed)-1 {
+			if current, err := native.Resolve(); err != nil || current != prefix || resource.Identity != prefix {
+				t.Fatal("merge workspace does not contain the complete native prefix", current, err)
+			}
+			for _, path := range []string{"core_test.go", "tooling_test.go"} {
+				if body, err := os.ReadFile(filepath.Join(resource.Path, path)); err != nil || string(body) != "package main\n" {
+					t.Fatal("integrated workspace lost the child's actual content", path, err)
+				}
+			}
+		}
+	}
+	// The admitted native prefix is complete; the remaining merge design still waits.
+	before, err := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
 		core.reopen()
 		core.drive()
 		master.reopen()
 		master.drive()
 	}
-	after, _ := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
-	state := driverState(t, master)
-	if !bytes.Equal(before, after) || state.Validation.Candidate != nil || !reflect.DeepEqual(state.PendingActions, own.PendingActions) {
+	after, err := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
+	state = driverState(t, master)
+	if err != nil || !bytes.Equal(before, after) || state.Validation.Candidate != nil || !reflect.DeepEqual(state.PendingActions, own.PendingActions) {
 		t.Fatalf("replay mutated acceptance or advanced the pending merge design: next=%+v", master.run.Next)
 	}
+	assertMasterReceiptProjection(t, master, own, first, second)
 }
 
 func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
