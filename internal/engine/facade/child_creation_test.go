@@ -646,6 +646,9 @@ func TestChildWorkspaceReceiptRejectsWrongContentWithoutRelease(t *testing.T) {
 	d := splitMaster(t)
 	s := prepareChildFrontier(t, d)
 	for _, intent := range s.PendingHostActions {
+		if intent.Step != "children.workspace" {
+			continue
+		}
 		var p protocol.WorkspaceParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
 			t.Fatal(err)
@@ -749,6 +752,24 @@ func TestChildReleaseReopenUsesCommittedMapAfterLostResponse(t *testing.T) {
 
 func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 	t.Helper()
+	state, err := child.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State.SliceChild == nil {
+		for id := range state.State.PendingActions {
+			if _, known := state.State.SpawnReceipts[id]; known {
+				continue
+			}
+			event, err := protocol.NewSpawnReceiptWithFailureClass(protocol.EventID("unstarted-"+digestOf(id)), id, state.State.RunProvider, id, protocol.SpawnStatusFailed, "TRANSIENT_ENGINE_ERROR")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := child.Submit(event); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	request, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	if err != nil {
 		t.Fatal(err)

@@ -30,6 +30,7 @@ func receiptMaster(t *testing.T) *validationDriver {
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	d.drive()
 	return d
 }
 
@@ -259,9 +260,9 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 		master.drive()
 	}
 	after, _ := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
-	next, _ := json.Marshal(master.run.Next)
-	if !bytes.Equal(before, after) || !strings.Contains(string(next), "waiting for integration") {
-		t.Fatalf("replay mutated acceptance or crossed integration: next=%+v", master.run.Next)
+	state := driverState(t, master)
+	if !bytes.Equal(before, after) || state.Validation.Candidate != nil || !reflect.DeepEqual(state.PendingActions, own.PendingActions) {
+		t.Fatalf("replay mutated acceptance or advanced the pending merge design: next=%+v", master.run.Next)
 	}
 }
 
@@ -450,7 +451,15 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 			for _, item := range master.run.RequirementWork {
 				choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "retain confirmed work outside the selected context scope"})
 			}
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:context", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: scope == "topology", RedoRoute: scope == "route", WorkDecisions: choices}
+			children := requirementChildChoices(t, master)
+			for i := range children {
+				if children[i].ChildRunID == child.f.runID {
+					children[i].ReceiptDisposition = protocol.RequirementWorkRedo
+					children[i].CandidateDisposition = protocol.RequirementWorkRedo
+				}
+			}
+			impact := &protocol.RequirementImpact{ChangedItems: []string{"confirmed context"}, TransitiveImpacts: []string{"fresh child validation"}, CarryReasons: []string{"development remains unchanged"}}
+			pkg := protocol.RequirementDecisionPackage{Children: children, Impact: impact, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:context", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: scope == "topology", RedoRoute: scope == "route", WorkDecisions: choices}
 			event, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm revised context"})
 			if err != nil {
 				t.Fatal(err)
@@ -461,7 +470,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 				t.Fatal("Phase A discarded or rejected accepted evidence")
 			}
 			ask := master.run.PendingRequirementAsk
-			master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: pkg.RedoTopology, RedoRoute: pkg.RedoRoute, WorkDecisions: choices, Reason: "confirm the current context scope"}}})
+			master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: pkg.RedoTopology, RedoRoute: pkg.RedoRoute, Children: children, Impact: impact, WorkDecisions: choices, Reason: "confirm the current context scope"}}})
 			master.reopen()
 			master.drive()
 			state := driverState(t, master)

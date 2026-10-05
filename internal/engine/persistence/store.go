@@ -178,7 +178,7 @@ func (s *Store) CleanupTerminal() error {
 		// promotion.lock 是晋升执行窗互斥锁（facade 经 coordination 持有的等
 		// 待式文件锁）：锁文件永不删除（删除会让等待者与新开锁者各持不同
 		// inode），由内核在持有者退出时释放，与 write.lock 同属合法留存。
-		if name == "request.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupIntentPath()) || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock" {
+		if name == "request.json" || name == "slice-guarantee.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupIntentPath()) || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock" {
 			continue
 		}
 		residue = append(residue, name)
@@ -201,7 +201,7 @@ func (s *Store) terminalCleanupComplete() (bool, error) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name != "request.json" && name != "terminal-summary.json" && name != "terminal-summary.intent.json" &&
+		if name != "request.json" && name != "slice-guarantee.json" && name != "terminal-summary.json" && name != "terminal-summary.intent.json" &&
 			name != filepath.Base(s.cleanupReceiptPath()) && name != lockFileName && name != "promotion.lock" {
 			return false, nil
 		}

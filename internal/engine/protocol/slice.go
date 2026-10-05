@@ -321,6 +321,9 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint st
 	if exists && accepted.Receipt.Status == "ABORTED" && r.Status == runtime.PhaseSliceReady {
 		return nil
 	}
+	if exists && accepted.Receipt.Status == r.Status && state.SliceReceiptQualified(accepted) {
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt differs within the same effective qualification"}
+	}
 	if err := state.errWriteBarrier("slice receipt acceptance"); err != nil && r.Status != "ABORTED" {
 		return err
 	}

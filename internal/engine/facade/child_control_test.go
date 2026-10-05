@@ -3,7 +3,10 @@ package facade
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
@@ -179,7 +182,18 @@ func TestMasterRequirementConfirmationCarriesChildOrigin(t *testing.T) {
 	}
 }
 func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
-	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
+	master := receiptMaster(t)
+	owner := filepath.Join(t.TempDir(), "owner.jsonl")
+	writeTranscript(t, owner, []string{intervalBaseLine})
+	child := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{Transcript: owner, Provider: meteredProvider})
+	promoteReceiptChild(t, child)
+	writeTranscript(t, owner, []string{intervalBaseLine, intervalDuringLine})
+	ready := publishReceiptChild(t, child)
+	child.drive()
+	if ready.Receipt.Cost.Owner == nil || *ready.Receipt.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 17, InputCacheHitTokens: 2, InputCacheMissTokens: 15, OutputTokens: 8}) {
+		t.Fatal("successful receipt lacks its actual nonzero owner interval")
+	}
+	readyCost := driverState(t, master).Cost
 	abortRun(t, child)
 	child.drive()
 	master.drive()
@@ -187,6 +201,9 @@ func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
 	accepted := s.SliceReceipts[child.f.runID]
 	if accepted.Receipt.Status != "ABORTED" || accepted.Receipt.Abort == nil || accepted.Digest == ready.Digest {
 		t.Fatal("abort did not replace successful receipt")
+	}
+	if !reflect.DeepEqual(accepted.Receipt.Cost.Owner, ready.Receipt.Cost.Owner) || !reflect.DeepEqual(s.Cost, readyCost) || len(s.SliceReceiptHistory) != 1 || s.SliceReceiptHistory[0].Digest != ready.Digest {
+		t.Fatal("receipt replacement duplicated nonzero owner usage or lost original evidence")
 	}
 	if master.run.Next.Kind != decision.KindAsk {
 		t.Fatal("aborted member became a tasks-in-flight wait")
@@ -312,6 +329,33 @@ func TestTerminalMaterialsFinishBeforeSeal(t *testing.T) {
 	if err != nil || !bytes.Contains(data, []byte("activation")) || !bytes.Contains(data, []byte("receipts")) || !bytes.Contains(data, []byte("validation")) {
 		t.Fatal("guarantee sidecar omitted required content", err)
 	}
+	var material struct {
+		RunID      string                        `json:"runId"`
+		Activation *protocol.GuaranteeActivation `json:"activation"`
+		Receipts   []protocol.SliceReceipt       `json:"receipts"`
+		Validation *protocol.Validation          `json:"validation"`
+	}
+	if err := json.Unmarshal(data, &material); err != nil {
+		t.Fatal(err)
+	}
+	var receipts []protocol.SliceReceipt
+	for _, slice := range summary.Termination.Topology.Slices {
+		receipts = append(receipts, summary.Termination.SliceReceipts[summary.Termination.SliceChildren[slice]])
+	}
+	digest := sha256.Sum256(data)
+	if material.RunID != master.f.runID || !reflect.DeepEqual(material.Activation, summary.Termination.RequirementGuarantee) || !reflect.DeepEqual(material.Receipts, receipts) || !reflect.DeepEqual(material.Validation, summary.Termination.Validation) || summary.SliceGuarantee.Digest != hex.EncodeToString(digest[:]) {
+		t.Fatal("guarantee material differs from the concluded activation, claims or final FULL evidence")
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.reopen()
+	master.drive()
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("repeated terminal drive changed immutable summary bytes", err)
+	}
 }
 
 func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
@@ -416,5 +460,63 @@ func TestMasterRequirementCarryRetainsOriginalNativePrefix(t *testing.T) {
 		if readSliceReceipt(t, child).Digest != original.SliceReceipts[child.f.runID].Digest {
 			t.Fatal("master carry rewrote child checkpoint bytes")
 		}
+	}
+}
+
+func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
+	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
+	origin := driverState(t, child).SliceChild.RequirementRevision
+	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	children := requirementChildChoices(t, master)
+	for i := range children {
+		if children[i].ChildRunID != child.f.runID {
+			continue
+		}
+		children[i].ReceiptDisposition, children[i].CandidateDisposition = protocol.RequirementWorkRedo, protocol.RequirementWorkRedo
+		for j := range children[i].WorkDecisions {
+			if children[i].WorkDecisions[j].Work.Task.Step == "validation.gate" {
+				children[i].WorkDecisions[j].Disposition = protocol.RequirementWorkRedo
+			}
+		}
+	}
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-document", ImpactDigest: "sha256:child-revalidation", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"confirmed document"}, TransitiveImpacts: []string{"fresh child gates"}, CarryReasons: []string{"development and route remain unchanged"}}}
+	for _, work := range master.run.RequirementWork {
+		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master inputs"})
+	}
+	request, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm child revalidation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(request)
+	ask := master.run.PendingRequirementAsk
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, Reason: "confirm the complete changed and carried inventory"}}})
+	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	if driverState(t, master).SliceReceiptQualified(ready) || driverState(t, master).SliceReceipts[child.f.runID].Digest != ready.Digest {
+		t.Fatal("redo lost frozen evidence or retained its successful qualification")
+	}
+	child.reopen()
+	child.drive()
+	completeSliceGates(t, child)
+	child.drive()
+	current := driverState(t, master)
+	receipt := current.SliceReceipts[child.f.runID]
+	if receipt.Digest == ready.Digest || receipt.Receipt.RequirementRevision != revision || receipt.Receipt.OriginRequirementRevision != origin || !current.SliceReceiptCurrent(receipt) || len(current.SliceReceiptHistory) != 1 || current.SliceReceiptHistory[0].Digest != ready.Digest {
+		t.Fatal("parent redo failed same-owner receipt replacement with the original child origin")
+	}
+	before, err := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.reopen()
+	child.drive()
+	master.reopen()
+	master.drive()
+	after, err := os.ReadFile(filepath.Join(master.f.stateDir, "state.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("receipt replacement replay changed accepted evidence or cost", err)
 	}
 }

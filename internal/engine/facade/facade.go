@@ -927,14 +927,22 @@ func (f *Facade) driveInWindow() (Run, error) {
 		}
 		return f.project()
 	}
-	if err := f.discoverSliceReceipts(snap.State); err != nil {
-		return Run{}, err
+	terminalReady := snap.State.Phase == runtime.PhaseTerminal || snap.State.DeliveryComplete(f.definition) && snap.State.ResourcesCleaned()
+	if !terminalReady {
+		if err := f.discoverSliceReceipts(snap.State); err != nil {
+			return Run{}, err
+		}
 	}
 	if err := f.recordIntakeReceipt(snap.State); err != nil {
 		return Run{}, err
 	}
 	var plan *decision.Plan
-	if snap.State.Route == "lightweight" {
+	if terminalReady {
+		plan, _, err = f.engine.Plan()
+		if err != nil {
+			return Run{}, err
+		}
+	} else if snap.State.Route == "lightweight" {
 		if _, err := f.engine.CompleteAll(emptyFingerprint()); err != nil {
 			return Run{}, err
 		}
@@ -967,7 +975,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 				}
 				continue
 			}
-			if current.State.ChildCreation == nil && !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
+			if current.State.ChildCreation == nil && !current.State.ResetPending() && !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
 				if err := f.engine.BeginCleanup(emptyFingerprint()); err != nil {
 					return Run{}, err
 				}
@@ -1054,63 +1062,64 @@ func (f *Facade) sealDelivered() error {
 	if err != nil {
 		return err
 	}
-	interval, err := f.finishOwnerCost()
-	if err != nil {
-		return err
-	}
-	run, err := f.project()
-	if err != nil {
-		return err
-	}
 	snapshot, err := f.engine.Load()
 	if err != nil {
 		return err
 	}
-	run.Termination = snapshot.State
-	if run.Termination.Phase == runtime.PhaseTerminal {
+	if snapshot.State.Phase == runtime.PhaseTerminal {
 		return nil
 	}
-	// The intended terminal projection is materialized while the live State
-	// remains at its recoverable cleanup boundary. Seal is the final authority.
-	data, err := json.Marshal(run.Termination)
-	if err != nil {
+	summary, err := f.readTerminalIntent()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	var terminal protocol.State
-	if err := json.Unmarshal(data, &terminal); err != nil {
-		return err
-	}
-	live := run.Termination
-	terminal.Phase = runtime.PhaseTerminal
-	run.Termination = &terminal
-	run.Status = "COMPLETE"
-	run.Revision++
-	run.Next = decision.NextResult{Kind: decision.KindComplete}
-	summary := summaryForRun(run, interval)
-	if existing, readErr := f.readTerminalIntent(); readErr == nil && f.terminalEvidenceComplete(existing) && existing.Revision == summary.Revision {
-		summary = existing
-	} else if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
-		return readErr
-	}
-	if summary.SliceGuarantee == nil {
-		summary.SliceGuarantee, err = f.materializeSliceGuarantee(live)
+	if err != nil || !f.terminalEvidenceComplete(summary) || summary.Revision != snapshot.Revision+1 {
+		interval, err := f.finishOwnerCost()
 		if err != nil {
 			return err
 		}
+		snapshot, err = f.engine.Load()
+		if err != nil {
+			return err
+		}
+		run, err := f.project()
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(snapshot.State)
+		if err != nil {
+			return err
+		}
+		var terminal protocol.State
+		if err := json.Unmarshal(data, &terminal); err != nil {
+			return err
+		}
+		terminal.Phase = runtime.PhaseTerminal
+		run.Termination = &terminal
+		run.Status = "COMPLETE"
+		run.Revision++
+		run.Next = decision.NextResult{Kind: decision.KindComplete}
+		summary = summaryForRun(run, interval)
+		summary.SliceGuarantee, err = f.materializeSliceGuarantee(snapshot.State)
+		if err != nil {
+			return err
+		}
+		if !f.terminalEvidenceComplete(summary) {
+			return fmt.Errorf("terminal material requires concluded delivery and cleanup")
+		}
+		if err := f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) }); err != nil {
+			return err
+		}
 	}
-	if !f.terminalEvidenceComplete(summary) {
-		return fmt.Errorf("terminal material requires concluded delivery and cleanup")
-	}
-	if err := f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) }); err != nil {
+	// Complete material precedes retirement of active child evidence. Reentry
+	// consumes the same intent without rebuilding a child inventory.
+	if err := f.writeSummaryValue(summary); err != nil {
 		return err
 	}
 	if err := f.cleanupCheckpoints(summary); err != nil {
 		return err
 	}
 	if err := f.endLifecycle(); err != nil {
-		return err
-	}
-	if err := f.writeSummaryValue(summary); err != nil {
 		return err
 	}
 	if _, _, err := f.verifyDelivered(); err != nil {
@@ -1540,9 +1549,11 @@ func (f *Facade) project() (Run, error) {
 		}
 	}
 	run.RequirementWork = work
-	run.RequirementChildren, err = f.requirementChildren()
-	if err != nil {
-		return Run{}, err
+	if snap.State.Phase != runtime.PhaseTerminal {
+		run.RequirementChildren, err = f.requirementChildren()
+		if err != nil {
+			return Run{}, err
+		}
 	}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt

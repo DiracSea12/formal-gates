@@ -38,7 +38,11 @@ func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
 	if child.Carried && s.ChildCreation.Previous != nil {
 		parent := *s
 		parent.ChildCreation = s.ChildCreation.Previous
-		return parent.ChildStart(child)
+		for _, previous := range parent.ChildCreation.Children {
+			if previous.RunID == child.RunID {
+				return parent.ChildStart(previous)
+			}
+		}
 	}
 	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
 }
@@ -70,6 +74,7 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 	}
 	var previous *ChildCreation
 	request := ""
+	topologyRequest := ""
 	if s.ChildCreation != nil {
 		previous = s.ChildCreation
 		for _, entry := range s.RequirementRevisions {
@@ -79,6 +84,15 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 		}
 		if request == "" {
 			return validationError("topology rebuild requires a confirmed requirement authorization")
+		}
+		var topologyRevision uint64
+		for _, decision := range s.Decisions {
+			if decision.Control == ControlConfirmTopology && decision.Revision > topologyRevision {
+				topologyRequest, topologyRevision = decision.RequestID, decision.Revision
+			}
+		}
+		if topologyRequest == "" {
+			return validationError("topology rebuild requires its confirmed topology request")
 		}
 	}
 	c := &ChildCreation{Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
@@ -100,8 +114,8 @@ sliceLoop:
 			}
 		}
 		digest := digestOfCanonical(struct{ Master, Slice string }{s.RunID, sliceID})
-		if request != "" {
-			digest = digestOfCanonical(struct{ Master, Slice, Request string }{s.RunID, sliceID, request})
+		if topologyRequest != "" {
+			digest = digestOfCanonical(struct{ Master, Slice, Request string }{s.RunID, sliceID, topologyRequest})
 		}
 		id := "child-" + strings.TrimPrefix(digest, "sha256:")
 		r := s.resource("child-target", c.Source, id)
