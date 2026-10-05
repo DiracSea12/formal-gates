@@ -298,7 +298,7 @@ func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	if state := driverState(t, master); state.SliceChildren["lane-core"] != f.runID {
 		t.Fatalf("master claim map = %v", state.SliceChildren)
 	}
-	child := &validationDriver{t: t, f: f, run: run, provider: DefaultProvider, git: f.vcs}
+	child := &validationDriver{t: t, f: f, run: run, provider: master.host(), git: f.vcs}
 	child.drive()
 	state := driverState(t, child)
 	if state.SliceChild == nil || state.SliceChild.MasterRunID != master.f.runID || state.SliceChild.SliceID != "lane-core" {
@@ -368,7 +368,7 @@ func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
-	child := &validationDriver{t: t, f: f, run: run, provider: DefaultProvider, git: f.vcs}
+	child := &validationDriver{t: t, f: f, run: run, provider: master.host(), git: f.vcs}
 	child.drive()
 	if boundary := operatorBoundary(t, child); !strings.Contains(boundary, "select the slice route") {
 		t.Fatalf("boundary before route selection = %q", boundary)
@@ -397,7 +397,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("slice child start: %v", err)
 			}
-			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: f.vcs}
+			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: master.host(), git: f.vcs}
 			child.drive()
 			route := protocol.RouteDecision{Mode: mode, Gates: []string{"gate.quality"}}
 			if mode == "custom" {
@@ -437,7 +437,7 @@ func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
-	child := &validationDriver{t: t, f: f, run: run, provider: DefaultProvider, git: f.vcs}
+	child := &validationDriver{t: t, f: f, run: run, provider: master.host(), git: f.vcs}
 	child.drive()
 	before := driverState(t, child)
 	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
@@ -522,7 +522,7 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("slice child start: %v", err)
 	}
-	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: f.vcs}
+	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: master.host(), git: f.vcs}
 	child.drive()
 	first := sliceLanePlan()
 	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
@@ -614,7 +614,7 @@ func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
 			if err != nil {
 				t.Fatalf("slice child start: %v", err)
 			}
-			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: DefaultProvider, git: f.vcs}
+			child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: master.host(), git: f.vcs}
 			route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality"}}
 			if mode == "custom" {
 				route.Selected = route.Gates

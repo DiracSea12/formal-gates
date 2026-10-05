@@ -214,7 +214,7 @@ func (d *validationDriver) host() string {
 	if d.provider != "" {
 		return d.provider
 	}
-	return DefaultProvider
+	return d.f.admission.Provider
 }
 
 func (d *validationDriver) eventID() protocol.EventID {
@@ -358,7 +358,7 @@ func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol
 		if id == "" {
 			t.Fatalf("missing %s dispatch: %+v", action, d.run)
 		}
-		if d.provider != DefaultProvider {
+		if d.host() != DefaultProvider && d.host() != lifecycle.ProviderDefault {
 			// 可计量 provider：审查派发补零用量 transcript 与 sidecar 生命周期
 			// 事件，结果完成链走 bridge READY。
 			d.meteredSpawn(d.f.root, id)
@@ -457,7 +457,7 @@ func (d *validationDriver) materialize() {
 		data, _ = json.Marshal(evidence)
 		fields := map[string]any{}
 		_ = json.Unmarshal(data, &fields)
-		e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
+		e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
 		if err != nil {
 			d.t.Fatal(err)
 		}
@@ -990,6 +990,9 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 		master, err := Open(root, req.MasterRunID)
 		if err != nil {
 			return nil, Run{}, err
+		}
+		if admitted != master.admission {
+			return nil, Run{}, fmt.Errorf("child fixture requires the exact parent admission")
 		}
 		return createdSliceFacade(t, master, req.SliceID, options.Owner)
 	}

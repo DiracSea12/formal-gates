@@ -98,7 +98,7 @@ func promotedSliceWithAuthorizedRetry(t *testing.T, mode string, owner OwnerBind
 	for attempt := 0; attempt < 2; attempt++ {
 		id, _ := child.gateAction("security")
 		child.receipt(id)
-		child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, PayloadDigest: id + "-unavailable", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
+		child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: child.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: id + "-unavailable", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
 		child.drive()
 	}
 	face := child.validationAsk("RETRY")
@@ -297,7 +297,16 @@ func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r.Status != runtime.PhaseSliceReady || r.ChildRunID != "child" || r.MasterRunID != "validation" || r.SliceID != "lane-core" || r.Envelope != child.f.envelope || r.Snapshot != before.PromotedSnapshot || r.Tree != tree || r.Digest != tree || r.RequirementRevision != child.revision || !reflect.DeepEqual(r.Topology, *before.Topology) || r.RouteMode != mode || !reflect.DeepEqual(r.SelectedGates, before.SelectedGates) {
+			parent, err := Open(child.f.root, before.SliceChild.MasterRunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			membership, err := parent.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			assigned := membership.State.SliceChildren[before.SliceChild.SliceID]
+			if assigned == "" || assigned != child.f.runID || r.Status != runtime.PhaseSliceReady || r.ChildRunID != assigned || r.MasterRunID != before.SliceChild.MasterRunID || r.SliceID != before.SliceChild.SliceID || r.Envelope != child.f.envelope || r.Snapshot != before.PromotedSnapshot || r.Tree != tree || r.Digest != tree || r.RequirementRevision != child.revision || !reflect.DeepEqual(r.Topology, *before.Topology) || r.RouteMode != mode || !reflect.DeepEqual(r.SelectedGates, before.SelectedGates) {
 				t.Fatalf("receipt bindings = %+v", r)
 			}
 			if content, err := (vcs.ExecRunner{}).Run(child.f.vcs.Root(), "git", "show", r.Snapshot+":app_test.go"); err != nil || content != "package main" {

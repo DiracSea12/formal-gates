@@ -18,6 +18,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/lifecycle"
 )
 
 func nativeMasterDriver(t *testing.T) *validationDriver {
@@ -32,11 +33,11 @@ func nativeMasterAt(t *testing.T, root, base string) *validationDriver {
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	receipt := testReceipt()
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", lifecycle.ProviderDefault), Request: StartRequest{RunID: "validation", Route: "regular", Provider: lifecycle.ProviderDefault, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: run, revision: revision, git: f.vcs}
+	d := &validationDriver{t: t, f: f, run: run, revision: revision, provider: f.admission.Provider, git: f.vcs}
 	d.drive()
 	return d
 }
@@ -200,6 +201,62 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(d.f.stateDir, "state.json"))
 	if !bytes.Equal(before, after) {
 		t.Fatal("released creation replay rewrote master state")
+	}
+	plan := s.ChildCreation.Children[0]
+	f, err := Open(root, s.SliceChildren[plan.SliceID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := &validationDriver{t: t, f: f, run: run, revision: d.revision, git: f.vcs}
+	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+	child.drive()
+	id, input := planBatchAction(child, "command")
+	w := input.Workspace.Path
+	if w == root || w == f.vcs.Root() || input.Workspace.Source != h {
+		t.Fatal("child development did not use an independent source from its accepted startup")
+	}
+	body, err := os.ReadFile(filepath.Join(w, "startup.txt"))
+	if err != nil || !bytes.Equal(body, content) {
+		t.Fatal("development source lost startup bytes", err)
+	}
+	if err := os.WriteFile(filepath.Join(w, "app_test.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotCommitOne(t, w, "implement child command")
+	child.git = vcs.New(w, nil)
+	evidence := batchEvidence(input)
+	evidence.Paths = append(evidence.Paths, "app_test.go")
+	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	child.drive()
+	completeSliceGates(t, child)
+	if _, err := f.PrepareCandidate("child delivery"); err != nil {
+		t.Fatal(err)
+	}
+	child.drive()
+	receipt := readSliceReceipt(t, child)
+	if receipt.Receipt.ChildRunID != s.SliceChildren[plan.SliceID] || receipt.Receipt.MasterRunID != d.f.runID || receipt.Receipt.SliceID != plan.SliceID {
+		t.Fatal("checkpoint lost the assigned child identity")
+	}
+	for _, target := range []string{w, f.vcs.Root()} {
+		body, err := runner.Run(target, "git", "show", receipt.Receipt.Snapshot+":startup.txt")
+		mode, modeErr := runner.Run(target, "git", "ls-tree", receipt.Receipt.Snapshot, "tool")
+		tree, treeErr := vcs.New(target, nil).TreeDigest(receipt.Receipt.Snapshot)
+		if err != nil || body != string(content) || modeErr != nil || !strings.HasPrefix(mode, "100755 ") || treeErr != nil || tree != receipt.Receipt.Tree {
+			t.Fatal("candidate/promotion/checkpoint lost accepted startup content", target, err, modeErr, treeErr)
+		}
+	}
+	accepted, err := d.f.engine.Load()
+	if err != nil || accepted.State.SliceReceipts[f.runID].Digest != receipt.Digest {
+		t.Fatal("master did not accept the actual child checkpoint", err)
+	}
+	current, err = d.f.vcs.Resolve()
+	if err != nil || current != h {
+		t.Fatal("child delivery moved parent HEAD", err)
 	}
 }
 
