@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -77,6 +78,7 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	reset := resetControl(t, child)
 	confirmResetControl(t, child)
 	state := driverState(t, child)
+	assertResetResourceOwnership(t, child, before, reset)
 	after, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "requirements.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +101,100 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	if _, _, err = child.f.Submit(reset); err != nil {
 		t.Fatal("reset replay was not stable", err)
 	}
+	child.reopen()
+	child.drive()
+	fresh := driverState(t, child)
+	if fresh.Validation.Generation <= before.Validation.Generation || len(fresh.Validation.Waves) != 1 || fresh.Validation.Waves[0].Status != "COLLECTING" {
+		t.Fatal("reset did not rebuild the current validation obligations")
+	}
+	for _, target := range fresh.Validation.Waves[0].Targets {
+		for _, old := range before.Validation.Waves {
+			if old.Targets[target.Task.String()] != nil {
+				t.Fatal("reset reused a retired validation task")
+			}
+		}
+	}
+	completeSliceGates(t, child)
+	child.drive()
+	current := driverState(t, master)
+	receipt := current.SliceReceipts[child.f.runID]
+	if receipt.Digest == ready.Digest || !current.SliceReceiptCurrent(receipt) || len(current.SliceReceiptHistory) != 1 || current.SliceReceiptHistory[0].Digest != ready.Digest || receipt.Receipt.ResetRequestID != string(reset.Decide.Request) {
+		t.Fatal("reset did not replace the retired child qualification exactly once")
+	}
+	acceptedCost := current.Cost
+	child.reopen()
+	child.drive()
+	master.reopen()
+	master.drive()
+	current = driverState(t, master)
+	if current.SliceReceipts[child.f.runID].Digest != receipt.Digest || len(current.SliceReceiptHistory) != 1 || !reflect.DeepEqual(current.Cost, acceptedCost) {
+		t.Fatal("reset receipt replay changed accepted evidence or cost")
+	}
+}
+
+// Native cleanup proves ownership by registered resource identity. Every
+// scratch path and ref in the accepted preview must disappear, while the
+// actual development workspace and native target retain their original bytes.
+func assertResetResourceOwnership(t *testing.T, d *validationDriver, before *protocol.State, reset protocol.Event) {
+	t.Helper()
+	state := driverState(t, d)
+	preview := state.PendingAsks[string(reset.Decide.Request)].Reset
+	var cleaned []protocol.GitResource
+	roles := map[string]bool{}
+	for id, resource := range before.GitResources {
+		if resource.Status == "CLEANED" {
+			continue
+		}
+		included := slices.ContainsFunc(preview.Resources, func(r protocol.GitResource) bool { return r.ID == id })
+		if resource.Role == "gate" || resource.Role == "candidate" {
+			roles[resource.Role] = true
+			if resource.Identity != before.Validation.DevelopmentSnapshot || !included {
+				t.Fatal("distinct equal-snapshot scratch was excluded from reset cleanup", resource)
+			}
+		}
+		if included {
+			want := resource
+			want.Status = "CLEANED"
+			if state.GitResources[id] != want {
+				t.Fatal("reset did not accept exact cleanup resource evidence", resource)
+			}
+			if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+				t.Fatal("reset left a registered scratch path", resource.Path, err)
+			}
+			if _, err := (vcs.ExecRunner{}).Run(d.f.vcs.Root(), "git", "show-ref", "--verify", resource.Ref); err == nil {
+				t.Fatal("reset left a registered scratch ref", resource.Ref)
+			}
+		} else if resource.Role == "development" {
+			if state.GitResources[id] != resource {
+				t.Fatal("reset changed retained development registration")
+			}
+			for _, root := range []string{resource.Path, d.f.vcs.Root()} {
+				tree, err := vcs.New(root, nil).TreeDigest(before.Validation.DevelopmentSnapshot)
+				if err != nil || tree != before.Validation.Candidate.Digest {
+					t.Fatal("retained development/native target lost its complete candidate", root, tree, err)
+				}
+			}
+		}
+	}
+	if !roles["gate"] || !roles["candidate"] {
+		t.Fatal("reset fixture did not create both distinct equal-snapshot scratch roles")
+	}
+	for _, resource := range preview.Resources {
+		resource.Status = "CLEANED"
+		cleaned = append(cleaned, resource)
+	}
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.AdapterOperation != "op.cleanup" || receipt.Status != protocol.HostActionStatusExecuted {
+			continue
+		}
+		var evidence protocol.WorkspaceCleanupReceipt
+		raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+		if err != nil || json.Unmarshal(raw, &evidence) != nil || !reflect.DeepEqual(evidence.Resources, cleaned) || evidence.ParametersDigest != receipt.PayloadDigest {
+			t.Fatal("durable reset cleanup receipt differs from the exact approved scope")
+		}
+		return
+	}
+	t.Fatal("reset omitted its durable cleanup receipt")
 }
 func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 	master, child := controlChildren(t)
@@ -106,23 +202,7 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 		master.receipt(id)
 	}
 	resetControl(t, master)
-	for action, intent := range master.run.AdapterIntents {
-		if intent.Terminate == nil {
-			continue
-		}
-		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-			event, err := protocol.NewLifecycleEventEvent(master.eventID(), master.host(), intent.Terminate.Identity, edge)
-			if err != nil {
-				t.Fatal(err)
-			}
-			master.submit(event)
-		}
-		event, err := protocol.NewAgentHostActionReceiptEvent(master.eventID(), action, intent.Operation, master.host(), action, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
-		if err != nil {
-			t.Fatal(err)
-		}
-		master.submit(event)
-	}
+	settleResetWorkerStops(t, master)
 	child.drive()
 	confirmResetControl(t, master)
 	child.drive()
@@ -132,6 +212,102 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 	}
 	if driverState(t, master).ReviewSeries.ProductReview.Completed != 0 || driverState(t, master).ReviewSeries.StartReadiness.Completed != 0 {
 		t.Fatal("explicit reset did not rebuild review quotas")
+	}
+}
+
+func settleResetWorkerStops(t *testing.T, d *validationDriver) {
+	t.Helper()
+	for action, intent := range d.run.AdapterIntents {
+		if intent.Terminate == nil {
+			continue
+		}
+		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+			event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, edge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(event)
+		}
+		event, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), action, intent.Operation, d.host(), action, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.submit(event)
+	}
+}
+
+func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) {
+	for _, gates := range [][]string{{"quality", "security"}, {"blackbox", "security"}} {
+		t.Run(fmt.Sprint(gates), func(t *testing.T) {
+			d := nativeMasterDriver(t)
+			passPreDevelopmentReviews(t, d, commandPlan())
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
+			d.confirmRoute(routeDecisionForGates(gates))
+			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+			d.drive()
+			id, input := planBatchAction(d, "command")
+			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			evidence := batchEvidence(input)
+			evidence.Paths = append(evidence.Paths, "app_test.go")
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+			d.drive()
+			freezeCases := func() {
+				if !slices.Contains(gates, "blackbox") {
+					return
+				}
+				id, input := d.action("engine.qa.design")
+				manifest := simpleManifest(input)
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+				d.drive()
+				id, input = d.action("engine.qa.review.rationale")
+				review := approvedReview(manifest)
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
+				d.drive()
+			}
+			freezeCases()
+			before := driverState(t, d)
+			for id := range d.run.PendingActions {
+				d.receipt(id)
+			}
+			reset := resetControl(t, d)
+			settleResetWorkerStops(t, d)
+			d.reopen()
+			confirmResetControl(t, d)
+			d.drive()
+			passPreDevelopmentReviews(t, d, commandPlan())
+			freezeCases()
+			fresh := driverState(t, d)
+			if fresh.Validation.DevelopmentSnapshot != before.Validation.DevelopmentSnapshot || fresh.BaseSnapshot != before.BaseSnapshot || fresh.AcceptedNativeSnapshot() != before.AcceptedNativeSnapshot() || len(fresh.Validation.Waves) != 1 {
+				t.Fatal("standalone reset changed retained development or failed to rebuild validation")
+			}
+			for _, target := range fresh.Validation.Waves[0].Targets {
+				for _, old := range before.Validation.Waves {
+					if old.Targets[target.Task.String()] != nil {
+						t.Fatal("standalone reset reused a retired validation duty")
+					}
+				}
+			}
+			if slices.Contains(gates, "blackbox") {
+				id, input := d.action("engine.qa.execution")
+				report := executionFor(input)
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "command", Environment: "native isolated project"})
+			}
+			for _, target := range fresh.Validation.Waves[0].Targets {
+				if target.Kind == "GATE" {
+					id, input := d.gateAction(target.Gate)
+					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+				}
+			}
+			d.drive()
+			if d.run.Status != "COMPLETE" {
+				t.Fatal("current standalone validation did not reach native delivery")
+			}
+			if _, _, err := d.f.Submit(reset); err != nil {
+				t.Fatal("completed reset replay lost its original acceptance", err)
+			}
+		})
 	}
 }
 func TestMasterRequirementBarrierProtectsChildWrites(t *testing.T) {
@@ -247,10 +423,20 @@ func requirementChildChoices(t *testing.T, d *validationDriver) []protocol.Child
 
 func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 	_, child := controlChildren(t)
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	plan := sliceLanePlan()
+	dependent := plan.Batches[0]
+	dependent.ID = "output"
+	dependent.Subtasks = []protocol.DevelopmentSubtask{{ID: "format-output", Description: "Render the validated command outcome"}}
+	dependent.Artifacts = []string{"output.go"}
+	dependent.DependsOn = []string{"command"}
+	plan.Batches = append(plan.Batches, dependent)
+	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, plan)
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
 	child.drive()
 	id, input := planBatchAction(child, "command")
+	if len(child.run.RequirementWork) != 2 {
+		t.Fatal("reset fixture omitted the queued dependent development duty")
+	}
 	child.receipt(id)
 	reset := resetControl(t, child)
 	state := driverState(t, child)
@@ -285,6 +471,14 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 	}
 	if !terminated {
 		t.Fatal("reset omitted original termination intent")
+	}
+	child.drive()
+	if ask := child.run.PendingRequirementAsk; ask == nil || len(ask.Package.WorkDecisions) != 2 || !slices.ContainsFunc(ask.Package.WorkDecisions, func(c protocol.RequirementWorkDecision) bool {
+		return c.Work.ActionID == id && c.Work.Task == input.Binding.Task && c.Disposition == protocol.RequirementWorkRedo
+	}) || !slices.ContainsFunc(ask.Package.WorkDecisions, func(c protocol.RequirementWorkDecision) bool {
+		return c.Work.IssuedRevision == 0 && c.Disposition == protocol.RequirementWorkRedo
+	}) {
+		t.Fatal("reset lost the original stopped or queued development obligation")
 	}
 	confirmResetControl(t, child)
 	state = driverState(t, child)

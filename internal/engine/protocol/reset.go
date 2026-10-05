@@ -52,8 +52,26 @@ func (s *State) ResetPreview() ResetPreview {
 			p.Children = append(p.Children, c.RunID)
 		}
 	}
+	// The signed development freeze names the retained workspace. Equal native
+	// content in a gate or candidate workspace does not give that resource the
+	// development role or its preservation authority.
+	developmentResources := map[string]bool{}
+	if p.Development != "" {
+		for action, receipt := range s.HostActionReceipts {
+			intent, exists := s.hostIntent(action)
+			params, err := candidateParameters(intent)
+			if !exists || err != nil || params.Stage != "DEVELOPMENT" || receipt.Status != HostActionStatusExecuted {
+				continue
+			}
+			evidence, err := decodeCandidateEvidence(receipt)
+			resource := s.GitResources[params.WorkspaceID]
+			if err == nil && evidence.Identity == p.Development && resource.Owner == s.RunID && (resource.Role == "development" || resource.Role == "merge") {
+				developmentResources[resource.ID] = true
+			}
+		}
+	}
 	for _, r := range s.GitResources {
-		if r.Status != "CLEANED" && r.Role != "child-target" && r.Identity != p.Development && r.Identity != p.Current {
+		if r.Status != "CLEANED" && r.Role != "child-target" && r.Path != s.NativeRoot && !developmentResources[r.ID] {
 			p.Resources = append(p.Resources, r)
 		}
 	}
@@ -207,6 +225,11 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 			s.archiveDispatchResults(id)
 		}
 	}
+	for id, receipt := range s.SpawnReceipts {
+		if s.validationRole(receipt.Task, e.cfg.Definition) != "engine.development.batch" {
+			s.retireAction(id, "", "Reset authorized by "+d.RequestID)
+		}
+	}
 	for id := range s.StagedResults {
 		s.archiveDispatchResults(id)
 	}
@@ -342,6 +365,15 @@ func (e *Engine) RecordChildReset(child *State, expectedFingerprint string) erro
 }
 
 func (s *State) ResetPending() bool { return s.resetPending() }
+
+// A reset retires the prior requirement-work projection, while the immutable
+// confirmation ledger still identifies original duties and result evidence.
+// Preserved unfinished development is explicitly decided again by the reset
+// confirmation; fresh validation comes from the route and candidate owners.
+func (s *State) requirementWorkRevisionCurrent(revision uint64) bool {
+	d, ok := s.resetDecision()
+	return !ok || !d.Reset.Applied || revision > d.Revision
+}
 
 func (s *State) beforeResetBoundary(actionID string) bool {
 	d, ok := s.resetDecision()

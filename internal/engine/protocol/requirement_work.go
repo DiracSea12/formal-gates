@@ -50,6 +50,18 @@ func (e *Engine) RequirementWork() ([]RequirementWork, error) {
 }
 
 func (e *Engine) requirementWork(state *State) []RequirementWork {
+	if d, ok := state.resetDecision(); ok && d.Reset.Applied && !d.Reset.Confirmed {
+		// Reset has already retired its old QA, gate and repair duties. The
+		// accepted preview retains each original development dispatch, including
+		// queued or stopped work whose PASS has not been accepted.
+		var work []RequirementWork
+		for _, item := range state.PendingAsks[d.RequestID].Reset.Work {
+			if state.validationRole(item.Task, e.cfg.Definition) == "engine.development.batch" {
+				work = append(work, item)
+			}
+		}
+		return work
+	}
 	tasks := map[string]runtime.TaskKey{}
 	for id, pending := range state.PendingActions {
 		tasks[id] = pending.Task
@@ -232,6 +244,9 @@ func (s *State) requirementRevisionForTask(key runtime.TaskKey) string {
 func (s *State) requiredWorkTasks() []runtime.TaskKey {
 	required := map[runtime.TaskKey]bool{}
 	for _, entry := range s.RequirementRevisions {
+		if !s.requirementWorkRevisionCurrent(entry.StateRevision) {
+			continue
+		}
 		for i, choice := range entry.WorkDecisions {
 			if choice.Disposition != RequirementWorkRedo {
 				continue

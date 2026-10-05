@@ -234,6 +234,9 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	// 由该 revision 机械派生（预授权；provenance 经 sourceValidationTask 折叠
 	// 回原任务归类）。
 	for _, entry := range state.RequirementRevisions {
+		if !state.requirementWorkRevisionCurrent(entry.StateRevision) {
+			continue
+		}
 		for j, choice := range entry.WorkDecisions {
 			if choice.Disposition == RequirementWorkRedo {
 				if err := declare(replacementWorkTask(entry, j)); err != nil {
