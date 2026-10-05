@@ -5,8 +5,7 @@ package harness
 // same machine: spawn one host process, speak line-delimited JSON over its
 // stdio, keep a routing-only trace, answer the host's own client-directed
 // requests and write the same four evidence files. Only the launch arguments
-// and the protocol sequence belong to an adapter (native_dsh.go,
-// native_zcode.go), supplied as plain hook functions on nativeHooks. No
+// and the protocol sequence belong to an adapter, supplied as plain hooks. No
 // interface, no registry,
 // no assembly injection: the adapter and the transport live in this one
 // package.
@@ -749,6 +748,7 @@ type nativeClient struct {
 	pendingsRead  bool
 	answerPoller  sync.Once
 	answerStop    chan struct{}
+	waitErr       error
 }
 
 // newNativeClient spawns the host process: cwd is the workspace, the
@@ -762,10 +762,9 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 
 // newNativeClientWithEnv is newNativeClient with additional launch environment
 // variables layered over the caller's own (the Python constructor's environment
-// parameter, {**os.environ, **environment}). Only zcode uses it today: a
-// launcher that pins the host's provider catalogue has to name it in the
-// child's environment, which DSH never needs. Duplicate keys resolve in the
-// adapter's favour, like the dict merge.
+// parameter, {**os.environ, **environment}). Adapters pin native configuration
+// paths in this environment. Duplicate keys resolve in the adapter's favour,
+// like the dict merge.
 func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directory string, environment map[string]string) (*nativeClient, error) {
 	c := &nativeClient{
 		hooks:      hooks,
@@ -1522,28 +1521,25 @@ func (c *nativeClient) timeoutError(method string) error {
 
 // close ends the transport: close stdin, give the host 8s to exit on EOF,
 // then SIGTERM with 5s, then SIGKILL; join the read loop (2s) and close the
-// evidence file handles. It is idempotent and never fails the caller. Held
-// interactions that never received a user decision are invalidated here too:
+// evidence file handles. It is idempotent and returns the original Wait error.
+// Held interactions that never received a user decision are invalidated here too:
 // their connection is gone, so their old option ids stop being authorized.
-func (c *nativeClient) close() {
+func (c *nativeClient) close() error {
 	c.closeOnce.Do(func() {
 		close(c.answerStop)
 		c.invalidatePendings()
 		c.stdin.Close()
-		waited := make(chan struct{}, 1)
-		go func() {
-			c.cmd.Wait()
-			waited <- struct{}{}
-		}()
+		waited := make(chan error, 1)
+		go func() { waited <- c.cmd.Wait() }()
 		select {
-		case <-waited:
+		case c.waitErr = <-waited:
 		case <-time.After(8 * time.Second):
 			_ = c.cmd.Process.Signal(syscall.SIGTERM)
 			select {
-			case <-waited:
+			case c.waitErr = <-waited:
 			case <-time.After(5 * time.Second):
 				_ = c.cmd.Process.Kill()
-				<-waited
+				c.waitErr = <-waited
 			}
 		}
 		select {
@@ -1553,6 +1549,7 @@ func (c *nativeClient) close() {
 		c.traceFile.Close()
 		c.errorsFile.Close()
 	})
+	return c.waitErr
 }
 
 // closeNativeSession asks the host to close a session; a failed close never

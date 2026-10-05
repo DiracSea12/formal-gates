@@ -50,6 +50,13 @@ class HostRegistryTests(unittest.TestCase):
                          ['/bind/formal-gates','harness','native','/jobs/k'])
         self.assertEqual(adapter.transport_files(),('zcode_credential.mjs',))
         self.assertEqual(adapter_for('dsh').transport_files(),('native_dsh.mjs',))
+    def test_claude_routes_to_the_driver_without_a_transport_plugin(self):
+        adapter=adapter_for('claude')
+        self.assertIs(type(adapter),GoAdapter)
+        self.assertEqual(adapter.entry_argv('/bound/formal-gates',Path('/jobs/claude')),
+                         ['/bound/formal-gates','harness','native','/jobs/claude'])
+        self.assertEqual(adapter.transport_files(),())
+
     def test_zcode_capture_binds_node_and_script_through_the_bridge(self):
         node=shutil.which('node')
         if not node:self.skipTest('node is not available')

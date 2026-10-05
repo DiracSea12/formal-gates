@@ -94,15 +94,13 @@ class GoAdapter:
         # host-side plugin belongs to this package's transport inventory: each
         # provider names its own (dsh's sandbox/tool plugin, zcode's credential
         # reader).
-        return ({'dsh': 'native_dsh.mjs', 'zcode': 'zcode_credential.mjs'}[self.name],)
+        return {'dsh': ('native_dsh.mjs',), 'zcode': ('zcode_credential.mjs',),
+                'claude': ()}[self.name]
 
 
-# This lists *execution* implementations, not another installation/alias list.
-# G2b retired the Python dsh execution path; G2c retired zcode the same way,
-# so every execution implementation now lives in the Go driver binary and the
-# pre-migration Python transports survive only as tests/reference_* copies.
+# This lists execution implementations; installation aliases come from the host catalog.
 _ADAPTERS = {a.name: a for a in (
-    GoAdapter('dsh'), GoAdapter('zcode'),
+    GoAdapter('dsh'), GoAdapter('zcode'), GoAdapter('claude'),
 )}
 
 def adapter_for(provider):
