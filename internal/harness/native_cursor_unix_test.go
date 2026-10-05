@@ -26,6 +26,7 @@ import (
 
 type cursorPeer struct {
 	UUID            string            `json:"uuid"`
+	Entry           string            `json:"entry"`
 	Args            []string          `json:"args"`
 	Environment     map[string]string `json:"environment"`
 	Workspace       string            `json:"workspace"`
@@ -61,13 +62,12 @@ func TestCursorCLI(t *testing.T) {
 	if len(args) > 0 {
 		args = args[1:]
 	}
-	if reflect.DeepEqual(args, []string{"--version"}) {
-		fmt.Println("2026.08.04-fixture")
-		os.Exit(0)
-	}
-	if reflect.DeepEqual(args, []string{"--help"}) {
-		fmt.Println("--mode ask --model bracket overrides --resume stream-json create-chat")
-		os.Exit(0)
+	if peer.Entry != "" {
+		if len(args) == 0 || args[0] != peer.Entry {
+			fmt.Fprintln(os.Stderr, "wrong native entry")
+			os.Exit(91)
+		}
+		args = args[1:]
 	}
 	cwd, _ := os.Getwd()
 	if cwd != peer.Workspace {
@@ -80,11 +80,19 @@ func TestCursorCLI(t *testing.T) {
 			os.Exit(91)
 		}
 	}
+	if reflect.DeepEqual(args, []string{"--version"}) {
+		fmt.Println("2026.08.04-fixture")
+		os.Exit(0)
+	}
+	if reflect.DeepEqual(args, []string{"--help"}) {
+		fmt.Println("--mode ask --model bracket overrides --resume stream-json create-chat")
+		os.Exit(0)
+	}
 	call, err := os.OpenFile(peer.Calls, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		os.Exit(91)
 	}
-	line, _ := json.Marshal(map[string]any{"argv": args, "cwd": cwd, "uuid": peer.UUID})
+	line, _ := json.Marshal(map[string]any{"argv": args, "entry": peer.Entry, "cwd": cwd, "uuid": peer.UUID})
 	call.Write(append(line, '\n'))
 	call.Close()
 	if reflect.DeepEqual(args, []string{"create-chat"}) {
@@ -319,6 +327,39 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 		})
 	}
 }
+func TestCursorDirectEntryCarriesEveryCommand(t *testing.T) {
+	s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "model-direct", "low", false)
+	entry := filepath.Join(filepath.Dir(s.script), "index.js")
+	if err := os.WriteFile(entry, []byte("native entry"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binding := objectOrEmpty(s.request["binding"])
+	executable := getOf(getOf(binding, "launch"), "executable")
+	direct, err := buildCaptureBinding("cursor", map[string]any{"executable": executable, "script": entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct["environment"] = binding["environment"]
+	s.request["binding"] = direct
+	s.peer.Entry = entry
+	s.request["probe"] = true
+	s.save(t)
+	if _, err := runNativeJob(s.directory); err != nil {
+		t.Fatal(err)
+	}
+	delete(s.request, "probe")
+	s.save(t)
+	if _, err := runNativeJob(s.directory); err != nil {
+		t.Fatal(err)
+	}
+	s.resume(t)
+	if _, err := runNativeJob(s.directory); err != nil {
+		t.Fatal(err)
+	}
+	if cursorCalls(t, s) != 3 {
+		t.Fatal("direct entry changed native invocation count")
+	}
+}
 func TestCursorMissingStoreBeforePrompt(t *testing.T) {
 	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
 	if _, err := runNativeJob(s.directory); err != nil {
@@ -370,12 +411,16 @@ func TestCursorNativeRefusals(t *testing.T) {
 		{"error-result", "native result failed", func(s *cursorScenario) { objectOrEmpty(s.peer.Events[1])["is_error"] = true }},
 		{"failure-subtype", "native result failed", func(s *cursorScenario) { objectOrEmpty(s.peer.Events[1])["subtype"] = "error" }},
 		{"request-missing", "request identity", func(s *cursorScenario) { delete(objectOrEmpty(s.peer.Events[1]), "request_id") }},
+		{"request-not-text", "request identity", func(s *cursorScenario) { objectOrEmpty(s.peer.Events[1])["request_id"] = true }},
 		{"nonzero-after-success", "CURSOR_PROCESS", func(s *cursorScenario) { s.peer.Exit = 7 }},
 		{"native-error", "CURSOR_PROCESS", func(s *cursorScenario) { s.peer.Exit = 1; s.peer.Events = nil; s.peer.Stderr = "Operation cancelled\n" }},
 		{"after-terminal", "after terminal", func(s *cursorScenario) { s.peer.Events = append(s.peer.Events, s.peer.Events[0]) }},
 		{"wrong-model", "model selection was not applied", func(s *cursorScenario) {
 			getOf(s.peer.Config, "model").(map[string]any)["modelId"] = "other"
+			getOf(s.peer.Config, "model").(map[string]any)["displayModelId"] = "other"
+			getOf(s.peer.Config, "model").(map[string]any)["displayName"] = "other high"
 			getOf(s.peer.Config, "selectedModel").(map[string]any)["modelId"] = "other"
+			objectOrEmpty(s.peer.Events[0])["model"] = "other high"
 		}},
 		{"stale-config-display", "does not match init", func(s *cursorScenario) { getOf(s.peer.Config, "model").(map[string]any)["displayName"] = "other" }},
 		{"wrong-effort", "parameter was not applied", func(s *cursorScenario) {

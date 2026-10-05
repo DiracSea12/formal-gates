@@ -87,6 +87,8 @@ class HostRegistryTests(unittest.TestCase):
                 source={'provider':provider,'identity':'native','files':{n:file_proof(root/n) for n in files}}
                 if provider == 'cursor':
                     # Cursor verifies its native terminal as well as file proofs.
+                    atomic(root/'native-request.json', {'workspace': t,
+                        'binding': {'environment': {'CURSOR_CONFIG_DIR': str(root/'config')}}})
                     with self.assertRaisesRegex(RuntimeBlocked,'CURSOR_BINDING'):
                         adapter_for(provider).verify_source(root,source)
                     continue

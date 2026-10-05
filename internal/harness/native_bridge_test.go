@@ -92,7 +92,7 @@ func TestBridgeNativeRefusalKinds(t *testing.T) {
 	}
 	inner, _ = answer["value"].(map[string]any)
 	if inner["ok"] != false || inner["kind"] != "" ||
-		inner["refusal"] != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude" {
+		inner["refusal"] != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, cursor" {
 		t.Fatalf("value = %v", inner)
 	}
 }

@@ -682,14 +682,11 @@ func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string
 	return AnswerReceipt{DecisionID: id, Choice: choice, AnsweredAt: at}, nil
 }
 
-// ---- task sessions (task_sessions, the v5 delta) ----------------------------
+// ---- task sessions ---------------------------------------------------------
 //
-// The execution identity a task's next native call resumes.  Three small
-// operations, one owner per transition: the executor remembers a settled
-// turn's identity (SetSession), a granted restart clears it inside the
-// grant's own transaction (answerRequest above), and readers re-derive
-// the current identity from the row on every pass (Session) — never from
-// a file a crash could strand between the answer and its effect.
+// The execution identity and original source a task's next native call resumes.
+// The executor remembers a settled turn, a granted restart clears the pair in
+// its own transaction, and readers derive the pair from this row on every pass.
 
 // SetSession remembers one task's execution identity, the session its
 // next native call resumes.  Deliberately no advance lock: executors

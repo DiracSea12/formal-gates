@@ -146,7 +146,11 @@ func cursorSelectionSnapshot(config string, event any) (map[string]any, error) {
 	if !valuesEqual(getOf(model, "displayName"), getOf(event, "model")) {
 		return nil, &blockedError{message: "CURSOR_CONFIG: native selection does not match init"}
 	}
-	return map[string]any{"model": nativePickParams(model, "modelId", "displayModelId", "displayName", "aliases"), "selectedModel": nativePickParams(selected, "modelId", "parameters")}, nil
+	parameters := []any{}
+	for _, parameter := range listOf(getOf(selected, "parameters")) {
+		parameters = append(parameters, nativePickParams(objectOrEmpty(parameter), "id", "value"))
+	}
+	return map[string]any{"model": nativePickParams(model, "modelId", "displayModelId", "displayName", "aliases"), "selectedModel": map[string]any{"modelId": getOf(selected, "modelId"), "parameters": parameters}}, nil
 }
 func cursorCheckSelection(request, snapshot any) (map[string]any, error) {
 	model := objectOrEmpty(getOf(snapshot, "model"))
@@ -201,13 +205,19 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 	if executable == "" {
 		return nil, &bindingError{message: "CURSOR_BINDING: missing executable"}
 	}
+	prefix := []string{executable}
+	// A wrapper names its sibling node for closure proofs. A direct node launch
+	// names only executable and script and must pass that entry to every command.
+	if script, _ := launch["script"].(string); script != "" && getOf(launch, "node") == nil {
+		prefix = append(prefix, script)
+	}
 	environment := map[string]string{}
 	for key, value := range objectOrEmpty(getOf(binding, "environment")) {
 		environment[key] = textOf(value)
 	}
 	workspace := resolveNativePath(textOf(getOf(request, "workspace")))
 	command := func(args ...string) *exec.Cmd {
-		cmd := exec.Command(executable, args...)
+		cmd := exec.Command(prefix[0], append(append([]string{}, prefix[1:]...), args...)...)
 		cmd.Dir = workspace
 		cmd.Env = os.Environ()
 		for key, value := range environment {
@@ -300,7 +310,7 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 		return nil, err
 	}
-	argv := []string{executable, "-p", "--output-format", "stream-json", "--workspace", workspace, "--resume", identity}
+	argv := append(append([]string{}, prefix...), "-p", "--output-format", "stream-json", "--workspace", workspace, "--resume", identity)
 	if readOnly {
 		argv = append(argv, "--mode", "ask")
 	}
@@ -441,7 +451,8 @@ func cursorObserve(directory string, materialize bool) (map[string]any, error) {
 				initialized = true
 			}
 			if valuesEqual(event["type"], "result") {
-				if !initialized || !valuesEqual(event["session_id"], identity) || !valuesEqual(event["subtype"], "success") || !valuesEqual(event["is_error"], false) || textOf(event["request_id"]) == "" || event["request_id"] == nil {
+				requestID, _ := event["request_id"].(string)
+				if !initialized || !valuesEqual(event["session_id"], identity) || !valuesEqual(event["subtype"], "success") || !valuesEqual(event["is_error"], false) || requestID == "" {
 					return nil, &blockedError{message: "CURSOR_RESULT: native result failed or lacks its request identity"}
 				}
 				terminal = event

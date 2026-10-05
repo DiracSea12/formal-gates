@@ -18,16 +18,15 @@ import (
 
 func jsonNumber(literal string) any { return json.Number(literal) }
 
-// TestDSHDispatch pins the provider dispatch: dsh and zcode, and the exact
-// unsupported-host refusal text.
+// TestDSHDispatch pins the registered providers and the unsupported-host text.
 func TestDSHDispatch(t *testing.T) {
-	for _, provider := range []string{"dsh", "zcode"} {
+	for _, provider := range []string{"dsh", "zcode", "claude", "cursor"} {
 		if err := dshDispatch(provider); err != nil {
 			t.Fatalf("%s must dispatch: %v", provider, err)
 		}
 	}
 	err := dshDispatch("ghost")
-	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude" {
+	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, cursor" {
 		t.Fatalf("unsupported text = %v", err)
 	}
 }
