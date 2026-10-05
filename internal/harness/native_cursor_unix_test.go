@@ -103,12 +103,6 @@ func TestCursorCLI(t *testing.T) {
 			fmt.Fprintln(os.Stderr, "Failed to create chat")
 			os.Exit(peer.CreateExit)
 		}
-		if !peer.SkipStore {
-			sum := md5.Sum([]byte(cwd))
-			store := filepath.Join(os.Getenv("CURSOR_CONFIG_DIR"), "chats", hex.EncodeToString(sum[:]), peer.UUID, "store.db")
-			os.MkdirAll(filepath.Dir(store), 0o755)
-			os.WriteFile(store, []byte(peer.UUID+":created"), 0o644)
-		}
 		fmt.Println(peer.UUID)
 		os.Exit(0)
 	}
@@ -117,7 +111,22 @@ func TestCursorCLI(t *testing.T) {
 		os.Exit(91)
 	}
 	prior, err := os.ReadFile(peer.Store)
-	if err != nil || string(prior) != peer.ExpectedContext {
+	if peer.ExpectedContext == "" {
+		if !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "new native store already exists")
+			os.Exit(91)
+		}
+		if !peer.SkipStore {
+			if err := os.MkdirAll(filepath.Dir(peer.Store), 0o755); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(91)
+			}
+			if err := os.WriteFile(peer.Store, []byte(peer.UUID+":initialized"), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(91)
+			}
+		}
+	} else if err != nil || string(prior) != peer.ExpectedContext {
 		fmt.Fprintln(os.Stderr, "native context differs")
 		os.Exit(91)
 	}
@@ -160,8 +169,11 @@ func TestCursorCLI(t *testing.T) {
 	if peer.Wait {
 		time.Sleep(60 * time.Second)
 	}
-	if peer.Exit == 0 {
-		os.WriteFile(peer.Store, []byte(peer.UUID+":completed"), 0o644)
+	if peer.Exit == 0 && !peer.SkipStore {
+		if err := os.WriteFile(peer.Store, []byte(peer.UUID+":completed"), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(91)
+		}
 	}
 	os.Exit(peer.Exit)
 }
@@ -221,7 +233,7 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": uuid, "request_id": "request-" + uuid, "result": mustCanonical(t, answer), "usage": map[string]any{"inputTokens": len(uuid), "outputTokens": len(model)}}
 	sum := md5.Sum([]byte(workspace))
 	store := filepath.Join(config, "chats", hex.EncodeToString(sum[:]), uuid, "store.db")
-	s := &cursorScenario{request: request, directory: directory, workspace: workspace, script: script, peer: cursorPeer{UUID: uuid, Workspace: workspace, Environment: environment, Calls: filepath.Join(root, "calls.jsonl"), Store: store, ExpectedContext: uuid + ":created", Config: nativeConfig, Events: []any{init, terminal}}}
+	s := &cursorScenario{request: request, directory: directory, workspace: workspace, script: script, peer: cursorPeer{UUID: uuid, Workspace: workspace, Environment: environment, Calls: filepath.Join(root, "calls.jsonl"), Store: store, Config: nativeConfig, Events: []any{init, terminal}}}
 	s.save(t)
 	return s
 }
@@ -314,12 +326,22 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 		t.Run(uuid, func(t *testing.T) {
 			model := fmt.Sprintf("model-%d", i)
 			s := newCursorScenario(t, uuid, model, "high", i == 0)
+			if _, err := os.Stat(s.peer.Store); !os.IsNotExist(err) {
+				t.Fatal("new identity has a store before its native prompt")
+			}
 			source, err := runNativeJob(s.directory)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if source["identity"] != uuid || source["native_store"] != s.peer.Store || source["native_request"] != "request-"+uuid {
 				t.Fatalf("native binding %v", source)
+			}
+			if string(readBytes(t, s.peer.Store)) != uuid+":completed" {
+				t.Fatal("native prompt did not persist the session context")
+			}
+			identity, err := readJSONFile(filepath.Join(s.directory, "identity.json"))
+			if err != nil || !valuesEqual(identity, map[string]any{"provider": "cursor", "identity": uuid, "native_store": s.peer.Store, "workspace": s.workspace, "selection": source["selection"]}) {
+				t.Fatalf("persisted identity %v %v", identity, err)
 			}
 			if err := cursorVerifySource(s.directory, source); err != nil {
 				t.Fatal(err)
@@ -359,6 +381,46 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 		})
 	}
 }
+
+func TestCursorDefaultSelectionAndFreshIdentity(t *testing.T) {
+	first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "native-default", "", true)
+	first.request["model"] = ""
+	first.save(t)
+	source, err := runNativeJob(first.directory)
+	if err != nil || getOf(source["selection"], "model") != "native-default" || getOf(source["selection"], "reasoning_effort") != "" {
+		t.Fatalf("default selection %v %v", source, err)
+	}
+	if strings.Contains(strings.Join(first.peer.Args, "\n"), "--model") {
+		t.Fatal("default request invented a native model override")
+	}
+	first.resume(t)
+	if _, err := runNativeJob(first.directory); err != nil {
+		t.Fatal(err)
+	}
+	second := newCursorScenario(t, "22222222-2222-4222-8222-222222222222", "model-b", "low", false)
+	second.workspace = first.workspace
+	second.request["workspace"] = first.workspace
+	second.peer.Workspace = first.workspace
+	objectOrEmpty(second.peer.Events[0])["cwd"] = first.workspace
+	config := first.peer.Environment["CURSOR_CONFIG_DIR"]
+	second.peer.Environment["CURSOR_CONFIG_DIR"] = config
+	getOf(second.request["binding"], "environment").(map[string]any)["CURSOR_CONFIG_DIR"] = config
+	second.peer.Store = cursorStore(config, first.workspace, second.peer.UUID)
+	second.save(t)
+	fresh, err := runNativeJob(second.directory)
+	if err != nil || fresh["identity"] != second.peer.UUID || fresh["native_store"] != second.peer.Store {
+		t.Fatalf("fresh native identity %v %v", fresh, err)
+	}
+	for _, s := range []*cursorScenario{first, second} {
+		if string(readBytes(t, s.peer.Store)) != s.peer.UUID+":completed" {
+			t.Fatal("fresh native identity replaced another session's context")
+		}
+	}
+	if cursorCalls(t, first) != 3 || cursorCalls(t, second) != 2 {
+		t.Fatal("native identity allocation or continuation replayed")
+	}
+}
+
 func TestCursorDirectEntryCarriesEveryCommand(t *testing.T) {
 	s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "model-direct", "low", false)
 	entry := filepath.Join(filepath.Dir(s.script), "index.js")
@@ -427,7 +489,7 @@ func TestCursorNativeRefusals(t *testing.T) {
 	}{
 		{"create-fails", "CURSOR_CREATE", func(s *cursorScenario) { s.peer.CreateExit = 7 }},
 		{"create-not-uuid", "native UUID", func(s *cursorScenario) { s.peer.UUID = "not-a-uuid" }},
-		{"create-store-absent", "native-resource-missing", func(s *cursorScenario) { s.peer.SkipStore = true }},
+		{"init-store-absent", "native init has no persisted store", func(s *cursorScenario) { s.peer.SkipStore = true }},
 		{"init-other-session", "native init", func(s *cursorScenario) {
 			objectOrEmpty(s.peer.Events[0])["session_id"] = "22222222-2222-4222-8222-222222222222"
 		}},
@@ -484,6 +546,18 @@ func TestCursorNativeRefusals(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(s.directory, "source.json")); !os.IsNotExist(err) {
 				t.Fatal("refusal became success")
+			}
+			if tc.name == "init-store-absent" {
+				if cursorCalls(t, s) != 2 {
+					t.Fatal("new native identity never reached its first prompt")
+				}
+				if _, err := os.Stat(filepath.Join(s.directory, "identity.json")); !os.IsNotExist(err) {
+					t.Fatal("unpersisted native identity was published")
+				}
+				failure, err := readJSONFile(filepath.Join(s.directory, "native-error.json"))
+				if err != nil || getOf(failure, "error_kind") == "SESSION_UNAVAILABLE" {
+					t.Fatal("native initialization failure became a lost saved session")
+				}
 			}
 			if tc.name == "wrong-resume-store" || tc.name == "conflicting-effort" || tc.name == "effort-without-model" {
 				if cursorCalls(t, s) != 0 {
@@ -651,8 +725,29 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				if _, err := os.Stat(s.peer.Store); err != nil {
 					t.Fatal("cancel deleted store")
 				}
+				if string(readBytes(t, s.peer.Store)) != s.peer.UUID+":initialized" {
+					t.Fatal("cancelled native initialization changed its context")
+				}
+				_, identityErr := os.Stat(filepath.Join(s.directory, "identity.json"))
+				if cancel == "initializing" && !os.IsNotExist(identityErr) || cancel == "initialized" && identityErr != nil {
+					t.Fatal("cancel crossed the native identity publication boundary")
+				}
+				wantIdentity := ""
+				if cancel == "initialized" {
+					wantIdentity = s.peer.UUID
+				}
+				if turnIdentity(s.directory) != wantIdentity {
+					t.Fatal("cancel recovery read an identity outside its publication boundary")
+				}
+				if _, err := cursorReconcile(s.directory, receipt); err == nil {
+					t.Fatal("cancelled native trajectory reconciled as completed")
+				}
+				if _, err := os.Stat(filepath.Join(s.directory, "source.json")); !os.IsNotExist(err) {
+					t.Fatal("cancelled native trajectory published an accepted source")
+				}
 				s.request["identity"] = s.peer.UUID
 				s.request["native_store"] = s.peer.Store
+				s.peer.ExpectedContext = s.peer.UUID + ":initialized"
 				s.peer.Wait = false
 				s.peer.BeforeInit = ""
 				s.peer.Events = append(s.peer.Events, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.peer.UUID, "request_id": "reopened", "result": `{"status":"PASS","summary":"reopened","findings":[],"check_ids":[]}`})

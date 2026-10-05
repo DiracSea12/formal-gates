@@ -760,18 +760,6 @@ func (c *Compose) revise(ctx context.Context, taskID string, brief []byte) error
 	return c.store.ReviseTask(ctx, taskID, runner.TaskSpec{TaskID: taskID, Input: brief})
 }
 
-// session returns the remembered identity of one stage's session — the
-// kernel's task_sessions row, re-read from the database on every call so
-// a recovered owner derives it from the same authority the restart grant
-// cleared. Empty means a fresh session.
-func (c *Compose) session(taskID string) string {
-	identity, err := c.store.Session(context.Background(), taskID)
-	if err != nil {
-		return ""
-	}
-	return identity
-}
-
 // clearSession drops one stage's session identity (a restart answer):
 // a direct application of the answered fact — idempotent, so a repeated
 // clear is harmless.

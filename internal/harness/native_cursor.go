@@ -308,15 +308,19 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 	}
 	nativeSource["sessionId"] = identity
 	nativeSource["native_store"] = store
-	if info, err := os.Stat(store); err != nil || !info.Mode().IsRegular() {
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
+	// create-chat allocates an identity; the first native resume opens its store.
+	// A saved identity must already have that store before another prompt starts.
+	if savedIdentity, _ := getOf(request, "identity").(string); savedIdentity != "" {
+		if info, err := os.Stat(store); err != nil || !info.Mode().IsRegular() {
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			nativeSource["native_resource_missing"] = map[string]any{"path": store, "identity": identity, "method": "--resume"}
+			if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
+				return nil, err
+			}
+			return nil, &sessionUnavailableError{blockedError: blockedError{message: "CURSOR_SESSION_UNAVAILABLE: native-resource-missing: " + store}, identity: identity, method: "--resume", code: nil}
 		}
-		nativeSource["native_resource_missing"] = map[string]any{"path": store, "identity": identity, "method": "--resume"}
-		if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
-			return nil, err
-		}
-		return nil, &sessionUnavailableError{blockedError: blockedError{message: "CURSOR_SESSION_UNAVAILABLE: native-resource-missing: " + store}, identity: identity, method: "--resume", code: nil}
 	}
 	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 		return nil, err
@@ -359,6 +363,13 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 		if nativeSource["native_selection"] == nil && valuesEqual(getOf(event, "type"), "system") && valuesEqual(getOf(event, "subtype"), "init") {
 			if !valuesEqual(getOf(event, "session_id"), identity) || resolveNativePath(textOf(getOf(event, "cwd"))) != workspace {
 				streamErr = &blockedError{message: "CURSOR_BINDING: native init does not match the created or resumed session"}
+				break
+			}
+			if info, err := os.Stat(store); err != nil || !info.Mode().IsRegular() {
+				streamErr = &bindingError{message: "CURSOR_BINDING: native init has no persisted store: " + store}
+				if err != nil && !os.IsNotExist(err) {
+					streamErr = err
+				}
 				break
 			}
 			snapshot, err := cursorSelectionSnapshot(config, event)
