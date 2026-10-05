@@ -2043,8 +2043,8 @@ func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmati
 	copyFile(c.binary, filepath.Join(source, "bin", "formal-gates"), 0755)
 	args := []string{"install", "--source", source, "--host", canaryProvider, "--scope", "global", "--binary-target", c.binary, "--force"}
 	output := c.cli(nil, args...)
-	begin := bytes.IndexByte(output, '{')
-	if begin < 0 || json.Unmarshal(output[begin:], &c.installed) != nil || len(c.installed.Targets) != 1 {
+	begin := bytes.Index(output, []byte("\n{")) + 1
+	if begin == 0 || json.Unmarshal(output[begin:], &c.installed) != nil || len(c.installed.Targets) != 1 {
 		c.fail("install returned no single target report: %s", output)
 	}
 	for name, data := range map[string][]byte{
@@ -2102,7 +2102,7 @@ func (c *engineCanary) prepareHome(candidate, stableHome string) error {
 		"resources": filepath.Join(stableHome, ".formal-gates-resources"),
 	}
 	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
-		if path := strings.TrimSpace(os.Getenv(key)); path != "" && !canaryPathWithin(home, path) {
+		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
 			stable[key] = path
 		}
 	}

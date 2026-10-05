@@ -69,6 +69,16 @@ func TestCanaryPreparedHomeRejectsStableAndMissingRoots(t *testing.T) {
 			}
 		})
 	}
+	t.Run("named-stable-storage", func(t *testing.T) {
+		storage := t.TempDir()
+		writeCanaryHostFixture(t, storage, "stable-provider")
+		t.Setenv("ZCODE_STORAGE_DIR", storage)
+		c := &engineCanary{t: t}
+		if err := c.prepareHome(storage, stable); err == nil || !strings.Contains(err.Error(), "overlaps stable") {
+			t.Fatalf("named stable storage root: %v", err)
+		}
+	})
+
 	for _, name := range []string{zcodePersonalConfig, zcodeSettingFile, zcodeCredentialsFile, "runtime/provider/zcode-builtin.json"} {
 		t.Run("config-alias-"+filepath.Base(name), func(t *testing.T) {
 			candidate := t.TempDir()
@@ -163,8 +173,16 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 			t.Fatalf("installed or native path leaves the candidate: %s", path)
 		}
 	}
-	if c.installed.PackageDigest == "" || target.InstalledDigest != c.installed.PackageDigest || target.HookAction != "CONFIGURED" || target.ManagedRuleAction != "APPLIED" {
-		t.Fatalf("candidate install identity/hooks/rule: %#v", target)
+	sourceReceipt, err := validate.PackageReceipt(target.SourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedReceipt, err := validate.PackageReceipt(target.TargetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.installed.PackageDigest != sourceReceipt.Digest || target.SourceDigest != sourceReceipt.Digest || target.InstalledDigest != installedReceipt.Digest || target.HookAction != "CONFIGURED" || target.ManagedRuleAction != "APPLIED" {
+		t.Fatalf("candidate receipt binding: source=%s/%s installed=%s/%s hook=%s rule=%s", target.SourceDigest, sourceReceipt.Digest, target.InstalledDigest, installedReceipt.Digest, target.HookAction, target.ManagedRuleAction)
 	}
 	hook := readTestFile(t, target.HookConfig)
 	if !strings.Contains(hook, target.LauncherPath) || strings.Contains(hook, filepath.Join(stable, ".local", "bin", "formal-gates")) {
@@ -196,9 +214,13 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity := textOf(source["identity"])
-		if identity != "fixture-"+canaryCanonicalPath(workspace) || identities[identity] {
-			t.Fatalf("native input identity=%q source=%#v", identity, source)
+		identityRecord, err := readJSONFile(filepath.Join(c.jobs, name, "identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := textOf(getOf(identityRecord, "identity"))
+		if identity != "fixture-"+canaryCanonicalPath(workspace) || identities[identity] || getOf(identityRecord, "workspace") != canaryCanonicalPath(workspace) || getOf(source, "model_calls") != 0 {
+			t.Fatalf("native input identity=%q record=%#v source=%#v", identity, identityRecord, source)
 		}
 		identities[identity] = true
 		observation := objectOrEmpty(decodeTestJSON(t, readTestFile(t, filepath.Join(workspace, "native-observation.json"))))
