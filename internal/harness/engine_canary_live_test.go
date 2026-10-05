@@ -34,9 +34,9 @@ package harness
 // live calls. Ordinary test runs keep the live canary skipped.
 //
 // Before running, the operator prepares a disjoint ZCODE_DATA_BASE_DIR with
-// the native .zcode/v2 provider_config.json, setting.json, credentials.json
-// and runtime/provider/zcode-builtin.json. Account provisioning and selection
-// remain native host responsibilities. The same root carries HOME, CLI
+// native configuration and account provisioning as required by the host.
+// UI settings, provider readiness and selection remain native responsibilities.
+// The same root carries HOME, CLI
 // storage, hooks, rules, installation and business resources. Shared Node and
 // app-server code are runtime files; the formal-gates launcher and helper
 // come from this private installation. jobs/host-isolation.json records the
@@ -167,7 +167,7 @@ type engineCanary struct {
 	jobs           string
 	binding        map[string]any
 	installed      validate.InstallReport
-	stablePaths    map[string]string
+	separateRoots  map[string]string
 	deadline       time.Time
 	seq            int
 	approvalInput  *bufio.Reader
@@ -233,7 +233,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stableHome); err != nil {
+	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stableHome, filepath.Dir(filepath.Dir(filepath.Dir(file)))); err != nil {
 		t.Fatal(err)
 	}
 	resources := filepath.Join(c.home, ".formal-gates-resources")
@@ -251,9 +251,9 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	if dir == "" {
 		dir = filepath.Join(c.home, "canary-evidence", fmt.Sprintf("engine-canary-%d", time.Now().UnixNano()))
 	}
-	for name, stablePath := range c.stablePaths {
-		if canaryPathWithin(stablePath, dir) || canaryPathWithin(dir, stablePath) {
-			t.Fatalf("canary evidence overlaps stable %s: %s", name, dir)
+	for name, root := range c.separateRoots {
+		if canaryPathWithin(root, dir) || canaryPathWithin(dir, root) {
+			t.Fatalf("canary evidence overlaps %s: %s", name, dir)
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "jobs"), 0o755); err != nil {
@@ -284,7 +284,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 		},
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
-	c.install(filepath.Dir(filepath.Dir(filepath.Dir(file))), base, receipt)
+	c.install(base, receipt)
 	f, err := facade.Open(c.project, "engine-canary")
 	if err != nil {
 		t.Fatal(err)
@@ -2009,7 +2009,8 @@ func (c *engineCanary) readRun(command string) facade.Run {
 	}
 	return run
 }
-func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmationReceipt) {
+func (c *engineCanary) install(base string, intake facade.IntakeConfirmationReceipt) {
+	root := c.separateRoots["source"]
 	c.binary = filepath.Join(c.home, ".local", "bin", "formal-gates")
 	if err := os.MkdirAll(filepath.Dir(c.binary), 0700); err != nil {
 		c.fail("binary directory: %v", err)
@@ -2073,7 +2074,7 @@ func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmati
 // binding. It observes path identity only; provisioning and entitlement stay
 // with the native account owner. The finite paths are the ZCode descriptor
 // and native data locations used by this canary.
-func (c *engineCanary) prepareHome(candidate, stableHome string) error {
+func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) error {
 	if strings.TrimSpace(candidate) == "" {
 		return fmt.Errorf("canary requires a prepared ZCODE_DATA_BASE_DIR")
 	}
@@ -2090,26 +2091,27 @@ func (c *engineCanary) prepareHome(candidate, stableHome string) error {
 	if err != nil {
 		return err
 	}
-	stable := map[string]string{
-		"home": stableHome, "host": filepath.Join(stableHome, ".zcode"),
-		"config":    filepath.Join(stableHome, ".zcode", "v2"),
-		"install":   filepath.Join(stableHome, descriptor.Paths.GlobalBase, "formal-gates"),
-		"hook":      filepath.Join(stableHome, descriptor.Paths.GlobalHookConfig),
-		"rules":     filepath.Join(stableHome, descriptor.Paths.GlobalManaged),
-		"launcher":  filepath.Join(stableHome, ".local", "bin", "formal-gates"),
-		"registry":  filepath.Join(stableHome, ".formal-gates", "registry.json"),
-		"state":     filepath.Join(stableHome, ".gates"),
-		"resources": filepath.Join(stableHome, ".formal-gates-resources"),
+	separate := map[string]string{
+		"source":      sourceRoot,
+		"stable home": stableHome, "stable host": filepath.Join(stableHome, ".zcode"),
+		"stable config":    filepath.Join(stableHome, ".zcode", "v2"),
+		"stable install":   filepath.Join(stableHome, descriptor.Paths.GlobalBase, "formal-gates"),
+		"stable hook":      filepath.Join(stableHome, descriptor.Paths.GlobalHookConfig),
+		"stable rules":     filepath.Join(stableHome, descriptor.Paths.GlobalManaged),
+		"stable launcher":  filepath.Join(stableHome, ".local", "bin", "formal-gates"),
+		"stable registry":  filepath.Join(stableHome, ".formal-gates", "registry.json"),
+		"stable state":     filepath.Join(stableHome, ".gates"),
+		"stable resources": filepath.Join(stableHome, ".formal-gates-resources"),
 	}
 	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
 		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
-			stable[key] = path
+			separate["stable "+key] = path
 		}
 	}
-	for name, path := range stable {
-		stable[name] = canaryCanonicalPath(path)
+	for name, path := range separate {
+		separate[name] = canaryCanonicalPath(path)
 		if canaryPathWithin(home, path) || canaryPathWithin(path, home) {
-			return fmt.Errorf("canary host root overlaps stable %s: %s", name, stable[name])
+			return fmt.Errorf("canary host root overlaps %s: %s", name, separate[name])
 		}
 	}
 	c.home = home
@@ -2118,13 +2120,7 @@ func (c *engineCanary) prepareHome(candidate, stableHome string) error {
 			return fmt.Errorf("canary %s leaves the prepared host root: %s", name, resolveNativePath(path))
 		}
 	}
-	for _, name := range []string{"personal", "setting", "credentials", "catalogue"} {
-		path := c.hostPaths()[name]
-		if !zcodeIsRegularFile(path) {
-			return fmt.Errorf("prepared canary host requires native %s: %s", name, path)
-		}
-	}
-	c.stablePaths = stable
+	c.separateRoots = separate
 	return nil
 }
 
@@ -2224,14 +2220,14 @@ func (c *engineCanary) recordIsolation() error {
 		paths[name] = canaryCanonicalPath(path)
 		_, err := os.Stat(path)
 		observed[name] = err == nil
-		for stableName, stablePath := range c.stablePaths {
-			if canaryPathWithin(stablePath, path) || canaryPathWithin(path, stablePath) {
-				return fmt.Errorf("candidate %s overlaps stable %s", name, stableName)
+		for separateName, separateRoot := range c.separateRoots {
+			if canaryPathWithin(separateRoot, path) || canaryPathWithin(path, separateRoot) {
+				return fmt.Errorf("candidate %s overlaps %s", name, separateName)
 			}
 		}
 	}
 	return writeAtomicJSON(filepath.Join(c.jobs, "host-isolation.json"), map[string]any{
-		"provider": canaryProvider, "stable": c.stablePaths, "candidate": paths,
+		"provider": canaryProvider, "separateRoots": c.separateRoots, "candidate": paths,
 		"observed": observed, "installReport": c.installed, "binding": c.binding["launch"],
 	})
 }

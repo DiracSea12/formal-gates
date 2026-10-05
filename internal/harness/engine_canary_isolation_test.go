@@ -41,6 +41,8 @@ func writeCanaryHostFixture(t *testing.T, root, provider string) {
 }
 
 func TestCanaryPreparedHomeRejectsStableAndMissingRoots(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	stable := t.TempDir()
 	writeCanaryHostFixture(t, stable, "stable-provider")
 	t.Setenv("USERPROFILE", stable)
@@ -61,7 +63,7 @@ func TestCanaryPreparedHomeRejectsStableAndMissingRoots(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &engineCanary{t: t}
-			if err := c.prepareHome(tc.root, stable); err == nil || !strings.Contains(err.Error(), tc.message) {
+			if err := c.prepareHome(tc.root, stable, sourceRoot); err == nil || !strings.Contains(err.Error(), tc.message) {
 				t.Fatalf("prepare %q: %v", tc.root, err)
 			}
 			if c.binary != "" || c.binding != nil || len(c.installed.Targets) != 0 {
@@ -74,7 +76,7 @@ func TestCanaryPreparedHomeRejectsStableAndMissingRoots(t *testing.T) {
 		writeCanaryHostFixture(t, storage, "stable-provider")
 		t.Setenv("ZCODE_STORAGE_DIR", storage)
 		c := &engineCanary{t: t}
-		if err := c.prepareHome(storage, stable); err == nil || !strings.Contains(err.Error(), "overlaps stable") {
+		if err := c.prepareHome(storage, stable, sourceRoot); err == nil || !strings.Contains(err.Error(), "overlaps stable") {
 			t.Fatalf("named stable storage root: %v", err)
 		}
 	})
@@ -91,14 +93,166 @@ func TestCanaryPreparedHomeRejectsStableAndMissingRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := &engineCanary{t: t}
-			if err := c.prepareHome(candidate, stable); err == nil || !strings.Contains(err.Error(), "leaves the prepared host root") {
+			if err := c.prepareHome(candidate, stable, sourceRoot); err == nil || !strings.Contains(err.Error(), "leaves the prepared host root") {
 				t.Fatalf("external native %s: %v", name, err)
 			}
 		})
 	}
 }
 
+func TestCanaryPreparedHomeSeparatesSourceAndProfile(t *testing.T) {
+	stable := t.TempDir()
+	t.Setenv("USERPROFILE", stable)
+	for _, key := range []string{"ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+		t.Setenv(key, "")
+	}
+	for _, relationship := range []string{"disjoint", "source-contains-home", "home-contains-source", "same", "candidate-alias", "source-alias"} {
+		t.Run(relationship, func(t *testing.T) {
+			base := t.TempDir()
+			source, candidate := filepath.Join(base, "source"), filepath.Join(base, "profile")
+			switch relationship {
+			case "source-contains-home":
+				candidate = filepath.Join(source, "native-home")
+			case "home-contains-source", "source-alias":
+				source = filepath.Join(candidate, "source")
+			case "same", "candidate-alias":
+				candidate = source
+			}
+			if err := os.MkdirAll(source, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "source.txt"), []byte("source sentinel\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeCanaryHostFixture(t, candidate, "profile-provider")
+			actualSource, actualHome := source, candidate
+			if relationship == "candidate-alias" || relationship == "source-alias" {
+				alias := filepath.Join(base, "alias")
+				target := candidate
+				if relationship == "source-alias" {
+					target = source
+				}
+				if err := os.Symlink(target, alias); err != nil {
+					t.Fatal(err)
+				}
+				if relationship == "source-alias" {
+					source = alias
+				} else {
+					candidate = alias
+				}
+			}
+			before, err := validate.PackageReceipt(actualSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := readTestFile(t, filepath.Join(actualHome, ".zcode", "v2", zcodePersonalConfig))
+			c := &engineCanary{t: t}
+			for repeat := 0; repeat < 2; repeat++ {
+				err := c.prepareHome(candidate, stable, source)
+				if relationship == "disjoint" {
+					if err != nil || c.separateRoots["source"] != canaryCanonicalPath(actualSource) {
+						t.Fatalf("disjoint source/profile preparation: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "overlaps source") {
+					t.Fatalf("overlapping source/profile preparation: %v", err)
+				}
+				if c.binary != "" || c.binding != nil || len(c.installed.Targets) != 0 {
+					t.Fatal("preparation reached installation or capture")
+				}
+			}
+			after, err := validate.PackageReceipt(actualSource)
+			if err != nil || before.Digest != after.Digest || !valuesEqual(before.Entries, after.Entries) {
+				t.Fatalf("preparation changed actual package input: %v", err)
+			}
+			if relationship == "disjoint" && (len(after.Entries) != 1 || after.Entries[0].Path != "source.txt") {
+				t.Fatalf("profile entered the source package: %+v", after.Entries)
+			}
+			if readTestFile(t, filepath.Join(actualSource, "source.txt")) != "source sentinel\n" || readTestFile(t, filepath.Join(actualHome, ".zcode", "v2", zcodePersonalConfig)) != profile {
+				t.Fatal("preparation changed source or native profile content")
+			}
+			t.Logf("source/profile relationship=%s package=%s entries=%d binary=%q captured=%t", relationship, after.Digest, len(after.Entries), c.binary, c.binding != nil)
+		})
+	}
+}
+
+func TestCanaryPreparationPreservesNativeSelection(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	stable := t.TempDir()
+	t.Setenv("USERPROFILE", stable)
+	for _, key := range []string{"ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+		t.Setenv(key, "")
+	}
+	preference := `{"providerFamilyDomain":"zhipu","providerFamilyConnectionSelections":{"zhipu":{"kind":"coding-plan"}}}`
+	for _, tc := range []struct {
+		name, setting, request, provider, selection string
+		provisioned, catalogue                      bool
+	}{
+		{"missing-setting", "", "", "p2", "provisioning-order", true, true},
+		{"no-preference", `{}`, "", "p2", "provisioning-order", true, true},
+		{"host-preference", preference, "", "p1", "host-selected-plan", true, true},
+		{"requested", preference, `{"providerId":"p2","modelId":"m1"}`, "p2", "requested", true, true},
+		{"no-provisioning", "", "", "", "", false, false},
+		{"provisioned-needs-catalogue", "", "", "", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := t.TempDir()
+			if tc.provisioned {
+				candidate = zcodeTestStore(t, []string{"account-provider:coding-plan:p2:account:u2:api-key", "account-provider:coding-plan:p1:account:u1:api-key"})
+			}
+			config := filepath.Join(candidate, ".zcode", "v2")
+			catalogue := filepath.Join(config, "runtime", "provider", "zcode-builtin.json")
+			if tc.catalogue {
+				if err := os.MkdirAll(filepath.Dir(catalogue), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(catalogue, readTestFileBytes(t, zcodeTestCatalogue(t, "7")), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.setting != "" {
+				if err := os.WriteFile(filepath.Join(config, zcodeSettingFile), []byte(tc.setting), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := &engineCanary{t: t}
+			if err := c.prepareHome(candidate, stable, sourceRoot); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ZCODE_DATA_BASE_DIR", c.home)
+			wanted, err := zcodeReference(tc.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			overlay, err := zcodeAccountProviderConfiguration(c.hostPaths()["catalogue"], wanted)
+			if tc.provisioned && !tc.catalogue {
+				if err == nil || err.Error() != "ZCODE_ACCOUNT_CONFIG: cannot read provider rules from "+c.hostPaths()["catalogue"] {
+					t.Fatalf("native catalogue requirement: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if !tc.provisioned {
+				if overlay != nil {
+					t.Fatalf("unprovisioned native host = %#v", overlay)
+				}
+			} else if getOf(overlay, "current") != tc.provider || getOf(overlay, "current_source") != tc.selection || !valuesEqual(getOf(overlay, "providers"), []any{"p2", "p1"}) {
+				t.Fatalf("native selection identity = %#v", overlay)
+			}
+			for name, absent := range map[string]bool{"personal": true, "setting": tc.setting == "", "credentials": !tc.provisioned, "catalogue": !tc.catalogue} {
+				if absent {
+					if _, err := os.Stat(c.hostPaths()[name]); !os.IsNotExist(err) {
+						t.Fatalf("preparation created absent native %s: %v", name, err)
+					}
+				}
+			}
+			t.Logf("prepared native selection=%s provider=%v source=%v nativeError=%v", tc.name, getOf(overlay, "current"), getOf(overlay, "current_source"), err)
+		})
+	}
+}
+
 func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available")
 	}
@@ -142,7 +296,7 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	}
 	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", peer)
 	c := &engineCanary{t: t}
-	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stable); err != nil {
+	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stable, sourceRoot); err != nil {
 		t.Fatal(err)
 	}
 	c.project = filepath.Join(c.home, ".formal-gates-resources", "project")
@@ -162,8 +316,7 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 		Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: reqRevision}, {Path: "frob.go", Revision: frobRevision}},
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
-	_, file, _, _ := runtime.Caller(0)
-	c.install(filepath.Dir(filepath.Dir(filepath.Dir(file))), base, intake)
+	c.install(base, intake)
 	target := c.installed.Targets[0]
 	if c.home != canaryCanonicalPath(candidate) || zcodeHostDataDirectory() != c.home || os.Getenv("HOME") != c.home || os.Getenv("USERPROFILE") != c.home {
 		t.Fatal("installation and native host did not share the prepared root")
@@ -243,7 +396,7 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 		t.Logf("local native observation: %s", readTestFile(t, filepath.Join(workspace, "native-observation.json")))
 	}
 	proof := objectOrEmpty(decodeTestJSON(t, readTestFile(t, filepath.Join(c.jobs, "host-isolation.json"))))
-	if !valuesEqual(proof["installReport"], decodeTestJSON(t, mustMarshalCanary(t, c.installed))) || getOf(proof["observed"], "projectState") != true || getOf(proof["observed"], "log") != false {
+	if getOf(proof["separateRoots"], "source") != canaryCanonicalPath(sourceRoot) || !valuesEqual(proof["installReport"], decodeTestJSON(t, mustMarshalCanary(t, c.installed))) || getOf(proof["observed"], "projectState") != true || getOf(proof["observed"], "log") != false {
 		t.Fatalf("proof lost actual installation or observed/prospective distinction: %#v", proof)
 	}
 	t.Logf("local canonical isolation proof: %s", readTestFile(t, filepath.Join(c.jobs, "host-isolation.json")))
