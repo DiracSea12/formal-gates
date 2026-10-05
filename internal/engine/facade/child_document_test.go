@@ -58,7 +58,7 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 			if reviewPending {
 				child.reopen()
 				child.drive()
-				if !driverState(t, child).SliceChild.ParentReviewPending || child.run.Status == runtime.PhaseSliceReady {
+				if !driverState(t, child).SliceChild.ParentReviewPending || child.run.Status == string(runtime.PhaseSliceReady) {
 					t.Fatal("current document bypassed pending parent review")
 				}
 				passPreDevelopmentReviews(t, master, commandPlan())
@@ -66,7 +66,7 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 			child.reopen()
 			child.drive()
 			current := driverState(t, child)
-			if child.run.Status != runtime.PhaseSliceReady || current.SliceReceipt.Receipt.RequirementRevision != revision || current.SliceReceipt.Receipt.Snapshot != ready.Receipt.Snapshot || current.Validation.Document.Content != document || len(current.SpawnReceipts) != len(physical.SpawnReceipts) || !reflect.DeepEqual(current.Results, physical.Results) {
+			if child.run.Status != string(runtime.PhaseSliceReady) || current.SliceReceipt.Receipt.RequirementRevision != revision || current.SliceReceipt.Receipt.Snapshot != ready.Receipt.Snapshot || current.Validation.Document.Content != document || len(current.SpawnReceipts) != len(physical.SpawnReceipts) || !reflect.DeepEqual(current.Results, physical.Results) {
 				t.Fatal("current document did not rebuild delivery with the original carried gate evidence")
 			}
 			before, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
