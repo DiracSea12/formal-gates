@@ -345,31 +345,30 @@ func canaryLocalPlan(split bool) *protocol.GranularityReview {
 }
 func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace string) (map[string]any, error) {
 	cases := []any{}
-	whitebox := input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
+	kind := input.Manifest.Binding.ReviewKind
+	whitebox := kind == coverage.ReviewWhitebox
 	var tests strings.Builder
 	if whitebox {
 		tests.WriteString("package main\nimport(\"testing\";\"os/exec\";\"strings\")\n")
 	}
 	for _, point := range input.Manifest.Points {
-		samples := [][]string{{"hello"}, {""}}
-		if e.split {
-			samples = [][]string{{"héLLo"}, {""}}
-		} else if point.PointID == "AC-002" {
-			samples = [][]string{{"--unknown-flag", "canary"}, {"--bogus"}}
+		type sample struct {
+			behavior, scenario string
+			args               []string
 		}
-		for index, args := range samples {
-			id := "case-" + point.PointID + "-" + strconv.Itoa(index)
-			scenario := "SUCCESS"
-			if index == 1 {
-				scenario = "BOUNDARY"
-			}
-			if !e.split && point.PointID == "AC-002" {
-				scenario = "MISUSE"
-			}
+		samples := []sample{{"OrdinaryWord", "SUCCESS", []string{"hello"}}, {"EmptyWord", "BOUNDARY", []string{""}}}
+		if e.split {
+			samples[0] = sample{"UnicodeWord", "SUCCESS", []string{"héLLo"}}
+		} else if point.PointID == "AC-002" {
+			samples = []sample{{"UnknownFlagWithWord", "MISUSE", []string{"--unknown-flag", "canary"}}, {"UnknownFlag", "MISUSE", []string{"--bogus"}}}
+		}
+		for _, sample := range samples {
+			args := sample.args
+			id := "case-" + string(kind) + "-" + point.PointID + "-" + sample.behavior
 			oracle := e.oracle(point.PointID, args)
-			designed := map[string]any{"caseId": id, "pointId": point.PointID, "scenario": scenario, "oracle": oracle}
+			designed := map[string]any{"caseId": id, "pointId": point.PointID, "scenario": sample.scenario, "oracle": oracle}
 			if whitebox {
-				ref := "TestContract" + strings.ReplaceAll(point.PointID, "-", "") + strconv.Itoa(index)
+				ref := "TestContract" + string(kind) + strings.ReplaceAll(point.PointID, "-", "") + sample.behavior
 				argv := []string{"run", "."}
 				argv = append(argv, args...)
 				quoted := []string{}

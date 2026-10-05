@@ -308,7 +308,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 // nothing exposes the seeded defect before validation runs.
 func (c *engineCanary) buildFixtureProject() string {
 	c.t.Helper()
-	c.git("init", "--initial-branch=main", "--quiet")
+	c.initFixtureRepository()
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(c.project, name), []byte(content), 0o600); err != nil {
 			c.t.Fatal(err)
@@ -1807,15 +1807,21 @@ func (c *engineCanary) git(args ...string) string {
 	return c.gitAt(c.project, args...)
 }
 
+// Fixture helpers and the installed CLI share the repository's native config,
+// including every worktree created by the engine.
+func (c *engineCanary) initFixtureRepository() {
+	c.t.Helper()
+	c.git("init", "--initial-branch=main", "--quiet")
+	c.git("config", "--local", "user.name", "engine-canary")
+	c.git("config", "--local", "user.email", "engine-canary@localhost")
+	c.git("config", "--local", "commit.gpgsign", "false")
+}
+
 // gitAt runs one git command in an arbitrary tree of the fixture repository
 // — the project or one of its worktrees.
 func (c *engineCanary) gitAt(dir string, args ...string) string {
 	c.t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=engine-canary", "GIT_AUTHOR_EMAIL=engine-canary@localhost",
-		"GIT_COMMITTER_NAME=engine-canary", "GIT_COMMITTER_EMAIL=engine-canary@localhost",
-		"commit.gpgsign=false")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		c.fail("git %v: %v: %s", args, err, out)
@@ -1858,7 +1864,7 @@ func (c *engineCanary) observe(label, dir string, argv []string) canaryObservati
 
 func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	c.t.Helper()
-	final := c.run
+	final := c.terminalRun()
 	if final.Status != "COMPLETE" || final.Next.Kind != decision.KindComplete {
 		c.fail("canary ended at status %s (next %s)", final.Status, final.Next.Kind)
 	}
@@ -1891,31 +1897,15 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if probe.ExitCode == 0 {
 		c.fail("final candidate still accepts unknown flags: %+v", probe)
 	}
-	summaryPath := final.SummaryPath
-	if summaryPath == "" {
-		summaryPath = filepath.Join(c.project, ".gates", "engine", final.RunID, "terminal-summary.json")
-	}
-	before, err := os.ReadFile(summaryPath)
-	if err != nil {
-		c.fail("terminal summary: %v", err)
-	}
-	replay := c.readRun("drive")
-	after, err := os.ReadFile(summaryPath)
-	if err != nil {
-		c.fail("terminal summary after replay: %v", err)
-	}
-	if string(before) != string(after) || replay.Revision != final.Revision || replay.Status != "COMPLETE" {
-		c.fail("terminal replay mutated the run or its summary")
-	}
-	shown := c.readRun("show")
-	if len(shown.PendingAsks) != 0 || shown.PendingRequirementAsk != nil {
-		c.fail("terminal run retains pending asks: %+v %+v", shown.PendingAsks, shown.PendingRequirementAsk)
+	c.assertTerminalReplay(final)
+	if len(final.PendingAsks) != 0 || final.PendingRequirementAsk != nil {
+		c.fail("terminal run retains pending asks: %+v %+v", final.PendingAsks, final.PendingRequirementAsk)
 	}
 	entries := 0
-	if shown.Cost != nil {
-		entries = len(shown.Cost.Dispatches)
+	if final.Cost != nil {
+		entries = len(final.Cost.Dispatches)
 		for _, actionID := range c.dispatched {
-			if _, ok := shown.Cost.Dispatches[strings.TrimPrefix(actionID, shown.RunID+"/")]; !ok {
+			if _, ok := final.Cost.Dispatches[strings.TrimPrefix(actionID, final.RunID+"/")]; !ok {
 				c.fail("dispatch %s has no cost entry", actionID)
 			}
 		}
@@ -1930,6 +1920,38 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 		c.fail("the pass never dispatched the repair")
 	}
 	c.t.Logf("engine canary complete: run=%s promoted=%s dispatches=%d evidence=%s", final.RunID, final.PromotedSnapshot, len(c.dispatched), evidenceDir)
+}
+
+// Show owns the terminal material path. Its complete projection must retain
+// every terminal fact returned by the completed drive.
+func (c *engineCanary) terminalRun() facade.Run {
+	c.t.Helper()
+	final := c.readRun("show")
+	expected := c.run
+	expected.SummaryPath = final.SummaryPath
+	if final.SummaryPath == "" || !canaryValuesEqual(final, expected) {
+		c.fail("terminal show differs from completed drive")
+	}
+	return final
+}
+
+func (c *engineCanary) assertTerminalReplay(final facade.Run) {
+	c.t.Helper()
+	before, err := os.ReadFile(final.SummaryPath)
+	if err != nil {
+		c.fail("terminal summary: %v", err)
+	}
+	for _, command := range []string{"drive", "drive", "show"} {
+		replay := c.readRun(command)
+		after, err := os.ReadFile(final.SummaryPath)
+		// Drive projects the summary without a material path; Show binds it.
+		if command == "drive" {
+			replay.SummaryPath = final.SummaryPath
+		}
+		if err != nil || !bytes.Equal(before, after) || !canaryValuesEqual(replay, final) {
+			c.fail("terminal replay changed frozen facts")
+		}
+	}
 }
 
 // --- shared helpers ----------------------------------------------------------

@@ -167,7 +167,7 @@ func TestEngineGitSplitCanary(t *testing.T) {
 	t.Logf("ordinary split live evidence: %s", evidence)
 }
 func (c *engineCanary) buildSplitFixture() (string, facade.IntakeConfirmationReceipt) {
-	c.git("init", "--initial-branch=main", "--quiet")
+	c.initFixtureRepository()
 	files := map[string]string{".gitignore": ".gates/\n", "go.mod": "module frob\n\ngo 1.22\n", "requirements.md": canarySplitRequirement, "frob.go": canarySplitMain, "uppercase.go": "package main\nfunc UpperWord(word string)string{return word}\n", "size.go": "package main\nfunc WordSize(word string)int{return 0}\n"}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(c.project, name), []byte(body), 0600); err != nil {
@@ -186,7 +186,7 @@ func (c *engineCanary) buildSplitFixture() (string, facade.IntakeConfirmationRec
 }
 
 func (c *engineCanary) assertSplitTerminal(base string) {
-	final := c.run
+	final := c.terminalRun()
 	if final.Status != "COMPLETE" || final.Termination == nil || !final.Termination.ResourcesCleaned() {
 		c.fail("split has no complete cleanup proof")
 	}
@@ -293,17 +293,7 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 			c.fail("native resource ref remains")
 		}
 	}
-	before, err := os.ReadFile(final.SummaryPath)
-	if err != nil {
-		c.fail("terminal summary: %v", err)
-	}
-	for _, command := range []string{"drive", "drive", "show"} {
-		replay := c.readRun(command)
-		after, err := os.ReadFile(final.SummaryPath)
-		if err != nil || !slices.Equal(before, after) || replay.Revision != final.Revision || !canaryValuesEqual(replay.Cost, final.Cost) || !canaryValuesEqual(replay.SliceReceipts, final.SliceReceipts) {
-			c.fail("terminal replay changed frozen facts")
-		}
-	}
+	c.assertTerminalReplay(final)
 	for _, key := range c.dispatched {
 		runID, action, _ := strings.Cut(key, "/")
 		ledgerKey := action
