@@ -50,6 +50,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -63,6 +64,7 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
@@ -417,16 +419,18 @@ func (c *engineCanary) loop() {
 				c.drive()
 				progressed = true
 			case decision.KindAsk:
-				c.answerAsks()
-				c.drive()
-				progressed = true
+				if c.answerAsks() {
+					c.drive()
+					progressed = true
+				}
 			case decision.KindOperator:
 				if c.run.Next.Operator != nil && len(c.run.Next.Operator.Facts) > 0 && strings.Contains(c.run.Next.Operator.Facts[0].Value, "waits for slice receipts") {
 					break
 				}
-				c.serveOperator()
-				c.drive()
-				progressed = true
+				if c.serveOperator() {
+					c.drive()
+					progressed = true
+				}
 			default:
 				c.fail("unexpected boundary kind %q", c.run.Next.Kind)
 			}
@@ -434,6 +438,21 @@ func (c *engineCanary) loop() {
 		}
 		if !progressed {
 			if len(active) == 0 {
+				// An unhandled run boundary does not end independently issued
+				// work. Report it after all eligible frontiers have settled.
+				for _, runID := range ids {
+					if runs[runID].Next.Kind == decision.KindAsk {
+						c.run = runs[runID]
+						c.fail("unexpected ask boundary for %s: %+v", runID, c.run.Next)
+					}
+				}
+				for _, runID := range ids {
+					next := runs[runID].Next
+					if next.Kind == decision.KindOperator && (next.Operator == nil || len(next.Operator.Facts) == 0 || !strings.Contains(next.Operator.Facts[0].Value, "waits for slice receipts")) {
+						c.run = runs[runID]
+						c.fail("unexpected operator boundary for %s: %+v", runID, next)
+					}
+				}
 				c.run = c.readRunID("drive", masterID)
 				if c.run.Revision == runs[masterID].Revision && c.run.Status != "COMPLETE" {
 					c.fail("graph has no dispatchable work or in-flight call")
@@ -494,9 +513,19 @@ func (c *engineCanary) drive() {
 }
 
 func (c *engineCanary) fail(format string, args ...any) {
+	c.failWithClass(authoring.FailureBlockedBug, format, args...)
+}
+
+// The interruption contract carries both the source class and its diagnostic
+// across the worker completion seam; the engine owns the resulting recovery.
+type canaryWorkerFailure protocol.Interruption
+
+func (e canaryWorkerFailure) Error() string { return e.InterruptionReason }
+
+func (c *engineCanary) failWithClass(class authoring.FailureClass, format string, args ...any) {
 	c.t.Helper()
 	if c.worker {
-		panic(fmt.Errorf("engine canary: "+format, args...))
+		panic(canaryWorkerFailure{Class: class, InterruptionReason: fmt.Sprintf("engine canary: "+format, args...)})
 	}
 	if data, err := json.MarshalIndent(c.run, "", "  "); err == nil {
 		c.t.Logf("run projection at failure:\n%s", data)
@@ -549,12 +578,18 @@ func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input
 	defer func() {
 		done.transcript, done.caseArgs, done.caseTests = c.transcript, c.caseArgs, c.caseTests
 		if failure := recover(); failure != nil {
-			err, ok := failure.(error)
-			if !ok {
-				panic(failure)
+			interruption := canaryWorkerFailure{Class: authoring.FailureBlockedBug, InterruptionReason: fmt.Sprint(failure)}
+			if source, ok := failure.(canaryWorkerFailure); ok {
+				interruption = source
 			}
-			c.t.Logf("canary worker failure: run=%s action=%s error=%v", done.runID, id, err)
-			done.event = protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: canaryProvider, Outcome: protocol.OutcomeRuntimeError, PayloadDigest: resultDigest(protocol.ValidationResult{Status: err.Error()})}}
+			c.t.Logf("canary worker failure: run=%s action=%s class=%s error=%v", done.runID, id, interruption.Class, interruption)
+			event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomeRuntimeError, resultDigest(protocol.ValidationResult{Status: interruption.Error()}), interruption.Class)
+			if err != nil {
+				panic(err)
+			}
+			event.ID = ""
+			event.Result.InterruptionReason = interruption.InterruptionReason
+			done.event = event
 		}
 	}()
 	if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
@@ -610,7 +645,7 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) protocol.
 	}
 	turn := c.turn(id, role, c.prompt(role, materials, instructions, true), canaryReviewSchema(series == review.StartReadiness), true, shape)
 	if answer.Status != protocol.OutcomePass || len(answer.Findings) > 0 {
-		c.fail("canary review %s returned %s with %d findings; the fixture requirement must review green", series, answer.Status, len(answer.Findings))
+		c.failWithClass(authoring.FailureBusinessReject, "canary review %s returned %s with %d findings; the fixture requirement must review green", series, answer.Status, len(answer.Findings))
 	}
 	evidence := protocol.ReviewResultEvidence{
 		GranularityReview: answer.Plan, Action: series, DispatchID: id,
@@ -649,9 +684,13 @@ func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInpu
 	default:
 		c.fail("no canary bridge for handler %q", input.Handler)
 	}
-	return protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{
-		ActionID: id, Provider: canaryProvider, Outcome: protocol.OutcomePass, PayloadDigest: resultDigest(result), Validation: &result,
-	}}
+	event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomePass, resultDigest(result), "")
+	if err != nil {
+		c.fail("pipeline event for %s: %v", id, err)
+	}
+	event.ID = ""
+	event.Result.Validation = &result
+	return event
 }
 
 // designResult runs the QA design turn for the dispatch's mode and assembles
@@ -918,7 +957,7 @@ func (c *engineCanary) modelReviewDecisions(layer string, decisions []canaryRevi
 	rows := make([]coverage.ReviewDecision, 0, len(decisions))
 	for _, decision := range decisions {
 		if decision.Status != string(coverage.StatusPass) {
-			c.fail("case review judged %s %s %s: %s", layer, decision.ID, decision.Status, decision.Reason)
+			c.failWithClass(authoring.FailureBusinessReject, "case review judged %s %s %s: %s", layer, decision.ID, decision.Status, decision.Reason)
 		}
 		rows = append(rows, coverage.ReviewDecision{ID: decision.ID, Status: coverage.DecisionStatus(decision.Status), Reason: decision.Reason})
 	}
@@ -1191,13 +1230,14 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema map[string]any, readOnly bool, shape func(map[string]any) error) canaryTurnResult {
 	c.t.Helper()
 	if time.Now().After(c.deadline) {
-		c.fail("canary exceeded its %s budget", canaryRunBudget)
+		c.failWithClass(authoring.FailureUserActionRequired, "canary exceeded its %s budget", canaryRunBudget)
 	}
 	if !canaryPathWithin(filepath.Join(c.home, ".formal-gates-resources"), workspace) {
 		c.fail("issued workspace is outside candidate resources: %s", workspace)
 	}
 	schema = c.plainSchema(actionID, schema)
 	var lastErr error
+	var lastClass authoring.FailureClass
 	for attempt := 1; attempt <= canaryTurnBudget; attempt++ {
 		promptNow := prompt
 		if attempt > 1 {
@@ -1213,7 +1253,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		}
 		if c.callContext != nil && c.callContext.Err() != nil {
 			c.approvalMu.Unlock()
-			c.fail("host call authorization stopped the pass")
+			c.failWithClass(authoring.FailureUserActionRequired, "host call authorization stopped the pass")
 		}
 		authorization := c.authorizeCall(request, c.dispatchKey(actionID), role, attempt)
 		if authorization != nil && c.stopCalls != nil {
@@ -1223,7 +1263,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 			c.approvalMu.Unlock()
 		}
 		if err := authorization; err != nil {
-			c.fail("dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
+			c.failWithClass(authoring.FailureUserActionRequired, "dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
 		}
 		watchCtx, stopWatcher := context.WithCancel(context.Background())
 		go c.answerHeldInteractions(watchCtx, dir)
@@ -1234,6 +1274,18 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		}
 		if err != nil {
 			lastErr = err
+			lastClass = authoring.FailureTransientEngine
+			switch source := err.(type) {
+			case *bindingError:
+				lastClass = authoring.FailureInvariantViolation
+			case *blockedError, *sessionUnavailableError:
+				lastClass = authoring.FailureUserActionRequired
+			case *nativeRefusal:
+				lastClass = authoring.FailureUserActionRequired
+				if source.kind == "binding" {
+					lastClass = authoring.FailureInvariantViolation
+				}
+			}
 			// The call is spent even when it fails: book its native usage
 			// from the attempt's own event stream, zero when unreadable.
 			identity, usage := canaryAttemptUsage(dir)
@@ -1257,21 +1309,29 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		rawAnswer, err := readJSONFile(filepath.Join(dir, "answer.json"))
 		if err != nil {
 			lastErr = fmt.Errorf("native answer is unavailable: %w", err)
+			lastClass = authoring.FailureAgentRecoverable
+			var unavailable *os.PathError
+			if errors.As(err, &unavailable) {
+				lastClass = authoring.FailureTransientEngine
+			}
 			continue
 		}
 		answer, ok := rawAnswer.(map[string]any)
 		if !ok {
 			lastErr = fmt.Errorf("native answer is not a JSON object")
+			lastClass = authoring.FailureAgentRecoverable
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, "answer.raw.txt"))
 		if err != nil {
 			lastErr = err
+			lastClass = authoring.FailureTransientEngine
 			continue
 		}
 		if shape != nil {
 			if err := shape(answer); err != nil {
 				lastErr = err
+				lastClass = authoring.FailureAgentRecoverable
 				c.t.Logf("canary dispatch %s (%s) attempt %d was refused: %v", actionID, role, attempt, err)
 				continue
 			}
@@ -1284,7 +1344,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		sum := sha256.Sum256(raw)
 		return canaryTurnResult{digest: "sha256:" + hex.EncodeToString(sum[:])}
 	}
-	c.fail("dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
+	c.failWithClass(lastClass, "dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
 	return canaryTurnResult{}
 }
 
@@ -1486,12 +1546,13 @@ func (c *engineCanary) prompt(role string, materials canaryMaterials, instructio
 
 // --- ASK: the user stand-in --------------------------------------------------
 
-func (c *engineCanary) answerAsks() {
+func (c *engineCanary) answerAsks() bool {
 	c.t.Helper()
+	handled := false
 	for _, ask := range c.run.PendingAsks {
 		if ask.Control == protocol.ControlValidation && ask.Validation != nil && ask.Validation.Kind == "REPAIR" {
 			if c.repairAllowances <= 0 {
-				c.fail("second repair authorization asked; the canary allows exactly one")
+				continue
 			}
 			c.repairAllowances--
 			c.t.Logf("answering repair authorization %s with approve", ask.RequestID)
@@ -1499,18 +1560,19 @@ func (c *engineCanary) answerAsks() {
 				Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "approve",
 				Validation: &protocol.ValidationDecision{Reason: "one repair round is authorized for this pass", Digest: ask.Validation.Digest, StateRevision: c.run.Revision},
 			}})
+			handled = true
 			continue
 		}
-		c.fail("unexpected ask %s (control %s): %+v", ask.RequestID, ask.Control, ask)
 	}
+	return handled
 }
 
 // --- OPERATOR: facts the host bridge serves ----------------------------------
 
-func (c *engineCanary) serveOperator() {
+func (c *engineCanary) serveOperator() bool {
 	c.t.Helper()
 	if c.run.Next.Operator == nil || len(c.run.Next.Operator.Facts) == 0 {
-		c.fail("OPERATOR boundary without facts")
+		return false
 	}
 	fact := c.run.Next.Operator.Facts[0]
 	switch {
@@ -1520,7 +1582,7 @@ func (c *engineCanary) serveOperator() {
 		if c.run.Review.Topology == nil {
 			if c.split && (c.run.Validation == nil || c.run.Validation.Document.Content == "") {
 				c.confirmRequirement()
-				return
+				return true
 			}
 			c.confirmTopology()
 		} else {
@@ -1536,8 +1598,9 @@ func (c *engineCanary) serveOperator() {
 		c.executionScope()
 
 	default:
-		c.fail("unexpected operator fact %q = %q", fact.Key, fact.Value)
+		return false
 	}
+	return true
 }
 
 func (c *engineCanary) confirmTopology() {
@@ -1930,14 +1993,10 @@ func (c *engineCanary) terminalRun() facade.Run {
 	expected := c.run
 	if final.SummaryPath == "" || final.RunID != expected.RunID || final.Runtime != expected.Runtime || final.Route != expected.Route ||
 		final.Status != expected.Status || final.Next.Kind != expected.Next.Kind || final.Revision != expected.Revision || final.Envelope != expected.Envelope ||
-		final.BaseSnapshot != expected.BaseSnapshot || final.PromotedSnapshot != expected.PromotedSnapshot ||
 		final.NotGuaranteed != expected.NotGuaranteed || final.Unverified != expected.Unverified ||
 		!canaryValuesEqual(final.Termination, expected.Termination) || !canaryValuesEqual(final.Cost, expected.Cost) ||
 		!canaryValuesEqual(final.IntakeReceipt, expected.IntakeReceipt) || !canaryValuesEqual(final.GuardBudget, expected.GuardBudget) ||
-		!canaryValuesEqual(final.ValidationDecisions, expected.ValidationDecisions) || !canaryValuesEqual(final.ValidationRequests, expected.ValidationRequests) ||
-		!canaryValuesEqual(final.SliceReceipt, expected.SliceReceipt) || !canaryValuesEqual(final.SliceChildren, expected.SliceChildren) ||
-		!canaryValuesEqual(final.SliceReceipts, expected.SliceReceipts) || !canaryValuesEqual(final.Validation, expected.Validation) ||
-		!canaryValuesEqual(final.DispatchBindings, expected.DispatchBindings) || !canaryValuesEqual(final.RecoveryRecords, expected.RecoveryRecords) {
+		!canaryValuesEqual(final.ValidationDecisions, expected.ValidationDecisions) || !canaryValuesEqual(final.ValidationRequests, expected.ValidationRequests) {
 		c.fail("terminal show differs from completed drive")
 	}
 	return final

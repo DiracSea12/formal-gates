@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -79,6 +81,54 @@ func TestCanaryInstalledGitFlows(t *testing.T) {
 			c.approvalOutput = canaryLocalApproval{approval}
 			executor := &canaryLocalExecutor{t: t, split: split, developmentStarted: make(chan struct{})}
 			c.execute = executor.execute
+			if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
+				started, release := make(chan struct{}), make(chan struct{})
+				var startedOnce, releaseOnce sync.Once
+				failedAction := ""
+				c.execute = func(value any, dir string, probe bool) (map[string]any, error) {
+					request := value.(map[string]any)
+					lines := strings.Split(textOf(request["prompt"]), "\n")
+					var material canaryMaterials
+					if err := json.Unmarshal(readTestFileBytes(t, lines[2]), &material); err != nil {
+						return nil, err
+					}
+					if material.Input != nil && material.Input.Handler == "engine.development.batch" {
+						executor.developmentOnce.Do(func() { close(executor.developmentStarted) })
+						if material.Slice == "uppercase" {
+							startedOnce.Do(func() { close(started) })
+							<-release
+						}
+						if material.Slice == "word-size" {
+							if failedAction == "" {
+								failedAction = material.ActionID
+							}
+							<-started
+							if material.ActionID != failedAction {
+								// A new issued action proves the previous failure was
+								// accepted by the public engine retry owner.
+								releaseOnce.Do(func() { close(release) })
+							}
+							if failureMode == "permanent" || material.ActionID == failedAction {
+								return nil, fmt.Errorf("local host transport unavailable")
+							}
+						}
+					}
+					return executor.execute(value, dir, probe)
+				}
+				defer func() {
+					master := c.readRunID("show", "engine-canary")
+					for slice, id := range master.SliceChildren {
+						child := c.readRunID("show", id)
+						data, err := json.Marshal(child)
+						if err == nil {
+							err = os.WriteFile(filepath.Join(c.jobs, slice+"-after-controller.json"), data, 0600)
+						}
+						if err != nil {
+							t.Error(err)
+						}
+					}
+				}()
+			}
 			var base string
 			if split {
 				var intake protocol.IntakeConfirmationReceipt
@@ -100,6 +150,95 @@ func TestCanaryInstalledGitFlows(t *testing.T) {
 				c.assertTerminal(base, evidence)
 			}
 			t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
+		})
+	}
+}
+
+// The subprocess preserves the normal fatal canary boundary. Its actual public
+// receipts must accept errors and settle the independent run through its gates.
+func TestCanaryInstalledTransportFailureKeepsIndependentFrontier(t *testing.T) {
+	for _, mode := range []string{"transient", "permanent"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			if base := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); base != "" {
+				root = filepath.Join(base, "transport-"+mode)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryInstalledGitFlows/split$", "-test.v", "-test.timeout=120s")
+			cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_LOCAL_DIR="+root, "FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE="+mode)
+			output, err := cmd.CombinedOutput()
+			t.Logf("installed %s transport fixture: exit=%v\n%s", mode, err, output)
+			if mode == "transient" && err != nil || mode == "permanent" && (err == nil || !strings.Contains(string(output), "unexpected ask boundary")) {
+				t.Fatalf("transport fixture reached the wrong public boundary: %v", err)
+			}
+			jobs := filepath.Join(root, "split", "evidence", "jobs")
+			journal := readTestFileBytes(t, filepath.Join(jobs, "installed-commands.jsonl"))
+			failures := 0
+			var failedRun facade.Run
+			for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
+				var command struct {
+					Exit          int `json:"exit"`
+					Input, Output string
+				}
+				if err := json.Unmarshal([]byte(line), &command); err != nil || command.Exit != 0 {
+					t.Fatalf("actual public command failed: %s (%v)", line, err)
+				}
+				var event protocol.Event
+				if command.Input == "" || json.Unmarshal([]byte(command.Input), &event) != nil || event.Result == nil || event.Result.Outcome != protocol.OutcomeRuntimeError {
+					continue
+				}
+				if err := event.Validate(); err != nil || event.Result.FailureClass != authoring.FailureTransientEngine || !strings.Contains(event.Result.InterruptionReason, "local host transport unavailable") {
+					t.Fatalf("failure source contract was lost: %+v (%v)", event.Result, err)
+				}
+				var response struct {
+					Acceptance protocol.Acceptance `json:"acceptance"`
+					Run        facade.Run          `json:"run"`
+				}
+				if err := json.Unmarshal([]byte(command.Output), &response); err != nil || response.Acceptance.Status != "ACCEPTED" {
+					t.Fatalf("public failure was not accepted: %s (%v)", command.Output, err)
+				}
+				var material canaryMaterials
+				if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, response.Run.RunID, canaryName(event.Result.ActionID), "materials.json")), &material); err != nil {
+					t.Fatal(err)
+				}
+				ended, ok := response.Run.EndedAttempts[material.Pending.Task]
+				if !ok || ended.ID != material.Pending.AttemptID || ended.ActionID != event.Result.ActionID || ended.Attempts != failures+1 || ended.MaxAttempts <= 0 || ended.Attempts > ended.MaxAttempts {
+					t.Fatalf("failure changed issued task/attempt or finite accounting: %+v material=%+v failures=%d", ended, material.Pending, failures)
+				}
+				if failures > 0 {
+					for task := range failedRun.EndedAttempts {
+						if task != material.Pending.Task {
+							t.Fatalf("retry changed the logical task: %s -> %s", task, material.Pending.Task)
+						}
+					}
+				}
+				failures++
+				failedRun = response.Run
+			}
+			if failures == 0 {
+				t.Fatal("transport errors did not reach public submit")
+			}
+			if mode == "transient" {
+				if failures != 1 || !strings.Contains(string(output), "ordinary split completed:") {
+					t.Fatal("finite transport failure did not resume to the normal terminal contract")
+				}
+				return
+			}
+			for _, attempt := range failedRun.EndedAttempts {
+				if !attempt.RetryExhausted || failures != attempt.MaxAttempts {
+					t.Fatalf("permanent failure did not retain the engine's finite bound: %+v failures=%d", attempt, failures)
+				}
+			}
+			var independent, failed facade.Run
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "uppercase-after-controller.json")), &independent); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "word-size-after-controller.json")), &failed); err != nil {
+				t.Fatal(err)
+			}
+			if independent.Status != "SLICE_READY" || independent.SliceReceipt == nil || independent.SliceReceipt.Receipt.Validation.Status != "COMPLETE" || len(independent.PendingActions) != 0 || failed.Next.Kind != decision.KindAsk {
+				t.Fatalf("independent frontier was abandoned or failed frontier hidden: independent=%+v failed=%+v", independent, failed)
+			}
+			t.Logf("public runtime failures=%d independent run=%s status=%s failed run=%s boundary=%s", failures, independent.RunID, independent.Status, failed.RunID, failed.Next.Kind)
 		})
 	}
 }
@@ -542,7 +681,8 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 	}
 	close(release)
 	failed := <-completed
-	if failed.runID != "failed" || failed.event.Result.Outcome != protocol.OutcomeRuntimeError {
+	failed.event.ID = "validate-worker-failure"
+	if failed.runID != "failed" || failed.event.Result.Outcome != protocol.OutcomeRuntimeError || failed.event.Result.FailureClass != authoring.FailureTransientEngine || !strings.Contains(failed.event.Result.InterruptionReason, "local worker transport failed") || failed.event.Validate() != nil {
 		t.Fatalf("failure lost completion: %+v", failed)
 	}
 	for _, runID := range []string{"independent", "refilled"} {
