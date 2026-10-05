@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -676,30 +677,73 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
 			master, _ := mainlineChildren(t, "")
-			passMainlineTargets(t, master)
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point}
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 			func() {
 				defer func() {
-					if recover() == nil {
+					lost := recover()
+					if lost == nil {
 						t.Fatal("delivery interruption not reached")
 					}
+					if lost != "native response lost" || !r.interrupted {
+						t.Fatalf("delivery did not lose the successful %s response: %v", point, lost)
+					}
 				}()
+				// The final result's Drive performs promotion and cleanup.
+				passMainlineTargets(t, master)
 				if _, err := master.f.PrepareCandidate("validated integration"); err != nil {
 					t.Fatal(err)
 				}
 				_, _ = master.f.Drive()
 			}()
+			operation := "op.candidate"
+			if point == "cleanup" {
+				operation = "op.cleanup"
+			}
+			original := nativeIncompleteState(t, master, operation)
+			state := driverState(t, master)
+			prefix, complete, err := master.f.nativeEvidence(state, original, false)
+			if err != nil || !state.FinalValidationComplete(master.f.definition) {
+				t.Fatal("delivery interruption lost its validated source", err)
+			}
+			if point == "promotion" && (!complete || prefix.Candidate == nil || prefix.Candidate.Promotion == nil) {
+				t.Fatal("successful native promotion has no original observable proof")
+			}
+			if point == "cleanup" && (complete || !prefix.observedEffect) {
+				t.Fatal("native cleanup did not leave a partial deletion prefix")
+			}
+			t.Logf("successful native %s response lost: action=%s correlation=%s payload=%s complete=%t observedEffect=%t", point, original.ActionID, original.Correlation, original.PayloadDigest, complete, prefix.observedEffect)
 			master.reopen()
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 			master.drive()
 			if master.run.Status != "COMPLETE" {
 				t.Fatal("delivery prefix did not complete", master.run.Status)
 			}
+			terminal := master.run.Termination
+			if terminal == nil {
+				t.Fatal("delivery lost its terminal admission state")
+			}
+			receipt := terminal.HostActionReceipts[original.ActionID]
+			effect := terminal.ReconciledEffects[original.ActionID]
+			if !reflect.DeepEqual(effect.Intent, &original) || effect.Status != "FULFILLED" || effect.ObservationDigest != receipt.Digest {
+				t.Fatal("delivery recovery changed its original intent or settlement")
+			}
+			if receipt.Status != protocol.HostActionStatusExecuted || receipt.ActionID != original.ActionID || receipt.AdapterOperation != original.Adapter.Operation || receipt.Correlation != original.Correlation || receipt.PayloadDigest != original.PayloadDigest {
+				t.Fatal("delivery recovery changed its original intent or receipt admission")
+			}
+			if point == "promotion" && !reflect.DeepEqual(terminal.CandidatePromotion, prefix.Candidate.Promotion) {
+				t.Fatal("delivery recovery changed the observed native promotion proof")
+			}
 			assertNoMainlineResources(t, master)
 			before, err := os.ReadFile(filepath.Join(master.f.stateDir, "terminal-summary.json"))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if directory := os.Getenv("NATIVE_VCS_EVIDENCE"); directory != "" {
+				path := filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+"-terminal-summary.json")
+				if err := os.WriteFile(path, before, 0644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			master.reopen()
 			master.drive()
