@@ -49,6 +49,9 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	intake := driverState(t, master).IntakeConfirmationReceipt
 	passPreDevelopmentReviews(t, master, commandPlan())
 	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
 	confirmValidationDocument(master, "", current, document)
 	master.revision = driverState(t, master).RequirementRevision()
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
@@ -90,6 +93,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	child.drive()
 	assertInput := func(input protocol.ValidationInput) {
 		t.Helper()
+		assertConfirmedMaterial(t, child, input, document)
 		if input.Binding.RequirementRevision != master.revision || input.Manifest.Binding.RequirementRevision != master.revision || input.Manifest.Binding.RunID != f.runID || !slices.Contains(input.Manifest.Sources, "SOL-CURRENT") || slices.Contains(input.Manifest.Sources, "SOL-ORIGINAL") || !slices.Contains(input.SourcePoints, current.Links[0]) || !slices.ContainsFunc(input.Manifest.Points, func(point coverage.AcceptancePoint) bool { return reflect.DeepEqual(point, current.Points[0]) }) {
 			t.Fatal("issued work lost the actual confirmed revision or coverage", input)
 		}
@@ -136,6 +140,9 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sibling := &validationDriver{t: t, f: other, run: otherRun, revision: master.revision, git: other.vcs}
+	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	confirmValidationDocument(sibling, "", local, document+"\n")
 	sibling.reopen()
 	state := driverState(t, sibling)
@@ -145,6 +152,11 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
 	sibling.drive()
 	siblingID, siblingInput := planBatchAction(sibling, "command")
+	sibling.revision = state.RequirementRevision()
+	assertConfirmedMaterial(t, sibling, siblingInput, document+"\n")
+	if body, err := os.ReadFile(filepath.Join(root, "requirements.md")); err != nil || string(body) != document {
+		t.Fatal("child local confirmation changed the parent's material", err)
+	}
 	if siblingInput.Binding.RequirementRevision != state.RequirementRevision() || !slices.Contains(siblingInput.Manifest.Sources, "SOL-LOCAL") || slices.Contains(siblingInput.Manifest.Sources, "SOL-CURRENT") {
 		t.Fatal("local confirmation did not own the child's next dispatch")
 	}

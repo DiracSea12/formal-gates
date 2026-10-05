@@ -160,7 +160,7 @@ func (s *Store) CleanupTerminal() error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name != stateFileName && name != intentFileName &&
+		if name != stateFileName && name != intentFileName && name != "slice-receipt.json" &&
 			!(strings.HasPrefix(name, tempPrefix) && strings.HasSuffix(name, tempSuffix)) {
 			continue
 		}

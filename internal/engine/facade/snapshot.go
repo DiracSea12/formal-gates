@@ -472,7 +472,11 @@ func requirementArtifactRevision(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return requirementContentRevision(data), nil
+}
+
+func requirementContentRevision(data []byte) string {
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	sum := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }

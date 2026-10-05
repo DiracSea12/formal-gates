@@ -5,29 +5,33 @@ import (
 
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/requirement"
 )
 
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
-	Workspace                *GitResource                `json:"workspace,omitempty"`
-	Interruption             *RecoveryRecord             `json:"interruption,omitempty"`
-	Gate                     *GateInput                  `json:"gate,omitempty"`
-	InheritableSharedReviews []coverage.ReviewDecision   `json:"inheritableSharedReviews,omitempty"`
-	Repair                   *RepairInput                `json:"repair,omitempty"`
-	Development              *DevelopmentInput           `json:"development,omitempty"`
-	RequiredCases            []string                    `json:"requiredCases,omitempty"`
-	Inherited                []coverage.ExecutionRecord  `json:"inherited,omitempty"`
-	SourcePoints             []SourcePoint               `json:"sourcePoints,omitempty"`
-	Binding                  WorkBinding                 `json:"binding"`
-	Handler                  string                      `json:"handler"`
-	Manifest                 coverage.AcceptanceManifest `json:"manifest"`
-	Contract                 *coverage.CoverageContract  `json:"contract,omitempty"`
-	Whitelist                *coverage.ApprovedWhitelist `json:"whitelist,omitempty"`
-	Execution                *coverage.ExecutionBinding  `json:"execution,omitempty"`
-	Completed                []coverage.ExecutionRecord  `json:"completed,omitempty"`
-	InheritableReviews       []coverage.ReviewDecision   `json:"inheritableReviews,omitempty"`
-	PendingCases             []string                    `json:"pendingCases,omitempty"`
+	// RequirementDocument supplies the current confirmed context alongside
+	// the original issued work binding, including explicitly carried work.
+	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
+	Workspace                *GitResource                            `json:"workspace,omitempty"`
+	Interruption             *RecoveryRecord                         `json:"interruption,omitempty"`
+	Gate                     *GateInput                              `json:"gate,omitempty"`
+	InheritableSharedReviews []coverage.ReviewDecision               `json:"inheritableSharedReviews,omitempty"`
+	Repair                   *RepairInput                            `json:"repair,omitempty"`
+	Development              *DevelopmentInput                       `json:"development,omitempty"`
+	RequiredCases            []string                                `json:"requiredCases,omitempty"`
+	Inherited                []coverage.ExecutionRecord              `json:"inherited,omitempty"`
+	SourcePoints             []SourcePoint                           `json:"sourcePoints,omitempty"`
+	Binding                  WorkBinding                             `json:"binding"`
+	Handler                  string                                  `json:"handler"`
+	Manifest                 coverage.AcceptanceManifest             `json:"manifest"`
+	Contract                 *coverage.CoverageContract              `json:"contract,omitempty"`
+	Whitelist                *coverage.ApprovedWhitelist             `json:"whitelist,omitempty"`
+	Execution                *coverage.ExecutionBinding              `json:"execution,omitempty"`
+	Completed                []coverage.ExecutionRecord              `json:"completed,omitempty"`
+	InheritableReviews       []coverage.ReviewDecision               `json:"inheritableReviews,omitempty"`
+	PendingCases             []string                                `json:"pendingCases,omitempty"`
 }
 
 func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]ValidationInput {
@@ -51,7 +55,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	binding := s.DispatchBindings[pending.ActionID]
 	mode := s.validationMode(pending.Task)
 	role := s.validationRole(pending.Task, cd)
-	input := ValidationInput{Binding: binding, Handler: role}
+	input := ValidationInput{Binding: binding, Handler: role, RequirementDocument: s.Validation.Document}
 	if r, ok := s.GitResources[binding.WorkspaceID]; ok {
 		input.Workspace = &r
 	}

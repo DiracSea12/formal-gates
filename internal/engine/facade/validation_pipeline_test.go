@@ -679,6 +679,12 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 		old[id] = a
 	}
 	revision := d.carryFormattingChange()
+	for _, input := range d.run.ValidationInputs {
+		assertConfirmedMaterial(t, d, input, validationDocument+"\n")
+		if input.Binding.RequirementRevision == revision {
+			t.Fatal("carried work replaced its original issued identity")
+		}
+	}
 	if len(d.run.PendingActions) != 2 {
 		t.Fatalf("carry duplicated obligations: %+v", d.run.PendingActions)
 	}

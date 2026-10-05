@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 
 	"formal-gates/internal/engine/authoring"
@@ -265,7 +266,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 				return nativeResult{}, false, err
 			}
 		}
-		if complete, err := f.injectRequirements(s, r.Path, mayWrite, &invoked); err != nil || !complete {
+		if complete, err := f.injectRequirements(s, p, mayWrite, &invoked); err != nil || !complete {
 			return nativeResult{}, false, err
 		}
 		if complete, err := f.ensureRef(r.Ref, r.Source, mayWrite, &invoked); err != nil || !complete {
@@ -421,35 +422,36 @@ func (f *Facade) ensureRef(ref, identity string, mayWrite bool, invoked *bool) (
 	})
 	return err == nil, err
 }
-func (f *Facade) injectRequirements(s *protocol.State, root string, mayWrite bool, invoked *bool) (bool, error) {
+func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParameters, mayWrite bool, invoked *bool) (bool, error) {
 	if s.IntakeConfirmationReceipt == nil {
 		return false, fmt.Errorf("workspace requires intake artifacts")
 	}
+	requirementPath := filepath.Clean(s.IntakeConfirmationReceipt.RequirementSource)
+	if filepath.IsAbs(requirementPath) {
+		var err error
+		requirementPath, err = filepath.Rel(f.root, requirementPath)
+		if err != nil {
+			return false, err
+		}
+	}
 	for _, artifact := range s.IntakeConfirmationReceipt.Artifacts {
-		source := filepath.Join(f.root, filepath.FromSlash(artifact.Path))
-		target := filepath.Join(root, filepath.FromSlash(artifact.Path))
-		data, err := os.ReadFile(source)
-		if err != nil {
-			return false, err
+		isRequirement := filepath.Clean(filepath.FromSlash(artifact.Path)) == requirementPath
+		revision := artifact.Revision
+		if isRequirement {
+			revision = strings.TrimPrefix(p.RequirementRevision, "sha256:")
 		}
-		revision, err := requirementArtifactRevision(source)
-		if err != nil {
-			return false, err
-		}
-		if revision != artifact.Revision {
-			return false, fmt.Errorf("requirement artifact %s differs from its confirmed revision", artifact.Path)
-		}
+		target := filepath.Join(p.Resource.Path, filepath.FromSlash(artifact.Path))
 		existing, err := os.ReadFile(target)
 		if err != nil && !os.IsNotExist(err) {
 			return false, err
 		}
-		if err == nil && string(existing) == string(data) {
+		if err == nil && requirementContentRevision(existing) == revision {
 			continue
 		}
 		if err == nil {
 			// Committed candidate content remains authoritative when development also
 			// owns an intake artifact such as a source file.
-			entry, entryErr := f.vcs.At(root).Entry("HEAD", artifact.Path)
+			entry, entryErr := f.vcs.At(p.Resource.Path).Entry("HEAD", artifact.Path)
 			if entryErr != nil {
 				return false, entryErr
 			}
@@ -459,6 +461,21 @@ func (f *Facade) injectRequirements(s *protocol.State, root string, mayWrite boo
 		}
 		if !mayWrite {
 			return false, nil
+		}
+		var data []byte
+		if isRequirement {
+			if s.Validation == nil || s.Validation.RequirementRevision != p.RequirementRevision {
+				return false, fmt.Errorf("workspace requires its issued confirmed requirement material")
+			}
+			data = []byte(s.Validation.Document.Content)
+		} else {
+			data, err = os.ReadFile(filepath.Join(f.root, filepath.FromSlash(artifact.Path)))
+			if err != nil {
+				return false, err
+			}
+		}
+		if requirementContentRevision(data) != revision {
+			return false, fmt.Errorf("requirement artifact %s differs from its confirmed revision", artifact.Path)
 		}
 		if err := f.admission.write(func() error {
 			*invoked = true

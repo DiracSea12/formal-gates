@@ -13,9 +13,12 @@ import (
 )
 
 type FrozenRequirementProjection struct {
-	Path          string              `json:"path"`
-	ContentDigest string              `json:"contentDigest"`
-	Requirements  []FrozenRequirement `json:"requirements"`
+	Path          string `json:"path"`
+	ContentDigest string `json:"contentDigest"`
+	// Content preserves the complete normalized confirmation material. The
+	// finite Requirements projection supplies coverage without losing prose.
+	Content      string              `json:"content"`
+	Requirements []FrozenRequirement `json:"requirements"`
 }
 
 type FrozenRequirement struct {
@@ -260,7 +263,7 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 		return FrozenRequirementProjection{}, &RequirementPrecheckError{Issues: issues}
 	}
 	sum := sha256.Sum256([]byte(normalized))
-	return FrozenRequirementProjection{Path: filepath.ToSlash(path), ContentDigest: hex.EncodeToString(sum[:]), Requirements: requirements}, nil
+	return FrozenRequirementProjection{Path: filepath.ToSlash(path), ContentDigest: hex.EncodeToString(sum[:]), Content: normalized, Requirements: requirements}, nil
 }
 
 func requirementID(current *parsedRequirement) string {

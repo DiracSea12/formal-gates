@@ -66,6 +66,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 func assertValidationInputModes(t *testing.T, d *validationDriver) {
 	t.Helper()
 	for _, input := range d.run.ValidationInputs {
+		assertConfirmedMaterial(t, d, input, driverState(t, d).Validation.Document.Content)
 		switch input.Handler {
 		case "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution":
 			mode := input.Manifest.Binding.ReviewKind
