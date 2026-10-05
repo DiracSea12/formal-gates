@@ -26,225 +26,246 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
 )
 
 // Local answers replace only host transport. Installed CLI commands, issued
-// workspaces, all command observations and every Git effect execute normally.
+// workspaces, all command observations and every native VCS effect execute normally.
 func TestCanaryInstalledGitFlows(t *testing.T) {
 	for _, split := range []bool{true, false} {
 		name := "split"
 		if !split {
 			name = "no-split"
 		}
-		t.Run(name, func(t *testing.T) {
-			_, file, _, _ := runtime.Caller(0)
-			source := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-			home := t.TempDir()
-			evidence := t.TempDir()
-			if root := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); root != "" {
-				home = filepath.Join(root, name, "home")
-				evidence = filepath.Join(root, name, "evidence")
-				if err := os.MkdirAll(home, 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			writeCanaryHostFixture(t, home, "local-only-provider")
-			runtimeRoot := t.TempDir()
-			script := filepath.Join(runtimeRoot, "glm", "zcode.cjs")
-			bundled := filepath.Join(runtimeRoot, "config", "provider", "zcode-builtin.json")
-			for _, path := range []string{script, bundled} {
-				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.WriteFile(script, []byte(canaryNativePathPeer), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(bundled, readTestFileBytes(t, zcodeTestCatalogue(t, "7")), 0600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
-			c := &engineCanary{t: t, split: split, deadline: time.Now().Add(8 * time.Minute), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
-			if err := c.prepareHome(home, t.TempDir(), source); err != nil {
-				t.Fatal(err)
-			}
-			c.project = filepath.Join(home, ".formal-gates-resources", "project")
-			c.jobs = filepath.Join(evidence, "jobs")
-			for _, path := range []string{c.project, c.jobs} {
-				if err := os.MkdirAll(path, 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			input, approval := io.Pipe()
-			defer input.Close()
-			defer approval.Close()
-			c.approvalInput = bufio.NewReader(input)
-			c.approvalOutput = canaryLocalApproval{approval}
-			executor := &canaryLocalExecutor{t: t, split: split, developmentStarted: make(chan struct{})}
-			c.execute = executor.execute
-			if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
-				started, release := make(chan struct{}), make(chan struct{})
-				var startedOnce, releaseOnce sync.Once
-				failedAction := ""
-				executor.transportFailure = func(material canaryMaterials) error {
-					if material.Input != nil && material.Input.Handler == "engine.development.batch" {
-						if material.Slice == "uppercase" {
-							startedOnce.Do(func() { close(started) })
-							<-release
-						}
-						if material.Slice == "word-size" {
-							if failedAction == "" {
-								failedAction = material.ActionID
-							}
-							<-started
-							if material.ActionID != failedAction {
-								// A new issued action proves the previous failure was
-								// accepted by the public engine retry owner.
-								releaseOnce.Do(func() { close(release) })
-							}
-							if failureMode == "permanent" || material.ActionID == failedAction {
-								return fmt.Errorf("local host transport unavailable")
-							}
-						}
-					}
-					return nil
-				}
-				defer func() {
-					master := c.readRunID("show", "engine-canary")
-					for slice, id := range master.SliceChildren {
-						child := c.readRunID("show", id)
-						data, err := json.Marshal(child)
-						if err == nil {
-							err = os.WriteFile(filepath.Join(c.jobs, slice+"-after-controller.json"), data, 0600)
-						}
-						if err != nil {
-							t.Error(err)
-						}
-					}
-				}()
-			}
-			var base string
-			if split {
-				var intake protocol.IntakeConfirmationReceipt
-				base, intake = c.buildSplitFixture()
-				c.install(base, intake)
-			} else {
-				base = c.buildFixtureProject()
-				c.doc = []byte(canaryRequirementDocument)
-				c.revision = canaryBytesRevision(c.doc)
-				solution := canaryBytesRevision([]byte(canaryFrobSource))
-				c.install(base, protocol.IntakeConfirmationReceipt{Source: "stable-driver", Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solution}}, SolutionRevision: solution, SolutionDigest: "sha256:" + solution})
-			}
-			c.drive()
-			c.loop()
-			if split {
-				c.assertSplitTerminal(base)
-				executor.assertOverlap(t)
-			} else {
-				c.assertTerminal(base, evidence)
-			}
-			t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
-		})
+		t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, "git", split) })
 	}
+}
+
+func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
+	name := "split"
+	if !split {
+		name = "no-split"
+	}
+	if provider != "git" {
+		name = filepath.Join(provider, name)
+	}
+	_, file, _, _ := runtime.Caller(0)
+	source := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	home := t.TempDir()
+	evidence := t.TempDir()
+	if root := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); root != "" {
+		home = filepath.Join(root, name, "home")
+		evidence = filepath.Join(root, name, "evidence")
+		if err := os.MkdirAll(home, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCanaryHostFixture(t, home, "local-only-provider")
+	runtimeRoot := t.TempDir()
+	script := filepath.Join(runtimeRoot, "glm", "zcode.cjs")
+	bundled := filepath.Join(runtimeRoot, "config", "provider", "zcode-builtin.json")
+	for _, path := range []string{script, bundled} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(script, []byte(canaryNativePathPeer), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundled, readTestFileBytes(t, zcodeTestCatalogue(t, "7")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
+	c := &engineCanary{t: t, split: split, deadline: time.Now().Add(8 * time.Minute), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+	if err := c.prepareHome(home, t.TempDir(), source); err != nil {
+		t.Fatal(err)
+	}
+	c.project = filepath.Join(home, ".formal-gates-resources", "project")
+	c.jobs = filepath.Join(evidence, "jobs")
+	for _, path := range []string{c.project, c.jobs} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.vcs = vcs.NewNative(c.project, provider, nil)
+	input, approval := io.Pipe()
+	defer input.Close()
+	defer approval.Close()
+	c.approvalInput = bufio.NewReader(input)
+	c.approvalOutput = canaryLocalApproval{approval}
+	executor := &canaryLocalExecutor{t: t, split: split, flagContract: split && provider != "git", developmentStarted: make(chan struct{})}
+	c.execute = executor.execute
+	if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
+		started, release := make(chan struct{}), make(chan struct{})
+		var startedOnce, releaseOnce sync.Once
+		failedAction := ""
+		executor.transportFailure = func(material canaryMaterials) error {
+			if material.Input != nil && material.Input.Handler == "engine.development.batch" {
+				if material.Slice == "uppercase" {
+					startedOnce.Do(func() { close(started) })
+					<-release
+				}
+				if material.Slice == "word-size" {
+					if failedAction == "" {
+						failedAction = material.ActionID
+					}
+					<-started
+					if material.ActionID != failedAction {
+						// A new issued action proves the previous failure was
+						// accepted by the public engine retry owner.
+						releaseOnce.Do(func() { close(release) })
+					}
+					if failureMode == "permanent" || material.ActionID == failedAction {
+						return fmt.Errorf("local host transport unavailable")
+					}
+				}
+			}
+			return nil
+		}
+		defer func() {
+			master := c.readRunID("show", "engine-canary")
+			for slice, id := range master.SliceChildren {
+				child := c.readRunID("show", id)
+				data, err := json.Marshal(child)
+				if err == nil {
+					err = os.WriteFile(filepath.Join(c.jobs, slice+"-after-controller.json"), data, 0600)
+				}
+				if err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	var base string
+	if split {
+		var intake protocol.IntakeConfirmationReceipt
+		base, intake = c.buildSplitFixture()
+		c.install(base, intake)
+	} else {
+		base = c.buildFixtureProject()
+		c.doc = []byte(canaryRequirementDocument)
+		c.revision = canaryBytesRevision(c.doc)
+		solution := canaryBytesRevision([]byte(canaryFrobSource))
+		c.install(base, protocol.IntakeConfirmationReceipt{Source: "stable-driver", Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solution}}, SolutionRevision: solution, SolutionDigest: "sha256:" + solution})
+	}
+	c.drive()
+	c.loop()
+	if split {
+		c.assertSplitTerminal(base)
+		executor.assertOverlap(t)
+	} else {
+		c.assertTerminal(base, evidence)
+	}
+	t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
 }
 
 // The subprocess preserves the normal fatal canary boundary. Its actual public
 // receipts must accept errors and settle the independent run through its gates.
 func TestCanaryInstalledTransportFailureKeepsIndependentFrontier(t *testing.T) {
 	for _, mode := range []string{"transient", "permanent"} {
-		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			if base := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); base != "" {
-				root = filepath.Join(base, "transport-"+mode)
-			}
-			cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryInstalledGitFlows$/^split$", "-test.v", "-test.timeout=120s")
-			cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_LOCAL_DIR="+root, "FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE="+mode)
-			output, err := cmd.CombinedOutput()
-			t.Logf("installed %s transport fixture: exit=%v\n%s", mode, err, output)
-			if mode == "transient" && err != nil || mode == "permanent" && (err == nil || !strings.Contains(string(output), "unexpected ask boundary")) {
-				t.Fatalf("transport fixture reached the wrong public boundary: %v", err)
-			}
-			jobs := filepath.Join(root, "split", "evidence", "jobs")
-			journal := readTestFileBytes(t, filepath.Join(jobs, "installed-commands.jsonl"))
-			failures := 0
-			var failedRun facade.Run
-			var failedPending protocol.PendingAction
-			for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
-				var command struct {
-					Exit          int `json:"exit"`
-					Input, Output string
-				}
-				if err := json.Unmarshal([]byte(line), &command); err != nil || command.Exit != 0 {
-					t.Fatalf("actual public command failed: %s (%v)", line, err)
-				}
-				var event protocol.Event
-				if command.Input == "" || json.Unmarshal([]byte(command.Input), &event) != nil || event.Result == nil || event.Result.Outcome != protocol.OutcomeRuntimeError {
-					continue
-				}
-				if err := event.Validate(); err != nil || event.Result.FailureClass != authoring.FailureTransientEngine || !strings.Contains(event.Result.InterruptionReason, "local host transport unavailable") {
-					t.Fatalf("failure source contract was lost: %+v (%v)", event.Result, err)
-				}
-				var response struct {
-					Acceptance protocol.Acceptance `json:"acceptance"`
-					Run        facade.Run          `json:"run"`
-				}
-				if err := json.Unmarshal([]byte(command.Output), &response); err != nil || response.Acceptance.Status != protocol.OutcomeRuntimeError || response.Acceptance.FailureClass != string(event.Result.FailureClass) {
-					t.Fatalf("public failure was not accepted: %s (%v)", command.Output, err)
-				}
-				var material canaryMaterials
-				if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, response.Run.RunID, canaryName(event.Result.ActionID), "materials.json")), &material); err != nil {
-					t.Fatal(err)
-				}
-				rejected, ok := response.Run.RejectedResults[event.Result.ActionID]
-				if !ok || rejected.Task != material.Pending.Task || rejected.AttemptID != material.Pending.AttemptID || rejected.Payload.InterruptionReason != event.Result.InterruptionReason || rejected.Payload.FailureClass != event.Result.FailureClass {
-					t.Fatalf("failure lost its issued task/attempt/source diagnostic: %+v material=%+v", rejected, material.Pending)
-				}
-				attempt, ok := response.Run.EndedAttempts[material.Pending.Task]
-				if len(response.Acceptance.Refill) > 0 {
-					attempt, ok = response.Run.Attempts[material.Pending.Task]
-					if !slices.Contains(response.Acceptance.Refill, attempt.ActionID) || attempt.PreviousAction != event.Result.ActionID {
-						t.Fatalf("public refill lost its originating action: %+v", attempt)
-					}
-				}
-				if !ok || attempt.Task != material.Pending.Task || attempt.Attempts != failures+1 || attempt.MaxAttempts <= 0 || attempt.Attempts > attempt.MaxAttempts {
-					t.Fatalf("failure changed finite accounting: %+v material=%+v failures=%d", attempt, material.Pending, failures)
-				}
-				if failures > 0 {
-					if failedPending.Task != material.Pending.Task || material.Input.Interruption == nil || material.Input.Interruption.ActionID != failedPending.ActionID || !strings.Contains(material.Input.Interruption.InterruptionReason, "local host transport unavailable") {
-						t.Fatalf("retry changed the logical task or lost unfinished feedback: previous=%+v material=%+v", failedPending, material)
-					}
-				}
-				failures++
-				failedRun = response.Run
-				failedPending = *material.Pending
-			}
-			if failures == 0 {
-				t.Fatal("transport errors did not reach public submit")
-			}
-			if mode == "transient" {
-				if failures != 1 || !strings.Contains(string(output), "ordinary split completed:") {
-					t.Fatal("finite transport failure did not resume to the normal terminal contract")
-				}
-				return
-			}
-			for _, attempt := range failedRun.EndedAttempts {
-				if !attempt.RetryExhausted || failures != attempt.MaxAttempts {
-					t.Fatalf("permanent failure did not retain the engine's finite bound: %+v failures=%d", attempt, failures)
-				}
-			}
-			var independent, failed facade.Run
-			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "uppercase-after-controller.json")), &independent); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "word-size-after-controller.json")), &failed); err != nil {
-				t.Fatal(err)
-			}
-			if independent.Status != "SLICE_READY" || independent.SliceReceipt == nil || independent.SliceReceipt.Receipt.Validation.Status != "COMPLETE" || len(independent.PendingActions) != 0 || failed.Next.Kind != decision.KindAsk {
-				t.Fatalf("independent frontier was abandoned or failed frontier hidden: independent=%+v failed=%+v", independent, failed)
-			}
-			t.Logf("public runtime failures=%d independent run=%s status=%s failed run=%s boundary=%s", failures, independent.RunID, independent.Status, failed.RunID, failed.Next.Kind)
-		})
+		t.Run(mode, func(t *testing.T) { runCanaryInstalledTransportFailure(t, "git", mode) })
 	}
+}
+
+func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
+	root := t.TempDir()
+	if base := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); base != "" {
+		root = filepath.Join(base, filepath.Join(provider, "transport-"+mode))
+	}
+	selection := "^TestCanaryInstalledGitFlows$/^split$"
+	if provider != "git" {
+		selection = "^TestCanaryInstalledNativeFlows$/^" + provider + "$/^split$"
+	}
+	cmd := exec.Command(os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout=5m")
+	cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_LOCAL_DIR="+root, "FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE="+mode)
+	output, err := cmd.CombinedOutput()
+	t.Logf("installed %s transport fixture: exit=%v\n%s", mode, err, output)
+	if mode == "transient" && err != nil || mode == "permanent" && (err == nil || !strings.Contains(string(output), "unexpected ask boundary")) {
+		t.Fatalf("transport fixture reached the wrong public boundary: %v", err)
+	}
+	cell := "split"
+	if provider != "git" {
+		cell = filepath.Join(provider, cell)
+	}
+	jobs := filepath.Join(root, cell, "evidence", "jobs")
+	journal := readTestFileBytes(t, filepath.Join(jobs, "installed-commands.jsonl"))
+	failures := 0
+	var failedRun facade.Run
+	var failedPending protocol.PendingAction
+	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
+		var command struct {
+			Exit          int `json:"exit"`
+			Input, Output string
+		}
+		if err := json.Unmarshal([]byte(line), &command); err != nil || command.Exit != 0 {
+			t.Fatalf("actual public command failed: %s (%v)", line, err)
+		}
+		var event protocol.Event
+		if command.Input == "" || json.Unmarshal([]byte(command.Input), &event) != nil || event.Result == nil || event.Result.Outcome != protocol.OutcomeRuntimeError {
+			continue
+		}
+		if err := event.Validate(); err != nil || event.Result.FailureClass != authoring.FailureTransientEngine || !strings.Contains(event.Result.InterruptionReason, "local host transport unavailable") {
+			t.Fatalf("failure source contract was lost: %+v (%v)", event.Result, err)
+		}
+		var response struct {
+			Acceptance protocol.Acceptance `json:"acceptance"`
+			Run        facade.Run          `json:"run"`
+		}
+		if err := json.Unmarshal([]byte(command.Output), &response); err != nil || response.Acceptance.Status != protocol.OutcomeRuntimeError || response.Acceptance.FailureClass != string(event.Result.FailureClass) {
+			t.Fatalf("public failure was not accepted: %s (%v)", command.Output, err)
+		}
+		var material canaryMaterials
+		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, response.Run.RunID, canaryName(event.Result.ActionID), "materials.json")), &material); err != nil {
+			t.Fatal(err)
+		}
+		rejected, ok := response.Run.RejectedResults[event.Result.ActionID]
+		if !ok || rejected.Task != material.Pending.Task || rejected.AttemptID != material.Pending.AttemptID || rejected.Payload.InterruptionReason != event.Result.InterruptionReason || rejected.Payload.FailureClass != event.Result.FailureClass {
+			t.Fatalf("failure lost its issued task/attempt/source diagnostic: %+v material=%+v", rejected, material.Pending)
+		}
+		attempt, ok := response.Run.EndedAttempts[material.Pending.Task]
+		if len(response.Acceptance.Refill) > 0 {
+			attempt, ok = response.Run.Attempts[material.Pending.Task]
+			if !slices.Contains(response.Acceptance.Refill, attempt.ActionID) || attempt.PreviousAction != event.Result.ActionID {
+				t.Fatalf("public refill lost its originating action: %+v", attempt)
+			}
+		}
+		if !ok || attempt.Task != material.Pending.Task || attempt.Attempts != failures+1 || attempt.MaxAttempts <= 0 || attempt.Attempts > attempt.MaxAttempts {
+			t.Fatalf("failure changed finite accounting: %+v material=%+v failures=%d", attempt, material.Pending, failures)
+		}
+		if failures > 0 {
+			if failedPending.Task != material.Pending.Task || material.Input.Interruption == nil || material.Input.Interruption.ActionID != failedPending.ActionID || !strings.Contains(material.Input.Interruption.InterruptionReason, "local host transport unavailable") {
+				t.Fatalf("retry changed the logical task or lost unfinished feedback: previous=%+v material=%+v", failedPending, material)
+			}
+		}
+		failures++
+		failedRun = response.Run
+		failedPending = *material.Pending
+	}
+	if failures == 0 {
+		t.Fatal("transport errors did not reach public submit")
+	}
+	if mode == "transient" {
+		if failures != 1 || !strings.Contains(string(output), "ordinary split completed:") {
+			t.Fatal("finite transport failure did not resume to the normal terminal contract")
+		}
+		return
+	}
+	for _, attempt := range failedRun.EndedAttempts {
+		if !attempt.RetryExhausted || failures != attempt.MaxAttempts {
+			t.Fatalf("permanent failure did not retain the engine's finite bound: %+v failures=%d", attempt, failures)
+		}
+	}
+	var independent, failed facade.Run
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "uppercase-after-controller.json")), &independent); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "word-size-after-controller.json")), &failed); err != nil {
+		t.Fatal(err)
+	}
+	if independent.Status != "SLICE_READY" || independent.SliceReceipt == nil || independent.SliceReceipt.Receipt.Validation.Status != "COMPLETE" || len(independent.PendingActions) != 0 || failed.Next.Kind != decision.KindAsk {
+		t.Fatalf("independent frontier was abandoned or failed frontier hidden: independent=%+v failed=%+v", independent, failed)
+	}
+	t.Logf("public runtime failures=%d independent run=%s status=%s failed run=%s boundary=%s", failures, independent.RunID, independent.Status, failed.RunID, failed.Next.Kind)
 }
 
 type canaryLocalApproval struct{ w io.Writer }
@@ -269,6 +290,7 @@ type canaryLocalCall struct {
 type canaryLocalExecutor struct {
 	t                  *testing.T
 	split              bool
+	flagContract       bool
 	mu                 sync.Mutex
 	calls              []canaryLocalCall
 	developmentStarted chan struct{}
@@ -399,6 +421,9 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 				return nil, err
 			}
 			content := strings.Replace(string(body), "fmt.Printf(\"frob: %s\\n\", os.Args[1])", "if len(os.Args[1])>0 && os.Args[1][0]=='-' {fmt.Fprintln(os.Stderr,\"unknown flag\");os.Exit(2)}\n\tfmt.Printf(\"frob: %s\\n\", os.Args[1])", 1)
+			if e.split {
+				content = strings.Replace(string(body), "func main(){", "func main(){if len(os.Args)>1 && len(os.Args[1])>0 && os.Args[1][0]=='-' {fmt.Fprintln(os.Stderr,\"unknown flag\");os.Exit(2)};", 1)
+			}
 			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 				return nil, err
 			}
@@ -469,12 +494,19 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 					point = "AC-002"
 				}
 			}
+			if observation.Label == "public flag-contract probe" {
+				point = "AC-004"
+			}
 			passed = passed && e.matches(point, observation.Command[1:], observation)
 		}
 		if passed {
 			return map[string]any{"status": "PASS", "findings": []any{}}, nil
 		}
-		finding := map[string]any{"severity": "P1", "message": "unknown flags are accepted", "severityRationale": "the public flag contract fails on its normal command entry", "requirement": "AC-002", "normalPath": "frob --unknown-flag canary", "actualError": "exit=0 and frob output", "deferralImpact": "unknown flags execute as words", "locations": []string{"frob.go"}}
+		requirement := "AC-002"
+		if e.flagContract {
+			requirement = "AC-004"
+		}
+		finding := map[string]any{"severity": "P1", "message": "unknown flags are accepted", "severityRationale": "the public flag contract fails on its normal command entry", "requirement": requirement, "normalPath": "frob --unknown-flag canary", "actualError": "exit=0 and frob output", "deferralImpact": "unknown flags execute as words", "locations": []string{"frob.go"}}
 		return map[string]any{"status": "FAIL", "findings": []any{finding}}, nil
 	}
 	return nil, fmt.Errorf("local executor has no answer for issued handler %s", input.Handler)
@@ -508,7 +540,8 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 		samples := []sample{{"OrdinaryWord", "SUCCESS", []string{"hello"}}, {"EmptyWord", "BOUNDARY", []string{""}}}
 		if e.split {
 			samples[0] = sample{"UnicodeWord", "SUCCESS", []string{"héLLo"}}
-		} else if point.PointID == "AC-002" {
+		}
+		if e.flagPoint(point.PointID) {
 			samples = []sample{{"UnknownFlagWithWord", "MISUSE", []string{"--unknown-flag", "canary"}}, {"UnknownFlag", "MISUSE", []string{"--bogus"}}}
 		}
 		for _, sample := range samples {
@@ -526,7 +559,7 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 				}
 				expected := e.expected(point.PointID, args)
 				assertion := fmt.Sprintf("if err!=nil||strings.TrimSpace(string(out))!=%q{t.Fatalf(\"command: %%v %%s\",err,out)}", expected)
-				if point.PointID == "AC-002" {
+				if e.flagPoint(point.PointID) {
 					assertion = "if err==nil||strings.Contains(string(out),\"frob:\"){t.Fatalf(\"flag contract: %v %s\",err,out)}"
 				}
 				fmt.Fprintf(&tests, "func %s(t *testing.T){out,err:=exec.Command(\"go\",%s).CombinedOutput();%s}\n", ref, strings.Join(quoted, ","), assertion)
@@ -556,13 +589,13 @@ func (e *canaryLocalExecutor) expected(point string, args []string) string {
 	return fmt.Sprintf("frob: %s\nusage: runs=1 words=%d", word, len(word))
 }
 func (e *canaryLocalExecutor) oracle(point string, args []string) string {
-	if !e.split && point == "AC-002" {
+	if e.flagPoint(point) {
 		return "nonzero exit and no frob: output"
 	}
 	return "exit=0 output=" + e.expected(point, args)
 }
 func (e *canaryLocalExecutor) matches(point string, args []string, observation canaryObservation) bool {
-	if !e.split && point == "AC-002" {
+	if e.flagPoint(point) {
 		return observation.ExitCode != 0 && !strings.Contains(observation.Output, "frob:")
 	}
 	if observation.ExitCode != 0 || len(args) == 0 {
@@ -701,4 +734,8 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 			t.Fatalf("job identity=%#v error=%v", identity, err)
 		}
 	}
+}
+
+func (e *canaryLocalExecutor) flagPoint(point string) bool {
+	return !e.split && point == "AC-002" || e.flagContract && point == "AC-004"
 }

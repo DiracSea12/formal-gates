@@ -2,7 +2,7 @@
 
 package harness
 
-// Engine canary — one real-host pass of the candidate engine over a real Git
+// Engine canary — one real-host pass of the candidate engine over a real native
 // repository on regular no-split or ordinary split routes. No-split covers FAIL ->
 // repair -> new candidate -> revalidation -> terminal cycle. Skipped unless
 // FORMAL_GATES_ENGINE_CANARY=1, because every dispatched turn is a real host
@@ -70,6 +70,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
@@ -171,6 +172,7 @@ type engineCanary struct {
 	binary, home   string
 	run            facade.Run
 	project        string
+	vcs            *vcs.Provider
 	jobs           string
 	binding        map[string]any
 	installed      validate.InstallReport
@@ -234,6 +236,10 @@ type canaryDevelopmentAnswer struct {
 }
 
 func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
+	runEngineNoSplitCanary(t, "git")
+}
+
+func runEngineNoSplitCanary(t *testing.T, name string) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
@@ -277,6 +283,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	c.jobs = filepath.Join(dir, "jobs")
 	t.Logf("engine canary evidence directory: %s", dir)
 
+	c.vcs = vcs.NewNative(c.project, name, nil)
 	base := c.buildFixtureProject()
 
 	// Intake binds the real artifact bytes: the requirement document is the
@@ -305,7 +312,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	c.assertTerminal(base, dir)
 }
 
-// buildFixtureProject creates the real Git fixture: one baseline commit with
+// buildFixtureProject creates the native fixture: one baseline commit with
 // the requirement document, the seeded frob command and no test files, so
 // nothing exposes the seeded defect before validation runs.
 func (c *engineCanary) buildFixtureProject() string {
@@ -320,9 +327,7 @@ func (c *engineCanary) buildFixtureProject() string {
 	write("requirements.md", canaryRequirementDocument)
 	write("frob.go", canaryFrobSource)
 	write("go.mod", "module frob\n\ngo 1.22\n")
-	c.git("add", "--all")
-	c.git("commit", "-m", "frob baseline with requirement")
-	return c.git("rev-parse", "HEAD")
+	return c.commitFixture([]string{".gitignore", "requirements.md", "frob.go", "go.mod"}, "frob baseline with requirement")
 }
 
 // The controller alone mutates projections and submits results. Workers carry
@@ -1058,9 +1063,27 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 	if input.Gate == nil {
 		c.fail("gate dispatch %s carries no gate input", id)
 	}
-	head := c.gitAt(c.workspace(input), "rev-parse", "HEAD")
-	if head != input.Gate.Candidate.Identity {
-		c.fail("gate %s judges candidate %s but the registered workspace head is %s", input.Gate.Gate, input.Gate.Candidate.Identity, head)
+	provider := c.vcs.At(c.workspace(input), input.Workspace.Handle)
+	if err := provider.Verify(input.Gate.Candidate.Identity); err != nil {
+		c.fail("gate %s candidate cannot be reproduced: %v", input.Gate.Gate, err)
+	}
+	head, err := provider.Resolve()
+	if err != nil {
+		c.fail("gate %s workspace snapshot: %v", input.Gate.Gate, err)
+	}
+	if c.vcs.Name() == "git" {
+		if head != input.Gate.Candidate.Identity {
+			c.fail("gate %s judges candidate %s but the registered workspace head is %s", input.Gate.Gate, input.Gate.Candidate.Identity, head)
+		}
+	} else {
+		workspace := input.Workspace
+		if head != workspace.Identity || workspace.Source != input.Gate.Candidate.Identity || workspace.Handle.Source != workspace.Source {
+			c.fail("gate %s lost its issued workspace identity or candidate source", input.Gate.Gate)
+		}
+		digest, err := provider.TreeDigest(head)
+		if err != nil || digest != input.Gate.Candidate.Digest {
+			c.fail("gate %s workspace content differs from its candidate: %s %v", input.Gate.Gate, digest, err)
+		}
 	}
 	materials := c.materials(id, input.Gate.Gate+" gate", input)
 	instructions := "Judge the exact issued gate and its complete native range against the bound requirement. Report findings for actual violations with severity, rationale, requirement, normal path, actual error, deferral impact and locations."
@@ -1087,6 +1110,11 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 			}
 		default:
 			c.fail("fixture has no contract for issued gate %q", input.Gate.Gate)
+		}
+		if c.splitFlagContract() && c.childSlice() == "" && input.Gate.Gate == "merge-gate" {
+			binary := c.buildCandidate(c.workspace(input), id)
+			materials.HostObservations = append(materials.HostObservations, c.observe("public flag-contract probe", c.workspace(input), append([]string{binary}, canaryGateArgs...)))
+			instructions += " AC-004 requires unknown flags to exit nonzero and emit no frob: output."
 		}
 	}
 	var answer struct {
@@ -1117,7 +1145,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "development batch", input)
-	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not run git commit or git push — the engine freezes declared changes."
+	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1133,7 +1161,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not run git commit or git push — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1608,6 +1636,9 @@ func (c *engineCanary) confirmTopology() {
 	topology := protocol.TopologyDecision{Decision: "no-split", Note: "one small command project with a single cohesive deliverable"}
 	if c.split {
 		topology = canarySplitTopology()
+		if c.splitFlagContract() {
+			topology.ACOwners = append(topology.ACOwners, protocol.ACOwner{AC: "AC-004", Owner: "master-merge"})
+		}
 	}
 	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: protocol.AskOptionID(topology.Decision), Label: topology.Decision})
 	if err != nil {
@@ -1863,34 +1894,7 @@ func (c *engineCanary) currentWave() *protocol.ValidationWave {
 	return &c.run.Validation.Waves[len(c.run.Validation.Waves)-1]
 }
 
-// --- real git and command execution -----------------------------------------
-
-func (c *engineCanary) git(args ...string) string {
-	c.t.Helper()
-	return c.gitAt(c.project, args...)
-}
-
-// Fixture helpers and the installed CLI share the repository's native config,
-// including every worktree created by the engine.
-func (c *engineCanary) initFixtureRepository() {
-	c.t.Helper()
-	c.git("init", "--initial-branch=main", "--quiet")
-	c.git("config", "--local", "user.name", "engine-canary")
-	c.git("config", "--local", "user.email", "engine-canary@localhost")
-	c.git("config", "--local", "commit.gpgsign", "false")
-}
-
-// gitAt runs one git command in an arbitrary tree of the fixture repository
-// — the project or one of its worktrees.
-func (c *engineCanary) gitAt(dir string, args ...string) string {
-	c.t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		c.fail("git %v: %v: %s", args, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
+// --- native command execution ----------------------------------------------
 
 // buildCandidate compiles the candidate under judgment into the dispatch
 // evidence tree; the binary is what behavior probes really run.
@@ -1931,30 +1935,7 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if final.Status != "COMPLETE" || final.Next.Kind != decision.KindComplete {
 		c.fail("canary ended at status %s (next %s)", final.Status, final.Next.Kind)
 	}
-	head := c.git("rev-parse", "HEAD")
-	if final.PromotedSnapshot != head {
-		c.fail("promoted snapshot %s is not the final head %s", final.PromotedSnapshot, head)
-	}
-	if count := c.git("rev-list", "--count", base+".."+head); strings.TrimSpace(count) != "1" {
-		c.fail("final range holds %s commits, want the single organized commit", count)
-	}
-	if diff := c.git("diff", "--name-only", base, head); !strings.Contains(diff, "analytics.go") || !strings.Contains(diff, "frob.go") {
-		c.fail("final candidate does not carry both the development and repair changes: %s", diff)
-	}
-	if final.Termination == nil || !final.Termination.ResourcesCleaned() {
-		c.fail("terminal resource cleanup proof is missing")
-	}
-	if trees := c.git("worktree", "list", "--porcelain"); strings.Count(trees, "worktree ") != 1 {
-		c.fail("native worktree residuals: %s", trees)
-	}
-	for _, resource := range final.Termination.NativeResources {
-		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
-			c.fail("native resource directory remains: %s %v", resource.Path, err)
-		}
-		if ref := c.git("for-each-ref", "--format=%(objectname)", resource.Ref); ref != "" {
-			c.fail("native resource ref remains: %s", ref)
-		}
-	}
+	c.assertNativeTerminal(base, final, []string{"analytics.go", "frob.go"})
 	// The repaired behavior really holds at the final candidate.
 	probe := c.observe("final flag probe", c.project, append([]string{c.buildCandidate(c.project, "final-probe")}, canaryGateArgs...))
 	if probe.ExitCode == 0 {
@@ -2376,7 +2357,7 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		c.fail("intake: %v", err)
 	}
-	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--base-snapshot", base, "--intake-receipt", path)
+	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--vcs", c.vcs.Name(), "--base-snapshot", base, "--intake-receipt", path)
 	if err := c.recordIsolation(); err != nil {
 		c.fail("candidate isolation proof: %v", err)
 	}

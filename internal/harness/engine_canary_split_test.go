@@ -19,6 +19,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 )
 
 const canarySplitRequirement = `# 交付
@@ -126,6 +127,10 @@ func (c *engineCanary) conflictResult(id string, input protocol.ValidationInput)
 }
 
 func TestEngineGitSplitCanary(t *testing.T) {
+	runEngineSplitCanary(t, "git")
+}
+
+func runEngineSplitCanary(t *testing.T, name string) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
@@ -159,6 +164,10 @@ func TestEngineGitSplitCanary(t *testing.T) {
 	if err := os.MkdirAll(c.jobs, 0700); err != nil {
 		t.Fatal(err)
 	}
+	c.vcs = vcs.NewNative(c.project, name, nil)
+	if c.splitFlagContract() {
+		c.repairAllowances = 1
+	}
 	base, intake := c.buildSplitFixture()
 	c.install(base, intake)
 	c.drive()
@@ -168,21 +177,24 @@ func TestEngineGitSplitCanary(t *testing.T) {
 }
 func (c *engineCanary) buildSplitFixture() (string, facade.IntakeConfirmationReceipt) {
 	c.initFixtureRepository()
-	files := map[string]string{".gitignore": ".gates/\n", "go.mod": "module frob\n\ngo 1.22\n", "requirements.md": canarySplitRequirement, "frob.go": canarySplitMain, "uppercase.go": "package main\nfunc UpperWord(word string)string{return word}\n", "size.go": "package main\nfunc WordSize(word string)int{return 0}\n"}
+	document := canarySplitRequirement
+	if c.splitFlagContract() {
+		document = strings.Replace(document, "#### 验收条件", "公开 flag 契约 AC-004 是已知的基线缺口：frob 当前接受未知 flag 并成功输出；两个函数开发批次不修此缺口。其满足预期通过 master-merge 的验证与返修闭环完成；验证发现缺口后修复 frob.go 的 flag 处理属于本 run 已授权的返修范围。\n#### 验收条件", 1)
+		document = strings.Replace(document, "#### 来源", "- AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。\n#### 来源", 1)
+	}
+	files := map[string]string{".gitignore": ".gates/\n", "go.mod": "module frob\n\ngo 1.22\n", "requirements.md": document, "frob.go": canarySplitMain, "uppercase.go": "package main\nfunc UpperWord(word string)string{return word}\n", "size.go": "package main\nfunc WordSize(word string)int{return 0}\n"}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(c.project, name), []byte(body), 0600); err != nil {
 			c.fail("fixture %s: %v", name, err)
 		}
 	}
-	c.doc = []byte(canarySplitRequirement)
+	c.doc = []byte(document)
 	sum := sha256.Sum256(c.doc)
 	c.revision = hex.EncodeToString(sum[:])
 	solution := sha256.Sum256([]byte(canarySplitMain))
 	solutionRevision := hex.EncodeToString(solution[:])
 	intake := facade.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []facade.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solutionRevision}}, SolutionRevision: solutionRevision, SolutionDigest: "sha256:" + solutionRevision}
-	c.git("add", "--all")
-	c.git("commit", "-m", "independent command functions")
-	return c.git("rev-parse", "HEAD"), intake
+	return c.commitFixture([]string{".gitignore", "go.mod", "requirements.md", "frob.go", "uppercase.go", "size.go"}, "independent command functions"), intake
 }
 
 func (c *engineCanary) assertSplitTerminal(base string) {
@@ -194,18 +206,7 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 	if len(terminal.SliceChildren) != 2 || len(terminal.SliceReceipts) != 2 {
 		c.fail("terminal lost released child map or receipts")
 	}
-	head, tree := c.git("rev-parse", "HEAD"), c.git("rev-parse", "HEAD^{tree}")
-	if terminal.CandidatePromotion == nil || terminal.CandidatePromotion.Final != head || terminal.CandidatePromotion.FinalDigest != tree || terminal.CandidatePromotion.SourceDigest != tree || final.PromotedSnapshot != head {
-		c.fail("promotion does not bind actual final tree")
-	}
-	if c.git("rev-list", "--count", base+".."+head) != "1" || c.git("status", "--porcelain") != "" {
-		c.fail("promotion is not one clean organized commit")
-	}
-	for _, path := range []string{"uppercase.go", "size.go"} {
-		if !strings.Contains(c.git("diff", "--name-only", base, head), path) {
-			c.fail("final candidate misses %s", path)
-		}
-	}
+	head, tree := c.assertNativeTerminal(base, final, []string{"uppercase.go", "size.go"})
 	for slice, runID := range terminal.SliceChildren {
 		receipt := terminal.SliceReceipts[runID]
 		child := receipt.Receipt
@@ -260,7 +261,12 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 		c.fail("merge cases not frozen")
 	}
 	casesPath := ".gates/results/" + final.RunID + ".merge-cases.md"
-	if c.git("show", head+":"+casesPath) != strings.TrimSpace(protocol.MergeCasesMarkdown(final.RunID, set.Manifest)) {
+	entries, err := c.vcs.TreeEntries(head)
+	if err != nil || entries[casesPath] == "" {
+		c.fail("final native tree lacks merge artifact: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(c.project, filepath.FromSlash(casesPath)))
+	if err != nil || string(body) != protocol.MergeCasesMarkdown(final.RunID, set.Manifest) {
 		c.fail("final merge artifact differs from approved manifest")
 	}
 	wave := terminal.Validation.Waves[len(terminal.Validation.Waves)-1]
@@ -282,15 +288,10 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 			c.fail("combined candidate mismatch: %+v", probe)
 		}
 	}
-	if strings.Count(c.git("worktree", "list", "--porcelain"), "worktree ") != 1 {
-		c.fail("native worktree residue")
-	}
-	for _, resource := range terminal.NativeResources {
-		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
-			c.fail("native resource remains %s", resource.Path)
-		}
-		if c.git("for-each-ref", "--format=%(objectname)", resource.Ref) != "" {
-			c.fail("native resource ref remains")
+	if c.splitFlagContract() {
+		probe := c.observe("final flag probe", c.project, append([]string{binary}, canaryGateArgs...))
+		if probe.ExitCode == 0 || strings.Contains(probe.Output, "frob:") || !c.sawWaveFailure || !c.sawRepair {
+			c.fail("split did not close its observed flag failure through repair: %+v failure=%t repair=%t", probe, c.sawWaveFailure, c.sawRepair)
 		}
 	}
 	c.assertTerminalReplay(final)
