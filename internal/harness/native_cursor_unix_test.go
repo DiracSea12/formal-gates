@@ -40,6 +40,9 @@ type cursorPeer struct {
 	Wait            bool              `json:"wait"`
 	CreateExit      int               `json:"create_exit"`
 	SkipStore       bool              `json:"skip_store"`
+	ConfigPublished string            `json:"config_published"`
+	BeforeInit      string            `json:"before_init"`
+	BeforeTerminal  string            `json:"before_terminal"`
 }
 
 func TestCursorCLI(t *testing.T) {
@@ -119,9 +122,38 @@ func TestCursorCLI(t *testing.T) {
 		os.Exit(91)
 	}
 	config, _ := json.Marshal(peer.Config)
-	os.WriteFile(filepath.Join(os.Getenv("CURSOR_CONFIG_DIR"), "cli-config.json"), config, 0o644)
+	if err := os.WriteFile(filepath.Join(os.Getenv("CURSOR_CONFIG_DIR"), "cli-config.json"), config, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(91)
+	}
+	if peer.ConfigPublished != "" {
+		if err := os.WriteFile(peer.ConfigPublished, []byte(peer.UUID), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(91)
+		}
+	}
+	waitMarker := func(path string) {
+		if path == "" {
+			return
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, err := os.Stat(path); err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				fmt.Fprintln(os.Stderr, "native peer barrier timeout")
+				os.Exit(91)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitMarker(peer.BeforeInit)
 	fmt.Fprint(os.Stderr, peer.Stderr)
 	for _, event := range peer.Events {
+		if getOf(event, "type") == "result" {
+			waitMarker(peer.BeforeTerminal)
+		}
 		line, _ := json.Marshal(event)
 		os.Stdout.Write(append(line, '\n'))
 	}
@@ -400,6 +432,9 @@ func TestCursorNativeRefusals(t *testing.T) {
 			objectOrEmpty(s.peer.Events[0])["session_id"] = "22222222-2222-4222-8222-222222222222"
 		}},
 		{"init-other-workspace", "native init", func(s *cursorScenario) { objectOrEmpty(s.peer.Events[0])["cwd"] = "/another/workspace" }},
+		{"repeated-init", "native init", func(s *cursorScenario) {
+			s.peer.Events = []any{s.peer.Events[0], s.peer.Events[0], s.peer.Events[1]}
+		}},
 		{"no-init", "CURSOR_RESULT", func(s *cursorScenario) { s.peer.Events = s.peer.Events[1:] }},
 		{"no-terminal", "terminal result is missing", func(s *cursorScenario) { s.peer.Events = s.peer.Events[:1] }},
 		{"hook-only", "terminal result is missing", func(s *cursorScenario) {
@@ -519,14 +554,71 @@ func TestCursorParallelSourcesRemainIndependent(t *testing.T) {
 		}
 	}
 }
+
+// Both peers use the same bound config. The first native selection is held
+// before init; its terminal waits for the second selection to prove overlap.
+func TestCursorSharedConfigSelectionAndConcurrentTurns(t *testing.T) {
+	for _, secondModel := range []string{"model-a", "model-b"} {
+		t.Run(secondModel, func(t *testing.T) {
+			first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", false)
+			second := newCursorScenario(t, "22222222-2222-4222-8222-222222222222", secondModel, "low", true)
+			shared := first.peer.Environment["CURSOR_CONFIG_DIR"]
+			second.peer.Environment["CURSOR_CONFIG_DIR"] = shared
+			getOf(second.request["binding"], "environment").(map[string]any)["CURSOR_CONFIG_DIR"] = shared
+			second.peer.Store = cursorStore(shared, second.workspace, second.peer.UUID)
+			first.peer.ConfigPublished = filepath.Join(shared, "first-selected")
+			first.peer.BeforeInit = filepath.Join(shared, "allow-init")
+			second.peer.ConfigPublished = filepath.Join(shared, "second-selected")
+			first.peer.BeforeTerminal = second.peer.ConfigPublished
+			first.save(t)
+			second.save(t)
+			done := make(chan error, 2)
+			go func() { _, err := runNativeJob(first.directory); done <- err }()
+			waitForFile(t, first.peer.ConfigPublished)
+			go func() { _, err := runNativeJob(second.directory); done <- err }()
+			select {
+			case err := <-done:
+				t.Fatalf("native call ended before either init: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			if _, err := os.Stat(second.peer.ConfigPublished); !os.IsNotExist(err) {
+				t.Fatal("another initialization replaced the first selection")
+			}
+			if err := os.WriteFile(first.peer.BeforeInit, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, s := range []*cursorScenario{first, second} {
+				source, err := cursorObserve(s.directory, false)
+				if err != nil || source["identity"] != s.peer.UUID || source["native_store"] != s.peer.Store || getOf(source["selection"], "model") != getOf(s.peer.Config["model"], "modelId") || getOf(source["selection"], "reasoning_effort") != s.request["reasoning_effort"] {
+					t.Fatalf("call selection or identity crossed: %v %v", source, err)
+				}
+				if err := cursorVerifySource(s.directory, source); err != nil {
+					t.Fatal(err)
+				}
+				if cursorCalls(t, s) != 2 {
+					t.Fatal("parallel turn replayed or created another chat")
+				}
+			}
+		})
+	}
+}
 func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 	bin := supervisorBinary(t)
-	for _, cancel := range []bool{false, true} {
-		t.Run(fmt.Sprint(cancel), func(t *testing.T) {
+	for _, cancel := range []string{"completed", "initializing", "initialized"} {
+		t.Run(cancel, func(t *testing.T) {
 			s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
-			if cancel {
+			if cancel != "completed" {
 				s.peer.Events = s.peer.Events[:1]
 				s.peer.Wait = true
+				if cancel == "initializing" {
+					s.peer.ConfigPublished = filepath.Join(filepath.Dir(s.script), "selected")
+					s.peer.BeforeInit = filepath.Join(filepath.Dir(s.script), "allow-init")
+				}
 			}
 			s.save(t)
 			writeRequest(t, s.directory, map[string]any{"kind": "native", "argv": []string{bin, "harness", "native", s.directory}, "cwd": s.workspace, "stdin": ""})
@@ -535,8 +627,12 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
-			if cancel {
-				waitForFile(t, filepath.Join(s.directory, "identity.json"))
+			if cancel != "completed" {
+				if cancel == "initializing" {
+					waitForFile(t, s.peer.ConfigPublished)
+				} else {
+					waitForFile(t, filepath.Join(s.directory, "identity.json"))
+				}
 				if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil {
 					t.Fatal(err)
 				}
@@ -545,7 +641,7 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				t.Fatal(err)
 			}
 			receipt := readReceipt(t, s.directory)
-			if cancel {
+			if cancel != "completed" {
 				if !valuesEqual(receipt["exit_code"], 130) || receipt["error"] != "owned job was cancelled" {
 					t.Fatalf("cancel %v", receipt)
 				}
@@ -558,6 +654,7 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				s.request["identity"] = s.peer.UUID
 				s.request["native_store"] = s.peer.Store
 				s.peer.Wait = false
+				s.peer.BeforeInit = ""
 				s.peer.Events = append(s.peer.Events, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.peer.UUID, "request_id": "reopened", "result": `{"status":"PASS","summary":"reopened","findings":[],"check_ids":[]}`})
 				s.directory = filepath.Join(filepath.Dir(s.directory), "reopened")
 				os.MkdirAll(s.directory, 0o755)

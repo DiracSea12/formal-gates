@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"formal-gates/internal/coordination"
 )
 
 func cursorCaptureBinding() (map[string]any, error) {
@@ -133,9 +135,9 @@ func cursorStore(config, workspace, identity string) string {
 var cursorUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Capture only native model fields. cli-config also contains authentication
-// data, which has no place in invocation evidence. Cursor persists the selected
-// parameters before its system/init frame; init's displayName ties the snapshot
-// to this process, so another native selection cannot silently substitute it.
+// data, which has no place in invocation evidence. The caller holds the bound
+// config's initialization lock from native launch through this snapshot, so
+// its model fields belong to the process that emitted this root init.
 func cursorSelectionSnapshot(config string, event any) (map[string]any, error) {
 	value, err := readJSONFile(filepath.Join(config, "cli-config.json"))
 	if err != nil {
@@ -265,6 +267,15 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 	if config == "" {
 		return nil, &bindingError{message: "CURSOR_BINDING: native config directory is missing"}
 	}
+	// Native init exposes only displayName; selected parameters live in the
+	// shared config. Protect their write-to-snapshot interval across launches,
+	// then let initialized workers run concurrently. The kernel releases this
+	// descriptor on cancellation or process death; the file carries no state.
+	releaseSelection, err := coordination.AcquirePathWaiting(filepath.Join(config, ".formal-gates-selection.lock"), "Cursor model initialization")
+	if err != nil {
+		return nil, err
+	}
+	defer releaseSelection()
 	identity, _ := getOf(request, "identity").(string)
 	nativeSource := map[string]any{"sessionId": identity, "workspace": workspace, "selection": map[string]any{}, "native_config": config}
 	store := ""
@@ -346,7 +357,7 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 			return nil, err
 		}
 		if valuesEqual(getOf(event, "type"), "system") && valuesEqual(getOf(event, "subtype"), "init") {
-			if !valuesEqual(getOf(event, "session_id"), identity) || resolveNativePath(textOf(getOf(event, "cwd"))) != workspace {
+			if nativeSource["native_selection"] != nil || !valuesEqual(getOf(event, "session_id"), identity) || resolveNativePath(textOf(getOf(event, "cwd"))) != workspace {
 				streamErr = &blockedError{message: "CURSOR_BINDING: native init does not match the created or resumed session"}
 				break
 			}
@@ -368,6 +379,7 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 			if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"provider": "cursor", "identity": identity, "native_store": store, "workspace": workspace, "selection": selection}); err != nil {
 				return nil, err
 			}
+			releaseSelection()
 		}
 	}
 	waitErr := client.close()
