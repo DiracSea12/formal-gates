@@ -60,7 +60,11 @@ func nativeCommand(t *testing.T, r Runner, dir, command string, args ...string) 
 }
 func nativeFixtureLog(t *testing.T) *os.File {
 	t.Helper()
-	file, err := os.Create(filepath.Join(t.TempDir(), "native-commands.log"))
+	directory := os.Getenv("NATIVE_VCS_EVIDENCE")
+	if directory == "" {
+		directory = t.TempDir()
+	}
+	file, err := os.Create(filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+".native-commands.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
