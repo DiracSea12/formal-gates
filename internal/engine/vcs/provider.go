@@ -94,7 +94,7 @@ func PlanWorkspace(name, source, run, id string) WorkspaceHandle {
 		handle.URL = identity.Address + "/formal-gates-" + run + "-" + id
 	case "p4":
 		handle.Client = "fg-" + run + "-" + id
-		handle.Branch = handle.Client
+		handle.Branch = handle.Client + "-branch"
 		if identity.Stream != "" {
 			depot, _, _ := strings.Cut(strings.TrimPrefix(identity.Stream, "//"), "/")
 			handle.Stream = "//" + depot + "/" + handle.Client

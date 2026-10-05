@@ -167,7 +167,7 @@ func TestCandidateReviewViewsRequireSignedTargets(t *testing.T) {
 			raw, _ = json.Marshal(evidence)
 			var values map[string]any
 			json.Unmarshal(raw, &values)
-			_, got, err := validateCandidateReceipt(intent, HostActionReceipt{AdapterEvidence: &AdapterEvidence{Values: values}})
+			_, got, err := validateCandidateReceipt("git", intent, HostActionReceipt{AdapterEvidence: &AdapterEvidence{Values: values}})
 			if variant == "single-input" {
 				if err != nil || len(got.ReviewViews[id].Inputs) != 1 {
 					t.Fatalf("complete single-input view rejected: %v", err)

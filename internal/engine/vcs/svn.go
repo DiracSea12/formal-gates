@@ -16,7 +16,7 @@ type svnInfo struct {
 	Entries []struct {
 		Path       string `xml:"path,attr"`
 		Kind       string `xml:"kind,attr"`
-		Revision   int    `xml:"revision,attr"`
+		Revision   string `xml:"revision,attr"`
 		URL        string `xml:"url"`
 		Relative   string `xml:"relative-url"`
 		Repository struct {
@@ -24,7 +24,8 @@ type svnInfo struct {
 			UUID string `xml:"uuid"`
 		} `xml:"repository"`
 		WC struct {
-			Root string `xml:"wcroot-abspath"`
+			Root     string `xml:"wcroot-abspath"`
+			Schedule string `xml:"schedule"`
 		} `xml:"wc-info"`
 		Conflict []struct {
 			Type string `xml:"type,attr"`
@@ -92,9 +93,11 @@ func (p *Provider) svnResolve(revision string) (string, error) {
 	if revision == "" && !SamePath(entry.WC.Root, p.root) {
 		return "", fmt.Errorf("SVN working copy root differs from bound root")
 	}
-	rev := entry.Revision
+	rev, err := strconv.Atoi(entry.Revision)
+	if err != nil {
+		return "", err
+	}
 	if revision != "" {
-		var err error
 		rev, err = strconv.Atoi(revision)
 		if err != nil {
 			return "", err
@@ -156,8 +159,15 @@ func (p *Provider) svnStatus() (string, error) {
 	}
 	revisions := map[int]bool{}
 	for _, entry := range info.Entries {
-		if entry.Revision > 0 {
-			revisions[entry.Revision] = true
+		if entry.WC.Schedule == "add" {
+			continue
+		}
+		revision, err := strconv.Atoi(entry.Revision)
+		if err != nil {
+			return "", err
+		}
+		if revision > 0 {
+			revisions[revision] = true
 		}
 	}
 	if len(revisions) > 1 {

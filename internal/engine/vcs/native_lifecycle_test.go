@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -120,25 +121,36 @@ func TestNativeIndependentWorkspacesIntegrateFixedInputs(t *testing.T) {
 			p, _ := nativeFixture(t, name)
 			base := nativeIdentityAt(t, p)
 			master, mh := nativeWorkspaceAt(t, p, base, "mainline")
-			var incoming []string
-			for _, lane := range []string{"alpha", "beta"} {
-				child, h := nativeWorkspaceAt(t, p, base, lane)
-				if err := os.WriteFile(filepath.Join(child.root, lane), []byte(lane+"\n"), 0644); err != nil {
-					t.Fatal(err)
-				}
-				if err := child.Track([]string{lane}); err != nil {
-					t.Fatal(err)
-				}
-				if err := child.Commit("child " + lane); err != nil {
-					t.Fatal(err)
-				}
-				id := nativeIdentityAt(t, child)
-				incoming = append(incoming, id)
-				t.Cleanup(func() {
-					if err := p.CleanupWorkspace(child.root, "cleanup "+lane, h); err != nil {
+			incoming := make([]string, 2)
+			var workers sync.WaitGroup
+			for i, lane := range []string{"alpha", "beta"} {
+				workers.Add(1)
+				go func() {
+					defer workers.Done()
+					child, h := nativeWorkspaceAt(t, p, base, lane)
+					if err := os.WriteFile(filepath.Join(child.root, lane), []byte(lane+"\n"), 0644); err != nil {
 						t.Error(err)
+						return
 					}
-				})
+					if err := child.Track([]string{lane}); err != nil {
+						t.Error(err)
+						return
+					}
+					if err := child.Commit("child " + lane); err != nil {
+						t.Error(err)
+						return
+					}
+					incoming[i] = nativeIdentityAt(t, child)
+					t.Cleanup(func() {
+						if err := p.CleanupWorkspace(child.root, "cleanup "+lane, h); err != nil {
+							t.Error(err)
+						}
+					})
+				}()
+			}
+			workers.Wait()
+			if t.Failed() {
+				return
 			}
 			for i, id := range incoming {
 				prefix := nativeIdentityAt(t, master)
@@ -234,11 +246,21 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			p, r := p4Fixture(t)
 			if mode == "ordered-view" {
+				overlayRoot := t.TempDir()
+				overlaySpec := "Client: overlay-supplier\nOwner: fixture\nRoot: " + overlayRoot + "\nView:\n\t//depot/overlay/... //overlay-supplier/...\n"
+				if _, err := r.RunRaw(overlayRoot, "p4", []byte(overlaySpec), "client", "-i"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(overlayRoot, "body.txt"), []byte("overlay value\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				nativeCommand(t, r, overlayRoot, "p4", "-c", "overlay-supplier", "add", "-t", "text+x", "body.txt")
+				nativeCommand(t, r, overlayRoot, "p4", "-c", "overlay-supplier", "submit", "-d", "overlay values")
 				spec := "Client: main\nOwner: fixture\nRoot: " + p.root + "\nLineEnd: unix\nView:\n\t//depot/main/... //main/...\n\t-//depot/main/excluded/... //main/excluded/...\n\t+//depot/overlay/... //main/...\n\t&//depot/main/body.txt //main/duplicate.txt\n"
 				if _, err := r.RunRaw(p.root, "p4", []byte(spec), "client", "-i"); err != nil {
 					t.Fatal(err)
 				}
-				nativeCommand(t, r, p.root, "p4", "sync")
+				nativeCommand(t, r, p.root, "p4", "sync", "-f")
 			} else {
 				depot := "Depot: stream\nOwner: fixture\nType: stream\nStreamDepth: //stream/1\nMap: stream/...\n"
 				if _, err := r.RunRaw(p.root, "p4", []byte(depot), "depot", "-i"); err != nil {
@@ -276,6 +298,16 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 			}
 			if mode == "ordered-view" && (len(source.View) != 4 || !strings.Contains(source.View[1], "-//") || !strings.Contains(source.View[2], "+//") || !strings.Contains(source.View[3], "&//")) {
 				t.Fatal("ordered View was not retained")
+			}
+			if mode == "ordered-view" {
+				values, err := p.TreeEntries(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var body nativeEntry
+				if err := json.Unmarshal([]byte(values["body.txt"]), &body); err != nil || len(body.Layers) != 2 || values["duplicate.txt"] == "" {
+					t.Fatalf("immutable overlay/ditto values missing: %v %v", values, err)
+				}
 			}
 			before, err := q.TreeEntries(created)
 			if err != nil {

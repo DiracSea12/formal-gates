@@ -93,7 +93,11 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	if err := os.WriteFile(filepath.Join(wc, "body.txt"), []byte(" leading\ntrailing\n\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	nativeCommand(t, runner, wc, "svn", "add", "body.txt", "empty")
+	if err := os.Symlink("body.txt", filepath.Join(wc, "link")); err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, runner, wc, "svn", "add", "body.txt", "empty", "link")
+	nativeCommand(t, runner, wc, "svn", "propset", "svn:executable", "*", "body.txt")
 	property := filepath.Join(root, "property")
 	if err := os.WriteFile(property, []byte{' ', 0, 1, '\n'}, 0644); err != nil {
 		t.Fatal(err)

@@ -50,7 +50,7 @@ func (p *Provider) p4JSON(args ...string) ([]map[string]string, error) {
 		for key, value := range raw {
 			record[key] = fmt.Sprint(value)
 		}
-		if record["code"] == "error" {
+		if record["code"] == "error" || record["severity"] == "3" || record["severityformat"] == "error" {
 			if record["generic"] == "17" {
 				empty = true
 				continue
@@ -553,6 +553,16 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 			return err
 		}
 	}
+	form := formFields(sourceSpec, []string{"Client", "Owner", "Root", "LineEnd", "Options", "SubmitOptions", "Stream"})
+	if len(view) > 0 {
+		form += "View:\n"
+		for _, row := range view {
+			form += "\t" + row + "\n"
+		}
+	}
+	if _, err = bound.p4Raw([]byte(form), "client", "-i"); err != nil {
+		return err
+	}
 	changes, err := bound.p4JSON("changes", "-s", "submitted", h.Depot+"/...")
 	if err != nil {
 		return err
@@ -564,13 +574,12 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 		}
 	}
 	if created == 0 {
-		args := []string{"populate"}
+		args := []string{"populate", "-d", message}
 		if h.Stream != "" {
 			args = append(args, "-r", "-S", h.Stream, h.Depot+"/...@"+strconv.Itoa(id.Revision))
 		} else {
 			args = append(args, "-b", h.Branch, h.Depot+"/...@"+strconv.Itoa(id.Revision))
 		}
-		args = append(args, "-d", message)
 		if _, err = bound.p4Raw(nil, args...); err != nil {
 			return err
 		}
@@ -582,16 +591,6 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 			return fmt.Errorf("P4 populated change is not unique")
 		}
 		created, _ = strconv.Atoi(changes[0]["change"])
-	}
-	form := formFields(sourceSpec, []string{"Client", "Owner", "Root", "LineEnd", "Options", "SubmitOptions", "Stream"})
-	if len(view) > 0 {
-		form += "View:\n"
-		for _, row := range view {
-			form += "\t" + row + "\n"
-		}
-	}
-	if _, err = bound.p4Raw([]byte(form), "client", "-i"); err != nil {
-		return err
 	}
 	if err = os.MkdirAll(workspace, 0755); err != nil {
 		return err
@@ -666,7 +665,7 @@ func (p *Provider) p4CleanupWorkspace(workspace, message string, h WorkspaceHand
 			active = active || file["action"] != "delete" && file["action"] != "move/delete"
 		}
 		if active {
-			if _, err = bound.p4Raw(nil, "delete", "//"+h.Client+"/..."); err != nil {
+			if _, err = bound.p4Raw(nil, "delete", h.Depot+"/..."); err != nil {
 				return err
 			}
 			if err = bound.p4Commit(message); err != nil {

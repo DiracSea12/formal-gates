@@ -211,6 +211,9 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 						t.Fatalf("native completed delivery response not lost: %v", err)
 					}
 					d.reopen()
+					state := driverState(t, d)
+					d.f.vcsRunner = runner
+					d.f.vcs = vcs.NewNative(d.f.root, name, runner).At(state.NativeRoot, state.NativeHandle)
 				} else if err != nil {
 					t.Fatal(err)
 				}
