@@ -1068,7 +1068,7 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if count > 1 {
+	if snap.State.SliceChild == nil && count > 1 {
 		return "", "", fmt.Errorf("engine delivery: native delivery requires at most one commit")
 	}
 	tree, err := f.vcs.TreeDigest(head)
@@ -1565,6 +1565,9 @@ func (f *Facade) recoverTerminalIntent() error {
 }
 
 func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
+	if err := f.cleanupCheckpoints(summary); err != nil {
+		return err
+	}
 	if err := f.store.CleanupTerminal(); err != nil {
 		return err
 	}
@@ -1577,6 +1580,35 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 		}
 		return nil
 	})
+}
+
+// cleanupCheckpoints consumes the master's durable terminal authority. Frozen
+// receipt evidence remains in that authority while active child files retire.
+func (f *Facade) cleanupCheckpoints(summary TerminalSummary) error {
+	s := summary.Termination
+	if summary.Status != "COMPLETE" || s == nil || s.ChildCreation == nil {
+		return nil
+	}
+	for _, plan := range s.ChildCreation.Children {
+		child := &Facade{admission: f.admission, root: f.root, runID: plan.RunID, stateDir: filepath.Join(f.root, EngineNamespace, plan.RunID)}
+		store, err := persistence.NewStore(child.stateDir, persistence.Config{PackageDigest: f.envelope.PackageDigest, DefinitionSource: f.envelope.DefinitionSource, InstalledTargetIdentity: f.envelope.InstalledTargetIdentity, AcquireAdmission: f.admission.acquire})
+		if err != nil {
+			return err
+		}
+		unlock, err := child.acquireNativeWindow()
+		if err != nil {
+			return err
+		}
+		err = child.endLifecycle()
+		if err == nil {
+			err = store.CleanupTerminal()
+		}
+		unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // freezeCleanupSummary preserves the intended terminal evidence before native
