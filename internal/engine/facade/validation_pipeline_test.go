@@ -986,14 +986,14 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	req.PackageDigest, req.InstalledTargetIdentity = admitted.PackageDigest, admitted.InstalledTargetIdentity
 	req.AdmissionRegistryPath, req.AdmissionTarget, req.AdmissionRoot = admitted.RegistryPath, admitted.Target, admitted.Root
 	req.AdmissionGeneration, req.AdmissionLease, req.AdmissionToken = admitted.Generation, admitted.Lease, admitted.Token
-	var sliceStart *protocol.SliceRunStart
-	var err error
 	if req.MasterRunID != "" {
-		sliceStart, err = claimMasterSlice(root, req)
+		master, err := Open(root, req.MasterRunID)
 		if err != nil {
 			return nil, Run{}, err
 		}
+		return createdSliceFacade(t, master, req.SliceID, options.Owner)
 	}
+	var sliceStart *protocol.SliceRunStart
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		return nil, Run{}, err

@@ -51,59 +51,76 @@ func (f *Facade) driveNative() (bool, error) {
 			if operation != "op.workspace" && operation != "op.candidate" && operation != "op.cleanup" {
 				continue
 			}
-			var params protocol.CandidateParameters
-			if operation == "op.candidate" {
-				if err := decodeNativeParams(intent, &params); err != nil {
-					return false, err
-				}
+			var progressed bool
+			var err error
+			if intent.Step == "children.workspace" {
+				progressed, err = f.driveChildWorkspace(intent, execute)
+			} else {
+				progressed, err = f.completeNativeIntent(snap.State, intent, execute)
 			}
-			if receipt, known := snap.State.HostActionReceipts[id]; known && receipt.Status == protocol.HostActionStatusExecuted {
-				continue
+			if err != nil || progressed {
+				return progressed, err
 			}
-			if execute {
-				if !snap.State.NativeActionWritable(intent, f.definition) {
-					continue
-				}
-			}
-			evidence, complete, err := f.nativeEvidence(snap.State, intent, execute)
-			if err != nil {
-				return false, err
-			}
-			if !complete {
-				_, aborted := snap.State.AbortDecision()
-				if aborted && operation != "op.cleanup" {
-					var observed protocol.HostActionObservation
-					if params.Promotion != nil {
-						prefix, err := f.promotionPrefix(*params.Promotion)
-						if err != nil {
-							return false, err
-						}
-						observed.Promotion = &prefix
-					} else {
-						resource, err := f.observeResource(snap.State, intent)
-						if err != nil {
-							return false, err
-						}
-						observed.Resource = &resource
-					}
-					_, _, err := f.engine.ReconcileHostAction(id, observed.Digest(), false, false, emptyFingerprint(), observed)
-					return err == nil, err
-				}
-				continue
-			}
-			values, err := evidence.fields()
-			if err != nil {
-				return false, err
-			}
-			event, err := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:"+id), id, operation, snap.State.RunProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
-			if err != nil {
-				return false, err
-			}
-			_, err = f.engine.Submit(event, emptyFingerprint())
-			return err == nil, err
+
 		}
 	}
 	return false, nil
+}
+
+// completeNativeIntent uses the caller's existing native window and original
+// typed receipt admission for both execution and lost-response observation.
+func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.HostActionIntent, execute bool) (bool, error) {
+	operation, id := intent.Adapter.Operation, intent.ActionID
+	var params protocol.CandidateParameters
+	if operation == "op.candidate" {
+		if err := decodeNativeParams(intent, &params); err != nil {
+			return false, err
+		}
+	}
+	if receipt, known := state.HostActionReceipts[id]; known && receipt.Status == protocol.HostActionStatusExecuted {
+		return false, nil
+	}
+	if execute {
+		if !state.NativeActionWritable(intent, f.definition) {
+			return false, nil
+		}
+	}
+	evidence, complete, err := f.nativeEvidence(state, intent, execute)
+	if err != nil {
+		return false, err
+	}
+	if !complete {
+		_, aborted := state.AbortDecision()
+		if aborted && operation != "op.cleanup" {
+			var observed protocol.HostActionObservation
+			if params.Promotion != nil {
+				prefix, err := f.promotionPrefix(*params.Promotion)
+				if err != nil {
+					return false, err
+				}
+				observed.Promotion = &prefix
+			} else {
+				resource, err := f.observeResource(state, intent)
+				if err != nil {
+					return false, err
+				}
+				observed.Resource = &resource
+			}
+			_, _, err := f.engine.ReconcileHostAction(id, observed.Digest(), false, false, emptyFingerprint(), observed)
+			return err == nil, err
+		}
+		return false, nil
+	}
+	values, err := evidence.fields()
+	if err != nil {
+		return false, err
+	}
+	event, err := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:"+id), id, operation, state.RunProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+	if err != nil {
+		return false, err
+	}
+	_, err = f.engine.Submit(event, emptyFingerprint())
+	return err == nil, err
 }
 
 func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIntent) (protocol.ResourceObservation, error) {

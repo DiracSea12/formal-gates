@@ -550,7 +550,7 @@ func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
 	if err == nil {
 		state.abortPlan(plan)
-		if state.Phase == runtime.PhaseSliceReady && !state.abortRequested() {
+		if (state.Phase == runtime.PhaseSliceReady || state.Phase == runtime.PhasePreparing || state.SliceChild == nil && state.Topology != nil && state.Topology.Decision == topologySplit && len(state.SliceChildren) == 0) && !state.abortRequested() {
 			plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitDependencies}}
 		}
 	}
@@ -1097,6 +1097,11 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 	}
 	if state.Phase == runtime.PhaseTerminal {
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
+	}
+	if state.Phase == runtime.PhasePreparing {
+		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil {
+			return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "preparing child has no business control authority"}
+		}
 	}
 	nextRevision := revision + 1
 	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, expectedFingerprint)
@@ -2796,6 +2801,9 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 		}
 	}
 	step := state.nextHostActionStep(e.cfg.Definition, operation)
+	if operation == "op.workspace" {
+		step = childWorkspaceStep(params)
+	}
 	if step == "" && nativeOperation(operation) {
 		for _, compiled := range e.cfg.Definition.Steps {
 			if owner, ok := compiled.Payload.(compiler.CompiledHostActionStep); ok && owner.Operation == operation {

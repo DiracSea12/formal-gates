@@ -138,10 +138,6 @@ const (
 	// 久投影不一致、已签发事实无来源、或将要超发而账本未记）——以
 	// BLOCKED_BUG 终止该次签发，零派发。
 	CodeGuardBlockedBug = "BLOCKED_BUG"
-	// CodeSliceClaimRejected：child run 对 master 分片的认领无法执行（master
-	// 非 ACTIVE、未绑定 split 拓扑、分片越界、已被异 id 认领或受理身份与
-	// master 账目不匹配）——零状态变化。
-	CodeSliceClaimRejected = "SLICE_CLAIM_REJECTED"
 )
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
@@ -605,13 +601,13 @@ type State struct {
 	// SliceChild 是 child run 的继承事实（master run、分片名与继承结论绑定
 	// 的需求 revision）；nil＝普通 run。产品审/技术审经它等价满足，child 不
 	// 自行增加审查轮次。
-	SliceChild *SliceChildBinding `json:"sliceChild,omitempty"`
+	SliceChild    *SliceChildBinding `json:"sliceChild,omitempty"`
+	ChildCreation *ChildCreation     `json:"childCreation,omitempty"`
 	// SliceReceipt is the immutable successful child checkpoint. Its sidecar
 	// is evidence only; phase, cost and the owner endpoint commit with this value.
 	SliceReceipt *SliceReceipt `json:"sliceReceipt,omitempty"`
-	// SliceChildren 是 master 账上的分片认领事实（sliceID → childRunID，累
-	// 积运行事实）。它不放进 TopologyBinding：拓扑是不可变的确认决定，
-	// children 是运行期累积——一个控制事实只有一个权威来源。
+	// SliceChildren is the complete released membership; preparation is owned
+	// by ChildCreation and cannot authorize a child.
 	SliceChildren map[string]string `json:"sliceChildren,omitempty"`
 	// SliceReceipts is the master's immutable accepted child evidence, keyed by
 	// child run. Receipt insertion, its cases payload and cost contribution share

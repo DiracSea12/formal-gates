@@ -18,6 +18,8 @@ import (
 type RunPhase string
 
 const (
+	// PhasePreparing keeps a planned child locked until the master releases it.
+	PhasePreparing RunPhase = "PREPARING"
 	// PhaseIntakeRegistered：run 已创建，受理确认已登记（intake receipt）。
 	PhaseIntakeRegistered RunPhase = "INTAKE_REGISTERED"
 	// PhaseProductReview：产品审进行中。
@@ -54,7 +56,7 @@ const (
 // phases 是全部合法 phase 值，顺序即建议图的主线顺序。枚举校验与终止
 // 闭包都从本表派生，新增 phase 必须同步维护 pipelineEdges。
 var phases = []RunPhase{
-	PhaseIntakeRegistered, PhaseProductReview, PhaseTechnicalReview,
+	PhasePreparing, PhaseIntakeRegistered, PhaseProductReview, PhaseTechnicalReview,
 	PhaseStartReadiness, PhaseTopologyAndRoute, PhaseDevelopmentParallel,
 	PhaseSnapshotReady, PhasePostReview, PhaseRepair, PhaseSliceReady,
 	PhaseMainlineIntegration, PhaseMergeValidation, PhaseFinalizingCleanup, PhaseTerminal,
@@ -101,6 +103,7 @@ type PhaseEdge struct {
 //	MERGE_VALIDATION → TERMINAL                  master Seal
 //	SLICE_READY → TERMINAL                       child 由 master Seal/级联终结
 var pipelineEdges = []PhaseEdge{
+	{PhasePreparing, PhaseTopologyAndRoute},
 	{PhaseIntakeRegistered, PhaseProductReview},
 	{PhaseProductReview, PhaseTechnicalReview},
 	{PhaseTechnicalReview, PhaseStartReadiness},

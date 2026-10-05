@@ -55,7 +55,9 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 			case compiler.CompiledHumanAskStep:
 				settle = s.hasDecisionForStep(step.Header.ID)
 			case compiler.CompiledHostActionStep:
-				if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" {
+				if step.Header.ID == "children.workspace" {
+					settle = s.creationStepSettled(step.Header.ID)
+				} else if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" {
 					settle = s.validationConcluded(compiled) && (payload.Operation != "op.cleanup" || s.SliceChild != nil || s.ResourcesCleaned())
 				} else if payload.Operation == "op.candidate" {
 					continue
@@ -65,6 +67,9 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 				}
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
+				if step.Header.ID == "children.prepare" || step.Header.ID == "children.publish" {
+					settle = s.creationStepSettled(step.Header.ID)
+				}
 			case compiler.CompiledAgentStep:
 				if validationHandler(*step) != "" {
 					settle = s.validationConcluded(compiled)

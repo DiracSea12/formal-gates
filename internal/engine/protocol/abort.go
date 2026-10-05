@@ -13,6 +13,9 @@ import (
 // AbortDecision derives the terminal authority from the accepted user decision.
 func (s *State) AbortDecision() (RecordedDecision, bool) {
 	var chosen RecordedDecision
+	if s.SliceChild != nil && s.SliceChild.ParentAbort != nil {
+		chosen = *s.SliceChild.ParentAbort
+	}
 	for _, d := range s.Decisions {
 		if d.Choice == "abort" && (d.Control == ControlAbort || d.Control == ControlValidation || d.Control == ControlRecovery) && (chosen.Revision == 0 || d.Revision < chosen.Revision) {
 			chosen = d

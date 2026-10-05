@@ -1,5 +1,5 @@
 // slice.go 是拆分 run 身份层在提交协议层的归属点：split 拓扑的验收条件
-// 责任映射校验与合并路线词汇、master 账上的分片认领（sliceID → childRunID
+// 责任映射校验与合并路线词汇、master 的已解锁成员（sliceID → childRunID
 // 的唯一事实源）、child run 启动携带的继承事实，以及整体审查结论经继承
 // 等价满足的判据。相位机与账本校验（review.go）直接引用本文件的判据，
 // 不另建第二套判定路径。
@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"formal-gates/internal/cost"
@@ -38,9 +37,10 @@ const (
 // 是 MasterRunID——child 不自行增加审查轮次（incremental-seal-plan：split
 // child 继承 master 的整体产品/技术审，不自行增加 series）。
 type SliceChildBinding struct {
-	MasterRunID         string `json:"masterRunId"`
-	SliceID             string `json:"sliceId"`
-	RequirementRevision string `json:"requirementRevision"`
+	MasterRunID         string            `json:"masterRunId"`
+	SliceID             string            `json:"sliceId"`
+	RequirementRevision string            `json:"requirementRevision"`
+	ParentAbort         *RecordedDecision `json:"parentAbort,omitempty"`
 }
 
 // SliceRunStart 是 child run 启动（Init）一次落账的完整继承事实：身份绑定
@@ -411,77 +411,6 @@ func (s *State) splitACOwners(decision *TopologyDecision) (map[string]string, er
 // merge-qa 在前、merge-gate 在后）。
 func mergeRouteGates() []string {
 	return []string{mergeQAGateID, mergeGateID}
-}
-
-// ClaimSlice 由 child run 的启动路径在 master 账上认领一个分片，并返回
-// child 启动所需的继承事实。唯一性与身份匹配都在认领事务内判定：master
-// 须 ACTIVE 且已绑定 split 拓扑、分片在拓扑内、child 受理需求 revision 等
-// 于 master 当前确认 revision、双方 BaseSnapshot 相同；同一分片只能被一个
-// childRunID 认领（认领即事实——异 id 重入拒绝，同 id 重入幂等补齐，两写窗
-// 中断后经同一创建路径恢复）。
-func (e *Engine) ClaimSlice(sliceID, childRunID, childRevision, childBaseSnapshot, expectedFingerprint string) (*SliceRunStart, error) {
-	claimRejected := func(format string, args ...any) error {
-		return &RejectedError{Code: CodeSliceClaimRejected, Detail: fmt.Sprintf(format, args...)}
-	}
-	sliceID, childRunID = strings.TrimSpace(sliceID), strings.TrimSpace(childRunID)
-	if sliceID == "" || childRunID == "" {
-		return nil, claimRejected("a slice claim needs both the slice id and the child run id")
-	}
-	revision, state, err := e.load()
-	if err != nil {
-		return nil, err
-	}
-	if state == nil {
-		return nil, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
-	}
-	// 认领是 master 账上的权威写入：需求变化写屏障（Phase A）在位时可区
-	// 分拒绝、零写（复用 FA 单一屏障闸判定，不另建第二套屏障逻辑）。
-	if err := state.errWriteBarrier("slice claiming"); err != nil {
-		return nil, err
-	}
-	if state.Phase == runtime.PhaseTerminal || state.abortRequested() {
-		return nil, claimRejected("master run %q is not ACTIVE", state.RunID)
-	}
-	if state.Topology == nil || state.Topology.Decision != topologySplit {
-		return nil, claimRejected("master run %q has no confirmed split topology", state.RunID)
-	}
-	if !slices.Contains(state.Topology.Slices, sliceID) {
-		return nil, claimRejected("slice %q is not part of the split topology of master run %q", sliceID, state.RunID)
-	}
-	if current := state.RequirementRevision(); childRevision != current {
-		return nil, claimRejected("child intake revision %q does not match the master's current confirmed revision %q", childRevision, current)
-	}
-	if childBaseSnapshot != state.BaseSnapshot {
-		return nil, claimRejected("child base snapshot %q does not match the master base snapshot %q", childBaseSnapshot, state.BaseSnapshot)
-	}
-	if claimed := state.SliceChildren[sliceID]; claimed != "" {
-		if claimed != childRunID {
-			return nil, claimRejected("slice %q is already claimed by child run %q", sliceID, claimed)
-		}
-		// 同 id 重入：认领事实已在账，直接返回继承事实补齐缺口侧。
-		return sliceRunStartOf(state, sliceID), nil
-	}
-	if state.SliceChildren == nil {
-		state.SliceChildren = map[string]string{}
-	}
-	state.SliceChildren[sliceID] = childRunID
-	if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
-		return nil, err
-	}
-	return sliceRunStartOf(state, sliceID), nil
-}
-
-// sliceRunStartOf 从 master 状态派生 child 启动继承事实（深拷贝拓扑，避免
-// 与 master 状态共享可变容器）。
-func sliceRunStartOf(state *State, sliceID string) *SliceRunStart {
-	return &SliceRunStart{
-		Binding: SliceChildBinding{
-			MasterRunID:         state.RunID,
-			SliceID:             sliceID,
-			RequirementRevision: state.RequirementRevision(),
-		},
-		Topology: copyTopology(*state.Topology),
-	}
 }
 
 // copyTopology 深拷贝拓扑绑定（继承落账用）。

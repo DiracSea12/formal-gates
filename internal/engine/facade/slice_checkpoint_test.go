@@ -27,9 +27,8 @@ import (
 // reviewReadySlice drives a real Git child through development and candidate freeze.
 func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validationDriver {
 	t.Helper()
-	root := t.TempDir()
-	base := snapshotRepoCommits(t, root)[0]
-	master := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
+	master := nativeMasterDriver(t)
+	base := master.run.BaseSnapshot
 	passPreDevelopmentReviews(t, master, commandPlan())
 	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: master.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: master.revision, Document: validationDocument}}})
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
@@ -40,7 +39,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: master.git}
+	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 	route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality", "security"}}
 	if mode == "custom" {
 		route.Selected = []string{"security"}
@@ -49,10 +48,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
 	child.drive()
 	id, input := planBatchAction(child, "command")
-	author := filepath.Join(t.TempDir(), "author")
-	if err := child.git.AddWorktree(author, driverState(t, child).InitialSnapshot); err != nil {
-		t.Fatal(err)
-	}
+	author := input.Workspace.Path
 	child.git = vcs.New(author, nil)
 	if err := os.WriteFile(filepath.Join(author, "app_test.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -181,7 +177,6 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", emptyFingerprint()); err == nil {
 			t.Fatal("checkpoint admitted unbound promotion")
 		}
-		child.drive()
 		assertNoSuccessfulSliceReceipt(t, child)
 	})
 	for _, kind := range []string{"dirty", "drift", "tree", "barrier", "abort", "independent-seal"} {
@@ -191,12 +186,12 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 			var err error
 			switch kind {
 			case "dirty":
-				if err := os.WriteFile(filepath.Join(child.f.root, "unsubmitted.go"), []byte("package main\n"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(child.f.vcs.Root(), "unsubmitted.go"), []byte("package main\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				_, err = child.f.Drive()
 			case "drift":
-				snapshotCommitOne(t, child.f.root, "different delivery")
+				snapshotCommitOne(t, child.f.vcs.Root(), "different delivery")
 				_, err = child.f.Drive()
 			case "tree":
 				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, strings.Repeat("1", 40), nil, "", emptyFingerprint())
@@ -305,7 +300,7 @@ func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
 			if r.Status != runtime.PhaseSliceReady || r.ChildRunID != "child" || r.MasterRunID != "validation" || r.SliceID != "lane-core" || r.Envelope != child.f.envelope || r.Snapshot != before.PromotedSnapshot || r.Tree != tree || r.Digest != tree || r.RequirementRevision != child.revision || !reflect.DeepEqual(r.Topology, *before.Topology) || r.RouteMode != mode || !reflect.DeepEqual(r.SelectedGates, before.SelectedGates) {
 				t.Fatalf("receipt bindings = %+v", r)
 			}
-			if content, err := (vcs.ExecRunner{}).Run(child.f.root, "git", "show", r.Snapshot+":app_test.go"); err != nil || content != "package main" {
+			if content, err := (vcs.ExecRunner{}).Run(child.f.vcs.Root(), "git", "show", r.Snapshot+":app_test.go"); err != nil || content != "package main" {
 				t.Fatalf("final native identity lost developer tests: content=%q error=%v", content, err)
 			}
 			v := r.Validation
@@ -374,7 +369,7 @@ func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, child.f.root, "later authorized work")
+	snapshotCommitOne(t, child.f.vcs.Root(), "later authorized work")
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine, intervalLaterLine})
 	child.reopen()
 	for i := 0; i < 2; i++ {
@@ -458,7 +453,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 					t.Fatal("post-commit interruption split receipt, owner cost or endpoint")
 				}
 				writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine, intervalLaterLine})
-				snapshotCommitOne(t, child.f.root, "later work after checkpoint commit")
+				snapshotCommitOne(t, child.f.vcs.Root(), "later work after checkpoint commit")
 			} else if driverState(t, child).Cost.Owner != nil {
 				t.Fatal("failed checkpoint committed owner separately")
 			}

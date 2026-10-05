@@ -751,7 +751,7 @@ func (s *State) topologyRouteConfirmed() bool {
 // 可直接进入 cleanup 终态）。
 func phaseRank(phase runtime.RunPhase) int {
 	switch phase {
-	case runtime.PhaseIntakeRegistered:
+	case runtime.PhasePreparing, runtime.PhaseIntakeRegistered:
 		return 0
 	case runtime.PhaseProductReview:
 		return 1

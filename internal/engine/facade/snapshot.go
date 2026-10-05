@@ -131,7 +131,7 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		p := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: f.root, TargetBase: s.BaseSnapshot, TargetStart: observed, Message: strings.TrimSpace(message)}
+		p := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: f.vcs.Root(), TargetBase: s.BaseSnapshot, TargetStart: observed, Message: strings.TrimSpace(message)}
 		if s.NativeRoot != "" {
 			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
 		}

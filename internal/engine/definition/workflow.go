@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "8"
+const Version authoring.DefinitionVersion = "9"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -35,6 +35,8 @@ var (
 		runner authoring.RunnerKind
 	}{
 		{"engine.entry.parse", authoring.RunnerEngineLocal},
+		{"engine.children.prepare", authoring.RunnerEngineLocal},
+		{"engine.children.publish", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
 		{"engine.review.worker", authoring.RunnerAgentWorker},
 		{"engine.readiness.plan", authoring.RunnerAgentWorker},
@@ -111,7 +113,13 @@ func Workflow() *compiler.Definition {
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
 		})
 	must("review.readiness", err)
-	steps := []authoring.Step{parse, persist, review, readiness}
+	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "review.readiness"), ioWith("review.readiness"), authoring.LocalSpec{Handler: "engine.children.prepare"})
+	must("children.prepare", err)
+	workspace, err := authoring.NewHostActionStep(header("children.workspace", "children", "children.prepare"), ioWith("children.prepare"), authoring.HostActionSpec{Handler: "engine.workspace", Boundary: authoring.BoundaryExternalCapability, Operation: "op.workspace", Schema: "schema.workspace", Timeout: time.Minute})
+	must("children.workspace", err)
+	publish, err := authoring.NewLocalStep(header("children.publish", "children", "children.workspace"), ioWith("children.workspace"), authoring.LocalSpec{Handler: "engine.children.publish"})
+	must("children.publish", err)
+	steps := []authoring.Step{parse, persist, review, readiness, prepare, workspace, publish}
 	for _, spec := range []struct {
 		id, handler string
 		reason      authoring.NonProgrammableReason

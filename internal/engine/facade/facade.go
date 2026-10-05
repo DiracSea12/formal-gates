@@ -63,9 +63,8 @@ const (
 // StartRequest is the candidate bootstrap request.  Runtime is not a caller
 // selectable switch in normal use; an admitted target identity/package digest
 // selects the candidate engine.  Runtime is retained as a read-only projection
-// for diagnostics and is always set to "engine" by Start.  MasterRunID 与
-// SliceID 同时非空时是分片 child 启动：在 master run 上认领分片并继承整体
-// 拓扑与审查结论；两者皆空是普通启动，行为不变。
+// for diagnostics and is always set to "engine" by Start. MasterRunID and
+// SliceID bind Controller-created children; public Start creates top-level runs.
 type StartRequest struct {
 	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
@@ -442,6 +441,13 @@ type Facade struct {
 // Start creates an engine candidate run after validating the complete typed
 // intake receipt.  Validation happens before the first state directory write.
 func Start(options StartOptions) (*Facade, Run, error) {
+	if options.Request.MasterRunID != "" || options.Request.SliceID != "" {
+		return nil, Run{}, fmt.Errorf("engine start: children are created by the master controller")
+	}
+	return startRun(options, nil, "")
+}
+
+func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRoot string) (*Facade, Run, error) {
 	if strings.TrimSpace(options.Root) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: root is required")
 	}
@@ -484,12 +490,6 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if req.Route != "lightweight" && req.Route != "regular" {
 		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
 	}
-	// 分片 child 是正式 run：必须显式以 regular 启动（sliced-runs 需求 10
-	// ——拆分与拆分决定记录仅限正式 run，轻量不增加任何拆分或记录）。拒绝
-	// 先于任何 master 写（认领不在此时点发生）。
-	if (req.MasterRunID != "" || req.SliceID != "") && req.Route != "regular" {
-		return nil, Run{}, fmt.Errorf("engine start: a slice child must start on the explicit regular route")
-	}
 	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
 	}
@@ -498,8 +498,11 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	// 引入 VCS 依赖。
 	var vcsProvider *vcs.Provider
 	var initialSnapshot string
-	if req.Route == "regular" {
-		vcsProvider = vcs.New(root, options.VCSRunner)
+	if nativeRoot == "" {
+		nativeRoot = root
+	}
+	if req.Route == "regular" && sliceStart == nil {
+		vcsProvider = vcs.New(nativeRoot, options.VCSRunner)
 		current, err := vcsProvider.Resolve()
 		if err != nil {
 			return nil, Run{}, err
@@ -600,20 +603,6 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if req.DefinitionSource != DefaultDefinitionSource {
 		return nil, Run{}, unsupported("definitionSource", DefaultDefinitionSource, req.DefinitionSource)
 	}
-	// 分片 child 启动：认领先于 child 状态落盘（两写窗的中断以认领为事实，
-	// 同 childRunID 重入经同一创建路径补齐）。锁序＝child run 锁（上方已持
-	// 有）→master run 锁，无人持 master 锁等 child 锁，无环。
-	var sliceStart *protocol.SliceRunStart
-	if req.MasterRunID != "" || req.SliceID != "" {
-		if req.MasterRunID == "" || req.SliceID == "" {
-			return nil, Run{}, fmt.Errorf("engine start: a slice child requires both the master run id and the slice id")
-		}
-		claim, err := claimMasterSlice(root, req)
-		if err != nil {
-			return nil, Run{}, err
-		}
-		sliceStart = claim
-	}
 	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), req.RunID)
 	// already-exists 与恢复共用同一成立判据：活动 state 或终态证据任一在
 	// 即拒——已完成 run 不可重启，终态证据不动。
@@ -656,6 +645,9 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	// Any failure after the prefix retains its evidence if installation moved.
 	// Established state and side effects stay available for normal reconciliation.
 	cleanupFailedStart := func(cause error) error {
+		if sliceStart != nil {
+			return cause
+		}
 		if err := admission.write(func() error {
 			if err := os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID)); err != nil {
 				return err
@@ -682,11 +674,23 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	if err := initializeRun(eng, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admission, cd); err != nil {
+	if sliceStart != nil {
+		bootstrap := &Facade{admission: admission, stateDir: stateDir}
+		unlock, err := bootstrap.acquireNativeWindow()
+		if err != nil {
+			return nil, Run{}, err
+		}
+		err = initializeRun(eng, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admission, cd)
+		unlock()
+		if err != nil {
+			return nil, Run{}, err
+		}
+		vcsProvider = vcs.New(nativeRoot, options.VCSRunner)
+	} else if err := initializeRun(eng, root, req, initialSnapshot, nil, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
 	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
@@ -704,11 +708,10 @@ func Start(options StartOptions) (*Facade, Run, error) {
 // The configured engine carries the native root and definition; initial cost
 // and lifecycle facts are bound before any workflow dispatch.
 func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialSnapshot string, sliceStart *protocol.SliceRunStart, owner OwnerBinding, tokenCap *int64, admission Admission, cd *compiler.CompiledDefinition) error {
-	// child 从继承事实出发：受理即处于拓扑/路线段（拓扑已继承，直接进入
-	// SELECT_ROUTE）。
+	// A child stays PREPARING until the master accepts every native proof.
 	phase := runtime.PhaseIntakeRegistered
 	if sliceStart != nil {
-		phase = runtime.PhaseTopologyAndRoute
+		phase = runtime.PhasePreparing
 	}
 	view, err := decision.NewState(cd.Version, phase)
 	if err != nil {
@@ -749,33 +752,6 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialS
 	return nil
 }
 
-// claimMasterSlice 在 master run 锁内完成 child run 的分片认领并返回继承
-// 事实。认领互斥由 master run 锁＋引擎 CAS 共同保证（并行创建同一分片恰成
-// 一个）；唯一性与身份匹配的权威判定在引擎 ClaimSlice（认领即事实——异
-// id 重入拒绝、同 id 重入幂等）。
-func claimMasterSlice(root string, req StartRequest) (*protocol.SliceRunStart, error) {
-	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(EngineNamespace), req.MasterRunID, "state.json")); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("engine start: master run %q has no engine state", req.MasterRunID)
-		}
-		return nil, err
-	}
-	unlock, err := coordination.AcquireRunWaiting(root, req.MasterRunID)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	master, err := Open(root, req.MasterRunID)
-	if err != nil {
-		return nil, fmt.Errorf("engine start: open master run %q: %w", req.MasterRunID, err)
-	}
-	claim, err := master.engine.ClaimSlice(req.SliceID, req.RunID, req.IntakeConfirmationReceipt.RequirementRevision, req.BaseSnapshot, emptyFingerprint())
-	if err != nil {
-		return nil, fmt.Errorf("engine start: claim slice %q of master run %q: %w", req.SliceID, req.MasterRunID, err)
-	}
-	return claim, nil
-}
-
 // Open loads an existing engine run and validates all six identity fields
 // before exposing a writer.  No fallback to the legacy namespace occurs.
 func Open(root, runID string) (*Facade, error) {
@@ -813,7 +789,14 @@ func Open(root, runID string) (*Facade, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := store.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	nativeRoot := ""
+	if stored, err := store.Load(); err == nil {
+		var state protocol.State
+		if err := json.Unmarshal(stored.Content, &state); err != nil {
+			return nil, err
+		}
+		nativeRoot = state.NativeRoot
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	} else if errors.Is(err, fs.ErrNotExist) {
 		// A completed run may have had its active state cleaned while retaining
@@ -832,6 +815,9 @@ func Open(root, runID string) (*Facade, error) {
 			if summaryErr := persistence.ValidateEnvelopeWithIdentity(summary.Envelope, req.PackageDigest, req.DefinitionSource, req.InstalledTargetIdentity); summaryErr != nil {
 				return nil, summaryErr
 			}
+			if summary.Termination != nil {
+				nativeRoot = summary.Termination.NativeRoot
+			}
 			break
 		}
 		if _, summaryErr := os.Stat(filepath.Join(stateDir, "terminal-summary.json")); summaryErr != nil {
@@ -846,12 +832,12 @@ func Open(root, runID string) (*Facade, error) {
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
 	if err != nil {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(root, req.Route)}, nil
+	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(nativeRoot, req.Route)}, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -861,6 +847,9 @@ func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
 	}
+	if err := f.coordinatePreparingChild(); err != nil {
+		return Run{}, err
+	}
 	if f.vcs != nil {
 		unlock, err := f.acquireNativeWindow()
 		if err != nil {
@@ -868,6 +857,11 @@ func (f *Facade) Drive() (Run, error) {
 		}
 		defer unlock()
 	}
+	return f.driveInWindow()
+}
+
+// driveInWindow consumes the caller's existing native window without reentry.
+func (f *Facade) driveInWindow() (Run, error) {
 	// Recovery is a write-side reconciliation step: it may create/remove the
 	// protocol lock and orphan temp files.  Keep it out of Open/Show/Status/Next
 	// so those read-only paths cannot mutate directory metadata.
@@ -926,6 +920,9 @@ func (f *Facade) Drive() (Run, error) {
 		}
 	} else {
 		for {
+			if err := f.driveChildren(); err != nil {
+				return Run{}, err
+			}
 			plan, _, err = f.engine.Drive(emptyFingerprint())
 			if err != nil {
 				break
@@ -947,7 +944,7 @@ func (f *Facade) Drive() (Run, error) {
 				}
 				continue
 			}
-			if !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
+			if current.State.ChildCreation == nil && !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
 				if err := f.engine.BeginCleanup(emptyFingerprint()); err != nil {
 					return Run{}, err
 				}
@@ -1911,7 +1908,7 @@ func runDirectoryEstablished(stateDir string) (bool, error) {
 // 证据）时只清过期 intent，目录不动；三者皆无而 intent 在＝真半启动残留
 // （request.json 只是 StartRequest 的纯投影——无 state 即无 run，「request
 // 先于 state」的不变量不受影响），stateDir 内容与 intent 一并清除，让同
-// 一 Start 路径重建（分片认领同 childRunID 幂等已备）。
+// 一 bootstrap 路径重建。
 func recoverStartIntent(root, runID string) error {
 	path := startIntentPath(root, runID)
 	data, err := os.ReadFile(path)

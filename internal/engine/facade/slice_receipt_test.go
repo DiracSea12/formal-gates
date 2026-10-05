@@ -24,9 +24,7 @@ import (
 
 func receiptMaster(t *testing.T) *validationDriver {
 	t.Helper()
-	root := t.TempDir()
-	base := snapshotRepoCommits(t, root)[0]
-	d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
+	d := nativeMasterDriver(t)
 	meterReceiptDispatches(d, 3, 9, 4)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
@@ -77,7 +75,7 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: master.git}
+	d := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 	meterReceiptDispatches(d, 1, 4, 2)
 	route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality", "security"}}
 	if mode == "custom" {
@@ -87,10 +85,7 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, input := planBatchAction(d, "command")
-	author := filepath.Join(t.TempDir(), "author")
-	if err := d.git.AddWorktree(author, driverState(t, d).InitialSnapshot); err != nil {
-		t.Fatal(err)
-	}
+	author := input.Workspace.Path
 	d.git = vcs.New(author, nil)
 	path := childID + "_test.go"
 	if err := os.WriteFile(filepath.Join(author, path), []byte("package main\n"), 0o600); err != nil {
@@ -290,9 +285,6 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 	if len(driverState(t, master).SliceReceipts) != 0 {
 		t.Fatal("unfinished child was accepted")
 	}
-	if _, err := master.f.engine.ClaimSlice("lane-tooling", "waiting", master.revision, master.run.BaseSnapshot, emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
 	master.drive()
 	if len(driverState(t, master).SliceReceipts) != 0 {
 		t.Fatal("claim without child state fabricated receipt")
@@ -389,7 +381,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 				}
 			}
 			// Later native work and transcript usage cannot redefine frozen child facts.
-			snapshotCommitOne(t, child.f.root, "later authorized work")
+			snapshotCommitOne(t, child.f.vcs.Root(), "later authorized work")
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine, intervalLaterLine})
 			master.reopen()
 			master.drive()
@@ -422,7 +414,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	}
 	resolveGateFinding(child, finding, wave.ID)
 	repair, input := child.action("engine.repair")
-	snapshotCommitOne(t, child.git.Root(), "correct documented output ordering")
+	snapshotCommitOne(t, input.Workspace.Path, "correct documented output ordering")
 	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"build passed"}, Tests: []string{"command regression passed"}}})
 	for {
 		child.drive()

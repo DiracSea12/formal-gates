@@ -220,7 +220,14 @@ func (e *Engine) ensureWorkspace(s *State, r GitResource, nextRevision uint64) (
 	}
 	for _, intent := range s.PendingHostActions {
 		if intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" && s.candidateInputsCurrent(intent, e.cfg.Definition) {
-			return false, nil
+			var original WorkspaceParameters
+			raw, _ := json.Marshal(intent.Adapter.Params)
+			if err := json.Unmarshal(raw, &original); err != nil {
+				return false, err
+			}
+			if original.Resource.ID == r.ID {
+				return false, nil
+			}
 		}
 	}
 	if s.GitResources == nil {
@@ -320,6 +327,9 @@ func (e *Engine) applyResourceReceipt(s *State, intent HostActionIntent, receipt
 	case "op.workspace":
 		var v WorkspaceEvidence
 		_ = decodeAdapterValues(receipt, &v)
+		if v.Resource.Role == "child-target" && (s.ChildCreation == nil || v.Digest != s.ChildCreation.Digest) {
+			return validationError("child workspace receipt content differs from the creation source")
+		}
 		applicable := s.nativeEffectApplicable(intent, e.cfg.Definition)
 		project := applicable && !s.abortRequested() && v.Resource.Role == "blackbox-design" && s.candidateInputsCurrent(intent, e.cfg.Definition)
 		if applicable {
@@ -404,6 +414,9 @@ func (s *State) resourceUsable(id string) bool {
 }
 
 func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition) bool {
+	if p.Resource.Role == "child-target" {
+		return s.creationWorkspaceCurrent(p)
+	}
 	if s.Validation == nil || s.abortRequested() || p.RequirementRevision != s.Validation.RequirementRevision || p.Generation != s.Validation.Generation || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || s.GitResources[p.Resource.ID] != p.Resource {
 		return false
 	}
@@ -462,6 +475,9 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 }
 
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
+	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
+		return false
+	}
 	if s.pendingControl() || s.nonCleanupNativeDebt() || s.SliceChild != nil && !s.abortRequested() || len(s.PendingActions) != 0 {
 		return false
 	}
@@ -496,7 +512,7 @@ func (s *State) ResourceCleanupPending(id string) bool {
 	return false
 }
 
-func (e *Engine) BeginCleanup(expectedFingerprint string) error {
+func (e *Engine) BeginCleanup(expectedFingerprint string, children ...*State) error {
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -506,6 +522,9 @@ func (e *Engine) BeginCleanup(expectedFingerprint string) error {
 	}
 	if !s.CleanupEligible(e.cfg.Definition) {
 		return validationError("cleanup requires concluded validation or an abort decision")
+	}
+	if !s.childTargetsCleanable(children) {
+		return validationError("cleanup requires terminal children with cleaned resources")
 	}
 	if s.SliceChild != nil && !s.abortRequested() {
 		return validationError("a child retains its checkpoint resources")
@@ -546,7 +565,7 @@ func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.Compi
 		}
 		view.RequiredTasks[step.Header.ID] = nil
 		for _, intent := range s.ExecutableHostActions() {
-			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && s.NativeActionCurrent(intent, cd) {
+			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && intent.Step == step.Header.ID && s.NativeActionCurrent(intent, cd) {
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}})
 			}
 		}

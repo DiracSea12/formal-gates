@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "8",
+  "version": "9",
   "stateSchemaVersion": "1",
   "writer": "engine",
   "transactionOwner": "validate",
@@ -13,11 +13,93 @@
   "entryNode": "entry",
   "steps": [
     {
+      "id": "children.prepare",
+      "nodeId": "children",
+      "ordinal": 4,
+      "kind": "LOCAL",
+      "definitionVersion": "9",
+      "dependencies": [
+        "review.readiness"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "review.readiness",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.children.prepare"
+      }
+    },
+    {
+      "id": "children.workspace",
+      "nodeId": "children",
+      "ordinal": 5,
+      "kind": "HOST_ACTION",
+      "definitionVersion": "9",
+      "dependencies": [
+        "children.prepare"
+      ],
+      "authority": "ENGINE",
+      "runner": "HOST_ADAPTER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "children.prepare",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.workspace",
+        "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
+        "operation": "op.workspace",
+        "schema": "schema.workspace",
+        "timeoutNs": 60000000000
+      }
+    },
+    {
+      "id": "children.publish",
+      "nodeId": "children",
+      "ordinal": 6,
+      "kind": "LOCAL",
+      "definitionVersion": "9",
+      "dependencies": [
+        "children.workspace"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "children.workspace",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.children.publish"
+      }
+    },
+    {
       "id": "entry.parse",
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -33,7 +115,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "entry.parse"
       ],
@@ -66,7 +148,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "entry.persist"
       ],
@@ -100,7 +182,7 @@
       "nodeId": "review",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.worker"
       ],
@@ -132,9 +214,9 @@
     {
       "id": "candidate.materialize",
       "nodeId": "validation",
-      "ordinal": 4,
+      "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -162,9 +244,9 @@
     {
       "id": "cleanup.materialize",
       "nodeId": "validation",
-      "ordinal": 5,
+      "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -192,9 +274,9 @@
     {
       "id": "development.repair",
       "nodeId": "validation",
-      "ordinal": 6,
+      "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -228,9 +310,9 @@
     {
       "id": "development.worker",
       "nodeId": "validation",
-      "ordinal": 7,
+      "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -264,9 +346,9 @@
     {
       "id": "qa.design",
       "nodeId": "validation",
-      "ordinal": 8,
+      "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -300,9 +382,9 @@
     {
       "id": "qa.execution",
       "nodeId": "validation",
-      "ordinal": 9,
+      "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -336,9 +418,9 @@
     {
       "id": "qa.review",
       "nodeId": "validation",
-      "ordinal": 10,
+      "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -373,9 +455,9 @@
     {
       "id": "validation.gate",
       "nodeId": "validation",
-      "ordinal": 11,
+      "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],
@@ -410,9 +492,9 @@
     {
       "id": "workspace.materialize",
       "nodeId": "validation",
-      "ordinal": 12,
+      "ordinal": 15,
       "kind": "HOST_ACTION",
-      "definitionVersion": "8",
+      "definitionVersion": "9",
       "dependencies": [
         "review.readiness"
       ],

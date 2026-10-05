@@ -28,6 +28,9 @@ var goldenPhaseEdges = []PhaseEdge{
 	{PhasePostReview, PhaseSliceReady},
 	{PhasePostReview, PhaseSnapshotReady},
 	{PhasePostReview, PhaseTerminal},
+	{PhasePreparing, PhaseFinalizingCleanup},
+	{PhasePreparing, PhaseTerminal},
+	{PhasePreparing, PhaseTopologyAndRoute},
 	{PhaseProductReview, PhaseFinalizingCleanup},
 	{PhaseProductReview, PhaseTechnicalReview},
 	{PhaseProductReview, PhaseTerminal},
@@ -91,8 +94,8 @@ func TestPhaseTransitionsExhaustive(t *testing.T) {
 }
 
 func TestPhaseValid(t *testing.T) {
-	if len(phases) != 14 {
-		t.Fatalf("phase count = %d, want 14", len(phases))
+	if len(phases) != 15 {
+		t.Fatalf("phase count = %d, want 15", len(phases))
 	}
 	for _, p := range phases {
 		if !p.Valid() {
