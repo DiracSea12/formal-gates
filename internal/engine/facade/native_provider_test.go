@@ -204,7 +204,29 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 			}
 		}
 	}
-	passMainlineTargets(t, d)
+	for len(d.run.ValidationInputs) > 0 {
+		var id string
+		var input protocol.ValidationInput
+		for action, in := range d.run.ValidationInputs {
+			if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
+				id, input = action, in
+				break
+			}
+		}
+		if id == "" {
+			t.Fatalf("unexpected native validation task: %+v", d.run.ValidationInputs)
+		}
+		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
+		if input.Handler == "engine.qa.execution" {
+			report := executionFor(input)
+			result.Execution = &report
+			result.Tool, result.Environment = "go test -buildvcs=false ./...", "native isolated candidate"
+		}
+		d.business(id, result)
+		if len(d.run.ValidationInputs) > 0 {
+			d.drive()
+		}
+	}
 }
 func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 	for _, name := range []string{"svn", "p4"} {
