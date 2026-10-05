@@ -222,6 +222,15 @@ func claudeExecute(request any, directory string, probe bool) (map[string]any, e
 				nativeSource["selection"] = selection
 				changed = true
 			}
+			if requested, _ := getOf(request, "identity").(string); requested != "" && requested != identity {
+				// Keep the observed identity as evidence, without publishing it
+				// as the consumer's continuation of the requested session.
+				if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
+					return nil, err
+				}
+				streamErr = &blockedError{message: "CLAUDE_BINDING: resumed native session identity changed"}
+				break
+			}
 			if changed {
 				if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
 					"identity": identity, "workspace": workspace, "selection": selection}); err != nil {
@@ -230,10 +239,6 @@ func claudeExecute(request any, directory string, probe bool) (map[string]any, e
 				if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 					return nil, err
 				}
-			}
-			if requested, _ := getOf(request, "identity").(string); requested != "" && requested != identity {
-				streamErr = &blockedError{message: "CLAUDE_BINDING: resumed native session identity changed"}
-				break
 			}
 		}
 	}

@@ -282,6 +282,15 @@ func TestClaudeNativeRefusals(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(s.directory, "source.json")); !os.IsNotExist(err) {
 				t.Fatal("refusal produced a source receipt")
 			}
+			if tc.name == "changed-resume" {
+				if _, err := os.Stat(filepath.Join(s.directory, "identity.json")); !os.IsNotExist(err) {
+					t.Fatal("rejected native identity was published for continuation")
+				}
+				observed, err := readJSONFile(filepath.Join(s.directory, "native-source.json"))
+				if err != nil || getOf(observed, "sessionId") != "refused-session" {
+					t.Fatalf("actual rejected identity evidence = %v, %v", observed, err)
+				}
+			}
 			writeNativeError(s.directory, err, &bytes.Buffer{})
 			if _, err := claudeReconcile(s.directory, map[string]any{"exit_code": 1, "error": ""}); err == nil {
 				t.Fatal("unchanged native failure was reconciled")
