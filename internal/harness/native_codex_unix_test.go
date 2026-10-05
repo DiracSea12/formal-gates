@@ -24,13 +24,14 @@ import (
 )
 
 type codexPeerInput struct {
-	Workspace    string         `json:"workspace"`
-	Home         string         `json:"home"`
-	ThreadParams map[string]any `json:"thread_params"`
-	TurnParams   map[string]any `json:"turn_params"`
-	Mode         string         `json:"mode"`
-	Reverse      []any          `json:"reverse"`
-	Replies      []any          `json:"replies"`
+	Workspace     string         `json:"workspace"`
+	Home          string         `json:"home"`
+	ThreadParams  map[string]any `json:"thread_params"`
+	TurnParams    map[string]any `json:"turn_params"`
+	Configuration map[string]any `json:"configuration"`
+	Mode          string         `json:"mode"`
+	Reverse       []any          `json:"reverse"`
+	Replies       []any          `json:"replies"`
 }
 
 func codexPeerID(text string) string {
@@ -120,16 +121,22 @@ func TestCodexRPCPeer(t *testing.T) {
 		thread = codexPeerID("another thread")
 	}
 	nativeThread := map[string]any{"id": thread, "sessionId": codexPeerID("shared tree"), "cliVersion": "0.154.0", "createdAt": 1, "updatedAt": 1, "cwd": cwd, "ephemeral": false, "modelProvider": "peer", "preview": "peer history", "projectId": nil, "source": "appServer", "status": map[string]any{"type": "idle"}, "turns": []any{}, "path": historyPath(thread)}
-	sandboxType := "workspaceWrite"
-	if valuesEqual(peer.ThreadParams["sandbox"], "read-only") {
-		sandboxType = "readOnly"
+	configuration := map[string]any{}
+	for key, value := range peer.Configuration {
+		configuration[key] = value
 	}
-	model := getOrOf(peer.ThreadParams, "model", "peer-default")
+	if valuesEqual(peer.ThreadParams["sandbox"], "read-only") && peer.Mode != "writable_review" {
+		configuration["sandbox"] = map[string]any{"type": "readOnly"}
+	}
+	configuration["model"] = getOrOf(peer.ThreadParams, "model", peer.Configuration["model"])
 	if peer.Mode == "selection" {
-		model = "wrong-model"
+		configuration["model"] = "wrong-model"
 	}
-	reply(frame, map[string]any{"thread": nativeThread, "model": model, "modelProvider": "peer", "reasoningEffort": "medium", "cwd": cwd, "sandbox": map[string]any{"type": sandboxType}, "approvalPolicy": "on-request", "approvalsReviewer": "user"})
-	if peer.Mode == "resume_identity" || peer.Mode == "selection" {
+	configuration["thread"] = nativeThread
+	configuration["modelProvider"] = "peer"
+	configuration["cwd"] = cwd
+	reply(frame, configuration)
+	if peer.Mode == "resume_identity" || peer.Mode == "selection" || peer.Mode == "writable_review" {
 		for scanner.Scan() {
 		}
 		os.Exit(0)
@@ -274,17 +281,16 @@ func newCodexScenario(t *testing.T) *codexScenario {
 			}
 		})
 	}
-	s.peer = codexPeerInput{Workspace: workspace, Home: home, ThreadParams: map[string]any{}, TurnParams: map[string]any{}}
+	s.peer = codexPeerInput{Workspace: workspace, Home: home, ThreadParams: map[string]any{}, TurnParams: map[string]any{}, Configuration: map[string]any{"model": "peer-default", "reasoningEffort": "medium", "sandbox": map[string]any{"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user"}}
 	return s
 }
 
 func (s *codexScenario) save(t *testing.T) {
 	t.Helper()
-	sandbox := "workspace-write"
+	s.peer.ThreadParams = map[string]any{"cwd": s.workspace}
 	if s.request["read_only"] == true {
-		sandbox = "read-only"
+		s.peer.ThreadParams["sandbox"] = "read-only"
 	}
-	s.peer.ThreadParams = map[string]any{"cwd": s.workspace, "sandbox": sandbox, "approvalPolicy": "on-request", "approvalsReviewer": "user"}
 	if model, _ := s.request["model"].(string); model != "" {
 		s.peer.ThreadParams["model"] = model
 	}
@@ -361,6 +367,86 @@ func TestCodexNativeContinuationAndRecovery(t *testing.T) {
 	}
 }
 
+func TestCodexNativePermissionAndDefaultSelection(t *testing.T) {
+	for _, policy := range []struct {
+		sandbox, approval, reviewer string
+	}{{"readOnly", "never", "user"}, {"workspaceWrite", "on-failure", "guardian"}} {
+		t.Run(policy.sandbox, func(t *testing.T) {
+			s := newCodexScenario(t)
+			delete(s.request, "model")
+			delete(s.request, "reasoning_effort")
+			s.peer.Configuration["sandbox"] = map[string]any{"type": policy.sandbox}
+			s.peer.Configuration["approvalPolicy"] = policy.approval
+			s.peer.Configuration["approvalsReviewer"] = policy.reviewer
+			var identity any
+			for _, operation := range []string{"new", "continued", "review"} {
+				t.Run(operation, func(t *testing.T) {
+					if operation != "new" {
+						s.directory = filepath.Join(filepath.Dir(s.directory), operation)
+						if err := os.MkdirAll(s.directory, 0o755); err != nil {
+							t.Fatal(err)
+						}
+						s.request["identity"] = identity
+						s.request["prompt"] = operation + " prompt"
+					}
+					s.request["read_only"] = operation == "review"
+					source, err := s.execute(t)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if identity != nil && !valuesEqual(source["identity"], identity) {
+						t.Fatal("continuation changed original identity")
+					}
+					identity = source["identity"]
+					configuration := getOf(getOf(source, "selection_evidence"), "configuration")
+					wantSandbox := policy.sandbox
+					if operation == "review" {
+						wantSandbox = "readOnly"
+					}
+					if !valuesEqual(getOf(getOf(configuration, "sandbox"), "type"), wantSandbox) || !valuesEqual(getOf(configuration, "approvalPolicy"), policy.approval) || !valuesEqual(getOf(configuration, "approvalsReviewer"), policy.reviewer) {
+						t.Fatalf("native permissions differ: %v", configuration)
+					}
+					if !valuesEqual(source["selection"], map[string]any{"model": "peer-default", "reasoning_effort": "medium"}) {
+						t.Fatalf("native defaults differ: %v", source["selection"])
+					}
+					log, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, line := range bytes.Split(bytes.TrimSpace(log), []byte{'\n'}) {
+						frame, err := decodeNativeJSON(line)
+						if err != nil {
+							t.Fatal(err)
+						}
+						params := getOf(frame, "params")
+						if getOf(params, "approvalPolicy") != nil || getOf(params, "approvalsReviewer") != nil || getOf(params, "model") != nil || getOf(params, "effort") != nil || valuesEqual(getOf(params, "sandbox"), "workspace-write") {
+							t.Fatalf("unrequested override: %v", frame)
+						}
+					}
+					observed, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
+					if err != nil || !valuesEqual(source, observed) {
+						t.Fatalf("permission/default recovery: %v %v", observed, err)
+					}
+					after, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+					if err != nil || !bytes.Equal(log, after) {
+						t.Fatal("recovery issued native work")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCodexNativeReadOnlyConstraintMustApply(t *testing.T) {
+	s := newCodexScenario(t)
+	s.request["read_only"] = true
+	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	s.peer.Mode = "writable_review"
+	if source, err := s.execute(t); err == nil || source != nil || !strings.Contains(err.Error(), "CODEX_CONFIG") {
+		t.Fatalf("writable review accepted: %v %v", source, err)
+	}
+}
+
 func TestCodexNativeTerminalBoundaries(t *testing.T) {
 	for _, mode := range []string{"drop", "wrong_thread", "wrong_turn", "failed", "interrupted", "commentary", "bad_json", "selection", "resume_identity", "nonzero", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
@@ -433,6 +519,9 @@ func TestCodexNativeParallelIsolation(t *testing.T) {
 	scenarios := []*codexScenario{newCodexScenario(t), newCodexScenario(t)}
 	scenarios[1].request["prompt"] = "independent input"
 	scenarios[1].request["read_only"] = true
+	scenarios[1].peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	scenarios[1].peer.Configuration["approvalPolicy"] = "on-failure"
+	scenarios[1].peer.Configuration["approvalsReviewer"] = "guardian"
 	for _, s := range scenarios {
 		s.save(t)
 	}
@@ -456,6 +545,10 @@ func TestCodexNativeParallelIsolation(t *testing.T) {
 		source, err := codexObserve(s.directory)
 		if err != nil || !valuesEqual(source, sources[i]) {
 			t.Fatalf("parallel recovery %d: %v", i, err)
+		}
+		configuration := getOf(getOf(source, "selection_evidence"), "configuration")
+		if !valuesEqual(getOf(configuration, "approvalPolicy"), s.peer.Configuration["approvalPolicy"]) || !valuesEqual(getOf(configuration, "approvalsReviewer"), s.peer.Configuration["approvalsReviewer"]) || !valuesEqual(getOf(getOf(configuration, "sandbox"), "type"), "readOnly") {
+			t.Fatalf("parallel permissions %d: %v", i, configuration)
 		}
 	}
 }

@@ -192,15 +192,14 @@ func codexInteractionObserved(hold *nativePendingHold, message map[string]any) b
 }
 
 // ThreadStartResponse and ThreadResumeResponse expose effective configuration.
-// The policy and cwd must match the worker's original permission boundary.
+// App-server owns inherited permissions; only a read-only role adds a sandbox
+// constraint. Both execution and recovery check this same native response.
 func codexCheckConfiguration(request, configuration any, thread string) error {
 	workspace, _ := getOf(request, "workspace").(string)
-	sandboxType := "workspaceWrite"
-	if getOf(request, "read_only") == true {
-		sandboxType = "readOnly"
-	}
+	sandboxType, _ := getOf(getOf(configuration, "sandbox"), "type").(string)
+	reviewer, _ := getOf(configuration, "approvalsReviewer").(string)
 	nativeThread := getOf(configuration, "thread")
-	if !valuesEqual(getOf(nativeThread, "id"), thread) || !valuesEqual(getOf(nativeThread, "ephemeral"), false) || !valuesEqual(resolveNativePath(textOf(getOf(configuration, "cwd"))), resolveNativePath(workspace)) || !valuesEqual(getOf(getOf(configuration, "sandbox"), "type"), sandboxType) || !valuesEqual(getOf(configuration, "approvalPolicy"), "on-request") || !valuesEqual(getOf(configuration, "approvalsReviewer"), "user") {
+	if !valuesEqual(getOf(nativeThread, "id"), thread) || !valuesEqual(getOf(nativeThread, "ephemeral"), false) || !valuesEqual(resolveNativePath(textOf(getOf(configuration, "cwd"))), resolveNativePath(workspace)) || sandboxType == "" || getOf(configuration, "approvalPolicy") == nil || reviewer == "" || (getOf(request, "read_only") == true && sandboxType != "readOnly") {
 		return &blockedError{message: "CODEX_CONFIG: native workspace/persistence/permissions differ"}
 	}
 	selected, _ := getOf(configuration, "model").(string)
@@ -292,11 +291,10 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	sandbox := "workspace-write"
+	params := map[string]any{"cwd": workspace}
 	if readOnly {
-		sandbox = "read-only"
+		params["sandbox"] = "read-only"
 	}
-	params := map[string]any{"cwd": workspace, "sandbox": sandbox, "approvalPolicy": "on-request", "approvalsReviewer": "user"}
 	model, _ := getOf(request, "model").(string)
 	if model != "" {
 		params["model"] = model

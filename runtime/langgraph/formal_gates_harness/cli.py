@@ -67,8 +67,11 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
     if provider!='fixture':
         adapter_for(provider)  # Fail before creating a run for installation-only hosts.
         probe=doctor(root,provider,model,effort)['provider']; selected=probe['selection']; binding=probe['binding']
-        model=selected.get('model',model);effort=selected.get('reasoning_effort',effort)
-        if not model: raise HarnessError(f'Native {provider} did not advertise a selected model')
+        # A probe may verify readiness without observing model configuration.
+        # In that case preserve the caller's overrides for native execution.
+        if probe.get('capabilities',{}).get('selection_observed') is not False:
+            model=selected.get('model',model);effort=selected.get('reasoning_effort',effort)
+            if not model: raise HarnessError(f'Native {provider} did not advertise a selected model')
     spec={'version':1,'project':str(project),'base':base,'requirement_digest':hashlib.sha256(body).hexdigest(),
           'checks':checks,'gates':gates,'provider':provider,'model':model,'reasoning_effort':effort,'repair_limit':repair_limit}
     validated=bridge.call('validate-spec',spec)
