@@ -17,7 +17,7 @@ class HarnessError(RuntimeError):
 class RuntimeBlocked(HarnessError):
     pass
 class SessionUnavailable(RuntimeBlocked):
-    """The host explicitly rejected the persistent session identity, not a timeout."""
+    """The persistent session was rejected or its saved native resource is absent."""
     def __init__(self, message, *, identity='', method='session/resume', code=None):
         super().__init__(message)
         self.identity, self.method, self.code = identity, method, code

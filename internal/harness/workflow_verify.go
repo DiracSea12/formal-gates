@@ -364,7 +364,10 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 	// the same record every worker stage reads (rememberSession); a new
 	// repair round drops it (routeRepair) so the re-review is a fresh
 	// round, never a silent resume.
-	identity := c.session(gateTaskID(gate))
+	identity, sourceJob, err := c.store.SessionSource(ctx, gateTaskID(gate))
+	if err != nil {
+		return runner.Result{}, err
+	}
 	attempt := 0
 	series := c.seriesKey(gateTaskID(gate), inv.Generation, brief)
 	for {
@@ -393,7 +396,7 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 			if err != nil {
 				return runner.Result{}, err
 			}
-			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
+			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, sourceJob, materials); err != nil {
 				return runner.Result{}, err
 			}
 			receipt, err := c.runSupervised(ctx, gateTaskID(gate), jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
@@ -452,7 +455,7 @@ func (c *Compose) executeGate(ctx context.Context, inv runner.Invocation, gate s
 // candidate binding, so the seal can later prove the same-candidate
 // evidence.
 func (c *Compose) finishGate(taskID string, generation int64, candidate string, output *workerOutput) (runner.Result, error) {
-	c.rememberSession(taskID, output.Identity)
+	c.rememberSession(taskID, output.Identity, output.Job)
 	if workerOutcome(workerOutcomeInput{
 		Role: output.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) == workerBlocked {
 		return runner.Result{}, c.parkWithResult(taskID, generation, output.Turn, output.Series, output, runner.Disposition{

@@ -29,9 +29,8 @@ class HostRegistryTests(unittest.TestCase):
         catalog=host_catalog(self.bridge)
         self.assertEqual({h['provider'] for h in catalog['hosts'] if h['execution_adapter']},set(execution_hosts()))
         self.assertIn('cursor',{h['provider'] for h in catalog['hosts'] if h['entry_integration']})
-    def test_installation_only_is_not_a_runnable_host(self):
-        self.assertEqual(normalize_provider(self.bridge,'cursor'),'cursor')
-        with self.assertRaisesRegex(RuntimeBlocked,'UNSUPPORTED_NATIVE_HOST'):adapter_for('cursor')
+    def test_unknown_provider_is_not_a_runnable_host(self):
+        with self.assertRaisesRegex(RuntimeBlocked,'UNSUPPORTED_NATIVE_HOST'):adapter_for('unknown')
         with self.assertRaises(HarnessError):normalize_provider(self.bridge,'unknown')
     def test_bound_host_changes_fail_before_execution(self):
         with tempfile.TemporaryDirectory() as t:
@@ -50,6 +49,13 @@ class HostRegistryTests(unittest.TestCase):
                          ['/bind/formal-gates','harness','native','/jobs/k'])
         self.assertEqual(adapter.transport_files(),('zcode_credential.mjs',))
         self.assertEqual(adapter_for('dsh').transport_files(),('native_dsh.mjs',))
+    def test_cursor_routes_to_the_driver_without_a_transport_plugin(self):
+        adapter=adapter_for('cursor')
+        self.assertIs(type(adapter),GoAdapter)
+        self.assertEqual(adapter.transport_files(),())
+        self.assertEqual(adapter.entry_argv('/bound/formal-gates',Path('/jobs/cursor')),
+                         ['/bound/formal-gates','harness','native','/jobs/cursor'])
+
     def test_claude_routes_to_the_driver_without_a_transport_plugin(self):
         adapter=adapter_for('claude')
         self.assertIs(type(adapter),GoAdapter)
@@ -85,6 +91,13 @@ class HostRegistryTests(unittest.TestCase):
                 files=('native-source.json','native-events.jsonl','answer.raw.txt','answer.json')
                 for name in files:(root/name).write_text('{}')
                 source={'provider':provider,'identity':'native','files':{n:file_proof(root/n) for n in files}}
+                if provider == 'cursor':
+                    # Cursor verifies its native terminal as well as file proofs.
+                    atomic(root/'native-request.json', {'workspace': t,
+                        'binding': {'environment': {'CURSOR_CONFIG_DIR': str(root/'config')}}})
+                    with self.assertRaisesRegex(RuntimeBlocked,'CURSOR_BINDING'):
+                        adapter_for(provider).verify_source(root,source)
+                    continue
                 adapter_for(provider).verify_source(root,source)
                 (root/'answer.raw.txt').write_text('changed')
                 with self.assertRaisesRegex(RuntimeBlocked,'EVIDENCE_CHANGED'):adapter_for(provider).verify_source(root,source)

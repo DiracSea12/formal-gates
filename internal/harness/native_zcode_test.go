@@ -1080,7 +1080,7 @@ func TestZcodeValidateBindingAndVerifySource(t *testing.T) {
 }
 
 // TestZcodeImplementationRouting pins the dispatch: zcode routes to its own
-// adapter, an unknown provider keeps the two-adapter refusal text.
+// adapter, an unknown provider reports the registered adapters.
 func TestZcodeImplementationRouting(t *testing.T) {
 	impl, err := nativeImplementationFor("zcode")
 	if err != nil {
@@ -1090,7 +1090,7 @@ func TestZcodeImplementationRouting(t *testing.T) {
 		t.Fatalf("zcode implementation = %+v", impl)
 	}
 	if _, err := nativeImplementationFor("ghost"); err == nil ||
-		err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex" {
+		err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, cursor" {
 		t.Fatalf("unknown provider: %v", err)
 	}
 }

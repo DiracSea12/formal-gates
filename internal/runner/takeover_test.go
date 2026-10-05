@@ -442,7 +442,7 @@ func TestTakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
 		// The refused identity the grant must clear, in its own transaction:
 		// remembered now, empty the moment the grant lands (the v5
 		// single-authority chain — no projection step in between).
-		if err := st.SetSession(ctx, "a", "s-refused"); err != nil {
+		if err := st.SetSessionSource(ctx, "a", "s-refused", "original-job"); err != nil {
 			t.Fatal(err)
 		}
 		if identity, err := st.Session(ctx, "a"); err != nil || identity != "s-refused" {
@@ -453,6 +453,9 @@ func TestTakeoverDeadSessionRequiresReplacementDecision(t *testing.T) {
 		}
 		if identity, err := st.Session(ctx, "a"); err != nil || identity != "" {
 			t.Errorf("identity after the restart grant = %q (err %v), want cleared with the grant itself", identity, err)
+		}
+		if identity, sourceJob, err := st.SessionSource(ctx, "a"); err != nil || identity != "" || sourceJob != "" {
+			t.Fatalf("restart grant retained native source: %q %q %v", identity, sourceJob, err)
 		}
 		// Recovery settles the stored decision alone — no consult and no
 		// Restart declaration needed — and the replacement runs under a

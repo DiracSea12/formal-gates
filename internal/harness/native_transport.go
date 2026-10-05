@@ -66,7 +66,8 @@ type blockedError struct{ message string }
 func (e *blockedError) Error() string { return e.message }
 
 // sessionUnavailableError is the subclass of blockedError for "the host
-// explicitly rejected the persistent session identity". Identity and code keep
+// rejected the persistent session identity, or its saved native resource is absent".
+// Identity and code keep
 // the host's original JSON values (number, string or null) verbatim.
 type sessionUnavailableError struct {
 	blockedError
@@ -452,7 +453,7 @@ func handleSessionLine(path, line string, identity any, handle func(map[string]a
 }
 
 // writeNativeAnswer is write_answer: keep the native bytes, then decode them
-// into the business result. A saved file is compared after line-ending
+// into the business result. Saved and native text are compared after line-ending
 // normalisation (CRLF and a lone CR both read as LF), so a byte difference a
 // text read cannot observe is not a refusal. A framing refusal is a
 // blockedError whose text already carries the NATIVE_RESULT prefix.
@@ -463,7 +464,7 @@ func writeNativeAnswer(directory, text, prefix string) error {
 		if err != nil {
 			return err
 		}
-		if normalizeNewlines(string(body)) != text {
+		if normalizeNewlines(string(body)) != normalizeNewlines(text) {
 			return &blockedError{message: prefix + "_RESULT: saved output differs"}
 		}
 	} else if os.IsNotExist(statErr) {

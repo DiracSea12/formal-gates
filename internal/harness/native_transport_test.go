@@ -343,22 +343,33 @@ func TestWriteAnswerSemantics(t *testing.T) {
 		t.Fatalf("saved output differs: %v", err)
 	}
 
-	// Line-ending-equal bytes are not a difference (CRLF and a lone CR both
-	// normalise to LF before comparing).
-	crlf := t.TempDir()
-	if err := os.WriteFile(filepath.Join(crlf, "answer.raw.txt"), []byte("{\r\n\"ok\": true\r\n}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeNativeAnswer(crlf, "{\n\"ok\": true\n}", "DSH"); err != nil {
-		t.Fatalf("CRLF-equivalent bytes must not be refused: %v", err)
-	}
-	if body, _ := os.ReadFile(filepath.Join(crlf, "answer.raw.txt")); string(body) != "{\r\n\"ok\": true\r\n}" {
-		t.Fatalf("saved bytes rewritten: %q", body)
-	}
-
 	err = writeNativeAnswer(t.TempDir(), "not json", "DSH")
 	if err == nil || err.Error() != "NATIVE_RESULT: no unambiguous result object" {
 		t.Fatalf("framing refusal: %v", err)
+	}
+}
+
+func TestWriteAnswerLineEndings(t *testing.T) {
+	for _, newline := range []struct{ name, text string }{{"LF", "\n"}, {"CRLF", "\r\n"}, {"CR", "\r"}} {
+		t.Run(newline.name, func(t *testing.T) {
+			directory := t.TempDir()
+			text := strings.ReplaceAll("{\n\"ok\": true\n}", "\n", newline.text)
+			for _, answer := range []string{text, text, "{\n\"ok\": true\n}"} {
+				if err := writeNativeAnswer(directory, answer, "DSH"); err != nil {
+					t.Fatal(err)
+				}
+				if body := readBytes(t, filepath.Join(directory, "answer.raw.txt")); string(body) != text {
+					t.Fatalf("native bytes changed: %q", body)
+				}
+				if body := readBytes(t, filepath.Join(directory, "answer.json")); string(body) != `{"ok":true}` {
+					t.Fatalf("business result changed: %s", body)
+				}
+			}
+			err := writeNativeAnswer(directory, strings.ReplaceAll(text, "true", "false"), "DSH")
+			if err == nil || err.Error() != "DSH_RESULT: saved output differs" {
+				t.Fatalf("different result accepted: %v", err)
+			}
+		})
 	}
 }
 
