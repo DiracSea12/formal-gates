@@ -87,15 +87,7 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 			continue
 		}
 		issued := state.issuedRevisionOf(id)
-		revision := ""
-		for _, entry := range state.RequirementRevisions {
-			if entry.StateRevision <= issued {
-				revision = entry.Revision
-			}
-		}
-		if revision == "" && state.IntakeConfirmationReceipt != nil {
-			revision = state.IntakeConfirmationReceipt.RequirementRevision
-		}
+		revision := state.requirementRevisionAt(issued)
 		if binding, known := state.DispatchBindings[id]; known {
 			revision = binding.RequirementRevision
 		}

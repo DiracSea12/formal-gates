@@ -234,11 +234,11 @@ func validateRouteDecision(route *RouteDecision) error {
 func (s *State) confirmedRevisionGeneration(revision string) (uint64, bool) {
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
 		entry := s.RequirementRevisions[i]
-		if entry.Revision == revision {
+		if (s.SliceChild == nil || i > 0) && entry.Revision == revision {
 			return entry.StateRevision, true
 		}
 	}
-	return 0, len(s.RequirementRevisions) == 0 && revision != "" && revision == s.RequirementRevision()
+	return 0, (s.SliceChild != nil || len(s.RequirementRevisions) == 0) && revision != "" && revision == s.initialRequirementRevision()
 }
 
 func (s *State) confirmedRequirementRevision(revision string) bool {

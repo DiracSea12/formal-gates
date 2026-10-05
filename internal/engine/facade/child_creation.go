@@ -131,12 +131,15 @@ func (f *Facade) driveChildren() error {
 		return err
 	}
 	s := snap.State
-	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != "split" {
+	if s.SliceChild != nil {
 		return nil
 	}
 	_, aborted := s.AbortDecision()
+	if s.ChildCreation != nil && aborted {
+		return f.cancelChildren(s)
+	}
 	if s.ChildCreation == nil {
-		if aborted || s.RequirementBarrierActive() || s.Phase == runtime.PhaseTerminal {
+		if aborted || s.Topology == nil || s.Topology.Decision != "split" || s.RequirementBarrierActive() || s.Phase == runtime.PhaseTerminal {
 			return nil
 		}
 		digest, err := f.vcs.TreeDigest(s.AcceptedNativeSnapshot())
@@ -151,9 +154,6 @@ func (f *Facade) driveChildren() error {
 			return err
 		}
 		s = snap.State
-	}
-	if aborted {
-		return f.cancelChildren(s)
 	}
 	if len(s.SliceChildren) != 0 {
 		return f.activateReleasedChildren(s)

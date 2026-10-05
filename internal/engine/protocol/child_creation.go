@@ -13,6 +13,7 @@ import (
 // alone authorizes released children; this intent owns the preceding work.
 type ChildCreation struct {
 	RequirementRevision string             `json:"requirementRevision"`
+	Coverage            *CoverageInventory `json:"coverage,omitempty"`
 	Topology            TopologyBinding    `json:"topology"`
 	Source              string             `json:"source"`
 	Digest              string             `json:"digest"`
@@ -31,7 +32,7 @@ func (s *State) ChildCreationCurrent() bool {
 }
 
 func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
-	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision}, Topology: copyTopology(s.ChildCreation.Topology)}
+	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
 }
 
 func (s *State) CreationChild(resourceID string) (ChildPreparation, bool) {
@@ -59,7 +60,7 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != topologySplit || s.abortRequested() || s.Phase == runtime.PhaseTerminal || s.NativeRoot == "" || sourceDigest == "" {
 		return validationError("child preparation requires an active native split master")
 	}
-	c := &ChildCreation{RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
+	c := &ChildCreation{RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
 	if s.GitResources == nil {
 		s.GitResources = map[string]GitResource{}
 	}
@@ -79,7 +80,7 @@ func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 		return false
 	}
 	expected := s.ChildStart(child)
-	return actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.GitResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && actual.IntakeConfirmationReceipt.RequirementRevision == s.ChildCreation.RequirementRevision
+	return actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.GitResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
 }
 
 func (e *Engine) RecordPreparedChildren(children []*State, expectedFingerprint string) error {

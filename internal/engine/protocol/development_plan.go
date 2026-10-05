@@ -318,7 +318,7 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 // confirmedSlicePlan 取 child 已确认的片内计划：最新路线决定的内联提案
 // 为准；同摘要的更早决定保留原引用（与普通 run 的执行契约引用保留形态
 // 一致）。返回的计划绑定 revision＝原确认决定时点的权威需求 revision（账
-// 本中代数不晚于该决定的最近确认；空账本回退受理确认）。
+// 本中代数不晚于该决定的最近本地确认；起点为继承绑定）。
 func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 	var request string
 	var latest uint64
@@ -339,16 +339,7 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 			request, latest = id, d.Revision
 		}
 	}
-	revision := ""
-	for _, entry := range s.RequirementRevisions {
-		if entry.StateRevision <= latest {
-			revision = entry.Revision
-		}
-	}
-	if revision == "" && s.IntakeConfirmationReceipt != nil {
-		revision = s.IntakeConfirmationReceipt.RequirementRevision
-	}
-	return request, p, revision
+	return request, p, s.requirementRevisionAt(latest)
 }
 
 // decisionPlanProposal 返回一条 SELECT_ROUTE 决定携带的计划提案来源：

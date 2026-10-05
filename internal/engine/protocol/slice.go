@@ -37,10 +37,11 @@ const (
 // 是 MasterRunID——child 不自行增加审查轮次（incremental-seal-plan：split
 // child 继承 master 的整体产品/技术审，不自行增加 series）。
 type SliceChildBinding struct {
-	MasterRunID         string          `json:"masterRunId"`
-	SliceID             string          `json:"sliceId"`
-	RequirementRevision string          `json:"requirementRevision"`
-	ParentAbort         *AbortAuthority `json:"parentAbort,omitempty"`
+	MasterRunID         string             `json:"masterRunId"`
+	SliceID             string             `json:"sliceId"`
+	RequirementRevision string             `json:"requirementRevision"`
+	Coverage            *CoverageInventory `json:"coverage,omitempty"`
+	ParentAbort         *AbortAuthority    `json:"parentAbort,omitempty"`
 }
 
 // SliceRunStart 是 child run 启动（Init）一次落账的完整继承事实：身份绑定

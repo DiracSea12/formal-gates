@@ -308,8 +308,12 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 	switch {
 	case state.Phase == runtime.PhaseTerminal:
 		next = NextResult{Kind: KindComplete, Complete: &CompletePayload{}}
-	case state.Suspended && len(state.ControlRequests) > 0:
-		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Requests: state.ControlRequests}}
+	case state.Suspended && (len(askSteps) > 0 || len(state.ControlRequests) > 0):
+		next = NextResult{Kind: KindAsk, Ask: &AskPayload{Steps: askSteps, Requests: state.ControlRequests}}
+	case state.Suspended && len(state.OperatorFacts) > 0:
+		next = NextResult{Kind: KindOperator, Operator: &OperatorPayload{Facts: state.OperatorFacts}}
+	case state.Suspended:
+		next = NextResult{Kind: KindWait, Wait: &WaitPayload{Reason: WaitDependencies}}
 	case len(state.Completed) == len(cd.Steps) && requiredCount == 0 && len(state.ControlRequests) == 0:
 		next = NextResult{Kind: KindComplete, Complete: &CompletePayload{}}
 	case len(agentTasks) > 0:

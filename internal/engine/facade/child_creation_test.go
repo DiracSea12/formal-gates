@@ -9,11 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
@@ -26,13 +29,280 @@ func nativeMasterDriver(t *testing.T) *validationDriver {
 	t.Helper()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
-	return nativeMasterAt(t, root, base)
+	return nativeMasterAt(t, root, base, nil)
 }
 
-func nativeMasterAt(t *testing.T, root, base string) *validationDriver {
+// Child creation consumes the confirmed baseline while preserving the original
+// intake and each run's own confirmation history through delivery and cleanup.
+func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
+	inventory := func(source, point string) *protocol.CoverageInventory {
+		return &protocol.CoverageInventory{
+			Sources: []coverage.RequiredSource{{SourceID: source, Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}},
+			Points:  []coverage.AcceptancePoint{{PointID: point, ObservableBehavior: "records the supported command outcome", Oracle: "outcome record exists"}},
+			Links:   []protocol.SourcePoint{{SourceID: source, PointID: point}},
+		}
+	}
+	original, current, local := inventory("SOL-ORIGINAL", "SP-ORIGINAL"), inventory("SOL-CURRENT", "SP-CURRENT"), inventory("SOL-LOCAL", "SP-LOCAL")
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	master := nativeMasterAt(t, root, base, original)
+	intake := driverState(t, master).IntakeConfirmationReceipt
+	passPreDevelopmentReviews(t, master, commandPlan())
+	document := validationDocument + "\n"
+	confirmValidationDocument(master, "", current, document)
+	master.revision = driverState(t, master).RequirementRevision()
+	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	master.drive()
+	parent := driverState(t, master)
+	if len(parent.SliceChildren) != 2 || parent.ChildCreation.RequirementRevision != master.revision || !reflect.DeepEqual(parent.ChildCreation.Coverage, current) {
+		t.Fatal("creation did not freeze the confirmed baseline")
+	}
+	master.reopen()
+	master.drive()
+	for _, plan := range parent.ChildCreation.Children {
+		f, err := Open(root, plan.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := snap.State
+		if state.RequirementRevision() != master.revision || state.SliceChild.RequirementRevision != master.revision || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) || len(state.RequirementRevisions) != 1 || state.RequirementRevisions[0].Revision != intake.RequirementRevision || state.RequirementRevisions[0].StateRevision != state.IntakeReceipt.Revision || state.InitialSnapshot != parent.ChildCreation.Source {
+			t.Fatal("child lost its inherited baseline, original intake or local ledger")
+		}
+	}
+	f, err := Open(root, parent.SliceChildren["lane-core"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
+	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality", "security"}}, sliceLanePlan())
+	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: document}}})
+	child.drive()
+	assertInput := func(input protocol.ValidationInput) {
+		t.Helper()
+		if input.Binding.RequirementRevision != master.revision || input.Manifest.Binding.RequirementRevision != master.revision || input.Manifest.Binding.RunID != f.runID || !slices.Contains(input.Manifest.Sources, "SOL-CURRENT") || slices.Contains(input.Manifest.Sources, "SOL-ORIGINAL") || !slices.Contains(input.SourcePoints, current.Links[0]) || !slices.ContainsFunc(input.Manifest.Points, func(point coverage.AcceptancePoint) bool { return reflect.DeepEqual(point, current.Points[0]) }) {
+			t.Fatal("issued work lost the actual confirmed revision or coverage", input)
+		}
+	}
+	id, input := planBatchAction(child, "command")
+	assertInput(input)
+	for _, work := range child.run.RequirementWork {
+		if work.RequirementRevision != master.revision {
+			t.Fatal("work disposition used the original intake instead of its issue baseline")
+		}
+	}
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := batchEvidence(input)
+	evidence.Paths = append(evidence.Paths, "app_test.go")
+	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	child.drive()
+	for _, gate := range driverState(t, child).SelectedGates {
+		id, input := child.gateAction(gate)
+		assertInput(input)
+		child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+	}
+	if _, err := f.PrepareCandidate("confirmed slice delivery"); err != nil {
+		t.Fatal(err)
+	}
+	child.drive()
+	receipt := readSliceReceipt(t, child)
+	if receipt.Receipt.RequirementRevision != master.revision || receipt.Receipt.Validation.RequirementRevision != master.revision || receipt.Receipt.ChildRunID != f.runID || receipt.Receipt.MasterRunID != master.f.runID || receipt.Receipt.SliceID != "lane-core" || driverState(t, master).SliceReceipts[f.runID].Digest != receipt.Digest {
+		t.Fatal("checkpoint or master receipt lost the confirmed binding")
+	}
+	child.reopen()
+	before := installationFiles(t, child.f.stateDir)
+	child.drive()
+	if !reflect.DeepEqual(before, installationFiles(t, child.f.stateDir)) {
+		t.Fatal("checkpoint replay changed the frozen confirmation evidence")
+	}
+	other, err := Open(root, parent.SliceChildren["lane-tooling"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRun, err := other.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling := &validationDriver{t: t, f: other, run: otherRun, revision: master.revision, git: other.vcs}
+	confirmValidationDocument(sibling, "", local, document+"\n")
+	sibling.reopen()
+	state := driverState(t, sibling)
+	if state.RequirementRevision() == master.revision || state.RequirementRevisions[1].BaseRevision != master.revision || state.RequirementRevisions[1].StateRevision <= state.IntakeReceipt.Revision || !reflect.DeepEqual(state.RequirementRevisions[1].Coverage, local) || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) {
+		t.Fatal("local confirmation replaced the inherited evidence or used parent generations")
+	}
+	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	sibling.drive()
+	siblingID, siblingInput := planBatchAction(sibling, "command")
+	if siblingInput.Binding.RequirementRevision != state.RequirementRevision() || !slices.Contains(siblingInput.Manifest.Sources, "SOL-LOCAL") || slices.Contains(siblingInput.Manifest.Sources, "SOL-CURRENT") {
+		t.Fatal("local confirmation did not own the child's next dispatch")
+	}
+	abortCreationChild(t, master.f)
+	master.drive()
+	if master.run.Status != "ABORTING" {
+		t.Fatal("parent ignored the child's outstanding spawn responsibility")
+	}
+	failed, err := protocol.NewSpawnReceiptWithFailureClass(sibling.eventID(), siblingID, sibling.host(), siblingID, protocol.SpawnStatusFailed, "TRANSIENT_ENGINE_ERROR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling.submit(failed)
+	master.drive()
+	if master.run.Status != "ABORTED" {
+		t.Fatal("confirmation-bound members did not cancel", master.run.Status)
+	}
+}
+
+func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.T) {
+	for _, released := range []bool{false, true} {
+		for _, withdrawn := range []bool{false, true} {
+			t.Run(fmt.Sprintf("released=%t/topology-withdrawn=%t", released, withdrawn), func(t *testing.T) {
+				master := splitMaster(t)
+				var original *protocol.State
+				if released {
+					master.drive()
+					original = driverState(t, master)
+				} else {
+					original = prepareChildFrontier(t, master)
+				}
+				document := validationDocument + "\n"
+				if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+				pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
+				event, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				master.submit(event)
+				if withdrawn {
+					ask := master.run.PendingRequirementAsk
+					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
+					if driverState(t, master).Topology != nil {
+						t.Fatal("normal topology reconsideration did not clear the current binding")
+					}
+				}
+				master.reopen()
+				abortCreationChild(t, master.f)
+				var wg sync.WaitGroup
+				errs := make(chan error, 2)
+				for range 2 {
+					wg.Add(1)
+					go func() { defer wg.Done(); _, err := master.f.Drive(); errs <- err }()
+				}
+				wg.Wait()
+				close(errs)
+				for err := range errs {
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				master.reopen()
+				master.drive()
+				if master.run.Status != "ABORTED" || !reflect.DeepEqual(master.run.Termination.ChildCreation, original.ChildCreation) {
+					t.Fatal("cancellation lost its frozen members or did not finish")
+				}
+				for _, plan := range original.ChildCreation.Children {
+					child, err := Open(master.f.root, plan.RunID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					run, err := child.Drive()
+					if err != nil || run.Status != "ABORTED" || !run.Termination.ResourcesCleaned() {
+						t.Fatal("a frozen child remained active after its parent's abort", err)
+					}
+					r := original.GitResources[plan.ResourceID]
+					if _, err := os.Stat(r.Path); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("frozen child target survived cancellation", err)
+					}
+					if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", r.Ref); err == nil {
+						t.Fatal("frozen child ref survived cancellation")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestChildWaitingBoundariesPreserveUserDecisions(t *testing.T) {
+	for _, target := range []string{"master-creation", "preparing-child", "slice-checkpoint"} {
+		t.Run(target, func(t *testing.T) {
+			var f *Facade
+			control := protocol.ControlAbort
+			if target == "slice-checkpoint" {
+				child := promotedSlice(t, "custom", OwnerBinding{})
+				child.drive()
+				f = child.f
+			} else {
+				master := splitMaster(t)
+				prepared := prepareChildFrontier(t, master)
+				f = master.f
+				control = protocol.ControlRequestRequirementChange
+				if target == "preparing-child" {
+					var err error
+					f, err = Open(master.f.root, prepared.ChildCreation.Children[0].RunID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					control = protocol.ControlAbort
+				}
+			}
+			event, err := protocol.NewRequestEvent("user-decision", control, protocol.AskOption{ID: "abort", Label: "Cancel"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, _, err := f.Submit(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err = Open(f.root, f.runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := installationFiles(t, f.stateDir)
+			for _, query := range []func() (Run, error){f.Show, f.Status} {
+				run, err := query()
+				if err != nil || run.Next.Kind != decision.KindAsk || !slices.Contains(run.Next.Ask.Requests, "user-decision") || !slices.Contains(run.AvailableActions, "submit") || len(run.PendingAsks) == 0 {
+					t.Fatal("waiting phase swallowed its actual user decision", run.Next, err)
+				}
+			}
+			next, err := f.Next()
+			if err != nil || next.Kind != decision.KindAsk || !slices.Contains(next.Ask.Requests, "user-decision") {
+				t.Fatal("Next lost the typed decision boundary", next, err)
+			}
+			replay, _, err := f.Submit(event)
+			if err != nil || !reflect.DeepEqual(accepted, replay) || !reflect.DeepEqual(before, installationFiles(t, f.stateDir)) {
+				t.Fatal("query or exact Ask replay wrote state", err)
+			}
+			token, err := f.Freshness("user-decision")
+			if err != nil {
+				t.Fatal(err)
+			}
+			decide, err := protocol.NewDecideEvent("user-choice", "user-decision", token, "abort")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := f.Submit(decide); err != nil {
+				t.Fatal("visible decision could not be accepted", err)
+			}
+		})
+	}
+}
+
+func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.CoverageInventory) *validationDriver {
 	t.Helper()
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	receipt := testReceipt()
+	receipt.Coverage = inventory
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
 	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", lifecycle.ProviderDefault), Request: StartRequest{RunID: "validation", Route: "regular", Provider: lifecycle.ProviderDefault, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
@@ -142,7 +412,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := nativeMasterAt(t, root, base)
+	d := nativeMasterAt(t, root, base, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})

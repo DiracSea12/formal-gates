@@ -21,9 +21,12 @@ type SourcePoint struct {
 
 func (s *State) confirmedCoverage() *CoverageInventory {
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
-		if v := s.RequirementRevisions[i].Coverage; v != nil {
+		if v := s.RequirementRevisions[i].Coverage; v != nil && (s.SliceChild == nil || i > 0) {
 			return v
 		}
+	}
+	if s.SliceChild != nil {
+		return s.SliceChild.Coverage
 	}
 	if s.IntakeConfirmationReceipt != nil {
 		return s.IntakeConfirmationReceipt.Coverage

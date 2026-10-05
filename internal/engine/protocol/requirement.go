@@ -121,13 +121,18 @@ func validateRequirementDecisionPayload(payload *RequirementDecisionPayload) err
 
 // ---- 权威 revision 读取与修订屏障 ----
 
-// RequirementRevision 返回当前权威需求 revision：确认账本的末条；账本为空
-// 时读取受理确认回执，回执为空时返回空字符串。
-// 一切 revision 比对（审查证据绑定、决定账目、结论 carry 有效性）都读它，
-// 需求变化登记后自动跟随新权威。
+// RequirementRevision reads the latest local confirmation. A child's initial
+// authority is its inherited binding; its intake remains the original receipt.
 func (s *State) RequirementRevision() string {
-	if n := len(s.RequirementRevisions); n > 0 {
+	if n := len(s.RequirementRevisions); n > 0 && (s.SliceChild == nil || n > 1) {
 		return s.RequirementRevisions[n-1].Revision
+	}
+	return s.initialRequirementRevision()
+}
+
+func (s *State) initialRequirementRevision() string {
+	if s.SliceChild != nil {
+		return s.SliceChild.RequirementRevision
 	}
 	if s.IntakeConfirmationReceipt == nil {
 		return ""
@@ -135,8 +140,19 @@ func (s *State) RequirementRevision() string {
 	return s.IntakeConfirmationReceipt.RequirementRevision
 }
 
+// requirementRevisionAt keeps historical work bound to its local issue time.
+func (s *State) requirementRevisionAt(stateRevision uint64) string {
+	revision := s.initialRequirementRevision()
+	for i, entry := range s.RequirementRevisions {
+		if (s.SliceChild == nil || i > 0) && entry.StateRevision <= stateRevision {
+			revision = entry.Revision
+		}
+	}
+	return revision
+}
+
 func (s *State) requirementGeneration() uint64 {
-	if len(s.RequirementRevisions) == 0 {
+	if len(s.RequirementRevisions) == 0 || s.SliceChild != nil && len(s.RequirementRevisions) == 1 {
 		return 0
 	}
 	return s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision
@@ -592,11 +608,10 @@ func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevi
 
 // ---- 账本完整性（加载/提交边界） ----
 
-// verifyRequirementLedger 重算确认 revision 账本的结构链：首条必须是与受
-// 理回执一致的 INTAKE 初始账目；其后每条 base 链精确衔接、来源/分类/重走
-// 项封闭、state 代数严格单调，且 P1 源不得声明 PRESERVED（伪造分类可检）。
-// PRESERVED 携 scope 合法（§7.2.1 组合）。空账本不检查结构链；解码边界
-// 在受理回执存在时用其确认 revision 与状态代次建立 INTAKE 初始账目。
+// verifyRequirementLedger preserves the original intake entry and validates
+// each later local confirmation's base, scope and increasing state revision.
+// A child starts its local base chain at the inherited binding, while its
+// intake entry still matches its own original receipt and local receipt revision.
 func verifyRequirementLedger(state *State) error {
 	if len(state.RequirementRevisions) == 0 {
 		return nil
@@ -615,6 +630,9 @@ func verifyRequirementLedger(state *State) error {
 		return fail("the initial entry does not match the recorded intake receipt")
 	}
 	previousRevision := intake.Revision
+	if state.SliceChild != nil {
+		previousRevision = state.SliceChild.RequirementRevision
+	}
 	previousState := intake.StateRevision
 	for index, entry := range state.RequirementRevisions[1:] {
 		if entry.BaseRevision != previousRevision {

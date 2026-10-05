@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,42 @@ func frontierSteps(p *Plan) []string {
 		out = append(out, string(e.Step))
 	}
 	return out
+}
+
+func TestSuspendedProgressionPreservesHumanAndOperatorBoundaries(t *testing.T) {
+	cd := testDefinition(t)
+	for _, host := range []bool{false, true} {
+		for _, boundary := range []Kind{KindWait, KindAsk, KindOperator} {
+			t.Run(fmt.Sprintf("host=%t/boundary=%s", host, boundary), func(t *testing.T) {
+				state := newTestState(t)
+				complete(t, state, cd, "boot.local", "work.ask")
+				if host {
+					complete(t, state, cd, "work.agent")
+				}
+				state.Suspended = true
+				switch boundary {
+				case KindAsk:
+					state.ControlRequests = []string{"unresolved-user-decision"}
+				case KindOperator:
+					state.OperatorFacts = []Fact{{Source: SourceReceipt, Key: "validation", Value: "classify the current evidence"}}
+				}
+				plan, err := Decide(state, Observation{}, cd)
+				if err != nil || plan.Next.Kind != boundary {
+					t.Fatal("business suspension replaced a semantic boundary", plan, err)
+				}
+				if boundary == KindWait && plan.Next.Wait.Reason != WaitDependencies {
+					t.Fatal("suspended business did not wait on its dependency")
+				}
+			})
+		}
+	}
+	state := newTestState(t)
+	complete(t, state, cd, "boot.local")
+	state.Suspended = true
+	plan, err := Decide(state, Observation{}, cd)
+	if err != nil || plan.Next.Kind != KindAsk || len(plan.Next.Ask.Steps) != 1 || plan.Next.Ask.Steps[0] != "work.ask" {
+		t.Fatal("suspension swallowed an actual human frontier step", plan, err)
+	}
 }
 
 // TestDecideKindScenarios 核对 Kind 判定的固定优先级与各形态的产出：

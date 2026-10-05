@@ -450,7 +450,7 @@ func (e *Engine) Load() (Snapshot, error) {
 // live dispatches retain their actual task identity, including replacement tasks.
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
-	view.Suspended = s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl()
+	view.Suspended = s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
@@ -550,9 +550,6 @@ func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
 	if err == nil {
 		state.abortPlan(plan)
-		if (state.Phase == runtime.PhaseSliceReady || state.Phase == runtime.PhasePreparing || state.SliceChild == nil && state.Topology != nil && state.Topology.Decision == topologySplit && len(state.SliceChildren) == 0) && !state.abortRequested() {
-			plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitDependencies}}
-		}
 	}
 	return plan, err
 }
