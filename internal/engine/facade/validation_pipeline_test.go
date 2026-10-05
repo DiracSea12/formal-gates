@@ -266,13 +266,13 @@ func (d *validationDriver) completeWorkerTerminations() {
 			return
 		}
 		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-			event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, edge)
+			event, err := protocol.NewLifecycleEventEvent(protocol.EventID("lifecycle:"+id+":"+edge), d.host(), intent.Terminate.Identity, edge)
 			if err != nil {
 				d.t.Fatal(err)
 			}
 			d.submit(event)
 		}
-		event, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("termination-receipt:"+id), id, intent.Operation, d.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 		if err != nil {
 			d.t.Fatal(err)
 		}
