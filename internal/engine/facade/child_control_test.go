@@ -315,11 +315,13 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 	ask := master.run.PendingRequirementAsk
 	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route"}}})
 	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
-	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
+	topology.Slices[1] = "lane-io"
+	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.reopen()
 	master.drive()
 	state := driverState(t, master)
-	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-tooling"] == before.SliceChildren["lane-tooling"] || state.ChildCreation.Previous == nil {
+	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-io"] == before.SliceChildren["lane-tooling"] || state.SliceChildren["lane-io"] == "" || state.SliceChildren["lane-tooling"] != "" || state.ChildCreation.Previous == nil {
 		t.Fatal("topology rebuild discarded carried origin or reused the affected child")
 	}
 	carried := driverState(t, child)

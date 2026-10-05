@@ -441,9 +441,6 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		return false
 	}
 	v := s.Validation
-	if s.mergeMaster() {
-		scope = coverage.ScopeFull
-	}
 	versions := map[coverage.ReviewKind]string{}
 	for _, mode := range s.validationKinds() {
 		versions[mode] = v.Sets[mode].Version

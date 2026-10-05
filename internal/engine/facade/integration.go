@@ -263,11 +263,6 @@ func preserveConflictContext(original, resolved []byte) error {
 		return fmt.Errorf("native conflict markers are incomplete")
 	}
 	fixed = append(fixed, part.String())
-	for _, line := range strings.Split(string(resolved), "\n") {
-		if strings.HasPrefix(line, "<<<<<<< ") || strings.HasPrefix(line, "||||||| ") || line == "=======" || strings.HasPrefix(line, ">>>>>>> ") {
-			return fmt.Errorf("conflict markers remain")
-		}
-	}
 	text := string(resolved)
 	if !strings.HasPrefix(text, fixed[0]) || !strings.HasSuffix(text, fixed[len(fixed)-1]) {
 		return fmt.Errorf("non-conflict prefix or suffix changed")
@@ -275,11 +270,25 @@ func preserveConflictContext(original, resolved []byte) error {
 	text = strings.TrimPrefix(text, fixed[0])
 	text = strings.TrimSuffix(text, fixed[len(fixed)-1])
 	for _, context := range fixed[1 : len(fixed)-1] {
-		_, after, found := strings.Cut(text, context)
+		replacement, after, found := strings.Cut(text, context)
 		if !found {
 			return fmt.Errorf("non-conflict context changed")
 		}
+		if err := resolvedConflictContent(replacement); err != nil {
+			return err
+		}
 		text = after
+	}
+	return resolvedConflictContent(text)
+}
+
+// The fixed contexts may contain ordinary separator text. Within the edited
+// spans, opening/base/closing delimiters still identify unresolved native hunks.
+func resolvedConflictContent(text string) error {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "<<<<<<< ") || strings.HasPrefix(line, "||||||| ") || strings.HasPrefix(line, ">>>>>>> ") {
+			return fmt.Errorf("conflict markers remain")
+		}
 	}
 	return nil
 }

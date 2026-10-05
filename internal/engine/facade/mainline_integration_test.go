@@ -26,6 +26,11 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		t.Fatal(err)
 	}
 	runner := vcs.ExecRunner{}
+	if conflict == "markdown" {
+		if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("Heading\n=======\n\nbase choice\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if conflict == "binary" {
 		if err := os.WriteFile(filepath.Join(root, "asset.bin"), []byte{0, 0}, 0644); err != nil {
 			t.Fatal(err)
@@ -96,6 +101,9 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 			path = "app.go"
 			body = []byte("package main\n// " + sliceID + " chooses command behavior\n")
 		}
+		if conflict == "markdown" && index < 2 {
+			path, body = "README.md", []byte("Heading\n=======\n\n"+sliceID+" choice\n")
+		}
 		if conflict == "binary" && index < 2 {
 			path, body = "asset.bin", []byte{0, byte(index + 1)}
 		}
@@ -109,7 +117,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		if !identical {
 			module := []byte("package main\n")
 			if conflict == "delete" && index == 0 {
-				module = []byte("package main\n\nfunc parseCommand(value string) string { return value }\n")
+				module = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\n")
 			}
 			if err := os.WriteFile(filepath.Join(in.Workspace.Path, sliceID+".go"), module, 0644); err != nil {
 				t.Fatal(err)
@@ -164,7 +172,7 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	commit := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates merge ")
 	candidate := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates candidate ")
 	cases := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, ".gates/results/validation.merge-cases.md")
-	promotion := command == "git" && len(args) > 1 && args[0] == "merge" && args[1] == "--ff-only"
+	promotion := command == "git" && (len(args) > 1 && args[0] == "merge" && args[1] == "--ff-only" || len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates delivery "))
 	resolution := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, "app.go")
 	cleanup := command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
 	if merge {
@@ -235,9 +243,11 @@ func passMainlineTargets(t *testing.T, master *validationDriver) {
 			result.Environment = "native isolated candidate"
 		}
 		master.business(id, result)
-		if len(master.run.ValidationInputs) > 0 {
-			master.drive()
+		wave := master.run.Validation.Waves[len(master.run.Validation.Waves)-1]
+		if wave.Status == "COMPLETE" {
+			return
 		}
+		master.drive()
 	}
 }
 
@@ -300,9 +310,6 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 		t.Fatal("integration lost executable mode", err)
 	}
 	passMainlineTargets(t, master)
-	if _, err := master.f.PrepareCandidate("validated mainline"); err != nil {
-		t.Fatal(err)
-	}
 	master.drive()
 	if master.run.Status != "COMPLETE" {
 		t.Fatalf("mainline did not close after child checkpoint cleanup: %s", master.run.Status)
@@ -350,9 +357,6 @@ func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 		t.Fatal("resolved prefix did not freeze")
 	}
 	passMainlineTargets(t, master)
-	if _, err := master.f.PrepareCandidate("resolved validated mainline"); err != nil {
-		t.Fatal(err)
-	}
 	master.drive()
 	if master.run.Status != "COMPLETE" {
 		t.Fatal("conflict trajectory failed terminal cleanup", master.run.Status)
@@ -462,9 +466,12 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	master.drive()
 	state := driverState(t, master)
 	current := state.Validation.Waves[len(state.Validation.Waves)-1]
-	if current.Candidate == original || current.Scope != coverage.ScopeFull || state.Validation.Sets[coverage.ReviewMerge].Status != "FROZEN" {
-		t.Fatal("repair did not produce a current FULL candidate with frozen cases")
+	if current.Candidate == original || current.Scope != coverage.ScopeAffected || state.Validation.Sets[coverage.ReviewMerge].Status != "FROZEN" {
+		t.Fatal("repair did not preserve the AFFECTED wave and frozen cases")
 	}
+	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "EXECUTION_SCOPE", Mode: coverage.ReviewMerge, AffectedCases: []string{failedCase}, Reason: "only the failed case changes; preserve the original PASS evidence"}}})
+	master.reopen()
+	master.drive()
 	if len(master.run.ValidationInputs) != 2 || len(state.AffectedChildSet()) != 0 {
 		t.Fatal("unchanged FULL child views were reexecuted", state.AffectedChildSet(), len(master.run.ValidationInputs))
 	}
@@ -477,6 +484,12 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	// their original event identities without changing the native candidate.
 	var events []protocol.Event
 	for id, in := range master.run.ValidationInputs {
+		if in.Handler == "engine.qa.execution" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
+			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
+		}
+		if in.Handler == "engine.gate" && in.Gate.Scope != coverage.ScopeFull {
+			t.Fatal("QA scope narrowed the ordinary gate")
+		}
 		master.receipt(id)
 		result := mainlineResult(in)
 		events = append(events, protocol.Event{ID: master.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: master.host(), Outcome: protocol.OutcomePass, PayloadDigest: id, Validation: &result}})
@@ -497,17 +510,24 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if master.run.Validation.Waves[len(master.run.Validation.Waves)-1].Status != "COMPLETE" {
-		t.Fatal("parallel results did not join")
+	joined := false
+	for _, wave := range master.run.Validation.Waves {
+		joined = joined || wave.ID == current.ID && wave.Status == "COMPLETE"
+	}
+	if !joined {
+		t.Fatal("parallel AFFECTED results did not join")
 	}
 	for _, child := range children {
 		if readSliceReceipt(t, child).Receipt.Snapshot == current.Candidate.Identity {
 			t.Fatal("mainline repair changed child checkpoint")
 		}
 	}
-	if _, err := master.f.PrepareCandidate("validated repaired mainline"); err != nil {
-		t.Fatal(err)
+	master.drive()
+	full := master.run.Validation.Waves[len(master.run.Validation.Waves)-1]
+	if full.Scope != coverage.ScopeFull || full.Candidate != current.Candidate {
+		t.Fatal("AFFECTED completion did not unlock final FULL on the same candidate")
 	}
+	passMainlineTargets(t, master)
 	master.drive()
 	if master.run.Status != "COMPLETE" {
 		t.Fatal("repaired mainline did not complete", master.run.Status)
@@ -580,7 +600,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 			}
 			original := []byte("package main\n")
 			if kind == "delete" {
-				original = []byte("package main\n\nfunc parseCommand(value string) string { return value }\n")
+				original = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\n")
 			}
 			if err := os.WriteFile(outside, original, 0644); err != nil {
 				t.Fatal(err)
@@ -601,9 +621,6 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 				}
 			}
 			passMainlineTargets(t, master)
-			if _, err := master.f.PrepareCandidate("native choices validated"); err != nil {
-				t.Fatal(err)
-			}
 			master.drive()
 			if master.run.Status != "COMPLETE" {
 				t.Fatal("native choice delivery did not complete", master.run.Status)
@@ -696,7 +713,6 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
 			master, _ := mainlineChildren(t, "")
-			passMainlineTargets(t, master)
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point}
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 			func() {
@@ -705,9 +721,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 						t.Fatal("delivery interruption not reached")
 					}
 				}()
-				if _, err := master.f.PrepareCandidate("validated integration"); err != nil {
-					t.Fatal(err)
-				}
+				passMainlineTargets(t, master)
 				_, _ = master.f.Drive()
 			}()
 			master.reopen()
@@ -728,5 +742,47 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 				t.Fatal("terminal replay changed evidence", err)
 			}
 		})
+	}
+}
+
+func TestMainlineTextSeparatorsResolveAndReopen(t *testing.T) {
+	master, _ := mainlineChildren(t, "markdown")
+	id, input := master.action("engine.merge.resolve")
+	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "README.md" {
+		t.Fatal("native Markdown conflict is absent")
+	}
+	resolved := []byte("Heading\n=======\n\nintegrated choice\n")
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "README.md"), resolved, 0644); err != nil {
+		t.Fatal(err)
+	}
+	master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Resolution: &protocol.ConflictResolution{Paths: []string{"README.md"}, Summary: "preserve the heading and resolve the native conflict"}})
+	master.reopen()
+	master.drive()
+	candidate := master.run.Validation.Candidate
+	if candidate == nil {
+		t.Fatal("normal resolved text did not freeze")
+	}
+	body, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show", candidate.Identity+":README.md")
+	if err != nil || body != strings.TrimSpace(string(resolved)) {
+		t.Fatal("resolution changed ordinary text", body, err)
+	}
+	master.reopen()
+	master.drive()
+	if *master.run.Validation.Candidate != *candidate {
+		t.Fatal("reopen changed the original resolved candidate")
+	}
+}
+
+func TestConflictContextPreservesSeparatorsBetweenNativeHunks(t *testing.T) {
+	hunk := "<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> incoming\n"
+	original := []byte("Heading\n=======\n" + hunk + "Middle\n=======\n" + hunk + "Tail\n=======\n")
+	resolved := "Heading\n=======\nchosen\nMiddle\n=======\nchosen again\nTail\n=======\n"
+	if err := preserveConflictContext(original, []byte(resolved)); err != nil {
+		t.Fatal("ordinary separators outside two native hunks were rejected", err)
+	}
+	for _, body := range []string{strings.Replace(resolved, "Middle\n=======", "changed\n=======", 1), strings.Replace(resolved, "chosen\n", hunk, 1)} {
+		if err := preserveConflictContext(original, []byte(body)); err == nil {
+			t.Fatal("context edit or unresolved native hunk was accepted")
+		}
 	}
 }

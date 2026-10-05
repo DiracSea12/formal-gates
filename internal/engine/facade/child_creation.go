@@ -115,6 +115,9 @@ func (f *Facade) driveChildren() error {
 		}
 	}
 	if s.ChildCreation != nil && s.DeliveryComplete(f.definition) && !s.ResourcesCleaned() {
+		if err := f.freezeCleanupSummary(s); err != nil {
+			return err
+		}
 		return f.cleanupChildren(s)
 	}
 	if s.ChildCreation == nil {

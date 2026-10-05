@@ -104,8 +104,12 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 			decision := parent.Decisions[entry.RequestID]
 			authority := &ParentRequirementAuthority{RequestID: entry.RequestID, RequestDigest: parent.requestDigest(entry.RequestID), DecisionDigest: parent.Events[decision.EventID].Digest, Confirmation: entry}
 			if s.RequirementRevision() != entry.Revision {
-				pkg := RequirementDecisionPackage{Coverage: entry.Coverage, CandidateRevision: entry.Revision, DeltaDigest: entry.DeltaDigest, ImpactDigest: entry.ImpactDigest, Source: entry.Source, Classification: entry.Classification, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
-				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
+				confirmed := parent.PendingAsks[entry.RequestID].Package
+				if confirmed == nil {
+					return validationError("parent confirmation has no accepted requirement package")
+				}
+				pkg := RequirementDecisionPackage{Coverage: confirmed.Coverage, CandidateRevision: confirmed.CandidateRevision, DeltaDigest: confirmed.DeltaDigest, ImpactDigest: confirmed.ImpactDigest, Source: confirmed.Source, Classification: confirmed.Classification, FindingDigest: confirmed.FindingDigest, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
+				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, FindingDigest: pkg.FindingDigest, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
 				s.SliceChild.ParentChange = authority
 				ask := PendingAsk{Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: &pkg}
 				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint); err != nil {

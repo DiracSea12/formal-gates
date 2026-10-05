@@ -346,7 +346,7 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint st
 	if r.Cost != nil {
 		cost.AddChildOwner(ledger, r.Cost.Owner)
 	}
-	if r.Status == "ABORTED" && !state.abortRequested() && r.Abort.Requirement == nil {
+	if r.Status == "ABORTED" && state.SliceChildren[r.SliceID] == r.ChildRunID && !state.abortRequested() && r.Abort.Requirement == nil {
 		id := "slice-aborted:" + r.ChildRunID + ":" + receipt.Digest
 		state.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlAbort, Options: []AskOption{{ID: "abort", Label: "Abort master because slice " + r.SliceID + " (" + r.ChildRunID + ") aborted by " + r.Abort.Decision.RequestID + "; request reset/rebuild or requirement change to continue"}}}
 	}
