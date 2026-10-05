@@ -336,7 +336,7 @@ func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
 						t.Fatal("native active read changed the shared bundled release")
 					}
 					if layout != "resources" {
-						lookup, err := exec.Command("node", consumer, "lookup", script).CombinedOutput()
+						lookup, err := exec.Command("node", consumer, "lookup", getOf(getOf(c.binding, "launch"), "script").(string)).CombinedOutput()
 						if err != nil || strings.TrimSpace(string(lookup)) != canaryCanonicalPath(bundled) {
 							t.Fatalf("original native lookup: %v %s", err, lookup)
 						}
