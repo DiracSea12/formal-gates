@@ -746,9 +746,6 @@ func (p *Provider) p4Apply(id nativeIdentity, paths []string) error {
 			if _, err = p.p4Raw(nil, "copy", "-v", source.Depot+"@"+strconv.Itoa(id.Revision), target); err != nil {
 				return err
 			}
-			if _, err = p.p4Raw(nil, "reopen", "-t", layer.Filetype, target); err != nil {
-				return err
-			}
 		}
 		for _, address := range current.Files {
 			if address.Path != key {
@@ -816,10 +813,8 @@ func (p *Provider) p4Index() ([]IndexEntry, error) {
 			value.Action = file["action"]
 			entries[logical] = entryValue(value)
 		}
-		if len(resolve) > 0 {
-			if file["unresolved"] != "" && file["unresolved"] != "0" {
-				conflicts[logical] = hashValue(resolve)
-			}
+		if _, unresolved := file["unresolved"]; unresolved {
+			conflicts[logical] = hashValue(resolve)
 		}
 	}
 	var result []IndexEntry
@@ -915,7 +910,8 @@ func (p *Provider) p4Pending(base, expected string) (Pending, error) {
 						}
 						if len(files) == 1 {
 							revision, _ := strconv.Atoi(files[0]["rev"])
-							proven = proven || end == revision && record["resolveAction"+strings.TrimPrefix(key, "resolveFromFile")] == "copy from"
+							action := record["resolveAction"+strings.TrimPrefix(key, "resolveFromFile")]
+							proven = proven || end == revision && (action == "copy from" || action == "branch from")
 						}
 					}
 				}

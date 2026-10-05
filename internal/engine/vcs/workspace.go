@@ -193,7 +193,8 @@ func (p *Provider) InputOwnership() (map[string]bool, error) {
 	if env.GOMOD == os.DevNull && (env.GOWORK == "" || env.GOWORK == "off") {
 		return nil, nil
 	}
-	out, err := p.runner.Run(p.root, "go", "list", "-test", "-json", "./...")
+	// Ownership reads build inputs, without VCS stamping of nested workspaces.
+	out, err := p.runner.Run(p.root, "go", "list", "-buildvcs=false", "-test", "-json", "./...")
 	if err != nil {
 		return nil, fmt.Errorf("test ownership is unavailable: %w", err)
 	}

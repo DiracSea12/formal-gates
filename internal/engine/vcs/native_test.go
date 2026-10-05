@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -289,7 +290,7 @@ func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 	if err = candidate.Track([]string{"body.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = candidate.p4Raw(nil, "reopen", "-t", "binary+x", "body.txt"); err != nil {
+	if _, err = candidate.p4Raw(nil, "reopen", "-t", "binary+x", filepath.Join(workspace, "body.txt")); err != nil {
 		t.Fatal(err)
 	}
 	if err = candidate.Commit("bound candidate"); err != nil {
@@ -303,8 +304,9 @@ func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(entries["body.txt"], "binary+x") {
-		t.Fatal("full native filetype omitted")
+	var value nativeEntry
+	if err := json.Unmarshal([]byte(entries["body.txt"]), &value); err != nil || value.Filetype != "binary+x" || !bytes.Equal(value.Content, []byte{0, 1, 255, '\n'}) {
+		t.Fatalf("immutable binary bytes/filetype differ: %+v %v", value, err)
 	}
 	if err = p.ApplyArtifact(identity, []string{"body.txt"}); err != nil {
 		t.Fatal(err)

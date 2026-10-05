@@ -185,7 +185,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	for _, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.qa.execution" || input.Handler == "engine.gate" {
-			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 		}

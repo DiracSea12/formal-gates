@@ -232,6 +232,11 @@ func TestNativeConflictResolutionPreservesObservedInputs(t *testing.T) {
 			if err := first.VerifyIntegration(prefix, incoming, nativeIdentityAt(t, first), "resolved merge"); err != nil {
 				t.Fatal(err)
 			}
+			entry, err := first.Entry(nativeIdentityAt(t, first), "body.txt")
+			var value nativeEntry
+			if err != nil || json.Unmarshal([]byte(entry), &value) != nil || string(value.Content) != "semantic choice\n" {
+				t.Fatalf("resolved native content differs: %+v %v", value, err)
+			}
 			for _, q := range []*Provider{first, second} {
 				if err := q.VerifyReady(); err != nil {
 					t.Fatal(err)

@@ -248,7 +248,7 @@ func TestOwnershipCapabilityAndQueryFailuresRemainDistinct(t *testing.T) {
 				switch strings.Join(args, " ") {
 				case "env -json GOMOD GOWORK":
 					return scenario.configuration, scenario.configurationError
-				case "list -test -json ./...":
+				case "list -buildvcs=false -test -json ./...":
 					queried = true
 					return scenario.graph, scenario.graphError
 				default:
