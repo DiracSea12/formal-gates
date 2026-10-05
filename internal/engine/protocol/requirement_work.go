@@ -50,6 +50,18 @@ func (e *Engine) RequirementWork() ([]RequirementWork, error) {
 }
 
 func (e *Engine) requirementWork(state *State) []RequirementWork {
+	if d, ok := state.resetDecision(); ok && d.Reset.Applied && !d.Reset.Confirmed {
+		// Reset has already retired its old QA, gate and repair duties. The
+		// accepted preview retains each original development dispatch, including
+		// queued or stopped work whose PASS has not been accepted.
+		var work []RequirementWork
+		for _, item := range state.PendingAsks[d.RequestID].Reset.Work {
+			if state.validationRole(item.Task, e.cfg.Definition) == "engine.development.batch" {
+				work = append(work, item)
+			}
+		}
+		return work
+	}
 	tasks := map[string]runtime.TaskKey{}
 	for id, pending := range state.PendingActions {
 		tasks[id] = pending.Task
@@ -187,7 +199,7 @@ func sameRequirementPackage(a, b RequirementDecisionPackage) bool {
 	return digestOfCanonical(a.Coverage) == digestOfCanonical(b.Coverage) && a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
 		a.Source == b.Source && a.Classification == b.Classification && a.RedoProductReview == b.RedoProductReview &&
 		a.RedoStartReadiness == b.RedoStartReadiness && a.RedoTopology == b.RedoTopology && a.RedoRoute == b.RedoRoute &&
-		a.FindingDigest == b.FindingDigest && slices.Equal(a.WorkDecisions, b.WorkDecisions)
+		a.FindingDigest == b.FindingDigest && a.ResetRequestID == b.ResetRequestID && digestOfCanonical(a.Children) == digestOfCanonical(b.Children) && digestOfCanonical(a.Impact) == digestOfCanonical(b.Impact) && slices.Equal(a.WorkDecisions, b.WorkDecisions)
 }
 
 // archiveDispatchResults keeps every available result on the same obsolete
@@ -232,6 +244,9 @@ func (s *State) requirementRevisionForTask(key runtime.TaskKey) string {
 func (s *State) requiredWorkTasks() []runtime.TaskKey {
 	required := map[runtime.TaskKey]bool{}
 	for _, entry := range s.RequirementRevisions {
+		if !s.requirementWorkRevisionCurrent(entry.StateRevision) {
+			continue
+		}
 		for i, choice := range entry.WorkDecisions {
 			if choice.Disposition != RequirementWorkRedo {
 				continue
@@ -269,7 +284,9 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 		work := choice.Work
 		delete(state.EndedAttempts, work.Task)
 		state.archiveDispatchResults(work.ActionID)
-		if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
+		if _, live := state.PendingActions[work.ActionID]; live {
+			state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
+		} else if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
 			if _, recorded := state.ObsoleteActions[work.ActionID]; !recorded {
 				state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
 			}

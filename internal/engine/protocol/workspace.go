@@ -204,9 +204,18 @@ func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
 	return s.FinalValidationComplete(cd) && !s.validationDeliveryComplete(cd)
 }
 
+// AcceptedNativeSnapshot is the physical target accepted by native receipt
+// admission. Current candidate and FULL qualification are derived separately.
 func (s *State) AcceptedNativeSnapshot() string {
 	if s.CandidatePromotion != nil {
 		return s.CandidatePromotion.Final
+	}
+	if reset, ok := s.resetDecision(); ok && reset.Reset.Applied {
+		preview := s.PendingAsks[reset.RequestID].Reset
+		if preview == nil && s.SliceChild != nil && s.SliceChild.ParentReset != nil {
+			preview = &s.SliceChild.ParentReset.Preview
+		}
+		return preview.Current
 	}
 	return s.InitialSnapshot
 }
@@ -215,7 +224,7 @@ func (s *State) AcceptedNativeSnapshot() string {
 // confirmed plan and its complete source set. A checkpoint only releases later
 // development; an AFFECTED wave still owes FULL validation of the same candidate.
 func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
-	if !pipelineEnabled(s, cd) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return false
 	}
 	_, plan, _ := s.confirmedDevelopmentPlan()

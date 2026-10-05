@@ -412,7 +412,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		if json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 {
 			return false
 		}
-		authority := s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd)
+		authority := s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd)
 		if p.Checkpoint != nil {
 			authority = s.checkpointCleanupCurrent(p.Checkpoint)
 		}
@@ -539,9 +539,24 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 		}
 		return digestOfCanonical(p) == digestOfCanonical(original)
 	}
-	for _, r := range s.NativeResources {
-		if r.Status != "CLEANED" {
-			expected = append(expected, r)
+	if s.resetPending() {
+		d, _ := s.resetDecision()
+		preview := s.PendingAsks[d.RequestID].Reset
+		if preview == nil {
+			return false
+		}
+		for _, r := range preview.Resources {
+			if current := s.NativeResources[r.ID]; current.Status != "CLEANED" {
+				expected = append(expected, current)
+			}
+		}
+	} else if s.RebuildingChildren() {
+		expected = s.replacedTargetResources()
+	} else {
+		for _, r := range s.NativeResources {
+			if r.Status != "CLEANED" {
+				expected = append(expected, r)
+			}
 		}
 	}
 	actual := slices.Clone(p.Resources)
@@ -551,9 +566,52 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 	return len(expected) != 0 && slices.Equal(actual, expected)
 }
 
+// cleanupResourcesQuiescent checks the existing execution bindings for the
+// resources being retired. Work on carried resources can continue independently.
+func (s *State) cleanupResourcesQuiescent(resources []NativeResource) bool {
+	uses := func(id, path string) bool {
+		return slices.ContainsFunc(resources, func(r NativeResource) bool { return r.ID == id || path != "" && r.Path == path })
+	}
+	for id := range s.PendingActions {
+		if uses(s.DispatchBindings[id].WorkspaceID, "") {
+			return false
+		}
+	}
+	for _, attempt := range s.EndedAttempts {
+		if attempt.AwaitingResult && attempt.Work != nil && uses(attempt.Work.WorkspaceID, "") {
+			return false
+		}
+	}
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter == nil {
+			continue
+		}
+		switch intent.Adapter.Operation {
+		case "op.workspace":
+			var p WorkspaceParameters
+			raw, _ := json.Marshal(intent.Adapter.Params)
+			if json.Unmarshal(raw, &p) != nil || uses(p.Resource.ID, p.Resource.Path) {
+				return false
+			}
+		case "op.candidate":
+			p, err := candidateParameters(intent)
+			if err != nil || uses(p.WorkspaceID, "") || p.Promotion != nil && uses(p.Promotion.SourceWorkspace, p.Promotion.TargetRoot) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (s *State) cleanupQuiescent() bool {
 	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
+	}
+	if s.RebuildingChildren() {
+		return s.cleanupResourcesQuiescent(s.replacedTargetResources())
+	}
+	if s.resetPending() {
+		return len(s.PendingActions) == 0
 	}
 	if s.pendingControl() || s.nonCleanupNativeDebt() || len(s.PendingActions) != 0 {
 		return false
@@ -572,7 +630,7 @@ func (s *State) cleanupQuiescent() bool {
 }
 
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
-	return s.cleanupQuiescent() && (s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(cd))
+	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(cd))
 }
 
 func (s *State) ResourceCleanupPending(id string) bool {
@@ -611,6 +669,9 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) err
 		if intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" {
 			return nil
 		}
+	}
+	if s.resetPending() {
+		return validationError("reset cleanup is issued from its accepted preview")
 	}
 	p := CleanupParameters{}
 	if s.SliceChild != nil && !s.abortRequested() {

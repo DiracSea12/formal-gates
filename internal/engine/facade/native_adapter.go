@@ -92,7 +92,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 	}
 	if !complete {
 		_, aborted := state.AbortDecision()
-		if aborted && operation != "op.cleanup" {
+		if (aborted || state.ResetPending()) && operation != "op.cleanup" {
 			var observed protocol.HostActionObservation
 			if params.Promotion != nil {
 				prefix, err := f.promotionPrefix(*params.Promotion)
@@ -373,7 +373,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return nativeResult{}, false, err
 		}
-		if mayWrite && p.Checkpoint == nil {
+		if mayWrite && p.Checkpoint == nil && !s.ResetPending() && !s.RebuildingChildren() {
 			if err := f.freezeCleanupSummary(s); err != nil {
 				return nativeResult{}, false, err
 			}

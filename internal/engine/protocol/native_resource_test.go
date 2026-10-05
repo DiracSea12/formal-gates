@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
@@ -39,7 +40,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	}
 	s := &State{
 		RunID: "delivery", NativeRoot: t.TempDir(), BaseSnapshot: "base-identity", InitialSnapshot: "initial-identity",
-		Validation:   &Validation{RequirementRevision: "rev-1", Generation: 1},
+		Validation:      &Validation{RequirementRevision: "rev-1", Generation: 1},
 		NativeResources: map[string]NativeResource{}, DispatchBindings: map[string]WorkBinding{},
 		Decisions: map[string]RecordedDecision{"route": {Control: ControlSelectRoute, Revision: 5,
 			Review: &ReviewDecisionPayload{Route: &RouteDecision{DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "readiness", Digest: planContractDigest(plan)}}}}},
@@ -93,5 +94,78 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	}
 	if s.NativeResources[spike.ID] != spike || s.NativeResources[delivery.ID] != delivery {
 		t.Fatal("requirement decisions discarded outstanding native resources")
+	}
+}
+
+// Topology replacement retires only the previous membership's removed targets.
+// Worker and native bindings keep the particular resources they still use live.
+func TestTopologyCleanupFollowsRetiredResources(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired := NativeResource{ID: "retired", Owner: "master", Role: "child-target", Path: "/targets/retired", Ref: "refs/retired", Source: "source", Identity: "source", Status: "READY"}
+	carried := retired
+	carried.ID, carried.Path, carried.Ref = "carried", "/targets/carried", "refs/carried"
+	current := retired
+	current.ID, current.Path, current.Ref, current.Status = "current", "/targets/current", "refs/current", "PLANNED"
+	design := retired
+	design.ID, design.Role, design.Path, design.Ref = "design", "merge-design", "/work/design", "refs/design"
+	s := &State{RunID: "master", SliceChildren: map[string]string{"core": "core-run"},
+		ChildCreation:   &ChildCreation{Previous: &ChildCreation{Children: []ChildPreparation{{RunID: "retired-run", ResourceID: retired.ID}, {RunID: "core-run", ResourceID: carried.ID}}}, Children: []ChildPreparation{{RunID: "core-run", ResourceID: carried.ID, Carried: true}, {RunID: "current-run", ResourceID: current.ID}}},
+		NativeResources: map[string]NativeResource{retired.ID: retired, carried.ID: carried, current.ID: current, design.ID: design},
+		PendingActions:  map[string]PendingAction{"designer": {ActionID: "designer"}}, DispatchBindings: map[string]WorkBinding{"designer": {WorkspaceID: design.ID}},
+		EndedAttempts: map[runtime.TaskKey]Attempt{}, PendingHostActions: map[string]HostActionIntent{}}
+	p := CleanupParameters{Resources: []NativeResource{retired}}
+	if !s.cleanupAuthorized(p, cd) || !s.cleanupParametersCurrent(p) || !reflect.DeepEqual(s.replacedTargetResources(), p.Resources) {
+		t.Fatal("carried work blocked the exact retired-target debt")
+	}
+	for _, r := range []NativeResource{carried, current, design} {
+		if s.cleanupParametersCurrent(CleanupParameters{Resources: []NativeResource{retired, r}}) {
+			t.Fatal("cleanup admitted a current resource", r.ID)
+		}
+	}
+	s.DispatchBindings["designer"] = WorkBinding{WorkspaceID: retired.ID}
+	if s.cleanupAuthorized(p, cd) {
+		t.Fatal("cleanup admitted a target with an active worker")
+	}
+	delete(s.PendingActions, "designer")
+	key := runtime.TaskKey{Step: "develop"}
+	s.EndedAttempts[key] = Attempt{AwaitingResult: true, Work: &WorkBinding{WorkspaceID: retired.ID}}
+	if s.cleanupAuthorized(p, cd) {
+		t.Fatal("cleanup admitted a target awaiting its worker result")
+	}
+	delete(s.EndedAttempts, key)
+	for _, input := range []struct {
+		operation string
+		params    any
+	}{
+		{"op.workspace", WorkspaceParameters{Resource: retired}},
+		{"op.candidate", CandidateParameters{WorkspaceID: retired.ID}},
+		{"op.candidate", CandidateParameters{Promotion: &PromotionParameters{SourceWorkspace: design.ID, TargetRoot: retired.Path}}},
+	} {
+		values, err := normalizeHostActionParams(input.params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.PendingHostActions["writer"] = HostActionIntent{Adapter: &AdapterHostAction{Operation: authoring.OperationID(input.operation), Params: values}}
+		if s.cleanupAuthorized(p, cd) {
+			t.Fatal("cleanup admitted a target with an unresolved native writer", input.operation)
+		}
+	}
+	delete(s.PendingHostActions, "writer")
+	values, err := normalizeHostActionParams(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := HostActionIntent{ActionID: "cleanup", Adapter: &AdapterHostAction{Operation: "op.cleanup", Params: values}}
+	s.PendingHostActions[intent.ActionID] = intent
+	if !s.cleanupParametersCurrent(p) || !s.NativeActionCurrent(intent, cd) || !s.nativeEffectApplicable(intent, cd) {
+		t.Fatal("issued cleanup lost its shared execution and observation authority")
+	}
+	s.NativeResources[retired.ID] = NativeResource{ID: retired.ID, Owner: retired.Owner, Role: retired.Role, Path: retired.Path, Ref: retired.Ref, Source: retired.Source, Identity: retired.Identity, Status: "CLEANED"}
+	delete(s.PendingHostActions, intent.ActionID)
+	if len(s.replacedTargetResources()) != 0 || s.cleanupParametersCurrent(p) || s.NativeResources[carried.ID] != carried || s.NativeResources[current.ID] != current || s.NativeResources[design.ID] != design {
+		t.Fatal("cleanup replay renewed debt or changed current resources")
 	}
 }

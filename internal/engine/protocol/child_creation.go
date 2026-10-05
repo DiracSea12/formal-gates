@@ -12,6 +12,8 @@ import (
 // ChildCreation is the master's immutable preparation plan. SliceChildren
 // alone authorizes released children; this intent owns the preceding work.
 type ChildCreation struct {
+	RequestID           string             `json:"requestId,omitempty"`
+	Previous            *ChildCreation     `json:"previous,omitempty"`
 	RequirementRevision string             `json:"requirementRevision"`
 	Coverage            *CoverageInventory `json:"coverage,omitempty"`
 	Topology            TopologyBinding    `json:"topology"`
@@ -24,14 +26,24 @@ type ChildPreparation struct {
 	SliceID    string `json:"sliceId"`
 	RunID      string `json:"runId"`
 	ResourceID string `json:"resourceId"`
+	Carried    bool   `json:"carried,omitempty"`
 }
 
 func (s *State) ChildCreationCurrent() bool {
 	c := s.ChildCreation
-	return c != nil && s.SliceChild == nil && s.Phase != runtime.PhaseTerminal && !s.abortRequested() && !s.requirementChangePending() && c.RequirementRevision == s.RequirementRevision() && digestOfCanonical(c.Topology) == digestOfCanonical(s.Topology)
+	return c != nil && s.SliceChild == nil && s.Phase != runtime.PhaseTerminal && !s.abortRequested() && !s.requirementChangePending() && digestOfCanonical(c.Topology) == digestOfCanonical(s.Topology)
 }
 
 func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
+	if child.Carried && s.ChildCreation.Previous != nil {
+		parent := *s
+		parent.ChildCreation = s.ChildCreation.Previous
+		for _, previous := range parent.ChildCreation.Children {
+			if previous.RunID == child.RunID {
+				return parent.ChildStart(previous)
+			}
+		}
+	}
 	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
 }
 
@@ -54,21 +66,66 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 	if err := s.errWriteBarrier("child preparation"); err != nil {
 		return err
 	}
-	if s.ChildCreation != nil {
+	if s.ChildCreation != nil && digestOfCanonical(s.ChildCreation.Topology) == digestOfCanonical(s.Topology) {
 		return nil
 	}
-	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != topologySplit || s.abortRequested() || s.Phase == runtime.PhaseTerminal || s.NativeRoot == "" || sourceDigest == "" {
+	if s.SliceChild != nil || s.Topology == nil || s.Topology.Decision != topologySplit && s.ChildCreation == nil || s.abortRequested() || s.Phase == runtime.PhaseTerminal || s.NativeRoot == "" || sourceDigest == "" {
 		return validationError("child preparation requires an active native split master")
 	}
-	c := &ChildCreation{RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
+	var previous *ChildCreation
+	request := ""
+	topologyRequest := ""
+	if s.ChildCreation != nil {
+		previous = s.ChildCreation
+		for _, entry := range s.RequirementRevisions {
+			if slices.Contains(entry.DecidedScope, "topology") {
+				request = entry.RequestID
+			}
+		}
+		if request == "" {
+			return validationError("topology rebuild requires a confirmed requirement authorization")
+		}
+		var topologyRevision uint64
+		for _, decision := range s.Decisions {
+			if decision.Control == ControlConfirmTopology && decision.Revision > topologyRevision {
+				topologyRequest, topologyRevision = decision.RequestID, decision.Revision
+			}
+		}
+		if topologyRequest == "" {
+			return validationError("topology rebuild requires its confirmed topology request")
+		}
+	}
+	c := &ChildCreation{Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
 	if s.NativeResources == nil {
 		s.NativeResources = map[string]NativeResource{}
 	}
+sliceLoop:
 	for _, sliceID := range c.Topology.Slices {
-		id := "child-" + strings.TrimPrefix(digestOfCanonical(struct{ Master, Slice string }{s.RunID, sliceID}), "sha256:")
+		if previous != nil {
+			_, choice := s.childRequirementDecision(s.SliceChildren[sliceID])
+			if choice != nil && choice.ReceiptDisposition == RequirementWorkCarry && choice.RouteDisposition == RequirementWorkCarry && !slices.ContainsFunc(choice.WorkDecisions, func(w RequirementWorkDecision) bool { return w.Disposition != RequirementWorkCarry }) {
+				for _, child := range previous.Children {
+					if child.SliceID == sliceID {
+						child.Carried = true
+						c.Children = append(c.Children, child)
+						continue sliceLoop
+					}
+				}
+			}
+		}
+		digest := digestOfCanonical(struct{ Master, Slice string }{s.RunID, sliceID})
+		if topologyRequest != "" {
+			digest = digestOfCanonical(struct{ Master, Slice, Request string }{s.RunID, sliceID, topologyRequest})
+		}
+		id := "child-" + strings.TrimPrefix(digest, "sha256:")
 		r := s.resource("child-target", c.Source, id)
 		s.NativeResources[r.ID] = r
 		c.Children = append(c.Children, ChildPreparation{SliceID: sliceID, RunID: id, ResourceID: r.ID})
+	}
+	if previous != nil {
+		s.Completed = slices.DeleteFunc(s.Completed, func(step authoring.StepID) bool {
+			return step == "children.prepare" || step == "children.workspace" || step == "children.publish"
+		})
 	}
 	s.ChildCreation = c
 	_, err = e.commit(s, revision, expectedFingerprint)
@@ -95,7 +152,7 @@ func (e *Engine) RecordPreparedChildren(children []*State, expectedFingerprint s
 		return nil
 	}
 	for i, child := range s.ChildCreation.Children {
-		if !s.preparedChild(child, children[i]) || children[i].Phase != runtime.PhasePreparing || children[i].abortRequested() {
+		if !s.preparedChild(child, children[i]) || !child.Carried && (children[i].Phase != runtime.PhasePreparing || children[i].abortRequested()) {
 			return validationError("child preparation does not prove the planned child")
 		}
 	}
@@ -111,7 +168,7 @@ func (e *Engine) SignChildWorkspace(expectedFingerprint string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !s.ChildCreationCurrent() || !slices.Contains(s.Completed, authoring.StepID("children.prepare")) || len(s.SliceChildren) != 0 {
+	if !s.ChildCreationCurrent() || !slices.Contains(s.Completed, authoring.StepID("children.prepare")) || len(s.SliceChildren) != 0 && s.ChildCreation.Previous == nil {
 		return false, nil
 	}
 	for _, child := range s.ChildCreation.Children {
@@ -211,14 +268,14 @@ func (e *Engine) ReleaseChildren(children []*State, expectedFingerprint string) 
 	if !s.ChildCreationCurrent() || len(children) != len(s.ChildCreation.Children) {
 		return validationError("child release no longer matches the master")
 	}
-	if len(s.SliceChildren) != 0 {
+	if len(s.SliceChildren) != 0 && s.ChildCreation.Previous == nil {
 		return nil
 	}
 	for i, child := range s.ChildCreation.Children {
-		if !s.preparedChild(child, children[i]) || children[i].Phase != runtime.PhasePreparing || children[i].abortRequested() || children[i].InitialSnapshot != s.childInitialSnapshot(child) {
+		if !s.preparedChild(child, children[i]) || !child.Carried && (children[i].Phase != runtime.PhasePreparing || children[i].abortRequested()) || !child.Carried && children[i].InitialSnapshot != s.childInitialSnapshot(child) {
 			return validationError("child release lacks a live prepared child")
 		}
-		if _, proven := s.ChildWorkspaceProof(child); !proven {
+		if _, proven := s.ChildWorkspaceProof(child); !child.Carried && !proven {
 			return validationError("child release lacks an exact workspace receipt")
 		}
 	}
@@ -268,7 +325,7 @@ func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
 	if !found || !cancelled || !recorded || !parent.preparedChild(child, s) {
 		return validationError("child cancellation lacks parent authority")
 	}
-	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record}
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record, RequestDigest: parent.requestDigest(d.RequestID)}
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }
@@ -318,7 +375,7 @@ func (s *State) childTargetsCleanable(children []*State) bool {
 	for i, child := range s.ChildCreation.Children {
 		actual := children[i]
 		if actual == nil {
-			if len(s.SliceChildren) != 0 {
+			if len(s.SliceChildren) != 0 && s.ChildCreation.Previous == nil {
 				return false
 			}
 			continue
@@ -350,7 +407,92 @@ func childWorkspaceStep(params any) authoring.StepID {
 
 func (s *State) creationWorkspaceCurrent(p WorkspaceParameters) bool {
 	child, found := s.CreationChild(p.Resource.ID)
-	return found && s.ChildCreationCurrent() && len(s.SliceChildren) == 0 && p.Generation == 0 && p.RouteScope == "" && p.Manifest == nil && p.RequirementRevision == s.ChildCreation.RequirementRevision && s.NativeResources[child.ResourceID] == p.Resource && p.Resource.Source == s.ChildCreation.Source && s.resourceUsable(p.Resource.ID)
+	return found && s.ChildCreationCurrent() && (len(s.SliceChildren) == 0 || s.ChildCreation.Previous != nil) && p.Generation == 0 && p.RouteScope == "" && p.Manifest == nil && p.RequirementRevision == s.ChildCreation.RequirementRevision && s.NativeResources[child.ResourceID] == p.Resource && p.Resource.Source == s.ChildCreation.Source && s.resourceUsable(p.Resource.ID)
+}
+
+func (s *State) RebuildingChildren() bool {
+	return s.ChildCreation != nil && s.ChildCreation.Previous != nil && !slices.Contains(s.Completed, authoring.StepID("children.publish"))
+}
+func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) error {
+	revision, s, err := e.load()
+	if err != nil {
+		return err
+	}
+	if s.Phase == runtime.PhaseTerminal || s.abortRequested() {
+		return nil
+	}
+	c := parent.ChildCreation
+	if c == nil || c.Previous == nil {
+		return validationError("replaced child lacks authorized topology")
+	}
+	original := *parent
+	original.ChildCreation = c.Previous
+	plan, ok := original.CreationChildByRun(s.RunID)
+	if !ok || !original.preparedChild(plan, s) {
+		return validationError("replaced child origin is not exact")
+	}
+	if slices.ContainsFunc(c.Children, func(child ChildPreparation) bool { return child.RunID == s.RunID }) {
+		return nil
+	}
+	d := parent.Decisions[c.RequestID]
+	event, ok := parent.Events[d.EventID]
+	if !ok {
+		return validationError("topology replacement lacks original user decision")
+	}
+	var authorization *ConfirmedRevision
+	for i := range parent.RequirementRevisions {
+		if parent.RequirementRevisions[i].RequestID == c.RequestID {
+			authorization = &parent.RequirementRevisions[i]
+		}
+	}
+	if authorization == nil || !slices.Contains(authorization.DecidedScope, "topology") {
+		return validationError("child replacement lacks confirmed topology scope")
+	}
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event, RequestDigest: parent.requestDigest(d.RequestID), Requirement: authorization}
+	_, err = e.commit(s, revision, expectedFingerprint)
+	return err
+}
+
+// replacedTargetResources derives the outstanding cleanup debt from the frozen
+// predecessor and current child membership. Carried and new targets remain live.
+func (s *State) replacedTargetResources() []NativeResource {
+	var resources []NativeResource
+	for _, old := range s.ChildCreation.Previous.Children {
+		if !slices.ContainsFunc(s.ChildCreation.Children, func(c ChildPreparation) bool { return c.RunID == old.RunID }) {
+			r := s.NativeResources[old.ResourceID]
+			if r.Status != "CLEANED" {
+				resources = append(resources, r)
+			}
+		}
+	}
+	slices.SortFunc(resources, func(a, b NativeResource) int { return strings.Compare(a.ID, b.ID) })
+	return resources
+}
+
+func (e *Engine) CleanupReplacedTargets(expectedFingerprint string) error {
+	revision, s, err := e.load()
+	if err != nil {
+		return err
+	}
+	if !s.RebuildingChildren() {
+		return nil
+	}
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" {
+			return nil
+		}
+	}
+	resources := s.replacedTargetResources()
+	if len(resources) == 0 {
+		return nil
+	}
+	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", CleanupParameters{Resources: resources}, "")
+	if err != nil {
+		return err
+	}
+	s.PendingHostActions[intent.ActionID] = intent
+	_, err = e.commit(s, revision, expectedFingerprint)
+	return err
 }
 
 func (s *State) childInitialSnapshot(child ChildPreparation) string {

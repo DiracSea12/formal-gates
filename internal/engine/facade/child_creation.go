@@ -78,53 +78,6 @@ func (f *Facade) finishChildBootstrap(child *Facade) error {
 	return child.admission.write(func() error { return lifecycle.BeginRun(f.root, child.runID) })
 }
 
-// coordinatePreparingChild enters parent then child, releases both before
-// ordinary child Drive, and never reads an authorization outside its window.
-func (f *Facade) coordinatePreparingChild() error {
-	snap, err := f.engine.Load()
-	if isMissingEngineState(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if snap.State.Phase != runtime.PhasePreparing {
-		return nil
-	}
-	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID)
-	if err != nil {
-		return err
-	}
-	unparent, err := parent.acquireNativeWindow()
-	if err != nil {
-		return err
-	}
-	defer unparent()
-	unchild, err := f.acquireNativeWindow()
-	if err != nil {
-		return err
-	}
-	defer unchild()
-	current, err := parent.engine.Load()
-	if err != nil {
-		return err
-	}
-	actual, err := f.engine.Load()
-	if err != nil {
-		return err
-	}
-	if actual.State.Phase != runtime.PhasePreparing {
-		return nil
-	}
-	if _, aborted := current.State.AbortDecision(); aborted {
-		return f.engine.CancelChild(current.State, emptyFingerprint())
-	}
-	if !current.State.ChildCreationCurrent() || current.State.SliceChildren[actual.State.SliceChild.SliceID] != f.runID {
-		return nil
-	}
-	return f.engine.ActivateChild(current.State, emptyFingerprint())
-}
-
 // driveChildren owns preparation, native receipt join, release and cancellation.
 // The caller holds only the parent window before acquiring any child window.
 func (f *Facade) driveChildren() error {
@@ -140,7 +93,33 @@ func (f *Facade) driveChildren() error {
 	if s.ChildCreation != nil && aborted {
 		return f.cancelChildren(s)
 	}
+	if s.ChildCreation != nil && s.Topology != nil && !reflect.DeepEqual(s.ChildCreation.Topology, *s.Topology) && !s.RequirementBarrierActive() {
+		digest, err := f.vcs.TreeDigest(s.AcceptedNativeSnapshot())
+		if err != nil {
+			return err
+		}
+		if err = f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+			return err
+		}
+		snap, err = f.engine.Load()
+		if err != nil {
+			return err
+		}
+		s = snap.State
+	}
+	if s.RebuildingChildren() {
+		ready, err := f.retireReplacedChildren(s)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return nil
+		}
+	}
 	if s.ChildCreation != nil && s.DeliveryComplete(f.definition) && !s.ResourcesCleaned() {
+		if err := f.freezeCleanupSummary(s); err != nil {
+			return err
+		}
 		return f.cleanupChildren(s)
 	}
 	if s.ChildCreation == nil {
@@ -160,7 +139,7 @@ func (f *Facade) driveChildren() error {
 		}
 		s = snap.State
 	}
-	if len(s.SliceChildren) != 0 {
+	if len(s.SliceChildren) != 0 && !s.RebuildingChildren() {
 		return f.activateReleasedChildren(s)
 	}
 	if !s.ChildCreationCurrent() {
@@ -186,7 +165,7 @@ func (f *Facade) driveChildren() error {
 		if loadErr != nil {
 			return loadErr
 		}
-		if _, cancelled := actual.State.AbortDecision(); cancelled || actual.State.Phase == runtime.PhaseTerminal {
+		if _, cancelled := actual.State.AbortDecision(); cancelled || actual.State.Phase == runtime.PhaseTerminal && !plan.Carried {
 			return nil
 		}
 		children[i], states[i] = child, actual.State
@@ -208,7 +187,7 @@ func (f *Facade) driveChildren() error {
 		return err
 	}
 	for _, plan := range snap.State.ChildCreation.Children {
-		if _, proven := snap.State.ChildWorkspaceProof(plan); !proven {
+		if _, proven := snap.State.ChildWorkspaceProof(plan); !plan.Carried && !proven {
 			return nil
 		}
 	}
@@ -243,10 +222,14 @@ func (f *Facade) driveChildren() error {
 		if err != nil {
 			return err
 		}
+		plan := snap.State.ChildCreation.Children[i]
+		if plan.Carried {
+			states[i] = actual.State
+			continue
+		}
 		if _, cancelled := actual.State.AbortDecision(); cancelled || actual.State.Phase != runtime.PhasePreparing {
 			return nil
 		}
-		plan := snap.State.ChildCreation.Children[i]
 		r := snap.State.NativeResources[plan.ResourceID]
 		if child.envelope != f.envelope || !reflect.DeepEqual(actual.State.Topology, &snap.State.ChildCreation.Topology) {
 			return fmt.Errorf("child join identity differs from its parent")
@@ -376,6 +359,11 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 			continue
 		}
 		states[i] = run.Termination
+		if states[i].SliceReceipt != nil {
+			if err := f.acceptSliceReceipt(*states[i].SliceReceipt); err != nil {
+				return err
+			}
+		}
 	}
 	if !settled {
 		return nil
@@ -475,4 +463,60 @@ func (f *Facade) driveChildWorkspace(intent protocol.HostActionIntent, execute b
 		return false, nil
 	}
 	return f.completeNativeIntent(parent.State, intent, mayWrite)
+}
+
+// retireReplacedChildren consumes the same cancellation/cleanup handlers, using
+// the frozen predecessor and the original topology authorization as evidence.
+func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
+	settled := true
+	for _, old := range parent.ChildCreation.Previous.Children {
+		if slices.ContainsFunc(parent.ChildCreation.Children, func(c protocol.ChildPreparation) bool { return c.RunID == old.RunID }) {
+			continue
+		}
+		child, err := Open(f.root, old.RunID)
+		if err != nil {
+			return false, err
+		}
+		unlock, err := child.acquireNativeWindow()
+		if err != nil {
+			return false, err
+		}
+		actual, err := child.engine.Load()
+		if isMissingEngineState(err) {
+			summary, e := child.readSummary()
+			err = e
+			actual.State = summary.Termination
+		}
+		if err == nil && actual.State.Phase != runtime.PhaseTerminal {
+			err = child.engine.CancelReplacedChild(parent, emptyFingerprint())
+			if err == nil {
+				run, e := child.driveInWindow()
+				err = e
+				settled = settled && (run.Status == "ABORTED" || run.Status == "COMPLETE")
+				if err == nil && run.Termination != nil && run.Termination.SliceReceipt != nil {
+					err = f.acceptSliceReceipt(*run.Termination.SliceReceipt)
+				}
+			}
+		}
+		unlock()
+		if err != nil {
+			return false, err
+		}
+	}
+	if !settled {
+		return false, nil
+	}
+	if err := f.engine.CleanupReplacedTargets(emptyFingerprint()); err != nil {
+		return false, err
+	}
+	current, err := f.engine.Load()
+	if err != nil {
+		return false, err
+	}
+	for _, old := range parent.ChildCreation.Previous.Children {
+		if !slices.ContainsFunc(parent.ChildCreation.Children, func(c protocol.ChildPreparation) bool { return c.RunID == old.RunID }) && current.State.NativeResources[old.ResourceID].Status != "CLEANED" {
+			return false, nil
+		}
+	}
+	return true, nil
 }

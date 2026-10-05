@@ -34,14 +34,26 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 		}
 		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "confirmed unchanged inputs except the selected fresh review"})
 	}
-	pkg := protocol.RequirementDecisionPackage{Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	children := d.run.RequirementChildren
+	for i := range children {
+		children[i].RouteDisposition = protocol.RequirementWorkCarry
+		children[i].ReceiptDisposition = protocol.RequirementWorkCarry
+		children[i].CandidateDisposition = protocol.RequirementWorkCarry
+		children[i].Reason = "formatting preserves the exact child inputs"
+		for j := range children[i].WorkDecisions {
+			children[i].WorkDecisions[j].Disposition = protocol.RequirementWorkCarry
+			children[i].WorkDecisions[j].Reason = "unchanged child inputs"
+		}
+	}
+	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"all bound inputs preserve meaning"}}
+	pkg := protocol.RequirementDecisionPackage{Children: children, Impact: impact, Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
 	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	d.submit(event)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: children, Impact: impact, Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}})
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 }
 

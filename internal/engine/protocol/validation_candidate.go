@@ -340,6 +340,9 @@ func (s *State) candidateContextCurrent(p CandidateParameters) bool {
 	if p.Generation == s.Validation.Generation {
 		return p.RequirementRevision == s.Validation.RequirementRevision
 	}
+	if p.Integration != nil {
+		return s.integrationCarryAuthorized(p)
+	}
 	if len(p.SourceTasks) == 0 {
 		return false
 	}
@@ -575,7 +578,10 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 }
 
 func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
-	if s.requirementChangePending() {
+	if !s.parentReviewReady() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
+		return false
+	}
+	if s.requirementChangePending() && !(s.resetPending() && intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup") {
 		return false
 	}
 	if s.abortRequested() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {

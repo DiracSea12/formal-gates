@@ -37,11 +37,14 @@ const (
 // 是 MasterRunID——child 不自行增加审查轮次（incremental-seal-plan：split
 // child 继承 master 的整体产品/技术审，不自行增加 series）。
 type SliceChildBinding struct {
-	MasterRunID         string             `json:"masterRunId"`
-	SliceID             string             `json:"sliceId"`
-	RequirementRevision string             `json:"requirementRevision"`
-	Coverage            *CoverageInventory `json:"coverage,omitempty"`
-	ParentAbort         *AbortAuthority    `json:"parentAbort,omitempty"`
+	MasterRunID         string                      `json:"masterRunId"`
+	SliceID             string                      `json:"sliceId"`
+	RequirementRevision string                      `json:"requirementRevision"`
+	Coverage            *CoverageInventory          `json:"coverage,omitempty"`
+	ParentChange        *ParentRequirementAuthority `json:"parentChange,omitempty"`
+	ParentReset         *ResetAuthority             `json:"parentReset,omitempty"`
+	ParentReviewPending bool                        `json:"parentReviewPending,omitempty"`
+	ParentAbort         *AbortAuthority             `json:"parentAbort,omitempty"`
 }
 
 // SliceRunStart 是 child run 启动（Init）一次落账的完整继承事实：身份绑定
@@ -62,27 +65,32 @@ type SliceReceipt struct {
 // master. It contains final results rather than a second copy of run state.
 // Empty SelectedQA and ApprovedCases explicitly mean ordinary QA was not selected.
 type SliceTerminalReceipt struct {
-	Status              runtime.RunPhase                                    `json:"status"`
-	ChildRunID          string                                              `json:"childRunId"`
-	SliceID             string                                              `json:"sliceId"`
-	MasterRunID         string                                              `json:"masterRunId"`
-	Envelope            persistence.Envelope                                `json:"envelope"`
-	Snapshot            string                                              `json:"snapshot"`
-	Tree                string                                              `json:"tree"`
-	Digest              string                                              `json:"digest"`
-	RequirementRevision string                                              `json:"requirementRevision"`
-	Topology            TopologyBinding                                     `json:"topology"`
-	RouteMode           string                                              `json:"routeMode"`
-	SelectedGates       []string                                            `json:"selectedGates"`
-	Validation          SliceValidationReceipt                              `json:"validation"`
-	SelectedQA          []coverage.ReviewKind                               `json:"selectedQA"`
-	ApprovedCases       map[coverage.ReviewKind]coverage.AcceptanceManifest `json:"approvedCases"`
-	Cost                *cost.RunCost                                       `json:"cost"`
-	OwnerTranscript     string                                              `json:"ownerTranscript,omitempty"`
-	OwnerStartedAt      string                                              `json:"ownerStartedAt,omitempty"`
-	OwnerEndedAt        string                                              `json:"ownerEndedAt,omitempty"`
-	LastEvent           *SliceEventIdentity                                 `json:"lastEvent,omitempty"`
-	LastRequest         *SliceRequestIdentity                               `json:"lastRequest,omitempty"`
+	OriginRequirementRevision string                                              `json:"originRequirementRevision,omitempty"`
+	ParentRequirement         *ParentRequirementAuthority                         `json:"parentRequirement,omitempty"`
+	ParentReset               *ResetAuthority                                     `json:"parentReset,omitempty"`
+	Status                    runtime.RunPhase                                    `json:"status"`
+	ChildRunID                string                                              `json:"childRunId"`
+	SliceID                   string                                              `json:"sliceId"`
+	MasterRunID               string                                              `json:"masterRunId"`
+	Envelope                  persistence.Envelope                                `json:"envelope"`
+	Snapshot                  string                                              `json:"snapshot"`
+	Tree                      string                                              `json:"tree"`
+	Digest                    string                                              `json:"digest"`
+	RequirementRevision       string                                              `json:"requirementRevision"`
+	Topology                  TopologyBinding                                     `json:"topology"`
+	RouteMode                 string                                              `json:"routeMode"`
+	SelectedGates             []string                                            `json:"selectedGates"`
+	Validation                SliceValidationReceipt                              `json:"validation"`
+	SelectedQA                []coverage.ReviewKind                               `json:"selectedQA"`
+	ApprovedCases             map[coverage.ReviewKind]coverage.AcceptanceManifest `json:"approvedCases"`
+	Cost                      *cost.RunCost                                       `json:"cost"`
+	OwnerTranscript           string                                              `json:"ownerTranscript,omitempty"`
+	OwnerStartedAt            string                                              `json:"ownerStartedAt,omitempty"`
+	OwnerEndedAt              string                                              `json:"ownerEndedAt,omitempty"`
+	Abort                     *AbortAuthority                                     `json:"abort,omitempty"`
+	ResetRequestID            string                                              `json:"resetRequestId,omitempty"`
+	LastEvent                 *SliceEventIdentity                                 `json:"lastEvent,omitempty"`
+	LastRequest               *SliceRequestIdentity                               `json:"lastRequest,omitempty"`
 }
 
 type SliceValidationReceipt struct {
@@ -172,6 +180,8 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	}
 	wave := state.currentValidationWave()
 	r := SliceTerminalReceipt{
+		OriginRequirementRevision: state.SliceChild.RequirementRevision,
+		ParentRequirement:         state.SliceChild.ParentChange, ParentReset: state.SliceChild.ParentReset,
 		Status:              runtime.PhaseSliceReady,
 		ChildRunID:          state.RunID,
 		SliceID:             state.SliceChild.SliceID,
@@ -181,6 +191,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 		Tree:                tree,
 		Digest:              tree,
 		RequirementRevision: state.RequirementRevision(),
+		ResetRequestID:      state.resetRequestID(),
 		Topology:            copyTopology(*state.Topology),
 		RouteMode:           state.RouteMode,
 		SelectedGates:       slices.Clone(state.SelectedGates),
@@ -217,6 +228,9 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 		}
 	}
 	for _, decision := range state.Decisions {
+		if _, local := state.Events[decision.EventID]; !local {
+			continue
+		}
 		if r.LastRequest == nil || decision.Revision > r.LastRequest.Revision {
 			r.LastRequest = &SliceRequestIdentity{RequestID: decision.RequestID, EventID: decision.EventID, RequestDigest: state.requestDigest(decision.RequestID), DecisionDigest: state.Events[decision.EventID].Digest, Revision: decision.Revision}
 		}
@@ -261,9 +275,9 @@ func (s *State) verifySliceReceipt() error {
 		return nil
 	}
 	r := s.SliceReceipt.Receipt
-	if s.SliceChild == nil || r.Status != runtime.PhaseSliceReady ||
+	if s.SliceChild == nil || (r.Status != runtime.PhaseSliceReady && r.Status != "ABORTED") ||
 		r.ChildRunID != s.RunID || r.MasterRunID != s.SliceChild.MasterRunID || r.SliceID != s.SliceChild.SliceID ||
-		r.Snapshot != s.PromotedSnapshot || r.Tree != s.PromotedDigest || r.Digest != r.Tree ||
+		r.Status == runtime.PhaseSliceReady && (r.Snapshot != s.PromotedSnapshot || r.Tree != s.PromotedDigest || r.Digest != r.Tree) ||
 		s.SliceReceipt.Digest != r.CanonicalDigest() {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: "slice receipt does not match its frozen child identity and digest"}
 	}
@@ -277,9 +291,9 @@ func (s *State) verifySliceReceipt() error {
 func (r SliceReceipt) verify() error {
 	v := r.Receipt
 	route := State{RouteMode: v.RouteMode, SelectedGates: v.SelectedGates, Topology: &v.Topology}
-	if r.Digest != v.CanonicalDigest() || v.Status != runtime.PhaseSliceReady || v.ChildRunID == "" || v.MasterRunID == "" || v.SliceID == "" ||
-		v.Snapshot == "" || v.Tree == "" || v.Digest != v.Tree || v.Validation.Status != "COMPLETE" || v.Validation.Candidate.Digest != v.Tree ||
-		v.RequirementRevision == "" || v.Validation.RequirementRevision != v.RequirementRevision || v.Validation.RouteDigest != route.validationRouteDigest() {
+	if r.Digest != v.CanonicalDigest() || (v.Status != runtime.PhaseSliceReady && v.Status != "ABORTED") || v.ChildRunID == "" || v.MasterRunID == "" || v.SliceID == "" ||
+		v.Status == runtime.PhaseSliceReady && (v.Snapshot == "" || v.Tree == "" || v.Digest != v.Tree || v.Validation.Status != "COMPLETE" || v.Validation.Candidate.Digest != v.Tree) ||
+		v.RequirementRevision == "" || v.Status == runtime.PhaseSliceReady && (v.Validation.RequirementRevision != v.RequirementRevision || v.Validation.RouteDigest != route.validationRouteDigest()) || v.Status == "ABORTED" && (v.Abort == nil || v.Abort.Event.Digest == "" || v.Abort.Decision.RequestID == "") {
 		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt has inconsistent frozen bindings"}
 	}
 	return nil
@@ -300,39 +314,78 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint st
 		return err
 	}
 	r := receipt.Receipt
-	if accepted, exists := state.SliceReceipts[r.ChildRunID]; exists {
-		if accepted.Digest == receipt.Digest {
-			return nil
-		}
-		return &RejectedError{Code: CodeReceiptConflict, Detail: "child has a different accepted slice receipt"}
+	accepted, exists := state.SliceReceipts[r.ChildRunID]
+	if exists && accepted.Digest == receipt.Digest {
+		return nil
 	}
-	if err := state.errWriteBarrier("slice receipt acceptance"); err != nil {
+	if exists && accepted.Receipt.Status == "ABORTED" && r.Status == runtime.PhaseSliceReady {
+		return nil
+	}
+	if exists && accepted.Receipt.Status == r.Status && state.SliceReceiptQualified(accepted) {
+		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt differs within the same effective qualification"}
+	}
+	if err := state.errWriteBarrier("slice receipt acceptance"); err != nil && r.Status != "ABORTED" {
 		return err
 	}
-	if !state.SliceReceiptCurrent(receipt) || r.Envelope != e.store.Envelope() {
+	if (!state.SliceReceiptCurrent(receipt) && !state.abortedSliceMember(receipt)) || r.Envelope != e.store.Envelope() {
 		return &RejectedError{Code: CodeReceiptConflict, Detail: "slice receipt does not match the active master's exact claim, requirement, topology or version"}
 	}
 	if state.SliceReceipts == nil {
 		state.SliceReceipts = map[string]SliceReceipt{}
 	}
+	if exists {
+		state.SliceReceiptHistory = append(state.SliceReceiptHistory, accepted)
+	}
 	state.SliceReceipts[r.ChildRunID] = receipt
 	ledger := state.costLedger()
 	cost.Merge(ledger, r.ChildRunID, r.Cost)
+	if exists && accepted.Receipt.Cost != nil && accepted.Receipt.Cost.Owner != nil {
+		o := accepted.Receipt.Cost.Owner
+		ledger.TotalInputTokens -= o.TotalInputTokens
+		ledger.InputCacheHitTokens -= o.InputCacheHitTokens
+		ledger.InputCacheMissTokens -= o.InputCacheMissTokens
+		ledger.OutputTokens -= o.OutputTokens
+	}
 	if r.Cost != nil {
 		cost.AddChildOwner(ledger, r.Cost.Owner)
+	}
+	if r.Status == "ABORTED" && state.SliceChildren[r.SliceID] == r.ChildRunID && !state.abortRequested() && r.Abort.Requirement == nil {
+		id := "slice-aborted:" + r.ChildRunID + ":" + receipt.Digest
+		state.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlAbort, Options: []AskOption{{ID: "abort", Label: "Abort master because slice " + r.SliceID + " (" + r.ChildRunID + ") aborted by " + r.Abort.Decision.RequestID + "; request reset/rebuild or requirement change to continue"}}}
 	}
 	_, err = e.commit(state, revision, expectedFingerprint)
 	return err
 }
 
-// SliceReceiptCurrent derives eligibility from the current master context;
-// historical accepted evidence remains readable when that context changes.
-func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
+func (s *State) abortedSliceMember(receipt SliceReceipt) bool {
 	r := receipt.Receipt
-	return s.SliceChild == nil && s.Phase != runtime.PhaseTerminal && !s.abortRequested() && s.errWriteBarrier("slice receipt acceptance") == nil &&
-		s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
+	if r.Status != "ABORTED" || r.MasterRunID != s.RunID || s.Phase == runtime.PhaseTerminal {
+		return false
+	}
+	for creation := s.ChildCreation; creation != nil; creation = creation.Previous {
+		for _, child := range creation.Children {
+			if child.RunID == r.ChildRunID && child.SliceID == r.SliceID && digestOfCanonical(creation.Topology) == digestOfCanonical(r.Topology) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SliceReceiptQualified derives evidence qualification from the current claim,
+// requirement and reset authority. Terminal readback uses the same bindings
+// after the active write window has closed.
+func (s *State) SliceReceiptQualified(receipt SliceReceipt) bool {
+	r := receipt.Receipt
+	return s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
 		r.MasterRunID == s.RunID && slices.Contains(s.Topology.Slices, r.SliceID) && s.SliceChildren[r.SliceID] == r.ChildRunID &&
-		r.RequirementRevision == s.RequirementRevision() && digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology)
+		(r.RequirementRevision == s.RequirementRevision() || s.childReceiptCarried(receipt) || r.Status == "ABORTED") && (digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology) || s.childReceiptCarried(receipt)) && (r.Status == "ABORTED" || s.SliceResetAuthorities[r.ChildRunID].Decision.RequestID == r.ResetRequestID)
+}
+
+// SliceReceiptCurrent admits activity only while the qualified receipt's master
+// has no terminal, abort or requirement barrier.
+func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
+	return s.Phase != runtime.PhaseTerminal && !s.abortRequested() && s.errWriteBarrier("slice receipt acceptance") == nil && s.SliceReceiptQualified(receipt)
 }
 
 func (s *State) sliceReceiptProgress() (ready, expected int) {
@@ -340,7 +393,7 @@ func (s *State) sliceReceiptProgress() (ready, expected int) {
 		return 0, 0
 	}
 	for _, sliceID := range s.Topology.Slices {
-		if receipt, accepted := s.SliceReceipts[s.SliceChildren[sliceID]]; accepted && receipt.Receipt.SliceID == sliceID && s.SliceReceiptCurrent(receipt) {
+		if receipt, accepted := s.SliceReceipts[s.SliceChildren[sliceID]]; accepted && receipt.Receipt.Status == runtime.PhaseSliceReady && receipt.Receipt.SliceID == sliceID && s.SliceReceiptCurrent(receipt) {
 			ready++
 		}
 	}
@@ -432,5 +485,42 @@ func copyTopology(binding TopologyBinding) TopologyBinding {
 // 语义续用），且该系列无重走义务。与 master 侧 effectivePass 的判据同构
 // （改动接纳判据本身，不建第二套判定路径）。
 func (s *State) inheritedReviewPass(series review.Series) bool {
-	return !series.FreshOwed && s.confirmedRequirementRevision(s.SliceChild.RequirementRevision)
+	return !s.SliceChild.ParentReviewPending && !series.FreshOwed && s.confirmedRequirementRevision(s.SliceChild.RequirementRevision)
+}
+
+// FreezeAbortedSlice replaces a success checkpoint with the abort authority only
+// after registered cleanup is proven. Its frozen value survives state deletion
+// in the ordinary terminal summary and is discovered through the same claim.
+func (e *Engine) FreezeAbortedSlice(endedAt, expectedFingerprint string) error {
+	revision, s, err := e.load()
+	if err != nil {
+		return err
+	}
+	if s.SliceChild == nil {
+		return nil
+	}
+	d, ok := s.AbortDecision()
+	record, recorded := s.AbortEvent()
+	if !ok || !recorded || s.Phase != runtime.PhaseTerminal || !s.ResourcesCleaned() {
+		return validationError("aborted slice receipt requires terminal cleanup and exact authority")
+	}
+	if s.SliceReceipt != nil && s.SliceReceipt.Receipt.Status == "ABORTED" {
+		return nil
+	}
+	r := SliceTerminalReceipt{OriginRequirementRevision: s.SliceChild.RequirementRevision, ParentRequirement: s.SliceChild.ParentChange, ParentReset: s.SliceChild.ParentReset, Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteMode: s.RouteMode, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
+	if s.SliceChild.ParentAbort != nil {
+		r.Abort = s.SliceChild.ParentAbort
+		r.LastRequest.RequestDigest = r.Abort.RequestDigest
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	var frozen SliceTerminalReceipt
+	if err = json.Unmarshal(data, &frozen); err != nil {
+		return err
+	}
+	s.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest()}
+	_, err = e.commit(s, revision, expectedFingerprint)
+	return err
 }

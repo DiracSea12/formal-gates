@@ -64,7 +64,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		message = "confirm topology and select route"
 	} else if s.SliceChild == nil && !s.mergeMaster() && developmentPlanPending() {
 		message = "confirm the current readiness development plan with the route"
-	} else if s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() {
+	} else if !s.validationRequirementCurrent() {
 		message = "submit confirmed REQUIREMENT document via OPERATOR_OBSERVATION.validation"
 	} else if w := s.currentValidationWave(); w != nil {
 		switch w.Status {
@@ -110,6 +110,12 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	if s.abortRequested() {
 		return e.advanceAbort(s, nextRevision)
 	}
+	if s.resetPending() {
+		return e.advanceReset(s, nextRevision)
+	}
+	if !s.parentReviewReady() || s.SliceChild != nil && s.Phase == runtime.PhaseSliceReady {
+		return false, nil
+	}
 	changed := e.ensureRetryAsks(s, nextRevision)
 	changed = s.reconcileValidationRemedyAsks(nextRevision) || changed
 	// token cap 到达＝预算边界：落账 DISPATCH_BUDGET_DISPOSITION Ask（零签发由
@@ -123,7 +129,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	} else if made {
 		return true, nil
 	}
-	if !pipelineEnabled(s, e.cfg.Definition) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+	if !pipelineEnabled(s, e.cfg.Definition) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return changed, nil
 	}
 	if s.validationConcluded(e.cfg.Definition) {
@@ -435,9 +441,6 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		return false
 	}
 	v := s.Validation
-	if s.mergeMaster() {
-		scope = coverage.ScopeFull
-	}
 	versions := map[coverage.ReviewKind]string{}
 	for _, mode := range s.validationKinds() {
 		versions[mode] = v.Sets[mode].Version

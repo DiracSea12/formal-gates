@@ -24,6 +24,9 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 	}
 	o := p.Validation
 	if o.Kind == "REQUIREMENT" {
+		if s.resetPending() {
+			return validationError("requirement inventory awaits the complete reset confirmation")
+		}
 		if o.RequirementRevision != s.RequirementRevision() || s.IntakeConfirmationReceipt == nil {
 			return validationError("requirement observation must bind the confirmed revision")
 		}
@@ -41,6 +44,9 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 			s.Validation = &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}, Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}}
 		}
 		s.Validation.Document = doc
+		if s.RequirementGuarantee != nil {
+			s.RequirementGuarantee.ManifestDigest = digestOfCanonical(doc.Requirements)
+		}
 		s.Validation.RequirementRevision = o.RequirementRevision
 		s.Validation.Generation = s.requirementGeneration()
 		if err := s.validateConfirmedCoverage(); err != nil {

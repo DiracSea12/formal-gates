@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 			Links:   []protocol.SourcePoint{{SourceID: source, PointID: point}},
 		}
 	}
-	original, current, local := inventory("SOL-ORIGINAL", "SP-ORIGINAL"), inventory("SOL-CURRENT", "SP-CURRENT"), inventory("SOL-LOCAL", "SP-LOCAL")
+	original, current := inventory("SOL-ORIGINAL", "SP-ORIGINAL"), inventory("SOL-CURRENT", "SP-CURRENT")
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	master := nativeMasterAt(t, root, base, original)
@@ -143,23 +144,27 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	confirmValidationDocument(sibling, "", local, document+"\n")
-	sibling.reopen()
+	request, err := protocol.NewRequestEvent("independent-child-change", protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Change child requirement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = other.Submit(request); err == nil {
+		t.Fatal("child independently accepted a requirement change")
+	}
 	state := driverState(t, sibling)
-	if state.RequirementRevision() == master.revision || state.RequirementRevisions[1].BaseRevision != master.revision || state.RequirementRevisions[1].StateRevision <= state.IntakeReceipt.Revision || !reflect.DeepEqual(state.RequirementRevisions[1].Coverage, local) || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) {
-		t.Fatal("local confirmation replaced the inherited evidence or used parent generations")
+	if state.RequirementRevision() != master.revision || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) {
+		t.Fatal("rejected child change rewrote origin or intake")
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "requirements.md")); err != nil || string(body) != document {
+		t.Fatal("child change modified master artifact", err)
+	}
+	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
 	}
 	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	sibling.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: sibling.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: sibling.revision, Document: document}}})
 	sibling.drive()
-	siblingID, siblingInput := planBatchAction(sibling, "command")
-	sibling.revision = state.RequirementRevision()
-	assertConfirmedMaterial(t, sibling, siblingInput, document+"\n")
-	if body, err := os.ReadFile(filepath.Join(root, "requirements.md")); err != nil || string(body) != document {
-		t.Fatal("child local confirmation changed the parent's material", err)
-	}
-	if siblingInput.Binding.RequirementRevision != state.RequirementRevision() || !slices.Contains(siblingInput.Manifest.Sources, "SOL-LOCAL") || slices.Contains(siblingInput.Manifest.Sources, "SOL-CURRENT") {
-		t.Fatal("local confirmation did not own the child's next dispatch")
-	}
+	siblingID, _ := planBatchAction(sibling, "command")
 	abortCreationChild(t, master.f)
 	master.drive()
 	if master.run.Status != "ABORTING" {
@@ -193,7 +198,8 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 					t.Fatal(err)
 				}
 				revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-				pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
+				children := requirementChildChoices(t, master)
+				pkg := protocol.RequirementDecisionPackage{Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"topology"}}, CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
 				event, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 				if err != nil {
 					t.Fatal(err)
@@ -201,7 +207,7 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 				master.submit(event)
 				if withdrawn {
 					ask := master.run.PendingRequirementAsk
-					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
+					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: pkg.Children, Impact: pkg.Impact, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
 					if driverState(t, master).Topology != nil {
 						t.Fatal("normal topology reconsideration did not clear the current binding")
 					}
@@ -324,6 +330,7 @@ func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.Coverag
 		t.Fatal(err)
 	}
 	d := &validationDriver{t: t, f: f, run: run, revision: revision, provider: f.admission.Provider, git: f.vcs}
+	retainNativeEvidence(t, f)
 	d.drive()
 	return d
 }
@@ -387,7 +394,13 @@ func prepareChildFrontier(t *testing.T, master *validationDriver) *protocol.Stat
 		t.Fatal(err)
 	}
 	s := driverState(t, master)
-	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || len(s.PendingHostActions) != len(s.Topology.Slices) {
+	workspaces := 0
+	for _, intent := range s.PendingHostActions {
+		if intent.Step == "children.workspace" {
+			workspaces++
+		}
+	}
+	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || workspaces != len(s.Topology.Slices) {
 		t.Fatalf("preparing frontier: %+v", s.ChildCreation)
 	}
 	for _, plan := range s.ChildCreation.Children {
@@ -633,6 +646,9 @@ func TestChildWorkspaceReceiptRejectsWrongContentWithoutRelease(t *testing.T) {
 	d := splitMaster(t)
 	s := prepareChildFrontier(t, d)
 	for _, intent := range s.PendingHostActions {
+		if intent.Step != "children.workspace" {
+			continue
+		}
 		var p protocol.WorkspaceParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
 			t.Fatal(err)
@@ -736,6 +752,24 @@ func TestChildReleaseReopenUsesCommittedMapAfterLostResponse(t *testing.T) {
 
 func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 	t.Helper()
+	state, err := child.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State.SliceChild == nil {
+		for id := range state.State.PendingActions {
+			if _, known := state.State.SpawnReceipts[id]; known {
+				continue
+			}
+			event, err := protocol.NewSpawnReceiptWithFailureClass(protocol.EventID("unstarted-"+digestOf(id)), id, state.State.RunProvider, id, protocol.SpawnStatusFailed, "TRANSIENT_ENGINE_ERROR")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := child.Submit(event); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	request, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	if err != nil {
 		t.Fatal(err)
@@ -1005,4 +1039,46 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 			}
 		})
 	}
+}
+
+// retainNativeEvidence copies the original state, intents and receipts before
+// the scenario's temporary project is removed. It is a test-only evidence sink.
+func retainNativeEvidence(t *testing.T, f *Facade) {
+	t.Helper()
+	destination := os.Getenv("FORMAL_GATES_TEST_EVIDENCE")
+	if destination == "" {
+		return
+	}
+	t.Cleanup(func() {
+		for _, relative := range []string{EngineNamespace, ".gates/tmp"} {
+			source := filepath.Join(f.root, relative)
+			err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil
+					}
+					return err
+				}
+				if entry.IsDir() || !entry.Type().IsRegular() {
+					return nil
+				}
+				name, err := filepath.Rel(f.root, path)
+				if err != nil {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				target := filepath.Join(destination, t.Name(), name)
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					return err
+				}
+				return os.WriteFile(target, data, 0600)
+			})
+			if err != nil {
+				t.Error("retain native scenario evidence:", err)
+			}
+		}
+	})
 }

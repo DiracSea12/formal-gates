@@ -207,11 +207,13 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
-	Validation *ValidationRequest `json:"validation,omitempty"`
-	RequestID  string             `json:"requestId"`
-	Control    ControlKind        `json:"control"`
-	Step       authoring.StepID   `json:"step,omitempty"`
-	Options    []AskOption        `json:"options"`
+	Reset          *ResetPreview      `json:"reset,omitempty"`
+	ResetRequestID string             `json:"resetRequestId,omitempty"`
+	Validation     *ValidationRequest `json:"validation,omitempty"`
+	RequestID      string             `json:"requestId"`
+	Control        ControlKind        `json:"control"`
+	Step           authoring.StepID   `json:"step,omitempty"`
+	Options        []AskOption        `json:"options"`
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
@@ -234,6 +236,7 @@ type PendingAsk struct {
 
 // RecordedDecision preserves the user decision and its typed action.
 type RecordedDecision struct {
+	Reset      *ResetDecision         `json:"reset,omitempty"`
 	Review     *ReviewDecisionPayload `json:"review,omitempty"`
 	Validation *ValidationDecision    `json:"validation,omitempty"`
 	RequestID  string                 `json:"requestId"`
@@ -484,10 +487,11 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
-	VCSName         string                    `json:"vcsName,omitempty"`
-	NativeHandle    vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
-	NativeRoot      string                    `json:"nativeRoot,omitempty"`
-	NativeResources map[string]NativeResource `json:"nativeResources,omitempty"`
+	RequirementGuarantee *GuaranteeActivation      `json:"requirementGuarantee,omitempty"`
+	VCSName              string                    `json:"vcsName,omitempty"`
+	NativeHandle         vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
+	NativeRoot           string                    `json:"nativeRoot,omitempty"`
+	NativeResources      map[string]NativeResource `json:"nativeResources,omitempty"`
 	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
 	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
@@ -614,7 +618,9 @@ type State struct {
 	// SliceReceipts is the master's immutable accepted child evidence, keyed by
 	// child run. Receipt insertion, its cases payload and cost contribution share
 	// one transaction; historical evidence survives requirement/topology changes.
-	SliceReceipts map[string]SliceReceipt `json:"sliceReceipts,omitempty"`
+	SliceResetAuthorities map[string]ResetAuthority `json:"sliceResetAuthorities,omitempty"`
+	SliceReceiptHistory   []SliceReceipt            `json:"sliceReceiptHistory,omitempty"`
+	SliceReceipts         map[string]SliceReceipt   `json:"sliceReceipts,omitempty"`
 	// Guard 是从签发/结果账本派生的额度投影（requestAllowance/retryAllowance/
 	// totalAllowance/budgetBasisDigest＋used 事实与 token cap 面）。事实源是账本
 	// 本身，本投影只在提交点重derive写入，加载边界重算比对；受理前的 run（包络
@@ -660,15 +666,18 @@ type TopologyBinding struct {
 // 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
 // 代数（单调，防篡改链的一环）。
 type ConfirmedRevision struct {
-	Coverage       *CoverageInventory        `json:"coverage,omitempty"`
-	Revision       string                    `json:"revision"`
-	DeltaDigest    string                    `json:"deltaDigest,omitempty"`
-	BaseRevision   string                    `json:"baseRevision,omitempty"`
-	Source         string                    `json:"source"`
-	Classification string                    `json:"classification"`
-	DecidedScope   []string                  `json:"decidedScope,omitempty"`
-	WorkDecisions  []RequirementWorkDecision `json:"workDecisions,omitempty"`
-	RequestID      string                    `json:"requestId,omitempty"`
+	Coverage       *CoverageInventory         `json:"coverage,omitempty"`
+	Revision       string                     `json:"revision"`
+	DeltaDigest    string                     `json:"deltaDigest,omitempty"`
+	BaseRevision   string                     `json:"baseRevision,omitempty"`
+	Source         string                     `json:"source"`
+	Classification string                     `json:"classification"`
+	DecidedScope   []string                   `json:"decidedScope,omitempty"`
+	WorkDecisions  []RequirementWorkDecision  `json:"workDecisions,omitempty"`
+	Children       []ChildRequirementDecision `json:"children,omitempty"`
+	Impact         *RequirementImpact         `json:"impact,omitempty"`
+	ResetRequestID string                     `json:"resetRequestId,omitempty"`
+	RequestID      string                     `json:"requestId,omitempty"`
 	// Reason 是用户决定的理由原文（随确认落账持久化）：carry 留痕据此
 	// 携理由（§7.2.2:4 携原 revision、证据和理由）。
 	Reason        string `json:"reason,omitempty"`

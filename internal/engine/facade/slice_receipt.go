@@ -1,11 +1,6 @@
 package facade
 
 import (
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
-
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/protocol"
 )
@@ -16,6 +11,20 @@ func (f *Facade) handoffSliceReceipt(receipt protocol.SliceReceipt) error {
 	master, err := Open(f.root, receipt.Receipt.MasterRunID)
 	if err != nil {
 		return err
+	}
+	unlock, err := master.acquireWriteWindow()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := master.engine.Load(); isMissingEngineState(err) {
+		summary, e := master.readSummary()
+		if e != nil {
+			return e
+		}
+		if summary.Termination != nil && summary.Termination.ChildCreation != nil {
+			return nil
+		}
 	}
 	return master.acceptSliceReceipt(receipt)
 }
@@ -44,17 +53,21 @@ func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
 		if childID == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(EngineNamespace), childID, "state.json")); errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return err
-		}
 		child, err := Open(f.root, childID)
 		if err != nil {
 			return err
 		}
 		snapshot, err := child.engine.Load()
-		if err != nil {
+		if isMissingEngineState(err) {
+			if accepted, ok := state.SliceReceipts[childID]; ok && accepted.Receipt.Status == "SLICE_READY" && state.ResourcesCleaned() {
+				continue
+			}
+			summary, e := child.readSummary()
+			if e != nil {
+				return e
+			}
+			snapshot.State = summary.Termination
+		} else if err != nil {
 			return err
 		}
 		receipt := snapshot.State.SliceReceipt

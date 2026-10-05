@@ -234,6 +234,9 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	// 由该 revision 机械派生（预授权；provenance 经 sourceValidationTask 折叠
 	// 回原任务归类）。
 	for _, entry := range state.RequirementRevisions {
+		if !state.requirementWorkRevisionCurrent(entry.StateRevision) {
+			continue
+		}
 		for j, choice := range entry.WorkDecisions {
 			if choice.Disposition == RequirementWorkRedo {
 				if err := declare(replacementWorkTask(entry, j)); err != nil {
@@ -380,22 +383,34 @@ func issuedGuardTasks(state *State, cd *compiler.CompiledDefinition) map[runtime
 			tasks[key] = true
 		}
 	}
-	for _, binding := range state.DispatchBindings {
+	for id, binding := range state.DispatchBindings {
+		if state.beforeResetBoundary(id) {
+			continue
+		}
 		collect(binding.Task)
 	}
 	for task := range state.Attempts {
 		collect(task)
 	}
-	for task := range state.EndedAttempts {
+	for task, attempt := range state.EndedAttempts {
+		if state.beforeResetBoundary(attempt.ActionID) {
+			continue
+		}
 		collect(task)
 	}
 	for _, pending := range state.PendingActions {
 		collect(pending.Task)
 	}
-	for _, obsolete := range state.ObsoleteActions {
+	for id, obsolete := range state.ObsoleteActions {
+		if state.beforeResetBoundary(id) {
+			continue
+		}
 		collect(obsolete.Task)
 	}
-	for _, receipt := range state.SpawnReceipts {
+	for id, receipt := range state.SpawnReceipts {
+		if state.beforeResetBoundary(id) {
+			continue
+		}
 		collect(receipt.Task)
 	}
 	return tasks

@@ -153,6 +153,7 @@ type DecidePayload struct {
 	Choice      AskOptionID
 	Review      *ReviewDecisionPayload
 	Requirement *RequirementDecisionPayload
+	Reset       *ResetDecision
 }
 
 // TaskPayload 是 TASK_PROGRESS 的 payload：目标任务、期望的当前
@@ -275,18 +276,21 @@ type RouteDecision struct {
 // RequirementDecisionPackage binds the revision, impact preview and each
 // downstream work disposition shown on the requirement-change Ask.
 type RequirementDecisionPackage struct {
-	Coverage           *CoverageInventory        `json:"coverage,omitempty"`
-	CandidateRevision  string                    `json:"candidateRevision"`
-	DeltaDigest        string                    `json:"deltaDigest"`
-	ImpactDigest       string                    `json:"impactDigest"`
-	Source             string                    `json:"source"`
-	Classification     string                    `json:"classification"`
-	RedoProductReview  bool                      `json:"redoProductReview"`
-	RedoStartReadiness bool                      `json:"redoStartReadiness"`
-	RedoTopology       bool                      `json:"redoTopology"`
-	RedoRoute          bool                      `json:"redoRoute"`
-	WorkDecisions      []RequirementWorkDecision `json:"workDecisions,omitempty"`
-	FindingDigest      string                    `json:"findingDigest,omitempty"`
+	Coverage           *CoverageInventory         `json:"coverage,omitempty"`
+	CandidateRevision  string                     `json:"candidateRevision"`
+	DeltaDigest        string                     `json:"deltaDigest"`
+	ImpactDigest       string                     `json:"impactDigest"`
+	Source             string                     `json:"source"`
+	Classification     string                     `json:"classification"`
+	RedoProductReview  bool                       `json:"redoProductReview"`
+	RedoStartReadiness bool                       `json:"redoStartReadiness"`
+	RedoTopology       bool                       `json:"redoTopology"`
+	RedoRoute          bool                       `json:"redoRoute"`
+	WorkDecisions      []RequirementWorkDecision  `json:"workDecisions,omitempty"`
+	Children           []ChildRequirementDecision `json:"children,omitempty"`
+	Impact             *RequirementImpact         `json:"impact,omitempty"`
+	ResetRequestID     string                     `json:"resetRequestId,omitempty"`
+	FindingDigest      string                     `json:"findingDigest,omitempty"`
 }
 
 // packageView 投影出 DECIDE 载荷中的包字段，供与 Ask 落账包的逐字段
@@ -303,7 +307,8 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 		RedoTopology:       p.RedoTopology,
 		RedoRoute:          p.RedoRoute,
 		WorkDecisions:      p.WorkDecisions,
-		FindingDigest:      p.FindingDigest,
+		Children:           p.Children, Impact: p.Impact, ResetRequestID: p.ResetRequestID,
+		FindingDigest: p.FindingDigest,
 	}
 }
 
@@ -312,20 +317,23 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 // （CAS 基线，必须等于 Ask 落账基线与当前权威 revision）与 Reason（决定
 // 理由，随决定落账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
-	Coverage           *CoverageInventory        `json:"coverage,omitempty"`
-	BaseRevision       string                    `json:"baseRevision"`
-	CandidateRevision  string                    `json:"candidateRevision"`
-	DeltaDigest        string                    `json:"deltaDigest"`
-	ImpactDigest       string                    `json:"impactDigest"`
-	Source             string                    `json:"source"`
-	Classification     string                    `json:"classification"`
-	RedoProductReview  bool                      `json:"redoProductReview"`
-	RedoStartReadiness bool                      `json:"redoStartReadiness"`
-	RedoTopology       bool                      `json:"redoTopology"`
-	RedoRoute          bool                      `json:"redoRoute"`
-	WorkDecisions      []RequirementWorkDecision `json:"workDecisions,omitempty"`
-	Reason             string                    `json:"reason"`
-	FindingDigest      string                    `json:"findingDigest,omitempty"`
+	Coverage           *CoverageInventory         `json:"coverage,omitempty"`
+	BaseRevision       string                     `json:"baseRevision"`
+	CandidateRevision  string                     `json:"candidateRevision"`
+	DeltaDigest        string                     `json:"deltaDigest"`
+	ImpactDigest       string                     `json:"impactDigest"`
+	Source             string                     `json:"source"`
+	Classification     string                     `json:"classification"`
+	RedoProductReview  bool                       `json:"redoProductReview"`
+	RedoStartReadiness bool                       `json:"redoStartReadiness"`
+	RedoTopology       bool                       `json:"redoTopology"`
+	RedoRoute          bool                       `json:"redoRoute"`
+	WorkDecisions      []RequirementWorkDecision  `json:"workDecisions,omitempty"`
+	Children           []ChildRequirementDecision `json:"children,omitempty"`
+	Impact             *RequirementImpact         `json:"impact,omitempty"`
+	ResetRequestID     string                     `json:"resetRequestId,omitempty"`
+	Reason             string                     `json:"reason"`
+	FindingDigest      string                     `json:"findingDigest,omitempty"`
 }
 
 // worker result outcome 的封闭集合（runtime/task.go：结果分类不进入任务
@@ -393,16 +401,17 @@ const (
 // Event 是提交事件的 tagged union：除本 kind 对应的一个 payload 外其余
 // 必须为 nil（Validate 强制，形态与 decision.NextResult 一致）。
 type Event struct {
-	ID          EventID
-	Kind        EventKind
-	Request     *RequestPayload
-	Decide      *DecidePayload
-	Task        *TaskPayload
-	Spawn       *SpawnReceiptPayload
-	Result      *WorkerResultPayload
-	Observation *OperatorObservationPayload
-	HostAction  *HostActionReceiptPayload
-	Lifecycle   *LifecycleEventPayload
+	resetPreview *ResetPreview
+	ID           EventID
+	Kind         EventKind
+	Request      *RequestPayload
+	Decide       *DecidePayload
+	Task         *TaskPayload
+	Spawn        *SpawnReceiptPayload
+	Result       *WorkerResultPayload
+	Observation  *OperatorObservationPayload
+	HostAction   *HostActionReceiptPayload
+	Lifecycle    *LifecycleEventPayload
 }
 
 // NewRequestEvent 构造受限 REQUEST_* 事件：ID 非空、控制类型合法、
@@ -843,6 +852,7 @@ type requestWire struct {
 }
 
 type decideEventWire struct {
+	Reset       *ResetDecision              `json:"reset,omitempty"`
 	Validation  *ValidationDecision         `json:"validation,omitempty"`
 	Request     string                      `json:"request"`
 	Token       string                      `json:"token"`
@@ -922,7 +932,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Request = &requestWire{Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
 	}
 	if e.Decide != nil {
-		w.Decide = &decideEventWire{Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
+		w.Decide = &decideEventWire{Reset: e.Decide.Reset, Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}
@@ -1017,3 +1027,7 @@ func canonicalJSON(v any) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+// WithResetPreview carries facade-observed document registration into the existing
+// request handler. It is engine input, not part of the external event identity.
+func (e Event) WithResetPreview(preview ResetPreview) Event { e.resetPreview = &preview; return e }

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/requirement"
 )
 
 // 需求修订来源与含义分类的封闭词汇（持久化契约的一部分）。INTAKE 是账本
@@ -22,6 +23,7 @@ import (
 const (
 	// RequirementSourceIntake 标记受理回执回填的初始账目。
 	RequirementSourceIntake = "INTAKE"
+	RequirementSourceReset  = "RESET"
 	// RequirementSourceUserInitiated 是用户主动发起的需求变化。
 	RequirementSourceUserInitiated = "USER_INITIATED"
 	// RequirementSourceReviewFindingP2 是产品审/技术审确认的 P2/P3 处置
@@ -60,7 +62,7 @@ var requirementScopeItems = []string{
 // validRequirementSource 报告来源是否属于决定包可用的封闭三值。
 func validRequirementSource(source string) bool {
 	switch source {
-	case RequirementSourceUserInitiated, RequirementSourceReviewFindingP2, RequirementSourceReviewFindingP1:
+	case RequirementSourceUserInitiated, RequirementSourceReviewFindingP2, RequirementSourceReviewFindingP1, RequirementSourceReset:
 		return true
 	}
 	return false
@@ -97,7 +99,7 @@ func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 	if pkg.Source == RequirementSourceUserInitiated && findingBound {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a user-initiated requirement decision cannot bind a review finding digest"}
 	}
-	if pkg.Source != RequirementSourceUserInitiated && !findingBound {
+	if pkg.Source != RequirementSourceUserInitiated && pkg.Source != RequirementSourceReset && !findingBound {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a finding-driven requirement decision must bind its finding digest"}
 	}
 	return validateWorkDecisionShape(pkg.WorkDecisions)
@@ -109,7 +111,7 @@ func validateRequirementDecisionPayload(payload *RequirementDecisionPayload) err
 	if strings.TrimSpace(payload.BaseRevision) == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the base revision it is decided against"}
 	}
-	if payload.CandidateRevision == payload.BaseRevision {
+	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision candidate revision must differ from its base"}
 	}
 	if strings.TrimSpace(payload.Reason) == "" {
@@ -208,6 +210,12 @@ func (s *State) errWriteBarrier(entry string) error {
 // 变化 Ask：需求决定事务内以它判定屏障解除边界——只有最后一个未决 Ask
 // 的解决才触发隔离账重分类，此前隔离继续持有。
 func (s *State) requirementChangePendingExcept(requestID string) bool {
+	if s.SliceChild != nil && s.SliceChild.ParentChange != nil && s.SliceChild.ParentChange.Pending {
+		return true
+	}
+	if s.resetPending() {
+		return true
+	}
 	for id, ask := range s.PendingAsks {
 		if id != requestID && ask.Control == ControlRequestRequirementChange && !ask.Resolved {
 			return true
@@ -395,7 +403,12 @@ func (s *State) retireReviewDispatch(actionID string, mark review.Action, reques
 	}
 	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
 	s.archiveDispatchResults(actionID)
-	pending, known := s.retireAction(actionID, "", detail)
+	pending, known := s.PendingActions[actionID]
+	if known {
+		s.ObsoleteActions[actionID] = ObsoleteAction{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Reason: detail}
+	} else {
+		pending, known = s.retireAction(actionID, "", detail)
+	}
 	if !known {
 		return &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("review dispatch %q is unknown", actionID)}
 	}
@@ -474,7 +487,11 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	//     P2/P3（P2/P3 处置默认 meaning-preserved；升级为 CHANGED 走 P1
 	//     来源，标签必须真实）。
 	//   - USER_INITIATED 不绑 finding，两种分类皆可。
-	if payload.Source != RequirementSourceUserInitiated {
+	if payload.Source == RequirementSourceReset && (ask.ResetRequestID == "" || payload.ResetRequestID != ask.ResetRequestID) {
+		return reject("reset confirmation must bind the accepted reset request")
+	}
+	parentConfirmed := state.SliceChild != nil && state.SliceChild.ParentChange != nil && state.SliceChild.ParentChange.Confirmation != nil && state.SliceChild.ParentChange.Confirmation.RequestID == requestID && state.SliceChild.ParentChange.Confirmation.Revision == payload.CandidateRevision
+	if payload.Source != RequirementSourceUserInitiated && payload.Source != RequirementSourceReset && !parentConfirmed {
 		owner, decision, severity, found := review.FindingDecision(state.ReviewSeries, payload.FindingDigest)
 		if !found {
 			return reject(fmt.Sprintf("requirement decision binds finding digest %q that no recorded review evidence contains", payload.FindingDigest))
@@ -499,6 +516,14 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	if err := e.validateRequirementWork(state, payload.WorkDecisions, false); err != nil {
 		return err
+	}
+	if payload.Source == RequirementSourceReset {
+		d := state.Decisions[payload.ResetRequestID]
+		if d.Reset == nil || !d.Reset.Applied || d.Reset.Confirmed {
+			return reject("reset confirmation has no pending applied authority")
+		}
+		d.Reset.Confirmed = true
+		state.Decisions[d.RequestID] = d
 	}
 	// scope 的计算与应用对两类分类完全一致（§7.2.1：PRESERVED 保留产品含
 	// 义＋重做受影响技术审是合法组合）；唯一硬规则是上面的 P1 源两约束。
@@ -525,7 +550,8 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	// 登记确认事实（新权威 revision）。
 	state.RequirementRevisions = append(state.RequirementRevisions, ConfirmedRevision{
-		Coverage:       payload.Coverage,
+		Coverage: payload.Coverage,
+		Children: payload.Children, Impact: payload.Impact, ResetRequestID: payload.ResetRequestID,
 		Revision:       payload.CandidateRevision,
 		DeltaDigest:    payload.DeltaDigest,
 		BaseRevision:   payload.BaseRevision,
@@ -537,6 +563,10 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		Reason:         payload.Reason,
 		StateRevision:  nextRevision,
 	})
+	if state.RequirementGuarantee != nil {
+		state.RequirementGuarantee.RequirementRevision = payload.CandidateRevision
+		state.RequirementGuarantee.ManifestDigest = ""
+	}
 	// 机械执行 scope：勾选的 series 调单 series stale 原语（不跨 series
 	// 级联：未勾选即续用），fresh floor＝本次决定的 state 代数——重走态
 	// 的新鲜轮只认不早于它的派发；勾选拓扑/路线即解绑，重新确认走既有
@@ -638,7 +668,7 @@ func verifyRequirementLedger(state *State) error {
 		if entry.BaseRevision != previousRevision {
 			return fail("entry %d base revision %q breaks the confirmation chain (previous %q)", index+2, entry.BaseRevision, previousRevision)
 		}
-		if entry.Revision == "" || entry.Revision == entry.BaseRevision || entry.DeltaDigest == "" || entry.RequestID == "" {
+		if entry.Revision == "" || entry.Revision == entry.BaseRevision && entry.Source != RequirementSourceReset || entry.DeltaDigest == "" || entry.RequestID == "" {
 			return fail("entry %d is missing its revision, delta, or ask binding", index+2)
 		}
 		if !validRequirementSource(entry.Source) || !validRequirementClassification(entry.Classification) {
@@ -661,4 +691,20 @@ func verifyRequirementLedger(state *State) error {
 		previousState = entry.StateRevision
 	}
 	return nil
+}
+
+// GuaranteeActivation is the finite requirement activation envelope. Validation
+// owns all approved cases and execution records; they are never duplicated here.
+type GuaranteeActivation struct {
+	ActivationSource    string `json:"activationSource"`
+	RequirementRevision string `json:"requirementRevision"`
+	SolutionRevision    string `json:"solutionRevision"`
+	ManifestDigest      string `json:"manifestDigest"`
+}
+
+func NewGuaranteeActivation(revision, solution string, document requirement.FrozenRequirementProjection) *GuaranteeActivation {
+	return &GuaranteeActivation{ActivationSource: "EXPLICIT_REQUIREMENT_CONFIRMATION", RequirementRevision: revision, SolutionRevision: solution, ManifestDigest: digestOfCanonical(document.Requirements)}
+}
+func (s *State) GuaranteeActive() bool {
+	return s.RequirementGuarantee != nil && s.RequirementGuarantee.RequirementRevision == s.RequirementRevision() && s.RequirementGuarantee.ManifestDigest != "" && s.RouteMode != "" && !s.routeHasNoQAModes() && !s.ValidationNotGuaranteed()
 }

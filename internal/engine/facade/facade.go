@@ -93,26 +93,30 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
-	RecoveryRecords     []protocol.RecoveryRecord `json:"recoveryRecords,omitempty"`
-	lastEvent           *protocol.EventRecord
-	Termination         *protocol.State                      `json:"termination,omitempty"`
-	ValidationDecisions map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
-	ValidationRequests  map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
-	NotGuaranteed       bool                                 `json:"notGuaranteed,omitempty"`
-	ValidationInputs    map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
-	Attempts            map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
-	PendingActions      map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
-	RejectedResults     map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
-	Validation          *protocol.Validation                 `json:"validation,omitempty"`
-	DispatchBindings    map[string]protocol.WorkBinding      `json:"dispatchBindings,omitempty"`
-	AdapterIntents      map[string]protocol.HostActionIntent `json:"adapterIntents,omitempty"`
-	EndedAttempts       map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
-	RunID               string                               `json:"runId"`
-	Runtime             string                               `json:"runtime"`
-	Route               string                               `json:"route"`
-	Status              string                               `json:"status"`
-	Revision            uint64                               `json:"revision"`
-	Envelope            Envelope                             `json:"envelope"`
+	MasterRunID          string                               `json:"masterRunId,omitempty"`
+	ParentRequirement    *protocol.ParentRequirementAuthority `json:"parentRequirement,omitempty"`
+	RequirementGuarantee *protocol.GuaranteeActivation        `json:"requirementGuarantee,omitempty"`
+	RequirementChildren  []protocol.ChildRequirementDecision  `json:"requirementChildren,omitempty"`
+	RecoveryRecords      []protocol.RecoveryRecord            `json:"recoveryRecords,omitempty"`
+	lastEvent            *protocol.EventRecord
+	Termination          *protocol.State                      `json:"termination,omitempty"`
+	ValidationDecisions  map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
+	ValidationRequests   map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
+	NotGuaranteed        bool                                 `json:"notGuaranteed,omitempty"`
+	ValidationInputs     map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
+	Attempts             map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
+	PendingActions       map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
+	RejectedResults      map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
+	Validation           *protocol.Validation                 `json:"validation,omitempty"`
+	DispatchBindings     map[string]protocol.WorkBinding      `json:"dispatchBindings,omitempty"`
+	AdapterIntents       map[string]protocol.HostActionIntent `json:"adapterIntents,omitempty"`
+	EndedAttempts        map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
+	RunID                string                               `json:"runId"`
+	Runtime              string                               `json:"runtime"`
+	Route                string                               `json:"route"`
+	Status               string                               `json:"status"`
+	Revision             uint64                               `json:"revision"`
+	Envelope             Envelope                             `json:"envelope"`
 	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线；lightweight
 	// 恒空（无 VCS 语义）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
@@ -351,7 +355,12 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 
 // TerminalSummary is immutable and supports terminal replay without reopening
 // the active writer. An aborted run retains its original State here after cleanup.
+type TerminalMaterial struct {
+	Path   string `json:"path"`
+	Digest string `json:"digest"`
+}
 type TerminalSummary struct {
+	SliceGuarantee      *TerminalMaterial                    `json:"sliceGuarantee,omitempty"`
 	LastEvent           *protocol.EventRecord                `json:"lastEvent,omitempty"`
 	Termination         *protocol.State                      `json:"termination,omitempty"`
 	ValidationDecisions map[string]protocol.RecordedDecision `json:"validationDecisions,omitempty"`
@@ -677,7 +686,11 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
+	activation, err := initialGuarantee(root, req.Route, req.IntakeConfirmationReceipt)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -850,21 +863,41 @@ func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
 	}
-	if err := f.coordinatePreparingChild(); err != nil {
+	unlock, err := f.acquireWriteWindow()
+	if err != nil {
 		return Run{}, err
 	}
-	if f.vcs != nil {
-		unlock, err := f.acquireNativeWindow()
-		if err != nil {
-			return Run{}, err
-		}
-		defer unlock()
+	run, err := f.driveInWindow()
+	unlock()
+	if err == nil && run.SliceReceipt != nil {
+		err = f.handoffSliceReceipt(*run.SliceReceipt)
 	}
-	return f.driveInWindow()
+	return run, err
+}
+
+// recordIntakeReceipt persists this run's original confirmation through the
+// first-drive handler. Parent controls may arrive before the child's first drive.
+func (f *Facade) recordIntakeReceipt(s *protocol.State) error {
+	if s.IntakeReceipt != nil {
+		return nil
+	}
+	confirmation := s.IntakeConfirmationReceipt
+	if confirmation == nil {
+		return fmt.Errorf("%s: start confirmation is missing", InvalidIntakeConfirmation)
+	}
+	digest, err := IntakeDigest(*confirmation)
+	if err != nil {
+		return err
+	}
+	_, err = f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digest}, emptyFingerprint())
+	return err
 }
 
 // driveInWindow consumes the caller's existing native window without reentry.
 func (f *Facade) driveInWindow() (Run, error) {
+	if err := f.syncResetRequirement(); err != nil {
+		return Run{}, err
+	}
 	// Recovery is a write-side reconciliation step: it may create/remove the
 	// protocol lock and orphan temp files.  Keep it out of Open/Show/Status/Next
 	// so those read-only paths cannot mutate directory metadata.
@@ -891,38 +924,36 @@ func (f *Facade) driveInWindow() (Run, error) {
 		}
 		return Run{}, err
 	}
-	if _, aborted := snap.State.AbortDecision(); snap.State.Phase == runtime.PhaseSliceReady && !aborted {
+	if _, aborted := snap.State.AbortDecision(); snap.State.Phase == runtime.PhaseSliceReady && !aborted && !snap.State.ResetPending() {
 		if err := f.publishSliceReceipt(snap.State.SliceReceipt); err != nil {
-			return Run{}, err
-		}
-		if err := f.handoffSliceReceipt(*snap.State.SliceReceipt); err != nil {
 			return Run{}, err
 		}
 		return f.project()
 	}
-	if err := f.discoverSliceReceipts(snap.State); err != nil {
+	terminalReady := snap.State.Phase == runtime.PhaseTerminal || snap.State.DeliveryComplete(f.definition) && snap.State.ResourcesCleaned()
+	if !terminalReady {
+		if err := f.discoverSliceReceipts(snap.State); err != nil {
+			return Run{}, err
+		}
+	}
+	if err := f.recordIntakeReceipt(snap.State); err != nil {
 		return Run{}, err
 	}
-	if snap.State.IntakeReceipt == nil {
-		confirmation := snap.State.IntakeConfirmationReceipt
-		if confirmation == nil {
-			return Run{}, fmt.Errorf("%s: start confirmation is missing", InvalidIntakeConfirmation)
-		}
-		digest, err := IntakeDigest(*confirmation)
+	var plan *decision.Plan
+	if terminalReady {
+		plan, _, err = f.engine.Plan()
 		if err != nil {
 			return Run{}, err
 		}
-		if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digest}, emptyFingerprint()); err != nil {
-			return Run{}, err
-		}
-	}
-	var plan *decision.Plan
-	if snap.State.Route == "lightweight" {
+	} else if snap.State.Route == "lightweight" {
 		if _, err := f.engine.CompleteAll(emptyFingerprint()); err != nil {
 			return Run{}, err
 		}
 	} else {
 		for {
+			if err := f.syncReleasedChildren(); err != nil {
+				return Run{}, err
+			}
 			if err := f.driveChildren(); err != nil {
 				return Run{}, err
 			}
@@ -947,7 +978,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 				}
 				continue
 			}
-			if current.State.ChildCreation == nil && !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
+			if current.State.ChildCreation == nil && !current.State.ResetPending() && !current.State.ResourcesCleaned() && current.State.CleanupEligible(f.definition) {
 				if err := f.engine.BeginCleanup(emptyFingerprint()); err != nil {
 					return Run{}, err
 				}
@@ -980,15 +1011,6 @@ func (f *Facade) driveInWindow() (Run, error) {
 			if deliveryErr != nil {
 				return Run{}, deliveryErr
 			}
-			if current.State.SliceChild != nil {
-				checkpoint, err := f.engine.Load()
-				if err != nil {
-					return Run{}, err
-				}
-				if err := f.handoffSliceReceipt(*checkpoint.State.SliceReceipt); err != nil {
-					return Run{}, err
-				}
-			}
 		}
 	}
 	run, err := f.project()
@@ -1002,6 +1024,11 @@ func (f *Facade) driveInWindow() (Run, error) {
 		interval, err := f.finishOwnerCost()
 		if err != nil {
 			return Run{}, err
+		}
+		if run.Status == "ABORTED" {
+			if err := f.engine.FreezeAbortedSlice(interval.endedAt, emptyFingerprint()); err != nil {
+				return Run{}, err
+			}
 		}
 		if run, err = f.project(); err != nil {
 			return Run{}, err
@@ -1036,6 +1063,69 @@ func (f *Facade) driveInWindow() (Run, error) {
 func (f *Facade) sealDelivered() error {
 	identity, _, err := f.verifyDelivered()
 	if err != nil {
+		return err
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		return err
+	}
+	if snapshot.State.Phase == runtime.PhaseTerminal {
+		return nil
+	}
+	summary, err := f.readTerminalIntent()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err != nil || !f.terminalEvidenceComplete(summary) || summary.Revision != snapshot.Revision+1 {
+		interval, err := f.finishOwnerCost()
+		if err != nil {
+			return err
+		}
+		snapshot, err = f.engine.Load()
+		if err != nil {
+			return err
+		}
+		run, err := f.project()
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(snapshot.State)
+		if err != nil {
+			return err
+		}
+		var terminal protocol.State
+		if err := json.Unmarshal(data, &terminal); err != nil {
+			return err
+		}
+		terminal.Phase = runtime.PhaseTerminal
+		run.Termination = &terminal
+		run.Status = "COMPLETE"
+		run.Revision++
+		run.Next = decision.NextResult{Kind: decision.KindComplete}
+		summary = summaryForRun(run, interval)
+		summary.SliceGuarantee, err = f.materializeSliceGuarantee(snapshot.State)
+		if err != nil {
+			return err
+		}
+		if !f.terminalEvidenceComplete(summary) {
+			return fmt.Errorf("terminal material requires concluded delivery and cleanup")
+		}
+		if err := f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) }); err != nil {
+			return err
+		}
+	}
+	// Complete material precedes retirement of active child evidence. Reentry
+	// consumes the same intent without rebuilding a child inventory.
+	if err := f.writeSummaryValue(summary); err != nil {
+		return err
+	}
+	if err := f.cleanupCheckpoints(summary); err != nil {
+		return err
+	}
+	if err := f.endLifecycle(); err != nil {
+		return err
+	}
+	if _, _, err := f.verifyDelivered(); err != nil {
 		return err
 	}
 	return f.engine.SealTerminal(identity, emptyFingerprint())
@@ -1186,7 +1276,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		run, err := f.projectOrSummary()
 		return accepted, run, err
 	}
-	unlock, err := f.acquireNativeWindow()
+	unlock, err := f.acquireWriteWindow()
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1199,9 +1289,67 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		run, err := f.projectOrSummary()
 		return accepted, run, err
 	}
+	if event.Request != nil && event.Request.Control == protocol.ControlReset {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		preview := snap.State.ResetPreview()
+		preview.Work, err = f.engine.RequirementWork()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		req, err := f.request()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		if req.IntakeConfirmationReceipt.RequirementSource != "" {
+			revision, err := requirementArtifactRevision(filepath.Join(f.root, req.IntakeConfirmationReceipt.RequirementSource))
+			if err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+			if strings.HasPrefix(snap.State.RequirementRevision(), "sha256:") {
+				revision = "sha256:" + revision
+			}
+			preview.RequirementRevision = revision
+		}
+		if err := f.resetChildrenPreview(&preview); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		preview.Digest = preview.CanonicalDigest()
+		event = event.WithResetPreview(preview)
+	}
+	if event.Request != nil && event.Request.Package != nil {
+		if err := f.validateChildRequirementPackage(event.Request.Package); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+	}
+	if event.Decide != nil && event.Decide.Reset != nil {
+		if err := f.validateResetChildren(string(event.Decide.Request)); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+	}
+	if event.Decide != nil && event.Decide.Requirement != nil {
+		pkg := event.Decide.Requirement
+		if len(pkg.Children) > 0 {
+			view := protocol.RequirementDecisionPackage{Children: pkg.Children, Impact: pkg.Impact, RedoTopology: pkg.RedoTopology}
+			if err := f.validateChildRequirementPackage(&view, true); err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+		}
+	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.syncResetRequirement(); err != nil {
+		return acceptance, Run{}, err
+	}
+	if err := f.syncReleasedChildren(); err != nil {
+		return acceptance, Run{}, err
+	}
+	if err := f.recordChildReset(); err != nil {
+		return acceptance, Run{}, err
 	}
 	run, err := f.projectOrSummary()
 	return acceptance, run, err
@@ -1386,7 +1534,32 @@ func (f *Facade) project() (Run, error) {
 		}
 	}
 	run.NotGuaranteed = snap.State.ValidationNotGuaranteed()
+	run.RequirementGuarantee = snap.State.RequirementGuarantee
+	if snap.State.SliceChild != nil {
+		run.MasterRunID = snap.State.SliceChild.MasterRunID
+		run.ParentRequirement = snap.State.SliceChild.ParentChange
+		parent, err := Open(f.root, run.MasterRunID)
+		if err != nil {
+			return Run{}, err
+		}
+		current, err := parent.engine.Load()
+		if err != nil {
+			return Run{}, err
+		}
+		for id, ask := range current.State.PendingAsks {
+			if ask.Control == protocol.ControlRequestRequirementChange && !ask.Resolved {
+				run.Next = decision.NextResult{Kind: decision.KindAsk, Ask: &decision.AskPayload{Requests: []string{"master:" + run.MasterRunID + ":" + id}}}
+				break
+			}
+		}
+	}
 	run.RequirementWork = work
+	if snap.State.Phase != runtime.PhaseTerminal {
+		run.RequirementChildren, err = f.requirementChildren()
+		if err != nil {
+			return Run{}, err
+		}
+	}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
 	// The protocol plan owns the boundary; the facade adds the bound package
@@ -1641,7 +1814,14 @@ func (f *Facade) freezeCleanupSummary(s *protocol.State) error {
 		run.Status = "ABORTED"
 	}
 	run.Next = decision.NextResult{Kind: decision.KindComplete}
-	return f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run, interval)) })
+	summary := summaryForRun(run, interval)
+	if !s.RequirementBarrierActive() && !s.ResetPending() {
+		summary.SliceGuarantee, err = f.materializeSliceGuarantee(s)
+		if err != nil {
+			return err
+		}
+	}
+	return f.admission.write(func() error { return writeJSONAtomic(terminalIntentPath(f.stateDir), summary) })
 }
 
 func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
@@ -1653,6 +1833,9 @@ func (f *Facade) finalizeTerminal(run Run, interval ownerInterval) error {
 	if err == nil && f.terminalEvidenceComplete(existing) {
 		summary = existing
 	} else {
+		if err == nil {
+			summary.SliceGuarantee = existing.SliceGuarantee
+		}
 		if !f.terminalEvidenceComplete(summary) {
 			return fmt.Errorf("terminal publication requires the actual completed State and authority")
 		}
@@ -1681,6 +1864,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 func runFromSummary(summary TerminalSummary) Run {
 	run := Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
+		run.SliceReceipt = s.SliceReceipt
 		run.BaseSnapshot = s.BaseSnapshot
 		run.PromotedSnapshot = s.PromotedSnapshot
 		run.Validation = s.Validation
