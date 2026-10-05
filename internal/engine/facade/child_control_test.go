@@ -217,9 +217,17 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 
 func settleResetWorkerStops(t *testing.T, d *validationDriver) {
 	t.Helper()
-	for action, intent := range d.run.AdapterIntents {
-		if intent.Terminate == nil {
-			continue
+	for {
+		var action string
+		var intent protocol.HostActionIntent
+		for id, pending := range d.run.AdapterIntents {
+			if pending.Terminate != nil {
+				action, intent = id, pending
+				break
+			}
+		}
+		if action == "" {
+			return
 		}
 		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
 			event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, edge)
@@ -481,12 +489,17 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 		t.Fatal("reset lost the original stopped or queued development obligation")
 	}
 	confirmResetControl(t, child)
+	child.drive()
 	state = driverState(t, child)
 	if _, accepted := state.Results[id]; accepted {
 		t.Fatal("pre-reset result requalified after reset")
 	}
 	if state.ResetPending() || len(state.PendingHostActions) != 0 {
 		t.Fatal("reset did not settle the original responsibilities")
+	}
+	_, replacement := planBatchAction(child, "command")
+	if replacement.Binding.Task == input.Binding.Task || replacement.Binding.Generation <= input.Binding.Generation || len(child.run.RequirementWork) != 2 {
+		t.Fatal("reset did not rebuild the stopped and queued development responsibilities")
 	}
 	if _, _, err := child.f.Submit(reset); err != nil {
 		t.Fatal(err)

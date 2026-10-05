@@ -921,7 +921,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 		}
 		return Run{}, err
 	}
-	if _, aborted := snap.State.AbortDecision(); snap.State.Phase == runtime.PhaseSliceReady && !aborted {
+	if _, aborted := snap.State.AbortDecision(); snap.State.Phase == runtime.PhaseSliceReady && !aborted && !snap.State.ResetPending() {
 		if err := f.publishSliceReceipt(snap.State.SliceReceipt); err != nil {
 			return Run{}, err
 		}

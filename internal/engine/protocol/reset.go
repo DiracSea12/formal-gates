@@ -219,9 +219,17 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 		s.PendingHostActions[intent.ActionID] = intent
 		return true, nil
 	}
+	// The confirmed development plan still reads its signed readiness payload.
+	// ReviewSeries owns the review conclusion and quota, which reset rebuilds;
+	// retaining this one plan source does not carry that review conclusion.
+	planSource := ""
+	planRequest, _, _ := s.confirmedDevelopmentPlan()
+	if route := s.Decisions[planRequest].Review; route != nil && route.Route != nil && route.Route.DevelopmentPlan != nil {
+		planSource = route.Route.DevelopmentPlan.ReviewActionID
+	}
 	for id := range s.Results {
 		binding := s.DispatchBindings[id]
-		if s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch" {
+		if id != planSource && s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch" {
 			s.archiveDispatchResults(id)
 		}
 	}
