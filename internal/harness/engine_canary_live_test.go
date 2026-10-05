@@ -1922,14 +1922,22 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	c.t.Logf("engine canary complete: run=%s promoted=%s dispatches=%d evidence=%s", final.RunID, final.PromotedSnapshot, len(c.dispatched), evidenceDir)
 }
 
-// Show owns the terminal material path. Its complete projection must retain
-// every terminal fact returned by the completed drive.
+// Show owns the terminal material path. Compare the durable terminal facts;
+// the active review face and Complete payload are not retained in the summary.
 func (c *engineCanary) terminalRun() facade.Run {
 	c.t.Helper()
 	final := c.readRun("show")
 	expected := c.run
-	expected.SummaryPath = final.SummaryPath
-	if final.SummaryPath == "" || !canaryValuesEqual(final, expected) {
+	if final.SummaryPath == "" || final.RunID != expected.RunID || final.Runtime != expected.Runtime || final.Route != expected.Route ||
+		final.Status != expected.Status || final.Next.Kind != expected.Next.Kind || final.Revision != expected.Revision || final.Envelope != expected.Envelope ||
+		final.BaseSnapshot != expected.BaseSnapshot || final.PromotedSnapshot != expected.PromotedSnapshot ||
+		final.NotGuaranteed != expected.NotGuaranteed || final.Unverified != expected.Unverified ||
+		!canaryValuesEqual(final.Termination, expected.Termination) || !canaryValuesEqual(final.Cost, expected.Cost) ||
+		!canaryValuesEqual(final.IntakeReceipt, expected.IntakeReceipt) || !canaryValuesEqual(final.GuardBudget, expected.GuardBudget) ||
+		!canaryValuesEqual(final.ValidationDecisions, expected.ValidationDecisions) || !canaryValuesEqual(final.ValidationRequests, expected.ValidationRequests) ||
+		!canaryValuesEqual(final.SliceReceipt, expected.SliceReceipt) || !canaryValuesEqual(final.SliceChildren, expected.SliceChildren) ||
+		!canaryValuesEqual(final.SliceReceipts, expected.SliceReceipts) || !canaryValuesEqual(final.Validation, expected.Validation) ||
+		!canaryValuesEqual(final.DispatchBindings, expected.DispatchBindings) || !canaryValuesEqual(final.RecoveryRecords, expected.RecoveryRecords) {
 		c.fail("terminal show differs from completed drive")
 	}
 	return final
