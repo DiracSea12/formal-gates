@@ -362,11 +362,11 @@ func canaryNativeReleaseConsumer(t *testing.T) string {
 	}
 	source := string(data)
 	_, functions, found := strings.Cut(source, "async function MWt(")
-	functions, ended := strings.Cut(functions, "var Snr,")
+	functions, _, ended := strings.Cut(functions, "var Snr,")
 	_, class, classFound := strings.Cut(source, "UO=class")
-	class, classEnded := strings.Cut(class, ";r(MWt,")
+	class, _, classEnded := strings.Cut(class, ";r(MWt,")
 	_, lookup, lookupFound := strings.Cut(source, "async function fQi(")
-	lookup, lookupEnded := strings.Cut(lookup, "function mQi(")
+	lookup, _, lookupEnded := strings.Cut(lookup, "function mQi(")
 	if !found || !ended || !classFound || !classEnded || !lookupFound || !lookupEnded {
 		t.Fatal("native release consumer source markers are missing")
 	}
