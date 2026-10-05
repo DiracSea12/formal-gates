@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/decision"
@@ -142,6 +143,11 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	observation := protocol.Event{ID: protocol.EventID(child.eventID()), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: pending.RequirementRevision(), Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: pending.RequirementRevision(), Document: string(raw)}}}
 	if _, _, err := child.f.Submit(observation); err == nil {
 		t.Fatal("ordinary requirement observation bypassed reset re-confirmation")
+	} else {
+		var rejected *protocol.RejectedError
+		if !errors.As(err, &rejected) || rejected.Code != protocol.CodeValidationEvidenceRejected {
+			t.Fatal("pending reset did not reject through the requirement inventory owner", err)
+		}
 	}
 	afterObservation, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
 	if err != nil || !bytes.Equal(unchanged, afterObservation) {
@@ -485,6 +491,13 @@ func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
 
 func requirementChildChoices(t *testing.T, d *validationDriver) []protocol.ChildRequirementDecision {
 	t.Helper()
+	// A child receipt can update the master independently of its last Drive.
+	// Build the confirmation package from the current public projection.
+	var err error
+	d.run, err = d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
 	choices, err := d.f.requirementChildren()
 	if err != nil {
 		t.Fatal(err)
