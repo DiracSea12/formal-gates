@@ -144,7 +144,9 @@ func mainlineChildren(t *testing.T, conflict string) (*validationDriver, []*vali
 type mergeInterruption struct {
 	vcs.Runner
 	point           string
+	root            string
 	interrupted     bool
+	promotionReset  bool
 	merges, commits int
 }
 
@@ -154,9 +156,12 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	commit := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates merge ")
 	candidate := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates candidate ")
 	cases := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, ".gates/results/validation.merge-cases.md")
-	promotion := command == "git" && len(args) > 1 && args[0] == "merge" && args[1] == "--ff-only"
+	if err == nil && dir == r.root && command == "git" && len(args) > 1 && args[0] == "reset" && args[1] == "--soft" {
+		r.promotionReset = true
+	}
+	promotion := dir == r.root && r.promotionReset && command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates delivery ")
 	resolution := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, "app.go")
-	cleanup := command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
+	cleanup := dir == r.root && command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
 	if merge {
 		r.merges++
 	}
@@ -677,7 +682,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
 			master, _ := mainlineChildren(t, "")
-			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point}
+			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point, root: master.f.root}
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 			func() {
 				defer func() {
