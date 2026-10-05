@@ -42,7 +42,16 @@ type WorkspaceEvidence struct {
 	Digest           string      `json:"digest"`
 }
 type CleanupParameters struct {
-	Resources []GitResource `json:"resources"`
+	Resources  []GitResource      `json:"resources"`
+	Checkpoint *CheckpointCleanup `json:"checkpoint,omitempty"`
+}
+
+// CheckpointCleanup carries the delivered master authority in the child's
+// original cleanup intent; the frozen slice receipt remains unchanged.
+type CheckpointCleanup struct {
+	MasterRunID   string                    `json:"masterRunId"`
+	Promotion     CandidatePromotionReceipt `json:"promotion"`
+	ReceiptDigest string                    `json:"receiptDigest"`
 }
 type WorkspaceCleanupReceipt struct {
 	ParametersDigest string        `json:"parametersDigest"`
@@ -52,6 +61,7 @@ type WorkspaceCleanupReceipt struct {
 // ResourceObservation binds an abort withdrawal to the original native root,
 // ref and actual prefix; it records no completion or cancellation receipt.
 type ResourceObservation struct {
+	Merge            *IntegrationEvidence  `json:"merge,omitempty"`
 	ParametersDigest string                `json:"parametersDigest"`
 	Resource         GitResource           `json:"resource"`
 	WorktreeExists   bool                  `json:"worktreeExists"`
@@ -64,6 +74,7 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 		return validationError("withdrawal requires its original registered resource")
 	}
 	raw, _ := json.Marshal(intent.Adapter.Params)
+	refPrefix := o.Resource.Source
 	switch intent.Adapter.Operation {
 	case "op.workspace":
 		var p WorkspaceParameters
@@ -75,13 +86,20 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 		if err != nil || p.Promotion != nil || p.WorkspaceID != o.Resource.ID {
 			return validationError("candidate withdrawal differs from original inputs")
 		}
+		if p.Integration != nil && o.WorktreeExists && (o.Merge == nil || o.Merge.Incoming != p.Integration.Incoming || o.Merge.Prefix != p.Base || o.Merge.MergeHead != "" && o.Merge.MergeHead != p.Integration.Incoming) {
+			return validationError("integration withdrawal differs from the original native prefix")
+		}
+
+		if p.Integration != nil {
+			refPrefix = p.Base
+		}
 	default:
 		return validationError("resource withdrawal is not a workspace or candidate")
 	}
-	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "") {
+	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "" && o.Merge == nil) {
 		return validationError("resource withdrawal has no exact observed prefix")
 	}
-	if o.RefIdentity != "" && o.RefIdentity != o.Resource.Source && (o.Prefix == nil || o.RefIdentity != o.Prefix.Head) {
+	if o.RefIdentity != "" && o.RefIdentity != o.Resource.Source && o.RefIdentity != refPrefix && (o.Prefix == nil || o.RefIdentity != o.Prefix.Head) {
 		return validationError("resource ref conflicts with its original source or prefix")
 	}
 	return nil
@@ -120,6 +138,8 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			source = w.Candidate.Identity
 		}
 		role = "development"
+	case "engine.merge.resolve":
+		return s.integrationResource()
 	case "engine.repair":
 		for _, work := range s.repairWork() {
 			if work.task == key {
@@ -129,13 +149,16 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		role = "development"
 	case "engine.qa.design":
+		if s.validationMode(key) == coverage.ReviewMerge {
+			source = s.AcceptedNativeSnapshot()
+		}
 		if s.validationMode(key) == coverage.ReviewWhitebox {
 			role = "whitebox-authoring"
 			source = s.Validation.DevelopmentSnapshot
 			scope = key.Scope + ":" + strconv.FormatUint(s.Validation.Generation, 10)
 		} else {
 			scope += ":" + strconv.FormatUint(s.Validation.Generation, 10)
-			role = "blackbox-design"
+			role = strings.ToLower(string(s.validationMode(key))) + "-design"
 		}
 	case "engine.qa.review.rationale":
 		set := s.Validation.Sets[s.validationMode(key)]
@@ -176,7 +199,12 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 }
 func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) GitResource {
 	switch p.Stage {
+	case "MERGE_START", "MERGE_FINISH":
+		return s.integrationResource()
 	case "DEVELOPMENT":
+		if s.mergeMaster() && len(p.SourceTasks) == 0 {
+			return s.integrationResource()
+		}
 		var chosen GitResource
 		var latest uint64
 		for _, task := range p.SourceTasks {
@@ -358,33 +386,37 @@ func (s *State) ResourcesCleaned() bool {
 	return true
 }
 
-// cleanupStarted proves the terminal resource boundary from its issued intent
-// or accepted receipt and the original abort or delivered candidate authority.
+// cleanupStarted proves resource authority from the original issued intent
+// or accepted receipt, including a delivered master's checkpoint release.
 func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
-	authority := s.abortRequested()
-	if !authority && s.SliceChild == nil && s.CandidatePromotion != nil {
-		p := s.CandidatePromotion
-		original, exists := s.hostIntent(p.OperationID)
-		params, err := candidateParameters(original)
-		authority = exists && err == nil && s.promotionAuthorized(params) && p.Provider == "git" && p.TargetRoot == s.NativeRoot && p.TargetBase == s.BaseSnapshot && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == p.SourceDigest
-	}
-	if !authority {
-		return false
-	}
-	for _, intent := range s.PendingHostActions {
+	valid := func(intent HostActionIntent, cleaned bool) bool {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup" {
-			continue
+			return false
 		}
 		var p CleanupParameters
-		raw, err := json.Marshal(intent.Adapter.Params)
-		if err != nil || json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 {
-			continue
+		raw, _ := json.Marshal(intent.Adapter.Params)
+		if json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 {
+			return false
 		}
-		valid := true
+		authority := s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd)
+		if p.Checkpoint != nil {
+			authority = s.checkpointCleanupCurrent(p.Checkpoint)
+		}
+		if !authority {
+			return false
+		}
 		for _, r := range p.Resources {
-			valid = valid && r.Owner == s.RunID && s.GitResources[r.ID] == r
+			if cleaned {
+				r.Status = "CLEANED"
+			}
+			if r.Owner != s.RunID || s.GitResources[r.ID] != r {
+				return false
+			}
 		}
-		if valid {
+		return true
+	}
+	for _, intent := range s.PendingHostActions {
+		if valid(intent, false) {
 			return true
 		}
 	}
@@ -392,20 +424,47 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		if receipt.AdapterOperation != "op.cleanup" || receipt.Status != HostActionStatusExecuted {
 			continue
 		}
-		var proof WorkspaceCleanupReceipt
-		if decodeAdapterValues(receipt, &proof) != nil || len(proof.Resources) == 0 {
-			continue
-		}
-		valid := true
-		for _, r := range proof.Resources {
-			registered, ok := s.GitResources[r.ID]
-			valid = valid && ok && r.Owner == s.RunID && r.Status == "CLEANED" && registered == r
-		}
-		if valid {
+		intent, exists := s.hostIntent(receipt.ActionID)
+		if exists && validateResourceReceipt(intent, receipt) == nil && valid(intent, true) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *State) checkpointCleanupCurrent(p *CheckpointCleanup) bool {
+	if p == nil || s.SliceChild == nil || s.Phase != runtime.PhaseSliceReady || s.SliceReceipt == nil || s.abortRequested() {
+		return false
+	}
+	promotion := p.Promotion
+	return p.MasterRunID == s.SliceChild.MasterRunID && p.ReceiptDigest == s.SliceReceipt.Digest && p.ReceiptDigest == s.SliceReceipt.Receipt.CanonicalDigest() && promotion.OperationID != "" && promotion.Provider == "git" && promotion.Final != "" && promotion.FinalDigest == promotion.SourceDigest
+}
+
+func (s *State) cleanupAuthorized(p CleanupParameters, cd *compiler.CompiledDefinition, parents ...*State) bool {
+	if p.Checkpoint == nil {
+		return s.CleanupEligible(cd)
+	}
+	if !s.cleanupQuiescent() || !s.checkpointCleanupCurrent(p.Checkpoint) {
+		return false
+	}
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" {
+			var original CleanupParameters
+			raw, _ := json.Marshal(intent.Adapter.Params)
+			return json.Unmarshal(raw, &original) == nil && digestOfCanonical(original) == digestOfCanonical(p)
+		}
+	}
+	if len(parents) != 1 || parents[0] == nil {
+		return false
+	}
+	parent := parents[0]
+	if parent.RunID != p.Checkpoint.MasterRunID || !parent.validationDeliveryComplete(cd) || parent.CandidatePromotion == nil || digestOfCanonical(parent.CandidatePromotion) != digestOfCanonical(p.Checkpoint.Promotion) {
+		return false
+	}
+	original, exists := parent.hostIntent(parent.CandidatePromotion.OperationID)
+	params, err := candidateParameters(original)
+	receipt, accepted := parent.SliceReceipts[s.RunID]
+	return exists && err == nil && parent.promotionAuthorized(params) && accepted && receipt.Digest == p.Checkpoint.ReceiptDigest && parent.SliceChildren[s.SliceChild.SliceID] == s.RunID
 }
 
 func (s *State) resourceUsable(id string) bool {
@@ -414,6 +473,10 @@ func (s *State) resourceUsable(id string) bool {
 }
 
 func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition) bool {
+	if p.Resource.Role == "merge" {
+		r := s.integrationResource()
+		return s.Validation != nil && p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation && p.RouteScope == s.validationRouteDigest() && p.Resource == r && s.resourceUsable(r.ID)
+	}
 	if p.Resource.Role == "child-target" {
 		return s.creationWorkspaceCurrent(p)
 	}
@@ -487,17 +550,14 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 	return len(expected) != 0 && slices.Equal(actual, expected)
 }
 
-func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
+func (s *State) cleanupQuiescent() bool {
 	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
 	}
-	if s.RebuildingChildren() {
+	if s.RebuildingChildren() || s.resetPending() {
 		return len(s.PendingActions) == 0
 	}
-	if s.resetPending() {
-		return len(s.PendingActions) == 0
-	}
-	if s.pendingControl() || s.nonCleanupNativeDebt() || s.SliceChild != nil && !s.abortRequested() || len(s.PendingActions) != 0 {
+	if s.pendingControl() || s.nonCleanupNativeDebt() || len(s.PendingActions) != 0 {
 		return false
 	}
 	for _, attempt := range s.EndedAttempts {
@@ -510,8 +570,13 @@ func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
 			return false
 		}
 	}
-	return s.abortRequested() || s.validationDeliveryComplete(cd)
+	return true
 }
+
+func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
+	return s.cleanupQuiescent() && (s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(cd))
+}
+
 func (s *State) ResourceCleanupPending(id string) bool {
 	for _, intent := range s.PendingHostActions {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup" {
@@ -531,22 +596,15 @@ func (s *State) ResourceCleanupPending(id string) bool {
 	return false
 }
 
-func (e *Engine) BeginCleanup(expectedFingerprint string, children ...*State) error {
+// BeginCleanup carries related run states inside the parent's native window:
+// a child receives its delivered master; a master receives its cleaned children.
+func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) error {
 	revision, s, err := e.load()
 	if err != nil {
 		return err
 	}
 	if s == nil {
 		return validationError("cleanup requires a run")
-	}
-	if !s.CleanupEligible(e.cfg.Definition) {
-		return validationError("cleanup requires concluded validation or an abort decision")
-	}
-	if !s.childTargetsCleanable(children) {
-		return validationError("cleanup requires terminal children with cleaned resources")
-	}
-	if s.SliceChild != nil && !s.abortRequested() {
-		return validationError("a child retains its checkpoint resources")
 	}
 	if s.ResourcesCleaned() {
 		return nil
@@ -556,26 +614,35 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, children ...*State) er
 			return nil
 		}
 	}
-	if s.Phase != runtime.PhaseFinalizingCleanup {
+	p := CleanupParameters{}
+	if s.SliceChild != nil && !s.abortRequested() {
+		if len(related) != 1 || related[0] == nil || related[0].CandidatePromotion == nil || s.SliceReceipt == nil {
+			return validationError("checkpoint cleanup requires its delivered master")
+		}
+		p.Checkpoint = &CheckpointCleanup{MasterRunID: related[0].RunID, Promotion: *related[0].CandidatePromotion, ReceiptDigest: s.SliceReceipt.Digest}
+	} else if !s.childTargetsCleanable(related) {
+		return validationError("cleanup requires released children with cleaned resources")
+	}
+	for _, r := range s.GitResources {
+		if r.Status != "CLEANED" {
+			p.Resources = append(p.Resources, r)
+		}
+	}
+	slices.SortFunc(p.Resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
+	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", p, "", related...)
+	if err != nil {
+		return err
+	}
+	if p.Checkpoint == nil && s.Phase != runtime.PhaseFinalizingCleanup {
 		if err := s.TransitionPhase(runtime.PhaseFinalizingCleanup); err != nil {
 			return err
 		}
-	}
-	var resources []GitResource
-	for _, r := range s.GitResources {
-		if r.Status != "CLEANED" {
-			resources = append(resources, r)
-		}
-	}
-	slices.SortFunc(resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
-	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", CleanupParameters{Resources: resources}, "")
-	if err != nil {
-		return err
 	}
 	s.PendingHostActions[intent.ActionID] = intent
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }
+
 func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition) {
 	for _, step := range cd.Steps {
 		p, ok := step.Payload.(compiler.CompiledHostActionStep)
@@ -594,8 +661,16 @@ func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.Compi
 // BlackboxCasesMarkdown renders the same complete manifest for the isolated
 // review mirror and the final tracked artifact.
 func BlackboxCasesMarkdown(runID string, m coverage.AcceptanceManifest) string {
+	return qaCasesMarkdown(runID, "Blackbox", m)
+}
+
+func MergeCasesMarkdown(runID string, m coverage.AcceptanceManifest) string {
+	return qaCasesMarkdown(runID, "Merge", m)
+}
+
+func qaCasesMarkdown(runID, kind string, m coverage.AcceptanceManifest) string {
 	data, _ := json.MarshalIndent(m, "", "  ")
-	return "# Blackbox QA cases (run: " + runID + ")\n\n```json\n" + string(data) + "\n```\n"
+	return "# " + kind + " QA cases (run: " + runID + ")\n\n```json\n" + string(data) + "\n```\n"
 }
 
 func (e *Engine) applyNativeReceipt(s *State, intent HostActionIntent, receipt HostActionReceipt) error {

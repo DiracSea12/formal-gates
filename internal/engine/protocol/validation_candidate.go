@@ -38,7 +38,10 @@ func candidateCorrelation(p CandidateParameters) string {
 		if p.Promotion != nil {
 			key.Promotion = &PromotionParameters{TargetRoot: p.Promotion.TargetRoot, TargetBase: p.Promotion.TargetBase, SourceDigest: p.Promotion.SourceDigest}
 		}
+	case "MERGE_START", "MERGE_FINISH":
+		key.Integration, key.Base = p.Integration, p.Base
 	case "DEVELOPMENT":
+		key.MergeManifest = p.MergeManifest
 		key.SourceTasks, key.Paths, key.Base = p.SourceTasks, p.Paths, p.Base
 	case "AUTHORING":
 		key.Base = p.Base
@@ -47,7 +50,7 @@ func candidateCorrelation(p CandidateParameters) string {
 		key.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: p.DesignTasks[coverage.ReviewWhitebox]}
 	case "REVIEW_READY":
 		key.ReviewBase = p.ReviewBase
-		key.BlackboxManifest = p.BlackboxManifest
+		key.BlackboxManifest, key.MergeManifest = p.BlackboxManifest, p.MergeManifest
 		key.Base, key.Paths, key.DesignTasks, key.QAArtifacts, key.Finalize = p.Base, p.Paths, p.DesignTasks, p.QAArtifacts, p.Finalize
 	default:
 		key = p
@@ -218,10 +221,20 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 	if s.abortRequested() || !s.candidateContextCurrent(p) || p.WorkspaceID != "" && !s.resourceUsable(p.WorkspaceID) {
 		return false
 	}
+	if p.Integration != nil {
+		child := s.SliceReceipts[p.Integration.ChildRunID]
+		return s.mergeMaster() && p.Integration.ChildReceiptDigest == child.Digest && p.Integration.TopologyDigest == digestOfCanonical(s.Topology) && p.Integration.MapDigest == digestOfCanonical(s.SliceChildren) && p.Integration.Incoming == child.Receipt.Snapshot && p.Integration.IncomingTree == child.Receipt.Tree
+	}
 	if p.Stage == "DEVELOPMENT" {
 		sources, paths, base, complete := s.developmentSources(cd)
-		if s.NativeRoot != "" {
+		if s.NativeRoot != "" && !s.mergeMaster() {
 			base = s.GitResources[p.WorkspaceID].Source
+		}
+		if s.mergeMaster() {
+			set := v.Sets[coverage.ReviewMerge]
+			if set == nil || set.Status != "FROZEN" || digestOfCanonical(p.MergeManifest) != digestOfCanonical(&set.Manifest) {
+				return false
+			}
 		}
 		return complete && sameTaskSet(p.SourceTasks, sources) && slices.Equal(p.Paths, paths) && p.Base == base
 	}
@@ -452,6 +465,15 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	if v == nil || s.abortRequested() {
 		return CandidateParameters{}, false, nil
 	}
+	if integration, ready := s.integrationParameters(cd); ready {
+		if integration.Stage == "MERGE_FINISH" {
+			input := s.conflictInput(integration.Integration.StartAction)
+			if len(input.Evidence.Conflicts) > 0 && s.integrationResolution(input.StartAction) == nil {
+				return CandidateParameters{}, false, nil
+			}
+		}
+		return integration, true, nil
+	}
 	sources, paths, base, complete := s.developmentSources(cd)
 	if !complete {
 		return CandidateParameters{}, false, nil
@@ -459,6 +481,13 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	params := CandidateParameters{RouteScope: s.validationRouteDigest(), RequirementRevision: v.RequirementRevision, Generation: v.Generation, Paths: paths, SourceTasks: sources}
 	switch {
 	case v.DevelopmentSnapshot == "":
+		if s.mergeMaster() {
+			if !s.caseSetReady(coverage.ReviewMerge) || s.validateFinalCoverage() != nil {
+				return CandidateParameters{}, false, nil
+			}
+			m := v.Sets[coverage.ReviewMerge].Manifest
+			params.MergeManifest = &m
+		}
 		params.Stage = "DEVELOPMENT"
 		params.Base = base
 	case s.nextRepairWork() != nil:
@@ -523,10 +552,14 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			params.DesignTasks[mode] = set.DesignTask
 		}
 	}
-	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" {
+	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" && !s.mergeMaster() {
 		params.Base = s.candidateResource(params, cd).Source
 	}
 	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" {
+		if s.mergeMaster() {
+			manifest := v.Sets[coverage.ReviewMerge].Manifest
+			params.MergeManifest = &manifest
+		}
 		if set := v.Sets[coverage.ReviewBlackbox]; set != nil && set.Status == "FROZEN" {
 			manifest := set.Manifest
 			params.BlackboxManifest = &manifest

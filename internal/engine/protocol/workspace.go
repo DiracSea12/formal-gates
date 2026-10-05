@@ -219,7 +219,7 @@ func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
 		return false
 	}
 	_, plan, _ := s.confirmedDevelopmentPlan()
-	if plan == nil || !s.developmentPlanCurrent(plan) || s.abortRequested() || s.nextRepairWork() != nil {
+	if (!s.mergeMaster() && (plan == nil || !s.developmentPlanCurrent(plan))) || s.abortRequested() || s.nextRepairWork() != nil {
 		return false
 	}
 	for _, task := range s.planTasks(cd) {

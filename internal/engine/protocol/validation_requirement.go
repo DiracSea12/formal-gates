@@ -5,6 +5,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"slices"
+	"strings"
 )
 
 // sourceValidationTask follows the existing requirement confirmation ledger.
@@ -28,7 +29,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave
 		if !s.prewaveDispatchCurrent(action, cd) || !s.sameValidationDuty(s.DispatchBindings[action], wave) {
 			continue
 		}
-		if pending.Task.Step == key.Step && s.validationMode(pending.Task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(pending.Task).Scope) == lastScopePart(key.Scope)) {
+		if pending.Task.Step == key.Step && s.validationMode(pending.Task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(pending.Task), key) {
 			return pending.Task
 		}
 	}
@@ -36,7 +37,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave
 		if !s.endedWorkCurrent(attempt, cd) || attempt.Work != nil && !s.sameValidationDuty(*attempt.Work, wave) {
 			continue
 		}
-		if task.Step == key.Step && s.validationMode(task) == s.validationMode(key) && (s.validationRole(key, cd) != "engine.gate" || lastScopePart(s.sourceValidationTask(task).Scope) == lastScopePart(key.Scope)) {
+		if task.Step == key.Step && s.validationMode(task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(task), key) {
 			return task
 		}
 	}
@@ -54,7 +55,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave
 		source := s.sourceValidationTask(required)
 		if s.validationMode(source) == s.validationMode(key) {
 			role := s.validationRole(key, cd)
-			if role != "engine.gate" || lastScopePart(source.Scope) == lastScopePart(key.Scope) {
+			if sameRequiredDuty(role, source, key) {
 				return required
 			}
 		}
@@ -78,13 +79,16 @@ func (s *State) sameValidationDuty(binding WorkBinding, current *ValidationWave)
 	}
 	return target != nil && (target.Kind != "QA" || original.Scope == current.Scope && sameWaveCases(original, current, target.Mode))
 }
-func lastScopePart(scope string) string {
-	for i := len(scope) - 1; i >= 0; i-- {
-		if scope[i] == ':' {
-			return scope[i+1:]
-		}
+func sameRequiredDuty(role string, source, current runtime.TaskKey) bool {
+	switch role {
+	case "engine.gate":
+		_, sourceScope, _ := strings.Cut(source.Scope, ":")
+		_, currentScope, _ := strings.Cut(current.Scope, ":")
+		return sourceScope == currentScope
+	case "engine.merge.resolve":
+		return source.Scope == current.Scope
 	}
-	return scope
+	return true
 }
 
 func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDecision) {
@@ -177,7 +181,7 @@ func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current 
 		return false
 	}
 	for _, previous := range prior.Targets {
-		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
+		if !sameTarget(previous, target) || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
 			continue
 		}
 		_, responsibility := s.targetResponsibility(prior, previous)

@@ -618,6 +618,9 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 	}
 }
 func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.TaskKey, []string, string, bool) {
+	if s.mergeMaster() {
+		return s.integratedSources()
+	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	if p == nil || !s.developmentPlanCurrent(p) {
 		return nil, nil, "", false

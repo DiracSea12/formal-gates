@@ -35,7 +35,7 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // step 完成（CompleteStep）与补位签发（Decide/SelectIssued）使用；
 // Registry 保留为编译期绑定的注册表输入；HostAction 的 operation
 // 与 schema 以 Definition 中的 compiled payload 为唯一运行时来源。Capacity
-// 是补位签发的固定容量（真实容量收集器属后续批次）。CostSource 是派发计量
+// 是并行在途任务上限，驱动与补位从 PendingActions 扣除已占槽位。CostSource 是派发计量
 // 来源的 sidecar 解析器（nil＝无宿主计量集成，cost 维度不参与判定）；
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
@@ -649,7 +649,7 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		case decision.KindWait:
 			return plan, revision, nil
 		case decision.KindReady:
-			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: e.cfg.Capacity}, expectedFingerprint)
+			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))}, expectedFingerprint)
 			if err != nil {
 				var rejected *RejectedError
 				if errors.As(err, &rejected) && rejected.Code == CodeGuardAllowanceBlocked && state.hasPendingBudgetAsk() {
@@ -2341,7 +2341,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if plan.Next.Kind != decision.KindReady {
 		return nil, nil
 	}
-	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: e.cfg.Capacity}, ackStore{})
+	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))}, ackStore{})
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill select: %w", err)
 	}
@@ -2758,7 +2758,7 @@ func (s *State) removeTaskBookkeeping(key runtime.TaskKey) {
 
 // prepareAdapterIntent owns the typed operation/schema checks and durable
 // identity for both explicit HostActions and controller-required candidates.
-func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operation authoring.OperationID, params any, correlation string) (HostActionIntent, error) {
+func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operation authoring.OperationID, params any, correlation string, parents ...*State) (HostActionIntent, error) {
 	schema, err := e.schemaForOperation(operation)
 	if err != nil {
 		return HostActionIntent{}, err
@@ -2817,7 +2817,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return HostActionIntent{}, err
 			}
-			if !state.CleanupEligible(e.cfg.Definition) || !state.cleanupParametersCurrent(p) {
+			if !state.cleanupAuthorized(p, e.cfg.Definition, parents...) || !state.cleanupParametersCurrent(p) {
 				return HostActionIntent{}, validationError("cleanup parameters differ from its exact eligible resources")
 			}
 			targets := slices.Clone(p.Resources)

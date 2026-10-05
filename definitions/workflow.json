@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "9",
+  "version": "10",
   "stateSchemaVersion": "1",
   "writer": "engine",
   "transactionOwner": "validate",
@@ -17,7 +17,7 @@
       "nodeId": "children",
       "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -43,7 +43,7 @@
       "nodeId": "children",
       "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "children.prepare"
       ],
@@ -73,7 +73,7 @@
       "nodeId": "children",
       "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "children.workspace"
       ],
@@ -99,7 +99,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -115,7 +115,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "entry.parse"
       ],
@@ -148,7 +148,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "entry.persist"
       ],
@@ -182,7 +182,7 @@
       "nodeId": "review",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.worker"
       ],
@@ -216,7 +216,7 @@
       "nodeId": "validation",
       "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -246,7 +246,7 @@
       "nodeId": "validation",
       "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -276,7 +276,7 @@
       "nodeId": "validation",
       "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -312,7 +312,7 @@
       "nodeId": "validation",
       "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -344,11 +344,47 @@
       }
     },
     {
-      "id": "qa.design",
+      "id": "merge.resolve",
       "nodeId": "validation",
       "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
+      "dependencies": [
+        "review.readiness"
+      ],
+      "authority": "AGENT",
+      "runner": "AGENT_WORKER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "postconditions": [
+          {
+            "id": "pred.review.post"
+          }
+        ],
+        "inputs": [
+          {
+            "from": "review.readiness",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.merge.resolve",
+        "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
+        "timeoutNs": 60000000000,
+        "retry": {
+          "maxAttempts": 2
+        }
+      }
+    },
+    {
+      "id": "qa.design",
+      "nodeId": "validation",
+      "ordinal": 12,
+      "kind": "AGENT",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -382,9 +418,9 @@
     {
       "id": "qa.execution",
       "nodeId": "validation",
-      "ordinal": 12,
+      "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -418,9 +454,9 @@
     {
       "id": "qa.review",
       "nodeId": "validation",
-      "ordinal": 13,
+      "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -455,9 +491,9 @@
     {
       "id": "validation.gate",
       "nodeId": "validation",
-      "ordinal": 14,
+      "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],
@@ -492,9 +528,9 @@
     {
       "id": "workspace.materialize",
       "nodeId": "validation",
-      "ordinal": 15,
+      "ordinal": 16,
       "kind": "HOST_ACTION",
-      "definitionVersion": "9",
+      "definitionVersion": "10",
       "dependencies": [
         "review.readiness"
       ],

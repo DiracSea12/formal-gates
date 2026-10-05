@@ -100,7 +100,7 @@ func (s *State) validationFindingTarget(w *ValidationWave, finding *ValidationFi
 
 func (s *State) carryRouteTarget(target *ValidationTarget, prior, current *ValidationWave) {
 	for _, previous := range prior.Targets {
-		if previous.Kind != target.Kind || previous.Mode != target.Mode || previous.Gate != target.Gate || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
+		if !sameTarget(previous, target) || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
 			continue
 		}
 		s.carryValidationTarget(target, previous, current)
@@ -151,7 +151,7 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 	if target.GateImpact != nil {
 		if source := s.validationWave(target.GateImpact.SourceWave); source != nil {
 			for _, original := range source.Targets {
-				if original.Gate == target.Gate && original.Kind == target.Kind {
+				if sameTarget(original, target) {
 					return s.targetResponsibility(source, original)
 				}
 			}
@@ -171,7 +171,7 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 			continue
 		}
 		for _, prior := range original.Targets {
-			if prior.Kind == target.Kind && prior.Gate == target.Gate && prior.Mode == target.Mode && prior.ResultAction != target.ResultAction {
+			if sameTarget(prior, target) && prior.ResultAction != target.ResultAction {
 				return s.targetResponsibility(original, prior)
 			}
 		}

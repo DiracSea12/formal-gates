@@ -114,6 +114,9 @@ func (f *Facade) driveChildren() error {
 			return nil
 		}
 	}
+	if s.ChildCreation != nil && s.DeliveryComplete(f.definition) && !s.ResourcesCleaned() {
+		return f.cleanupChildren(s)
+	}
 	if s.ChildCreation == nil {
 		if aborted || s.Topology == nil || s.Topology.Decision != "split" || s.RequirementBarrierActive() || s.Phase == runtime.PhaseTerminal {
 			return nil
@@ -366,6 +369,49 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 		return f.engine.BeginCleanup(emptyFingerprint(), states...)
 	}
 	return nil
+}
+
+// cleanupChildren keeps checkpoints and their states until the master publisher
+// has durable terminal authority. Native effects use each child's own registry.
+func (f *Facade) cleanupChildren(parent *protocol.State) error {
+	states := make([]*protocol.State, len(parent.ChildCreation.Children))
+	for i, plan := range parent.ChildCreation.Children {
+		child, err := f.prepareChild(parent, plan, OwnerBinding{})
+		if err != nil {
+			return err
+		}
+		unlock, err := child.acquireNativeWindow()
+		if err != nil {
+			return err
+		}
+		err = func() error {
+			if err := child.engine.BeginCleanup(emptyFingerprint(), parent); err != nil {
+				return err
+			}
+			for {
+				progress, err := child.driveNative()
+				if err != nil {
+					return err
+				}
+				if !progress {
+					break
+				}
+			}
+			actual, err := child.engine.Load()
+			if err == nil {
+				states[i] = actual.State
+			}
+			return err
+		}()
+		unlock()
+		if err != nil {
+			return err
+		}
+		if !states[i].ResourcesCleaned() {
+			return nil
+		}
+	}
+	return f.engine.BeginCleanup(emptyFingerprint(), states...)
 }
 
 func (f *Facade) driveChildWorkspace(intent protocol.HostActionIntent, execute bool) (bool, error) {

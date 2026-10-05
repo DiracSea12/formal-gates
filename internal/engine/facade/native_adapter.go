@@ -127,6 +127,8 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIntent) (protocol.ResourceObservation, error) {
 	var resource protocol.GitResource
 	var allowed []string
+	var integration *protocol.IntegrationParameters
+	var integrationBase string
 	if intent.Adapter.Operation == "op.workspace" {
 		var p protocol.WorkspaceParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
@@ -139,6 +141,7 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 			return protocol.ResourceObservation{}, err
 		}
 		resource, allowed = s.GitResources[p.WorkspaceID], p.Paths
+		integration, integrationBase = p.Integration, p.Base
 	}
 	if resource.ID == "" || s.GitResources[resource.ID] != resource {
 		return protocol.ResourceObservation{}, fmt.Errorf("native observation has no original registered resource")
@@ -155,14 +158,36 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 	}
 	if o.WorktreeExists {
 		native := f.vcs.At(resource.Path)
-		prefix, err := observeNativePrefix(native)
+		var prefix protocol.PromotionObservation
+		var err error
+		if integration != nil {
+			prefix.Head, err = native.Resolve()
+			if err != nil {
+				return o, err
+			}
+			prefix.Tree, err = native.TreeDigest(prefix.Head)
+			if err != nil {
+				return o, err
+			}
+			entries, err := native.IndexEntries()
+			if err != nil {
+				return o, err
+			}
+			mergeHead, err := native.MergeHead()
+			if err != nil {
+				return o, err
+			}
+			o.Merge = &protocol.IntegrationEvidence{Prefix: integrationBase, Incoming: integration.Incoming, MergeHead: mergeHead, Index: entries}
+		} else {
+			prefix, err = observeNativePrefix(native)
+		}
 		if err != nil {
 			return o, err
 		}
 		if err := native.IsAncestorOrEqual(resource.Source, prefix.Head); err != nil {
 			return o, err
 		}
-		if intent.Adapter.Operation == "op.candidate" {
+		if intent.Adapter.Operation == "op.candidate" && integration == nil {
 			paths, err := native.ChangedPaths()
 			if err != nil {
 				return o, err
@@ -306,14 +331,14 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	case "op.candidate":
 		return f.candidateEvidence(s, intent, mayWrite, &invoked)
 	case "op.cleanup":
-		if mayWrite && !s.ResetPending() && !s.RebuildingChildren() {
-			if err := f.freezeCleanupSummary(s); err != nil {
-				return nativeResult{}, false, err
-			}
-		}
 		var p protocol.CleanupParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return nativeResult{}, false, err
+		}
+		if mayWrite && p.Checkpoint == nil && !s.ResetPending() && !s.RebuildingChildren() {
+			if err := f.freezeCleanupSummary(s); err != nil {
+				return nativeResult{}, false, err
+			}
 		}
 		for i, r := range p.Resources {
 			registered, ok := s.GitResources[r.ID]
@@ -495,6 +520,9 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	if err := decodeNativeParams(intent, &p); err != nil {
 		return nativeResult{}, false, err
 	}
+	if p.Integration != nil {
+		return f.integrationEvidence(s, intent, p, mayWrite, invoked)
+	}
 	if p.Stage == "PROMOTION" {
 		return f.promotionEvidence(s, intent, mayWrite, invoked)
 	}
@@ -554,6 +582,15 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				}
 			}
 		}
+		if p.MergeManifest != nil {
+			body, err := os.ReadFile(filepath.Join(r.Path, ".gates", "results", s.RunID+".merge-cases.md"))
+			if err != nil && !os.IsNotExist(err) {
+				return nativeResult{}, false, err
+			}
+			if string(body) != protocol.MergeCasesMarkdown(s.RunID, *p.MergeManifest) {
+				return nativeResult{}, false, nil
+			}
+		}
 		if p.BlackboxManifest != nil {
 			body, err := os.ReadFile(filepath.Join(r.Path, ".gates", "results", s.RunID+".blackbox-cases.md"))
 			if err != nil && !os.IsNotExist(err) {
@@ -574,6 +611,25 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		for _, path := range changes {
 			if !slices.Contains(paths, path) {
 				return nativeResult{}, false, fmt.Errorf("candidate contains undeclared change: %s", path)
+			}
+		}
+		if p.MergeManifest != nil {
+			target := filepath.Join(r.Path, ".gates", "results", s.RunID+".merge-cases.md")
+			body := protocol.MergeCasesMarkdown(s.RunID, *p.MergeManifest)
+			actual, err := os.ReadFile(target)
+			if err != nil && !os.IsNotExist(err) {
+				return nativeResult{}, false, err
+			}
+			if string(actual) != body {
+				if err := f.admission.write(func() error {
+					*invoked = true
+					if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+						return err
+					}
+					return writeFileAtomic(target, []byte(body), 0644)
+				}); err != nil {
+					return nativeResult{}, false, err
+				}
 			}
 		}
 		if p.Stage == "REVIEW_READY" {
@@ -722,6 +778,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
+		if p.MergeManifest != nil {
+			if owned == nil {
+				owned = map[string]bool{}
+			}
+			owned[".gates/results/"+s.RunID+".merge-cases.md"] = true
+		}
 		baseOwned, err := f.ownershipAt(s, p.ReviewBase)
 		if err != nil {
 			return nativeResult{}, false, err
@@ -733,6 +795,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			}
 		}
 		evidence.Changes, evidence.GateView = changes, view
+		if s.RouteMode == "merge" {
+			evidence.ChildViews, err = f.childValidationViews(s, head, owned)
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+		}
 	}
 	return nativeResult{Candidate: &evidence}, true, nil
 }
@@ -754,7 +822,7 @@ func (f *Facade) ownershipAt(s *protocol.State, identity string) (map[string]boo
 	slices.Sort(ids)
 	for _, id := range ids {
 		r := s.GitResources[id]
-		if (r.Source == identity || r.Identity == identity) && r.Status == "READY" && !s.ResourceCleanupPending(r.ID) {
+		if r.Status == "READY" && !s.ResourceCleanupPending(r.ID) {
 			providers = append(providers, f.vcs.At(r.Path))
 		}
 	}
@@ -773,7 +841,25 @@ func (f *Facade) ownershipAt(s *protocol.State, identity string) (map[string]boo
 		if status != "" {
 			continue
 		}
-		return native.InputOwnership()
+		owned, err := native.InputOwnership()
+		if err != nil {
+			return nil, err
+		}
+		for _, receipt := range s.HostActionReceipts {
+			var evidence protocol.CandidateEvidence
+			if decodeReceiptEvidence(receipt, &evidence) != nil || evidence.Identity != identity || evidence.GateView == nil {
+				continue
+			}
+			if owned == nil {
+				owned = map[string]bool{}
+			}
+			for _, path := range evidence.GateView.TestOwnedPaths {
+				if _, known := owned[path]; !known {
+					owned[path] = true
+				}
+			}
+		}
+		return owned, nil
 	}
 	return nil, nil
 }

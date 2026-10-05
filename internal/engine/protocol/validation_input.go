@@ -32,6 +32,7 @@ type ValidationInput struct {
 	Completed                []coverage.ExecutionRecord              `json:"completed,omitempty"`
 	InheritableReviews       []coverage.ReviewDecision               `json:"inheritableReviews,omitempty"`
 	PendingCases             []string                                `json:"pendingCases,omitempty"`
+	Conflict                 *ConflictInput                          `json:"conflict,omitempty"`
 }
 
 func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]ValidationInput {
@@ -65,6 +66,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Interruption = &record
 			break
 		}
+	}
+	if role == "engine.merge.resolve" {
+		input.Conflict = s.conflictInput(pending.Task.Scope)
 	}
 	if role == "engine.gate" {
 		input.Gate = s.gateInput(binding, pending.Task)

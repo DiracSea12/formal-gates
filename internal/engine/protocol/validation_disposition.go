@@ -143,7 +143,7 @@ func (s *State) validationObligationWaived(w *ValidationWave, target *Validation
 			continue
 		}
 		for _, original := range source.Targets {
-			if original.Kind != target.Kind || original.Mode != target.Mode || original.Gate != target.Gate || original.ResultAction == "" || original.ResultAction != target.ResultAction {
+			if !sameTarget(original, target) || original.ResultAction == "" || original.ResultAction != target.ResultAction {
 				continue
 			}
 			if target.Mode != "" && !sameWaveCases(source, w, target.Mode) {
@@ -345,7 +345,7 @@ func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecisi
 	projection = s.validationWave(projectionID)
 	for key, target := range current.Targets {
 		for oldKey, previous := range projection.Targets {
-			if target.Kind != previous.Kind || target.Mode != previous.Mode || target.Gate != previous.Gate {
+			if !sameTarget(target, previous) {
 				continue
 			}
 			if selected[oldKey] {
@@ -357,13 +357,7 @@ func (e *Engine) retryValidationQA(s *State, ask PendingAsk, d *ValidationDecisi
 			break
 		}
 	}
-	current.ExpectedDigest = digestOfCanonical(struct {
-		Candidate coverage.ValidationCandidate
-		Versions  map[coverage.ReviewKind]string
-		Route     string
-		Targets   []string
-		Scope     coverage.ScopeMode
-	}{current.Candidate, current.Versions, current.RouteDigest, sortedTargetKeys(current), current.Scope})
+	current.ExpectedDigest = validationExpectedDigest(current)
 	return nil
 }
 
