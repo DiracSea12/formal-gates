@@ -157,6 +157,13 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if body, err := os.ReadFile(filepath.Join(root, "requirements.md")); err != nil || string(body) != document {
 		t.Fatal("child change modified master artifact", err)
 	}
+	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	sibling.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: sibling.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: sibling.revision, Document: document}}})
+	sibling.drive()
+	siblingID, _ := planBatchAction(sibling, "command")
 	abortCreationChild(t, master.f)
 	master.drive()
 	if master.run.Status != "ABORTING" {

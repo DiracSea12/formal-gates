@@ -311,7 +311,7 @@ func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
 	if !found || !cancelled || !recorded || !parent.preparedChild(child, s) {
 		return validationError("child cancellation lacks parent authority")
 	}
-	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record}
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record, RequestDigest: parent.requestDigest(d.RequestID)}
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }
@@ -434,7 +434,7 @@ func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) 
 	if authorization == nil || !slices.Contains(authorization.DecidedScope, "topology") {
 		return validationError("child replacement lacks confirmed topology scope")
 	}
-	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event, Requirement: authorization}
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event, RequestDigest: parent.requestDigest(d.RequestID), Requirement: authorization}
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }

@@ -7,6 +7,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -60,7 +61,7 @@ func confirmResetControl(t *testing.T, d *validationDriver) {
 		t.Fatal("reset omitted complete document re-confirmation")
 	}
 	pkg := ask.Package
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoProductReview: pkg.RedoProductReview, RedoStartReadiness: pkg.RedoStartReadiness, ResetRequestID: pkg.ResetRequestID, Reason: "confirm the complete registered requirement and solution"}}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoProductReview: pkg.RedoProductReview, RedoStartReadiness: pkg.RedoStartReadiness, ResetRequestID: pkg.ResetRequestID, Reason: "confirm the complete registered requirement and solution"}}})
 }
 func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	master, child := controlChildren(t)
@@ -210,6 +211,9 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 	if _, pending := state.PendingActions[id]; !pending {
 		t.Fatal("reset dropped the active worker responsibility")
 	}
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)}
 	child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: child.host(), Outcome: protocol.OutcomePass, PayloadDigest: "completed-before-stop", Validation: &result}})
 	child.reopen()
@@ -315,11 +319,71 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 	master.reopen()
 	master.drive()
 	state := driverState(t, master)
-	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-ui"] == before.SliceChildren["lane-ui"] || state.ChildCreation.Previous == nil {
+	if state.SliceChildren["lane-core"] != child.f.runID || state.SliceReceipts[child.f.runID].Digest != ready.Digest || state.SliceChildren["lane-tooling"] == before.SliceChildren["lane-tooling"] || state.ChildCreation.Previous == nil {
 		t.Fatal("topology rebuild discarded carried origin or reused the affected child")
 	}
 	carried := driverState(t, child)
 	if carried.SliceChild.RequirementRevision != ready.Receipt.RequirementRevision || carried.SliceReceipt.Digest != ready.Digest {
 		t.Fatal("topology carry rewrote frozen child evidence")
+	}
+}
+
+func TestMasterRequirementCarryRetainsOriginalNativePrefix(t *testing.T) {
+	master, children := mainlineReady(t, "", false)
+	runner := &mergeInterruption{Runner: vcs.ExecRunner{}, point: "later-commit"}
+	master.f.vcsRunner, master.f.vcs = runner, vcs.New(master.f.root, runner)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("native commit response loss was not reached")
+			}
+		}()
+		_, _ = master.f.Drive()
+	}()
+	original := driverState(t, master)
+	var workspace string
+	for _, intent := range original.PendingHostActions {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" {
+			var p protocol.CandidateParameters
+			if err := decodeNativeParams(intent, &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Integration != nil {
+				workspace = p.WorkspaceID
+			}
+		}
+	}
+	if workspace == "" {
+		t.Fatal("fixture omitted the original merge responsibility")
+	}
+	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	master.run, _ = master.f.Show()
+	confirmValidationDocument(master, "", nil, document)
+	master.reopen()
+	master.f.vcsRunner, master.f.vcs = runner, vcs.New(master.f.root, runner)
+	master.drive()
+	state := driverState(t, master)
+	if runner.merges != 3 || runner.commits != 3 || state.Validation.Candidate == nil {
+		t.Fatal("requirement CARRY repeated or lost the native prefix", runner.merges, runner.commits)
+	}
+	for _, intent := range state.ReconciledEffects {
+		if intent.Intent == nil || intent.Intent.Adapter == nil || intent.Intent.Adapter.Operation != "op.candidate" {
+			continue
+		}
+		var p protocol.CandidateParameters
+		if err := decodeNativeParams(*intent.Intent, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Integration != nil && p.WorkspaceID != workspace {
+			t.Fatal("carried native prefix changed its registered workspace")
+		}
+	}
+	for _, child := range children {
+		if readSliceReceipt(t, child).Digest != original.SliceReceipts[child.f.runID].Digest {
+			t.Fatal("master carry rewrote child checkpoint bytes")
+		}
 	}
 }

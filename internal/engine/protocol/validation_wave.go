@@ -107,11 +107,14 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 }
 
 func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) {
+	if s.abortRequested() {
+		return e.advanceAbort(s, nextRevision)
+	}
 	if s.resetPending() {
 		return e.advanceReset(s, nextRevision)
 	}
-	if s.abortRequested() {
-		return e.advanceAbort(s, nextRevision)
+	if !s.parentReviewReady() || s.SliceChild != nil && s.Phase == runtime.PhaseSliceReady {
+		return false, nil
 	}
 	changed := e.ensureRetryAsks(s, nextRevision)
 	changed = s.reconcileValidationRemedyAsks(nextRevision) || changed

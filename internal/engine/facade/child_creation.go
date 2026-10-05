@@ -354,6 +354,11 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 			continue
 		}
 		states[i] = run.Termination
+		if states[i].SliceReceipt != nil {
+			if err := f.acceptSliceReceipt(*states[i].SliceReceipt); err != nil {
+				return err
+			}
+		}
 	}
 	if !settled {
 		return nil
@@ -483,6 +488,9 @@ func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
 				run, e := child.driveInWindow()
 				err = e
 				settled = settled && (run.Status == "ABORTED" || run.Status == "COMPLETE")
+				if err == nil && run.Termination != nil && run.Termination.SliceReceipt != nil {
+					err = f.acceptSliceReceipt(*run.Termination.SliceReceipt)
+				}
 			}
 		}
 		unlock()

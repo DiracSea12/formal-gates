@@ -11,20 +11,21 @@ import (
 // Accepted development and its native target survive; only registered scratch
 // resources are candidates for cleanup.
 type ResetPreview struct {
-	RunID               string           `json:"runId"`
-	RequirementRevision string           `json:"requirementRevision"`
-	Base                string           `json:"base"`
-	Current             string           `json:"current"`
-	Development         string           `json:"development,omitempty"`
-	Topology            *TopologyBinding `json:"topology,omitempty"`
-	RouteMode           string           `json:"routeMode"`
-	Gates               []string         `json:"gates"`
-	Children            []string         `json:"children"`
-	ChildPreviews       []ResetPreview   `json:"childPreviews,omitempty"`
-	Preserve            []string         `json:"preserve"`
-	Clear               []string         `json:"clear"`
-	Resources           []GitResource    `json:"resources"`
-	Digest              string           `json:"digest"`
+	RunID               string            `json:"runId"`
+	RequirementRevision string            `json:"requirementRevision"`
+	Base                string            `json:"base"`
+	Current             string            `json:"current"`
+	Development         string            `json:"development,omitempty"`
+	Topology            *TopologyBinding  `json:"topology,omitempty"`
+	RouteMode           string            `json:"routeMode"`
+	Gates               []string          `json:"gates"`
+	Children            []string          `json:"children"`
+	ChildPreviews       []ResetPreview    `json:"childPreviews,omitempty"`
+	Preserve            []string          `json:"preserve"`
+	Clear               []string          `json:"clear"`
+	Resources           []GitResource     `json:"resources"`
+	Work                []RequirementWork `json:"work"`
+	Digest              string            `json:"digest"`
 }
 
 func (p ResetPreview) CanonicalDigest() string { p.Digest = ""; return digestOfCanonical(p) }
@@ -82,6 +83,7 @@ func (e *Engine) acceptResetDecision(s *State, ask PendingAsk, d *DecidePayload)
 		return validationError("reset requires the exact preservation/cleanup preview and reason")
 	}
 	current := s.ResetPreview()
+	current.Work = e.requirementWork(s)
 	current.RequirementRevision = ask.Reset.RequirementRevision
 	current.Children = ask.Reset.Children
 	current.ChildPreviews = ask.Reset.ChildPreviews
@@ -205,6 +207,12 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 			s.archiveDispatchResults(id)
 		}
 	}
+	for id := range s.StagedResults {
+		s.archiveDispatchResults(id)
+	}
+	for _, result := range s.QuarantinedResults {
+		s.archiveDispatchResults(result.ActionID)
+	}
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
 			ask.Resolved = true
@@ -237,6 +245,13 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	s.Decisions[d.RequestID] = d
 	request := "reset-confirm:" + d.RequestID
 	pkg := &RequirementDecisionPackage{Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
+	for _, work := range e.requirementWork(s) {
+		disposition := RequirementWorkRedo
+		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch" {
+			disposition = RequirementWorkCarry
+		}
+		pkg.WorkDecisions = append(pkg.WorkDecisions, RequirementWorkDecision{Work: work, Disposition: disposition, Reason: d.Reset.Reason})
+	}
 	s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: pkg, ResetRequestID: d.RequestID, Options: []AskOption{{ID: "proceed", Label: "Confirm the complete current requirement and solution"}, {ID: "abort", Label: "Leave requirements unconfirmed"}}}
 	return true, nil
 }
@@ -264,12 +279,13 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 		if pkg == nil {
 			return validationError("cascaded reset has no local re-registration")
 		}
-		payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, ResetRequestID: d.RequestID, Reason: d.Reset.Reason}
+		payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, ResetRequestID: d.RequestID, Reason: d.Reset.Reason}
 		if err := e.admitRequirementDecision(s, ask, request, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint); err != nil {
 			return err
 		}
 		ask.Resolved = true
 		s.PendingAsks[request] = ask
+		s.SliceChild.ParentReset.Decision = d
 		_, err = e.commit(s, revision, expectedFingerprint)
 		return err
 	}
@@ -283,8 +299,9 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 	local.RequirementRevision = preview.RequirementRevision
 	local.Digest = local.CanonicalDigest()
 	copy := d
+	copy.Revision = revision + 1
 	copy.Reset = &ResetDecision{PreviewDigest: local.Digest, Reason: d.Reset.Reason}
-	s.SliceChild.ParentReset = &ResetAuthority{Decision: copy, Event: parent.Events[d.EventID], Preview: local}
+	s.SliceChild.ParentReset = &ResetAuthority{Decision: d, Event: parent.Events[d.EventID], Preview: local}
 	s.Decisions[d.RequestID] = copy
 	s.PendingAsks[d.RequestID] = PendingAsk{RequestID: d.RequestID, Control: ControlReset, Reset: &local, Resolved: true}
 	_, err = e.commit(s, revision, expectedFingerprint)
@@ -315,7 +332,11 @@ func (e *Engine) RecordChildReset(child *State, expectedFingerprint string) erro
 	if preview == nil {
 		return validationError("child reset preview is missing")
 	}
-	s.SliceResetAuthorities[child.RunID] = ResetAuthority{Decision: d, Event: child.Events[d.EventID], Preview: *preview}
+	authority := ResetAuthority{Decision: d, Event: child.Events[d.EventID], Preview: *preview}
+	if child.SliceChild.ParentReset != nil && child.SliceChild.ParentReset.Decision.RequestID == d.RequestID {
+		authority = *child.SliceChild.ParentReset
+	}
+	s.SliceResetAuthorities[child.RunID] = authority
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }

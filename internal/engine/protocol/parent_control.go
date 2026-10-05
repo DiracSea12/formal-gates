@@ -100,11 +100,11 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 	}
 	if !pending {
 		entry, choice := parent.childRequirementDecision(s.RunID)
-		if entry != nil && (s.SliceChild.ParentChange == nil || s.SliceChild.ParentChange.RequestID != entry.RequestID || s.SliceChild.ParentChange.Pending) {
+		if entry != nil && entry.Revision == parent.RequirementRevision() && (s.SliceChild.ParentChange == nil || s.SliceChild.ParentChange.RequestID != entry.RequestID || s.SliceChild.ParentChange.Pending) {
 			decision := parent.Decisions[entry.RequestID]
 			authority := &ParentRequirementAuthority{RequestID: entry.RequestID, RequestDigest: parent.requestDigest(entry.RequestID), DecisionDigest: parent.Events[decision.EventID].Digest, Confirmation: entry}
 			if s.RequirementRevision() != entry.Revision {
-				pkg := RequirementDecisionPackage{Coverage: entry.Coverage, CandidateRevision: entry.Revision, DeltaDigest: entry.DeltaDigest, ImpactDigest: digestOfCanonical(entry.Impact), Source: entry.Source, Classification: entry.Classification, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
+				pkg := RequirementDecisionPackage{Coverage: entry.Coverage, CandidateRevision: entry.Revision, DeltaDigest: entry.DeltaDigest, ImpactDigest: entry.ImpactDigest, Source: entry.Source, Classification: entry.Classification, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
 				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
 				s.SliceChild.ParentChange = authority
 				ask := PendingAsk{Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: &pkg}
@@ -131,6 +131,13 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 			changed = true
 			e.replayQuarantinedResults(s, "parent-change-declined", revision+1, expectedFingerprint)
 		}
+	}
+	if !pending && s.Phase != runtime.PhaseSliceReady && parent.Validation != nil && parent.Validation.RequirementRevision == s.RequirementRevision() && s.Validation != nil && (s.Validation.RequirementRevision != s.RequirementRevision() || s.Validation.Generation != s.requirementGeneration()) {
+		observation := &OperatorObservationPayload{Subject: s.RequirementRevision(), Validation: &ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: s.RequirementRevision(), Document: parent.Validation.Document.Content}}
+		if err := e.acceptValidationObservation(s, observation, revision, revision+1); err != nil {
+			return err
+		}
+		changed = true
 	}
 	reviewPending := !parent.effectivePass(parent.ReviewSeries.ProductReview) || !parent.effectivePass(parent.ReviewSeries.StartReadiness)
 	if reviewPending != s.SliceChild.ParentReviewPending {

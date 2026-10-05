@@ -874,6 +874,9 @@ func (f *Facade) Drive() (Run, error) {
 
 // driveInWindow consumes the caller's existing native window without reentry.
 func (f *Facade) driveInWindow() (Run, error) {
+	if err := f.syncResetRequirement(); err != nil {
+		return Run{}, err
+	}
 	// Recovery is a write-side reconciliation step: it may create/remove the
 	// protocol lock and orphan temp files.  Keep it out of Open/Show/Status/Next
 	// so those read-only paths cannot mutate directory metadata.
@@ -1270,6 +1273,10 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			return protocol.Acceptance{}, Run{}, err
 		}
 		preview := snap.State.ResetPreview()
+		preview.Work, err = f.engine.RequirementWork()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
 		req, err := f.request()
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -1304,7 +1311,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		pkg := event.Decide.Requirement
 		if len(pkg.Children) > 0 {
 			view := protocol.RequirementDecisionPackage{Children: pkg.Children, Impact: pkg.Impact, RedoTopology: pkg.RedoTopology}
-			if err := f.validateChildRequirementPackage(&view); err != nil {
+			if err := f.validateChildRequirementPackage(&view, true); err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}
 		}
@@ -1312,6 +1319,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.syncResetRequirement(); err != nil {
+		return acceptance, Run{}, err
 	}
 	if err := f.syncReleasedChildren(); err != nil {
 		return acceptance, Run{}, err

@@ -524,9 +524,6 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		}
 		d.Reset.Confirmed = true
 		state.Decisions[d.RequestID] = d
-		if state.SliceChild != nil && state.SliceChild.ParentReset != nil {
-			state.SliceChild.ParentReset.Decision = d
-		}
 	}
 	// scope 的计算与应用对两类分类完全一致（§7.2.1：PRESERVED 保留产品含
 	// 义＋重做受影响技术审是合法组合）；唯一硬规则是上面的 P1 源两约束。

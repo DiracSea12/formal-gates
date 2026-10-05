@@ -17,6 +17,15 @@ func (f *Facade) handoffSliceReceipt(receipt protocol.SliceReceipt) error {
 		return err
 	}
 	defer unlock()
+	if _, err := master.engine.Load(); isMissingEngineState(err) {
+		summary, e := master.readSummary()
+		if e != nil {
+			return e
+		}
+		if summary.Termination != nil && summary.Termination.ChildCreation != nil {
+			return nil
+		}
+	}
 	return master.acceptSliceReceipt(receipt)
 }
 

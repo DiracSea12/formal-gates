@@ -13,9 +13,10 @@ import (
 // AbortAuthority carries the accepted parent decision and its original event.
 // CancelChild accepts it only before a local abort; revisions belong to each run.
 type AbortAuthority struct {
-	Decision    RecordedDecision   `json:"decision"`
-	Event       EventRecord        `json:"event"`
-	Requirement *ConfirmedRevision `json:"requirement,omitempty"`
+	Decision      RecordedDecision   `json:"decision"`
+	Event         EventRecord        `json:"event"`
+	RequestDigest string             `json:"requestDigest,omitempty"`
+	Requirement   *ConfirmedRevision `json:"requirement,omitempty"`
 }
 
 // AbortDecision derives the terminal authority from the accepted user decision.

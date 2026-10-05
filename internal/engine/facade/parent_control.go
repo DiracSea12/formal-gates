@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"os"
+	"path/filepath"
 )
 
 // acquireWriteWindow linearizes a child's writes with its master's controls.
@@ -102,7 +104,7 @@ func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, err
 	}
 	return out, nil
 }
-func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisionPackage) error {
+func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisionPackage, deciding ...bool) error {
 	if pkg == nil {
 		return nil
 	}
@@ -125,7 +127,11 @@ func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisi
 			if got.EnteredMainline && !pkg.RedoTopology && work.Disposition == protocol.RequirementWorkRedo {
 				return fmt.Errorf("entered child work is owned by the master candidate/repair obligations: %s", got.ChildRunID)
 			}
-			if work.Work != want.WorkDecisions[j].Work || !disposition(work.Disposition) || work.Reason == "" {
+			expected := want.WorkDecisions[j].Work
+			if len(deciding) > 0 && deciding[0] && work.Work.ResultDigest == "" {
+				expected.ResultDigest = ""
+			}
+			if work.Work != expected || !disposition(work.Disposition) || work.Reason == "" {
 				return fmt.Errorf("child requirement work decision does not match %s", want.ChildRunID)
 			}
 		}
@@ -147,7 +153,7 @@ func (f *Facade) syncReleasedChildren() error {
 		return nil
 	}
 	for _, plan := range snap.State.ChildCreation.Children {
-		established, err := runDirectoryEstablished(f.root + "/" + EngineNamespace + "/" + plan.RunID)
+		established, err := runDirectoryEstablished(filepath.Join(f.root, EngineNamespace, plan.RunID))
 		if err != nil {
 			return err
 		}
@@ -171,6 +177,12 @@ func (f *Facade) syncReleasedChildren() error {
 			err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
 			if err == nil {
 				err = child.engine.SyncParentRequirement(snap.State, emptyFingerprint())
+			}
+			if err == nil {
+				actual, err = child.engine.Load()
+				if err == nil && actual.State.ResetPending() {
+					_, err = child.driveInWindow()
+				}
 			}
 		} else {
 			err = loadErr
@@ -214,6 +226,10 @@ func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 			return err
 		}
 		p := snap.State.ResetPreview()
+		p.Work, err = child.engine.RequirementWork()
+		if err != nil && !isMissingEngineState(err) {
+			return err
+		}
 		p.RequirementRevision = preview.RequirementRevision
 		p.Digest = p.CanonicalDigest()
 		preview.ChildPreviews = append(preview.ChildPreviews, p)
@@ -238,4 +254,35 @@ func (f *Facade) validateResetChildren(request string) error {
 		return fmt.Errorf("child reset scope changed; request a fresh complete preview")
 	}
 	return nil
+}
+
+// Reset re-registration observes the complete confirmed document through the
+// same requirement handler. Drive resumes this observation after response loss.
+func (f *Facade) syncResetRequirement() error {
+	snap, err := f.engine.Load()
+	if isMissingEngineState(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s := snap.State
+	if s.ResetPending() || len(s.RequirementRevisions) < 2 {
+		return nil
+	}
+	entry := s.RequirementRevisions[len(s.RequirementRevisions)-1]
+	if entry.Source != protocol.RequirementSourceReset || s.Validation == nil || s.Validation.Generation == entry.StateRevision {
+		return nil
+	}
+	req, err := f.request()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(f.root, req.IntakeConfirmationReceipt.RequirementSource))
+	if err != nil {
+		return err
+	}
+	event := protocol.Event{ID: protocol.EventID("reset-requirement:" + entry.RequestID), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: entry.Revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: entry.Revision, Document: string(data)}}}
+	_, err = f.engine.Submit(event, emptyFingerprint())
+	return err
 }

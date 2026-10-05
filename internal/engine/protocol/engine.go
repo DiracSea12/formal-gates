@@ -297,12 +297,12 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 			return nil, nil
 		}
 	}
-	if state.resetPending() {
-		_, err := e.advanceReset(state, nextRevision)
-		return nil, err
-	}
 	if state.abortRequested() {
 		_, err := e.advanceAbort(state, nextRevision)
+		return nil, err
+	}
+	if state.resetPending() {
+		_, err := e.advanceReset(state, nextRevision)
 		return nil, err
 	}
 	if state.requirementChangePending() {
@@ -1208,6 +1208,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.Request.Control == ControlReset {
 			preview := state.ResetPreview()
+			preview.Work = e.requirementWork(state)
 			if ev.resetPreview != nil {
 				preview.RequirementRevision = ev.resetPreview.RequirementRevision
 				preview.Children = ev.resetPreview.Children
