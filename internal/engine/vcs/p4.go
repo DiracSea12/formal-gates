@@ -195,12 +195,22 @@ func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 			return "", err
 		}
 	} else {
-		changes, err := p.p4JSON("changes", "-s", "submitted", "-m", "1", "//"+client+"/...#have")
+		// cstat orders native changes and includes deleted revisions. Only the
+		// synced prefix identifies a complete snapshot: later removals can be
+		// reported as have when their paths do not exist at the synced revision.
+		changes, err := p.p4JSON("cstat", "//"+client+"/...")
 		if err != nil {
 			return "", err
 		}
-		if len(changes) != 0 {
-			rev, _ = strconv.Atoi(changes[0]["change"])
+		for _, change := range changes {
+			if change["status"] != "have" {
+				break
+			}
+			synced, err := strconv.Atoi(change["change"])
+			if err != nil {
+				return "", err
+			}
+			rev = max(rev, synced)
 		}
 	}
 	if rev < 1 {

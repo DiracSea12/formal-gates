@@ -413,3 +413,163 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 		})
 	}
 }
+
+// A synced snapshot includes submitted removals, even when no project file remains.
+func TestP4WorkspaceSnapshotPreservesMovesAndDeletions(t *testing.T) {
+	p, _ := p4Fixture(t)
+	base := nativeIdentityAt(t, p)
+	isolated, handle := nativeWorkspaceAt(t, p, base, "isolated")
+	isolatedBase := nativeIdentityAt(t, isolated)
+	nativeCommand(t, p.runner, p.root, "p4", "edit", "body.txt")
+	nativeCommand(t, p.runner, p.root, "p4", "move", "body.txt", "renamed.txt")
+	if err := p.Commit("move project file"); err != nil {
+		t.Fatal(err)
+	}
+	moved := nativeIdentityAt(t, p)
+	entries, err := p.TreeEntries(moved)
+	var value nativeEntry
+	if err != nil || entries["body.txt"] != "" || json.Unmarshal([]byte(entries["renamed.txt"]), &value) != nil || string(value.Content) != " leading\ntrailing\n\n" || value.Filetype != "text+x" {
+		t.Fatalf("move snapshot lost native values: %+v %v", entries, err)
+	}
+	if err := os.Remove(filepath.Join(p.root, "renamed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"renamed.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("remove all project files"); err != nil {
+		t.Fatal(err)
+	}
+	empty := nativeIdentityAt(t, p)
+	id, err := decodeNative(empty)
+	if err != nil || id.Revision <= 1 {
+		t.Fatalf("deleted workspace has no submitted identity: %+v %v", id, err)
+	}
+	message, err := p.Message(empty)
+	if err != nil || message != "remove all project files" {
+		t.Fatalf("snapshot is not the actual deletion submission: %q %v", message, err)
+	}
+	entries, err = p.TreeEntries(empty)
+	if err != nil || len(entries) != 1 || entries["."] == "" {
+		t.Fatalf("fully deleted snapshot contains project files: %+v %v", entries, err)
+	}
+	if nativeDigestAt(t, p, empty) == nativeDigestAt(t, p, moved) || nativeIdentityAt(t, p) != empty {
+		t.Fatal("removal digest or repeated identity differs")
+	}
+	if nativeIdentityAt(t, isolated) != isolatedBase || nativeDigestAt(t, isolated, isolatedBase) != nativeDigestAt(t, p, base) {
+		t.Fatal("independent workspace followed another client's submission")
+	}
+	if err := os.WriteFile(filepath.Join(isolated.root, "body.txt"), []byte("independent contents\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := isolated.Track([]string{"body.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := isolated.Commit("independent modification"); err != nil {
+		t.Fatal(err)
+	}
+	if nativeIdentityAt(t, p) != empty {
+		t.Fatal("workspace snapshot followed the latest global change")
+	}
+	if err := p.Synchronize(base); err != nil {
+		t.Fatal(err)
+	}
+	if nativeIdentityAt(t, p) != base {
+		t.Fatal("fixed old workspace followed a later client submission")
+	}
+	if err := p.Synchronize(moved); err != nil {
+		t.Fatal(err)
+	}
+	if nativeIdentityAt(t, p) != moved || nativeDigestAt(t, p, empty) == nativeDigestAt(t, p, moved) {
+		t.Fatal("fixed moved revision lost its deletion boundary")
+	}
+	if err := p.CleanupWorkspace(isolated.root, "cleanup isolated workspace", handle); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestP4DeletionObservationRetainsSubmittedIdentity(t *testing.T) {
+	p, runner := p4Fixture(t)
+	base := nativeIdentityAt(t, p)
+	master, handle := nativeWorkspaceAt(t, p, base, "mainline")
+	prefix := nativeIdentityAt(t, master)
+	if err := os.Remove(filepath.Join(p.root, "body.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"body.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	runner.lost = "submit"
+	if err := p.Commit("exact complete deletion"); err == nil || !runner.didLose {
+		t.Fatalf("completed deletion response was not lost: %v", err)
+	}
+	observed, found, err := p.ObservedCommit(base, "exact complete deletion")
+	if err != nil || !found {
+		t.Fatalf("exact deletion submission was not observed: %t %v", found, err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := p.Synchronize(observed); err != nil {
+			t.Fatal(err)
+		}
+		if nativeIdentityAt(t, p) != observed {
+			t.Fatal("recovery resolved another native identity")
+		}
+		entries, err := p.TreeEntries(observed)
+		count, countErr := p.CommitCount(base, observed)
+		if err != nil || len(entries) != 1 || entries["."] == "" || countErr != nil || count != 1 {
+			t.Fatalf("recovery changed content or resubmitted: %+v count=%d %v %v", entries, count, err, countErr)
+		}
+	}
+	if err := master.Merge(observed); err != nil {
+		t.Fatal(err)
+	}
+	integration, err := master.ObserveIntegration(prefix, observed)
+	if err != nil || !integration.Started {
+		t.Fatalf("submitted deletion integration was not observed: %+v %v", integration, err)
+	}
+	if err := master.Commit("integrate complete deletion"); err != nil {
+		t.Fatal(err)
+	}
+	final := nativeIdentityAt(t, master)
+	if err := master.VerifyIntegration(prefix, observed, final, "integrate complete deletion"); err != nil {
+		t.Fatal(err)
+	}
+	if nativeDigestAt(t, master, final) != nativeDigestAt(t, p, observed) {
+		t.Fatal("integration changed the complete deletion snapshot")
+	}
+	if err := p.CleanupWorkspace(master.root, "cleanup deletion mainline", handle); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestP4FixedWorkspaceIdentitySurvivesAbsentPathHistory(t *testing.T) {
+	p, _ := p4Fixture(t)
+	base := nativeIdentityAt(t, p)
+	path := filepath.Join(p.root, "temporary.txt")
+	if err := os.WriteFile(path, []byte("temporary contents\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"temporary.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("add temporary project file"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"temporary.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("remove temporary project file"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Synchronize(base); err != nil {
+		t.Fatal(err)
+	}
+	if current := nativeIdentityAt(t, p); current != base {
+		original, _ := decodeNative(base)
+		observed, _ := decodeNative(current)
+		t.Fatalf("fixed native revision changed from %d to %d after absent path history", original.Revision, observed.Revision)
+	}
+}

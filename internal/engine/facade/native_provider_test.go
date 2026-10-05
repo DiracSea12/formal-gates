@@ -483,3 +483,128 @@ func TestSVNCandidateDirectoryPermissions(t *testing.T) {
 		})
 	}
 }
+
+// The public workflow must validate and deliver the same complete deletion snapshot.
+func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lost=%t", lost), func(t *testing.T) {
+			root, _, runner := nativeProviderFixture(t, "p4")
+			path := filepath.Join(root, "unused.txt")
+			if err := os.WriteFile(path, []byte("retired command notes\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			native := vcs.NewNative(root, "p4", runner)
+			if err := native.Track([]string{"unused.txt"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := native.Commit("tracked command notes"); err != nil {
+				t.Fatal(err)
+			}
+			base, err := native.Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
+			receipt := testReceipt()
+			receipt.RequirementSource, receipt.Artifacts[0].Path = ".gates/requirements.md", ".gates/requirements.md"
+			receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
+			f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "p4", RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := &validationDriver{t: t, f: f, run: run, revision: revision, git: f.vcs}
+			d.drive()
+			plan := commandPlan()
+			plan.Batches[0].Artifacts = []string{"unused.txt"}
+			plan.Batches[0].Deliverable = "Remove retired command notes"
+			passPreDevelopmentReviews(t, d, plan)
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command removal"}})
+			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
+			d.drive()
+			action, input := d.action("engine.development.batch")
+			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+				t.Fatal(err)
+			}
+			d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+			d.drive()
+			if d.run.Validation.Candidate == nil {
+				t.Fatal("no immutable deletion candidate")
+			}
+			candidate, digest := d.run.Validation.Candidate.Identity, d.run.Validation.Candidate.Digest
+			for _, identity := range []string{d.run.Validation.DevelopmentSnapshot, candidate} {
+				entry, err := d.f.vcs.Entry(identity, "unused.txt")
+				if err != nil || entry != "" {
+					t.Fatalf("frozen snapshot retained deleted content: %q %v", entry, err)
+				}
+			}
+			gate, gateInput := d.action("engine.gate")
+			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+				t.Fatal(err)
+			}
+			d.business(gate, protocol.ValidationResult{Binding: gateInput.Binding, Status: "PASS"})
+			runner.interruptDelivery = lost
+			_, err = d.f.PrepareCandidate("verified command notes removal")
+			var original protocol.HostActionIntent
+			if lost {
+				if !runner.lost {
+					t.Fatal("completed deletion promotion response was not lost")
+				}
+				// Complete read-only observation may settle a lost response inline.
+				// A pending local continuation retains the same original intent.
+				if err != nil {
+					original = nativeIncompleteState(t, d, "op.candidate")
+					reopenNativeProviderDriver(t, d, "p4", runner)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := d.f.PrepareCandidate("verified command notes removal"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state := driverState(t, d)
+			proof := state.CandidatePromotion
+			if proof == nil || proof.Source != candidate || proof.SourceDigest != digest || proof.FinalDigest != digest || original.ActionID != "" && proof.OperationID != original.ActionID {
+				t.Fatalf("deletion promotion lost its exact candidate and operation: %+v", proof)
+			}
+			retained := state.ReconciledEffects[proof.OperationID].Intent
+			if retained == nil || retained.ActionID != proof.OperationID {
+				t.Fatal("deletion promotion lost its settled original intent")
+			}
+			var params protocol.CandidateParameters
+			if err := decodeNativeParams(*retained, &params); err != nil || params.Promotion == nil {
+				t.Fatalf("deletion promotion lost its signed inputs: %v", err)
+			}
+			count, err := d.f.vcs.CommitCount(proof.TargetStart.Head, proof.Final)
+			if err != nil || count != 1 || len(runner.deliverySubmissions) != 1 || runner.deliverySubmissions[0] != params.Promotion.Message {
+				t.Fatalf("deletion promotion resubmitted: count=%d submissions=%q %v", count, runner.deliverySubmissions, err)
+			}
+			d.drive()
+			if d.run.Status != "COMPLETE" || d.run.Termination == nil || !reflect.DeepEqual(d.run.Termination.CandidatePromotion, proof) {
+				t.Fatal("public completion lost the deletion promotion receipt")
+			}
+			if _, err := os.ReadFile(path); !os.IsNotExist(err) {
+				t.Fatalf("delivered deleted file remains: %v", err)
+			}
+			for _, file := range []string{"app.go", "go.mod", ".gates/requirements.md"} {
+				validated, err := d.f.vcs.Entry(candidate, file)
+				if err != nil || validated == "" {
+					t.Fatalf("candidate content is missing: %s %v", file, err)
+				}
+				final, err := d.f.vcs.Entry(proof.Final, file)
+				if err != nil || final != validated {
+					t.Fatalf("delivered native bytes or metadata differ: %s %v", file, err)
+				}
+			}
+			finalDigest, err := d.f.vcs.TreeDigest(proof.Final)
+			if err != nil || finalDigest != digest {
+				t.Fatalf("final deletion content differs from candidate: %s %v", finalDigest, err)
+			}
+		})
+	}
+}
