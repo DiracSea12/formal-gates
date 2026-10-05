@@ -99,7 +99,27 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 }
 func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 	master, child := controlChildren(t)
+	for id := range master.run.PendingActions {
+		master.receipt(id)
+	}
 	resetControl(t, master)
+	for action, intent := range master.run.AdapterIntents {
+		if intent.Terminate == nil {
+			continue
+		}
+		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+			event, err := protocol.NewLifecycleEventEvent(master.eventID(), master.host(), intent.Terminate.Identity, edge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			master.submit(event)
+		}
+		event, err := protocol.NewAgentHostActionReceiptEvent(master.eventID(), action, intent.Operation, master.host(), action, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		if err != nil {
+			t.Fatal(err)
+		}
+		master.submit(event)
+	}
 	child.drive()
 	confirmResetControl(t, master)
 	child.drive()

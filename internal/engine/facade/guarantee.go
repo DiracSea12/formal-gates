@@ -31,7 +31,8 @@ func initialGuarantee(root, route string, receipt IntakeConfirmationReceipt) (*p
 // materializeSliceGuarantee publishes only evidence, outside the verified VCS
 // candidate. Readback proves the complete frozen map and final master evidence.
 func (f *Facade) materializeSliceGuarantee(s *protocol.State) (*TerminalMaterial, error) {
-	if s.SliceChild != nil || s.ChildCreation == nil || !s.GuaranteeActive() {
+	_, aborted := s.AbortDecision()
+	if aborted || s.SliceChild != nil || s.ChildCreation == nil || !s.GuaranteeActive() {
 		return nil, nil
 	}
 	if !s.FinalValidationComplete(f.definition) {
@@ -40,7 +41,7 @@ func (f *Facade) materializeSliceGuarantee(s *protocol.State) (*TerminalMaterial
 	receipts := make([]protocol.SliceReceipt, 0, len(s.Topology.Slices))
 	for _, slice := range s.Topology.Slices {
 		r, ok := s.SliceReceipts[s.SliceChildren[slice]]
-		if !ok || r.Receipt.Status != "SLICE_READY" || !s.SliceReceiptCurrent(r) {
+		if !ok || r.Receipt.Status != "SLICE_READY" || !s.SliceReceiptQualified(r) {
 			return nil, fmt.Errorf("active slice guarantee lacks current successful receipt %s", slice)
 		}
 		receipts = append(receipts, r)

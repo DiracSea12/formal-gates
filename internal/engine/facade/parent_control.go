@@ -45,6 +45,13 @@ func (f *Facade) acquireWriteWindow() (func(), error) {
 	release := func() { uc(); up() }
 	current, err := parent.engine.Load()
 	if err == nil {
+		actual, loadErr := f.engine.Load()
+		err = loadErr
+		if err == nil {
+			err = f.recordIntakeReceipt(actual.State)
+		}
+	}
+	if err == nil {
 		err = f.engine.SyncParentReset(current.State, emptyFingerprint())
 	}
 	if err == nil {
@@ -174,7 +181,10 @@ func (f *Facade) syncReleasedChildren() error {
 			continue
 		}
 		if loadErr == nil && actual.State.Phase != runtime.PhasePreparing {
-			err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
+			err = child.recordIntakeReceipt(actual.State)
+			if err == nil {
+				err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
+			}
 			if err == nil {
 				err = child.engine.SyncParentRequirement(snap.State, emptyFingerprint())
 			}

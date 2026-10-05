@@ -191,9 +191,11 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 	if !s.mergeMaster() || s.ChildCreation == nil {
 		return nil, nil, "", false
 	}
-	ready, expected := s.sliceReceiptProgress()
-	if ready != expected || expected == 0 {
-		return nil, nil, "", false
+	for _, sliceID := range s.Topology.Slices {
+		receipt, accepted := s.SliceReceipts[s.SliceChildren[sliceID]]
+		if !accepted || receipt.Receipt.Status != runtime.PhaseSliceReady || !s.SliceReceiptQualified(receipt) {
+			return nil, nil, "", false
+		}
 	}
 	var paths []string
 	prefix := s.ChildCreation.Source

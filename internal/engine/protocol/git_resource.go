@@ -615,18 +615,30 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) err
 		}
 	}
 	p := CleanupParameters{}
-	if s.SliceChild != nil && !s.abortRequested() {
+	if s.SliceChild != nil && !s.abortRequested() && !s.resetPending() {
 		if len(related) != 1 || related[0] == nil || related[0].CandidatePromotion == nil || s.SliceReceipt == nil {
 			return validationError("checkpoint cleanup requires its delivered master")
 		}
 		p.Checkpoint = &CheckpointCleanup{MasterRunID: related[0].RunID, Promotion: *related[0].CandidatePromotion, ReceiptDigest: s.SliceReceipt.Digest}
-	} else if !s.childTargetsCleanable(related) {
+	} else if !s.resetPending() && !s.childTargetsCleanable(related) {
 		return validationError("cleanup requires released children with cleaned resources")
 	}
-	for _, r := range s.GitResources {
-		if r.Status != "CLEANED" {
-			p.Resources = append(p.Resources, r)
+	if s.resetPending() {
+		d, _ := s.resetDecision()
+		for _, r := range s.PendingAsks[d.RequestID].Reset.Resources {
+			if current := s.GitResources[r.ID]; current.Status != "CLEANED" {
+				p.Resources = append(p.Resources, current)
+			}
 		}
+	} else {
+		for _, r := range s.GitResources {
+			if r.Status != "CLEANED" {
+				p.Resources = append(p.Resources, r)
+			}
+		}
+	}
+	if len(p.Resources) == 0 {
+		return nil
 	}
 	slices.SortFunc(p.Resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
 	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", p, "", related...)

@@ -872,6 +872,24 @@ func (f *Facade) Drive() (Run, error) {
 	return run, err
 }
 
+// recordIntakeReceipt persists this run's original confirmation through the
+// first-drive handler. Parent controls may arrive before the child's first drive.
+func (f *Facade) recordIntakeReceipt(s *protocol.State) error {
+	if s.IntakeReceipt != nil {
+		return nil
+	}
+	confirmation := s.IntakeConfirmationReceipt
+	if confirmation == nil {
+		return fmt.Errorf("%s: start confirmation is missing", InvalidIntakeConfirmation)
+	}
+	digest, err := IntakeDigest(*confirmation)
+	if err != nil {
+		return err
+	}
+	_, err = f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digest}, emptyFingerprint())
+	return err
+}
+
 // driveInWindow consumes the caller's existing native window without reentry.
 func (f *Facade) driveInWindow() (Run, error) {
 	if err := f.syncResetRequirement(); err != nil {
@@ -912,18 +930,8 @@ func (f *Facade) driveInWindow() (Run, error) {
 	if err := f.discoverSliceReceipts(snap.State); err != nil {
 		return Run{}, err
 	}
-	if snap.State.IntakeReceipt == nil {
-		confirmation := snap.State.IntakeConfirmationReceipt
-		if confirmation == nil {
-			return Run{}, fmt.Errorf("%s: start confirmation is missing", InvalidIntakeConfirmation)
-		}
-		digest, err := IntakeDigest(*confirmation)
-		if err != nil {
-			return Run{}, err
-		}
-		if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digest}, emptyFingerprint()); err != nil {
-			return Run{}, err
-		}
+	if err := f.recordIntakeReceipt(snap.State); err != nil {
+		return Run{}, err
 	}
 	var plan *decision.Plan
 	if snap.State.Route == "lightweight" {

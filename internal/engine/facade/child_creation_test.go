@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -329,6 +330,7 @@ func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.Coverag
 		t.Fatal(err)
 	}
 	d := &validationDriver{t: t, f: f, run: run, revision: revision, provider: f.admission.Provider, git: f.vcs}
+	retainNativeEvidence(t, f)
 	d.drive()
 	return d
 }
@@ -392,7 +394,13 @@ func prepareChildFrontier(t *testing.T, master *validationDriver) *protocol.Stat
 		t.Fatal(err)
 	}
 	s := driverState(t, master)
-	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || len(s.PendingHostActions) != len(s.Topology.Slices) {
+	workspaces := 0
+	for _, intent := range s.PendingHostActions {
+		if intent.Step == "children.workspace" {
+			workspaces++
+		}
+	}
+	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || workspaces != len(s.Topology.Slices) {
 		t.Fatalf("preparing frontier: %+v", s.ChildCreation)
 	}
 	for _, plan := range s.ChildCreation.Children {
@@ -1010,4 +1018,46 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 			}
 		})
 	}
+}
+
+// retainNativeEvidence copies the original state, intents and receipts before
+// the scenario's temporary project is removed. It is a test-only evidence sink.
+func retainNativeEvidence(t *testing.T, f *Facade) {
+	t.Helper()
+	destination := os.Getenv("FORMAL_GATES_TEST_EVIDENCE")
+	if destination == "" {
+		return
+	}
+	t.Cleanup(func() {
+		for _, relative := range []string{EngineNamespace, ".gates/tmp"} {
+			source := filepath.Join(f.root, relative)
+			err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil
+					}
+					return err
+				}
+				if entry.IsDir() || !entry.Type().IsRegular() {
+					return nil
+				}
+				name, err := filepath.Rel(f.root, path)
+				if err != nil {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				target := filepath.Join(destination, t.Name(), name)
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					return err
+				}
+				return os.WriteFile(target, data, 0600)
+			})
+			if err != nil {
+				t.Error("retain native scenario evidence:", err)
+			}
+		}
+	})
 }

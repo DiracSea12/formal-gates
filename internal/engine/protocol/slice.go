@@ -369,14 +369,20 @@ func (s *State) abortedSliceMember(receipt SliceReceipt) bool {
 	return false
 }
 
-// SliceReceiptCurrent derives eligibility from the current master context;
-// historical accepted evidence remains readable when that context changes.
-func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
+// SliceReceiptQualified derives evidence qualification from the current claim,
+// requirement and reset authority. Terminal readback uses the same bindings
+// after the active write window has closed.
+func (s *State) SliceReceiptQualified(receipt SliceReceipt) bool {
 	r := receipt.Receipt
-	return s.SliceChild == nil && s.Phase != runtime.PhaseTerminal && !s.abortRequested() && s.errWriteBarrier("slice receipt acceptance") == nil &&
-		s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
+	return s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
 		r.MasterRunID == s.RunID && slices.Contains(s.Topology.Slices, r.SliceID) && s.SliceChildren[r.SliceID] == r.ChildRunID &&
 		(r.RequirementRevision == s.RequirementRevision() || s.childReceiptCarried(receipt) || r.Status == "ABORTED") && (digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology) || s.childReceiptCarried(receipt)) && (r.Status == "ABORTED" || s.SliceResetAuthorities[r.ChildRunID].Decision.RequestID == r.ResetRequestID)
+}
+
+// SliceReceiptCurrent admits activity only while the qualified receipt's master
+// has no terminal, abort or requirement barrier.
+func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
+	return s.Phase != runtime.PhaseTerminal && !s.abortRequested() && s.errWriteBarrier("slice receipt acceptance") == nil && s.SliceReceiptQualified(receipt)
 }
 
 func (s *State) sliceReceiptProgress() (ready, expected int) {
