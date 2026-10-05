@@ -196,8 +196,8 @@ func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 		}
 	} else {
 		// cstat orders native changes and includes deleted revisions. Only the
-		// synced prefix identifies a complete snapshot: later removals can be
-		// reported as have when their paths do not exist at the synced revision.
+		// have prefix selects complete material, not a historical sync cursor:
+		// absent paths can make later removals have with equivalent material.
 		changes, err := p.p4JSON("cstat", "//"+client+"/...")
 		if err != nil {
 			return "", err

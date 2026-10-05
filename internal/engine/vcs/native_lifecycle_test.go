@@ -1,10 +1,12 @@
 package vcs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -542,7 +544,7 @@ func TestP4DeletionObservationRetainsSubmittedIdentity(t *testing.T) {
 	}
 }
 
-func TestP4FixedWorkspaceIdentitySurvivesAbsentPathHistory(t *testing.T) {
+func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 	p, _ := p4Fixture(t)
 	base := nativeIdentityAt(t, p)
 	path := filepath.Join(p.root, "temporary.txt")
@@ -567,9 +569,32 @@ func TestP4FixedWorkspaceIdentitySurvivesAbsentPathHistory(t *testing.T) {
 	if err := p.Synchronize(base); err != nil {
 		t.Fatal(err)
 	}
-	if current := nativeIdentityAt(t, p); current != base {
-		original, _ := decodeNative(base)
-		observed, _ := decodeNative(current)
-		t.Fatalf("fixed native revision changed from %d to %d after absent path history", original.Revision, observed.Revision)
+	current := nativeIdentityAt(t, p)
+	originalEntries, err := p.TreeEntries(base)
+	if err != nil {
+		t.Fatal(err)
 	}
+	observedEntries, err := p.TreeEntries(current)
+	if err != nil || !reflect.DeepEqual(originalEntries, observedEntries) || nativeDigestAt(t, p, base) != nativeDigestAt(t, p, current) {
+		t.Fatalf("absent path history changed complete native material: original=%v observed=%v error=%v", originalEntries, observedEntries, err)
+	}
+	if bound, err := p.BindIdentity(base); err != nil || bound != base {
+		t.Fatalf("explicit native identity changed: %q %v", bound, err)
+	}
+	var value nativeEntry
+	if err := json.Unmarshal([]byte(originalEntries["body.txt"]), &value); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(p.root, "body.txt"))
+	if err != nil || !bytes.Equal(body, value.Content) {
+		t.Fatalf("workspace content differs from bound material: %q %v", body, err)
+	}
+	info, err := os.Stat(filepath.Join(p.root, "body.txt"))
+	if err != nil || info.Mode()&0111 == 0 || value.Filetype != "text+x" {
+		t.Fatalf("workspace lost its executable filetype: %v %v", info, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("absent path returned to the workspace: %v", err)
+	}
+	t.Logf("original=%s observed=%s completeEntries=%v", base, current, originalEntries)
 }

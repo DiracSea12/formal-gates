@@ -534,7 +534,7 @@ func TestMasterDriveAcceptsThePublishedChildReceipt(t *testing.T) {
 }
 
 // Receipt import changes selected gate evidence, while this waiting master has
-// one authorized merge design task and no issued validation work. Construct its
+// one issued merge design request and no case-set. Construct its
 // canonical basis from those confirmed inputs without the production calculator.
 func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *protocol.State, receipts []protocol.SliceReceipt) {
 	t.Helper()
@@ -586,7 +586,7 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 				if payload.Retry != nil {
 					attempts = payload.Retry.MaxAttempts
 				}
-				key.Scope = fmt.Sprintf("%d:MERGE:1:FULL", state.Validation.Generation)
+				key.Scope = fmt.Sprintf("%d:MERGE:1:", state.Validation.Generation)
 				basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.RouteSource, Identity: basis.Route.Identity}, MaxAttempts: &attempts})
 			}
 		}

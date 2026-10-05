@@ -780,6 +780,20 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 			}
 			beforeChild := installationFiles(t, child.f.stateDir)
 			beforeMaster := installationFiles(t, master.f.stateDir)
+			if window == "replay" {
+				if err := master.f.engine.AcceptSliceReceipt(receipt, emptyFingerprint()); err != nil {
+					t.Fatalf("pure accepted receipt replay=%v", err)
+				}
+				for _, query := range []func() (Run, error){master.f.Show, master.f.Status} {
+					projection, err := query()
+					if err != nil || projection.RunID != master.f.runID || !reflect.DeepEqual(projection.SliceReceipts[child.f.runID], receipt) {
+						t.Fatalf("retained accepted receipt projection=%+v, %v", projection, err)
+					}
+					if next, err := master.f.Next(); err != nil || !reflect.DeepEqual(next, projection.Next) {
+						t.Fatalf("retained accepted receipt next=%+v, %v", next, err)
+					}
+				}
+			}
 			var err error
 			switch window {
 			case "publish":
@@ -789,11 +803,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 			case "handoff", "replay":
 				err = child.f.handoffSliceReceipt(receipt)
 			}
-			if window == "replay" {
-				if err != nil {
-					t.Fatalf("immutable accepted receipt replay=%v", err)
-				}
-			} else if !errors.Is(err, errStaleFencingToken) {
+			if !errors.Is(err, errStaleFencingToken) {
 				t.Fatalf("fenced slice window=%v", err)
 			}
 			if after := installationFiles(t, child.f.stateDir); !reflect.DeepEqual(beforeChild, after) {

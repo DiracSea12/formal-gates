@@ -11,6 +11,7 @@ import (
 
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -61,7 +62,25 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 				if !driverState(t, child).SliceChild.ParentReviewPending || child.run.Status == string(runtime.PhaseSliceReady) {
 					t.Fatal("current document bypassed pending parent review")
 				}
-				passPreDevelopmentReviews(t, master, commandPlan())
+				id := ""
+				for key, pending := range master.run.PendingActions {
+					if pending.ReviewSeries == review.ProductReview {
+						t.Fatal("unchanged product review was reopened")
+					}
+					if pending.ReviewSeries == review.StartReadiness {
+						id = key
+					}
+				}
+				if id == "" {
+					t.Fatal("missing current start-readiness dispatch")
+				}
+				master.receipt(id)
+				result, err := protocol.NewReviewWorkerResultEvent(master.eventID(), id, master.host(), string(master.eventID()), protocol.ReviewResultEvidence{GranularityReview: commandPlan(), Action: review.StartReadiness, DispatchID: id, RequirementRevision: revision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				master.submit(result)
+				master.drive()
 			}
 			child.reopen()
 			child.drive()
