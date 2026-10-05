@@ -176,7 +176,8 @@ func TestCanaryTurnAuthorizationFixture(t *testing.T) {
 			return nil, refusal
 		}
 		if strings.Contains(scenario, "answer") && calls == 1 {
-			refusal = fmt.Errorf("native answer is unavailable: %w", &os.PathError{Op: "open", Path: filepath.Join(dir, "answer.json"), Err: os.ErrNotExist})
+			_, err := readJSONFile(filepath.Join(dir, "answer.json"))
+			refusal = fmt.Errorf("native answer is unavailable: %w", err)
 			return map[string]any{"identity": identity, "usage_evidence": usage}, nil
 		}
 		answer := map[string]any{"action": actionID, "prompt": wantPrompt, "identity": identity}

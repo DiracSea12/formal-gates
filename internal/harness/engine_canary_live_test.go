@@ -1102,7 +1102,7 @@ func (c *engineCanary) authorizeCall(request map[string]any, actionID, role stri
 	sum := sha256.Sum256([]byte(prompt))
 	approval := fmt.Sprintf("approve %s %d %x", actionID, attempt, sum)
 	selection := func(key string) string {
-		if value := textOf(request[key]); value != "" {
+		if value, _ := request[key].(string); value != "" {
 			return value
 		}
 		return "unavailable"
