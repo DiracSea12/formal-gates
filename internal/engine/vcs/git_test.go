@@ -381,3 +381,8 @@ func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
 		t.Fatalf("unstaged modification classified staged-only = %t (%v)", stagedOnly, err)
 	}
 }
+
+func (s *stubRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	out, err := s.Run(dir, command, args...)
+	return []byte(out), err
+}

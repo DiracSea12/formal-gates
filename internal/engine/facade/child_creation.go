@@ -40,8 +40,10 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		if err != nil {
 			return nil, err
 		}
+		req.NativeHandle = parent.NativeResources[plan.ResourceID].Handle
+		req.VCS = parent.NativeVCS()
 		req.RunID, req.MasterRunID, req.SliceID = plan.RunID, parent.RunID, plan.SliceID
-		child, _, err = startRun(StartOptions{Root: f.root, Request: req, Admission: &f.admission, Capacity: f.capacity, VCSRunner: f.vcsRunner, Owner: owner}, parent.ChildStart(plan), parent.GitResources[plan.ResourceID].Path)
+		child, _, err = startRun(StartOptions{Root: f.root, Request: req, Admission: &f.admission, Capacity: f.capacity, VCSRunner: f.vcsRunner, Owner: owner}, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
 		if err != nil {
 			return nil, err
 		}
@@ -55,7 +57,7 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		return nil, fmt.Errorf("child installation and version identity differ from the parent")
 	}
 	child.vcsRunner = f.vcsRunner
-	child.vcs = f.vcs.At(parent.GitResources[plan.ResourceID].Path)
+	child.vcs = f.vcs.At(parent.NativeResources[plan.ResourceID].Path, parent.NativeResources[plan.ResourceID].Handle)
 	return child, nil
 }
 
@@ -242,7 +244,7 @@ func (f *Facade) driveChildren() error {
 			return nil
 		}
 		plan := snap.State.ChildCreation.Children[i]
-		r := snap.State.GitResources[plan.ResourceID]
+		r := snap.State.NativeResources[plan.ResourceID]
 		if child.envelope != f.envelope || !reflect.DeepEqual(actual.State.Topology, &snap.State.ChildCreation.Topology) {
 			return fmt.Errorf("child join identity differs from its parent")
 		}

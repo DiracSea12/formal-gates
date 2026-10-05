@@ -313,3 +313,7 @@ func TestControlAskProjectionsKeepTheirSnapshot(t *testing.T) {
 		t.Fatal("accepted requirement replay changed its persisted decision")
 	}
 }
+
+func (r *transientOrganizationRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return r.inner.RunRaw(dir, command, input, args...)
+}

@@ -235,7 +235,7 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 					if err != nil || run.Status != "ABORTED" || !run.Termination.ResourcesCleaned() {
 						t.Fatal("a frozen child remained active after its parent's abort", err)
 					}
-					r := original.GitResources[plan.ResourceID]
+					r := original.NativeResources[plan.ResourceID]
 					if _, err := os.Stat(r.Path); !errors.Is(err, os.ErrNotExist) {
 						t.Fatal("frozen child target survived cancellation", err)
 					}
@@ -780,7 +780,7 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 	if _, err := d.f.Drive(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(s.GitResources[plan.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(s.NativeResources[plan.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("cancelled child acquired a workspace")
 	}
 	if len(driverState(t, d).SliceChildren) != 0 {
@@ -810,7 +810,7 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 		if !reflect.DeepEqual(run.lastEvent, &want) {
 			t.Fatal("preparing cancellation replaced the original accepted authority")
 		}
-		if _, err := os.Stat(s.GitResources[p.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(s.NativeResources[p.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("child target survived master cancellation")
 		}
 	}
@@ -870,7 +870,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				}
 				child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 				children[i] = child
-				paths = append(paths, parent.GitResources[plan.ResourceID].Path)
+				paths = append(paths, parent.NativeResources[plan.ResourceID].Path)
 				if !inFlight {
 					continue
 				}
@@ -915,7 +915,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 					if state.SliceChild.ParentAbort == nil || !ok || !reflect.DeepEqual(record, parentAuthority) || len(state.ExecutableHostActions()) == 0 {
 						t.Fatal("waiting sibling blocked parent cancellation propagation")
 					}
-					for _, resource := range state.GitResources {
+					for _, resource := range state.NativeResources {
 						if resource.Ref != "" && resource.Identity != "" {
 							if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", resource.Ref); err != nil {
 								t.Fatal("cancellation removed a ref before its worker stopped", err)
@@ -961,7 +961,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 							t.Fatal("master ignored another active child")
 						}
 						for _, plan := range parent.ChildCreation.Children {
-							if _, err := os.Stat(parent.GitResources[plan.ResourceID].Path); err != nil {
+							if _, err := os.Stat(parent.NativeResources[plan.ResourceID].Path); err != nil {
 								t.Fatal("master cleaned targets before every child ended", err)
 							}
 						}
@@ -996,10 +996,10 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				if !reflect.DeepEqual(before, installationFiles(t, c.stateDir)) {
 					t.Fatal("terminal cancellation replay changed child evidence")
 				}
-				if _, err := os.Stat(parent.GitResources[plan.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
+				if _, err := os.Stat(parent.NativeResources[plan.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("child target survived cancellation")
 				}
-				if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", parent.GitResources[plan.ResourceID].Ref); err == nil {
+				if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", parent.NativeResources[plan.ResourceID].Ref); err == nil {
 					t.Fatal("child target ref survived terminal cancellation")
 				}
 			}

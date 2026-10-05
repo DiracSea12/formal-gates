@@ -525,7 +525,7 @@ func (d *candidateDriver) assertClean() {
 	if state == nil || !state.ResourcesCleaned() {
 		d.t.Fatal("terminal summary lacks resource cleanup proof")
 	}
-	for _, resource := range state.GitResources {
+	for _, resource := range state.NativeResources {
 		if resource.Status != "CLEANED" {
 			d.t.Fatalf("unclean resource %+v", resource)
 		}
@@ -846,7 +846,7 @@ func TestInstalledCandidateAbortCleansRegisteredResources(t *testing.T) {
 		t.Fatalf("abort did not clean native resources: %+v", d.run)
 	}
 	d.assertTargetUnchanged()
-	for _, r := range d.run.Termination.GitResources {
+	for _, r := range d.run.Termination.NativeResources {
 		if _, err := os.Stat(r.Path); !os.IsNotExist(err) {
 			t.Fatalf("aborted resource remains: %s %v", r.Path, err)
 		}

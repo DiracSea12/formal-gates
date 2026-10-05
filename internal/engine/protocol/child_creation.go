@@ -61,13 +61,13 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 		return validationError("child preparation requires an active native split master")
 	}
 	c := &ChildCreation{RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
-	if s.GitResources == nil {
-		s.GitResources = map[string]GitResource{}
+	if s.NativeResources == nil {
+		s.NativeResources = map[string]NativeResource{}
 	}
 	for _, sliceID := range c.Topology.Slices {
 		id := "child-" + strings.TrimPrefix(digestOfCanonical(struct{ Master, Slice string }{s.RunID, sliceID}), "sha256:")
 		r := s.resource("child-target", c.Source, id)
-		s.GitResources[r.ID] = r
+		s.NativeResources[r.ID] = r
 		c.Children = append(c.Children, ChildPreparation{SliceID: sliceID, RunID: id, ResourceID: r.ID})
 	}
 	s.ChildCreation = c
@@ -80,7 +80,7 @@ func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 		return false
 	}
 	expected := s.ChildStart(child)
-	return actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.GitResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
+	return actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
 }
 
 func (e *Engine) RecordPreparedChildren(children []*State, expectedFingerprint string) error {
@@ -115,7 +115,7 @@ func (e *Engine) SignChildWorkspace(expectedFingerprint string) (bool, error) {
 		return false, nil
 	}
 	for _, child := range s.ChildCreation.Children {
-		r := s.GitResources[child.ResourceID]
+		r := s.NativeResources[child.ResourceID]
 		if r.Status == "READY" {
 			continue
 		}
@@ -155,7 +155,7 @@ func (s *State) ChildWorkspaceProof(child ChildPreparation) (WorkspaceEvidence, 
 			continue
 		}
 		intent, found := s.hostIntent(receipt.ActionID)
-		if !found || intent.Step != "children.workspace" || validateResourceReceipt(intent, receipt) != nil || evidence.Digest != s.ChildCreation.Digest || evidence.Resource.Identity != s.ChildCreation.Source {
+		if !found || intent.Step != "children.workspace" || validateResourceReceipt(intent, receipt) != nil || evidence.Digest != s.ChildCreation.Digest || s.NativeVCS() == "git" && evidence.Resource.Identity != s.ChildCreation.Source {
 			continue
 		}
 		return evidence, true
@@ -215,7 +215,7 @@ func (e *Engine) ReleaseChildren(children []*State, expectedFingerprint string) 
 		return nil
 	}
 	for i, child := range s.ChildCreation.Children {
-		if !s.preparedChild(child, children[i]) || children[i].Phase != runtime.PhasePreparing || children[i].abortRequested() || children[i].InitialSnapshot != s.ChildCreation.Source {
+		if !s.preparedChild(child, children[i]) || children[i].Phase != runtime.PhasePreparing || children[i].abortRequested() || children[i].InitialSnapshot != s.childInitialSnapshot(child) {
 			return validationError("child release lacks a live prepared child")
 		}
 		if _, proven := s.ChildWorkspaceProof(child); !proven {
@@ -244,7 +244,7 @@ func (e *Engine) ActivateChild(parent *State, expectedFingerprint string) error 
 		return nil
 	}
 	child, found := parent.CreationChildByRun(s.RunID)
-	if !found || !parent.ChildCreationCurrent() || !parent.preparedChild(child, s) || parent.SliceChildren[child.SliceID] != s.RunID || s.InitialSnapshot != parent.ChildCreation.Source || s.abortRequested() {
+	if !found || !parent.ChildCreationCurrent() || !parent.preparedChild(child, s) || parent.SliceChildren[child.SliceID] != s.RunID || s.InitialSnapshot != parent.childInitialSnapshot(child) || s.abortRequested() {
 		return validationError("child activation lacks current parent release authority")
 	}
 	if err := s.TransitionPhase(runtime.PhaseTopologyAndRoute); err != nil {
@@ -345,5 +345,13 @@ func childWorkspaceStep(params any) authoring.StepID {
 
 func (s *State) creationWorkspaceCurrent(p WorkspaceParameters) bool {
 	child, found := s.CreationChild(p.Resource.ID)
-	return found && s.ChildCreationCurrent() && len(s.SliceChildren) == 0 && p.Generation == 0 && p.RouteScope == "" && p.Manifest == nil && p.RequirementRevision == s.ChildCreation.RequirementRevision && s.GitResources[child.ResourceID] == p.Resource && p.Resource.Source == s.ChildCreation.Source && s.resourceUsable(p.Resource.ID)
+	return found && s.ChildCreationCurrent() && len(s.SliceChildren) == 0 && p.Generation == 0 && p.RouteScope == "" && p.Manifest == nil && p.RequirementRevision == s.ChildCreation.RequirementRevision && s.NativeResources[child.ResourceID] == p.Resource && p.Resource.Source == s.ChildCreation.Source && s.resourceUsable(p.Resource.ID)
+}
+
+func (s *State) childInitialSnapshot(child ChildPreparation) string {
+	proof, ok := s.ChildWorkspaceProof(child)
+	if !ok {
+		return ""
+	}
+	return proof.Resource.Identity
 }

@@ -228,13 +228,13 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	if s.NativeRoot != "" {
 		if params.Stage == "QA_ARTIFACT" {
 			base := s.resource("candidate", params.Base, "ownership:"+candidateCorrelation(params)+":"+strconv.FormatUint(s.Validation.Generation, 10))
-			if r, ok := s.GitResources[base.ID]; !ok || r.Status != "READY" || s.ResourceCleanupPending(base.ID) {
+			if r, ok := s.NativeResources[base.ID]; !ok || r.Status != "READY" || s.ResourceCleanupPending(base.ID) {
 				made, err := e.ensureWorkspace(s, base, nextRevision)
 				return changed || made, err
 			}
 		}
 		r := s.candidateResource(params, e.cfg.Definition)
-		if registered, ok := s.GitResources[r.ID]; !ok || registered.Status != "READY" || !s.resourceUsable(r.ID) {
+		if registered, ok := s.NativeResources[r.ID]; !ok || registered.Status != "READY" || !s.resourceUsable(r.ID) {
 			made, err := e.ensureWorkspace(s, r, nextRevision)
 			return changed || made, err
 		}
@@ -321,7 +321,7 @@ func validateCandidateReceipt(intent HostActionIntent, receipt HostActionReceipt
 	switch params.Stage {
 	case "PROMOTION":
 		p, proof := params.Promotion, evidence.Promotion
-		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != "git" || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
+		if p == nil || proof == nil || proof.OperationID != intent.ActionID || proof.Provider != s.NativeVCS() || proof.SourceWorkspace != p.SourceWorkspace || proof.Source != p.Source || proof.SourceDigest != p.SourceDigest || proof.TargetRoot != p.TargetRoot || proof.TargetBase != p.TargetBase || proof.Final != evidence.Identity || proof.FinalDigest != evidence.Digest || proof.FinalDigest != p.SourceDigest || proof.SupersedesActionID != p.SupersedesActionID || digestOfCanonical(proof.TargetStart) != digestOfCanonical(p.TargetStart) {
 			return params, CandidateEvidence{}, validationError("promotion receipt lacks the signed native source, target prefix and final mapping")
 		}
 	case "MERGE_START", "MERGE_FINISH":
@@ -376,9 +376,9 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	switch params.Stage {
 	case "MERGE_START", "MERGE_FINISH":
 		if params.Stage == "MERGE_FINISH" {
-			r := s.GitResources[params.WorkspaceID]
+			r := s.NativeResources[params.WorkspaceID]
 			r.Identity = evidence.Identity
-			s.GitResources[r.ID] = r
+			s.NativeResources[r.ID] = r
 		}
 		return nil
 	case "DEVELOPMENT":
@@ -399,9 +399,9 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		}
 	}
 	if params.WorkspaceID != "" {
-		r := s.GitResources[params.WorkspaceID]
+		r := s.NativeResources[params.WorkspaceID]
 		r.Identity = evidence.Identity
-		s.GitResources[r.ID] = r
+		s.NativeResources[r.ID] = r
 	}
 	switch params.Stage {
 	case "DEVELOPMENT":

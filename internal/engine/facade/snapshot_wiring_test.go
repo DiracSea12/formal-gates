@@ -1806,3 +1806,15 @@ func TestUnknownPromotionPartialPrefixDoesNotExecuteOnReentry(t *testing.T) {
 		t.Fatal("UNKNOWN reentry changed native bytes, the original responsibility, receipt or delivery qualification")
 	}
 }
+
+func (r *publicationDriftRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return r.inner.RunRaw(dir, command, input, args...)
+}
+
+func (r *promotionWindowObserver) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return r.inner.RunRaw(dir, command, input, args...)
+}
+
+func (r *commitFailureRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return r.inner.RunRaw(dir, command, input, args...)
+}

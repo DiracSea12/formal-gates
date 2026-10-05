@@ -470,7 +470,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 			candidateBase = *base
 		}
 		_, run, err := facade.Start(facade.StartOptions{Root: *root, Request: facade.StartRequest{
-			RunID: runID, Route: candidateRoute, BaseSnapshot: candidateBase, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource,
+			VCS: *vcs, RunID: runID, Route: candidateRoute, BaseSnapshot: candidateBase, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 		if err != nil {

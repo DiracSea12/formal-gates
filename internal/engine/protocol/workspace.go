@@ -13,7 +13,7 @@ import (
 )
 
 // RecordQAWorktree records the public QA role projection. Native resources
-// remain in GitResources until their typed cleanup evidence is accepted.
+// remain in NativeResources until their typed cleanup evidence is accepted.
 func (e *Engine) RecordQAWorktree(worktree, expectedFingerprint string) error {
 	worktree = strings.TrimSpace(worktree)
 	revision, state, err := e.load()
@@ -69,7 +69,7 @@ func (e *Engine) OpenPromotion(p PromotionParameters, expectedFingerprint string
 		return err
 	}
 	source := s.currentValidationWave().Candidate
-	if p.Source != source.Identity || p.SourceDigest != source.Digest || p.TargetBase != s.BaseSnapshot || p.TargetRoot == "" || s.NativeRoot != "" && p.TargetRoot != s.NativeRoot || p.TargetStart.Head == "" || p.TargetStart.Tree == "" || p.TargetStart.IndexTree == "" {
+	if p.Source != source.Identity || p.SourceDigest != source.Digest || p.TargetBase != s.BaseSnapshot || p.TargetRoot == "" || s.NativeRoot != "" && p.TargetRoot != s.NativeRoot || p.TargetStart.Head == "" || p.TargetStart.Tree == "" || p.TargetStart.IndexTree == "" && p.TargetStart.PendingFingerprint == "" {
 		return validationError("promotion requires the exact verified source, fixed target and native prefix")
 	}
 	if latest, pending := s.PromotionIntent(); pending {
@@ -248,12 +248,13 @@ func (s *State) validationDeliveryComplete(cd *compiler.CompiledDefinition) bool
 // CandidatePromotionReceipt binds the observed source and final native trees.
 // The signed candidate intent owns execution; this value retains its proof.
 type PromotionObservation struct {
-	Head       string       `json:"head"`
-	Tree       string       `json:"tree"`
-	IndexTree  string       `json:"indexTree"`
-	Changes    []vcs.Change `json:"changes,omitempty"`
-	Clean      bool         `json:"clean"`
-	StagedOnly bool         `json:"stagedOnly"`
+	Head               string       `json:"head"`
+	Tree               string       `json:"tree"`
+	PendingFingerprint string       `json:"pendingFingerprint,omitempty"`
+	IndexTree          string       `json:"indexTree"`
+	Changes            []vcs.Change `json:"changes,omitempty"`
+	Clean              bool         `json:"clean"`
+	StagedOnly         bool         `json:"stagedOnly"`
 }
 
 type PromotionParameters struct {
@@ -330,11 +331,11 @@ func (s *State) validateCurrentPromotion(p CandidateParameters, cd *compiler.Com
 		return validationError("promotion differs from current FULL qualification")
 	}
 	target := p.Promotion
-	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly {
+	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" && target.TargetStart.PendingFingerprint == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly {
 		return validationError("promotion differs from current source and exact target prefix")
 	}
 	if s.NativeRoot != "" {
-		r := s.GitResources[target.SourceWorkspace]
+		r := s.NativeResources[target.SourceWorkspace]
 		if p.WorkspaceID != r.ID || r.Role != "candidate" || r.Identity != target.Source || r.Status != "READY" || !s.resourceUsable(r.ID) {
 			return validationError("promotion source is not a current registered workspace")
 		}

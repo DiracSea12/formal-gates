@@ -1579,7 +1579,7 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if trees := c.git("worktree", "list", "--porcelain"); strings.Count(trees, "worktree ") != 1 {
 		c.fail("native worktree residuals: %s", trees)
 	}
-	for _, resource := range final.Termination.GitResources {
+	for _, resource := range final.Termination.NativeResources {
 		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
 			c.fail("native resource directory remains: %s %v", resource.Path, err)
 		}

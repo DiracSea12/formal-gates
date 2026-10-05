@@ -16,11 +16,11 @@ import (
 // integrationEvidence observes the original prefix before writing. Both an
 // ordinary return and a lost-response observation admit this same typed proof.
 func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActionIntent, p protocol.CandidateParameters, mayWrite bool, invoked *bool) (nativeResult, bool, error) {
-	r, exists := s.GitResources[p.WorkspaceID]
+	r, exists := s.NativeResources[p.WorkspaceID]
 	if !exists || r.Status != "READY" || p.Integration == nil {
 		return nativeResult{}, false, fmt.Errorf("merge requires its admitted workspace and child")
 	}
-	native := f.vcs.At(r.Path)
+	native := f.vcs.At(r.Path, r.Handle)
 	incomingTree, err := native.TreeDigest(p.Integration.Incoming)
 	if err != nil {
 		return nativeResult{}, false, err
@@ -32,7 +32,11 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	mergeHead, err := native.MergeHead()
+	observation, err := native.ObserveIntegration(p.Base, p.Integration.Incoming)
+	mergeHead := ""
+	if native.Name() == "git" {
+		mergeHead = observation.Lineage
+	}
 	if err != nil {
 		return nativeResult{}, false, err
 	}
@@ -42,7 +46,7 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 			return nativeResult{}, false, fmt.Errorf("merge start has a different native prefix")
 		}
 		included := native.IsAncestorOrEqual(p.Integration.Incoming, head) == nil
-		if mergeHead == "" && !included {
+		if !observation.Started && !included {
 			if !mayWrite {
 				return nativeResult{}, false, nil
 			}
@@ -52,7 +56,10 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 			if err := f.admission.write(func() error { *invoked = true; return native.Merge(p.Integration.Incoming) }); err != nil {
 				return nativeResult{}, false, err
 			}
-			mergeHead, err = native.MergeHead()
+			observation, err = native.ObserveIntegration(p.Base, p.Integration.Incoming)
+			if native.Name() == "git" {
+				mergeHead = observation.Lineage
+			}
 			if err != nil {
 				return nativeResult{}, false, err
 			}
@@ -61,7 +68,7 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, MergeHead: mergeHead, Index: entries}
+		proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: entries}
 		for _, entry := range entries {
 			if entry.Stage == 0 {
 				continue
@@ -96,15 +103,16 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		parents, err := native.Parents(head)
-		if err != nil {
+
+		if err := native.VerifyIntegration(p.Base, p.Integration.Incoming, head, message); err != nil {
 			return nativeResult{}, false, err
 		}
-		if observed != message || !slices.Equal(parents, []string{p.Base, p.Integration.Incoming}) || mergeHead != "" {
+		if observed != message || mergeHead != "" {
 			return nativeResult{}, false, fmt.Errorf("merge commit is not the exact issued operation")
 		}
-	} else if start.Integration.MergeHead != "" {
-		if mergeHead != p.Integration.Incoming {
+
+	} else if start.Integration.NativeStarted || start.Integration.MergeHead != "" {
+		if native.Name() == "git" && mergeHead != p.Integration.Incoming {
 			return nativeResult{}, false, fmt.Errorf("merge completion lost its original incoming identity")
 		}
 		if !mayWrite {
@@ -117,7 +125,7 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 		for _, conflict := range start.Integration.Conflicts {
 			paths = append(paths, conflict.Path)
 		}
-		if err := f.admission.write(func() error { *invoked = true; return native.Track(paths) }); err != nil {
+		if err := f.admission.write(func() error { *invoked = true; return native.ResolveConflicts(paths) }); err != nil {
 			return nativeResult{}, false, err
 		}
 		entries, err := native.IndexEntries()
@@ -140,26 +148,29 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 	if err := native.VerifyReady(); err != nil {
 		return nativeResult{}, false, err
 	}
-	ref, err := f.vcs.Ref(r.Ref)
-	if err != nil {
-		return nativeResult{}, false, err
-	}
-	if ref != head {
-		if ref != p.Base {
-			return nativeResult{}, false, fmt.Errorf("merge ref differs from its original prefix")
-		}
-		if !mayWrite {
-			return nativeResult{}, false, nil
-		}
-		if err := f.admission.write(func() error { *invoked = true; return f.vcs.Pin(r.Ref, head) }); err != nil {
+
+	if r.Ref != "" {
+		ref, err := f.vcs.Ref(r.Ref)
+		if err != nil {
 			return nativeResult{}, false, err
+		}
+		if ref != head {
+			if ref != p.Base {
+				return nativeResult{}, false, fmt.Errorf("merge ref differs from its original prefix")
+			}
+			if !mayWrite {
+				return nativeResult{}, false, nil
+			}
+			if err := f.admission.write(func() error { *invoked = true; return f.vcs.Pin(r.Ref, head) }); err != nil {
+				return nativeResult{}, false, err
+			}
 		}
 	}
 	entries, err := native.IndexEntries()
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, Index: entries}
+	proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, NativeLineage: observation.Lineage, Index: entries}
 	return mergeNativeResult(native, p, intent, head, proof)
 }
 
@@ -198,6 +209,9 @@ func validateConflictEdits(native *vcs.Provider, root string, proof protocol.Int
 		return err
 	}
 	for _, path := range working {
+		if native.Name() != "git" && slices.ContainsFunc(proof.Index, func(e vcs.IndexEntry) bool { return e.Path == path }) {
+			continue
+		}
 		if _, allowed := conflicts[path]; !allowed {
 			return fmt.Errorf("resolution edited non-conflict path: %s", path)
 		}

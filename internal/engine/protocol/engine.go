@@ -18,6 +18,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
 // ackStore defers persistence until the selected actions, attempts and state
@@ -40,6 +41,8 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
+	VCSName       string
+	NativeHandle  vcs.WorkspaceHandle
 	NativeRoot    string
 	Definition    *compiler.CompiledDefinition
 	Registry      *compiler.Registry
@@ -156,6 +159,8 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	state.BaseSnapshot = baseSnapshot
 	state.InitialSnapshot = initialSnapshot
 	state.NativeRoot = e.cfg.NativeRoot
+	state.VCSName = e.cfg.VCSName
+	state.NativeHandle = e.cfg.NativeHandle
 	state.IntakeConfirmationReceipt = confirmation
 	if sliceStart != nil {
 		binding := sliceStart.Binding
@@ -2774,7 +2779,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 				mirror = BlackboxCasesDigest(state.RunID, *p.Manifest)
 			}
 			correlation = "workspace:" + digestOfCanonical(struct {
-				Resource GitResource
+				Resource NativeResource
 				Mirror   string
 			}{r, mirror})
 		case "op.cleanup":
@@ -2790,7 +2795,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 			for i := range targets {
 				targets[i].Role, targets[i].Source, targets[i].Identity, targets[i].Status, targets[i].MirrorDigest = "", "", "", "", ""
 			}
-			slices.SortFunc(targets, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
+			slices.SortFunc(targets, func(a, b NativeResource) int { return strings.Compare(a.ID, b.ID) })
 			correlation = "cleanup:" + digestOfCanonical(targets)
 		}
 		if err := state.admitNativeSigning(HostActionIntent{Correlation: correlation}); err != nil {

@@ -40,7 +40,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	s := &State{
 		RunID: "delivery", NativeRoot: t.TempDir(), BaseSnapshot: "base-identity", InitialSnapshot: "initial-identity",
 		Validation:   &Validation{RequirementRevision: "rev-1", Generation: 1},
-		GitResources: map[string]GitResource{}, DispatchBindings: map[string]WorkBinding{},
+		NativeResources: map[string]NativeResource{}, DispatchBindings: map[string]WorkBinding{},
 		Decisions: map[string]RecordedDecision{"route": {Control: ControlSelectRoute, Revision: 5,
 			Review: &ReviewDecisionPayload{Route: &RouteDecision{DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "readiness", Digest: planContractDigest(plan)}}}}},
 		Results: map[string]WorkerResult{"readiness": {ActionID: "readiness", Outcome: OutcomePass,
@@ -55,7 +55,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 		t.Fatalf("ordinary members lost their shared delivery resource: %+v %+v", got, delivery)
 	}
 	spike.Status, spike.Identity = "READY", "observed-spike-identity"
-	s.GitResources[spike.ID], s.GitResources[delivery.ID] = spike, delivery
+	s.NativeResources[spike.ID], s.NativeResources[delivery.ID] = spike, delivery
 	if got := s.taskResource(spikeTask, cd); got != spike {
 		t.Fatal("repeat selection replaced the registered native fact")
 	}
@@ -91,7 +91,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	if newSpikeTask == spikeTask || newSpike.ID == spike.ID || newSpike.ID == newDelivery.ID || newSpike.Source != s.Validation.Candidate.Identity || s.taskResource(extensionTask, cd) != newDelivery {
 		t.Fatal("redo lost the spike business identity or shared delivery boundary")
 	}
-	if s.GitResources[spike.ID] != spike || s.GitResources[delivery.ID] != delivery {
+	if s.NativeResources[spike.ID] != spike || s.NativeResources[delivery.ID] != delivery {
 		t.Fatal("requirement decisions discarded outstanding native resources")
 	}
 }

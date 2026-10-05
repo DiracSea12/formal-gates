@@ -82,7 +82,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 				d.drive()
 				d.assertTargetUnchanged()
 				d.assertAbortedResources()
-				if _, ok := d.run.Termination.GitResources[spikeInput.Workspace.ID]; !ok || !reflect.DeepEqual(d.run.Termination.Results[spikeAction].Validation, &conclusion) {
+				if _, ok := d.run.Termination.NativeResources[spikeInput.Workspace.ID]; !ok || !reflect.DeepEqual(d.run.Termination.Results[spikeAction].Validation, &conclusion) {
 					t.Fatal("abort omitted the spike resource responsibility or its conclusion")
 				}
 				return
@@ -113,10 +113,10 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 				t.Fatal("spike-only completion produced a candidate or validation wave")
 			}
 			trace := string(readInstalledFile(t, d.breakLog))
-			if strings.Count(trace, "\tworktree\tadd\t") != len(state.GitResources) {
+			if strings.Count(trace, "\tworktree\tadd\t") != len(state.NativeResources) {
 				t.Fatalf("resource resume or concurrent drive repeated a native add:\n%s", trace)
 			}
-			for _, resource := range state.GitResources {
+			for _, resource := range state.NativeResources {
 				command := "\tworktree\tadd\t--detach\t" + resource.Path + "\t" + resource.Source + "\n"
 				if strings.Count(trace, command) != 1 {
 					t.Fatalf("native add differs from its unique registered path and source: %+v\n%s", resource, trace)
@@ -137,7 +137,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 						t.Fatal(err)
 					}
 					if evidence.Resource.ID == spikeInput.Workspace.ID {
-						found = receipt.ActionID == id && receipt.Status == protocol.HostActionStatusExecuted && evidence.Resource == state.GitResources[spikeInput.Workspace.ID] && evidence.ParametersDigest == receipt.PayloadDigest
+						found = receipt.ActionID == id && receipt.Status == protocol.HostActionStatusExecuted && evidence.Resource == state.NativeResources[spikeInput.Workspace.ID] && evidence.ParametersDigest == receipt.PayloadDigest
 					}
 				}
 				if !found {
@@ -171,17 +171,17 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			d.execute()
 			d.assertClean()
 			terminal := d.run.Termination
-			if terminal.GitResources[spikeInput.Workspace.ID].Status != "CLEANED" || !reflect.DeepEqual(terminal.Results[spikeAction].Validation, &conclusion) || d.p.git(t, "ls-tree", "--name-only", "HEAD", "--", "probe.go") != "" {
+			if terminal.NativeResources[spikeInput.Workspace.ID].Status != "CLEANED" || !reflect.DeepEqual(terminal.Results[spikeAction].Validation, &conclusion) || d.p.git(t, "ls-tree", "--name-only", "HEAD", "--", "probe.go") != "" {
 				t.Fatal("delivery or terminal cleanup lost spike isolation or its conclusion")
 			}
 			for _, receipt := range terminal.HostActionReceipts {
 				if receipt.AdapterOperation == "op.cleanup" {
 					var proof protocol.WorkspaceCleanupReceipt
-					if err := json.Unmarshal(installedJSON(t, receipt.AdapterEvidence.Values), &proof); err != nil || len(proof.Resources) != len(terminal.GitResources) {
+					if err := json.Unmarshal(installedJSON(t, receipt.AdapterEvidence.Values), &proof); err != nil || len(proof.Resources) != len(terminal.NativeResources) {
 						t.Fatal("cleanup receipt omitted an owned resource")
 					}
 					for _, resource := range proof.Resources {
-						if resource != terminal.GitResources[resource.ID] {
+						if resource != terminal.NativeResources[resource.ID] {
 							t.Fatal("cleanup evidence differs from the native resource registry")
 						}
 					}
@@ -320,7 +320,7 @@ func (d *candidateDriver) assertAbortedResources() {
 		d.t.Fatalf("abort retained an execution responsibility: %+v", d.run)
 	}
 	cleanupProofs := 0
-	for _, r := range state.GitResources {
+	for _, r := range state.NativeResources {
 		if _, err := os.Stat(r.Path); !os.IsNotExist(err) || d.p.git(d.t, "for-each-ref", "--format=%(objectname)", r.Ref) != "" {
 			d.t.Fatalf("aborted resource remains: %+v err=%v", r, err)
 		}
@@ -336,17 +336,17 @@ func (d *candidateDriver) assertAbortedResources() {
 			}
 			var proof protocol.WorkspaceCleanupReceipt
 			raw, err := json.Marshal(receipt.AdapterEvidence.Values)
-			if err != nil || json.Unmarshal(raw, &proof) != nil || proof.ParametersDigest != receipt.PayloadDigest || len(proof.Resources) != len(state.GitResources) {
+			if err != nil || json.Unmarshal(raw, &proof) != nil || proof.ParametersDigest != receipt.PayloadDigest || len(proof.Resources) != len(state.NativeResources) {
 				d.t.Fatal("cleanup receipt omitted its exact resource set")
 			}
 			for _, r := range proof.Resources {
-				if !reflect.DeepEqual(r, state.GitResources[r.ID]) {
+				if !reflect.DeepEqual(r, state.NativeResources[r.ID]) {
 					d.t.Fatal("cleanup proof differs from the final registry")
 				}
 			}
 		}
 	}
-	if len(state.GitResources) != 0 && cleanupProofs == 0 {
+	if len(state.NativeResources) != 0 && cleanupProofs == 0 {
 		d.t.Fatal("abort cleaned resources without a native cleanup receipt")
 	}
 	d.t.Logf("aborted native proof: %s", installedJSON(d.t, state))

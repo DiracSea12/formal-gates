@@ -125,7 +125,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 }
 
 func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIntent) (protocol.ResourceObservation, error) {
-	var resource protocol.GitResource
+	var resource protocol.NativeResource
 	var allowed []string
 	var integration *protocol.IntegrationParameters
 	var integrationBase string
@@ -140,24 +140,28 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return protocol.ResourceObservation{}, err
 		}
-		resource, allowed = s.GitResources[p.WorkspaceID], p.Paths
+		resource, allowed = s.NativeResources[p.WorkspaceID], p.Paths
 		integration, integrationBase = p.Integration, p.Base
 	}
-	if resource.ID == "" || s.GitResources[resource.ID] != resource {
+	if resource.ID == "" || s.NativeResources[resource.ID] != resource {
 		return protocol.ResourceObservation{}, fmt.Errorf("native observation has no original registered resource")
 	}
 	o := protocol.ResourceObservation{ParametersDigest: intent.PayloadDigest, Resource: resource}
-	trees, err := f.vcs.Worktrees()
+
+	var err error
+	o.WorktreeExists, err = f.vcs.WorkspaceExists(resource.Path, resource.Handle)
 	if err != nil {
 		return o, err
 	}
-	o.WorktreeExists = slices.ContainsFunc(trees, func(t vcs.Worktree) bool { return vcs.SamePath(t.Path, resource.Path) })
-	o.RefIdentity, err = f.vcs.Ref(resource.Ref)
-	if err != nil {
-		return o, err
+	if resource.Ref != "" {
+		o.RefIdentity, err = f.vcs.Ref(resource.Ref)
+		if err != nil {
+			return o, err
+		}
 	}
+
 	if o.WorktreeExists {
-		native := f.vcs.At(resource.Path)
+		native := f.vcs.At(resource.Path, resource.Handle)
 		var prefix protocol.PromotionObservation
 		var err error
 		if integration != nil {
@@ -173,11 +177,17 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 			if err != nil {
 				return o, err
 			}
-			mergeHead, err := native.MergeHead()
+
+			observation, err := native.ObserveIntegration(integrationBase, integration.Incoming)
 			if err != nil {
 				return o, err
 			}
-			o.Merge = &protocol.IntegrationEvidence{Prefix: integrationBase, Incoming: integration.Incoming, MergeHead: mergeHead, Index: entries}
+			mergeHead := ""
+			if native.Name() == "git" {
+				mergeHead = observation.Lineage
+			}
+			o.Merge = &protocol.IntegrationEvidence{Prefix: integrationBase, Incoming: integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: entries}
+
 		} else {
 			prefix, err = observeNativePrefix(native)
 		}
@@ -272,11 +282,11 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return nativeResult{}, false, err
 		}
-		r, ok := s.GitResources[p.Resource.ID]
+		r, ok := s.NativeResources[p.Resource.ID]
 		if !ok || r != p.Resource {
 			return nativeResult{}, false, fmt.Errorf("workspace intent is not the registered resource")
 		}
-		exists, err := f.observeWorktree(r.Path, r.Source)
+		exists, err := f.observeWorktree(r.Path, r.Source, r.Handle)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -286,7 +296,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			}
 			if err := f.admission.write(func() error {
 				invoked = true
-				return f.vcs.AddWorktree(r.Path, r.Source)
+				return f.vcs.CreateWorkspace(r.Path, r.Source, "formal-gates workspace "+s.RunID+" "+intent.ActionID+" "+intent.PayloadDigest, r.Handle)
 			}); err != nil {
 				return nativeResult{}, false, err
 			}
@@ -321,13 +331,23 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			}
 			r.MirrorDigest = protocol.BlackboxCasesDigest(s.RunID, *p.Manifest)
 		}
-		r.Identity = r.Source
+		r.Identity, err = f.vcs.At(r.Path, r.Handle).Resolve()
+		if err != nil {
+			return nativeResult{}, false, err
+		}
 		r.Status = "READY"
 		digest, err := f.vcs.TreeDigest(r.Identity)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		return nativeResult{Workspace: &protocol.WorkspaceEvidence{ParametersDigest: intent.PayloadDigest, Resource: r, Digest: digest}}, true, nil
+		sourceDigest, err := f.vcs.TreeDigest(r.Source)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if sourceDigest != digest {
+			return nativeResult{}, false, fmt.Errorf("native workspace does not preserve complete source values")
+		}
+		return nativeResult{Workspace: &protocol.WorkspaceEvidence{ParametersDigest: intent.PayloadDigest, Resource: r, Digest: digest, SourceDigest: sourceDigest}}, true, nil
 	case "op.candidate":
 		return f.candidateEvidence(s, intent, mayWrite, &invoked)
 	case "op.cleanup":
@@ -341,65 +361,58 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			return nativeResult{}, false, err
 		}
 		for i, r := range p.Resources {
-			registered, ok := s.GitResources[r.ID]
+			registered, ok := s.NativeResources[r.ID]
 			if !ok || registered != r {
 				return nativeResult{}, false, fmt.Errorf("cleanup intent does not match its registered resource")
 			}
-			trees, err := f.vcs.Worktrees()
+
+			absent, err := f.vcs.WorkspaceAbsent(r.Path, r.Handle)
 			if err != nil {
 				return nativeResult{}, false, err
 			}
-			exists := slices.ContainsFunc(trees, func(t vcs.Worktree) bool { return vcs.SamePath(t.Path, r.Path) })
-			if exists {
+			if !absent {
 				if !mayWrite {
 					return nativeResult{}, false, nil
 				}
 				if err := f.admission.write(func() error {
 					invoked = true
-					return f.vcs.RemoveWorktree(r.Path)
+					return f.vcs.CleanupWorkspace(r.Path, "formal-gates cleanup "+s.RunID+" "+intent.ActionID+" "+intent.PayloadDigest, r.Handle)
 				}); err != nil {
 					return nativeResult{}, false, err
 				}
 			}
-			ref, err := f.vcs.Ref(r.Ref)
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			if ref != "" {
-				if !mayWrite {
-					return nativeResult{}, false, nil
-				}
-				if err := f.admission.write(func() error {
-					invoked = true
-					return f.vcs.RemoveRef(r.Ref)
-				}); err != nil {
+			if r.Ref != "" {
+				ref, err := f.vcs.Ref(r.Ref)
+				if err != nil {
 					return nativeResult{}, false, err
 				}
-			}
-			trees, err = f.vcs.Worktrees()
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			ref, err = f.vcs.Ref(r.Ref)
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			if ref != "" || slices.ContainsFunc(trees, func(t vcs.Worktree) bool { return vcs.SamePath(t.Path, r.Path) }) {
-				return nativeResult{}, false, fmt.Errorf("native resource remains after cleanup: %s", r.Path)
+				if ref != "" {
+					if !mayWrite {
+						return nativeResult{}, false, nil
+					}
+					if err = f.admission.write(func() error { invoked = true; return f.vcs.RemoveRef(r.Ref) }); err != nil {
+						return nativeResult{}, false, err
+					}
+				}
 			}
 			if _, err := os.Stat(r.Path); err == nil {
 				if !mayWrite {
 					return nativeResult{}, false, nil
 				}
-				if err := f.admission.write(func() error {
-					invoked = true
-					return os.RemoveAll(r.Path)
-				}); err != nil {
+				if err = f.admission.write(func() error { invoked = true; return os.RemoveAll(r.Path) }); err != nil {
 					return nativeResult{}, false, err
 				}
 			} else if !os.IsNotExist(err) {
 				return nativeResult{}, false, err
 			}
+			absent, err = f.vcs.WorkspaceAbsent(r.Path, r.Handle)
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			if !absent {
+				return nativeResult{}, false, fmt.Errorf("native resource remains after cleanup")
+			}
+
 			r.Status = "CLEANED"
 			p.Resources[i] = r
 		}
@@ -407,27 +420,46 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	}
 	return nativeResult{}, false, nil
 }
-func (f *Facade) observeWorktree(path, identity string) (bool, error) {
-	trees, err := f.vcs.Worktrees()
+func (f *Facade) observeWorktree(path, identity string, handles ...vcs.WorkspaceHandle) (bool, error) {
+	h := vcs.WorkspaceHandle{}
+	if len(handles) != 0 {
+		h = handles[0]
+	}
+	exists, err := f.vcs.WorkspaceExists(path, h)
 	if err != nil {
 		return false, err
 	}
-	for _, tree := range trees {
-		if vcs.SamePath(tree.Path, path) {
-			if tree.Identity != identity {
-				return false, fmt.Errorf("workspace %s has identity %s, expected %s", path, tree.Identity, identity)
-			}
-			return true, nil
-		}
+	if !exists {
+		return false, nil
 	}
-	if _, err := os.Stat(path); err == nil {
-		return false, fmt.Errorf("unregistered directory occupies workspace %s", path)
-	} else if !os.IsNotExist(err) {
+	native := f.vcs.At(path, h)
+	actual, err := native.Resolve()
+	if err != nil {
 		return false, err
 	}
-	return false, nil
+	if f.vcs.Name() == "git" {
+		if actual != identity {
+			return false, fmt.Errorf("workspace identity differs from original source")
+		}
+	} else {
+		a, err := native.TreeDigest(actual)
+		if err != nil {
+			return false, err
+		}
+		b, err := native.TreeDigest(identity)
+		if err != nil {
+			return false, err
+		}
+		if a != b {
+			return false, fmt.Errorf("native workspace values differ from original source")
+		}
+	}
+	return true, nil
 }
 func (f *Facade) ensureRef(ref, identity string, mayWrite bool, invoked *bool) (bool, error) {
+	if ref == "" {
+		return true, nil
+	}
 	actual, err := f.vcs.Ref(ref)
 	if err != nil {
 		return false, err
@@ -476,7 +508,7 @@ func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParam
 		if err == nil {
 			// Committed candidate content remains authoritative when development also
 			// owns an intake artifact such as a source file.
-			entry, entryErr := f.vcs.At(p.Resource.Path).Entry("HEAD", artifact.Path)
+			entry, entryErr := f.vcs.At(p.Resource.Path, p.Resource.Handle).Entry("HEAD", artifact.Path)
 			if entryErr != nil {
 				return false, entryErr
 			}
@@ -526,16 +558,35 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	if p.Stage == "PROMOTION" {
 		return f.promotionEvidence(s, intent, mayWrite, invoked)
 	}
-	r, ok := s.GitResources[p.WorkspaceID]
+	r, ok := s.NativeResources[p.WorkspaceID]
 	if !ok || r.Status != "READY" {
 		return nativeResult{}, false, fmt.Errorf("candidate has no admitted native workspace")
 	}
-	native := f.vcs.At(r.Path)
+	native := f.vcs.At(r.Path, r.Handle)
 	head, err := native.Resolve()
 	if err != nil {
 		return nativeResult{}, false, err
 	}
 	message := "formal-gates candidate " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
+	if native.Name() != "git" {
+		observed, found, err := native.ObservedCommit(p.Base, message)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if found && observed != head {
+			if !mayWrite {
+				return nativeResult{}, false, nil
+			}
+			if err = f.admission.write(func() error { *invoked = true; return native.Synchronize(observed) }); err != nil {
+				return nativeResult{}, false, err
+			}
+			head, err = native.Resolve()
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+		}
+	}
+
 	completed := p.Stage == "AUTHORING" && head == p.Base
 	if head != p.Base {
 		observed, err := native.Message(head)
@@ -692,19 +743,13 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}); err != nil {
 			return nativeResult{}, false, err
 		}
-		tree, err := native.StagedTreeDigest()
+
+		pending, err := native.Pending(p.Base, "")
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		baseTree, err := native.TreeDigest(p.Base)
-		if err != nil {
-			return nativeResult{}, false, err
-		}
-		if tree != baseTree {
-			if err := f.admission.write(func() error {
-				*invoked = true
-				return native.Commit(message)
-			}); err != nil {
+		if !pending.Clean {
+			if err := f.admission.write(func() error { *invoked = true; return native.Commit(message) }); err != nil {
 				return nativeResult{}, false, err
 			}
 			head, err = native.Resolve()
@@ -712,6 +757,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				return nativeResult{}, false, err
 			}
 		}
+
 	}
 	if p.Stage != "AUTHORING" {
 		if err := native.VerifyReady(); err != nil {
@@ -722,22 +768,25 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	ref, err := f.vcs.Ref(r.Ref)
-	if err != nil {
-		return nativeResult{}, false, err
-	}
-	if ref != head {
-		if ref != "" && ref != p.Base {
-			return nativeResult{}, false, fmt.Errorf("candidate ref %s points to %s, expected its base %s or freeze %s", r.Ref, ref, p.Base, head)
-		}
-		if !mayWrite {
-			return nativeResult{}, false, nil
-		}
-		if err := f.admission.write(func() error {
-			*invoked = true
-			return f.vcs.Pin(r.Ref, head)
-		}); err != nil {
+
+	if r.Ref != "" {
+		ref, err := f.vcs.Ref(r.Ref)
+		if err != nil {
 			return nativeResult{}, false, err
+		}
+		if ref != head {
+			if ref != "" && ref != p.Base {
+				return nativeResult{}, false, fmt.Errorf("candidate ref %s points to %s, expected its base %s or freeze %s", r.Ref, ref, p.Base, head)
+			}
+			if !mayWrite {
+				return nativeResult{}, false, nil
+			}
+			if err := f.admission.write(func() error {
+				*invoked = true
+				return f.vcs.Pin(r.Ref, head)
+			}); err != nil {
+				return nativeResult{}, false, err
+			}
 		}
 	}
 	changes, err := native.Changes(p.Base, head)
@@ -815,15 +864,15 @@ func (f *Facade) ownershipAt(s *protocol.State, identity string) (map[string]boo
 	// A graph represents an immutable commit only when HEAD and all delivery
 	// bytes match it. Mutable authoring workspaces cannot prove base ownership.
 	providers := []*vcs.Provider{f.vcs}
-	ids := make([]string, 0, len(s.GitResources))
-	for id := range s.GitResources {
+	ids := make([]string, 0, len(s.NativeResources))
+	for id := range s.NativeResources {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
-		r := s.GitResources[id]
+		r := s.NativeResources[id]
 		if r.Status == "READY" && !s.ResourceCleanupPending(r.ID) {
-			providers = append(providers, f.vcs.At(r.Path))
+			providers = append(providers, f.vcs.At(r.Path, r.Handle))
 		}
 	}
 	for _, native := range providers {

@@ -26,7 +26,7 @@ func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
 		return func() error { return nil }, nil
 	}
 	if f.vcs == nil {
-		return nil, fmt.Errorf("engine terminal: regular run %q has no git provider for snapshot verification", f.runID)
+		return nil, fmt.Errorf("engine terminal: regular run %q has no native VCS provider for snapshot verification", f.runID)
 	}
 	head, err := f.vcs.Resolve()
 	if err != nil {
@@ -73,7 +73,7 @@ func (f *Facade) acquireNativeWindow() (func(), error) {
 // candidate. Observation and execution use the same handler as Drive recovery.
 func (f *Facade) PrepareCandidate(message string) (string, error) {
 	if f.vcs == nil {
-		return "", fmt.Errorf("candidate promotion requires a regular run with a git provider")
+		return "", fmt.Errorf("candidate promotion requires a regular run with a native VCS provider")
 	}
 	unlock, err := f.acquireNativeWindow()
 	if err != nil {
@@ -153,10 +153,10 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 				return "", fmt.Errorf("promotion target drifted from its accepted delivery %s to %s", expected, observed.Head)
 			}
 			if !observed.Clean {
-				return "", fmt.Errorf("promotion target has unsubmitted git changes")
+				return "", fmt.Errorf("promotion target has unsubmitted native changes")
 			}
 		}
-		for _, r := range s.GitResources {
+		for _, r := range s.NativeResources {
 			if r.Role == "candidate" && r.Identity == source.Identity && r.Status == "READY" && !s.ResourceCleanupPending(r.ID) {
 				p.SourceWorkspace = r.ID
 				break
@@ -209,26 +209,68 @@ func observeNativePrefix(native *vcs.Provider) (protocol.PromotionObservation, e
 	if o.Tree, err = native.TreeDigest(head); err != nil {
 		return o, err
 	}
-	if o.IndexTree, err = native.StagedTreeDigest(); err != nil {
-		return o, err
-	}
-	if o.Changes, err = native.Changes(head, o.IndexTree); err != nil {
-		return o, err
-	}
-	status, err := native.Status()
+
+	pending, err := native.Pending(head, "")
 	if err != nil {
 		return o, err
 	}
-	o.Clean = status == ""
-	if !o.Clean {
-		o.StagedOnly, err = native.StagedOnly()
+	if native.Name() == "git" {
+		o.IndexTree = pending.Fingerprint
+	} else {
+		o.PendingFingerprint = pending.Fingerprint
 	}
+	o.Changes, o.Clean, o.StagedOnly = pending.Changes, pending.Clean, pending.Tracked
+
 	return o, err
 }
 
 // promotionPrefix accepts only the signed initial state or exact native
 // prefixes whose entries and organization are explained by this responsibility.
 func (f *Facade) promotionPrefix(p protocol.PromotionParameters) (protocol.PromotionObservation, error) {
+	if f.vcs.Name() != "git" {
+		o, err := f.observePromotion()
+		if err != nil {
+			return o, err
+		}
+		digest, err := f.vcs.TreeDigest(p.Source)
+		if err != nil {
+			return o, err
+		}
+		if digest != p.SourceDigest {
+			return o, fmt.Errorf("promotion source values differ from verified candidate")
+		}
+		if err = f.vcs.IsAncestorOrEqual(p.TargetBase, o.Head); err != nil {
+			return o, err
+		}
+		pending, err := f.vcs.Pending(p.TargetStart.Head, p.Source)
+		if err != nil {
+			return o, err
+		}
+		if o.Head == p.TargetStart.Head {
+			expected, err := f.vcs.Changes(p.TargetStart.Head, p.Source)
+			if err != nil {
+				return o, err
+			}
+			for _, change := range pending.Changes {
+				if !slices.ContainsFunc(expected, func(e vcs.Change) bool { return e.Path == change.Path }) {
+					return o, fmt.Errorf("promotion has an unexplained native change: %s", change.Path)
+				}
+			}
+			if !pending.Clean && (!pending.Tracked || !pending.Prefix) {
+				return o, fmt.Errorf("promotion has unopened or untracked changes")
+			}
+			return o, nil
+		}
+		message, err := f.vcs.Message(o.Head)
+		if err != nil {
+			return o, err
+		}
+		if message != p.Message || !o.Clean || o.Tree != p.SourceDigest {
+			return o, fmt.Errorf("native promotion does not prove the issued operation")
+		}
+		return o, nil
+	}
+
 	o, err := f.observePromotion()
 	if err != nil {
 		return o, err
@@ -303,6 +345,10 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, fmt.Errorf("promotion has no typed parameters")
 	}
 	p := *params.Promotion
+	if f.vcs.Name() != "git" {
+		return f.nativePromotionEvidence(s, intent, params, mayWrite, invoked)
+	}
+
 	o, err := f.promotionPrefix(p)
 	if err != nil {
 		if latest, exists := s.PromotionIntent(); exists && latest.ActionID != intent.ActionID {
@@ -332,11 +378,11 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 			return nativeResult{}, false, fmt.Errorf("native responsibility has no current execution allowance")
 		}
 		if p.SourceWorkspace != "" {
-			r, ok := s.GitResources[p.SourceWorkspace]
+			r, ok := s.NativeResources[p.SourceWorkspace]
 			if !ok || r.Identity != p.Source || r.Status != "READY" || s.ResourceCleanupPending(r.ID) {
 				return nativeResult{}, false, fmt.Errorf("promotion source workspace is not available")
 			}
-			native := f.vcs.At(r.Path)
+			native := f.vcs.At(r.Path, r.Handle)
 			if err := native.VerifyReady(); err != nil {
 				return nativeResult{}, false, err
 			}
@@ -419,7 +465,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 			return nativeResult{}, false, fmt.Errorf("promotion final native tree is incomplete")
 		}
 	}
-	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: "git", SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
+	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
 	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
 }
 
@@ -427,7 +473,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 // artifacts. Native workflow resources are created and owned by Drive.
 func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if f.vcs == nil {
-		return fmt.Errorf("QA worktree registration requires a regular run with a git provider")
+		return fmt.Errorf("QA worktree registration requires a regular run with a native VCS provider")
 	}
 	snap, err := f.engine.Load()
 	if err != nil {
@@ -441,11 +487,11 @@ func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if err != nil {
 		return err
 	}
-	resolved, err := vcs.New(worktree, f.vcsRunner).Resolve()
+	resolved, err := f.vcs.At(worktree).Resolve()
 	if err != nil {
 		return fmt.Errorf("cannot resolve QA isolation worktree: %w", err)
 	}
-	if !strings.EqualFold(resolved, snap.State.BaseSnapshot) {
+	if resolved != snap.State.BaseSnapshot {
 		return fmt.Errorf("QA isolation worktree native identity %s does not match the base snapshot %s", resolved, snap.State.BaseSnapshot)
 	}
 	receipt := snap.State.IntakeConfirmationReceipt
@@ -490,4 +536,69 @@ func requirementContentRevision(data []byte) string {
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	sum := sha256.Sum256([]byte(normalized))
 	return hex.EncodeToString(sum[:])
+}
+
+// Native promotion materializes the verified full value through the same
+// candidate operation and receipt admission. Immutable values are read after
+// submit, including a submit whose process response was lost.
+func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.HostActionIntent, params protocol.CandidateParameters, mayWrite bool, invoked *bool) (nativeResult, bool, error) {
+	p := *params.Promotion
+	head, err := f.vcs.Resolve()
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	observed, found, err := f.vcs.ObservedCommit(p.TargetStart.Head, p.Message)
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	if found && observed != head {
+		if !mayWrite {
+			return nativeResult{}, false, nil
+		}
+		if err = f.admission.write(func() error { *invoked = true; return f.vcs.Synchronize(observed) }); err != nil {
+			return nativeResult{}, false, err
+		}
+	}
+	o, err := f.promotionPrefix(p)
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	complete := o.Clean && o.Tree == p.SourceDigest
+	if !complete {
+		if !mayWrite {
+			return nativeResult{}, false, nil
+		}
+		changes, err := f.vcs.Changes(p.TargetStart.Head, p.Source)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		if err = f.admission.write(func() error { *invoked = true; return f.vcs.ApplyArtifact(p.Source, paths) }); err != nil {
+			return nativeResult{}, false, err
+		}
+		pending, err := f.vcs.Pending(p.TargetStart.Head, p.Source)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if !pending.Equal {
+			return nativeResult{}, false, fmt.Errorf("native promotion pending values differ from candidate")
+		}
+		if !pending.Clean {
+			if err = f.admission.write(func() error { *invoked = true; return f.vcs.Commit(p.Message) }); err != nil {
+				return nativeResult{}, false, err
+			}
+		}
+		o, err = f.observePromotion()
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if !o.Clean || o.Tree != p.SourceDigest {
+			return nativeResult{}, false, fmt.Errorf("native promotion final values differ from candidate")
+		}
+	}
+	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
+	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
 }

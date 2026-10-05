@@ -107,8 +107,8 @@ func TestNativeWorkspaceObservationDistinguishesIncompleteAndConflict(t *testing
 			if err := os.WriteFile(filepath.Join(root, ".gates", "requirements.md"), []byte(body), 0644); err != nil {
 				t.Fatal(err)
 			}
-			r := protocol.GitResource{ID: "workspace", Owner: "run", Role: "blackbox-design", Path: path, Ref: "refs/formal-gates/run/workspace", Source: base, Status: "PLANNED"}
-			s := &protocol.State{RunID: "run", GitResources: map[string]protocol.GitResource{r.ID: r}, IntakeConfirmationReceipt: &protocol.IntakeConfirmationReceipt{Artifacts: []protocol.IntakeArtifact{{Path: ".gates/requirements.md", Revision: fmt.Sprintf("%x", sha256.Sum256([]byte(body)))}}}}
+			r := protocol.NativeResource{ID: "workspace", Owner: "run", Role: "blackbox-design", Path: path, Ref: "refs/formal-gates/run/workspace", Source: base, Status: "PLANNED"}
+			s := &protocol.State{RunID: "run", NativeResources: map[string]protocol.NativeResource{r.ID: r}, IntakeConfirmationReceipt: &protocol.IntakeConfirmationReceipt{Artifacts: []protocol.IntakeArtifact{{Path: ".gates/requirements.md", Revision: fmt.Sprintf("%x", sha256.Sum256([]byte(body)))}}}}
 			params := protocol.WorkspaceParameters{Resource: r}
 			if prefix != "requirement" {
 				if err := os.MkdirAll(filepath.Join(path, ".gates"), 0755); err != nil {
@@ -187,7 +187,7 @@ func TestNativeOwnershipRejectsMutableGraphAsImmutableSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("source=%s authoring HEAD=%s dirty graph status=%s", base, git("-C", authoring, "rev-parse", "HEAD"), git("-C", authoring, "status", "--porcelain"))
-	s := &protocol.State{GitResources: map[string]protocol.GitResource{"authoring": {ID: "authoring", Owner: "run", Role: "whitebox-authoring", Path: authoring, Source: base, Identity: base, Status: "READY"}}}
+	s := &protocol.State{NativeResources: map[string]protocol.NativeResource{"authoring": {ID: "authoring", Owner: "run", Role: "whitebox-authoring", Path: authoring, Source: base, Identity: base, Status: "READY"}}}
 	f := &Facade{root: root, vcs: vcs.New(root, vcs.ExecRunner{})}
 	owned, err := f.ownershipAt(s, base)
 	t.Logf("ownership at exact immutable source=%v err=%v", owned, err)
@@ -222,8 +222,8 @@ func TestNativeUnchangedFreezeObservedWithoutWrites(t *testing.T) {
 	base := git("rev-parse", "HEAD")
 	ref := "refs/formal-gates/run/candidate"
 	git("update-ref", ref, base)
-	r := protocol.GitResource{ID: "candidate", Owner: "run", Role: "development", Path: root, Ref: ref, Source: base, Identity: base, Status: "READY"}
-	s := &protocol.State{RunID: "run", GitResources: map[string]protocol.GitResource{r.ID: r}}
+	r := protocol.NativeResource{ID: "candidate", Owner: "run", Role: "development", Path: root, Ref: ref, Source: base, Identity: base, Status: "READY"}
+	s := &protocol.State{RunID: "run", NativeResources: map[string]protocol.NativeResource{r.ID: r}}
 	p := protocol.CandidateParameters{Stage: "DEVELOPMENT", WorkspaceID: r.ID, Base: base, Paths: []string{"input.txt"}}
 	params, err := evidenceFields(p)
 	if err != nil {
@@ -305,9 +305,9 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 				}
 				paths = []string{"old_test.go"}
 			}
-			r := protocol.GitResource{ID: "authoring", Owner: "ownership", Role: "whitebox-authoring", Path: path, Ref: "refs/formal-gates/ownership/authoring", Source: base, Identity: base, Status: "READY"}
+			r := protocol.NativeResource{ID: "authoring", Owner: "ownership", Role: "whitebox-authoring", Path: path, Ref: "refs/formal-gates/ownership/authoring", Source: base, Identity: base, Status: "READY"}
 			git(root, "update-ref", r.Ref, base)
-			s := &protocol.State{RunID: "ownership", GitResources: map[string]protocol.GitResource{r.ID: r}}
+			s := &protocol.State{RunID: "ownership", NativeResources: map[string]protocol.NativeResource{r.ID: r}}
 			params, err := evidenceFields(protocol.CandidateParameters{Stage: "QA_ARTIFACT", WorkspaceID: r.ID, Base: base, Paths: paths})
 			if err != nil {
 				t.Fatal(err)

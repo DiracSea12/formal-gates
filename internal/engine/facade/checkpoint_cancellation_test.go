@@ -97,7 +97,7 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 						t.Fatal("active payload survived cancellation", name, err)
 					}
 				}
-				for _, resource := range run.Termination.GitResources {
+				for _, resource := range run.Termination.NativeResources {
 					if _, err := os.Stat(resource.Path); !errors.Is(err, os.ErrNotExist) {
 						t.Fatal("child worktree survived cancellation", resource.Path, err)
 					}
@@ -105,7 +105,7 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 						t.Fatal("child ref survived cancellation", resource.Ref)
 					}
 				}
-				resource := parent.GitResources[plan.ResourceID]
+				resource := parent.NativeResources[plan.ResourceID]
 				if _, err := os.Stat(resource.Path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("child target survived cancellation", err)
 				}

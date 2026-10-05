@@ -14,7 +14,7 @@ type ValidationInput struct {
 	// RequirementDocument supplies the current confirmed context alongside
 	// the original issued work binding, including explicitly carried work.
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
-	Workspace                *GitResource                            `json:"workspace,omitempty"`
+	Workspace                *NativeResource                            `json:"workspace,omitempty"`
 	Interruption             *RecoveryRecord                         `json:"interruption,omitempty"`
 	Gate                     *GateInput                              `json:"gate,omitempty"`
 	InheritableSharedReviews []coverage.ReviewDecision               `json:"inheritableSharedReviews,omitempty"`
@@ -57,7 +57,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	mode := s.validationMode(pending.Task)
 	role := s.validationRole(pending.Task, cd)
 	input := ValidationInput{Binding: binding, Handler: role, RequirementDocument: s.Validation.Document}
-	if r, ok := s.GitResources[binding.WorkspaceID]; ok {
+	if r, ok := s.NativeResources[binding.WorkspaceID]; ok {
 		input.Workspace = &r
 	}
 	for i := len(s.RecoveryRecords) - 1; i >= 0; i-- {

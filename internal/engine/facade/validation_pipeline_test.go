@@ -1040,3 +1040,8 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	run, err := f.project()
 	return f, run, err
 }
+
+func (r *frozenGitRepo) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	out, err := r.Run(dir, command, args...)
+	return []byte(out), err
+}

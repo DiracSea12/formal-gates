@@ -15,7 +15,14 @@ import (
 // Worktree is the native registration, rather than a directory-existence claim.
 type Worktree struct{ Path, Identity string }
 
-func (p *Provider) At(root string) *Provider { return New(root, p.runner) }
+func (p *Provider) At(root string, handles ...WorkspaceHandle) *Provider {
+	child := *p
+	child.root = root
+	if len(handles) != 0 {
+		child.handle = handles[0]
+	}
+	return &child
+}
 
 func (p *Provider) Worktrees() ([]Worktree, error) {
 	out, err := p.runner.Run(p.root, "git", "worktree", "list", "--porcelain")
@@ -62,6 +69,9 @@ func (p *Provider) FastForward(identity string) error {
 	return err
 }
 func (p *Provider) Message(identity string) (string, error) {
+	if p.name != "git" {
+		return p.nativeMessage(identity)
+	}
 	out, err := p.runner.Run(p.root, "git", "show", "-s", "--format=%B", identity)
 	return strings.TrimSpace(out), err
 }
@@ -75,6 +85,9 @@ func nulPaths(out string) []string {
 	return paths
 }
 func (p *Provider) ChangedPaths() ([]string, error) {
+	if p.name != "git" {
+		return p.nativeChangedPaths()
+	}
 	tracked, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
 	if err != nil {
 		return nil, err
@@ -90,7 +103,7 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 	paths := append(nulPaths(tracked), nulPaths(staged)...)
 	for _, path := range nulPaths(untracked) {
 		runtime := false
-		for _, dir := range runtimeGitStatusDirs {
+		for _, dir := range runtimeStatusDirs {
 			runtime = runtime || strings.HasPrefix(path, dir)
 		}
 		if !runtime {
@@ -104,6 +117,9 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 // Track stages only declared differences between the working files and index.
 // An artifact's already staged removal or addition is an observed prefix.
 func (p *Provider) Track(paths []string) error {
+	if p.name != "git" {
+		return p.nativeTrack(paths)
+	}
 	if len(paths) == 0 {
 		return nil
 	}
@@ -128,6 +144,9 @@ func (p *Provider) Track(paths []string) error {
 // ApplyArtifact uses Git's tree checkout, including executable and symlink modes.
 // Missing entries are removals; both endpoints of a rename are declared paths.
 func (p *Provider) ApplyArtifact(identity string, paths []string) error {
+	if p.name != "git" {
+		return p.nativeApply(identity, paths)
+	}
 	for _, path := range paths {
 		working, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", identity, "--", path)
 		if err != nil {
@@ -220,21 +239,30 @@ func (p *Provider) InputOwnership() (map[string]bool, error) {
 }
 
 func (p *Provider) Entry(identity, path string) (string, error) {
+	if p.name != "git" {
+		entries, err := p.TreeEntries(identity)
+		return entries[path], err
+	}
 	return p.runner.Run(p.root, "git", "ls-tree", identity, "--", path)
 }
 
 // Change is the complete native tree entry transition. Rename endpoints are
 // represented as a deletion and addition so neither path can be omitted.
 type Change struct {
-	Path       string `json:"path"`
-	Kind       string `json:"kind"`
-	BaseMode   string `json:"baseMode"`
-	Mode       string `json:"mode"`
-	BaseObject string `json:"baseObject"`
-	Object     string `json:"object"`
+	Path         string `json:"path"`
+	Kind         string `json:"kind"`
+	BaseMode     string `json:"baseMode"`
+	Mode         string `json:"mode"`
+	BaseObject   string `json:"baseObject"`
+	Object       string `json:"object"`
+	BaseMetadata string `json:"baseMetadata,omitempty"`
+	Metadata     string `json:"metadata,omitempty"`
 }
 
 func (p *Provider) Changes(base, identity string) ([]Change, error) {
+	if p.name != "git" {
+		return p.nativeChanges(base, identity)
+	}
 	out, err := p.runner.Run(p.root, "git", "diff", "--raw", "--no-abbrev", "--no-renames", "-z", base, identity, "--")
 	if err != nil {
 		return nil, err

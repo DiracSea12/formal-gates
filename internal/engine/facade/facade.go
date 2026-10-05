@@ -66,6 +66,8 @@ const (
 // for diagnostics and is always set to "engine" by Start. MasterRunID and
 // SliceID bind Controller-created children; public Start creates top-level runs.
 type StartRequest struct {
+	VCS                       string                    `json:"vcs,omitempty"`
+	NativeHandle              vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
 	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
 	Route                     string                    `json:"route"`
@@ -117,7 +119,7 @@ type Run struct {
 	// PromotedSnapshot 是终态晋升绑定的候选快照（validation 完成后经
 	// PrepareCandidate 落账）。
 	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
-	// QAWorktree projects the current blackbox design resource; GitResources
+	// QAWorktree projects the current blackbox design resource; NativeResources
 	// retains its cleanup ownership after this role is retired.
 	QAWorktree                string                     `json:"qaWorktree,omitempty"`
 	IntakeConfirmationReceipt *IntakeConfirmationReceipt `json:"intakeConfirmationReceipt,omitempty"`
@@ -502,15 +504,16 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		nativeRoot = root
 	}
 	if req.Route == "regular" && sliceStart == nil {
-		vcsProvider = vcs.New(nativeRoot, options.VCSRunner)
+		vcsProvider = vcs.NewNative(nativeRoot, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
 		current, err := vcsProvider.Resolve()
 		if err != nil {
 			return nil, Run{}, err
 		}
-		if err := vcsProvider.Verify(req.BaseSnapshot); err != nil {
+		boundBase, err := vcsProvider.BindIdentity(req.BaseSnapshot)
+		if err != nil {
 			return nil, Run{}, err
 		}
-		req.BaseSnapshot = strings.ToLower(strings.TrimSpace(req.BaseSnapshot))
+		req.BaseSnapshot = boundBase
 		if err := vcsProvider.IsAncestorOrEqual(req.BaseSnapshot, current); err != nil {
 			return nil, Run{}, fmt.Errorf("base snapshot %s: %w", req.BaseSnapshot, err)
 		}
@@ -674,7 +677,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission)}, nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -689,7 +692,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		if err != nil {
 			return nil, Run{}, err
 		}
-		vcsProvider = vcs.New(nativeRoot, options.VCSRunner)
+		vcsProvider = vcs.NewNative(nativeRoot, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
 	} else if err := initializeRun(eng, root, req, initialSnapshot, nil, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -832,12 +835,12 @@ func Open(root, runID string) (*Facade, error) {
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission)}, nil)
 	if err != nil {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenVCSProvider(nativeRoot, req.Route)}, nil
+	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(nativeRoot, req)}, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -1042,7 +1045,7 @@ func (f *Facade) sealDelivered() error {
 // worktree and its baseline ancestry. Both seal and child checkpoint use it.
 func (f *Facade) verifyDelivered() (string, string, error) {
 	if f.vcs == nil {
-		return "", "", fmt.Errorf("engine delivery: regular run %q has no git provider for delivery verification", f.runID)
+		return "", "", fmt.Errorf("engine delivery: regular run %q has no native VCS provider for delivery verification", f.runID)
 	}
 	snap, err := f.engine.Load()
 	if err != nil {
@@ -1068,7 +1071,7 @@ func (f *Facade) verifyDelivered() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if count > 1 {
+	if f.vcs.Name() == "git" && count > 1 {
 		return "", "", fmt.Errorf("engine delivery: native delivery requires at most one commit")
 	}
 	tree, err := f.vcs.TreeDigest(head)
@@ -1470,11 +1473,15 @@ func terminalSummaryPath(stateDir string) string {
 // reopenVCSProvider 是重开 run 的 provider 构造：regular 路线用生产 exec
 // runner（重开没有注入替身的通道，exec 是唯一合法生产形态）；lightweight 无
 // VCS 语义，返回 nil。
-func reopenVCSProvider(root, route string) *vcs.Provider {
+func reopenVCSProvider(root, route string, names ...string) *vcs.Provider {
 	if route != "regular" {
 		return nil
 	}
-	return vcs.New(root, nil)
+	name := "git"
+	if len(names) != 0 {
+		name = names[0]
+	}
+	return vcs.NewNative(root, name, nil)
 }
 
 func terminalIntentPath(stateDir string) string {
@@ -2124,4 +2131,12 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 // DevelopmentPlan projects the exact proposal and bindings for route confirmation.
 func (f *Facade) DevelopmentPlan(route protocol.RouteDecision) (*protocol.DevelopmentPlanPreview, error) {
 	return f.engine.DevelopmentPlan(route)
+}
+
+func reopenNativeProvider(root string, req StartRequest) *vcs.Provider {
+	p := reopenVCSProvider(root, req.Route, req.VCS)
+	if p == nil {
+		return nil
+	}
+	return p.At(root, req.NativeHandle)
 }

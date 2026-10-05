@@ -199,7 +199,7 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 		if err != nil || json.Unmarshal(raw, &p) != nil || !s.resourceUsable(p.Resource.ID) {
 			return false
 		}
-		r := s.GitResources[p.Resource.ID]
+		r := s.NativeResources[p.Resource.ID]
 		return r.Owner == p.Resource.Owner && r.Path == p.Resource.Path && r.Ref == p.Resource.Ref && r.Source == p.Resource.Source
 	case "op.cleanup":
 		return s.cleanupStarted(cd)
@@ -228,7 +228,7 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 	if p.Stage == "DEVELOPMENT" {
 		sources, paths, base, complete := s.developmentSources(cd)
 		if s.NativeRoot != "" && !s.mergeMaster() {
-			base = s.GitResources[p.WorkspaceID].Source
+			base = s.NativeResources[p.WorkspaceID].Source
 		}
 		if s.mergeMaster() {
 			set := v.Sets[coverage.ReviewMerge]
@@ -570,6 +570,9 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	if s.NativeRoot != "" {
 		r := s.candidateResource(params, cd)
 		params.WorkspaceID = r.ID
+		if s.NativeVCS() != "git" && r.Identity != "" && params.Integration == nil {
+			params.Base = r.Identity
+		}
 	}
 	return params, true, nil
 }

@@ -31,11 +31,13 @@ type MergeConflict struct {
 	Text    bool             `json:"text"`
 }
 type IntegrationEvidence struct {
-	Incoming  string           `json:"incoming"`
-	Prefix    string           `json:"prefix"`
-	MergeHead string           `json:"mergeHead,omitempty"`
-	Index     []vcs.IndexEntry `json:"index"`
-	Conflicts []MergeConflict  `json:"conflicts,omitempty"`
+	Incoming      string           `json:"incoming"`
+	Prefix        string           `json:"prefix"`
+	NativeLineage string           `json:"nativeLineage,omitempty"`
+	NativeStarted bool             `json:"nativeStarted,omitempty"`
+	MergeHead     string           `json:"mergeHead,omitempty"`
+	Index         []vcs.IndexEntry `json:"index"`
+	Conflicts     []MergeConflict  `json:"conflicts,omitempty"`
 }
 type ConflictResolution struct {
 	Paths   []string `json:"paths"`
@@ -68,12 +70,12 @@ type ChildGateView struct {
 func (s *State) mergeMaster() bool {
 	return s.SliceChild == nil && s.RouteMode == routeModeMerge && s.Topology != nil && s.Topology.Decision == topologySplit
 }
-func (s *State) integrationResource() GitResource {
+func (s *State) integrationResource() NativeResource {
 	if !s.mergeMaster() || s.ChildCreation == nil || s.Validation == nil {
-		return GitResource{}
+		return NativeResource{}
 	}
 	r := s.resource("merge", s.ChildCreation.Source, digestOfCanonical(s.Topology)+":"+strconv.FormatUint(s.Validation.Generation, 10))
-	if existing, ok := s.GitResources[r.ID]; ok {
+	if existing, ok := s.NativeResources[r.ID]; ok {
 		return existing
 	}
 	return r
@@ -111,7 +113,7 @@ func (s *State) integrationParameters(cd *compiler.CompiledDefinition) (Candidat
 	if ready != expected || expected == 0 {
 		return CandidateParameters{}, false
 	}
-	prefix := s.ChildCreation.Source
+	prefix := s.resourceStartIdentity(s.integrationResource())
 	for _, sliceID := range s.Topology.Slices {
 		if _, proof, complete := s.integrationReceipt("MERGE_FINISH", sliceID); complete {
 			prefix = proof.Identity
@@ -154,7 +156,7 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 		return nil, nil, "", false
 	}
 	var paths []string
-	prefix := s.ChildCreation.Source
+	prefix := s.resourceStartIdentity(s.integrationResource())
 	for _, sliceID := range s.Topology.Slices {
 		_, evidence, ok := s.integrationReceipt("MERGE_FINISH", sliceID)
 		if !ok {

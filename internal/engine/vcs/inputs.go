@@ -6,6 +6,9 @@ import (
 )
 
 func (p *Provider) TreeEntries(identity string) (map[string]string, error) {
+	if p.name != "git" {
+		return p.nativeEntries(identity)
+	}
 	out, err := p.runner.Run(p.root, "git", "ls-tree", "-r", "-z", identity)
 	if err != nil {
 		return nil, err

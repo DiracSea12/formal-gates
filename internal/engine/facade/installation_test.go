@@ -868,3 +868,7 @@ func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
 	}
 	release()
 }
+
+func (runner *admittedGitRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return runner.inner.RunRaw(dir, command, input, args...)
+}

@@ -42,7 +42,7 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 			if err := d.f.vcs.AddWorktree(workspace, source); err != nil {
 				t.Fatal(err)
 			}
-			original := protocol.WorkspaceParameters{RequirementRevision: d.revision, Resource: protocol.GitResource{Path: workspace, Source: source, Role: "development"}}
+			original := protocol.WorkspaceParameters{RequirementRevision: d.revision, Resource: protocol.NativeResource{Path: workspace, Source: source, Role: "development"}}
 			invoked := false
 			complete, err := d.f.injectRequirements(driverState(t, d), original, true, &invoked)
 			if err != nil || !complete || invoked == committed {
@@ -72,7 +72,7 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 			if err := d.f.vcs.AddWorktree(fresh, source); err != nil {
 				t.Fatal(err)
 			}
-			current := protocol.WorkspaceParameters{RequirementRevision: d.revision, Generation: state.Validation.Generation, Resource: protocol.GitResource{Path: fresh, Source: source, Role: "gate"}}
+			current := protocol.WorkspaceParameters{RequirementRevision: d.revision, Generation: state.Validation.Generation, Resource: protocol.NativeResource{Path: fresh, Source: source, Role: "gate"}}
 			invoked = false
 			complete, err = d.f.injectRequirements(state, current, false, &invoked)
 			if err != nil || complete != committed || invoked {

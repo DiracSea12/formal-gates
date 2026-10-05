@@ -274,3 +274,8 @@ type ownershipRunner func(string, string, ...string) (string, error)
 func (r ownershipRunner) Run(dir, command string, args ...string) (string, error) {
 	return r(dir, command, args...)
 }
+
+func (r ownershipRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	out, err := r.Run(dir, command, args...)
+	return []byte(out), err
+}

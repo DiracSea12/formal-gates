@@ -1,4 +1,4 @@
-// Package vcs owns native Git operations and their observed content identities.
+// Package vcs owns native repository operations and their observed content identities.
 package vcs
 
 import (
@@ -16,17 +16,24 @@ import (
 // An empty directory selects the calling process working directory.
 type Runner interface {
 	Run(dir, command string, args ...string) (string, error)
+	RunRaw(dir, command string, input []byte, args ...string) ([]byte, error)
 }
 
 // ExecRunner 是生产 runner：直接 exec，stderr 作错误详情。
 type ExecRunner struct{}
 
-func (ExecRunner) Run(dir, command string, args ...string) (string, error) {
+func (r ExecRunner) Run(dir, command string, args ...string) (string, error) {
+	body, err := r.RunRaw(dir, command, nil, args...)
+	return strings.TrimSpace(string(body)), err
+}
+
+func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
 	cmd := exec.Command(command, args...)
 	if cmd.Err != nil {
-		return "", fmt.Errorf("%s: %w", command, cmd.Err)
+		return nil, fmt.Errorf("%s: %w", command, cmd.Err)
 	}
 	cmd.Dir = dir
+	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -34,15 +41,18 @@ func (ExecRunner) Run(dir, command string, args ...string) (string, error) {
 		if detail == "" {
 			detail = err.Error()
 		}
-		return "", fmt.Errorf("%s: %s", command, detail)
+		return nil, fmt.Errorf("%s: %s", command, detail)
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.Bytes(), nil
 }
 
 // Provider 绑定一个工作区根并提供该工作区的快照操作。零值不可用；New 构造。
 type Provider struct {
-	root   string
-	runner Runner
+	root       string
+	configRoot string
+	name       string
+	handle     WorkspaceHandle
+	runner     Runner
 }
 
 // New 返回绑定 root 的 Git provider；runner 为 nil 时用 exec。
@@ -50,7 +60,7 @@ func New(root string, runner Runner) *Provider {
 	if runner == nil {
 		runner = ExecRunner{}
 	}
-	return &Provider{root: root, runner: runner}
+	return &Provider{root: root, configRoot: root, name: "git", runner: runner}
 }
 
 // Root 返回绑定的仓库根（登记制的隔离工作区各自构造 Provider）。
@@ -58,12 +68,12 @@ func (p *Provider) Root() string { return p.root }
 
 var gitIdentityPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
-// runtimeGitStatusDirs 是 formal-gates 的保留运行期目录（git status 路径形
-// 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先 gitignore 它
-// 们。判据是「谁创建」而非逐字镜像 legacy 清单——含引擎自身必建的
+// runtimeStatusDirs 是 formal-gates 的保留运行期目录（git status 路径形
+// 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先忽略它
+// 们。清单包含引擎自身必建的
 // .gates/engine/ run 目录。清单单源持有，逐路径豁免读这一份（.gates/
 // token-cap.json 是宿主维护的项目级配置，引擎只读不建，不属本清单）。
-var runtimeGitStatusDirs = []string{
+var runtimeStatusDirs = []string{
 	".gates/engine/", ".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
 }
 
@@ -71,6 +81,9 @@ var runtimeGitStatusDirs = []string{
 // --porcelain=v1 --untracked-files=all）。只剔运行期目录下的 "?? " 行；这些
 // 路径被跟踪后出现修改（非 "??" 行）仍照常作为未提交变更报告。
 func (p *Provider) Status() (string, error) {
+	if p.name != "git" {
+		return p.nativeStatus()
+	}
 	pending, err := p.runner.Run(p.root, "git", "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil {
 		return "", fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
@@ -85,7 +98,7 @@ func (p *Provider) VerifyReady() error {
 		return err
 	}
 	if strings.TrimSpace(pending) != "" {
-		return fmt.Errorf("unsubmitted git changes must be committed before recording a snapshot (including any untracked files that must be added)")
+		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot (including any untracked files that must be added)", p.name)
 	}
 	return nil
 }
@@ -97,6 +110,9 @@ func (p *Provider) VerifyReady() error {
 // --branch 变体：首行 "## " 头保证 XY 状态列不位于输出开头——共享 runner 会
 // 裁剪整个 stdout 的首尾空白，纯 " M" 行一旦居首会丢列。
 func (p *Provider) StagedOnly() (bool, error) {
+	if p.name != "git" {
+		return p.nativeTracked()
+	}
 	pending, err := p.runner.Run(p.root, "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all")
 	if err != nil {
 		return false, fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
@@ -116,6 +132,9 @@ func (p *Provider) StagedOnly() (bool, error) {
 
 // Resolve 返回当前 HEAD 的提交身份（40/64 位 hex，小写规范化）。
 func (p *Provider) Resolve() (string, error) {
+	if p.name != "git" {
+		return p.nativeResolve("")
+	}
 	if err := p.verifyRoot(); err != nil {
 		return "", err
 	}
@@ -133,6 +152,9 @@ func (p *Provider) Resolve() (string, error) {
 // Verify 校验 identity 是可复现的提交对象（rev-parse --verify <id>^{commit}
 // 且解析结果与 identity 相等）。
 func (p *Provider) Verify(identity string) error {
+	if p.name != "git" {
+		return p.nativeVerify(identity)
+	}
 	identity = strings.TrimSpace(identity)
 	if !gitIdentityPattern.MatchString(identity) {
 		return fmt.Errorf("invalid git snapshot identity %q", identity)
@@ -154,6 +176,9 @@ func (p *Provider) Verify(identity string) error {
 // 晋升共用的内容摘要原生形态——同一棵树经不同提交历史组织（squash）内容仍
 // 相等。
 func (p *Provider) TreeDigest(rev string) (string, error) {
+	if p.name != "git" {
+		return p.nativeDigest(rev)
+	}
 	if err := p.verifyRoot(); err != nil {
 		return "", err
 	}
@@ -172,6 +197,9 @@ func (p *Provider) TreeDigest(rev string) (string, error) {
 // 暂存树＝HEAD 提交的树；reset --soft 后 index 保留截链前内容——晋升入口以
 // 此分辨「reset 已完成、commit 未执行」的组织中断中间态。
 func (p *Provider) StagedTreeDigest() (string, error) {
+	if p.name != "git" {
+		return "", fmt.Errorf("%s has no immutable index tree", p.name)
+	}
 	if err := p.verifyRoot(); err != nil {
 		return "", err
 	}
@@ -188,6 +216,9 @@ func (p *Provider) StagedTreeDigest() (string, error) {
 
 // IsAncestorOrEqual 要求 ancestor 是 descendant 的祖先或与之相等。
 func (p *Provider) IsAncestorOrEqual(ancestor, descendant string) error {
+	if p.name != "git" {
+		return p.nativeAncestor(ancestor, descendant)
+	}
 	resolved, err := p.runner.Run(p.root, "git", "merge-base", ancestor, descendant)
 	if err != nil {
 		return fmt.Errorf("cannot resolve git ancestry of %s: %w", ancestor, err)
@@ -201,6 +232,9 @@ func (p *Provider) IsAncestorOrEqual(ancestor, descendant string) error {
 // CommitCount 统计 base..head 区间内的提交数（不含 base、含 head）；超过一个
 // 提交的区间才需要 squash。
 func (p *Provider) CommitCount(base, head string) (int, error) {
+	if p.name != "git" {
+		return p.nativeCount(base, head)
+	}
 	output, err := p.runner.Run(p.root, "git", "rev-list", "--count", base+".."+head)
 	if err != nil {
 		return 0, err
@@ -216,6 +250,9 @@ func (p *Provider) CommitCount(base, head string) (int, error) {
 // <base> 把整段差异压入暂存区，再以 message 重新提交；中间提交悬空（审计证据
 // 是恒等的最终树＋run 摘要）。
 func (p *Provider) SquashToBase(base, message string) error {
+	if p.name != "git" {
+		return fmt.Errorf("%s snapshots are not squashed", p.name)
+	}
 	if _, err := p.runner.Run(p.root, "git", "reset", "--soft", base); err != nil {
 		return fmt.Errorf("cannot squash: %w", err)
 	}
@@ -228,6 +265,13 @@ func (p *Provider) SquashToBase(base, message string) error {
 // TrackAll 把工作区当前变更全部纳入暂存（git add --all）：候选 freeze 的收口
 // 动作，语义＝把工作区当前变更全部纳入候选提交。
 func (p *Provider) TrackAll() error {
+	if p.name != "git" {
+		paths, err := p.ChangedPaths()
+		if err != nil {
+			return err
+		}
+		return p.Track(paths)
+	}
 	if _, err := p.runner.Run(p.root, "git", "add", "--all"); err != nil {
 		return fmt.Errorf("cannot stage working tree changes: %w", err)
 	}
@@ -236,6 +280,9 @@ func (p *Provider) TrackAll() error {
 
 // Commit records the exact staged tree with its bound operation message.
 func (p *Provider) Commit(message string) error {
+	if p.name != "git" {
+		return p.nativeCommit(message)
+	}
 	if _, err := p.runner.Run(p.root, "git", "commit", "-m", message); err != nil {
 		return fmt.Errorf("cannot commit: %w", err)
 	}
@@ -245,6 +292,14 @@ func (p *Provider) Commit(message string) error {
 // DiffNames 列出 base..head 的变更路径（每行一个，按 git 输出原序）：候选
 // freeze/promotion 据此描述候选包含的交付面。
 func (p *Provider) DiffNames(base, head string) ([]string, error) {
+	if p.name != "git" {
+		changes, err := p.Changes(base, head)
+		var paths []string
+		for _, c := range changes {
+			paths = append(paths, c.Path)
+		}
+		return paths, err
+	}
 	output, err := p.runner.Run(p.root, "git", "diff", "--name-only", base+".."+head)
 	if err != nil {
 		return nil, fmt.Errorf("cannot list changed paths %s..%s: %w", base, head, err)
@@ -256,6 +311,9 @@ func (p *Provider) DiffNames(base, head string) ([]string, error) {
 }
 
 func (p *Provider) verifyRoot() error {
+	if p.name != "git" {
+		return p.nativeRoot()
+	}
 	resolved, err := p.runner.Run(p.root, "git", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("cannot resolve git working root (the directory may not be a git working copy): %w", err)
@@ -291,7 +349,7 @@ func normalizeStatusPath(path string) string {
 }
 
 func isRuntimeStatusPath(path string) bool {
-	for _, dir := range runtimeGitStatusDirs {
+	for _, dir := range runtimeStatusDirs {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true
 		}

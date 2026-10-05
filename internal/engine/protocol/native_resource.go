@@ -14,39 +14,42 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
-// GitResource is the finite registry for this run's native worktrees and refs.
+// NativeResource is the finite registry for this run's native worktrees and refs.
 // Projections may retire a role while its resource remains owed to cleanup.
-type GitResource struct {
-	ID           string `json:"id"`
-	Owner        string `json:"owner"`
-	Role         string `json:"role"`
-	Path         string `json:"path"`
-	Ref          string `json:"ref"`
-	Source       string `json:"source"`
-	Identity     string `json:"identity,omitempty"`
-	Status       string `json:"status"`
-	MirrorDigest string `json:"mirrorDigest,omitempty"`
+type NativeResource struct {
+	ID           string              `json:"id"`
+	Handle       vcs.WorkspaceHandle `json:"handle,omitempty"`
+	Owner        string              `json:"owner"`
+	Role         string              `json:"role"`
+	Path         string              `json:"path"`
+	Ref          string              `json:"ref"`
+	Source       string              `json:"source"`
+	Identity     string              `json:"identity,omitempty"`
+	Status       string              `json:"status"`
+	MirrorDigest string              `json:"mirrorDigest,omitempty"`
 }
 type WorkspaceParameters struct {
 	RequirementRevision string                       `json:"requirementRevision"`
 	Generation          uint64                       `json:"generation"`
 	RouteScope          string                       `json:"routeScope"`
-	Resource            GitResource                  `json:"resource"`
+	Resource            NativeResource               `json:"resource"`
 	Manifest            *coverage.AcceptanceManifest `json:"manifest,omitempty"`
 }
 type WorkspaceEvidence struct {
-	ParametersDigest string      `json:"parametersDigest"`
-	Resource         GitResource `json:"resource"`
-	Digest           string      `json:"digest"`
+	ParametersDigest string         `json:"parametersDigest"`
+	Resource         NativeResource `json:"resource"`
+	Digest           string         `json:"digest"`
+	SourceDigest     string         `json:"sourceDigest,omitempty"`
 }
 type CleanupParameters struct {
-	Resources []GitResource `json:"resources"`
+	Resources []NativeResource `json:"resources"`
 }
 type WorkspaceCleanupReceipt struct {
-	ParametersDigest string        `json:"parametersDigest"`
-	Resources        []GitResource `json:"resources"`
+	ParametersDigest string           `json:"parametersDigest"`
+	Resources        []NativeResource `json:"resources"`
 }
 
 // ResourceObservation binds an abort withdrawal to the original native root,
@@ -54,14 +57,14 @@ type WorkspaceCleanupReceipt struct {
 type ResourceObservation struct {
 	Merge            *IntegrationEvidence  `json:"merge,omitempty"`
 	ParametersDigest string                `json:"parametersDigest"`
-	Resource         GitResource           `json:"resource"`
+	Resource         NativeResource        `json:"resource"`
 	WorktreeExists   bool                  `json:"worktreeExists"`
 	RefIdentity      string                `json:"refIdentity"`
 	Prefix           *PromotionObservation `json:"prefix,omitempty"`
 }
 
 func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceObservation) error {
-	if intent.Adapter == nil || o.ParametersDigest != intent.PayloadDigest || o.Resource.Owner != s.RunID || s.GitResources[o.Resource.ID] != o.Resource {
+	if intent.Adapter == nil || o.ParametersDigest != intent.PayloadDigest || o.Resource.Owner != s.RunID || s.NativeResources[o.Resource.ID] != o.Resource {
 		return validationError("withdrawal requires its original registered resource")
 	}
 	raw, _ := json.Marshal(intent.Adapter.Params)
@@ -83,7 +86,7 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 	default:
 		return validationError("resource withdrawal is not a workspace or candidate")
 	}
-	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "" && o.Merge == nil) {
+	if o.WorktreeExists != (o.Prefix != nil) || o.Prefix != nil && (o.Prefix.Head == "" || o.Prefix.Tree == "" || o.Prefix.IndexTree == "" && o.Prefix.PendingFingerprint == "" && o.Merge == nil) {
 		return validationError("resource withdrawal has no exact observed prefix")
 	}
 	if o.RefIdentity != "" && o.RefIdentity != o.Resource.Source && (o.Prefix == nil || o.RefIdentity != o.Prefix.Head) {
@@ -92,17 +95,22 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 	return nil
 }
 
-func (s *State) resource(role, source, scope string) GitResource {
+func (s *State) resource(role, source, scope string) NativeResource {
 	id := strings.TrimPrefix(digestOfCanonical(struct{ Role, Source, Scope string }{role, source, scope}), "sha256:")
-	return GitResource{ID: id, Owner: s.RunID, Role: role, Path: filepath.Join(s.NativeRoot, ".gates", "qa-isolation", s.RunID, id), Ref: "refs/formal-gates/" + s.RunID + "/" + id, Source: source, Status: "PLANNED"}
+	resource := NativeResource{ID: id, Owner: s.RunID, Role: role, Path: filepath.Join(s.NativeRoot, ".gates", "qa-isolation", s.RunID, id), Ref: "refs/formal-gates/" + s.RunID + "/" + id, Source: source, Status: "PLANNED"}
+	if s.NativeVCS() != "git" {
+		resource.Ref = ""
+		resource.Handle = vcs.PlanWorkspace(s.NativeVCS(), source, s.RunID, id)
+	}
+	return resource
 }
-func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinition) GitResource {
+func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinition) NativeResource {
 	if s.NativeRoot == "" || s.Validation == nil {
-		return GitResource{}
+		return NativeResource{}
 	}
 	for _, b := range s.DispatchBindings {
 		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.validationWorkCarryAuthorized("", b.Task)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
-			return s.GitResources[b.WorkspaceID]
+			return s.NativeResources[b.WorkspaceID]
 		}
 	}
 	role := s.validationRole(key, cd)
@@ -150,13 +158,13 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	case "engine.qa.review.rationale":
 		set := s.Validation.Sets[s.validationMode(key)]
 		if set == nil {
-			return GitResource{}
+			return NativeResource{}
 		}
 		return s.taskResource(set.DesignTask, cd)
 	case "engine.qa.execution", "engine.gate":
 		wave := s.currentValidationWave()
 		if wave == nil {
-			return GitResource{}
+			return NativeResource{}
 		}
 		source = wave.Candidate.Identity
 		scope = wave.ID
@@ -166,13 +174,13 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			role = "gate"
 		}
 	default:
-		return GitResource{}
+		return NativeResource{}
 	}
 	if source == "" {
-		return GitResource{}
+		return NativeResource{}
 	}
 	resource := s.resource(role, source, scope)
-	if existing, ok := s.GitResources[resource.ID]; ok && existing.Status != "CLEANED" && !s.ResourceCleanupPending(resource.ID) {
+	if existing, ok := s.NativeResources[resource.ID]; ok && existing.Status != "CLEANED" && !s.ResourceCleanupPending(resource.ID) {
 		return existing
 	}
 	return resource
@@ -184,7 +192,7 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 	r := s.taskResource(key, cd)
 	return s.resourceUsable(r.ID) && r.Status == "READY" && (s.validationRole(key, cd) != "engine.qa.review.rationale" || s.validationMode(key) != coverage.ReviewBlackbox || r.MirrorDigest == BlackboxCasesDigest(s.RunID, s.Validation.Sets[coverage.ReviewBlackbox].Manifest))
 }
-func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) GitResource {
+func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) NativeResource {
 	switch p.Stage {
 	case "MERGE_START", "MERGE_FINISH":
 		return s.integrationResource()
@@ -192,14 +200,14 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		if s.mergeMaster() && len(p.SourceTasks) == 0 {
 			return s.integrationResource()
 		}
-		var chosen GitResource
+		var chosen NativeResource
 		var latest uint64
 		for _, task := range p.SourceTasks {
 			if result := s.developmentResultRecord(task); result != nil {
 				issued := s.issuedRevisionOf(result.ActionID)
 				if issued >= latest {
 					latest = issued
-					chosen = s.GitResources[result.Validation.Binding.WorkspaceID]
+					chosen = s.NativeResources[result.Validation.Binding.WorkspaceID]
 				}
 			}
 		}
@@ -212,15 +220,15 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		for _, intent := range s.PendingHostActions {
 			original, err := candidateParameters(intent)
 			if err == nil && candidateCorrelation(original) == candidateCorrelation(p) && s.candidateContextCurrent(original) && s.resourceUsable(original.WorkspaceID) {
-				return s.GitResources[original.WorkspaceID]
+				return s.NativeResources[original.WorkspaceID]
 			}
 		}
 		return s.resource("candidate", p.Base, candidateCorrelation(p)+":"+strconv.FormatUint(s.Validation.Generation, 10))
 	}
-	return GitResource{}
+	return NativeResource{}
 }
-func (e *Engine) ensureWorkspace(s *State, r GitResource, nextRevision uint64) (bool, error) {
-	if r.ID == "" || s.GitResources[r.ID].Status == "CLEANED" || s.ResourceCleanupPending(r.ID) {
+func (e *Engine) ensureWorkspace(s *State, r NativeResource, nextRevision uint64) (bool, error) {
+	if r.ID == "" || s.NativeResources[r.ID].Status == "CLEANED" || s.ResourceCleanupPending(r.ID) {
 		return false, nil
 	}
 	params := WorkspaceParameters{Resource: r, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}
@@ -230,7 +238,7 @@ func (e *Engine) ensureWorkspace(s *State, r GitResource, nextRevision uint64) (
 			params.Manifest = &manifest
 		}
 	}
-	if existing, ok := s.GitResources[r.ID]; ok && existing.Status == "READY" && (params.Manifest == nil || existing.MirrorDigest == BlackboxCasesDigest(s.RunID, *params.Manifest)) {
+	if existing, ok := s.NativeResources[r.ID]; ok && existing.Status == "READY" && (params.Manifest == nil || existing.MirrorDigest == BlackboxCasesDigest(s.RunID, *params.Manifest)) {
 		return false, nil
 	}
 	for _, intent := range s.PendingHostActions {
@@ -245,10 +253,10 @@ func (e *Engine) ensureWorkspace(s *State, r GitResource, nextRevision uint64) (
 			}
 		}
 	}
-	if s.GitResources == nil {
-		s.GitResources = map[string]GitResource{}
+	if s.NativeResources == nil {
+		s.NativeResources = map[string]NativeResource{}
 	}
-	s.GitResources[r.ID] = r
+	s.NativeResources[r.ID] = r
 	intent, err := e.prepareAdapterIntent(s, nextRevision, "op.workspace", params, "")
 	if err != nil {
 		return false, err
@@ -306,6 +314,12 @@ func validateResourceReceipt(intent HostActionIntent, receipt HostActionReceipt)
 		}
 		expected := p.Resource
 		expected.Identity = expected.Source
+		if p.Resource.Handle.Source != "" {
+			expected.Identity = v.Resource.Identity
+			if expected.Identity == "" || v.SourceDigest == "" || v.SourceDigest != v.Digest {
+				return validationError("native workspace must preserve its source values")
+			}
+		}
 		expected.Status = "READY"
 		if p.Manifest != nil {
 			expected.MirrorDigest = BlackboxCasesDigest(expected.Owner, *p.Manifest)
@@ -348,7 +362,7 @@ func (e *Engine) applyResourceReceipt(s *State, intent HostActionIntent, receipt
 		applicable := s.nativeEffectApplicable(intent, e.cfg.Definition)
 		project := applicable && !s.abortRequested() && v.Resource.Role == "blackbox-design" && s.candidateInputsCurrent(intent, e.cfg.Definition)
 		if applicable {
-			s.GitResources[v.Resource.ID] = v.Resource
+			s.NativeResources[v.Resource.ID] = v.Resource
 		}
 		if project {
 			s.QAWorktree = v.Resource.Path
@@ -357,15 +371,15 @@ func (e *Engine) applyResourceReceipt(s *State, intent HostActionIntent, receipt
 		var v WorkspaceCleanupReceipt
 		_ = decodeAdapterValues(receipt, &v)
 		for _, r := range v.Resources {
-			if old, ok := s.GitResources[r.ID]; ok && old.Owner == r.Owner && old.Path == r.Path && old.Ref == r.Ref {
-				s.GitResources[r.ID] = r
+			if old, ok := s.NativeResources[r.ID]; ok && old.Owner == r.Owner && old.Path == r.Path && old.Ref == r.Ref {
+				s.NativeResources[r.ID] = r
 			}
 		}
 	}
 	return nil
 }
 func (s *State) ResourcesCleaned() bool {
-	for _, r := range s.GitResources {
+	for _, r := range s.NativeResources {
 		if r.Status != "CLEANED" {
 			return false
 		}
@@ -381,7 +395,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		p := s.CandidatePromotion
 		original, exists := s.hostIntent(p.OperationID)
 		params, err := candidateParameters(original)
-		authority = exists && err == nil && s.promotionAuthorized(params) && p.Provider == "git" && p.TargetRoot == s.NativeRoot && p.TargetBase == s.BaseSnapshot && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == p.SourceDigest
+		authority = exists && err == nil && s.promotionAuthorized(params) && p.Provider == s.NativeVCS() && p.TargetRoot == s.NativeRoot && p.TargetBase == s.BaseSnapshot && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == p.SourceDigest
 	}
 	if !authority {
 		return false
@@ -397,7 +411,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		}
 		valid := true
 		for _, r := range p.Resources {
-			valid = valid && r.Owner == s.RunID && s.GitResources[r.ID] == r
+			valid = valid && r.Owner == s.RunID && s.NativeResources[r.ID] == r
 		}
 		if valid {
 			return true
@@ -413,7 +427,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 		}
 		valid := true
 		for _, r := range proof.Resources {
-			registered, ok := s.GitResources[r.ID]
+			registered, ok := s.NativeResources[r.ID]
 			valid = valid && ok && r.Owner == s.RunID && r.Status == "CLEANED" && registered == r
 		}
 		if valid {
@@ -424,7 +438,7 @@ func (s *State) cleanupStarted(cd *compiler.CompiledDefinition) bool {
 }
 
 func (s *State) resourceUsable(id string) bool {
-	r, exists := s.GitResources[id]
+	r, exists := s.NativeResources[id]
 	return exists && r.Status != "CLEANED" && !s.ResourceCleanupPending(id)
 }
 
@@ -436,7 +450,7 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	if p.Resource.Role == "child-target" {
 		return s.creationWorkspaceCurrent(p)
 	}
-	if s.Validation == nil || s.abortRequested() || p.RequirementRevision != s.Validation.RequirementRevision || p.Generation != s.Validation.Generation || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || s.GitResources[p.Resource.ID] != p.Resource {
+	if s.Validation == nil || s.abortRequested() || p.RequirementRevision != s.Validation.RequirementRevision || p.Generation != s.Validation.Generation || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || s.NativeResources[p.Resource.ID] != p.Resource {
 		return false
 	}
 	if p.Resource.Role == "blackbox-design" {
@@ -469,7 +483,7 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 }
 
 func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
-	var expected []GitResource
+	var expected []NativeResource
 	for _, intent := range s.PendingHostActions {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup" {
 			continue
@@ -481,13 +495,13 @@ func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {
 		}
 		return digestOfCanonical(p) == digestOfCanonical(original)
 	}
-	for _, r := range s.GitResources {
+	for _, r := range s.NativeResources {
 		if r.Status != "CLEANED" {
 			expected = append(expected, r)
 		}
 	}
 	actual := slices.Clone(p.Resources)
-	order := func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) }
+	order := func(a, b NativeResource) int { return strings.Compare(a.ID, b.ID) }
 	slices.SortFunc(expected, order)
 	slices.SortFunc(actual, order)
 	return len(expected) != 0 && slices.Equal(actual, expected)
@@ -561,13 +575,13 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, children ...*State) er
 			return err
 		}
 	}
-	var resources []GitResource
-	for _, r := range s.GitResources {
+	var resources []NativeResource
+	for _, r := range s.NativeResources {
 		if r.Status != "CLEANED" {
 			resources = append(resources, r)
 		}
 	}
-	slices.SortFunc(resources, func(a, b GitResource) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(resources, func(a, b NativeResource) int { return strings.Compare(a.ID, b.ID) })
 	intent, err := e.prepareAdapterIntent(s, revision+1, "op.cleanup", CleanupParameters{Resources: resources}, "")
 	if err != nil {
 		return err
@@ -621,4 +635,22 @@ func (s *State) RequirementBarrierActive() bool { return s.requirementChangePend
 func BlackboxCasesDigest(runID string, m coverage.AcceptanceManifest) string {
 	sum := sha256.Sum256([]byte(BlackboxCasesMarkdown(runID, m)))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// The original workspace receipt owns the created native baseline. The
+// resource's current Identity advances with accepted candidate receipts.
+func (s *State) resourceStartIdentity(resource NativeResource) string {
+	if s.NativeVCS() == "git" {
+		return resource.Source
+	}
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.workspace" || receipt.Status != HostActionStatusExecuted {
+			continue
+		}
+		var proof WorkspaceEvidence
+		if decodeAdapterValues(receipt, &proof) == nil && proof.Resource.ID == resource.ID {
+			return proof.Resource.Identity
+		}
+	}
+	return resource.Source
 }

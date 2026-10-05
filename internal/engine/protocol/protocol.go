@@ -40,6 +40,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
 // RejectedError 是提交协议的全部可区分拒绝。Code 是封闭拒绝码，调用方
@@ -483,8 +484,10 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
-	NativeRoot   string                 `json:"nativeRoot,omitempty"`
-	GitResources map[string]GitResource `json:"gitResources,omitempty"`
+	VCSName         string                    `json:"vcsName,omitempty"`
+	NativeHandle    vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
+	NativeRoot      string                    `json:"nativeRoot,omitempty"`
+	NativeResources map[string]NativeResource `json:"nativeResources,omitempty"`
 	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
 	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
@@ -499,7 +502,7 @@ type State struct {
 	// 证内容」，不是任意一个原生身份。
 	PromotedDigest     string                     `json:"promotedDigest,omitempty"`
 	CandidatePromotion *CandidatePromotionReceipt `json:"candidatePromotion,omitempty"`
-	// QAWorktree projects the active blackbox design role. GitResources owns
+	// QAWorktree projects the active blackbox design role. NativeResources owns
 	// the native registration and cleanup obligation after the projection clears.
 	QAWorktree       string                      `json:"qaWorktree,omitempty"`
 	Validation       *Validation                 `json:"validation,omitempty"`
@@ -848,4 +851,11 @@ func (s *State) normalizeCollections() {
 	if s.Guard != nil && s.Guard.TokenCapStatus == "" {
 		s.Guard.TokenCapStatus = TokenCapUnavailable
 	}
+}
+
+func (s *State) NativeVCS() string {
+	if s.VCSName == "" {
+		return "git"
+	}
+	return s.VCSName
 }
