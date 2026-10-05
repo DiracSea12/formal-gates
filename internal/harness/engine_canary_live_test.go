@@ -2104,7 +2104,7 @@ func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) err
 		"stable state":     filepath.Join(stableHome, ".gates"),
 		"stable resources": filepath.Join(stableHome, ".formal-gates-resources"),
 	}
-	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
 		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
 			separate["stable "+key] = path
 		}
@@ -2159,6 +2159,8 @@ func (c *engineCanary) hostPaths() map[string]string {
 		"state":       filepath.Join(c.home, ".gates"),
 		"resources":   filepath.Join(c.home, ".formal-gates-resources"),
 		"log":         filepath.Join(hostRoot, "log"), "mailbox": filepath.Join(hostRoot, "mailbox"),
+
+		"sessionDatabase": filepath.Join(hostRoot, "cli", "db", "db.sqlite"),
 	}
 }
 
@@ -2197,7 +2199,9 @@ func (c *engineCanary) hostEnvironment() map[string]string {
 	environment := map[string]string{
 		"HOME": c.home, "USERPROFILE": c.home, "ZCODE_DATA_BASE_DIR": c.home,
 		"ZCODE_HOME": paths["host"], "ZCODE_STORAGE_DIR": paths["host"],
+		"ZCODE_SESSION_DB_PATH": paths["sessionDatabase"], "ZCODE_SESSION_DB": paths["sessionDatabase"],
 		"ZCODE_LOG_DIR": paths["log"], "ZCODE_MAILBOX_ROOT": paths["mailbox"],
+		"FORMAL_GATES_ZCODE_SCRIPT":                  script,
 		zcodeBuiltinCatalogueEnv:                     paths["catalogue"],
 		"ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE": bundled,
 		zcodePersonalConfigEnv:                       paths["personal"], zcodeCredentialHelperEnv: paths["credentials"],
