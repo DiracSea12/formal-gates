@@ -1940,6 +1940,13 @@ type nativeImplementation struct {
 }
 
 var nativeImplementations = map[string]nativeImplementation{
+	"claude": {
+		capture:         claudeCaptureBinding,
+		validateBinding: claudeValidateBinding,
+		verifySource:    claudeVerifySource,
+		reconcile:       claudeReconcile,
+		execute:         claudeExecute,
+	},
 	"dsh": {
 		capture:         dshCaptureBinding,
 		validateBinding: dshValidateBinding,
