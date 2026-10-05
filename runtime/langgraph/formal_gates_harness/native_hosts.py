@@ -95,12 +95,12 @@ class GoAdapter:
         # provider names its own (dsh's sandbox/tool plugin, zcode's credential
         # reader).
         return {'dsh': ('native_dsh.mjs',), 'zcode': ('zcode_credential.mjs',),
-                'claude': ()}[self.name]
+                'claude': (), 'cursor': ()}[self.name]
 
 
 # This lists execution implementations; installation aliases come from the host catalog.
 _ADAPTERS = {a.name: a for a in (
-    GoAdapter('dsh'), GoAdapter('zcode'), GoAdapter('claude'),
+    GoAdapter('dsh'), GoAdapter('zcode'), GoAdapter('claude'), GoAdapter('cursor'),
 )}
 
 def adapter_for(provider):

@@ -61,8 +61,9 @@ const (
 // disposition.go) and the runs terminal columns (the run's terminal
 // status and stop reason, below).  Every step is additive, so every
 // older version migrates forward for real, never by refusal.  Version 1
-// databases are refused outright below.
-const schemaVersion = 5
+// databases are refused outright below. Version 6 carries the exact source
+// job paired with the remembered execution identity.
+const schemaVersion = 6
 
 // Store is the durable state of one run plus exclusive ownership of its
 // directory.  Open acquires ownership, Close releases it; between the two,
@@ -455,6 +456,7 @@ const taskSessionsTable = `CREATE TABLE task_sessions (
 	run_id   TEXT NOT NULL,
 	task_id  TEXT NOT NULL,
 	identity TEXT NOT NULL,
+	source_job TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (run_id, task_id),
 	FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, task_id)
 )`
@@ -516,7 +518,7 @@ func migrate(db *sql.DB) error {
 		return nil
 	}
 	switch version {
-	case 0, 2, 3, 4:
+	case 0, 2, 3, 4, 5:
 		tx, err := db.Begin()
 		if err != nil {
 			return err
@@ -565,6 +567,15 @@ func migrate(db *sql.DB) error {
 					"ALTER TABLE runs ADD COLUMN %s %s", column[0], column[1])); err != nil {
 					return err
 				}
+			}
+		}
+		hasSource, err := txHasColumn(tx, "task_sessions", "source_job")
+		if err != nil {
+			return err
+		}
+		if !hasSource {
+			if _, err := tx.Exec("ALTER TABLE task_sessions ADD COLUMN source_job TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
 			}
 		}
 		// user_version is a transactional header write: a crash

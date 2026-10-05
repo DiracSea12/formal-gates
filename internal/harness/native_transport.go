@@ -66,7 +66,8 @@ type blockedError struct{ message string }
 func (e *blockedError) Error() string { return e.message }
 
 // sessionUnavailableError is the subclass of blockedError for "the host
-// explicitly rejected the persistent session identity". Identity and code keep
+// rejected the persistent session identity, or its saved native resource is absent".
+// Identity and code keep
 // the host's original JSON values (number, string or null) verbatim.
 type sessionUnavailableError struct {
 	blockedError

@@ -699,13 +699,19 @@ func (s *Store) answerRequest(ctx context.Context, tx *sql.Tx, id, choice string
 // An empty identity is not a fact worth remembering; callers use
 // ClearSession for that.
 func (s *Store) SetSession(ctx context.Context, taskID, identity string) error {
+	return s.SetSessionSource(ctx, taskID, identity, "")
+}
+
+// SetSessionSource remembers the identity and its exact original source job
+// in the same row. Restart deletes that row in its existing grant transaction.
+func (s *Store) SetSessionSource(ctx context.Context, taskID, identity, sourceJob string) error {
 	if identity == "" {
 		return s.ClearSession(ctx, taskID)
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO task_sessions (run_id, task_id, identity) VALUES (?,?,?)
-		ON CONFLICT (run_id, task_id) DO UPDATE SET identity=excluded.identity`,
-		s.runID, taskID, identity)
+		INSERT INTO task_sessions (run_id, task_id, identity, source_job) VALUES (?,?,?,?)
+		ON CONFLICT (run_id, task_id) DO UPDATE SET identity=excluded.identity, source_job=excluded.source_job`,
+		s.runID, taskID, identity, sourceJob)
 	return err
 }
 
@@ -721,12 +727,19 @@ func (s *Store) ClearSession(ctx context.Context, taskID string) error {
 // Session reads one task's remembered identity; "" means the next call
 // opens a fresh session.
 func (s *Store) Session(ctx context.Context, taskID string) (string, error) {
-	var identity string
-	err := s.db.QueryRowContext(ctx,
-		"SELECT identity FROM task_sessions WHERE run_id=? AND task_id=?",
-		s.runID, taskID).Scan(&identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+	identity, _, err := s.SessionSource(ctx, taskID)
 	return identity, err
+}
+
+// SessionSource reads the paired identity and original source reference;
+// absence means a fresh session, with no retained resource reference.
+func (s *Store) SessionSource(ctx context.Context, taskID string) (string, string, error) {
+	var identity, sourceJob string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT identity, source_job FROM task_sessions WHERE run_id=? AND task_id=?",
+		s.runID, taskID).Scan(&identity, &sourceJob)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return identity, sourceJob, err
 }

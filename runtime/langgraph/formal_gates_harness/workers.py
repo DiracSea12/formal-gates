@@ -26,13 +26,13 @@ class Workers:
         self.spec = store.manifest['spec']
         self.schema = store.bridge.call('schema', {})
     def run(self, role: str, workspace: Path, key_data: dict,
-            feedback: dict | None = None, session: str = '', attempt: int = 0, restart_session: bool = False) -> dict:
+            feedback: dict | None = None, session: str = '', attempt: int = 0, restart_session: bool = False, native_store: str = '') -> dict:
         if role not in ROLES: raise HarnessError('unknown role')
         series = digest({'role':role,'input':key_data,'feedback':feedback,'revision':self.store.manifest['revision']})
         key = digest({'series':series,'attempt':attempt})
         identity_receipt = self.store.directory/'native-identities'/f'{series}.json'
         if restart_session:
-            session = ''
+            session = ''; native_store = ''
         elif identity_receipt.exists():
             # The graph may replay with its original session argument after a
             # replacement failed. The same-series receipt is the latest identity,
@@ -43,6 +43,7 @@ class Workers:
             if latest.get('provider', self.spec['provider']) != self.spec['provider']:
                 raise HarnessError('SESSION_BINDING: provider changed')
             session = latest['identity']
+            native_store = latest.get('native_store', '')
             if not isinstance(session, str) or not session:
                 raise HarnessError('SESSION_BINDING: latest identity is empty')
         receipt = self.store.directory/'workers'/f'{key}.json'
@@ -108,12 +109,13 @@ class Workers:
             directory=self.store.directory/'jobs'/key;directory.mkdir(parents=True,exist_ok=True)
             native={'provider':adapter.name, 'binding':binding, 'workspace':str(workspace),'read_only':role not in ('development','repair'),
                 'identity':session,'model':self.spec['model'],'reasoning_effort':self.spec['reasoning_effort'],'prompt':prompt,'schema':self.schema}
+            if adapter.name == 'cursor' and session: native['native_store'] = native_store
             path=directory/'native-request.json'
             if path.exists():
                 original=read(path)
                 # Replay the original call even when it attached a session ID
                 # before the workflow result could be checkpointed.
-                if {k:v for k,v in original.items() if k!='identity'}!={k:v for k,v in native.items() if k!='identity'}:
+                if {k:v for k,v in original.items() if k not in ('identity', 'native_store')}!={k:v for k,v in native.items() if k not in ('identity', 'native_store')}:
                     raise HarnessError('native input changed for the same operation')
             else: atomic(path,native)
             process=self.store.job(key,{'kind':'native','argv':adapter.entry_argv(self.store.bridge.binary,str(directory)),

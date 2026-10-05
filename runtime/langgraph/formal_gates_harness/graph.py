@@ -66,11 +66,17 @@ class Flow:
     def invoke_worker(self, role: str, state: State, workspace: Path, feedback=None, session="") -> tuple[str, dict]:
         attempt = 0; continuation = 0; restart_session = False
         initial_feedback = feedback
+        native_store = ''
+        if session and state.get('development'):
+            original = self.store.get(state['development'])['source']
+            if original.get('identity') == session:
+                native_store = original.get('native_store', '')
         while True:
             key = {"run_id": state["run_id"], "round": state.get("round", 0),
                    "candidate": state.get("candidate", self.spec["base"]), "continuation": continuation}
             try:
                 options = {'restart_session': True} if restart_session else {}
+                if native_store: options['native_store'] = native_store
                 result = self.workers.run(role, workspace, key, feedback, session, attempt, **options)
             except SessionUnavailable as exc:
                 # The current identity cannot recover; don't offer a known-useless retry.
@@ -83,6 +89,7 @@ class Flow:
                 restart_session = decision == 'restart-session'
                 attempt += 1; continue
             session = result["source"].get("identity", session)
+            native_store = result['source'].get('native_store', '')
             restart_session = False
             action = self.store.bridge.call("worker-outcome", {"role": role, "status": result["result"]["status"],
                                                                "needs_repair": result["needs_repair"]})["action"]

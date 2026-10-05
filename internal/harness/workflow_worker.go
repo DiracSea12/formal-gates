@@ -336,7 +336,10 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 		return runner.Result{}, err
 	}
 	series := c.seriesKey(taskID, inv.Generation, brief)
-	identity := c.session(taskID)
+	identity, sourceJob, err := c.store.SessionSource(ctx, taskID)
+	if err != nil {
+		return runner.Result{}, err
+	}
 	initialFeedback := decodedFeedback(brief.Feedback)
 	if initialFeedback == nil {
 		// The stage's upstream evidence is derived here, at execution
@@ -385,7 +388,7 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 			if err != nil {
 				return runner.Result{}, fmt.Errorf("compose: binding for %s: %w", taskID, err)
 			}
-			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, materials); err != nil {
+			if err := c.writeNativeRequest(jobDir, brief, workspace, binding, identity, sourceJob, materials); err != nil {
 				return runner.Result{}, err
 			}
 			receipt, err := c.runSupervised(ctx, taskID, jobDir, "native", c.nativeJobArgv(jobDir), workspace, map[string]string{
@@ -422,6 +425,7 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 		if workerOutcome(workerOutcomeInput{
 			Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) == workerContinue {
 			identity = output.Identity
+			sourceJob = output.Job
 			initialFeedback = continuationFeedback(taskID, inv.Generation, brief, output, c.spec.revision)
 			continue
 		}
@@ -442,7 +446,7 @@ func (c *Compose) executeWorker(ctx context.Context, taskID string, inv runner.I
 // explicit new round drops it: a review retry, a repair round's gate
 // re-review (both in the route), a granted restart (in the kernel).
 func (c *Compose) settleWorkerResult(taskID string, generation int64, series string, brief workerBrief, output *workerOutput) (runner.Result, error) {
-	c.rememberSession(taskID, output.Identity)
+	c.rememberSession(taskID, output.Identity, output.Job)
 	switch workerOutcome(workerOutcomeInput{
 		Role: brief.Role, Status: output.Result.Status, NeedsRepair: output.NeedsRepair}) {
 	case workerContinue:
@@ -761,11 +765,11 @@ func (c *Compose) parkWithResult(taskID string, generation int64, attempt int, s
 // clears and every execution re-reads (session). A write failure is
 // swallowed: the cost of a lost identity is a fresh session on the next
 // call, never a failed settled turn.
-func (c *Compose) rememberSession(taskID, identity string) {
+func (c *Compose) rememberSession(taskID, identity, sourceJob string) {
 	if identity == "" {
 		return
 	}
-	_ = c.store.SetSession(context.Background(), taskID, identity)
+	_ = c.store.SetSessionSource(context.Background(), taskID, identity, sourceJob)
 }
 
 // errSessionRefused marks a turn the host refused on its persistent
@@ -1025,7 +1029,7 @@ func (c *Compose) materializeComparison(workspace, materialsDir, base, candidate
 // the caller's capture, the prompt from the role instruction, the bound
 // materials and the accepted result schema. Identity empty means a new
 // session; a continuation resumes the prior turn's.
-func (c *Compose) writeNativeRequest(jobDir string, brief workerBrief, workspace string, binding map[string]any, identity string, materials workerMaterials) error {
+func (c *Compose) writeNativeRequest(jobDir string, brief workerBrief, workspace string, binding map[string]any, identity, sourceJob string, materials workerMaterials) error {
 	prompt := workerPrompt(brief, materials, identity)
 	request := map[string]any{
 		"provider":  textOf(getOf(binding, "provider")),
@@ -1035,6 +1039,18 @@ func (c *Compose) writeNativeRequest(jobDir string, brief workerBrief, workspace
 		"identity":  identity,
 		"prompt":    prompt,
 		"schema":    plainWorkerSchema(),
+	}
+	if request["provider"] == "cursor" && identity != "" {
+		if sourceJob != "" {
+			source, err := readJSONFile(filepath.Join(c.dir, sourceJob, "source.json"))
+			if err != nil {
+				return err
+			}
+			if !valuesEqual(getOf(source, "identity"), identity) || !valuesEqual(getOf(source, "provider"), "cursor") {
+				return fmt.Errorf("compose: session source does not match its remembered identity")
+			}
+			request["native_store"] = getOf(source, "native_store")
+		}
 	}
 	return writeAtomicJSON(filepath.Join(jobDir, "native-request.json"), request)
 }
