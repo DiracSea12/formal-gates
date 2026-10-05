@@ -700,26 +700,10 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 				if master.run.Status != "ABORTING" {
 					t.Fatal("active worker bypassed termination")
 				}
-				for id, intent := range master.run.AdapterIntents {
-					if intent.Terminate == nil {
-						continue
-					}
-					if _, err := os.Stat(workerWorkspace); err != nil {
-						t.Fatal(err)
-					}
-					for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-						event, err := protocol.NewLifecycleEventEvent(master.eventID(), master.host(), intent.Terminate.Identity, edge)
-						if err != nil {
-							t.Fatal(err)
-						}
-						master.submit(event)
-					}
-					event, err := protocol.NewAgentHostActionReceiptEvent(master.eventID(), id, intent.Operation, master.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
-					if err != nil {
-						t.Fatal(err)
-					}
-					master.submit(event)
+				if _, err := os.Stat(workerWorkspace); err != nil {
+					t.Fatal(err)
 				}
+				master.completeWorkerTerminations()
 				master.drive()
 			}
 			if master.run.Status != "ABORTED" || master.run.Termination.Validation.Candidate != nil || len(master.run.Termination.PendingHostActions) != 0 {

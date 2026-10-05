@@ -394,16 +394,31 @@ func prepareChildFrontier(t *testing.T, master *validationDriver) *protocol.Stat
 		t.Fatal(err)
 	}
 	s := driverState(t, master)
-	workspaces := 0
+	workspaces := map[string]protocol.WorkspaceParameters{}
 	for _, intent := range s.PendingHostActions {
-		if intent.Step == "children.workspace" {
-			workspaces++
+		if intent.Step != "children.workspace" {
+			continue
 		}
+		if intent.Adapter == nil || intent.Adapter.Operation != "op.workspace" {
+			t.Fatal("child frontier lacks its workspace operation")
+		}
+		var params protocol.WorkspaceParameters
+		if err := decodeNativeParams(intent, &params); err != nil {
+			t.Fatal(err)
+		}
+		if _, duplicate := workspaces[params.Resource.ID]; duplicate {
+			t.Fatal("child frontier signed a resource twice")
+		}
+		workspaces[params.Resource.ID] = params
 	}
-	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || workspaces != len(s.Topology.Slices) {
+	if s.ChildCreation == nil || len(s.SliceChildren) != 0 || len(workspaces) != len(s.Topology.Slices) || len(workspaces) != len(s.ChildCreation.Children) {
 		t.Fatalf("preparing frontier: %+v", s.ChildCreation)
 	}
 	for _, plan := range s.ChildCreation.Children {
+		params, signed := workspaces[plan.ResourceID]
+		if !signed || params.Resource != s.NativeResources[plan.ResourceID] || params.Resource.Owner != s.RunID || params.Resource.Role != "child-target" || params.Resource.Source != s.ChildCreation.Source || params.RequirementRevision != s.ChildCreation.RequirementRevision {
+			t.Fatal("child frontier differs from its exact preparation/resource owner")
+		}
 		child, err := Open(master.f.root, plan.RunID)
 		if err != nil {
 			t.Fatal(err)
@@ -761,7 +776,7 @@ func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 			if _, known := state.State.SpawnReceipts[id]; known {
 				continue
 			}
-			event, err := protocol.NewSpawnReceiptWithFailureClass(protocol.EventID("unstarted-"+digestOf(id)), id, state.State.RunProvider, id, protocol.SpawnStatusFailed, "TRANSIENT_ENGINE_ERROR")
+			event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn:"+digestOf(id)), id, state.State.RunProvider, id, protocol.SpawnStatusSpawned)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -788,8 +803,13 @@ func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := child.Submit(decide); err != nil {
+	_, run, err = child.Submit(decide)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if state.State.SliceChild == nil {
+		host := &validationDriver{t: t, f: child, run: run, provider: state.State.RunProvider}
+		host.completeWorkerTerminations()
 	}
 	return decide
 }
@@ -972,23 +992,12 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 					for _, action := range actions[i] {
 						child.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: child.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "late-" + action, FailureClass: "TRANSIENT_ENGINE_ERROR"}})
 					}
-					for id, intent := range child.run.AdapterIntents {
+					for _, intent := range child.run.AdapterIntents {
 						if intent.Terminate == nil {
 							t.Fatal("parent cancellation signed business work")
 						}
-						for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-							event, err := protocol.NewLifecycleEventEvent(child.eventID(), child.host(), intent.Terminate.Identity, edge)
-							if err != nil {
-								t.Fatal(err)
-							}
-							child.submit(event)
-						}
-						event, err := protocol.NewAgentHostActionReceiptEvent(child.eventID(), id, intent.Operation, child.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
-						if err != nil {
-							t.Fatal(err)
-						}
-						child.submit(event)
 					}
+					child.completeWorkerTerminations()
 					master.drive()
 					if i != 0 {
 						if master.run.Status != "ABORTING" {

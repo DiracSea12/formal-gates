@@ -249,6 +249,36 @@ func (d *validationDriver) receipt(id string) {
 	}
 	d.submit(e)
 }
+
+// Termination evidence uses each signed intent's original worker identity.
+func (d *validationDriver) completeWorkerTerminations() {
+	d.t.Helper()
+	for {
+		var id string
+		var intent protocol.HostActionIntent
+		for action, candidate := range d.run.AdapterIntents {
+			if candidate.Terminate != nil {
+				id, intent = action, candidate
+				break
+			}
+		}
+		if id == "" {
+			return
+		}
+		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+			event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, edge)
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			d.submit(event)
+		}
+		event, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		d.submit(event)
+	}
+}
 func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 	d.t.Helper()
 	d.receipt(id)

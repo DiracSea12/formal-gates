@@ -28,24 +28,11 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 				if err := child.f.engine.CancelChild(driverState(t, master), emptyFingerprint()); err != nil {
 					t.Fatal(err)
 				}
-				transport := &checkpointCleanupInterruption{Runner: vcs.ExecRunner{}}
+				responseLost := errors.New("native cleanup response lost")
+				transport := &checkpointCleanupInterruption{Runner: vcs.ExecRunner{}, responseLost: responseLost}
 				child.f.vcs = vcs.New(child.f.vcs.Root(), transport)
-				panicked := false
-				func() {
-					defer func() {
-						if got := recover(); got != nil {
-							if got != "native cleanup response lost" {
-								panic(got)
-							}
-							panicked = true
-						}
-					}()
-					if _, err := child.f.Drive(); err != nil {
-						t.Fatal(err)
-					}
-				}()
-				if !panicked || len(transport.removed) != 1 {
-					t.Fatal("native cleanup did not reach the actual lost response")
+				if _, err := child.f.Drive(); !errors.Is(err, responseLost) || len(transport.removed) != 1 {
+					t.Fatal("native cleanup did not reach the actual lost response", err)
 				}
 				if _, err := os.Stat(transport.removed[0]); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("interruption preceded the cleanup side effect", err)
@@ -140,7 +127,8 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 // The interruption follows an actual successful worktree removal.
 type checkpointCleanupInterruption struct {
 	vcs.Runner
-	removed []string
+	removed      []string
+	responseLost error
 }
 
 func (r *checkpointCleanupInterruption) Run(dir, command string, args ...string) (string, error) {
@@ -148,7 +136,7 @@ func (r *checkpointCleanupInterruption) Run(dir, command string, args ...string)
 	if err == nil && command == "git" && len(args) == 4 && args[0] == "worktree" && args[1] == "remove" {
 		r.removed = append(r.removed, args[3])
 		if len(r.removed) == 1 {
-			panic("native cleanup response lost")
+			return out, r.responseLost
 		}
 	}
 	return out, err
