@@ -346,3 +346,76 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// A failed native call needs a positive effect observation to keep its writer.
+// An unavailable observation is UNKNOWN; a proven missing effect is FAILED.
+type nativeFailureObservationRunner struct {
+	inner       vcs.Runner
+	message     string
+	unavailable bool
+	failed      bool
+	commits     int
+}
+
+func (r *nativeFailureObservationRunner) Run(dir, command string, args ...string) (string, error) {
+	if command == "git" && len(args) == 3 && args[0] == "commit" && args[1] == "-m" && args[2] == r.message {
+		r.commits++
+		r.failed = true
+		return "", fmt.Errorf("fixture commit failed before its native effect")
+	}
+	if r.failed && r.unavailable {
+		return "", fmt.Errorf("fixture native observation unavailable")
+	}
+	return r.inner.Run(dir, command, args...)
+}
+
+func (r *nativeFailureObservationRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	if r.failed && r.unavailable {
+		return nil, fmt.Errorf("fixture native observation unavailable")
+	}
+	return r.inner.RunRaw(dir, command, input, args...)
+}
+
+func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unavailable=%t", unavailable), func(t *testing.T) {
+			root := t.TempDir()
+			identities := snapshotRepoCommits(t, root, "implementation", "verified candidate")
+			d := completePromotionPipeline(t, nil, root, identities[0])
+			runner := &nativeFailureObservationRunner{inner: vcs.ExecRunner{}, message: "bound organization", unavailable: unavailable}
+			d.f.vcsRunner = runner
+			d.f.vcs = vcs.New(root, runner)
+			if _, err := d.f.PrepareCandidate(runner.message); err == nil || !runner.failed || runner.commits != 1 {
+				t.Fatalf("native failure did not reach the exact commit input: %v", err)
+			}
+			state := driverState(t, d)
+			intent, pending := state.PromotionIntent()
+			if !pending || state.NativeActionWritable(intent, d.f.definition) {
+				t.Fatal("failed or UNKNOWN responsibility exposed a writer")
+			}
+			if unavailable {
+				if state.HostActionReceipts[intent.ActionID].Status != protocol.HostActionStatusUnknown || len(state.HostActionFailures[intent.ActionID]) != 0 {
+					t.Fatal("unavailable observation was declared a failed effect")
+				}
+			} else {
+				failures := state.HostActionFailures[intent.ActionID]
+				if len(failures) != 1 || failures[0].Status != protocol.HostActionStatusFailed || failures[0].FailureClass != "USER_ACTION_REQUIRED" {
+					t.Fatalf("proven missing effect has no original failure fact: %+v", failures)
+				}
+			}
+			d.reopen()
+			before, err := d.f.observePromotion()
+			if err != nil || before.Head != identities[0] || before.Clean || before.IndexTree != state.Validation.Candidate.Digest {
+				t.Fatalf("failed native call changed its expected prefix: %+v %v", before, err)
+			}
+			if _, err := d.f.PrepareCandidate(runner.message); err == nil {
+				t.Fatal("failed or UNKNOWN reentry executed without authorization")
+			}
+			d.drive()
+			after, err := d.f.observePromotion()
+			if err != nil || !reflect.DeepEqual(before, after) || driverState(t, d).DeliveryComplete(d.f.definition) {
+				t.Fatalf("failed reentry changed native bytes or admitted delivery: %+v %v", after, err)
+			}
+		})
+	}
+}

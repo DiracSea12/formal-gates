@@ -449,6 +449,9 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	return nativeResult{}, false, nil
 }
 func (f *Facade) incompleteWorkspaceEvidence(s *protocol.State, intent protocol.HostActionIntent, r protocol.NativeResource) (nativeResult, bool, error) {
+	if r.Status == "READY" {
+		return nativeResult{}, false, nil
+	}
 	message := "formal-gates workspace " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
 	identity, found, err := f.vcs.ObservedWorkspace(r.Path, r.Source, message, r.Handle)
 	if err != nil || !found {

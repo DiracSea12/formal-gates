@@ -332,8 +332,12 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 				if proof.Source != candidate || proof.SourceDigest != digest || proof.FinalDigest != digest || lost && proof.OperationID != original.ActionID {
 					t.Fatalf("promotion did not preserve the original candidate/operation: %+v", proof)
 				}
+				retained := state.ReconciledEffects[proof.OperationID].Intent
+				if retained == nil || retained.ActionID != proof.OperationID {
+					t.Fatal("promotion did not retain its settled original intent")
+				}
 				var params protocol.CandidateParameters
-				if err := decodeNativeParams(state.PendingHostActions[proof.OperationID], &params); err != nil || params.Promotion == nil {
+				if err := decodeNativeParams(*retained, &params); err != nil || params.Promotion == nil {
 					t.Fatalf("promotion has no original signed parameters: %v", err)
 				}
 				if len(runner.deliverySubmissions) != 1 || runner.deliverySubmissions[0] != params.Promotion.Message {
