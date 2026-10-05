@@ -9,13 +9,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"formal-gates/internal/cost"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/guard"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -23,13 +27,23 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-func receiptMaster(t *testing.T) *validationDriver {
+func receiptMaster(t *testing.T, owner ...OwnerBinding) *validationDriver {
 	t.Helper()
 	d := nativeMasterDriver(t)
 	meterReceiptDispatches(d, 3, 9, 4)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	if len(owner) != 0 {
+		child, _, err := createdSliceFacade(t, d.f, "lane-core", owner[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := child.engine.Load()
+		if err != nil || bound.State.RunID != child.runID || bound.State.OwnerTranscript != owner[0].Transcript || bound.State.OwnerProvider != owner[0].Provider || bound.State.OwnerStartedAt == "" || bound.State.OwnerBaseline == nil {
+			t.Fatal("child creation did not bind its actual owner interval", err)
+		}
+	}
 	d.drive()
 	return d
 }
@@ -65,11 +79,10 @@ func meterReceiptDispatches(d *validationDriver, hit, miss, output int64) {
 	d.f.engine = eng
 }
 
-func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string, owner OwnerBinding) *validationDriver {
+func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string) *validationDriver {
 	t.Helper()
 	options := sliceChildStart(master, childID, sliceID, sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = master.run.BaseSnapshot
-	options.Owner = owner
 	f, run, err := semanticValidationFacade(t, options)
 	if err != nil {
 		t.Fatal(err)
@@ -166,9 +179,10 @@ func assertMasterReceiptProjection(t *testing.T, master *validationDriver, own *
 	if err := json.Unmarshal(data, &stored); err != nil || stored.Envelope != master.f.envelope || !reflect.DeepEqual(stored.Content.SliceReceipts, state.SliceReceipts) || !reflect.DeepEqual(stored.Content.Cost, want) {
 		t.Fatalf("durable envelope/content differs: error=%v data=%s", err, data)
 	}
-	if !reflect.DeepEqual(state.Guard, own.Guard) {
-		t.Fatal("imported dispatch manufactured master request/attempt allowance")
+	if state.Guard.UsedRequests != own.Guard.UsedRequests || state.Guard.UsedRetries != own.Guard.UsedRetries || state.Guard.TokenCapStatus != own.Guard.TokenCapStatus || state.Guard.TokenCapMax != own.Guard.TokenCapMax || state.Guard.TokenCapDispatch != own.Guard.TokenCapDispatch || !reflect.DeepEqual(state.EndedAttempts, own.EndedAttempts) {
+		t.Fatal("imported dispatch changed the master's actual issued or billed work")
 	}
+	assertReceiptGuardBasis(t, master, state, receipts)
 	for _, query := range []func() (Run, error){master.f.Show, master.f.Status} {
 		run, err := query()
 		if err != nil || run.Status != "ACTIVE" || run.Next.Kind == decision.KindComplete || !reflect.DeepEqual(run.SliceReceipts, state.SliceReceipts) || !reflect.DeepEqual(run.SliceChildren, state.SliceChildren) {
@@ -185,15 +199,15 @@ func assertMasterReceiptProjection(t *testing.T, master *validationDriver, own *
 }
 
 func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *testing.T) {
-	master := receiptMaster(t)
-	own := driverState(t, master)
 	path := filepath.Join(t.TempDir(), "core-owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
-	core := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
+	own := driverState(t, master)
+	core := receiptChild(t, master, "core", "lane-core", "custom")
 	promoteReceiptChild(t, core)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	first := publishReceiptChild(t, core)
-	if *first.Receipt.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 17, InputCacheHitTokens: 2, InputCacheMissTokens: 15, OutputTokens: 8}) {
+	if first.Receipt.Cost.Owner == nil || *first.Receipt.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 17, InputCacheHitTokens: 2, InputCacheMissTokens: 15, OutputTokens: 8}) {
 		t.Fatal("owner fixture does not have the known transcript interval")
 	}
 	for _, entry := range first.Receipt.Cost.Dispatches {
@@ -201,7 +215,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 			t.Fatalf("child dispatch differs from its known transcript: %+v", entry)
 		}
 	}
-	tooling := receiptChild(t, master, "tooling", "lane-tooling", "custom", OwnerBinding{})
+	tooling := receiptChild(t, master, "tooling", "lane-tooling", "custom")
 	tooling.reopen()
 	promoteReceiptChild(t, tooling)
 	second := publishReceiptChild(t, tooling)
@@ -272,7 +286,7 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 	if len(driverState(t, master).SliceReceipts) != 0 || master.run.Status != "ACTIVE" {
 		t.Fatal("unclaimed slices did not wait")
 	}
-	child := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{})
+	child := receiptChild(t, master, "core", "lane-core", "custom")
 	master.drive()
 	if len(driverState(t, master).SliceReceipts) != 0 {
 		t.Fatal("unfinished child was accepted")
@@ -338,11 +352,11 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 	for _, point := range []persistence.FaultPoint{"", persistence.FaultIntentBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		t.Run(string(point), func(t *testing.T) {
-			master := receiptMaster(t)
-			own := driverState(t, master)
 			path := filepath.Join(t.TempDir(), "owner.jsonl")
 			writeTranscript(t, path, []string{intervalBaseLine})
-			child := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
+			master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
+			own := driverState(t, master)
+			child := receiptChild(t, master, "core", "lane-core", "custom")
 			promoteReceiptChild(t, child)
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			receipt := publishReceiptChild(t, child)
@@ -394,7 +408,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	master := receiptMaster(t)
 	own := driverState(t, master)
-	child := receiptChild(t, master, "core", "lane-core", "default", OwnerBinding{})
+	child := receiptChild(t, master, "core", "lane-core", "default")
 	quality, input := child.gateAction("quality")
 	child.business(quality, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "documented output order differs"}}})
 	security, input := child.gateAction("security")
@@ -439,7 +453,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 	for _, scope := range []string{"requirement", "topology", "route"} {
 		t.Run(scope, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{})
+			child := receiptChild(t, master, "core", "lane-core", "custom")
 			promoteReceiptChild(t, child)
 			child.drive()
 			receipt := readSliceReceipt(t, child)
@@ -516,5 +530,74 @@ func TestMasterDriveAcceptsThePublishedChildReceipt(t *testing.T) {
 	}
 	if got, accepted := projection.SliceReceipts[child.f.runID]; !accepted || !reflect.DeepEqual(got, receipt) {
 		t.Fatalf("master did not accept its claimed published child receipt: accepted=%v got=%+v", accepted, got)
+	}
+}
+
+// Receipt import changes selected gate evidence, while this waiting master has
+// one authorized merge design task and no issued validation work. Construct its
+// canonical basis from those confirmed inputs without the production calculator.
+func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *protocol.State, receipts []protocol.SliceReceipt) {
+	t.Helper()
+	canonicalDigest := func(value any) string {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(value); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("sha256:%x", sha256.Sum256(b.Bytes()))
+	}
+	gates := slices.Clone(state.SelectedGates)
+	slices.Sort(gates)
+	topologyDigest := canonicalDigest(state.Topology)
+	routeDigest := canonicalDigest(struct {
+		Route    string
+		Gates    []string
+		Topology *protocol.TopologyBinding
+	}{state.RouteMode, gates, state.Topology})
+	confirmed := func(id, revision string) guard.ConfirmedIdentity {
+		return guard.ConfirmedIdentity{Identity: guard.Identity{ID: id, Revision: revision}, ConfirmedRevision: revision}
+	}
+	basis := guard.Basis{
+		SchemaVersion: 1,
+		Requirement:   confirmed(state.IntakeConfirmationReceipt.RequirementSource, state.RequirementRevision()),
+		Batch:         confirmed("merge-topology", topologyDigest),
+		Route:         confirmed("merge", routeDigest),
+		Topology:      confirmed("split", topologyDigest),
+		Definition:    guard.Definition{Identity: guard.Identity{ID: definition.WorkflowDefinitionDigest, Revision: string(master.f.definition.Version)}, ExternalSteps: []runtime.TaskKey{}},
+		ApprovedQA:    []guard.Identity{}, SelectedGates: []guard.Identity{}, EstablishedObligations: []guard.Identity{}, EstablishedRepairs: []guard.Identity{}, ExternalTasks: []guard.ExternalTask{},
+	}
+	for _, gate := range gates {
+		basis.SelectedGates = append(basis.SelectedGates, guard.Identity{ID: gate, Revision: routeDigest})
+	}
+	for _, receipt := range receipts {
+		for _, gate := range receipt.Receipt.SelectedGates {
+			basis.SelectedGates = append(basis.SelectedGates, guard.Identity{ID: receipt.Receipt.SliceID + ":" + gate, Revision: receipt.Digest})
+		}
+	}
+	slices.SortFunc(basis.SelectedGates, func(a, b guard.Identity) int { return strings.Compare(a.ID, b.ID) })
+	attempts := 2
+	for _, step := range master.f.definition.Steps {
+		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
+			key := runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID}
+			basis.Definition.ExternalSteps = append(basis.Definition.ExternalSteps, key)
+			if payload.Handler == "engine.qa.design" {
+				if payload.Retry != nil {
+					attempts = payload.Retry.MaxAttempts
+				}
+				key.Scope = fmt.Sprintf("%d:MERGE:1:FULL", state.Validation.Generation)
+				basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.RouteSource, Identity: basis.Route.Identity}, MaxAttempts: &attempts})
+			}
+		}
+	}
+	slices.SortFunc(basis.Definition.ExternalSteps, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
+	encoded, err := json.Marshal(basis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := encoder.Digest(encoded)
+	if state.Guard.RequestAllowance != 1 || state.Guard.RetryAllowance != attempts-1 || state.Guard.TotalAllowance != attempts || state.Guard.BudgetBasisDigest != wantDigest {
+		t.Fatalf("master guard differs from confirmed merge task/receipt basis: got=%+v wantDigest=%s basis=%s", state.Guard, wantDigest, encoded)
 	}
 }

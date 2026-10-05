@@ -748,7 +748,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 	for _, window := range []string{"publish", "handoff", "discovery", "replay"} {
 		t.Run(window, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "child", "lane-core", "custom", OwnerBinding{})
+			child := receiptChild(t, master, "child", "lane-core", "custom")
 			for _, f := range []*Facade{master.f, child.f} {
 				req, err := f.request()
 				if err != nil {

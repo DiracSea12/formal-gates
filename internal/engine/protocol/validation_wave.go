@@ -79,7 +79,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 			}
 		}
 	}
-	if s.Validation != nil && s.Validation.DevelopmentSnapshot != "" && s.Validation.Candidate == nil {
+	if s.validationRequirementCurrent() && s.Validation.DevelopmentSnapshot != "" && s.Validation.Candidate == nil {
 		frozen := true
 		for _, mode := range s.validationKinds() {
 			if !s.caseSetReady(mode) {
@@ -92,7 +92,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 			}
 		}
 	}
-	if s.Validation != nil && s.currentValidationWave() != nil {
+	if s.validationRequirementCurrent() && s.currentValidationWave() != nil {
 		if err := s.validateCoverageRelations(); err != nil {
 			message = err.Error()
 		} else if waiting := s.executionScopePending(); waiting != "" {

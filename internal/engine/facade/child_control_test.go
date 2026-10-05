@@ -444,10 +444,10 @@ func TestMasterRequirementConfirmationCarriesChildOrigin(t *testing.T) {
 	}
 }
 func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
-	master := receiptMaster(t)
 	owner := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, owner, []string{intervalBaseLine})
-	child := receiptChild(t, master, "core", "lane-core", "custom", OwnerBinding{Transcript: owner, Provider: meteredProvider})
+	master := receiptMaster(t, OwnerBinding{Transcript: owner, Provider: meteredProvider})
+	child := receiptChild(t, master, "core", "lane-core", "custom")
 	promoteReceiptChild(t, child)
 	writeTranscript(t, owner, []string{intervalBaseLine, intervalDuringLine})
 	ready := publishReceiptChild(t, child)
@@ -593,7 +593,17 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 
 func TestTerminalMaterialsFinishBeforeSeal(t *testing.T) {
 	master, _ := mainlineChildren(t, "")
-	passMainlineTargets(t, master)
+	for len(master.run.ValidationInputs) > 0 {
+		submitMainlineTarget(t, master)
+		if master.run.Validation.Waves[len(master.run.Validation.Waves)-1].Status == "COMPLETE" {
+			break
+		}
+		master.drive()
+	}
+	beforeHandler := driverState(t, master)
+	if beforeHandler.Phase == runtime.PhaseTerminal || !beforeHandler.FinalValidationComplete(master.f.definition) {
+		t.Fatal("terminal fixture did not stop at the completed validation boundary")
+	}
 	path := filepath.Join(master.f.stateDir, "terminal-summary.json")
 	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)

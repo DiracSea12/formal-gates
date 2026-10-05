@@ -470,7 +470,7 @@ func (e *Engine) Load() (Snapshot, error) {
 // live dispatches retain their actual task identity, including replacement tasks.
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
-	view.Suspended = !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
+	view.Suspended = pipelineEnabled(s, compiled) && s.dualReviewPass() && !s.validationRequirementCurrent() || !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {

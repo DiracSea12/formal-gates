@@ -133,7 +133,7 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 			e.replayQuarantinedResults(s, "parent-change-declined", revision+1, expectedFingerprint)
 		}
 	}
-	if !pending && !s.resetPending() && s.Phase != runtime.PhaseSliceReady && parent.Validation != nil && parent.Validation.RequirementRevision == s.RequirementRevision() && s.Validation != nil && !s.validationRequirementCurrent() {
+	if !pending && !s.resetPending() && s.Phase != runtime.PhaseSliceReady && parent.validationRequirementCurrent() && parent.RequirementRevision() == s.RequirementRevision() && s.Validation != nil && !s.validationRequirementCurrent() {
 		observation := &OperatorObservationPayload{Subject: s.RequirementRevision(), Validation: &ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: s.RequirementRevision(), Document: parent.Validation.Document.Content}}
 		if err := e.acceptValidationObservation(s, observation, revision, revision+1); err != nil {
 			return err
