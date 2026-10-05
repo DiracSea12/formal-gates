@@ -32,6 +32,15 @@ package harness
 // existing forty-minute pass budget; EOF, denial and timeout fail the pass.
 // `go test` does not forward stdin to its test process, so it cannot approve
 // live calls. Ordinary test runs keep the live canary skipped.
+//
+// Before running, the operator prepares a disjoint ZCODE_DATA_BASE_DIR with
+// the native .zcode/v2 provider_config.json, setting.json, credentials.json
+// and runtime/provider/zcode-builtin.json. Account provisioning and selection
+// remain native host responsibilities. The same root carries HOME, CLI
+// storage, hooks, rules, installation and business resources. Shared Node and
+// app-server code are runtime files; the formal-gates launcher and helper
+// come from this private installation. jobs/host-isolation.json records the
+// canonical paths and actual install report without configuration contents.
 
 import (
 	"bufio"
@@ -56,6 +65,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
@@ -156,6 +166,8 @@ type engineCanary struct {
 	project        string
 	jobs           string
 	binding        map[string]any
+	installed      validate.InstallReport
+	stablePaths    map[string]string
 	deadline       time.Time
 	seq            int
 	approvalInput  *bufio.Reader
@@ -210,25 +222,39 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
-	// The test binary runs from the build cache, outside the repository tree,
-	// so dshHarnessRoot's executable walk cannot find the harness runtime and
-	// every model turn would fail its credential request. Point the root env
-	// at the real checkout (same derivation as supervisorBinary, same env as
-	// the dsh patch tests).
 	_, file, _, _ := runtime.Caller(0)
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", filepath.Dir(filepath.Dir(filepath.Dir(file))))
-	project := t.TempDir()
 	c := &engineCanary{
-		t: t, project: project, deadline: time.Now().Add(canaryRunBudget),
+		t: t, deadline: time.Now().Add(canaryRunBudget),
 		repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{},
 		approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: zcodeExecute,
+	}
+
+	stableHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stableHome); err != nil {
+		t.Fatal(err)
+	}
+	resources := filepath.Join(c.home, ".formal-gates-resources")
+	if err := os.MkdirAll(resources, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.project, err = os.MkdirTemp(resources, "engine-canary-")
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// The evidence directory survives the test so a failed pass keeps its
 	// dispatch receipts, native answers and source records.
 	dir := os.Getenv("FORMAL_GATES_ENGINE_CANARY_DIR")
 	if dir == "" {
-		dir = filepath.Join(os.TempDir(), fmt.Sprintf("formal-gates-engine-canary-%d", time.Now().UnixNano()))
+		dir = filepath.Join(c.home, "canary-evidence", fmt.Sprintf("engine-canary-%d", time.Now().UnixNano()))
+	}
+	for name, stablePath := range c.stablePaths {
+		if canaryPathWithin(stablePath, dir) || canaryPathWithin(dir, stablePath) {
+			t.Fatalf("canary evidence overlaps stable %s: %s", name, dir)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "jobs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -237,12 +263,6 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	t.Logf("engine canary evidence directory: %s", dir)
 
 	base := c.buildFixtureProject()
-
-	var err error
-	c.binding, err = zcodeCaptureBinding()
-	if err != nil {
-		t.Fatalf("capture zcode binding: %v", err)
-	}
 
 	// Intake binds the real artifact bytes: the requirement document is the
 	// requirement revision, the seeded frob source is the solution artifact.
@@ -265,7 +285,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
 	}
 	c.install(filepath.Dir(filepath.Dir(filepath.Dir(file))), base, receipt)
-	f, err := facade.Open(project, "engine-canary")
+	f, err := facade.Open(c.project, "engine-canary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1026,6 +1046,9 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 	c.t.Helper()
 	if time.Now().After(c.deadline) {
 		c.fail("canary exceeded its %s budget", canaryRunBudget)
+	}
+	if !canaryPathWithin(filepath.Join(c.home, ".formal-gates-resources"), workspace) {
+		c.fail("issued workspace is outside candidate resources: %s", workspace)
 	}
 	schema = c.plainSchema(actionID, schema)
 	var lastErr error
@@ -1969,7 +1992,10 @@ func (c *engineCanary) cli(input []byte, args ...string) []byte {
 	cmd := exec.Command(c.binary, args...)
 	cmd.Dir = c.project
 	cmd.Stdin = bytes.NewReader(input)
-	cmd.Env = append(os.Environ(), "HOME="+c.home, "USERPROFILE="+c.home, "AI_AGENT=", "CODEX_HOME=", "DSH_HOME=", "DSH_PROJECT_DIR=")
+	cmd.Env = os.Environ()
+	for key, value := range c.hostEnvironment() {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		c.fail("installed %v: %v %s", args, err, output)
@@ -1984,7 +2010,6 @@ func (c *engineCanary) readRun(command string) facade.Run {
 	return run
 }
 func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmationReceipt) {
-	c.home = c.t.TempDir()
 	c.binary = filepath.Join(c.home, ".local", "bin", "formal-gates")
 	if err := os.MkdirAll(filepath.Dir(c.binary), 0700); err != nil {
 		c.fail("binary directory: %v", err)
@@ -2016,13 +2041,197 @@ func (c *engineCanary) install(root, base string, intake facade.IntakeConfirmati
 		copyFile(filepath.Join(root, rel), filepath.Join(source, rel), os.FileMode(entry.Mode))
 	}
 	copyFile(c.binary, filepath.Join(source, "bin", "formal-gates"), 0755)
-	args := []string{"install", "--source", source, "--host", canaryProvider, "--scope", "global", "--binary-target", c.binary, "--force", "--skip-hooks"}
-	c.cli(nil, args...)
-	c.cli(nil, append(args, "--bootstrap")...)
+	args := []string{"install", "--source", source, "--host", canaryProvider, "--scope", "global", "--binary-target", c.binary, "--force"}
+	output := c.cli(nil, args...)
+	begin := bytes.IndexByte(output, '{')
+	if begin < 0 || json.Unmarshal(output[begin:], &c.installed) != nil || len(c.installed.Targets) != 1 {
+		c.fail("install returned no single target report: %s", output)
+	}
+	for name, data := range map[string][]byte{
+		"install.json":   output,
+		"bootstrap.json": c.cli(nil, append(args, "--bootstrap")...),
+	} {
+		if err := os.WriteFile(filepath.Join(c.jobs, name), data, 0o600); err != nil {
+			c.fail("save %s: %v", name, err)
+		}
+	}
+	if err := c.captureBinding(); err != nil {
+		c.fail("capture private zcode binding: %v", err)
+	}
 	path := filepath.Join(c.jobs, "intake.json")
 	data, _ := json.Marshal(intake)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		c.fail("intake: %v", err)
 	}
 	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--base-snapshot", base, "--intake-receipt", path)
+	if err := c.recordIsolation(); err != nil {
+		c.fail("candidate isolation proof: %v", err)
+	}
+}
+
+// prepareHome checks the operator's existing root before any installation or
+// binding. It observes path identity only; provisioning and entitlement stay
+// with the native account owner. The finite paths are the ZCode descriptor
+// and native data locations used by this canary.
+func (c *engineCanary) prepareHome(candidate, stableHome string) error {
+	if strings.TrimSpace(candidate) == "" {
+		return fmt.Errorf("canary requires a prepared ZCODE_DATA_BASE_DIR")
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("canary host root must be an existing directory: %s", candidate)
+	}
+	home, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return err
+	}
+	home = resolveNativePath(home)
+	descriptor, err := host.Lookup(canaryProvider)
+	if err != nil {
+		return err
+	}
+	stable := map[string]string{
+		"home": stableHome, "host": filepath.Join(stableHome, ".zcode"),
+		"config":    filepath.Join(stableHome, ".zcode", "v2"),
+		"install":   filepath.Join(stableHome, descriptor.Paths.GlobalBase, "formal-gates"),
+		"hook":      filepath.Join(stableHome, descriptor.Paths.GlobalHookConfig),
+		"rules":     filepath.Join(stableHome, descriptor.Paths.GlobalManaged),
+		"launcher":  filepath.Join(stableHome, ".local", "bin", "formal-gates"),
+		"registry":  filepath.Join(stableHome, ".formal-gates", "registry.json"),
+		"state":     filepath.Join(stableHome, ".gates"),
+		"resources": filepath.Join(stableHome, ".formal-gates-resources"),
+	}
+	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+		if path := strings.TrimSpace(os.Getenv(key)); path != "" && !canaryPathWithin(home, path) {
+			stable[key] = path
+		}
+	}
+	for name, path := range stable {
+		stable[name] = canaryCanonicalPath(path)
+		if canaryPathWithin(home, path) || canaryPathWithin(path, home) {
+			return fmt.Errorf("canary host root overlaps stable %s: %s", name, stable[name])
+		}
+	}
+	c.home = home
+	for name, path := range c.hostPaths() {
+		if !canaryPathWithin(home, path) {
+			return fmt.Errorf("canary %s leaves the prepared host root: %s", name, resolveNativePath(path))
+		}
+	}
+	for _, name := range []string{"personal", "setting", "credentials", "catalogue"} {
+		path := c.hostPaths()[name]
+		if !zcodeIsRegularFile(path) {
+			return fmt.Errorf("prepared canary host requires native %s: %s", name, path)
+		}
+	}
+	c.stablePaths = stable
+	return nil
+}
+
+// canaryPathWithin compares canonical paths using path components. Existing
+// paths resolve symlinks; prospective paths inherit their nearest real parent.
+func canaryPathWithin(root, path string) bool {
+	relative, err := filepath.Rel(canaryCanonicalPath(root), canaryCanonicalPath(path))
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
+func canaryCanonicalPath(path string) string {
+	path = resolveNativePath(path)
+	if _, err := os.Lstat(path); os.IsNotExist(err) && filepath.Dir(path) != path {
+		return filepath.Join(canaryCanonicalPath(filepath.Dir(path)), filepath.Base(path))
+	}
+	return resolveNativePath(path)
+}
+
+func (c *engineCanary) hostPaths() map[string]string {
+	hostRoot := filepath.Join(c.home, ".zcode")
+	config := filepath.Join(hostRoot, "v2")
+	descriptor, _ := host.Lookup(canaryProvider)
+	return map[string]string{
+		"home": c.home, "host": hostRoot, "config": config,
+		"personal":    filepath.Join(config, zcodePersonalConfig),
+		"setting":     filepath.Join(config, zcodeSettingFile),
+		"credentials": filepath.Join(config, zcodeCredentialsFile),
+		"runtime":     filepath.Join(config, "runtime"),
+		"catalogue":   filepath.Join(config, "runtime", "provider", "zcode-builtin.json"),
+		"hook":        filepath.Join(c.home, descriptor.Paths.GlobalHookConfig),
+		"rules":       filepath.Join(c.home, descriptor.Paths.GlobalManaged),
+		"install":     filepath.Join(c.home, descriptor.Paths.GlobalBase, "formal-gates"),
+		"launcher":    filepath.Join(c.home, ".local", "bin", "formal-gates"),
+		"registry":    filepath.Join(c.home, ".formal-gates", "registry.json"),
+		"state":       filepath.Join(c.home, ".gates"),
+		"resources":   filepath.Join(c.home, ".formal-gates-resources"),
+		"log":         filepath.Join(hostRoot, "log"), "mailbox": filepath.Join(hostRoot, "mailbox"),
+	}
+}
+
+// hostEnvironment is shared by the installed CLI and the native binding.
+// Only known data overrides are replaced; Node and the app-server remain the
+// operator's native runtime. The credential helper uses the actual installed
+// target after the installer has reported it.
+func (c *engineCanary) hostEnvironment() map[string]string {
+	paths := c.hostPaths()
+	searchPath := os.Getenv("PATH")
+	binPrefix := filepath.Dir(paths["launcher"]) + string(os.PathListSeparator)
+	if !strings.HasPrefix(searchPath, binPrefix) {
+		searchPath = binPrefix + searchPath
+	}
+	environment := map[string]string{
+		"HOME": c.home, "USERPROFILE": c.home, "ZCODE_DATA_BASE_DIR": c.home,
+		"ZCODE_HOME": paths["host"], "ZCODE_STORAGE_DIR": paths["host"],
+		"ZCODE_LOG_DIR": paths["log"], "ZCODE_MAILBOX_ROOT": paths["mailbox"],
+		zcodeBuiltinCatalogueEnv:                     paths["catalogue"],
+		"ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE": paths["catalogue"],
+		zcodePersonalConfigEnv:                       paths["personal"], zcodeCredentialHelperEnv: paths["credentials"],
+		"PATH":     searchPath,
+		"AI_AGENT": "", "CODEX_HOME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
+	}
+	if len(c.installed.Targets) == 1 {
+		environment["FORMAL_GATES_HARNESS_ROOT"] = c.installed.Targets[0].TargetPath
+	}
+	return environment
+}
+
+func (c *engineCanary) captureBinding() error {
+	for key, value := range c.hostEnvironment() {
+		c.t.Setenv(key, value)
+	}
+	binding, err := zcodeCaptureBinding()
+	if err != nil {
+		return err
+	}
+	environment := objectOrEmpty(binding["environment"])
+	for key, value := range c.hostEnvironment() {
+		environment[key] = value
+	}
+	binding["environment"] = environment
+	c.binding = binding
+	return nil
+}
+
+// recordIsolation is path evidence in the existing jobs directory. The
+// install report remains the authority for the target and package identity.
+// Missing runtime paths are labelled prospective, never claimed observed.
+func (c *engineCanary) recordIsolation() error {
+	paths := c.hostPaths()
+	paths["project"] = c.project
+	paths["projectState"] = filepath.Join(c.project, ".gates")
+	paths["jobs"] = c.jobs
+	target := c.installed.Targets[0]
+	paths["install"], paths["launcher"], paths["hook"], paths["rules"] = target.TargetPath, target.LauncherPath, target.HookConfig, target.ManagedRulePath
+	observed := map[string]bool{}
+	for name, path := range paths {
+		paths[name] = canaryCanonicalPath(path)
+		_, err := os.Stat(path)
+		observed[name] = err == nil
+		for stableName, stablePath := range c.stablePaths {
+			if canaryPathWithin(stablePath, path) || canaryPathWithin(path, stablePath) {
+				return fmt.Errorf("candidate %s overlaps stable %s", name, stableName)
+			}
+		}
+	}
+	return writeAtomicJSON(filepath.Join(c.jobs, "host-isolation.json"), map[string]any{
+		"provider": canaryProvider, "stable": c.stablePaths, "candidate": paths,
+		"observed": observed, "installReport": c.installed, "binding": c.binding["launch"],
+	})
 }

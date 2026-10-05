@@ -128,12 +128,19 @@ func TestCanaryTurnAuthorizationFixture(t *testing.T) {
 	if scenario == "" {
 		t.Skip("local approval-boundary fixture child")
 	}
-	project, workspace, jobs := t.TempDir(), t.TempDir(), t.TempDir()
+	home, jobs := t.TempDir(), t.TempDir()
+	project := filepath.Join(home, ".formal-gates-resources", "project")
+	workspace := filepath.Join(home, ".formal-gates-resources", "issued")
+	for _, path := range []string{project, workspace} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	actionID, role, prompt := "fixture-action-"+scenario, "fixture role "+scenario, "fixture prompt "+scenario
 	readOnly := !strings.Contains(scenario, "execute")
 	binding := map[string]any{"provider": canaryProvider, "launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}
 	schema := map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string"}}}
-	c := &engineCanary{t: t, project: project, jobs: jobs, binding: binding, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout}
+	c := &engineCanary{t: t, home: home, project: project, jobs: jobs, binding: binding, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout}
 	if scenario == "read-error" {
 		c.approvalInput = bufio.NewReader(canaryApprovalReadError{})
 	}
