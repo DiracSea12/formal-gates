@@ -83,6 +83,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 			plan.Batches[0].Artifacts = []string{"app.go"}
 		}
 		child.confirmSliceRoute(route, plan)
+		child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
 		child.drive()
 		id, in := planBatchAction(child, "command")
 		path := sliceID + ".go"
@@ -153,6 +154,7 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	candidate := command == "git" && len(args) > 2 && args[0] == "commit" && strings.HasPrefix(args[2], "formal-gates candidate ")
 	cases := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, ".gates/results/validation.merge-cases.md")
 	promotion := command == "git" && len(args) > 1 && args[0] == "merge" && args[1] == "--ff-only"
+	resolution := command == "git" && len(args) > 0 && args[0] == "add" && slices.Contains(args, "app.go")
 	cleanup := command == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "remove"
 	if merge {
 		r.merges++
@@ -160,7 +162,7 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 	if commit {
 		r.commits++
 	}
-	if err == nil && !r.interrupted && (r.point == "merge" && merge || r.point == "commit" && commit || r.point == "candidate" && candidate || r.point == "cases" && cases || r.point == "promotion" && promotion || r.point == "cleanup" && cleanup) {
+	if err == nil && !r.interrupted && (r.point == "merge" && merge || r.point == "commit" && commit || r.point == "later-commit" && commit && r.commits == 2 || r.point == "resolution" && resolution || r.point == "candidate" && candidate || r.point == "cases" && cases || r.point == "promotion" && promotion || r.point == "cleanup" && cleanup) {
 		r.interrupted = true
 		panic("native response lost")
 	}
@@ -269,6 +271,9 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 	}
 	for _, child := range children {
 		receipt := readSliceReceipt(t, child)
+		if err := master.f.vcs.IsAncestorOrEqual(state.ChildCreation.Source, receipt.Receipt.Snapshot); err != nil {
+			t.Fatal("child checkpoint lost its creation source ancestry", err)
+		}
 		if err := master.f.vcs.IsAncestorOrEqual(receipt.Receipt.Snapshot, wave.Candidate.Identity); err != nil {
 			t.Fatal("candidate lacks child history", err)
 		}
@@ -293,6 +298,11 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 		if _, err := os.Stat(filepath.Join(child.f.stateDir, "slice-receipt.json")); !os.IsNotExist(err) {
 			t.Fatal("child checkpoint sidecar remains", err)
 		}
+		for _, path := range []string{filepath.Join(child.f.stateDir, "state.json"), filepath.Join(child.f.root, ".gates", "tmp", child.f.runID, "lifecycle", "active")} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("child checkpoint active state remains", path, err)
+			}
+		}
 	}
 	trees, err := master.f.vcs.Worktrees()
 	if err != nil || len(trees) != 1 {
@@ -310,7 +320,18 @@ func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Resolution: &protocol.ConflictResolution{Paths: []string{"app.go"}, Summary: "choose the unified command behavior"}})
+	r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: "resolution"}
+	master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("resolution staging response loss was not reached")
+			}
+		}()
+		_, _ = master.f.Drive()
+	}()
 	master.reopen()
+	master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 	master.drive()
 	if driverState(t, master).Validation.Candidate == nil {
 		t.Fatal("resolved prefix did not freeze")
@@ -356,7 +377,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	master.drive()
 	original := master.run.Validation.Waves[0].Candidate
 	if len(master.run.ValidationInputs) != 3 {
-		t.Fatal("capacity did not issue min(N,C)")
+		t.Fatal("capacity did not issue min(N,C)", len(master.run.ValidationInputs))
 	}
 	completed := 0
 	var failedCase string
@@ -468,6 +489,14 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			t.Fatal("mainline repair changed child checkpoint")
 		}
 	}
+	if _, err := master.f.PrepareCandidate("validated repaired mainline"); err != nil {
+		t.Fatal(err)
+	}
+	master.drive()
+	if master.run.Status != "COMPLETE" {
+		t.Fatal("repaired mainline did not complete", master.run.Status)
+	}
+	assertNoMainlineResources(t, master)
 }
 
 func TestMainlineReusesOnlyEqualOriginalFullGateInputs(t *testing.T) {
@@ -565,7 +594,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 }
 
 func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
-	for _, point := range []string{"prefix", "worker"} {
+	for _, point := range []string{"prefix", "later-commit", "worker"} {
 		t.Run(point, func(t *testing.T) {
 			kind := ""
 			if point == "worker" {
@@ -573,8 +602,12 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 			}
 			master, _ := mainlineReady(t, kind, false)
 			var workerWorkspace string
-			if point == "prefix" {
-				r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: "merge"}
+			if point != "worker" {
+				nativePoint := "merge"
+				if point == "later-commit" {
+					nativePoint = point
+				}
+				r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: nativePoint}
 				master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)
 				func() {
 					defer func() {
@@ -586,7 +619,11 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 				}()
 				request := holdRequirement(t, master)
 				master.drive()
-				if r.merges != 1 || master.run.Validation.Candidate != nil || master.run.Validation.DevelopmentSnapshot != "" {
+				expectedMerges := 1
+				if point == "later-commit" {
+					expectedMerges = 2
+				}
+				if r.merges != expectedMerges || master.run.Validation.Candidate != nil || master.run.Validation.DevelopmentSnapshot != "" {
 					t.Fatal("requirement barrier admitted another native prefix")
 				}
 				releaseRequirement(t, master, request)

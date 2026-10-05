@@ -62,7 +62,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		message = "select the slice route (the topology is inherited from the master)"
 	} else if s.SliceChild == nil && (s.Topology == nil || s.RouteMode == "") {
 		message = "confirm topology and select route"
-	} else if s.SliceChild == nil && developmentPlanPending() {
+	} else if s.SliceChild == nil && !s.mergeMaster() && developmentPlanPending() {
 		message = "confirm the current readiness development plan with the route"
 	} else if s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() {
 		message = "submit confirmed REQUIREMENT document via OPERATOR_OBSERVATION.validation"

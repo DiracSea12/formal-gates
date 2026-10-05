@@ -140,7 +140,7 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if count > 1 {
+			if s.SliceChild == nil && count > 1 {
 				return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
 			}
 			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
@@ -369,7 +369,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	complete := o.Clean && o.Tree == p.SourceDigest && o.IndexTree == p.SourceDigest && count <= 1
+	complete := o.Clean && o.Tree == p.SourceDigest && o.IndexTree == p.SourceDigest && (s.SliceChild != nil || count <= 1)
 	if !complete {
 		if !mayWrite {
 			return nativeResult{}, false, nil
@@ -445,7 +445,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		if count > 1 {
+		if s.SliceChild == nil && count > 1 {
 			if err := f.admission.write(func() error {
 				*invoked = true
 				return f.vcs.SquashToBase(p.TargetBase, p.Message)
@@ -461,7 +461,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		if !o.Clean || o.Tree != p.SourceDigest || o.IndexTree != p.SourceDigest || count > 1 {
+		if !o.Clean || o.Tree != p.SourceDigest || o.IndexTree != p.SourceDigest || s.SliceChild == nil && count > 1 {
 			return nativeResult{}, false, fmt.Errorf("promotion final native tree is incomplete")
 		}
 	}

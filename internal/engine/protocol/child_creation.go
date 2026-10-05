@@ -306,8 +306,8 @@ func (e *Engine) FinishChildCancellation(children []*State, expectedFingerprint 
 	return err
 }
 
-// Creation targets outlive their children: a cleanup intent may own them only
-// after every created child is terminal and has cleaned its own native resources.
+// Creation targets outlive their children until abort or delivered-master
+// release has cleaned every child's own native resources.
 func (s *State) childTargetsCleanable(children []*State) bool {
 	if s.ChildCreation == nil {
 		return true
@@ -323,7 +323,12 @@ func (s *State) childTargetsCleanable(children []*State) bool {
 			}
 			continue
 		}
-		if !s.preparedChild(child, actual) || actual.Phase != runtime.PhaseTerminal || !actual.ResourcesCleaned() {
+		released := actual.Phase == runtime.PhaseTerminal
+		if !s.abortRequested() {
+			receipt, accepted := s.SliceReceipts[child.RunID]
+			released = actual.Phase == runtime.PhaseSliceReady && actual.SliceReceipt != nil && accepted && receipt.Digest == actual.SliceReceipt.Digest
+		}
+		if !s.preparedChild(child, actual) || !released || !actual.ResourcesCleaned() {
 			return false
 		}
 	}

@@ -351,14 +351,14 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	case "op.candidate":
 		return f.candidateEvidence(s, intent, mayWrite, &invoked)
 	case "op.cleanup":
-		if mayWrite {
-			if err := f.freezeCleanupSummary(s); err != nil {
-				return nativeResult{}, false, err
-			}
-		}
 		var p protocol.CleanupParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return nativeResult{}, false, err
+		}
+		if mayWrite && p.Checkpoint == nil {
+			if err := f.freezeCleanupSummary(s); err != nil {
+				return nativeResult{}, false, err
+			}
 		}
 		for i, r := range p.Resources {
 			registered, ok := s.NativeResources[r.ID]
