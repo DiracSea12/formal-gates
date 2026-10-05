@@ -863,12 +863,38 @@ func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
 	}
+	if _, err := f.engine.Load(); isMissingEngineState(err) {
+		unlock, err := coordination.AcquireExistingPathWaiting(f.promotionLockPath(), promotionLockDescription)
+		if err != nil {
+			return Run{}, err
+		}
+		// Only a fully retired run is a pure read. Recheck its current authority
+		// under the window; unfinished cleanup must enter the admitted writer.
+		run, replayed := func() (Run, bool) {
+			defer unlock()
+			if _, err := f.engine.Load(); !isMissingEngineState(err) {
+				return Run{}, false
+			}
+			summary, err := f.readSummary()
+			_, intentErr := os.Stat(terminalIntentPath(f.stateDir))
+			_, activeErr := os.Stat(filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active"))
+			if err == nil && f.terminalEvidenceComplete(summary) && errors.Is(intentErr, fs.ErrNotExist) && errors.Is(activeErr, fs.ErrNotExist) {
+				return runFromSummary(summary), true
+			}
+			return Run{}, false
+		}()
+		if replayed {
+			return run, nil
+		}
+	}
 	unlock, err := f.acquireWriteWindow()
 	if err != nil {
 		return Run{}, err
 	}
-	run, err := f.driveInWindow()
-	unlock()
+	run, err := func() (Run, error) {
+		defer unlock()
+		return f.driveInWindow()
+	}()
 	if err == nil && run.SliceReceipt != nil {
 		err = f.handoffSliceReceipt(*run.SliceReceipt)
 	}
@@ -1704,8 +1730,6 @@ func (f *Facade) readTerminalIntent() (TerminalSummary, error) {
 	return summary, nil
 }
 
-// recoverTerminalIntent finishes a terminal cleanup whose process response
-// was lost. It is called only by Drive, keeping Show/Status/Next read-only.
 func (f *Facade) terminalEvidenceComplete(summary TerminalSummary) bool {
 	s := summary.Termination
 	if s == nil || s.Phase != runtime.PhaseTerminal || !s.ResourcesCleaned() || len(s.PendingActions) != 0 || len(s.PendingHostActions) != 0 {
@@ -1727,6 +1751,9 @@ func (f *Facade) terminalEvidenceComplete(summary TerminalSummary) bool {
 	}
 	return summary.Status == "COMPLETE" && (s.Route == "lightweight" || s.DeliveryComplete(f.definition))
 }
+
+// recoverTerminalIntent finishes terminal cleanup from its durable intent.
+// It is called only by Drive, keeping Show/Status/Next read-only.
 func (f *Facade) recoverTerminalIntent() error {
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1781,11 +1808,13 @@ func (f *Facade) cleanupCheckpoints(summary TerminalSummary) error {
 		if err != nil {
 			return err
 		}
-		err = child.endLifecycle()
-		if err == nil {
-			err = store.CleanupTerminal()
-		}
-		unlock()
+		err = func() error {
+			defer unlock()
+			if err := child.endLifecycle(); err != nil {
+				return err
+			}
+			return store.CleanupTerminal()
+		}()
 		if err != nil {
 			return err
 		}

@@ -10,12 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
@@ -200,6 +202,9 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 				revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
 				children := requirementChildChoices(t, master)
 				pkg := protocol.RequirementDecisionPackage{Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"topology"}}, CandidateRevision: revision, DeltaDigest: "sha256:confirmed-scope", ImpactDigest: "sha256:topology-scope", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: withdrawn}
+				for _, work := range master.run.RequirementWork {
+					pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "preserve unchanged master obligations"})
+				}
 				event, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 				if err != nil {
 					t.Fatal(err)
@@ -207,7 +212,7 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 				master.submit(event)
 				if withdrawn {
 					ask := master.run.PendingRequirementAsk
-					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: pkg.Children, Impact: pkg.Impact, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
+					master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: pkg.Children, WorkDecisions: pkg.WorkDecisions, Impact: pkg.Impact, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoTopology: true, Reason: "reconsider the confirmed split topology"}}})
 					if driverState(t, master).Topology != nil {
 						t.Fatal("normal topology reconsideration did not clear the current binding")
 					}
@@ -616,6 +621,8 @@ func (r *childWorkspaceInterruption) Run(dir, command string, args ...string) (s
 }
 
 func TestChildWorkspaceReopenPreservesExecutedPrefixes(t *testing.T) {
+	gc := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(gc)
 	for _, point := range []string{"worktree", "update-ref"} {
 		t.Run(point, func(t *testing.T) {
 			d := splitMaster(t)
@@ -633,6 +640,17 @@ func TestChildWorkspaceReopenPreservesExecutedPrefixes(t *testing.T) {
 			}()
 			if !r.interrupted {
 				t.Fatal("native side effect was not reached")
+			}
+			windows := []string{d.f.promotionLockPath()}
+			for _, plan := range before.ChildCreation.Children {
+				windows = append(windows, filepath.Join(d.f.root, EngineNamespace, plan.RunID, "promotion.lock"))
+			}
+			for _, path := range windows {
+				release, err := coordination.AcquirePath(path, promotionLockDescription)
+				if err != nil {
+					t.Fatal("native window remained held after stack unwind", err)
+				}
+				release()
 			}
 			parent, err := Open(d.f.root, d.f.runID)
 			if err != nil {

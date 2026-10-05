@@ -156,19 +156,23 @@ func (f *Facade) driveChildren() error {
 		if err != nil {
 			return err
 		}
-		err = f.finishChildBootstrap(child)
-		actual, loadErr := child.engine.Load()
-		unlock()
+		var actual *protocol.State
+		err = func() error {
+			defer unlock()
+			if err := f.finishChildBootstrap(child); err != nil {
+				return err
+			}
+			snapshot, err := child.engine.Load()
+			actual = snapshot.State
+			return err
+		}()
 		if err != nil {
 			return err
 		}
-		if loadErr != nil {
-			return loadErr
-		}
-		if _, cancelled := actual.State.AbortDecision(); cancelled || actual.State.Phase == runtime.PhaseTerminal && !plan.Carried {
+		if _, cancelled := actual.AbortDecision(); cancelled || actual.Phase == runtime.PhaseTerminal && !plan.Carried {
 			return nil
 		}
-		children[i], states[i] = child, actual.State
+		children[i], states[i] = child, actual
 	}
 	if err := f.engine.RecordPreparedChildren(states, emptyFingerprint()); err != nil {
 		return err
@@ -230,26 +234,35 @@ func (f *Facade) driveChildren() error {
 		if _, cancelled := actual.State.AbortDecision(); cancelled || actual.State.Phase != runtime.PhasePreparing {
 			return nil
 		}
-		r := snap.State.NativeResources[plan.ResourceID]
+		proof, found := snap.State.ChildWorkspaceProof(plan)
+		if !found {
+			return fmt.Errorf("child join has no exact workspace proof")
+		}
+		r := proof.Resource
 		if child.envelope != f.envelope || !reflect.DeepEqual(actual.State.Topology, &snap.State.ChildCreation.Topology) {
 			return fmt.Errorf("child join identity differs from its parent")
 		}
-		exists, err := f.observeWorktree(r.Path, r.Source)
+		exists, err := f.observeWorktree(r.Path, r.Identity, r.Handle)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			return fmt.Errorf("child join has no registered native worktree")
 		}
-		ref, err := f.vcs.Ref(r.Ref)
+		if r.Ref != "" {
+			ref, err := f.vcs.Ref(r.Ref)
+			if err != nil {
+				return err
+			}
+			if ref != r.Identity {
+				return fmt.Errorf("child join native ref differs from its receipt")
+			}
+		}
+		digest, err := child.vcs.TreeDigest(r.Identity)
 		if err != nil {
 			return err
 		}
-		digest, err := child.vcs.TreeDigest(r.Source)
-		if err != nil {
-			return err
-		}
-		if ref != r.Source || digest != snap.State.ChildCreation.Digest {
+		if digest != proof.Digest {
 			return fmt.Errorf("child join native identity/content differs from its receipt")
 		}
 		if err := child.engine.AcceptPreparedSnapshot(snap.State, emptyFingerprint()); err != nil {
@@ -299,11 +312,14 @@ func (f *Facade) activateReleasedChildren(parent *protocol.State) error {
 		if err != nil {
 			return err
 		}
-		current, err := f.engine.Load()
-		if err == nil {
-			err = child.engine.ActivateChild(current.State, emptyFingerprint())
-		}
-		unlock()
+		err = func() error {
+			defer unlock()
+			current, err := f.engine.Load()
+			if err != nil {
+				return err
+			}
+			return child.engine.ActivateChild(current.State, emptyFingerprint())
+		}()
 		if err != nil {
 			return err
 		}
@@ -328,29 +344,30 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 		if err != nil {
 			return err
 		}
-		_, loadErr := child.engine.Load()
-		if isMissingEngineState(loadErr) {
-			summary, err := child.readSummary()
-			unlock()
+		var run Run
+		err = func() error {
+			defer unlock()
+			_, err := child.engine.Load()
+			if isMissingEngineState(err) {
+				summary, err := child.readSummary()
+				if err == nil {
+					run = runFromSummary(summary)
+				}
+				return err
+			}
 			if err != nil {
 				return err
 			}
-			states[i] = summary.Termination
-			continue
-		}
-		if loadErr != nil {
-			unlock()
-			return loadErr
-		}
-		current, err := f.engine.Load()
-		if err == nil {
-			err = child.engine.CancelChild(current.State, emptyFingerprint())
-		}
-		var run Run
-		if err == nil {
+			current, err := f.engine.Load()
+			if err != nil {
+				return err
+			}
+			if err := child.engine.CancelChild(current.State, emptyFingerprint()); err != nil {
+				return err
+			}
 			run, err = child.driveInWindow()
-		}
-		unlock()
+			return err
+		}()
 		if err != nil {
 			return err
 		}
@@ -395,6 +412,7 @@ func (f *Facade) cleanupChildren(parent *protocol.State) error {
 			return err
 		}
 		err = func() error {
+			defer unlock()
 			if err := child.engine.BeginCleanup(emptyFingerprint(), parent); err != nil {
 				return err
 			}
@@ -413,7 +431,6 @@ func (f *Facade) cleanupChildren(parent *protocol.State) error {
 			}
 			return err
 		}()
-		unlock()
 		if err != nil {
 			return err
 		}
@@ -481,24 +498,27 @@ func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		actual, err := child.engine.Load()
-		if isMissingEngineState(err) {
-			summary, e := child.readSummary()
-			err = e
-			actual.State = summary.Termination
-		}
-		if err == nil && actual.State.Phase != runtime.PhaseTerminal {
-			err = child.engine.CancelReplacedChild(parent, emptyFingerprint())
-			if err == nil {
-				run, e := child.driveInWindow()
+		err = func() error {
+			defer unlock()
+			actual, err := child.engine.Load()
+			if isMissingEngineState(err) {
+				summary, e := child.readSummary()
 				err = e
-				settled = settled && (run.Status == "ABORTED" || run.Status == "COMPLETE")
-				if err == nil && run.Termination != nil && run.Termination.SliceReceipt != nil {
-					err = f.acceptSliceReceipt(*run.Termination.SliceReceipt)
+				actual.State = summary.Termination
+			}
+			if err == nil && actual.State.Phase != runtime.PhaseTerminal {
+				err = child.engine.CancelReplacedChild(parent, emptyFingerprint())
+				if err == nil {
+					run, e := child.driveInWindow()
+					err = e
+					settled = settled && (run.Status == "ABORTED" || run.Status == "COMPLETE")
+					if err == nil && run.Termination != nil && run.Termination.SliceReceipt != nil {
+						err = f.acceptSliceReceipt(*run.Termination.SliceReceipt)
+					}
 				}
 			}
-		}
-		unlock()
+			return err
+		}()
 		if err != nil {
 			return false, err
 		}

@@ -145,6 +145,9 @@ func writeTranscript(t *testing.T, path string, lines []string) {
 // 时结果滞留 COST_PENDING；stop 携 transcript 后下一事务完成并记精确用量。
 func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	transcript := filepath.Join(root, "agent-one.jsonl")
 	writeTranscript(t, transcript, []string{
 		`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3}}}`,

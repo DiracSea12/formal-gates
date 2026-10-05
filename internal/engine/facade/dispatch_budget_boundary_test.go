@@ -309,6 +309,9 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 // 时计量仍成立，结果走公开接纳记精确用量。
 func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "unknown-attach", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
 	if err != nil {
 		t.Fatal(err)

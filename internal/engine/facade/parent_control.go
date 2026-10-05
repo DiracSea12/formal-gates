@@ -10,7 +10,7 @@ import (
 
 // acquireWriteWindow linearizes a child's writes with its master's controls.
 // Native adapter effects cannot continue on authority read before this window.
-func (f *Facade) acquireWriteWindow() (func(), error) {
+func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
 	snap, err := f.engine.Load()
 	if err != nil {
 		if isMissingEngineState(err) {
@@ -23,8 +23,17 @@ func (f *Facade) acquireWriteWindow() (func(), error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func() {
+			if unlock == nil {
+				u()
+			}
+		}()
+		if _, err := f.engine.Load(); isMissingEngineState(err) {
+			return u, nil
+		} else if err != nil {
+			return nil, err
+		}
 		if err = f.syncReleasedChildren(); err != nil {
-			u()
 			return nil, err
 		}
 		return u, nil
@@ -37,19 +46,31 @@ func (f *Facade) acquireWriteWindow() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if unlock == nil {
+			up()
+		}
+	}()
 	uc, err := f.acquireNativeWindow()
 	if err != nil {
-		up()
 		return nil, err
 	}
+	defer func() {
+		if unlock == nil {
+			uc()
+		}
+	}()
 	release := func() { uc(); up() }
+	actual, err := f.engine.Load()
+	if isMissingEngineState(err) {
+		return release, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	current, err := parent.engine.Load()
 	if err == nil {
-		actual, loadErr := f.engine.Load()
-		err = loadErr
-		if err == nil {
-			err = f.recordIntakeReceipt(actual.State)
-		}
+		err = f.recordIntakeReceipt(actual.State)
 	}
 	if err == nil {
 		err = f.engine.SyncParentReset(current.State, emptyFingerprint())
@@ -65,7 +86,6 @@ func (f *Facade) acquireWriteWindow() (func(), error) {
 		}
 	}
 	if err != nil {
-		release()
 		return nil, err
 	}
 	return release, nil
@@ -175,29 +195,31 @@ func (f *Facade) syncReleasedChildren() error {
 		if err != nil {
 			return err
 		}
-		actual, loadErr := child.engine.Load()
-		if isMissingEngineState(loadErr) {
-			unlock()
-			continue
-		}
-		if loadErr == nil && actual.State.Phase != runtime.PhasePreparing {
-			err = child.recordIntakeReceipt(actual.State)
-			if err == nil {
-				err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
+		err = func() error {
+			defer unlock()
+			actual, loadErr := child.engine.Load()
+			if isMissingEngineState(loadErr) {
+				return nil
 			}
-			if err == nil {
-				err = child.engine.SyncParentRequirement(snap.State, emptyFingerprint())
-			}
-			if err == nil {
-				actual, err = child.engine.Load()
-				if err == nil && actual.State.ResetPending() {
-					_, err = child.driveInWindow()
+			if loadErr == nil && actual.State.Phase != runtime.PhasePreparing {
+				err = child.recordIntakeReceipt(actual.State)
+				if err == nil {
+					err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
 				}
+				if err == nil {
+					err = child.engine.SyncParentRequirement(snap.State, emptyFingerprint())
+				}
+				if err == nil {
+					actual, err = child.engine.Load()
+					if err == nil && actual.State.ResetPending() {
+						_, err = child.driveInWindow()
+					}
+				}
+			} else {
+				err = loadErr
 			}
-		} else {
-			err = loadErr
-		}
-		unlock()
+			return err
+		}()
 		if err != nil {
 			return err
 		}

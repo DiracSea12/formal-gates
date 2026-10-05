@@ -16,6 +16,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -606,5 +607,186 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 				t.Fatalf("final deletion content differs from candidate: %s %v", finalDigest, err)
 			}
 		})
+	}
+}
+
+// Native child admission and delivery preserve each registered scope, original
+// workspace proof and complete slice content through the common final candidate.
+func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
+	for _, name := range []string{"svn", "p4"} {
+		for _, lost := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
+				master, runner := startNativeProviderDriver(t, name)
+				passPreDevelopmentReviews(t, master, commandPlan())
+				master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: master.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: master.revision, Document: validationDocument}}})
+				topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 2, Parallel: "independent command modules"}
+				master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
+				prepared := prepareChildFrontier(t, master)
+				if lost {
+					runner.interruptOperation = "workspace"
+					if _, err := master.f.Drive(); err == nil || !runner.lost {
+						t.Fatal("completed workspace response was not lost", err)
+					}
+					nativeIncompleteState(t, master, "op.workspace")
+					reopenNativeProviderDriver(t, master, name, runner)
+					runner.interruptOperation = ""
+				}
+				master.drive()
+				parent := driverState(t, master)
+				if !reflect.DeepEqual(parent.ChildCreation, prepared.ChildCreation) || len(parent.SliceChildren) != len(topology.Slices) {
+					t.Fatal("join changed the original creation or released partial membership")
+				}
+				for _, plan := range parent.ChildCreation.Children {
+					proof, found := parent.ChildWorkspaceProof(plan)
+					resource := parent.NativeResources[plan.ResourceID]
+					child, err := Open(master.f.root, plan.RunID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					state, err := child.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					exists, err := master.f.vcs.WorkspaceExists(resource.Path, resource.Handle)
+					if err != nil || !exists || !found || proof.Resource != resource || proof.Digest != parent.ChildCreation.Digest || proof.SourceDigest != parent.ChildCreation.Digest || state.State.InitialSnapshot != proof.Resource.Identity || state.State.NativeRoot != resource.Path || state.State.NativeHandle != resource.Handle || state.State.NativeVCS() != name || state.State.Phase != runtime.PhaseTopologyAndRoute || state.State.SliceChild.MasterRunID != parent.RunID || state.State.SliceChild.SliceID != plan.SliceID || state.State.RequirementRevision() != master.revision {
+						t.Fatal("child did not consume its exact original native proof/scope", err)
+					}
+					body, err := os.ReadFile(filepath.Join(resource.Path, ".gates", "requirements.md"))
+					if err != nil || string(body) != validationDocument {
+						t.Fatal("child lost complete requirement bytes", err)
+					}
+					digest, err := child.vcs.TreeDigest(state.State.InitialSnapshot)
+					if err != nil || digest != proof.Digest {
+						t.Fatal("child initial native values differ from its proof", err)
+					}
+				}
+				before := installationFiles(t, master.f.root)
+				reopenNativeProviderDriver(t, master, name, runner)
+				master.drive()
+				if !reflect.DeepEqual(before, installationFiles(t, master.f.root)) {
+					t.Fatal("released join replay changed retained material")
+				}
+				design, input := master.action("engine.qa.design")
+				manifest := simpleManifest(input)
+				for i := range manifest.Cases {
+					manifest.Cases[i].Mode = coverage.CaseMerge
+				}
+				master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+				master.drive()
+				id, input := master.action("engine.qa.review.rationale")
+				review := approvedReview(manifest)
+				master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
+				master.drive()
+				receipts := make(map[string]protocol.SliceReceipt)
+				entries := make(map[string]string)
+				for index, plan := range parent.ChildCreation.Children {
+					f, err := Open(master.f.root, plan.RunID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					run, err := f.Show()
+					if err != nil {
+						t.Fatal(err)
+					}
+					child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
+					reopenNativeProviderDriver(t, child, name, runner)
+					route := protocol.RouteDecision{Mode: "full", Gates: []string{"quality", "security"}}
+					if index == 1 {
+						route.Mode = "custom"
+						route.Selected = []string{"quality"}
+					}
+					development := sliceLanePlan()
+					path := plan.SliceID + ".go"
+					development.Batches[0].Artifacts = []string{path}
+					child.confirmSliceRoute(route, development)
+					child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+					child.drive()
+					id, input := planBatchAction(child, "command")
+					body := "package command\n// " + plan.SliceID + " behavior\n"
+					if err := os.WriteFile(filepath.Join(input.Workspace.Path, path), []byte(body), 0644); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+						t.Fatal(err)
+					}
+					child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+					child.drive()
+					completeSliceGates(t, child)
+					if _, err := child.f.PrepareCandidate("verified slice delivery"); err != nil {
+						t.Fatal(err)
+					}
+					child.drive()
+					if child.run.Status != "SLICE_READY" {
+						t.Fatal("child delivery did not freeze its checkpoint")
+					}
+					receipt := readSliceReceipt(t, child)
+					if receipt.Receipt.ChildRunID != plan.RunID || receipt.Receipt.MasterRunID != parent.RunID || receipt.Receipt.SliceID != plan.SliceID || receipt.Receipt.RequirementRevision != master.revision || receipt.Receipt.CanonicalDigest() != receipt.Digest || driverState(t, master).SliceReceipts[plan.RunID].Digest != receipt.Digest {
+						t.Fatal("checkpoint/handoff lost original identity or material")
+					}
+					digest, err := child.f.vcs.TreeDigest(receipt.Receipt.Snapshot)
+					if err != nil || digest != receipt.Receipt.Tree {
+						t.Fatal("checkpoint did not retain its complete native values", err)
+					}
+					entries[path], err = child.f.vcs.Entry(receipt.Receipt.Snapshot, path)
+					if err != nil || entries[path] == "" {
+						t.Fatal("checkpoint lacks slice bytes/metadata", err)
+					}
+					bytes, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), path))
+					if err != nil || string(bytes) != body {
+						t.Fatal("promoted slice bytes differ from development", err)
+					}
+					receipts[plan.RunID] = receipt
+				}
+				master.drive()
+				state := driverState(t, master)
+				if state.Validation.Candidate == nil || len(state.Validation.Waves) != 1 || len(state.Validation.Waves[0].Targets) != 5 {
+					t.Fatal("common final candidate did not include merge QA/gate and all selected slice gates")
+				}
+				candidate := state.Validation.Candidate
+				for _, input := range master.run.ValidationInputs {
+					if input.Binding.Candidate != candidate.Identity {
+						t.Fatal("final validation mixed native candidates")
+					}
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for path, want := range entries {
+					got, err := master.f.vcs.Entry(candidate.Identity, path)
+					if err != nil || got != want {
+						t.Fatal("fixed merge changed slice bytes or metadata", path, err)
+					}
+				}
+				passMainlineTargets(t, master)
+				master.drive()
+				if master.run.Status != "COMPLETE" || master.run.Termination.PromotedDigest != candidate.Digest {
+					t.Fatal("native split promotion/cleanup did not complete")
+				}
+				for childID, receipt := range receipts {
+					if !reflect.DeepEqual(master.run.Termination.SliceReceipts[childID], receipt) {
+						t.Fatal("terminal authority changed the complete slice receipt")
+					}
+					for _, name := range []string{"state.json", "slice-receipt.json"} {
+						if _, err := os.Stat(filepath.Join(master.f.root, EngineNamespace, childID, name)); !os.IsNotExist(err) {
+							t.Fatal("child active evidence survived terminal cleanup", err)
+						}
+					}
+				}
+				for _, resource := range master.run.Termination.NativeResources {
+					if resource.Status != "CLEANED" {
+						t.Fatal("native resource did not clean up")
+					}
+					if exists, err := master.f.vcs.WorkspaceExists(resource.Path, resource.Handle); err != nil || exists {
+						t.Fatal("native workspace survived cleanup", err)
+					}
+				}
+				for path, want := range entries {
+					got, err := master.f.vcs.Entry(master.run.Termination.PromotedSnapshot, path)
+					if err != nil || got != want {
+						t.Fatal("final promotion changed complete slice content", err)
+					}
+				}
+			})
+		}
 	}
 }
