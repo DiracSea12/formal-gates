@@ -584,10 +584,9 @@ type State struct {
 	// start-readiness 两条 series）：raw candidate 只作证据，effective
 	// status 由账本确定性投影。run phase 的推进条件从它重算。
 	ReviewSeries review.Set `json:"reviewSeries"`
-	// RequirementRevisions 是确认 revision 的权威账本：末条 Revision 即当
-	// 前权威需求 revision（一切 revision 比对都读它）。引擎只登记确认事实
-	// 与 DeltaDigest 指纹绑定，不持有 base/diff 内容账本（§7.2.1：内容归
-	// 主代理）。首条是受理落账回填的 INTAKE 初始账目。
+	// RequirementRevisions stores local confirmations and their DeltaDigest
+	// bindings. Its first INTAKE entry preserves the original receipt; current
+	// requirement authority is read through RequirementRevision.
 	RequirementRevisions []ConfirmedRevision `json:"requirementRevisions"`
 	// Topology 是 start-readiness PASS 后唯一绑定的拆分拓扑决定（总需求
 	// §8.1.1 绑定点：确认后不得重切）。child run 落账的是从 master 继承的
@@ -835,8 +834,7 @@ func (s *State) normalizeCollections() {
 	if s.ReviewSeries.ProductReview.Action == "" && s.ReviewSeries.StartReadiness.Action == "" {
 		s.ReviewSeries = review.NewSet()
 	}
-	// revision 账本为空而受理回执已落账时，回填单条 INTAKE 初始账目：账本
-	// 从此以末条承载权威 revision，受理值与回退值恒等，既有 run 向前兼容。
+	// An empty local ledger is seeded from this run's original intake receipt.
 	if len(s.RequirementRevisions) == 0 && s.IntakeReceipt != nil {
 		s.RequirementRevisions = []ConfirmedRevision{{
 			Revision:       s.IntakeReceipt.Confirmation.RequirementRevision,

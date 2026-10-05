@@ -64,13 +64,16 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := f.Drive(); err != nil {
+			t.Fatal(err)
+		}
 		snap, err := f.engine.Load()
 		if err != nil {
 			t.Fatal(err)
 		}
 		state := snap.State
 		if state.RequirementRevision() != master.revision || state.SliceChild.RequirementRevision != master.revision || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) || len(state.RequirementRevisions) != 1 || state.RequirementRevisions[0].Revision != intake.RequirementRevision || state.RequirementRevisions[0].StateRevision != state.IntakeReceipt.Revision || state.InitialSnapshot != parent.ChildCreation.Source {
-			t.Fatal("child lost its inherited baseline, original intake or local ledger")
+			t.Fatalf("child lost its inherited baseline, original intake or local ledger: %+v", state)
 		}
 	}
 	f, err := Open(root, parent.SliceChildren["lane-core"])
