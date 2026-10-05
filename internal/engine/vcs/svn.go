@@ -22,7 +22,7 @@ type svnInfo struct {
 		Repository struct {
 			Root string `xml:"root"`
 			UUID string `xml:"uuid"`
-		}
+		} `xml:"repository"`
 		WC struct {
 			Root string `xml:"wcroot-abspath"`
 		} `xml:"wc-info"`

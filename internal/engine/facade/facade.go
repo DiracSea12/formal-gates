@@ -504,7 +504,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		nativeRoot = root
 	}
 	if req.Route == "regular" && sliceStart == nil {
-		vcsProvider = vcs.NewNative(nativeRoot, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
+		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
 		current, err := vcsProvider.Resolve()
 		if err != nil {
 			return nil, Run{}, err
@@ -692,7 +692,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		if err != nil {
 			return nil, Run{}, err
 		}
-		vcsProvider = vcs.NewNative(nativeRoot, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
+		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
 	} else if err := initializeRun(eng, root, req, initialSnapshot, nil, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -840,7 +840,7 @@ func Open(root, runID string) (*Facade, error) {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(nativeRoot, req)}, nil
+	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(root, nativeRoot, req)}, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -2165,8 +2165,8 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision) (*protocol.Develo
 	return f.engine.DevelopmentPlan(route)
 }
 
-func reopenNativeProvider(root string, req StartRequest) *vcs.Provider {
-	p := reopenVCSProvider(root, req.Route, req.VCS)
+func reopenNativeProvider(configRoot, root string, req StartRequest) *vcs.Provider {
+	p := reopenVCSProvider(configRoot, req.Route, req.VCS)
 	if p == nil {
 		return nil
 	}

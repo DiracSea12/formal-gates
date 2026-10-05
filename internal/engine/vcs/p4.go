@@ -32,15 +32,16 @@ func (p *Provider) p4Raw(input []byte, args ...string) ([]byte, error) {
 	return p.runner.RunRaw(p.configRoot, "p4", input, p.p4Args(args...)...)
 }
 func (p *Provider) p4JSON(args ...string) ([]map[string]string, error) {
-	body, err := p.p4Raw(nil, append([]string{"-ztag", "-Mj"}, args...)...)
-	if err != nil {
-		return nil, err
+	body, commandErr := p.p4Raw(nil, append([]string{"-ztag", "-Mj"}, args...)...)
+	if commandErr != nil && len(body) == 0 {
+		return nil, commandErr
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	var records []map[string]string
+	empty := false
 	for {
 		var raw map[string]any
-		if err = decoder.Decode(&raw); err == io.EOF {
+		if err := decoder.Decode(&raw); err == io.EOF {
 			break
 		} else if err != nil {
 			return nil, err
@@ -49,14 +50,21 @@ func (p *Provider) p4JSON(args ...string) ([]map[string]string, error) {
 		for key, value := range raw {
 			record[key] = fmt.Sprint(value)
 		}
-		if record["code"] == "error" && record["severity"] != "1" {
+		if record["code"] == "error" {
+			if record["generic"] == "17" {
+				empty = true
+				continue
+			}
 			return nil, fmt.Errorf("p4: %s", record["data"])
 		}
 		if record["code"] != "info" {
 			records = append(records, record)
 		}
 	}
-	return records, nil
+	if empty && len(records) == 0 {
+		return nil, nil
+	}
+	return records, commandErr
 }
 func p4List(record map[string]string, prefix string) []string {
 	var values []string
@@ -210,10 +218,6 @@ func (p *Provider) p4Resolve(revision string) (string, error) {
 		}
 		encoded, _ := json.Marshal(semantic)
 		identity.StreamSpec = string(encoded)
-		if p.handle.Source != "" {
-			source, _ := decodeNative(p.handle.Source)
-			identity.StreamSpec = string(encoded)
-		}
 	}
 	files, err := p.p4JSON("fstat", "-Op", "-Ol", "//"+client+"/...@"+strconv.Itoa(rev))
 	if err != nil {

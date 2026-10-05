@@ -352,3 +352,8 @@ func engineWriterAdmission(t *testing.T, root string) *facade.Admission {
 		PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: generation, Lease: lease, Token: token}
 	return a
 }
+
+func (r frozenGitRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	out, err := r.Run(dir, command, args...)
+	return []byte(out), err
+}

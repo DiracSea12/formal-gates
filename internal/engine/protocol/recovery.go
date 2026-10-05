@@ -432,7 +432,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		intent, ok := state.PendingHostActions[actionID]
 		params, parseErr := candidateParameters(intent)
 		observation := *observations[0].Promotion
-		if !ok || parseErr != nil || params.Promotion == nil || observation.Head == "" || observation.Tree == "" || observation.IndexTree == "" || !observation.Clean && !observation.StagedOnly || observationDigest != digestOfCanonical(observation) {
+		if !ok || parseErr != nil || params.Promotion == nil || observation.Head == "" || observation.Tree == "" || observation.IndexTree == "" && observation.PendingFingerprint == "" || !observation.Clean && !observation.StagedOnly || observationDigest != digestOfCanonical(observation) {
 			return RecoveryPlan{}, 0, validationError("promotion withdrawal requires the original intent and exact native observation")
 		}
 		chain, err := state.PromotionChain(intent)
