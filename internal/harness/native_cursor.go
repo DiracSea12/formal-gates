@@ -356,8 +356,8 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 		if _, err := events.Write(append(line, '\n')); err != nil {
 			return nil, err
 		}
-		if valuesEqual(getOf(event, "type"), "system") && valuesEqual(getOf(event, "subtype"), "init") {
-			if nativeSource["native_selection"] != nil || !valuesEqual(getOf(event, "session_id"), identity) || resolveNativePath(textOf(getOf(event, "cwd"))) != workspace {
+		if nativeSource["native_selection"] == nil && valuesEqual(getOf(event, "type"), "system") && valuesEqual(getOf(event, "subtype"), "init") {
+			if !valuesEqual(getOf(event, "session_id"), identity) || resolveNativePath(textOf(getOf(event, "cwd"))) != workspace {
 				streamErr = &blockedError{message: "CURSOR_BINDING: native init does not match the created or resumed session"}
 				break
 			}
