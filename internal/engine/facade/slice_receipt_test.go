@@ -63,14 +63,11 @@ func meterReceiptDispatches(d *validationDriver, hit, miss, output int64) {
 	d.f.engine = eng
 }
 
-func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string, owner OwnerBinding, admission ...*Admission) *validationDriver {
+func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string, owner OwnerBinding) *validationDriver {
 	t.Helper()
 	options := sliceChildStart(master, childID, sliceID, sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = master.run.BaseSnapshot
 	options.Owner = owner
-	if len(admission) != 0 {
-		options.Admission = admission[0]
-	}
 	f, run, err := semanticValidationFacade(t, options)
 	if err != nil {
 		t.Fatal(err)
@@ -91,17 +88,10 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	if err := os.WriteFile(filepath.Join(author, path), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, author, "implement "+sliceID)
 	evidence := batchEvidence(input)
 	evidence.Paths = append(evidence.Paths, path)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
-	for {
-		d.drive()
-		if len(d.run.AdapterIntents) == 0 {
-			break
-		}
-		d.materialize()
-	}
+	d.drive()
 	return d
 }
 
@@ -414,15 +404,11 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	}
 	resolveGateFinding(child, finding, wave.ID)
 	repair, input := child.action("engine.repair")
-	snapshotCommitOne(t, input.Workspace.Path, "correct documented output ordering")
-	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"build passed"}, Tests: []string{"command regression passed"}}})
-	for {
-		child.drive()
-		if len(child.run.AdapterIntents) == 0 {
-			break
-		}
-		child.materialize()
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // documented output order\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"build passed"}, Tests: []string{"command regression passed"}}})
+	child.drive()
 	current := child.run.Validation.Waves[len(child.run.Validation.Waves)-1]
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: "INHERIT", Reason: "The ordering repair leaves the checked security boundaries unchanged"}}})
 	child.drive()

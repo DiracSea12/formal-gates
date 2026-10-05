@@ -263,10 +263,11 @@ func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
 	}
 	child, found := parent.CreationChildByRun(s.RunID)
 	d, cancelled := parent.AbortDecision()
-	if !found || !cancelled || !parent.preparedChild(child, s) {
+	record, recorded := parent.AbortEvent()
+	if !found || !cancelled || !recorded || !parent.preparedChild(child, s) {
 		return validationError("child cancellation lacks parent authority")
 	}
-	s.SliceChild.ParentAbort = &d
+	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record}
 	_, err = e.commit(s, revision, expectedFingerprint)
 	return err
 }

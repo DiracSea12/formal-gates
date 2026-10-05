@@ -53,17 +53,10 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	if err := os.WriteFile(filepath.Join(author, "app_test.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, author, "implement command")
 	evidence := batchEvidence(input)
 	evidence.Paths = append(evidence.Paths, "app_test.go")
 	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
-	for {
-		child.drive()
-		if len(child.run.AdapterIntents) == 0 {
-			break
-		}
-		child.materialize()
-	}
+	child.drive()
 	return child
 }
 

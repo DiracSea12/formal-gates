@@ -1366,10 +1366,7 @@ func (f *Facade) project() (Run, error) {
 			run.lastEvent = &record
 		}
 	}
-	if abort, aborted := snap.State.AbortDecision(); aborted {
-		// The accepted decision owns abort identity; later effect receipts remain
-		// in Events without replacing the terminal business receipt.
-		record := snap.State.Events[abort.EventID]
+	if record, aborted := snap.State.AbortEvent(); aborted {
 		run.lastEvent = &record
 		run.Termination = snap.State
 	} else if snap.State.Phase == runtime.PhaseTerminal {
@@ -1542,8 +1539,8 @@ func (f *Facade) terminalEvidenceComplete(summary TerminalSummary) bool {
 			return false
 		}
 	}
-	if d, abort := s.AbortDecision(); abort {
-		record, ok := s.Events[d.EventID]
+	if _, abort := s.AbortDecision(); abort {
+		record, ok := s.AbortEvent()
 		return ok && summary.Status == "ABORTED" && summary.LastEvent != nil && record.Digest == summary.LastEvent.Digest && reflect.DeepEqual(record.Acceptance, summary.LastEvent.Acceptance)
 	}
 	return summary.Status == "COMPLETE" && (s.Route == "lightweight" || s.DeliveryComplete(f.definition))

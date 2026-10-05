@@ -10,18 +10,38 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
+// AbortAuthority carries the accepted parent decision and its original event.
+// CancelChild accepts it only before a local abort; revisions belong to each run.
+type AbortAuthority struct {
+	Decision RecordedDecision `json:"decision"`
+	Event    EventRecord      `json:"event"`
+}
+
 // AbortDecision derives the terminal authority from the accepted user decision.
 func (s *State) AbortDecision() (RecordedDecision, bool) {
-	var chosen RecordedDecision
 	if s.SliceChild != nil && s.SliceChild.ParentAbort != nil {
-		chosen = *s.SliceChild.ParentAbort
+		return s.SliceChild.ParentAbort.Decision, true
 	}
+	var chosen RecordedDecision
 	for _, d := range s.Decisions {
 		if d.Choice == "abort" && (d.Control == ControlAbort || d.Control == ControlValidation || d.Control == ControlRecovery) && (chosen.Revision == 0 || d.Revision < chosen.Revision) {
 			chosen = d
 		}
 	}
 	return chosen, chosen.Revision != 0
+}
+
+// AbortEvent returns the event owned by the selected terminal decision.
+func (s *State) AbortEvent() (EventRecord, bool) {
+	if s.SliceChild != nil && s.SliceChild.ParentAbort != nil {
+		return s.SliceChild.ParentAbort.Event, true
+	}
+	d, ok := s.AbortDecision()
+	if !ok {
+		return EventRecord{}, false
+	}
+	record, found := s.Events[d.EventID]
+	return record, found
 }
 func (s *State) abortRequested() bool { _, ok := s.AbortDecision(); return ok }
 

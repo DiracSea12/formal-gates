@@ -744,27 +744,25 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 	}
 }
 
-func TestSliceReceiptUsesIndependentChildAndMasterAdmission(t *testing.T) {
+func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 	for _, window := range []string{"publish", "handoff", "discovery", "replay"} {
 		t.Run(window, func(t *testing.T) {
 			master := receiptMaster(t)
-			childAdmission := master.f.admission
-			childAdmission.RegistryPath = filepath.Join(t.TempDir(), "registry.json")
-			for _, suffix := range []string{"", ".bootstrap.json"} {
-				data, err := os.ReadFile(master.f.admission.RegistryPath + suffix)
+			child := receiptChild(t, master, "child", "lane-core", "custom", OwnerBinding{})
+			for _, f := range []*Facade{master.f, child.f} {
+				req, err := f.request()
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(childAdmission.RegistryPath+suffix, data, 0o600); err != nil {
-					t.Fatal(err)
+				if req.RunID != f.runID || admissionFromRequest(req) != f.admission || f.admission != master.f.admission || req.AdmissionRoot != master.f.root || req.PackageDigest != f.envelope.PackageDigest || req.InstalledTargetIdentity != f.envelope.InstalledTargetIdentity {
+					t.Fatal("writer lost its immutable original installation admission")
 				}
 			}
-			childAdmission = advanceInstallation(t, childAdmission)
-			child := receiptChild(t, master, "child", "lane-core", "custom", OwnerBinding{}, &childAdmission)
 			promoteReceiptChild(t, child)
 			receipt := publishReceiptChild(t, child)
-			if master.f.admission.RegistryPath == child.f.admission.RegistryPath {
-				t.Fatal("fixture shares owning admission")
+			assigned := driverState(t, master).SliceChildren["lane-core"]
+			if assigned != child.f.runID || receipt.Receipt.ChildRunID != assigned || receipt.Receipt.MasterRunID != master.f.runID || receipt.Receipt.SliceID != "lane-core" || receipt.Digest != receipt.Receipt.CanonicalDigest() {
+				t.Fatal("receipt lost its assigned child or immutable content binding")
 			}
 			if window == "publish" || window == "discovery" {
 				// The state checkpoint is durable before the missing publish window.
@@ -799,10 +797,10 @@ func TestSliceReceiptUsesIndependentChildAndMasterAdmission(t *testing.T) {
 				t.Fatalf("fenced slice window=%v", err)
 			}
 			if after := installationFiles(t, child.f.stateDir); !reflect.DeepEqual(beforeChild, after) {
-				t.Fatal("slice window wrote child with another admission")
+				t.Fatal("fenced slice window changed child files")
 			}
 			if after := installationFiles(t, master.f.stateDir); !reflect.DeepEqual(beforeMaster, after) {
-				t.Fatal("slice window wrote master with another admission")
+				t.Fatal("fenced slice window changed master files")
 			}
 		})
 	}

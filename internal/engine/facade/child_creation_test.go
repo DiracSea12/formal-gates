@@ -227,7 +227,9 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(w, "app_test.go"), []byte("package main\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotCommitOne(t, w, "implement child command")
+	if head, err := vcs.New(w, nil).Resolve(); err != nil || head != h {
+		t.Fatal("worker changed the issued source HEAD", err)
+	}
 	child.git = vcs.New(w, nil)
 	evidence := batchEvidence(input)
 	evidence.Paths = append(evidence.Paths, "app_test.go")
@@ -244,9 +246,10 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	}
 	for _, target := range []string{w, f.vcs.Root()} {
 		body, err := runner.Run(target, "git", "show", receipt.Receipt.Snapshot+":startup.txt")
+		developed, developmentErr := runner.Run(target, "git", "show", receipt.Receipt.Snapshot+":app_test.go")
 		mode, modeErr := runner.Run(target, "git", "ls-tree", receipt.Receipt.Snapshot, "tool")
 		tree, treeErr := vcs.New(target, nil).TreeDigest(receipt.Receipt.Snapshot)
-		if err != nil || body != string(content) || modeErr != nil || !strings.HasPrefix(mode, "100755 ") || treeErr != nil || tree != receipt.Receipt.Tree {
+		if err != nil || body != string(content) || developmentErr != nil || developed != "package main\n" || modeErr != nil || !strings.HasPrefix(mode, "100755 ") || treeErr != nil || tree != receipt.Receipt.Tree {
 			t.Fatal("candidate/promotion/checkpoint lost accepted startup content", target, err, modeErr, treeErr)
 		}
 	}
@@ -439,7 +442,7 @@ func TestChildReleaseReopenUsesCommittedMapAfterLostResponse(t *testing.T) {
 	}
 }
 
-func abortCreationChild(t *testing.T, child *Facade) {
+func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 	t.Helper()
 	request, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 	if err != nil {
@@ -462,6 +465,7 @@ func abortCreationChild(t *testing.T, child *Facade) {
 	if _, _, err := child.Submit(decide); err != nil {
 		t.Fatal(err)
 	}
+	return decide
 }
 
 func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.T) {
@@ -473,6 +477,14 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 		t.Fatal(err)
 	}
 	abortCreationChild(t, child)
+	local, err := child.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	localAuthority, ok := local.State.AbortEvent()
+	if !ok {
+		t.Fatal("local child abort has no accepted event")
+	}
 	if _, err := d.f.Drive(); err != nil {
 		t.Fatal(err)
 	}
@@ -483,6 +495,10 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 		t.Fatal("cancelled child released the map")
 	}
 	abortCreationChild(t, d.f)
+	parentAuthority, ok := driverState(t, d).AbortEvent()
+	if !ok {
+		t.Fatal("parent abort has no accepted event")
+	}
 	if _, err := d.f.Drive(); err != nil {
 		t.Fatal(err)
 	}
@@ -494,6 +510,13 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 		run, err := c.Show()
 		if err != nil || run.Status != "ABORTED" {
 			t.Fatal("orphan preparing child", err)
+		}
+		want := parentAuthority
+		if p.RunID == plan.RunID {
+			want = localAuthority
+		}
+		if !reflect.DeepEqual(run.lastEvent, &want) {
+			t.Fatal("preparing cancellation replaced the original accepted authority")
 		}
 		if _, err := os.Stat(s.GitResources[p.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("child target survived master cancellation")
@@ -571,7 +594,16 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 					t.Fatal("child has no actual issued worker")
 				}
 			}
-			abortCreationChild(t, master.f)
+			parentEvent := abortCreationChild(t, master.f)
+			parentAuthority, ok := driverState(t, master).AbortEvent()
+			if !ok {
+				t.Fatal("parent cancellation has no actual accepted authority")
+			}
+			var err error
+			master.f, err = Open(master.f.root, master.f.runID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			master.drive()
 			if inFlight {
 				if master.run.Status != "ABORTING" {
@@ -587,8 +619,16 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				}
 				for _, child := range children {
 					state := driverState(t, child)
-					if state.SliceChild.ParentAbort == nil || len(state.ExecutableHostActions()) == 0 {
+					record, ok := state.AbortEvent()
+					if state.SliceChild.ParentAbort == nil || !ok || !reflect.DeepEqual(record, parentAuthority) || len(state.ExecutableHostActions()) == 0 {
 						t.Fatal("waiting sibling blocked parent cancellation propagation")
+					}
+					for _, resource := range state.GitResources {
+						if resource.Ref != "" && resource.Identity != "" {
+							if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", resource.Ref); err != nil {
+								t.Fatal("cancellation removed a ref before its worker stopped", err)
+							}
+						}
 					}
 				}
 				var err error
@@ -617,7 +657,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 							}
 							child.submit(event)
 						}
-						event, err := protocol.NewAgentHostActionReceiptEvent(child.eventID(), id, intent.Operation, child.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+						event, err := protocol.NewAgentHostActionReceiptEvent(child.eventID(), id, intent.Operation, child.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -648,8 +688,27 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				if err != nil || run.Status != "ABORTED" || run.Termination == nil || !run.Termination.ResourcesCleaned() {
 					t.Fatal("released child survived parent cancellation", err)
 				}
+				if !reflect.DeepEqual(run.lastEvent, &parentAuthority) {
+					t.Fatal("child terminal replaced the parent accepted authority")
+				}
+				if _, copied := run.Termination.Events[string(parentEvent.ID)]; copied {
+					t.Fatal("parent acceptance was copied into the child replay ledger")
+				}
+				before := installationFiles(t, c.stateDir)
+				if _, _, err := c.Submit(parentEvent); err == nil {
+					t.Fatal("child replay accepted an event accepted only by its parent")
+				}
+				if _, err := c.Drive(); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(before, installationFiles(t, c.stateDir)) {
+					t.Fatal("terminal cancellation replay changed child evidence")
+				}
 				if _, err := os.Stat(parent.GitResources[plan.ResourceID].Path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("child target survived cancellation")
+				}
+				if _, err := (vcs.ExecRunner{}).Run(master.f.root, "git", "show-ref", "--verify", parent.GitResources[plan.ResourceID].Ref); err == nil {
+					t.Fatal("child target ref survived terminal cancellation")
 				}
 			}
 		})

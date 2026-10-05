@@ -631,13 +631,7 @@ func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
 			}
 			child.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 			// 候选逐段冻结直至 REVIEW_READY（开发交付物进候选，片内计划收口）。
-			for {
-				child.drive()
-				if len(child.run.AdapterIntents) == 0 {
-					break
-				}
-				child.materialize()
-			}
+			child.drive()
 			child.drive()
 			if child.run.Validation == nil || child.run.Validation.Candidate == nil {
 				t.Fatalf("REVIEW_READY candidate missing after development: candidate=%v", child.run.Validation.Candidate)
