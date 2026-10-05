@@ -678,8 +678,8 @@ func TestZcodeExecuteSelection(t *testing.T) {
 	}
 }
 
-// TestZcodeExecuteDeliverAccountProviders pins the overlay handover: the
-// delivery goes before the session, the host's answer is read back and
+// TestZcodeExecuteDeliverAccountProviders pins the overlay handover: native
+// readiness precedes the delivery, the host's answer is read back and
 // recorded, and an answer that does not confirm the overlay is refused.
 func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 	data := t.TempDir()
@@ -701,6 +701,7 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 	baseSteps := func(reply string) func(string) []peerStep {
 		return func(inputID string) []peerStep {
 			return []peerStep{
+				{On: `"method":"runtime/capabilities"`, Send: `{"id": "@ID@", "result": {"independentPlanState": true}}`},
 				{On: `"method":"provider/updateAccountConfig"`, Send: reply},
 				{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 				{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
@@ -743,8 +744,11 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 		t.Fatalf("account-provider.json = %v", record)
 	}
 	echo := readTestFile(t, scenario.echoPath)
-	if strings.Index(echo, `"method":"provider/updateAccountConfig"`) > strings.Index(echo, `"method":"session/create"`) {
-		t.Fatalf("the overlay must be delivered before the session:\n%s", echo)
+	ready := strings.Index(echo, `"method":"runtime/capabilities"`)
+	overlay := strings.Index(echo, `"method":"provider/updateAccountConfig"`)
+	created := strings.Index(echo, `"method":"session/create"`)
+	if ready < 0 || overlay < ready || created < overlay {
+		t.Fatalf("native readiness and overlay must precede the session:\n%s", echo)
 	}
 	if !strings.Contains(echo, `"basedOnZCodeBuiltinRevision":"zcode-builtin:7:`+
 		zcodePathHash(t, resolved)+`"`) {
@@ -760,6 +764,19 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 	if got := nativeRecordError(t, scenario.directory); got != "RuntimeBlocked: ZCODE_ACCOUNT_CONFIG: the host did not "+
 		`accept the account provider configuration: {"providerCount":2,"status":"received"}` {
 		t.Fatalf("error = %q", got)
+	}
+
+	scenario = newZcodeScenario(t, func(string) []peerStep {
+		return []peerStep{{On: `"method":"runtime/capabilities"`, Send: `{"id":"@ID@","error":{"code":-32603,"message":"native bootstrap unavailable"}}`}}
+	}, pin)
+	errout.Reset()
+	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+	if code != 1 || !strings.Contains(nativeRecordError(t, scenario.directory), "native bootstrap unavailable") {
+		t.Fatalf("native readiness failure: code=%d stderr=%s", code, errout.String())
+	}
+	echo = readTestFile(t, scenario.echoPath)
+	if strings.Contains(echo, `"method":"provider/updateAccountConfig"`) || strings.Contains(echo, `"method":"session/create"`) {
+		t.Fatalf("failed readiness reached overlay or session:\n%s", echo)
 	}
 }
 

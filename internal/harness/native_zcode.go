@@ -1619,11 +1619,14 @@ func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSes
 			s.close()
 		}
 	}()
-	// The app-server starts with an empty provider registry and only the side
-	// that launched it can fill it, so the account provider configuration goes
-	// first: a snapshot taken before it reports no current model at all.
+	// The protocol serves requests after native provider bootstrap has settled
+	// the active catalogue. Cross that boundary before reading its revision;
+	// the account overlay must then precede the session's selection snapshot.
 	catalogue := zcodePinnedCatalogue(req.binding)
 	if catalogue != "" {
+		if _, err := client.request("runtime/capabilities", map[string]any{}); err != nil {
+			return nil, err
+		}
 		if _, err := zcodeDeliverAccountProviders(client, catalogue, req.wanted, directory); err != nil {
 			return nil, err
 		}
