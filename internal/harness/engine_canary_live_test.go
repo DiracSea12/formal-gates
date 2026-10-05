@@ -21,14 +21,27 @@ package harness
 // boundary fails the pass with the run projection dumped. Every spent turn
 // prints its provider, session identity and native usage. A typed event the
 // engine rejects fails the pass outright — no reshaped retries over the gate.
+//
+// Human approval is required before every host call, including retries. Build
+// this test binary with `go test -c -o /tmp/formal-gates-canary.test
+// ./internal/harness`, then run it directly in a PTY with
+// `FORMAL_GATES_ENGINE_CANARY=1 /tmp/formal-gates-canary.test
+// -test.run=^TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair$
+// -test.v -test.timeout=45m`. The operator writes only the displayed approval
+// line after the human approves that call. Approval waiting counts toward the
+// existing forty-minute pass budget; EOF, denial and timeout fail the pass.
+// `go test` does not forward stdin to its test process, so it cannot approve
+// live calls. Ordinary test runs keep the live canary skipped.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,15 +149,18 @@ type canaryMaterials struct {
 
 // engineCanary is the host execution bridge and user stand-in for one pass.
 type engineCanary struct {
-	t            *testing.T
-	f            *facade.Facade
-	binary, home string
-	run          facade.Run
-	project      string
-	jobs         string
-	binding      map[string]any
-	deadline     time.Time
-	seq          int
+	t              *testing.T
+	f              *facade.Facade
+	binary, home   string
+	run            facade.Run
+	project        string
+	jobs           string
+	binding        map[string]any
+	deadline       time.Time
+	seq            int
+	approvalInput  *bufio.Reader
+	approvalOutput io.Writer
+	execute        func(any, string, bool) (map[string]any, error)
 
 	revision  string // confirmed requirement revision (bare hex)
 	doc       []byte
@@ -205,6 +221,7 @@ func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
 	c := &engineCanary{
 		t: t, project: project, deadline: time.Now().Add(canaryRunBudget),
 		repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{},
+		approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: zcodeExecute,
 	}
 
 	// The evidence directory survives the test so a failed pass keeps its
@@ -1022,9 +1039,12 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 			"provider": canaryProvider, "binding": c.binding, "workspace": workspace,
 			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
 		}
+		if err := c.authorizeCall(request, actionID, role, attempt); err != nil {
+			c.fail("dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
+		}
 		watchCtx, stopWatcher := context.WithCancel(context.Background())
 		go c.answerHeldInteractions(watchCtx, dir)
-		source, err := zcodeExecute(request, dir, false)
+		source, err := c.execute(request, dir, false)
 		stopWatcher()
 		if err != nil {
 			lastErr = err
@@ -1070,6 +1090,60 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 	}
 	c.fail("dispatch %s (%s) exhausted its %d turns: %v", actionID, role, canaryTurnBudget, lastErr)
 	return canaryTurnResult{}
+}
+
+// authorizeCall consumes one human decision for this exact request. It reads
+// only stdin, never prompt or answer material. The prompt fingerprint summarizes
+// the current bytes without printing model material or binding environment.
+// The host's current selection is unavailable until it starts; only selection
+// values already carried by this request can be shown before approval.
+func (c *engineCanary) authorizeCall(request map[string]any, actionID, role string, attempt int) error {
+	prompt := textOf(request["prompt"])
+	sum := sha256.Sum256([]byte(prompt))
+	approval := fmt.Sprintf("approve %s %d %x", actionID, attempt, sum)
+	selection := func(key string) string {
+		if value := textOf(request[key]); value != "" {
+			return value
+		}
+		return "unavailable"
+	}
+	launch := getOf(request["binding"], "launch")
+	if _, err := fmt.Fprintf(c.approvalOutput,
+		"canary call authorization: action=%q role=%q attempt=%d provider=%q workspace=%q read_only=%v prompt_bytes=%d prompt_sha256=%x model=%q reasoning_effort=%q permission_mode=%q executable=%q script=%q\nType %q to authorize this call; any other line denies it.\n",
+		actionID, role, attempt, request["provider"], request["workspace"], request["read_only"], len(prompt), sum,
+		selection("model"), selection("reasoning_effort"), selection("permission_mode"), textOf(getOf(launch, "executable")), textOf(getOf(launch, "script")), approval); err != nil {
+		return fmt.Errorf("write call authorization request: %w", err)
+	}
+	decision := make(chan struct {
+		line string
+		err  error
+	}, 1)
+	go func() {
+		line, err := c.approvalInput.ReadString('\n')
+		decision <- struct {
+			line string
+			err  error
+		}{line, err}
+	}()
+	// The run deadline remains the only time budget. A timed-out read cannot
+	// start a call, and turnIn stops the pass instead of requesting again.
+	timer := time.NewTimer(time.Until(c.deadline))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return fmt.Errorf("call authorization exceeded the %s pass budget", canaryRunBudget)
+	case answer := <-decision:
+		if answer.err != nil {
+			return fmt.Errorf("read call authorization: %w", answer.err)
+		}
+		if time.Now().After(c.deadline) {
+			return fmt.Errorf("call authorization exceeded the %s pass budget", canaryRunBudget)
+		}
+		if strings.TrimSpace(answer.line) != approval {
+			return fmt.Errorf("human denied this call")
+		}
+		return nil
+	}
 }
 
 // plainSchema normalizes one role's schema literal into plain decoded JSON
