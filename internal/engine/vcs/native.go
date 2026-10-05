@@ -168,6 +168,71 @@ func (p *Provider) WorkspaceExists(path string, h WorkspaceHandle) (bool, error)
 	}
 	return p.p4WorkspaceExists(path, h)
 }
+
+// ObservedWorkspace proves the registered copy's exact source and operation
+// even when its local checkout or sync has not finished.
+func (p *Provider) ObservedWorkspace(path, source, message string, h WorkspaceHandle) (string, bool, error) {
+	if p.name == "git" {
+		exists, err := p.WorkspaceExists(path, h)
+		if err != nil || !exists {
+			return "", false, err
+		}
+		identity, err := p.At(path, h).Resolve()
+		if err == nil && identity != source {
+			err = fmt.Errorf("workspace identity differs from original source")
+		}
+		return identity, err == nil, err
+	}
+	id, err := decodeNative(source)
+	if err != nil {
+		return "", false, err
+	}
+	if p.name == "svn" {
+		exists, err := p.svnURLExists(h.URL)
+		if err != nil || !exists {
+			return "", false, err
+		}
+		revision, err := p.svnCreatedRevision(id, h, message)
+		id.Scope, id.Revision = h.URL, revision
+		return encodeNative(id), err == nil, err
+	}
+	bound := p.At(p.root, h)
+	revision, err := bound.p4WorkspaceRevision(h, message)
+	if err != nil || revision == 0 {
+		return "", false, err
+	}
+	identity, err := bound.p4ResolveAt(strconv.Itoa(revision), path)
+	return identity, err == nil, err
+}
+
+// ObservedWorkspaceCleanup locates the exact resource deletion independently
+// of the remaining client, ref and local directory cleanup.
+func (p *Provider) ObservedWorkspaceCleanup(source, message string, h WorkspaceHandle) (bool, error) {
+	id, err := decodeNative(source)
+	if err != nil {
+		return false, err
+	}
+	if p.name == "svn" {
+		var log svnLog
+		if err := p.svnXML(&log, "log", "--xml", "-v", "-r", "HEAD:"+strconv.Itoa(id.Revision), id.Address); err != nil {
+			return false, err
+		}
+		for _, entry := range log.Entries {
+			if entry.Message != message {
+				continue
+			}
+			for _, change := range entry.Paths {
+				if change.Action == "D" && id.Address+change.Path == h.URL {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	}
+	revision, err := p.p4WorkspaceRevision(h, message)
+	return revision > id.Revision, err
+}
+
 func (p *Provider) CreateWorkspace(path, source, message string, h WorkspaceHandle) error {
 	if p.name == "git" {
 		return p.AddWorktree(path, source)

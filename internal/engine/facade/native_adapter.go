@@ -218,9 +218,12 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 }
 
 type nativeResult struct {
-	Workspace *protocol.WorkspaceEvidence
-	Candidate *protocol.CandidateEvidence
-	Cleanup   *protocol.WorkspaceCleanupReceipt
+	// A precise native effect can precede its local ref or workspace finish.
+	// This observation never admits a receipt or authorizes another writer.
+	observedEffect bool
+	Workspace      *protocol.WorkspaceEvidence
+	Candidate      *protocol.CandidateEvidence
+	Cleanup        *protocol.WorkspaceCleanupReceipt
 }
 
 func (r nativeResult) fields() (map[string]any, error) {
@@ -264,6 +267,11 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			result, complete, err = observed, true, nil
 			return
 		}
+		if observationErr == nil && observed.observedEffect {
+			// Keep the original error and responsibility until its authorized
+			// local continuation produces the complete typed evidence.
+			return
+		}
 		status, class := protocol.HostActionStatusFailed, authoring.FailureUserActionRequired
 		if observationErr != nil {
 			status, class = protocol.HostActionStatusUnknown, ""
@@ -296,7 +304,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 		}
 		if !exists {
 			if !mayWrite {
-				return nativeResult{}, false, nil
+				return f.incompleteWorkspaceEvidence(s, intent, r)
 			}
 			if err := f.admission.write(func() error {
 				invoked = true
@@ -306,10 +314,16 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			}
 		}
 		if complete, err := f.injectRequirements(s, p, mayWrite, &invoked); err != nil || !complete {
-			return nativeResult{}, false, err
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			return f.incompleteWorkspaceEvidence(s, intent, r)
 		}
 		if complete, err := f.ensureRef(r.Ref, r.Source, mayWrite, &invoked); err != nil || !complete {
-			return nativeResult{}, false, err
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			return f.incompleteWorkspaceEvidence(s, intent, r)
 		}
 		if p.Manifest != nil {
 			body := protocol.BlackboxCasesMarkdown(s.RunID, *p.Manifest)
@@ -320,7 +334,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			}
 			if string(existing) != body {
 				if !mayWrite {
-					return nativeResult{}, false, nil
+					return f.incompleteWorkspaceEvidence(s, intent, r)
 				}
 				if err := f.admission.write(func() error {
 					invoked = true
@@ -364,6 +378,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 				return nativeResult{}, false, err
 			}
 		}
+		observedEffect := false
 		for i, r := range p.Resources {
 			registered, ok := s.NativeResources[r.ID]
 			if !ok || registered != r {
@@ -374,9 +389,17 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			if err != nil {
 				return nativeResult{}, false, err
 			}
+			observedEffect = observedEffect || absent
 			if !absent {
 				if !mayWrite {
-					return nativeResult{}, false, nil
+					if f.vcs.Name() != "git" {
+						removed, err := f.vcs.ObservedWorkspaceCleanup(r.Source, "formal-gates cleanup "+s.RunID+" "+intent.ActionID+" "+intent.PayloadDigest, r.Handle)
+						if err != nil {
+							return nativeResult{}, false, err
+						}
+						observedEffect = observedEffect || removed
+					}
+					return nativeResult{observedEffect: observedEffect}, false, nil
 				}
 				if err := f.admission.write(func() error {
 					invoked = true
@@ -392,7 +415,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 				}
 				if ref != "" {
 					if !mayWrite {
-						return nativeResult{}, false, nil
+						return nativeResult{observedEffect: observedEffect}, false, nil
 					}
 					if err = f.admission.write(func() error { invoked = true; return f.vcs.RemoveRef(r.Ref) }); err != nil {
 						return nativeResult{}, false, err
@@ -401,7 +424,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 			}
 			if _, err := os.Stat(r.Path); err == nil {
 				if !mayWrite {
-					return nativeResult{}, false, nil
+					return nativeResult{observedEffect: observedEffect}, false, nil
 				}
 				if err = f.admission.write(func() error { invoked = true; return os.RemoveAll(r.Path) }); err != nil {
 					return nativeResult{}, false, err
@@ -417,6 +440,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 				return nativeResult{}, false, fmt.Errorf("native resource remains after cleanup")
 			}
 
+			observedEffect = true
 			r.Status = "CLEANED"
 			p.Resources[i] = r
 		}
@@ -424,6 +448,26 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	}
 	return nativeResult{}, false, nil
 }
+func (f *Facade) incompleteWorkspaceEvidence(s *protocol.State, intent protocol.HostActionIntent, r protocol.NativeResource) (nativeResult, bool, error) {
+	message := "formal-gates workspace " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
+	identity, found, err := f.vcs.ObservedWorkspace(r.Path, r.Source, message, r.Handle)
+	if err != nil || !found {
+		return nativeResult{}, false, err
+	}
+	actual, err := f.vcs.TreeDigest(identity)
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	expected, err := f.vcs.TreeDigest(r.Source)
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	if actual != expected {
+		return nativeResult{}, false, fmt.Errorf("observed native workspace does not preserve complete source values")
+	}
+	return nativeResult{observedEffect: true}, false, nil
+}
+
 func (f *Facade) observeWorktree(path, identity string, handles ...vcs.WorkspaceHandle) (bool, error) {
 	h := vcs.WorkspaceHandle{}
 	if len(handles) != 0 {
@@ -583,7 +627,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 		if found && observed != head {
 			if !mayWrite {
-				return nativeResult{}, false, nil
+				return nativeResult{observedEffect: true}, false, nil
 			}
 			if err = f.admission.write(func() error { *invoked = true; return native.Synchronize(observed) }); err != nil {
 				return nativeResult{}, false, err
@@ -794,7 +838,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				return nativeResult{}, false, fmt.Errorf("candidate ref %s points to %s, expected its base %s or freeze %s", r.Ref, ref, p.Base, head)
 			}
 			if !mayWrite {
-				return nativeResult{}, false, nil
+				return nativeResult{observedEffect: true}, false, nil
 			}
 			if err := f.admission.write(func() error {
 				*invoked = true

@@ -551,9 +551,21 @@ func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.Host
 	if err != nil {
 		return nativeResult{}, false, err
 	}
+	if found {
+		digest, err := f.vcs.TreeDigest(observed)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if digest != p.SourceDigest {
+			return nativeResult{}, false, fmt.Errorf("observed native promotion values differ from candidate")
+		}
+	}
 	if found && observed != head {
 		if !mayWrite {
-			return nativeResult{}, false, nil
+			return nativeResult{observedEffect: true}, false, nil
+		}
+		if _, err := f.promotionPrefix(p); err != nil {
+			return nativeResult{}, false, err
 		}
 		if err = f.admission.write(func() error { *invoked = true; return f.vcs.Synchronize(observed) }); err != nil {
 			return nativeResult{}, false, err

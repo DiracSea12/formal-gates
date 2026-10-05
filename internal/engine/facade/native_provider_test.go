@@ -2,12 +2,14 @@ package facade
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,9 +33,12 @@ func nativeFixtureDirectory(t *testing.T) string {
 }
 
 type nativeProviderRunner struct {
-	log               *os.File
-	lost              bool
-	interruptDelivery bool
+	log                 *os.File
+	lost                bool
+	interruptDelivery   bool
+	interruptOperation  string
+	deliverySubmissions []string
+	synchronizations    int
 }
 
 func (r *nativeProviderRunner) Run(dir, command string, args ...string) (string, error) {
@@ -44,12 +49,23 @@ func (r *nativeProviderRunner) RunRaw(dir, command string, input []byte, args ..
 	start := time.Now()
 	body, err := (vcs.ExecRunner{}).RunRaw(dir, command, input, args...)
 	fmt.Fprintf(r.log, "%s %q dir=%q stdin=%q elapsed=%s error=%v\nstdout=%q\n", command, args, dir, input, time.Since(start), err, body)
-	if err == nil && r.interruptDelivery && !r.lost {
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "formal-gates delivery ") {
-				r.lost = true
-				return nil, fmt.Errorf("fixture lost completed delivery response")
-			}
+	if command == "svn" && len(args) > 0 && args[0] == "update" || command == "p4" && slices.Contains(args, "sync") {
+		r.synchronizations++
+	}
+	operation := ""
+	if r.interruptDelivery {
+		operation = "delivery"
+	}
+	if r.interruptOperation != "" {
+		operation = r.interruptOperation
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "formal-gates delivery ") && (command == "svn" && args[0] == "commit" || command == "p4" && slices.Contains(args, "submit")) {
+			r.deliverySubmissions = append(r.deliverySubmissions, arg)
+		}
+		if err == nil && !r.lost && operation != "" && strings.HasPrefix(arg, "formal-gates "+operation+" ") {
+			r.lost = true
+			return nil, fmt.Errorf("fixture lost completed %s response", operation)
 		}
 	}
 	return body, err
@@ -153,6 +169,43 @@ func startNativeProviderDriver(t *testing.T, name string) (*validationDriver, *n
 	d.drive()
 	return d, runner
 }
+func reopenNativeProviderDriver(t *testing.T, d *validationDriver, name string, runner *nativeProviderRunner) {
+	t.Helper()
+	d.reopen()
+	state := driverState(t, d)
+	d.f.vcsRunner = runner
+	d.f.vcs = vcs.NewNative(d.f.root, name, runner).At(state.NativeRoot, state.NativeHandle)
+}
+
+func nativeIncompleteState(t *testing.T, d *validationDriver, operation string) protocol.HostActionIntent {
+	t.Helper()
+	state := driverState(t, d)
+	for _, intent := range state.PendingHostActions {
+		if intent.Adapter == nil || string(intent.Adapter.Operation) != operation {
+			continue
+		}
+		if _, accepted := state.HostActionReceipts[intent.ActionID]; accepted {
+			continue
+		}
+		if len(state.HostActionFailures[intent.ActionID]) != 0 || !state.NativeActionWritable(intent, d.f.definition) {
+			t.Fatal("observed effect lost its original execution responsibility")
+		}
+		if directory := os.Getenv("NATIVE_VCS_EVIDENCE"); directory != "" {
+			body, err := json.MarshalIndent(state, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+"-"+operation+"-incomplete-state.json")
+			if err := os.WriteFile(path, body, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return intent
+	}
+	t.Fatal("lost response has no original pending native intent")
+	return protocol.HostActionIntent{}
+}
+
 func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	t.Helper()
 	dev, di := d.action("engine.development.batch")
@@ -237,33 +290,89 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 				d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one native command"}})
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "whitebox", "quality"}))
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+				if lost {
+					runner.interruptOperation = "workspace"
+					if _, err := d.f.Drive(); err == nil || !runner.lost {
+						t.Fatalf("completed workspace response not lost: %v", err)
+					}
+					nativeIncompleteState(t, d, "op.workspace")
+					reopenNativeProviderDriver(t, d, name, runner)
+					runner.interruptOperation, runner.lost = "", false
+				}
 				d.drive()
 				nativeWhiteboxReady(t, d)
 				candidate := d.run.Validation.Candidate.Identity
 				digest := d.run.Validation.Candidate.Digest
 				runner.interruptDelivery = lost
 				_, err := d.f.PrepareCandidate("verified native candidate")
+				var original protocol.HostActionIntent
 				if lost {
 					if err == nil || !runner.lost {
 						t.Fatalf("native completed delivery response not lost: %v", err)
 					}
-					d.reopen()
-					state := driverState(t, d)
-					d.f.vcsRunner = runner
-					d.f.vcs = vcs.NewNative(d.f.root, name, runner).At(state.NativeRoot, state.NativeHandle)
+					original = nativeIncompleteState(t, d, "op.candidate")
+					reopenNativeProviderDriver(t, d, name, runner)
 				} else if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := d.f.PrepareCandidate("verified native candidate"); err != nil {
-					t.Fatal(err)
+				errors := make(chan error, 2)
+				for i := 0; i < 2; i++ {
+					go func() { _, err := d.f.PrepareCandidate("verified native candidate"); errors <- err }()
+				}
+				for i := 0; i < 2; i++ {
+					if err := <-errors; err != nil {
+						t.Fatal(err)
+					}
 				}
 				state := driverState(t, d)
 				if state.CandidatePromotion == nil || state.CandidatePromotion.Provider != name || state.PromotedDigest != digest {
 					t.Fatal("promotion receipt lost native provider/full digest")
 				}
+				proof := state.CandidatePromotion
+				if proof.Source != candidate || proof.SourceDigest != digest || proof.FinalDigest != digest || lost && proof.OperationID != original.ActionID {
+					t.Fatalf("promotion did not preserve the original candidate/operation: %+v", proof)
+				}
+				var params protocol.CandidateParameters
+				if err := decodeNativeParams(state.PendingHostActions[proof.OperationID], &params); err != nil || params.Promotion == nil {
+					t.Fatalf("promotion has no original signed parameters: %v", err)
+				}
+				if len(runner.deliverySubmissions) != 1 || runner.deliverySubmissions[0] != params.Promotion.Message {
+					t.Fatalf("native submitted another operation: %q", runner.deliverySubmissions)
+				}
+				count, err := d.f.vcs.CommitCount(proof.TargetStart.Head, proof.Final)
+				if err != nil || count != 1 {
+					t.Fatalf("delivery history does not have one native commit: %d %v", count, err)
+				}
+				before, syncs := len(runner.deliverySubmissions), runner.synchronizations
+				if _, err := d.f.PrepareCandidate("verified native candidate"); err != nil || len(runner.deliverySubmissions) != before || runner.synchronizations != syncs {
+					t.Fatalf("repeated promotion performed another native writer: %v", err)
+				}
+				if lost {
+					runner.interruptDelivery = false
+					runner.interruptOperation, runner.lost = "cleanup", false
+					if _, err := d.f.Drive(); err == nil || !runner.lost {
+						t.Fatalf("completed cleanup response not lost: %v", err)
+					}
+					nativeIncompleteState(t, d, "op.cleanup")
+					reopenNativeProviderDriver(t, d, name, runner)
+					runner.interruptOperation = ""
+				}
 				d.drive()
 				if d.run.Status != "COMPLETE" {
 					t.Fatalf("native cleanup not complete: %+v", d.run.Next)
+				}
+				if d.run.Termination == nil || d.run.Termination.CandidatePromotion == nil || !reflect.DeepEqual(*d.run.Termination.CandidatePromotion, *proof) {
+					t.Fatal("terminal summary lost the exact promotion receipt")
+				}
+				for _, path := range []string{"app.go", "app_test.go", ".gates/results/validation.blackbox-cases.md"} {
+					validated, err := d.f.vcs.Entry(candidate, path)
+					if err != nil || validated == "" {
+						t.Fatalf("validated native content is missing: %s %v", path, err)
+					}
+					final, err := d.f.vcs.Entry(proof.Final, path)
+					if err != nil || final != validated {
+						t.Fatalf("final native bytes/metadata differ: %s %v", path, err)
+					}
 				}
 				observed, err := vcs.NewNative(d.f.root, name, runner).TreeDigest(candidate)
 				if err != nil || observed != digest {

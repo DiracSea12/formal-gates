@@ -152,6 +152,10 @@ func (p *Provider) p4Spec() (map[string]string, error) {
 	return records[0], nil
 }
 func (p *Provider) p4Resolve(revision string) (string, error) {
+	return p.p4ResolveAt(revision, p.root)
+}
+
+func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 	info, err := p.p4JSON("info")
 	if err != nil {
 		return "", err
@@ -163,7 +167,7 @@ func (p *Provider) p4Resolve(revision string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !SamePath(spec["Root"], p.root) {
+	if !SamePath(spec["Root"], workspace) {
 		return "", fmt.Errorf("P4 client root differs from bound workspace")
 	}
 	client := spec["Client"]
@@ -488,6 +492,26 @@ func (p *Provider) p4WorkspaceExists(workspace string, h WorkspaceHandle) (bool,
 	}
 	return true, nil
 }
+func (p *Provider) p4WorkspaceRevision(h WorkspaceHandle, message string) (int, error) {
+	changes, err := p.p4JSON("changes", "-l", "-s", "submitted", h.Depot+"/...")
+	if err != nil {
+		return 0, err
+	}
+	revision := 0
+	for _, change := range changes {
+		if strings.TrimSuffix(change["desc"], "\n") == message {
+			if revision != 0 {
+				return 0, fmt.Errorf("multiple P4 changes match one workspace operation")
+			}
+			revision, err = strconv.Atoi(change["change"])
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+	return revision, nil
+}
+
 func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, message string, h WorkspaceHandle) error {
 	bound := p.At(workspace, h)
 	original, err := p.p4IdentityJSON(id, "client", "-o", id.Client)
@@ -567,15 +591,9 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 	if _, err = bound.p4Raw([]byte(form), "client", "-i"); err != nil {
 		return err
 	}
-	changes, err := bound.p4JSON("changes", "-l", "-s", "submitted", h.Depot+"/...")
+	created, err := bound.p4WorkspaceRevision(h, message)
 	if err != nil {
 		return err
-	}
-	created := 0
-	for _, change := range changes {
-		if strings.TrimSuffix(change["desc"], "\n") == message {
-			created, _ = strconv.Atoi(change["change"])
-		}
 	}
 	if created == 0 {
 		args := []string{"populate", "-d", message}
@@ -587,7 +605,7 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 		if _, err = bound.p4Raw(nil, args...); err != nil {
 			return err
 		}
-		changes, err = bound.p4JSON("changes", "-s", "submitted", "-m", "1", h.Depot+"/...")
+		changes, err := bound.p4JSON("changes", "-s", "submitted", "-m", "1", h.Depot+"/...")
 		if err != nil {
 			return err
 		}

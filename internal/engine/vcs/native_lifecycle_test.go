@@ -50,12 +50,23 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			base := nativeIdentityAt(t, p)
 			h := PlanWorkspace(name, base, "response", "candidate")
 			path := filepath.Join(nativeFixtureDirectory(t), "candidate")
+			message := "bound creation " + strings.Repeat("exact source operation ", 8)
+			if identity, found, err := p.ObservedWorkspace(path, base, message, h); err != nil || found || identity != "" {
+				t.Fatalf("unperformed copy was observed: %q %t %v", identity, found, err)
+			}
 			runner.lost = "copy"
 			if name == "p4" {
 				runner.lost = "populate"
 			}
 			if err := p.CreateWorkspace(path, base, "bound creation "+strings.Repeat("exact source operation ", 8), h); err == nil || !runner.didLose {
 				t.Fatalf("completed side effect was not interrupted: %v", err)
+			}
+			observedCopy, found, err := p.ObservedWorkspace(path, base, message, h)
+			if err != nil || !found || nativeDigestAt(t, p, observedCopy) != nativeDigestAt(t, p, base) {
+				t.Fatalf("exact native copy not observed before local continuation: %q %t %v", observedCopy, found, err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("readonly copy observation created a local workspace: %v", err)
 			}
 			if err := p.CreateWorkspace(path, base, "bound creation "+strings.Repeat("exact source operation ", 8), h); err != nil {
 				t.Fatal(err)
@@ -104,8 +115,17 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			want := nativeDigestAt(t, q, observed)
 			runner.didLose = false
 			runner.lost = "delete"
+			if name == "p4" {
+				runner.lost = "submit"
+			}
 			if err := p.CleanupWorkspace(path, "bound cleanup", h); err == nil || !runner.didLose {
 				t.Fatalf("cleanup was not interrupted: %v", err)
+			}
+			if observed, err := p.ObservedWorkspaceCleanup(base, "bound cleanup", h); err != nil || !observed {
+				t.Fatalf("exact native cleanup not observed before local continuation: %t %v", observed, err)
+			}
+			if observed, err := p.ObservedWorkspaceCleanup(base, "unsubmitted cleanup", h); err != nil || observed {
+				t.Fatalf("unperformed native cleanup was observed: %t %v", observed, err)
 			}
 			if err := p.CleanupWorkspace(path, "bound cleanup", h); err != nil {
 				t.Fatal(err)

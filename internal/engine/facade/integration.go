@@ -41,6 +41,24 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 		return nativeResult{}, false, err
 	}
 	message := "formal-gates merge " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
+	if p.Stage == "MERGE_FINISH" && native.Name() != "git" {
+		observed, found, err := native.ObservedCommit(p.Base, message)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if found && observed != head {
+			if err := native.VerifyIntegration(p.Base, p.Integration.Incoming, observed, message); err != nil {
+				return nativeResult{}, false, err
+			}
+			if !mayWrite {
+				return nativeResult{observedEffect: true}, false, nil
+			}
+			if err := f.admission.write(func() error { *invoked = true; return native.Synchronize(observed) }); err != nil {
+				return nativeResult{}, false, err
+			}
+			return f.integrationEvidence(s, intent, p, mayWrite, invoked)
+		}
+	}
 	if p.Stage == "MERGE_START" {
 		if head != p.Base || mergeHead != "" && mergeHead != p.Integration.Incoming {
 			return nativeResult{}, false, fmt.Errorf("merge start has a different native prefix")
@@ -159,7 +177,7 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 				return nativeResult{}, false, fmt.Errorf("merge ref differs from its original prefix")
 			}
 			if !mayWrite {
-				return nativeResult{}, false, nil
+				return nativeResult{observedEffect: true}, false, nil
 			}
 			if err := f.admission.write(func() error { *invoked = true; return f.vcs.Pin(r.Ref, head) }); err != nil {
 				return nativeResult{}, false, err
