@@ -31,6 +31,13 @@ type Validation struct {
 	Problems            map[string]*ValidationProblem           `json:"problems"`
 }
 
+// Validation work uses the inventory observed for the latest local confirmation.
+// Equal document bytes can belong to a different confirmation occurrence, so a
+// reset's temporary projection cannot authorize work before its document sync.
+func (s *State) validationRequirementCurrent() bool {
+	return s.Validation != nil && s.Validation.RequirementRevision == s.RequirementRevision() && s.Validation.Generation == s.requirementGeneration()
+}
+
 // DesignTask refers to the accepted design result supplying the artifact inputs.
 type CaseSet struct {
 	DesignTask    runtime.TaskKey             `json:"designTask"`
@@ -511,7 +518,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			view.RequiredTasks[step.Header.ID] = nil
 		}
 	}
-	if s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.Topology == nil || s.RouteMode == "" {
+	if !s.validationRequirementCurrent() || s.Topology == nil || s.RouteMode == "" {
 		return
 	}
 	v := s.Validation

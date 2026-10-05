@@ -24,6 +24,9 @@ func (e *Engine) acceptValidationObservation(s *State, p *OperatorObservationPay
 	}
 	o := p.Validation
 	if o.Kind == "REQUIREMENT" {
+		if s.resetPending() {
+			return validationError("requirement inventory awaits the complete reset confirmation")
+		}
 		if o.RequirementRevision != s.RequirementRevision() || s.IntakeConfirmationReceipt == nil {
 			return validationError("requirement observation must bind the confirmed revision")
 		}

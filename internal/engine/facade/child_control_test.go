@@ -66,7 +66,55 @@ func confirmResetControl(t *testing.T, d *validationDriver) {
 	}
 	pkg := ask.Package
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: ask.BaseRevision, CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoProductReview: pkg.RedoProductReview, RedoStartReadiness: pkg.RedoStartReadiness, ResetRequestID: pkg.ResetRequestID, Reason: "confirm the complete registered requirement and solution"}}})
+	state := driverState(t, d)
+	if state.Validation != nil {
+		generation := state.RequirementRevisions[len(state.RequirementRevisions)-1].StateRevision
+		if state.Validation.Generation != generation {
+			t.Fatal("reset inventory does not belong to its accepted local confirmation")
+		}
+		for id, intent := range state.PendingHostActions {
+			if intent.Adapter == nil || intent.Adapter.Operation != "op.workspace" && intent.Adapter.Operation != "op.candidate" {
+				continue
+			}
+			raw, err := json.Marshal(intent.Adapter.Params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var params struct {
+				Generation uint64 `json:"generation"`
+			}
+			if err := json.Unmarshal(raw, &params); err != nil {
+				t.Fatal(err)
+			}
+			if params.Generation != generation {
+				t.Fatalf("confirmed reset issued stale native work: action=%s intent=%d confirmation=%d", id, params.Generation, generation)
+			}
+		}
+	}
+	retainResetState(t, d, "confirmed")
 }
+
+// Preserve exact confirmation-boundary states as well as the final scenario.
+// The existing test evidence sink has no effect on production behavior.
+func retainResetState(t *testing.T, d *validationDriver, authority string) {
+	t.Helper()
+	destination := os.Getenv("FORMAL_GATES_TEST_EVIDENCE")
+	if destination == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(d.f.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(destination, t.Name(), "reset-authority", authority+"-state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
 	before := driverState(t, child)
@@ -76,6 +124,30 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	reset := resetControl(t, child)
+	child.drive()
+	pending := driverState(t, child)
+	if !pending.ResetPending() || !pending.Decisions[string(reset.Decide.Request)].Reset.Applied {
+		t.Fatal("reset did not preserve its pending confirmation authority")
+	}
+	retainResetState(t, child, "unconfirmed")
+	unchanged, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := child.f.engine.SyncParentRequirement(driverState(t, master), emptyFingerprint()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observation := protocol.Event{ID: protocol.EventID(child.eventID()), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: pending.RequirementRevision(), Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: pending.RequirementRevision(), Document: string(raw)}}}
+	if _, _, err := child.f.Submit(observation); err == nil {
+		t.Fatal("ordinary requirement observation bypassed reset re-confirmation")
+	}
+	afterObservation, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
+	if err != nil || !bytes.Equal(unchanged, afterObservation) {
+		t.Fatal("parent sync or rejected observation changed pending reset authority", err)
+	}
+	child.reopen()
 	confirmResetControl(t, child)
 	state := driverState(t, child)
 	assertResetResourceOwnership(t, child, before, reset)

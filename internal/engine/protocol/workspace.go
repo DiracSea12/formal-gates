@@ -222,7 +222,7 @@ func (s *State) AcceptedNativeSnapshot() string {
 // confirmed plan and its complete source set. A checkpoint only releases later
 // development; an AFFECTED wave still owes FULL validation of the same candidate.
 func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
-	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || s.Validation == nil || s.Validation.RequirementRevision != s.RequirementRevision() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return false
 	}
 	_, plan, _ := s.confirmedDevelopmentPlan()
