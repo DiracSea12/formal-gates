@@ -13,6 +13,19 @@ import (
 	"time"
 )
 
+func nativeFixtureDirectory(t *testing.T) string {
+	t.Helper()
+	if evidence := os.Getenv("NATIVE_VCS_EVIDENCE"); evidence != "" {
+		path, err := os.MkdirTemp(evidence, strings.ReplaceAll(t.Name(), "/", "-")+"-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("native fixture: %s", path)
+		return path
+	}
+	return t.TempDir()
+}
+
 type nativeTestRunner struct {
 	port, user, client string
 	log                *os.File
@@ -63,7 +76,7 @@ func nativeFixtureLog(t *testing.T) *os.File {
 	t.Helper()
 	directory := os.Getenv("NATIVE_VCS_EVIDENCE")
 	if directory == "" {
-		directory = t.TempDir()
+		directory = nativeFixtureDirectory(t)
 	}
 	file, err := os.Create(filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+".native-commands.log"))
 	if err != nil {
@@ -80,7 +93,7 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 			t.Skipf("%s unavailable", tool)
 		}
 	}
-	root := t.TempDir()
+	root := nativeFixtureDirectory(t)
 	repo := filepath.Join(root, "repository")
 	wc := filepath.Join(root, "main")
 	runner := &nativeTestRunner{log: nativeFixtureLog(t)}
@@ -122,7 +135,7 @@ func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
 	if !strings.Contains(entries["."], "custom:binary") || !strings.Contains(entries["empty"], "custom:directory") || !strings.Contains(entries["body.txt"], "IGxlYWRpbmcKdHJhaWxpbmcKCg==") {
 		t.Fatalf("native values omitted: %v", entries)
 	}
-	workspace := filepath.Join(t.TempDir(), "candidate")
+	workspace := filepath.Join(nativeFixtureDirectory(t), "candidate")
 	handle := PlanWorkspace("svn", base, "owned", "candidate")
 	if err = p.CreateWorkspace(workspace, base, "bound copy", handle); err != nil {
 		t.Fatal(err)
@@ -206,7 +219,7 @@ func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
 }
 func TestNativeRawRunnerPreservesBytesAndStdin(t *testing.T) {
 	input := []byte(" leading\n\n")
-	body, err := (ExecRunner{}).RunRaw(t.TempDir(), "cat", input)
+	body, err := (ExecRunner{}).RunRaw(nativeFixtureDirectory(t), "cat", input)
 	if err != nil || !bytes.Equal(body, input) {
 		t.Fatalf("raw bytes changed: %q %v", body, err)
 	}
@@ -224,7 +237,7 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	}
 	port := listener.Addr().String()
 	listener.Close()
-	root := t.TempDir()
+	root := nativeFixtureDirectory(t)
 	serverRoot := filepath.Join(root, "server")
 	if err = os.MkdirAll(serverRoot, 0755); err != nil {
 		t.Fatal(err)
@@ -269,7 +282,7 @@ func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := filepath.Join(t.TempDir(), "candidate")
+	workspace := filepath.Join(nativeFixtureDirectory(t), "candidate")
 	handle := PlanWorkspace("p4", base, "owned", "candidate")
 	if err = p.CreateWorkspace(workspace, base, "bound populate", handle); err != nil {
 		t.Fatal(err)

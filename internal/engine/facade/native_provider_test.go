@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,19 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 )
+
+func nativeFixtureDirectory(t *testing.T) string {
+	t.Helper()
+	if evidence := os.Getenv("NATIVE_VCS_EVIDENCE"); evidence != "" {
+		path, err := os.MkdirTemp(evidence, strings.ReplaceAll(t.Name(), "/", "-")+"-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("native fixture: %s", path)
+		return path
+	}
+	return t.TempDir()
+}
 
 type nativeProviderRunner struct {
 	log               *os.File
@@ -44,7 +58,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 	t.Helper()
 	directory := os.Getenv("NATIVE_VCS_EVIDENCE")
 	if directory == "" {
-		directory = t.TempDir()
+		directory = nativeFixtureDirectory(t)
 	}
 	log, err := os.Create(filepath.Join(directory, strings.ReplaceAll(t.Name(), "/", "-")+".native-commands.log"))
 	if err != nil {
@@ -52,7 +66,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 	}
 	t.Cleanup(func() { log.Close() })
 	runner := &nativeProviderRunner{log: log}
-	root := filepath.Join(t.TempDir(), "main")
+	root := filepath.Join(nativeFixtureDirectory(t), "main")
 	command := func(dir, cmd string, args ...string) string {
 		t.Helper()
 		out, err := runner.Run(dir, cmd, args...)
@@ -62,7 +76,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 		return out
 	}
 	if name == "svn" {
-		repo := filepath.Join(t.TempDir(), "repository")
+		repo := filepath.Join(nativeFixtureDirectory(t), "repository")
 		command("", "svnadmin", "create", repo)
 		command("", "svn", "mkdir", "file://"+repo+"/trunk", "-m", "fixture trunk")
 		command("", "svn", "checkout", "file://"+repo+"/trunk", root)
@@ -73,7 +87,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 		}
 		port := listener.Addr().String()
 		listener.Close()
-		serverRoot := t.TempDir()
+		serverRoot := nativeFixtureDirectory(t)
 		server := exec.Command("p4d", "-r", serverRoot, "-p", port)
 		server.Stdout, server.Stderr = log, log
 		if err := server.Start(); err != nil {
@@ -235,5 +249,102 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSVNCandidateDirectoryPermissions(t *testing.T) {
+	for _, scenario := range []string{"new-parents", "existing-parent", "explicit-empty", "explicit-property", "undeclared-sibling", "extra-empty", "new-parent-property", "existing-parent-property", "test-package"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, base, runner := nativeProviderFixture(t, "svn")
+			native := vcs.NewNative(root, "svn", runner)
+			write := func(path, body string) {
+				t.Helper()
+				target := filepath.Join(root, filepath.FromSlash(path))
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(target, []byte(body), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths := []string{"nested/input.txt"}
+			stage := "DEVELOPMENT"
+			switch scenario {
+			case "existing-parent", "existing-parent-property":
+				paths = []string{".gates/input.txt"}
+			case "explicit-empty":
+				paths = []string{"empty"}
+			case "explicit-property":
+				paths = []string{".gates"}
+			case "test-package":
+				paths, stage = []string{"nested/input_test.go"}, "QA_ARTIFACT"
+			}
+			if scenario == "explicit-empty" {
+				if err := os.Mkdir(filepath.Join(root, "empty"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			} else if scenario == "explicit-property" {
+				if _, err := runner.Run(root, "svn", "propset", "custom:directory", " exact \n", ".gates"); err != nil {
+					t.Fatal(err)
+				}
+			} else if scenario == "test-package" {
+				write(paths[0], "package nested\nimport \"testing\"\nfunc TestInput(t *testing.T) {}\n")
+			} else {
+				write(paths[0], " exact input \n\n")
+			}
+			switch scenario {
+			case "undeclared-sibling":
+				write("nested/other.txt", "undeclared")
+			case "extra-empty":
+				if err := os.Mkdir(filepath.Join(root, "extra"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "new-parent-property":
+				if err := native.Track(paths); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := runner.Run(root, "svn", "propset", "custom:directory", "unauthorized", "nested"); err != nil {
+					t.Fatal(err)
+				}
+			case "existing-parent-property":
+				if _, err := runner.Run(root, "svn", "propset", "custom:directory", "unauthorized", ".gates"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := protocol.NativeResource{ID: "candidate", Owner: "directory", Role: "development", Path: root, Source: base, Identity: base, Status: "READY"}
+			s := &protocol.State{RunID: "directory", VCSName: "svn", NativeResources: map[string]protocol.NativeResource{r.ID: r}}
+			params, err := evidenceFields(protocol.CandidateParameters{Stage: stage, WorkspaceID: r.ID, Base: base, Paths: paths})
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent := protocol.HostActionIntent{ActionID: "freeze", PayloadDigest: "sha256:directories", Adapter: &protocol.AdapterHostAction{Operation: "op.candidate", Params: params}}
+			f := &Facade{root: root, vcs: native, admission: *testAdmission(t, root, "directory", "sha256:package", DefaultProvider)}
+			result, complete, err := f.candidateEvidence(s, intent, true, new(bool))
+			rejected := scenario == "undeclared-sibling" || scenario == "extra-empty" || scenario == "new-parent-property" || scenario == "existing-parent-property"
+			if rejected {
+				if err == nil || complete || result.Candidate != nil {
+					t.Fatalf("undeclared native value accepted: %+v %t %v", result, complete, err)
+				}
+				head, resolveErr := native.Resolve()
+				if resolveErr != nil || head != base {
+					t.Fatalf("rejection committed values: %s %v", head, resolveErr)
+				}
+				return
+			}
+			if err != nil || !complete || result.Candidate == nil {
+				t.Fatalf("declared native values rejected: %+v %t %v", result, complete, err)
+			}
+			want, err := native.Changes(base, result.Candidate.Identity)
+			if err != nil || !reflect.DeepEqual(want, result.Candidate.Changes) {
+				t.Fatalf("directory evidence omitted native values: %+v %v", result.Candidate, err)
+			}
+			if scenario == "test-package" && (!result.Candidate.TestOnly || !result.Candidate.ProductionViewEqual) {
+				t.Fatal("test directory containers lost test-only proof")
+			}
+			recovered, observed, err := f.candidateEvidence(s, intent, false, new(bool))
+			if err != nil || !observed || !reflect.DeepEqual(recovered, result) {
+				t.Fatalf("observation changed native proof: %+v %v", recovered, err)
+			}
+		})
 	}
 }

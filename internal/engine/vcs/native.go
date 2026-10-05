@@ -87,6 +87,15 @@ func entryChanges(base, current map[string]string) []Change {
 	}
 	return changes
 }
+
+// IsDirectoryContainer identifies a newly versioned, property-free directory
+// needed to hold a declared descendant. The directory remains in native evidence;
+// directory properties, removals and independent empty directories need a declaration.
+func (c Change) IsDirectoryContainer(paths []string) bool {
+	return c.Kind == "A" && c.BaseMetadata == "" && c.Metadata == entryValue(nativeEntry{Kind: "dir"}) &&
+		slices.ContainsFunc(paths, func(path string) bool { return strings.HasPrefix(path, c.Path+"/") })
+}
+
 func (p *Provider) nativeChanges(base, current string) ([]Change, error) {
 	a, err := p.nativeEntries(base)
 	if err != nil {
@@ -325,7 +334,7 @@ func (p *Provider) ObservedCommit(base, message string) (string, bool, error) {
 		}
 		return found, found != "", nil
 	}
-	records, err := p.p4JSON("changes", "-s", "submitted", "-c", p.p4Client(), "//"+p.p4Client()+"/...")
+	records, err := p.p4JSON("changes", "-l", "-s", "submitted", "-c", p.p4Client(), "//"+p.p4Client()+"/...")
 	if err != nil {
 		return "", false, err
 	}

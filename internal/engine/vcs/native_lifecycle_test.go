@@ -37,7 +37,7 @@ func nativeDigestAt(t *testing.T, p *Provider, id string) string {
 func nativeWorkspaceAt(t *testing.T, p *Provider, base, id string) (*Provider, WorkspaceHandle) {
 	t.Helper()
 	h := PlanWorkspace(p.Name(), base, "owned", id)
-	path := filepath.Join(t.TempDir(), id)
+	path := filepath.Join(nativeFixtureDirectory(t), id)
 	if err := p.CreateWorkspace(path, base, "workspace "+id, h); err != nil {
 		t.Fatal(err)
 	}
@@ -49,15 +49,15 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			p, runner := nativeFixture(t, name)
 			base := nativeIdentityAt(t, p)
 			h := PlanWorkspace(name, base, "response", "candidate")
-			path := filepath.Join(t.TempDir(), "candidate")
+			path := filepath.Join(nativeFixtureDirectory(t), "candidate")
 			runner.lost = "copy"
 			if name == "p4" {
 				runner.lost = "populate"
 			}
-			if err := p.CreateWorkspace(path, base, "bound creation", h); err == nil || !runner.didLose {
+			if err := p.CreateWorkspace(path, base, "bound creation "+strings.Repeat("exact source operation ", 8), h); err == nil || !runner.didLose {
 				t.Fatalf("completed side effect was not interrupted: %v", err)
 			}
-			if err := p.CreateWorkspace(path, base, "bound creation", h); err != nil {
+			if err := p.CreateWorkspace(path, base, "bound creation "+strings.Repeat("exact source operation ", 8), h); err != nil {
 				t.Fatal(err)
 			}
 			q := p.At(path, h)
@@ -65,10 +65,10 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			if nativeDigestAt(t, p, base) != nativeDigestAt(t, q, created) {
 				t.Fatal("recovered copy changed values")
 			}
-			if err := p.CreateWorkspace(path, base, "bound creation", h); err != nil || nativeIdentityAt(t, q) != created {
+			if err := p.CreateWorkspace(path, base, "bound creation "+strings.Repeat("exact source operation ", 8), h); err != nil || nativeIdentityAt(t, q) != created {
 				t.Fatalf("repetition changed identity: %v", err)
 			}
-			for _, message := range []string{"bound freeze", "bound creation"} {
+			for _, message := range []string{"bound freeze " + strings.Repeat("exact submitted operation ", 8), "bound creation " + strings.Repeat("exact source operation ", 8)} {
 				if observed, found, err := q.ObservedCommit(created, message); err != nil || found || observed != "" {
 					t.Fatalf("no-effect prefix has a later commit: %q %t %v", observed, found, err)
 				}
@@ -84,10 +84,10 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 			if name == "p4" {
 				runner.lost = "submit"
 			}
-			if err := q.Commit("bound freeze"); err == nil || !runner.didLose {
+			if err := q.Commit("bound freeze " + strings.Repeat("exact submitted operation ", 8)); err == nil || !runner.didLose {
 				t.Fatalf("completed commit was not interrupted: %v", err)
 			}
-			observed, found, err := q.ObservedCommit(created, "bound freeze")
+			observed, found, err := q.ObservedCommit(created, "bound freeze "+strings.Repeat("exact submitted operation ", 8))
 			if err != nil || !found {
 				t.Fatalf("committed identity not observed: %v", err)
 			}
@@ -192,63 +192,105 @@ func TestNativeIndependentWorkspacesIntegrateFixedInputs(t *testing.T) {
 }
 func TestNativeConflictResolutionPreservesObservedInputs(t *testing.T) {
 	for _, name := range []string{"svn", "p4"} {
-		t.Run(name, func(t *testing.T) {
-			p, _ := nativeFixture(t, name)
-			base := nativeIdentityAt(t, p)
-			first, h1 := nativeWorkspaceAt(t, p, base, "first")
-			second, h2 := nativeWorkspaceAt(t, p, base, "second")
-			for i, q := range []*Provider{first, second} {
-				if err := os.WriteFile(filepath.Join(q.root, "body.txt"), []byte(fmt.Sprintf("choice %d\n", i)), 0644); err != nil {
+		for _, lost := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
+				p, runner := nativeFixture(t, name)
+				base := nativeIdentityAt(t, p)
+				first, h1 := nativeWorkspaceAt(t, p, base, "first")
+				second, h2 := nativeWorkspaceAt(t, p, base, "second")
+				for i, q := range []*Provider{first, second} {
+					if err := os.WriteFile(filepath.Join(q.root, "body.txt"), []byte(fmt.Sprintf("choice %d\n", i)), 0644); err != nil {
+						t.Fatal(err)
+					}
+					if err := q.Track([]string{"body.txt"}); err != nil {
+						t.Fatal(err)
+					}
+					if err := q.Commit(fmt.Sprintf("choice %d", i)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				prefix := nativeIdentityAt(t, first)
+				incoming := nativeIdentityAt(t, second)
+				if err := first.Merge(incoming); err != nil {
 					t.Fatal(err)
 				}
-				if err := q.Track([]string{"body.txt"}); err != nil {
+				proof, err := first.ObserveIntegration(prefix, incoming)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if err := q.Commit(fmt.Sprintf("choice %d", i)); err != nil {
+				if !proof.Started || !slices.ContainsFunc(proof.Entries, func(e IndexEntry) bool { return e.Stage != 0 && e.Path == "body.txt" }) {
+					t.Fatalf("content conflict not observed: %+v", proof)
+				}
+				if err := os.WriteFile(filepath.Join(first.root, "body.txt"), []byte("semantic choice\n"), 0644); err != nil {
 					t.Fatal(err)
 				}
-			}
-			prefix := nativeIdentityAt(t, first)
-			incoming := nativeIdentityAt(t, second)
-			if err := first.Merge(incoming); err != nil {
-				t.Fatal(err)
-			}
-			proof, err := first.ObserveIntegration(prefix, incoming)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !proof.Started || !slices.ContainsFunc(proof.Entries, func(e IndexEntry) bool { return e.Stage != 0 && e.Path == "body.txt" }) {
-				t.Fatalf("content conflict not observed: %+v", proof)
-			}
-			if err := os.WriteFile(filepath.Join(first.root, "body.txt"), []byte("semantic choice\n"), 0644); err != nil {
-				t.Fatal(err)
-			}
-			if err := first.ResolveConflicts([]string{"body.txt"}); err != nil {
-				t.Fatal(err)
-			}
-			if err := first.Commit("resolved merge"); err != nil {
-				t.Fatal(err)
-			}
-			if err := first.VerifyIntegration(prefix, incoming, nativeIdentityAt(t, first), "resolved merge"); err != nil {
-				t.Fatal(err)
-			}
-			entry, err := first.Entry(nativeIdentityAt(t, first), "body.txt")
-			var value nativeEntry
-			if err != nil || json.Unmarshal([]byte(entry), &value) != nil || string(value.Content) != "semantic choice\n" {
-				t.Fatalf("resolved native content differs: %+v %v", value, err)
-			}
-			for _, q := range []*Provider{first, second} {
-				if err := q.VerifyReady(); err != nil {
+				if err := first.ResolveConflicts([]string{"body.txt"}); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if err := p.CleanupWorkspace(first.root, "cleanup first", h1); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.CleanupWorkspace(second.root, "cleanup second", h2); err != nil {
-				t.Fatal(err)
-			}
-		})
+				resolved, err := first.ObserveIntegration(prefix, incoming)
+				if err != nil || slices.ContainsFunc(resolved.Entries, func(e IndexEntry) bool { return e.Stage != 0 }) {
+					t.Fatalf("native resolution remains unresolved: %+v %v", resolved, err)
+				}
+				if name == "p4" {
+					records, err := first.p4JSON("fstat", "-Or", "//"+first.p4Client()+"/body.txt")
+					if err != nil || len(records) != 1 || records[0]["resolveAction0"] != "edit from" || records[0]["type"] != "text+x" {
+						t.Fatalf("semantic merge lacks native edit lineage/type: %+v %v", records, err)
+					}
+				}
+				message := "resolved merge " + strings.Repeat("bound semantic input ", 8)
+				if lost {
+					runner.didLose = false
+					runner.lost = "commit"
+					if name == "p4" {
+						runner.lost = "submit"
+					}
+				}
+				if err := first.Commit(message); lost {
+					if err == nil || !runner.didLose {
+						t.Fatalf("completed semantic commit response not lost: %v", err)
+					}
+					observed, found, err := first.ObservedCommit(prefix, message)
+					if err != nil || !found {
+						t.Fatalf("semantic commit effect not observed: %v", err)
+					}
+					if err := first.Synchronize(observed); err != nil {
+						t.Fatal(err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if err := first.VerifyIntegration(prefix, incoming, nativeIdentityAt(t, first), message); err != nil {
+					t.Fatal(err)
+				}
+				final := nativeIdentityAt(t, first)
+				for i := 0; i < 2; i++ {
+					observed, found, err := first.ObservedCommit(prefix, message)
+					count, countErr := first.CommitCount(prefix, final)
+					if err != nil || !found || observed != final || countErr != nil || count != 1 {
+						t.Fatalf("semantic effect repeated or changed: %q %t %d %v %v", observed, found, count, err, countErr)
+					}
+				}
+				entry, err := first.Entry(final, "body.txt")
+				var value nativeEntry
+				if err != nil || json.Unmarshal([]byte(entry), &value) != nil || string(value.Content) != "semantic choice\n" {
+					t.Fatalf("resolved native content differs: %+v %v", value, err)
+				}
+				for _, q := range []*Provider{first, second} {
+					if err := q.VerifyReady(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := p.CleanupWorkspace(first.root, "cleanup first", h1); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.CleanupWorkspace(second.root, "cleanup second", h2); err != nil {
+					t.Fatal(err)
+				}
+				if historical, err := p.Entry(final, "body.txt"); err != nil || historical != entry {
+					t.Fatalf("cleanup changed semantic native history: %q %v", historical, err)
+				}
+			})
+		}
 	}
 }
 func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
@@ -256,7 +298,7 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			p, r := p4Fixture(t)
 			if mode == "ordered-view" {
-				overlayRoot := t.TempDir()
+				overlayRoot := nativeFixtureDirectory(t)
 				overlaySpec := "Client: overlay-supplier\nOwner: fixture\nRoot: " + overlayRoot + "\nView:\n\t//depot/overlay/... //overlay-supplier/...\n"
 				if _, err := r.RunRaw(overlayRoot, "p4", []byte(overlaySpec), "client", "-i"); err != nil {
 					t.Fatal(err)
@@ -280,7 +322,7 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 				if _, err := r.RunRaw(p.root, "p4", []byte(stream), "stream", "-i"); err != nil {
 					t.Fatal(err)
 				}
-				root := filepath.Join(t.TempDir(), "stream")
+				root := filepath.Join(nativeFixtureDirectory(t), "stream")
 				if err := os.MkdirAll(root, 0755); err != nil {
 					t.Fatal(err)
 				}

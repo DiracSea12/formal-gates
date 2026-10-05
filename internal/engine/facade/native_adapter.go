@@ -202,8 +202,12 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 			if err != nil {
 				return o, err
 			}
+			pending, err := native.Pending(integrationBase, "")
+			if err != nil {
+				return o, err
+			}
 			for _, path := range paths {
-				if !slices.Contains(allowed, path) {
+				if !slices.Contains(allowed, path) && !slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(allowed) }) {
 					return o, fmt.Errorf("candidate prefix has an undeclared path: %s", path)
 				}
 			}
@@ -663,8 +667,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
+		pending, err := native.Pending(p.Base, "")
+		if err != nil {
+			return nativeResult{}, false, err
+		}
 		for _, path := range changes {
-			if !slices.Contains(paths, path) {
+			if !slices.Contains(paths, path) && !slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
 				return nativeResult{}, false, fmt.Errorf("candidate contains undeclared change: %s", path)
 			}
 		}
@@ -728,6 +736,9 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				return nativeResult{}, false, err
 			}
 			for _, path := range changes {
+				if slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
+					continue
+				}
 				entry, err := native.Entry(p.Base, path)
 				if err != nil {
 					return nativeResult{}, false, err
@@ -748,7 +759,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			return nativeResult{}, false, err
 		}
 
-		pending, err := native.Pending(p.Base, "")
+		pending, err = native.Pending(p.Base, "")
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -798,7 +809,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, err
 	}
 	for _, change := range changes {
-		if !slices.Contains(p.Paths, change.Path) {
+		if !slices.Contains(p.Paths, change.Path) && !change.IsDirectoryContainer(p.Paths) {
 			return nativeResult{}, false, fmt.Errorf("candidate has an undeclared native change: %s", change.Path)
 		}
 	}
@@ -815,7 +826,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 		for _, change := range changes {
 			path := change.Path
-			if !slices.Contains(p.Paths, path) || !testOwnedTransition(path, change.BaseMode != "000000", change.Mode != "000000", baseOwned, owned) {
+			if !testOwnedChange(change, changes, baseOwned, owned) {
 				return nativeResult{}, false, fmt.Errorf("whitebox change is not test-owned: %s", path)
 			}
 		}
@@ -843,7 +854,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 		view := &protocol.GateReviewView{TestOwnedPaths: []string{}}
 		for _, change := range changes {
-			if testOwnedTransition(change.Path, change.BaseMode != "000000", change.Mode != "000000", baseOwned, owned) {
+			if testOwnedChange(change, changes, baseOwned, owned) {
 				view.TestOwnedPaths = append(view.TestOwnedPaths, change.Path)
 			}
 		}
@@ -856,6 +867,27 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 	return nativeResult{Candidate: &evidence}, true, nil
+}
+
+func testOwnedChange(change vcs.Change, changes []vcs.Change, base, candidate map[string]bool) bool {
+	owned := func(c vcs.Change) bool {
+		return testOwnedTransition(c.Path, c.BaseMode != "000000", c.Mode != "000000", base, candidate)
+	}
+	if owned(change) {
+		return true
+	}
+	var paths []string
+	for path, test := range candidate {
+		if test {
+			paths = append(paths, path)
+		}
+	}
+	if !change.IsDirectoryContainer(paths) {
+		return false
+	}
+	return !slices.ContainsFunc(changes, func(c vcs.Change) bool {
+		return strings.HasPrefix(c.Path, change.Path+"/") && !owned(c) && !c.IsDirectoryContainer(paths)
+	})
 }
 
 func testOwnedTransition(path string, baseExists, candidateExists bool, base, candidate map[string]bool) bool {

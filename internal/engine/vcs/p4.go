@@ -356,7 +356,7 @@ func (p *Provider) p4Track(paths []string) error {
 	return err
 }
 func (p *Provider) p4Commit(message string) error {
-	pending, err := p.p4JSON("changes", "-s", "pending", "-c", p.p4Client())
+	pending, err := p.p4JSON("changes", "-l", "-s", "pending", "-c", p.p4Client())
 	if err != nil {
 		return err
 	}
@@ -375,7 +375,7 @@ func (p *Provider) p4Commit(message string) error {
 			return err
 		}
 	}
-	changes, err := p.p4JSON("changes", "-s", "submitted", "-c", p.p4Client(), "//"+p.p4Client()+"/...")
+	changes, err := p.p4JSON("changes", "-l", "-s", "submitted", "-c", p.p4Client(), "//"+p.p4Client()+"/...")
 	if err != nil {
 		return err
 	}
@@ -567,7 +567,7 @@ func (p *Provider) p4CreateWorkspace(workspace string, id nativeIdentity, messag
 	if _, err = bound.p4Raw([]byte(form), "client", "-i"); err != nil {
 		return err
 	}
-	changes, err := bound.p4JSON("changes", "-s", "submitted", h.Depot+"/...")
+	changes, err := bound.p4JSON("changes", "-l", "-s", "submitted", h.Depot+"/...")
 	if err != nil {
 		return err
 	}
@@ -998,7 +998,12 @@ func (p *Provider) p4ObserveIntegration(base, incoming string) (IntegrationObser
 }
 func (p *Provider) p4ResolveConflicts(paths []string) error {
 	for _, path := range paths {
-		if _, err := p.p4Raw(nil, "resolve", "-ay", materialPath(p.root, path)); err != nil {
+		// A semantic edit must remain an edited integration result. Native edit
+		// preserves the pending source records and accepts the workspace bytes.
+		if _, err := p.p4Raw(nil, "edit", materialPath(p.root, path)); err != nil {
+			return err
+		}
+		if _, err := p.p4Raw(nil, "resolve", "-e", "-ay", materialPath(p.root, path)); err != nil {
 			return err
 		}
 	}
