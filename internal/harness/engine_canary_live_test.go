@@ -179,6 +179,8 @@ type engineCanary struct {
 	approvalOutput io.Writer
 	execute        func(any, string, bool) (map[string]any, error)
 	approvalMu     *sync.Mutex
+	callContext    context.Context
+	stopCalls      context.CancelFunc
 	worker         bool
 	transcript     string
 	split          bool
@@ -330,6 +332,8 @@ func (c *engineCanary) loop() {
 	active := map[string]bool{}
 	completed := make(chan canaryCompletion)
 	c.approvalMu = &sync.Mutex{}
+	c.callContext, c.stopCalls = context.WithCancel(context.Background())
+	defer c.stopCalls()
 	accept := func(done canaryCompletion) {
 		c.run = c.readRunID("show", done.runID)
 		delete(active, done.runID+"/"+done.actionID)
@@ -361,6 +365,13 @@ func (c *engineCanary) loop() {
 		}
 	}
 	for runs[masterID].Status != "COMPLETE" {
+		if c.callContext.Err() != nil {
+			if len(active) == 0 {
+				c.fail("host call authorization stopped the pass")
+			}
+			accept(<-completed)
+			continue
+		}
 		c.rounds++
 		if c.rounds > canaryLoopLimit {
 			c.fail("canary exceeded %d drive rounds", canaryLoopLimit)
@@ -397,11 +408,11 @@ func (c *engineCanary) loop() {
 			if c.run.Status == "COMPLETE" || c.run.Status == "SLICE_READY" {
 				continue
 			}
+			if c.dispatchPending(active, completed) {
+				progressed = true
+			}
 			switch c.run.Next.Kind {
 			case decision.KindReady, decision.KindWait:
-				if c.dispatchPending(active, completed) {
-					progressed = true
-				}
 			case decision.KindHostAction:
 				c.drive()
 				progressed = true
@@ -410,6 +421,9 @@ func (c *engineCanary) loop() {
 				c.drive()
 				progressed = true
 			case decision.KindOperator:
+				if c.run.Next.Operator != nil && len(c.run.Next.Operator.Facts) > 0 && strings.Contains(c.run.Next.Operator.Facts[0].Value, "waits for slice receipts") {
+					break
+				}
 				c.serveOperator()
 				c.drive()
 				progressed = true
@@ -1197,7 +1211,14 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		if c.approvalMu != nil {
 			c.approvalMu.Lock()
 		}
+		if c.callContext != nil && c.callContext.Err() != nil {
+			c.approvalMu.Unlock()
+			c.fail("host call authorization stopped the pass")
+		}
 		authorization := c.authorizeCall(request, c.dispatchKey(actionID), role, attempt)
+		if authorization != nil && c.stopCalls != nil {
+			c.stopCalls()
+		}
 		if c.approvalMu != nil {
 			c.approvalMu.Unlock()
 		}
@@ -1221,6 +1242,12 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 				actionID, role, attempt, canaryProvider, identity, usageJSON)
 			c.t.Logf("canary dispatch %s (%s) attempt %d failed: %v", actionID, role, attempt, err)
 			continue
+		}
+		if c.run.RunID != "" {
+			identity, identityErr := readJSONFile(filepath.Join(dir, "identity.json"))
+			if identityErr != nil || canaryCanonicalPath(textOf(getOf(identity, "workspace"))) != canaryCanonicalPath(workspace) || textOf(getOf(identity, "identity")) != textOf(getOf(source, "identity")) {
+				c.fail("native identity does not match issued workspace/source: %v", identityErr)
+			}
 		}
 		// The call is spent the moment it returns — every real attempt gets
 		// its spend line here, including the ones refused below.
@@ -1499,7 +1526,7 @@ func (c *engineCanary) serveOperator() {
 		} else {
 			c.confirmRoute()
 		}
-	case strings.Contains(fact.Value, "development plan with the route"):
+	case strings.Contains(fact.Value, "development plan with the route"), strings.Contains(fact.Value, "select the slice route"):
 		c.confirmRoute()
 	case strings.Contains(fact.Value, "REQUIREMENT document"):
 		c.confirmRequirement()
@@ -1519,7 +1546,7 @@ func (c *engineCanary) confirmTopology() {
 	if c.split {
 		topology = canarySplitTopology()
 	}
-	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: topology.Decision, Label: topology.Decision})
+	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: protocol.AskOptionID(topology.Decision), Label: topology.Decision})
 	if err != nil {
 		c.fail("topology request: %v", err)
 	}
@@ -1533,7 +1560,7 @@ func (c *engineCanary) confirmTopology() {
 	if token == "" {
 		c.fail("topology ask %s is not pending", request.ID)
 	}
-	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, topology.Decision, protocol.ReviewDecisionPayload{
+	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, protocol.AskOptionID(topology.Decision), protocol.ReviewDecisionPayload{
 		Topology: &topology,
 	})
 	if err != nil {
@@ -1542,10 +1569,8 @@ func (c *engineCanary) confirmTopology() {
 	c.submit(event)
 }
 
-// confirmRoute asks SELECT_ROUTE over the fixture's candidate gate universe,
-// then decides the full route with exactly the gate list the ask pinned back:
-// the ask's pinned set is the one authority the decide repeats, so the whitebox
-// face joins the pass.
+// confirmRoute repeats the ask's pinned candidate set. Child proposals derive
+// from the accepted master plan and carry their own full or custom decision.
 func (c *engineCanary) confirmRoute() {
 	c.t.Helper()
 	candidates, mode := canaryRouteCandidates, "full"
@@ -1555,7 +1580,7 @@ func (c *engineCanary) confirmRoute() {
 			mode = "custom"
 		}
 	}
-	request, err := protocol.NewRouteRequestEvent(c.eventID(), candidates, protocol.AskOption{ID: mode, Label: mode})
+	request, err := protocol.NewRouteRequestEvent(c.eventID(), candidates, protocol.AskOption{ID: protocol.AskOptionID(mode), Label: mode})
 	if err != nil {
 		c.fail("route request: %v", err)
 	}
@@ -1590,7 +1615,7 @@ func (c *engineCanary) confirmRoute() {
 		c.fail("development plan preview: %v", err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, mode, protocol.ReviewDecisionPayload{Route: &route})
+	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, protocol.AskOptionID(mode), protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		c.fail("route decision: %v", err)
 	}
@@ -2173,7 +2198,25 @@ func (c *engineCanary) cli(input []byte, args ...string) []byte {
 	for key, value := range c.hostEnvironment() {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
+	started := time.Now()
 	output, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		exit = 1
+		if failure, ok := err.(*exec.ExitError); ok {
+			exit = failure.ExitCode()
+		}
+	}
+	record, _ := json.Marshal(map[string]any{"argv": append([]string{c.binary}, args...), "cwd": cmd.Dir, "startedUTC": started.UTC().Format(time.RFC3339Nano), "elapsedSeconds": time.Since(started).Seconds(), "exit": exit, "input": string(input), "output": string(output)})
+	journal, writeErr := os.OpenFile(filepath.Join(c.jobs, "installed-commands.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if writeErr != nil {
+		c.fail("command evidence: %v", writeErr)
+	}
+	_, writeErr = journal.Write(append(record, '\n'))
+	closeErr := journal.Close()
+	if writeErr != nil || closeErr != nil {
+		c.fail("command evidence write: %v %v", writeErr, closeErr)
+	}
 	if err != nil {
 		c.fail("installed %v: %v %s", args, err, output)
 	}

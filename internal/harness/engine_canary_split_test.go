@@ -219,7 +219,9 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 				c.fail("custom child route changed")
 			}
 		}
-		if !slices.Equal(child.SelectedGates, expected) {
+		actualGates := slices.Clone(child.SelectedGates)
+		slices.Sort(actualGates)
+		if !slices.Equal(actualGates, expected) {
 			c.fail("child selected gates %v, want %v", child.SelectedGates, expected)
 		}
 		gates := map[string]bool{}
