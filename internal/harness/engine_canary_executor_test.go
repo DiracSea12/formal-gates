@@ -126,7 +126,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 	if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
 		started, release := make(chan struct{}), make(chan struct{})
 		var startedOnce, releaseOnce sync.Once
-		failedAction := ""
+		failedAttempt := ""
 		executor.transportFailure = func(material canaryMaterials) error {
 			if material.Input != nil && material.Input.Handler == "engine.development.batch" {
 				if material.Slice == "uppercase" {
@@ -134,16 +134,16 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 					<-release
 				}
 				if material.Slice == "word-size" {
-					if failedAction == "" {
-						failedAction = material.ActionID
+					if failedAttempt == "" {
+						failedAttempt = material.Pending.AttemptID
 					}
 					<-started
-					if material.ActionID != failedAction {
-						// A new issued action proves the previous failure was
+					if material.Pending.AttemptID != failedAttempt {
+						// A new issued attempt proves the previous failure was
 						// accepted by the public engine retry owner.
 						releaseOnce.Do(func() { close(release) })
 					}
-					if failureMode == "permanent" || material.ActionID == failedAction {
+					if failureMode == "permanent" || material.Pending.AttemptID == failedAttempt {
 						return fmt.Errorf("local host transport unavailable")
 					}
 				}
@@ -249,11 +249,11 @@ func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 		if err := json.Unmarshal([]byte(command.Output), &response); err != nil || response.Acceptance.Status != protocol.OutcomeRuntimeError || response.Acceptance.FailureClass != string(event.Result.FailureClass) {
 			t.Fatalf("public failure was not accepted: %s (%v)", command.Output, err)
 		}
+		rejected, ok := response.Run.RejectedResults[event.Result.ActionID]
 		var material canaryMaterials
-		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, response.Run.RunID, canaryName(event.Result.ActionID), "materials.json")), &material); err != nil {
+		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(canaryJobDirectory(jobs, response.Run.RunID, event.Result.ActionID, rejected.AttemptID), "materials.json")), &material); err != nil {
 			t.Fatal(err)
 		}
-		rejected, ok := response.Run.RejectedResults[event.Result.ActionID]
 		if !ok || rejected.Task != material.Pending.Task || rejected.AttemptID != material.Pending.AttemptID || rejected.Payload.InterruptionReason != event.Result.InterruptionReason || rejected.Payload.FailureClass != event.Result.FailureClass {
 			t.Fatalf("failure lost its issued task/attempt/source diagnostic: %+v material=%+v", rejected, material.Pending)
 		}
@@ -359,7 +359,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 		}
 		readOnly = handler != "engine.development.batch" && handler != "engine.repair" && handler != "engine.merge.resolve" && !(handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox)
 	}
-	if request["read_only"] != readOnly || material.ActionID == "" || material.RunID == "" || material.Pending == nil || material.Pending.ActionID != material.ActionID || filepath.Base(filepath.Dir(dir)) != canaryName(material.ActionID) || filepath.Base(filepath.Dir(filepath.Dir(dir))) != material.RunID {
+	if request["read_only"] != readOnly || material.ActionID == "" || material.RunID == "" || material.Pending == nil || material.Pending.ActionID != material.ActionID || filepath.Dir(dir) != canaryJobDirectory(e.canary.jobs, material.RunID, material.ActionID, material.Pending.AttemptID) {
 		return nil, fmt.Errorf("local executor saw wrong method or dispatch identity")
 	}
 	call := canaryLocalCall{RunID: material.RunID, ActionID: material.ActionID, Handler: handler, Start: time.Now()}

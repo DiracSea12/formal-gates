@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 )
 
 // These child processes exercise turnIn's fatal boundaries with a local
@@ -181,6 +186,75 @@ func TestCanaryTurnRequestsNativeHeadlessMode(t *testing.T) {
 				t.Fatalf("requested mode absent from report: %s", report.String())
 			}
 		})
+	}
+}
+
+// Each signed engine attempt keeps its materials and all native call turns.
+// Failed executions return their own final transcript without merging sessions.
+func TestCanaryEngineAttemptsKeepIndependentEvidence(t *testing.T) {
+	home, jobs := t.TempDir(), t.TempDir()
+	workspace := filepath.Join(home, ".formal-gates-resources", "candidate")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	action := "shared-action"
+	var retained map[string][]byte = map[string][]byte{}
+	for _, attempt := range []string{"att:gate:31", "att:gate:32"} {
+		pending := protocol.PendingAction{ActionID: action, AttemptID: attempt, ReviewSeries: review.ProductReview}
+		c := &engineCanary{t: t, worker: true, home: home, project: workspace, jobs: jobs, run: facade.Run{RunID: "bound-run", PendingActions: map[string]protocol.PendingAction{action: pending}}, deadline: time.Now().Add(time.Minute), binding: map[string]any{"launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}}
+		base := filepath.Join(jobs, "bound-run", action, canaryName(attempt))
+		material := canaryMaterials{Role: "product review", RunID: c.run.RunID, ActionID: action, Pending: &pending, RequirementPath: "bound-requirement", RequirementRevision: "bound-revision"}
+		c.prompt("product review", material, "review the bound requirement", true)
+		input, approval := io.Pipe()
+		c.approvalInput = bufio.NewReader(input)
+		c.approvalOutput = canaryLocalApproval{approval}
+		calls := 0
+		c.execute = func(value any, dir string, probe bool) (map[string]any, error) {
+			calls++
+			request := value.(map[string]any)
+			if probe || request["workspace"] != workspace || request["identity"] != "" || request["read_only"] != true || dir != filepath.Join(base, fmt.Sprintf("attempt-%d", calls)) {
+				t.Fatalf("issued native call changed identity: %#v %s", request, dir)
+			}
+			var got canaryMaterials
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(base, "materials.json")), &got); err != nil || got.Pending == nil || got.Pending.AttemptID != attempt || got.ActionID != action || got.RunID != "bound-run" {
+				t.Fatalf("native call lost signed attempt material: %+v %v", got, err)
+			}
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			session := fmt.Sprintf("session-%s-%d", attempt, calls)
+			identity := map[string]any{"provider": "zcode", "identity": session}
+			event := map[string]any{"sessionId": session, "payload": map[string]any{"usage": map[string]any{"source": "provider", "attempt": attempt, "turn": calls}}}
+			for name, value := range map[string]any{"identity.json": identity, "native-events.jsonl": event} {
+				if err := writeAtomicJSON(filepath.Join(dir, name), value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return nil, fmt.Errorf("native execution unavailable")
+		}
+		done := c.dispatch(action, pending, protocol.ValidationInput{})
+		input.Close()
+		approval.Close()
+		if done.event.Result == nil || done.event.Result.Outcome != protocol.OutcomeRuntimeError || calls != canaryTurnBudget || done.transcript != filepath.Join(base, "attempt-3") {
+			t.Fatalf("attempt lost failure/turn/transcript ownership: %+v calls=%d", done, calls)
+		}
+		for turn := 1; turn <= canaryTurnBudget; turn++ {
+			dir := filepath.Join(base, fmt.Sprintf("attempt-%d", turn))
+			identity, usage := canaryAttemptUsage(dir)
+			if identity != fmt.Sprintf("session-%s-%d", attempt, turn) || textOf(getOf(usage, "attempt")) != attempt {
+				t.Fatalf("usage mixed native sessions: %s %#v", identity, usage)
+			}
+			for _, name := range []string{"identity.json", "native-events.jsonl"} {
+				path := filepath.Join(dir, name)
+				retained[path] = readTestFileBytes(t, path)
+			}
+		}
+		for path, want := range retained {
+			if got := readTestFileBytes(t, path); !bytes.Equal(got, want) {
+				t.Fatalf("later engine attempt changed failed evidence: %s", path)
+			}
+		}
+		retained[filepath.Join(base, "materials.json")] = readTestFileBytes(t, filepath.Join(base, "materials.json"))
 	}
 }
 

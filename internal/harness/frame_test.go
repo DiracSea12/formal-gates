@@ -2,6 +2,8 @@ package harness
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -115,4 +117,38 @@ func canon(value map[string]any) string {
 		return "MARSHAL_ERROR"
 	}
 	return string(encoded)
+}
+
+// Native final messages may explain code without supplying another JSON value.
+// The framed result keeps its exact value, while genuine competitors still fail.
+func TestFrameResultDistinguishesCodeFromJSON(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "gate_response_with_code.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replies []struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal(body, &replies); err != nil {
+		t.Fatal(err)
+	}
+	for i, reply := range replies {
+		result, refusal := FrameResult(reply.Response)
+		if refusal != "" || canon(result) != `{"findings":[],"status":"PASS"}` {
+			t.Fatalf("native final message %d: %s %s", i, canon(result), refusal)
+		}
+	}
+	for _, tc := range []struct{ outside, refusal string }{
+		{`{"other":true}`, "NATIVE_RESULT: competing structured content outside result"},
+		{`[1,2]`, "NATIVE_RESULT: competing structured content outside result"},
+		{`{"a":1,"a":2}`, "NATIVE_RESULT: duplicate JSON field a"},
+		{`{"n":NaN}`, "NATIVE_RESULT: non-finite number NaN"},
+		{`{"unfinished":`, "NATIVE_RESULT: competing structured content outside result"},
+	} {
+		text := tc.outside + "\n```json\n{\"status\":\"PASS\",\"findings\":[]}\n```"
+		_, refusal := FrameResult(text)
+		if refusal != tc.refusal {
+			t.Fatalf("competing content %s: %s", tc.outside, refusal)
+		}
+	}
 }

@@ -52,11 +52,22 @@ func (c *engineCanary) dispatchKey(id string) string {
 	}
 	return c.run.RunID + "/" + id
 }
+
+// Engine attempts own all dispatch material; native call turns remain inside
+// that identity. Standalone callers have no engine attempt to add.
 func (c *engineCanary) jobDirectory(id string) string {
-	if c.run.RunID == "" {
-		return filepath.Join(c.jobs, canaryName(id))
+	return canaryJobDirectory(c.jobs, c.run.RunID, id, c.run.PendingActions[id].AttemptID)
+}
+
+func canaryJobDirectory(jobs, runID, actionID, attemptID string) string {
+	if runID == "" {
+		return filepath.Join(jobs, canaryName(actionID))
 	}
-	return filepath.Join(c.jobs, c.run.RunID, canaryName(id))
+	dir := filepath.Join(jobs, runID, canaryName(actionID))
+	if attemptID != "" {
+		dir = filepath.Join(dir, canaryName(attemptID))
+	}
+	return dir
 }
 func (c *engineCanary) caseKey(id string) string { return c.dispatchKey(id) }
 func (c *engineCanary) childSlice() string       { return c.slice }

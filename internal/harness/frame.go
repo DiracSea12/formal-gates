@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"regexp"
 	"strings"
@@ -59,10 +60,26 @@ func FrameResult(text string) (map[string]any, string) {
 		}
 		outside = body[:fences[0].start] + body[fences[0].end:]
 	}
-	if strings.ContainsAny(outside, "{}[]") {
+	if hasJSONStructure(outside) {
 		return nil, refusalPrefix + "competing structured content outside result"
 	}
 	return asObject(value)
+}
+
+// Only JSON structure competes with the result; ordinary non-JSON prose may
+// contain delimiters. Typed refusals and unfinished structures still compete.
+func hasJSONStructure(text string) bool {
+	for i, ch := range text {
+		if ch != '{' && ch != '[' {
+			continue
+		}
+		_, _, err := rawDecode(text[i:])
+		_, typed := refusalFor(err)
+		if err == nil || typed || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true
+		}
+	}
+	return false
 }
 
 const refusalPrefix = "NATIVE_RESULT: "
