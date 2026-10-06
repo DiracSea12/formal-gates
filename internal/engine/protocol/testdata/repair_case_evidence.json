@@ -1,0 +1,375 @@
+{
+  "contract": {
+    "requiredSources": {
+      "binding": {
+        "runId": "engine-canary",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "solutionRevision": "78146b0c2d8c8be5401c4f98ec85cb234664cccf3912db97400cb7f9a855dcb5"
+      },
+      "sources": [
+        {
+          "sourceId": "REQ-001",
+          "category": "PRODUCT_REQUIREMENT",
+          "applicability": "QA"
+        }
+      ]
+    },
+    "selectedKinds": [
+      "MERGE"
+    ],
+    "manifests": [
+      {
+        "binding": {
+          "runId": "engine-canary",
+          "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+          "solutionRevision": "78146b0c2d8c8be5401c4f98ec85cb234664cccf3912db97400cb7f9a855dcb5",
+          "reviewKind": "MERGE",
+          "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+          "topologyScope": "sha256:4e872e52740362acc2a2097ee57f68cc375e092b1f4bd1d46c9c9b9df5ffba91"
+        },
+        "sources": [
+          "REQ-001"
+        ],
+        "points": [
+          {
+            "pointId": "AC-001",
+            "observableBehavior": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。",
+            "oracle": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。"
+          },
+          {
+            "pointId": "AC-002",
+            "observableBehavior": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。",
+            "oracle": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。"
+          },
+          {
+            "pointId": "AC-003",
+            "observableBehavior": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。",
+            "oracle": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。"
+          },
+          {
+            "pointId": "AC-004",
+            "observableBehavior": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+            "oracle": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。"
+          }
+        ],
+        "cases": [
+          {
+            "scenario": "SUCCESS",
+            "caseId": "QA-AC001-01",
+            "mode": "MERGE",
+            "publicEntry": "frob naïve",
+            "preconditions": "frob is built from the merged master revision (go build ./... succeeds; UpperWord implemented via strings.ToUpper, WordSize returns the UTF-8 byte length); the argument is passed verbatim as a single argv entry in a UTF-8 environment.",
+            "steps": "Run the frob program with argv ['naïve'] (i.e. frob naïve); capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly the single line 'frob: NAÏVE bytes=6' followed by one newline: the word is Unicode-uppercased (ï becomes Ï, proving non-ASCII simple case mapping is applied rather than the placeholder that returns input unchanged) and N=6 is the UTF-8 byte count of 'naïve' (n,a,v,e are 1 byte each, ï is 2). No other stdout output appears."
+          },
+          {
+            "scenario": "SUCCESS",
+            "caseId": "QA-AC001-02",
+            "mode": "MERGE",
+            "publicEntry": "frob hello",
+            "preconditions": "frob is built from the merged master revision; UpperWord implemented via strings.ToUpper.",
+            "steps": "Run the frob program with argv ['hello']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob: HELLO bytes=5' followed by one newline; all lowercase ASCII letters are uppercased (the placeholder UpperWord that returns the input unchanged would print 'frob: hello bytes=5' and must fail this oracle)."
+          },
+          {
+            "scenario": "BOUNDARY",
+            "caseId": "QA-AC001-03",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the empty string is passed as one argv entry (frob '').",
+            "steps": "Run the frob program with argv [''] (a single empty argument); capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob:  bytes=0' followed by one newline, with two spaces between 'frob:' and 'bytes=0' because UpperWord of the empty word is the empty string; UpperWord('',...) must not inject any placeholder or error text."
+          },
+          {
+            "scenario": "MISUSE",
+            "caseId": "QA-AC001-04",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the program is invoked with no argument after the program name.",
+            "steps": "Run the frob program with an empty argv after the program name; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is non-zero (the baseline entry exits 2), a usage message ('usage: frob <word>') appears on stderr, and stdout contains no line starting with 'frob: ' — UpperWord is never observable for a missing word."
+          },
+          {
+            "scenario": "SUCCESS",
+            "caseId": "QA-AC002-01",
+            "mode": "MERGE",
+            "publicEntry": "frob 日本",
+            "preconditions": "frob is built from the merged master revision (WordSize implemented to return the UTF-8 byte length); UTF-8 argv passthrough.",
+            "steps": "Run the frob program with argv ['日本']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob: 日本 bytes=6' followed by one newline: '日本' has 2 runes but 6 UTF-8 bytes (3 per rune), so N=6 proves WordSize counts bytes, not runes or the placeholder 0; the UPPER field equals the input because these runes have no case mapping, isolating WordSize."
+          },
+          {
+            "scenario": "BOUNDARY",
+            "caseId": "QA-AC002-02",
+            "mode": "MERGE",
+            "publicEntry": "frob é",
+            "preconditions": "frob is built from the merged master revision; UTF-8 argv passthrough.",
+            "steps": "Run the frob program with argv ['é']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob: É bytes=2' followed by one newline: a single rune occupying 2 UTF-8 bytes, so N=2 (not 1) confirms byte-length semantics for the smallest multi-byte input."
+          },
+          {
+            "scenario": "BOUNDARY",
+            "caseId": "QA-AC002-03",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the empty string is passed as one argv entry.",
+            "steps": "Run the frob program with argv ['']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob:  bytes=0' followed by one newline: WordSize('') returns 0, distinguishing the implemented function from the placeholder that returned 0 for every input when combined with case QA-AC002-01."
+          },
+          {
+            "scenario": "MISUSE",
+            "caseId": "QA-AC002-04",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the program is invoked with no argument.",
+            "steps": "Run the frob program with an empty argv after the program name; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is non-zero (the baseline entry exits 2), usage appears on stderr, and stdout contains no 'frob: ' line — WordSize is never invoked/observable when the word is missing."
+          },
+          {
+            "scenario": "SUCCESS",
+            "caseId": "QA-AC003-01",
+            "mode": "MERGE",
+            "publicEntry": "frob héLLo",
+            "preconditions": "frob is built from the merged master revision combining both slices (UpperWord and WordSize wired in frob.go); UTF-8 argv passthrough.",
+            "steps": "Run the frob program with argv ['héLLo']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob: HÉLLO bytes=6' followed by one newline and nothing else: the combined output of UpperWord (héLLo → HÉLLO, é is 2 UTF-8 bytes so the input is 6 bytes) and WordSize (6) on one line, byte-for-byte."
+          },
+          {
+            "scenario": "BOUNDARY",
+            "caseId": "QA-AC003-02",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the empty string is passed as one argv entry (frob '').",
+            "steps": "Run the frob program with argv ['']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is 0 and stdout is exactly 'frob:  bytes=0' followed by one newline (two spaces between 'frob:' and 'bytes=0'), byte-for-byte the specified empty-word combined output; the empty argument is treated as the word, not as a missing argument."
+          },
+          {
+            "scenario": "MISUSE",
+            "caseId": "QA-AC003-03",
+            "mode": "MERGE",
+            "publicEntry": "frob ",
+            "preconditions": "frob is built from the merged master revision; the program is invoked with no argument.",
+            "steps": "Run the frob program with an empty argv after the program name; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is non-zero (the baseline entry exits 2), stderr carries the usage line 'usage: frob <word>', and stdout contains no 'frob: ' line — the combined command rejects insufficient arguments without emitting the normal output line."
+          },
+          {
+            "scenario": "MISUSE",
+            "caseId": "QA-AC004-01",
+            "mode": "MERGE",
+            "publicEntry": "frob --unknown-flag hello",
+            "preconditions": "frob is built from the merged master revision after the authorized master-merge rework of frob.go flag handling (the known baseline gap where unknown flags were accepted is closed); UTF-8 argv passthrough.",
+            "steps": "Run the frob program with argv ['--unknown-flag','hello']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is non-zero and stdout contains no line starting with 'frob: ' — in particular neither 'frob: --UNKNOWN-FLAG bytes=14' (the known baseline-gap output that treats the flag as the word) nor 'frob: HELLO bytes=5'; a rejection/usage message may appear on stderr but the frob: output line must not be produced on any stream."
+          },
+          {
+            "scenario": "BOUNDARY",
+            "caseId": "QA-AC004-02",
+            "mode": "MERGE",
+            "publicEntry": "frob --unknown-flag ",
+            "preconditions": "frob is built from the merged master revision after the authorized master-merge rework of frob.go flag handling; the second argv entry is the empty string.",
+            "steps": "Run the frob program with argv ['--unknown-flag','']; capture stdout, stderr and the exit code.",
+            "oracle": "Exit code is non-zero and stdout contains no line starting with 'frob: ' — the unknown flag is rejected even when the accompanying word is empty, so the empty-word success path 'frob:  bytes=0' must not be reached."
+          }
+        ],
+        "edges": [
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-001",
+            "caseId": "QA-AC001-01"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-001",
+            "caseId": "QA-AC001-02"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-001",
+            "caseId": "QA-AC001-03"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-001",
+            "caseId": "QA-AC001-04"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-002",
+            "caseId": "QA-AC002-01"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-002",
+            "caseId": "QA-AC002-02"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-002",
+            "caseId": "QA-AC002-03"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-002",
+            "caseId": "QA-AC002-04"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-003",
+            "caseId": "QA-AC003-01"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-003",
+            "caseId": "QA-AC003-02"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-003",
+            "caseId": "QA-AC003-03"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-004",
+            "caseId": "QA-AC004-01"
+          },
+          {
+            "sourceId": "REQ-001",
+            "pointId": "AC-004",
+            "caseId": "QA-AC004-02"
+          }
+        ]
+      }
+    ],
+    "candidate": {
+      "identity": "e79540132c4efce54701feb0f15af754cae7aa1c",
+      "digest": "fa825e236afdd894d534d9e81c1691aec25ca646"
+    }
+  },
+  "development": {
+    "caseRuns": [
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC001-01",
+        "procedure": "Ran /tmp/frob-candidate (built from workspace after repair) with argv ['naïve']; captured stdout, stderr, exit code; compared stdout byte-for-byte against expected 'frob: NAÏVE bytes=6\\n'.",
+        "observation": "exit=0, stdout='frob: NAÏVE bytes=6\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout, Unicode case mapping proven.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC001-02",
+        "procedure": "Ran candidate with argv ['hello']; byte-exact stdout comparison against 'frob: HELLO bytes=5\\n'.",
+        "observation": "exit=0, stdout='frob: HELLO bytes=5\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC001-03",
+        "procedure": "Ran candidate with argv [''] (single empty argv entry); byte-exact stdout comparison against 'frob:  bytes=0\\n'.",
+        "observation": "exit=0, stdout='frob:  bytes=0\\n' (two spaces), stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout including the two-space gap.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC001-04",
+        "procedure": "Ran candidate with no argument after program name; checked exit code, stdout, stderr.",
+        "observation": "exit=2, stdout empty, stderr='usage: frob <word>\\n'.",
+        "comparison": "Matches oracle: non-zero exit, usage on stderr, no 'frob: ' line on any stream; unchanged by the repair.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC002-01",
+        "procedure": "Ran candidate with argv ['日本']; byte-exact stdout comparison against 'frob: 日本 bytes=6\\n'.",
+        "observation": "exit=0, stdout='frob: 日本 bytes=6\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout; byte semantics and case-mapping isolation confirmed.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC002-02",
+        "procedure": "Ran candidate with argv ['é']; byte-exact stdout comparison against 'frob: É bytes=2\\n'.",
+        "observation": "exit=0, stdout='frob: É bytes=2\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout with N=2.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC002-03",
+        "procedure": "Ran candidate with argv ['']; byte-exact stdout comparison against 'frob:  bytes=0\\n'.",
+        "observation": "exit=0, stdout='frob:  bytes=0\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact stdout.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC002-04",
+        "procedure": "Ran candidate with no argument; checked exit code, stdout, stderr.",
+        "observation": "exit=2, stdout empty, stderr='usage: frob <word>\\n'.",
+        "comparison": "Matches oracle: non-zero exit, usage on stderr, no 'frob: ' line; unchanged by the repair.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC003-01",
+        "procedure": "Ran candidate with argv ['héLLo']; byte-exact stdout comparison against 'frob: HÉLLO bytes=6\\n'.",
+        "observation": "exit=0, stdout='frob: HÉLLO bytes=6\\n', stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact combined output; no regression from the frob.go rework.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC003-02",
+        "procedure": "Ran candidate with argv ['']; byte-exact stdout comparison against 'frob:  bytes=0\\n'.",
+        "observation": "exit=0, stdout='frob:  bytes=0\\n' (two spaces), stderr empty.",
+        "comparison": "Matches oracle: exit 0, byte-exact empty-word composed output.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC003-03",
+        "procedure": "Ran candidate with no argument; checked exit code, stdout, stderr.",
+        "observation": "exit=2, stdout empty, stderr='usage: frob <word>\\n'.",
+        "comparison": "Matches oracle: non-zero exit, usage on stderr, no 'frob: ' line; unchanged by the repair.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC004-01",
+        "procedure": "Ran candidate built from the repaired workspace with argv ['--unknown-flag','hello']; captured stdout, stderr, exit code and grepped both streams for '^frob: '.",
+        "observation": "exit=2, stdout empty, stderr='usage: frob <word>\\n'; no line starting with 'frob: ' on stdout or stderr (neither 'frob: --UNKNOWN-FLAG bytes=14' nor 'frob: HELLO bytes=5').",
+        "comparison": "Satisfies the AC-004 oracle that previously failed (exit 0 + 'frob: --UNKNOWN-FLAG bytes=14'): now non-zero exit and no 'frob: ' line on any stream; rejection/usage text on stderr only, mirroring the missing-argument path in frob.go.",
+        "result": "EXECUTED_PASS"
+      },
+      {
+        "mode": "MERGE",
+        "caseId": "QA-AC004-02",
+        "procedure": "Ran candidate with argv ['--unknown-flag',''] (second argv entry empty string); captured stdout, stderr, exit code and grepped both streams for '^frob: '.",
+        "observation": "exit=2, stdout empty, stderr='usage: frob <word>\\n'; no 'frob: ' line on any stream and 'frob:  bytes=0' not produced.",
+        "comparison": "Satisfies the AC-004 oracle that previously failed (exit 0 + 'frob: --UNKNOWN-FLAG bytes=14'): now non-zero exit and no 'frob: ' line; the empty-word success path is never reached.",
+        "result": "EXECUTED_PASS"
+      }
+    ],
+    "paths": [
+      "frob.go"
+    ],
+    "summary": "Repaired adjudicated problem sha256:5ad1563e2da7d5ea1fedd6e3737ffdf13eda6de8c19bb183e0a14b8d275d4ce1 (AC-004 unknown-flag rejection, master-merge responsibility, authorized as in-run frob.go rework). frob.go now checks the first argument with isFlag(): a dash-prefixed argument longer than '-' is an unknown flag (frob defines no flags) and is rejected by the same path as a missing argument — 'usage: frob <word>' on stderr and exit 2 — so no 'frob: ' line is ever emitted for flag invocations, while normal words, the empty word and the missing-argument path behave unchanged. uppercase.go and size.go are untouched. Verification: go build ./... and go vet ./... exit 0; all 13 frozen MERGE cases were actually executed against the built candidate — QA-AC004-01 ('--unknown-flag' hello) and QA-AC004-02 ('--unknown-flag' '') now exit 2 with empty stdout and no 'frob: ' line on any stream, and the other 11 cases pass byte-exact (NAÏVE/HELLO/HÉLLO/日本/É uppercasing, byte counts, empty-word 'frob:  bytes=0', three no-arg misuse cases exit 2). The repair is small and completed in this turn; no batching (granularityReview) needed.",
+    "build": [
+      "go build ./... in workspace c6ea8a6a48d2e2c38650011910d1a88f6b3eeab91a13ace1cd0178aa969412e1 -> exit 0, BUILD_OK",
+      "go vet ./... -> exit 0, VET_OK",
+      "go build -o /tmp/frob-candidate . -> exit 0 (candidate binary used for case self-runs, deleted afterwards; no artifact left in workspace)"
+    ],
+    "tests": [
+      "Self-run QA-AC004-01: candidate argv ['--unknown-flag','hello'] -> exit=2, stdout empty, stderr 'usage: frob <word>', no 'frob: ' line -> EXECUTED_PASS",
+      "Self-run QA-AC004-02: candidate argv ['--unknown-flag',''] -> exit=2, stdout empty, stderr 'usage: frob <word>', 'frob:  bytes=0' not reached -> EXECUTED_PASS",
+      "Regression self-runs QA-AC001-01/02/03/04, QA-AC002-01/02/03/04, QA-AC003-01/02/03: all byte-exact expected stdout, expected exit codes (0 for word cases, 2 for no-arg misuse) -> EXECUTED_PASS",
+      "Extra probes: '-x' rejected exit 2 with no output line; lone '-' treated as a word ('frob: - bytes=1') per documented convention"
+    ],
+    "affectedCases": [
+      "QA-AC004-01",
+      "QA-AC004-02"
+    ]
+  }
+}

@@ -656,17 +656,28 @@ func sameWaveCases(a, b *ValidationWave, mode coverage.ReviewKind) bool {
 }
 
 func (s *State) validateRepairEvidence(d DevelopmentEvidence, requireRuns bool) error {
-	expected := map[string]coverage.ReviewKind{}
+	var manifests []coverage.AcceptanceManifest
 	for _, mode := range s.validationKinds() {
-		set := s.Validation.Sets[mode]
-		if set == nil {
-			continue
+		if set := s.Validation.Sets[mode]; set != nil {
+			manifest := set.Manifest
+			manifest.Binding.ReviewKind = mode
+			manifests = append(manifests, manifest)
 		}
-		for _, c := range set.Manifest.Cases {
+	}
+	return ValidateRepairEvidence(manifests, d, requireRuns)
+}
+
+// ValidateRepairEvidence checks declared affected cases against the issued
+// approved manifests. Supplied runs always belong to that exact declared set;
+// requireRuns additionally requires complete self-run evidence for each case.
+func ValidateRepairEvidence(manifests []coverage.AcceptanceManifest, d DevelopmentEvidence, requireRuns bool) error {
+	expected := map[string]coverage.ReviewKind{}
+	for _, manifest := range manifests {
+		for _, c := range manifest.Cases {
 			if _, exists := expected[c.CaseID]; exists {
 				return validationError("repair needs unambiguous case IDs across selected modes")
 			}
-			expected[c.CaseID] = mode
+			expected[c.CaseID] = manifest.Binding.ReviewKind
 		}
 	}
 	affected := map[string]bool{}

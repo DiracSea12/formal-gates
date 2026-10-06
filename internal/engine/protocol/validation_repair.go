@@ -183,7 +183,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 		if w.task != task {
 			continue
 		}
-		input := &RepairInput{OriginTask: w.wave.Repair.Task, Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
+		input := &RepairInput{OriginTask: w.wave.Repair.Task, Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2 || w.pureP2}}
 		if w.verification {
 			_, proof, _ := s.repairFinalSource(w)
 			input.FinalCandidate = &coverage.ValidationCandidate{Identity: proof.Identity, Digest: proof.Digest}

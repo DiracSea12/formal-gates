@@ -614,14 +614,27 @@ func (s *State) repairVerificationWork(w *ValidationWave) *repairWork {
 }
 
 func (s *State) validateFinalRepairEvidence(work repairWork, e DevelopmentEvidence) error {
-	var paths, affected []string
+	var members []DevelopmentEvidence
 	for _, member := range s.repairMembers(work.wave) {
 		r := s.developmentResultRecord(member.task)
 		if r == nil {
 			return validationError("final verification lacks a completed repair member")
 		}
-		paths = append(paths, r.Validation.Development.Paths...)
-		affected = append(affected, r.Validation.Development.AffectedCases...)
+		members = append(members, *r.Validation.Development)
+	}
+	if err := ValidateFinalRepairEvidence(members, e); err != nil {
+		return err
+	}
+	return s.validateRepairEvidence(e, true)
+}
+
+// ValidateFinalRepairEvidence checks the exact paths and affected-case union
+// of the completed members; per-case execution uses ValidateRepairEvidence.
+func ValidateFinalRepairEvidence(members []DevelopmentEvidence, e DevelopmentEvidence) error {
+	var paths, affected []string
+	for _, member := range members {
+		paths = append(paths, member.Paths...)
+		affected = append(affected, member.AffectedCases...)
 	}
 	slices.Sort(paths)
 	paths = slices.Compact(paths)
@@ -634,7 +647,7 @@ func (s *State) validateFinalRepairEvidence(work repairWork, e DevelopmentEviden
 	if !slices.Equal(paths, actual) || !slices.Equal(affected, cases) {
 		return validationError("final self-run must cover the complete integrated member paths and affected cases")
 	}
-	return s.validateRepairEvidence(e, true)
+	return nil
 }
 
 // Gate findings retain their source target; an accepted repair disposition

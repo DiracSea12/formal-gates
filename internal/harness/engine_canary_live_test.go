@@ -1186,13 +1186,13 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required; report other actual regression runs in tests. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		return canaryRepairShape(&answer, input.Development != nil)
+		return canaryRepairShape(&answer, input)
 	}
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
 		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
@@ -1213,9 +1213,10 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 }
 
 // canaryRepairShape checks the core repair plan/result contract before submission.
-func canaryRepairShape(answer *canaryDevelopmentAnswer, batch bool) error {
+func canaryRepairShape(answer *canaryDevelopmentAnswer, input protocol.ValidationInput) error {
+	batch := input.Development != nil
 	if answer.Plan != nil {
-		if batch {
+		if batch || input.Repair != nil && (input.Repair.Plan != nil || input.Repair.FinalCandidate != nil) {
 			return fmt.Errorf("only the original repair worker can freeze its plan")
 		}
 		if err := protocol.ValidateRepairPlan(answer.Plan, len(answer.Paths) > 0); err != nil {
@@ -1225,7 +1226,22 @@ func canaryRepairShape(answer *canaryDevelopmentAnswer, batch bool) error {
 			return nil
 		}
 	}
-	return canaryDevelopmentShape(answer, batch || answer.Plan != nil)
+	if err := canaryDevelopmentShape(answer, batch || answer.Plan != nil); err != nil {
+		return err
+	}
+	evidence := protocol.DevelopmentEvidence{Paths: answer.Paths, AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns}
+	requireRuns := input.Repair != nil && input.Repair.Obligation.PureP2
+	if input.Repair != nil && input.Repair.FinalCandidate != nil {
+		var members []protocol.DevelopmentEvidence
+		for _, result := range input.Repair.MemberResults {
+			members = append(members, *result.Validation.Development)
+		}
+		if err := protocol.ValidateFinalRepairEvidence(members, evidence); err != nil {
+			return err
+		}
+		requireRuns = true
+	}
+	return protocol.ValidateRepairEvidence(input.Contract.Manifests, evidence, requireRuns)
 }
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
@@ -2412,6 +2428,7 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 			}
 			plan := answer.Plan
 			if boundary != "invalid-full" {
+				answer = canaryDevelopmentAnswer{Plan: plan, Paths: []string{"frob.go"}, Summary: "completed the declared command change", Build: []string{"go build ./... exit=0"}, Tests: []string{"command contract verification completed"}}
 				plan.Batches[0].Route.Selected = nil
 				answer.DoD, answer.Checks = map[string]string{}, map[string]string{}
 				for _, criterion := range plan.Batches[0].DoD {
@@ -2456,13 +2473,15 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 			if answer.Plan != nil {
 				coreErr = protocol.ValidateRepairPlan(answer.Plan, len(answer.Paths) > 0)
 			}
-			refusal := canaryRepairShape(&answer, false)
+			input := protocol.ValidationInput{Contract: &coverage.CoverageContract{}}
+			refusal := canaryRepairShape(&answer, input)
 			valid := boundary == "full" || boundary == "custom" || boundary == "inherited" || boundary == "multi-plan" || boundary == "small-repair"
 			if (refusal == nil) != valid || (refusal == nil) != (coreErr == nil) || refusal != nil && refusal.Error() != coreErr.Error() {
 				t.Fatalf("repair admission boundary %s: consumer=%v core=%v", boundary, refusal, coreErr)
 			}
 			if valid && answer.Plan != nil {
-				if err := canaryRepairShape(&answer, true); err == nil || !strings.Contains(err.Error(), "only the original repair worker can freeze its plan") {
+				input.Development = &protocol.DevelopmentInput{}
+				if err := canaryRepairShape(&answer, input); err == nil || !strings.Contains(err.Error(), "only the original repair worker can freeze its plan") {
 					t.Fatalf("member tried to freeze another plan: %v", err)
 				}
 			}
@@ -2549,7 +2568,7 @@ func TestCanaryPlanAdmissionUsesCoreContract(t *testing.T) {
 					if err := decodeCanaryAnswer(map[string]any{"granularityReview": planValue}, &answer); err != nil {
 						t.Fatal(err)
 					}
-					got, refusal = answer.Plan, canaryRepairShape(&answer, false)
+					got, refusal = answer.Plan, canaryRepairShape(&answer, protocol.ValidationInput{})
 				}
 				if (refusal == nil) != (coreErr == nil) || refusal != nil && refusal.Error() != coreErr.Error() {
 					t.Fatalf("consumer admission differs from core: consumer=%v core=%v", refusal, coreErr)
@@ -3197,5 +3216,154 @@ func TestCanaryCaseReviewRetainsSubmittedDecisions(t *testing.T) {
 				t.Fatal("malformed decisions accepted")
 			}
 		})
+	}
+}
+
+// The original complete repair evidence must be refused before submission,
+// without changing its declared affected set or dropping the extra run rows.
+func TestCanaryRepairEvidenceUsesCoreApprovedSet(t *testing.T) {
+	var sample struct {
+		Contract    coverage.CoverageContract
+		Development protocol.DevelopmentEvidence
+	}
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("..", "engine", "protocol", "testdata", "repair_case_evidence.json")), &sample); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(sample.Development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	var answer canaryDevelopmentAnswer
+	if err := decodeCanaryAnswer(value, &answer); err != nil {
+		t.Fatal(err)
+	}
+	input := protocol.ValidationInput{Contract: &sample.Contract, Repair: &protocol.RepairInput{}}
+	before, _ := json.Marshal(answer)
+	core := protocol.ValidateRepairEvidence(sample.Contract.Manifests, sample.Development, false)
+	actual := canaryRepairShape(&answer, input)
+	if len(answer.AffectedCases) != 2 || len(answer.CaseRuns) != 13 || core == nil || actual == nil || actual.Error() != core.Error() || actual.Error() != "VALIDATION_EVIDENCE_REJECTED: repair execution must uniquely match each affected mode/case and pass" {
+		t.Fatalf("original repair boundary: consumer=%v core=%v", actual, core)
+	}
+	after, _ := json.Marshal(answer)
+	if !bytes.Equal(before, after) {
+		t.Fatal("native shape rewrote original model evidence")
+	}
+	for _, scenario := range []string{"subset", "all", "extra", "duplicate", "wrong-mode", "bad-status", "empty-procedure", "empty-observation", "empty-comparison", "missing-ordinary", "missing-pureP2", "final", "missing-final", "final-union", "member", "member-plan"} {
+		t.Run(scenario, func(t *testing.T) {
+			var current canaryDevelopmentAnswer
+			if err := decodeCanaryAnswer(value, &current); err != nil {
+				t.Fatal(err)
+			}
+			current.CaseRuns = nil
+			for _, row := range sample.Development.CaseRuns {
+				if slices.Contains(current.AffectedCases, row.CaseID) {
+					current.CaseRuns = append(current.CaseRuns, row)
+				}
+			}
+			issued := protocol.ValidationInput{Contract: &sample.Contract, Repair: &protocol.RepairInput{}}
+			valid := true
+			switch scenario {
+			case "all":
+				current.AffectedCases = nil
+				current.CaseRuns = slices.Clone(sample.Development.CaseRuns)
+				for _, row := range current.CaseRuns {
+					current.AffectedCases = append(current.AffectedCases, row.CaseID)
+				}
+			case "extra":
+				current.CaseRuns = append(current.CaseRuns, sample.Development.CaseRuns[0])
+				valid = false
+			case "duplicate":
+				current.CaseRuns = append(current.CaseRuns, current.CaseRuns[0])
+				valid = false
+			case "wrong-mode":
+				current.CaseRuns[0].Mode = coverage.ReviewWhitebox
+				valid = false
+			case "bad-status":
+				current.CaseRuns[0].Result = coverage.ExecutedFail
+				valid = false
+			case "empty-procedure":
+				current.CaseRuns[0].Procedure = ""
+				valid = false
+			case "empty-observation":
+				current.CaseRuns[0].Observation = ""
+				valid = false
+			case "empty-comparison":
+				current.CaseRuns[0].Comparison = ""
+				valid = false
+			case "missing-ordinary":
+				current.CaseRuns = nil
+			case "missing-pureP2":
+				current.CaseRuns = nil
+				issued.Repair.Obligation.PureP2 = true
+				valid = false
+			case "final", "missing-final", "final-union":
+				issued.Repair.FinalCandidate = &coverage.ValidationCandidate{}
+				issued.Repair.MemberResults = []protocol.WorkerResult{{Validation: &protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: slices.Clone(current.Paths), AffectedCases: slices.Clone(current.AffectedCases)}}}}
+				if scenario == "missing-final" {
+					current.CaseRuns = nil
+					valid = false
+				} else if scenario == "final-union" {
+					current.Paths = append(current.Paths, "extra.go")
+					valid = false
+				} else {
+					issued.Repair.MemberResults = []protocol.WorkerResult{
+						{Validation: &protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: slices.Clone(current.Paths), AffectedCases: current.AffectedCases[:1]}}},
+						{Validation: &protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: slices.Clone(current.Paths), AffectedCases: current.AffectedCases[1:]}}},
+					}
+				}
+			case "member", "member-plan":
+				issued.Development = &protocol.DevelopmentInput{}
+				current.DoD = map[string]string{"behavior": "declared behavior completed"}
+				current.Checks = map[string]string{"build": "actual build completed"}
+				current.Handoff = "owned changes ready"
+				if scenario == "member-plan" {
+					current.Plan = &protocol.GranularityReview{}
+					valid = false
+				}
+			}
+			original, _ := json.Marshal(current)
+			err := canaryRepairShape(&current, issued)
+			if (err == nil) != valid {
+				t.Fatalf("%s validity differs: %v", scenario, err)
+			}
+			unchanged, _ := json.Marshal(current)
+			if !bytes.Equal(original, unchanged) {
+				t.Fatal("shape changed submitted evidence")
+			}
+		})
+	}
+}
+
+// Completion evidence retains its raw rows even when the plan contract is
+// tested separately. Ordinary regression runs cannot impersonate affected runs.
+func TestCanaryRepairCompletionKeepsOriginalRunRows(t *testing.T) {
+	var raw map[string]any
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "repair_plan_with_invalid_route.json")), &raw); err != nil {
+		t.Fatal(err)
+	}
+	var answer canaryDevelopmentAnswer
+	if err := decodeCanaryAnswer(raw, &answer); err != nil {
+		t.Fatal(err)
+	}
+	// Isolate the original completion from its independently invalid route plan.
+	answer.Plan = nil
+	manifests := []coverage.AcceptanceManifest{
+		{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{{CaseID: "case-ac002-failure-unknown-long-flag"}, {CaseID: "case-ac002-misuse-unknown-short-flag"}, {CaseID: "case-ac002-success-plain-word"}}},
+		{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "AC-002-MISUSE-01"}, {CaseID: "AC-002-MISUSE-02"}, {CaseID: "AC-002-MISUSE-03"}, {CaseID: "AC-002-SUCCESS-01"}, {CaseID: "AC-001-SUCCESS-01"}, {CaseID: "AC-001-BOUNDARY-01"}, {CaseID: "AC-001-BOUNDARY-02"}, {CaseID: "AC-001-MISUSE-01"}}},
+	}
+	before, _ := json.Marshal(answer)
+	evidence := protocol.DevelopmentEvidence{AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns}
+	core := protocol.ValidateRepairEvidence(manifests, evidence, false)
+	actual := canaryRepairShape(&answer, protocol.ValidationInput{Contract: &coverage.CoverageContract{Manifests: manifests}})
+	if len(answer.AffectedCases) != 5 || len(answer.CaseRuns) != 11 || core == nil || actual == nil || core.Error() != actual.Error() || !strings.Contains(actual.Error(), "repair execution must uniquely match each affected mode/case and pass") {
+		t.Fatalf("raw completion rejected inconsistently: native=%v core=%v", actual, core)
+	}
+	after, _ := json.Marshal(answer)
+	if !bytes.Equal(before, after) {
+		t.Fatal("consumer changed original completion fields")
 	}
 }

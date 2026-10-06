@@ -312,6 +312,10 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 				t.Fatal("gate correction lost original obligation or frozen source")
 			}
 			if severity == "P2" {
+				input := s.repairInput(correction.task)
+				if input == nil || !input.Obligation.PureP2 || w.Repair.PureP2 {
+					t.Fatal("member P2 correction lost its self-run duty in issued input")
+				}
 				if len(s.repairGates(correction)) != 0 || s.completedValidationWaves() != 1 {
 					t.Fatal("P2 correction repeated gate or spent a business round")
 				}
@@ -337,6 +341,124 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			w.ExtraAuthorized = true
 			if s.repairExtraAuthorized(&later) {
 				t.Fatal("an earlier source grant authorized the next failure")
+			}
+		})
+	}
+}
+
+// State acceptance and native consumption share the same case evidence owner.
+func TestRepairEvidenceUsesSelectedManifests(t *testing.T) {
+	manifests := []coverage.AcceptanceManifest{{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "changed"}, {CaseID: "unchanged"}}}}
+	s := &State{SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifests[0]}}}}
+	row := RepairCaseEvidence{Mode: coverage.ReviewMerge, CaseID: "changed", Result: coverage.ExecutedPass, Procedure: "ran exact changed-case command", Observation: "exit=0 output matched changed-case bytes", Comparison: "matched exact declared changed-case oracle"}
+	for _, scenario := range []string{"subset", "all", "extra", "outside", "duplicate-affected", "duplicate-run", "wrong-mode", "bad-status", "empty-reason", "missing-optional", "missing-required", "empty-required", "ambiguous"} {
+		t.Run(scenario, func(t *testing.T) {
+			d := DevelopmentEvidence{AffectedCases: []string{"changed"}, CaseRuns: []RepairCaseEvidence{row}}
+			require := false
+			approved := manifests
+			valid := true
+			switch scenario {
+			case "all":
+				d.AffectedCases = append(d.AffectedCases, "unchanged")
+				other := row
+				other.CaseID = "unchanged"
+				d.CaseRuns = append(d.CaseRuns, other)
+			case "extra":
+				other := row
+				other.CaseID = "unchanged"
+				d.CaseRuns = append(d.CaseRuns, other)
+				valid = false
+			case "outside":
+				d.AffectedCases = []string{"outside"}
+				valid = false
+			case "duplicate-affected":
+				d.AffectedCases = append(d.AffectedCases, "changed")
+				valid = false
+			case "duplicate-run":
+				d.CaseRuns = append(d.CaseRuns, row)
+				valid = false
+			case "wrong-mode":
+				d.CaseRuns[0].Mode = coverage.ReviewBlackbox
+				valid = false
+			case "bad-status":
+				d.CaseRuns[0].Result = coverage.ExecutedFail
+				valid = false
+			case "empty-reason":
+				d.CaseRuns[0].Comparison = ""
+				valid = false
+			case "missing-optional":
+				d.CaseRuns = nil
+			case "missing-required":
+				d.CaseRuns = nil
+				require = true
+				valid = false
+			case "empty-required":
+				d.AffectedCases = nil
+				d.CaseRuns = nil
+				require = true
+				valid = false
+			case "ambiguous":
+				approved = append(append([]coverage.AcceptanceManifest{}, manifests...), manifests[0])
+				valid = false
+			}
+			shared := ValidateRepairEvidence(approved, d, require)
+			if (shared == nil) != valid {
+				t.Fatalf("shared evidence %s: %v", scenario, shared)
+			}
+			if scenario != "ambiguous" {
+				actual := s.validateRepairEvidence(d, require)
+				if (actual == nil) != (shared == nil) || actual != nil && actual.Error() != shared.Error() {
+					t.Fatalf("state evidence differs: %v / %v", actual, shared)
+				}
+			}
+		})
+	}
+}
+
+func TestFinalRepairEvidenceUsesMemberUnion(t *testing.T) {
+	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
+	wave := &ValidationWave{Status: "REPAIR", Repair: &ValidationRepair{Task: task}}
+	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first"}, {ID: "second"}}}
+	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "first-case"}, {CaseID: "second-case"}}}
+	s := &State{SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifest}}}, Results: map[string]WorkerResult{"plan": {Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}}}
+	var members []DevelopmentEvidence
+	final := DevelopmentEvidence{}
+	for _, member := range s.repairMembers(wave) {
+		caseID := member.batch.ID + "-case"
+		evidence := DevelopmentEvidence{Paths: []string{member.batch.ID + ".go", "shared.go"}, AffectedCases: []string{caseID}, CaseRuns: []RepairCaseEvidence{{Mode: coverage.ReviewMerge, CaseID: caseID, Result: coverage.ExecutedPass, Procedure: "ran declared member command", Observation: "exit=0 exact output bytes", Comparison: "output matched member contract"}}}
+		s.Results[member.batch.ID] = WorkerResult{Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: member.task}, Development: &evidence}}
+		members = append(members, evidence)
+		final.AffectedCases = append(final.AffectedCases, caseID)
+		final.CaseRuns = append(final.CaseRuns, evidence.CaseRuns...)
+	}
+	final.Paths = []string{"first.go", "second.go", "shared.go"}
+	work := repairWork{wave: wave, verification: true}
+	before, _ := json.Marshal(final)
+	if err := s.validateFinalRepairEvidence(work, final); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateFinalRepairEvidence(members, final); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(final)
+	if string(before) != string(after) {
+		t.Fatal("final acceptance rewrote submitted union")
+	}
+	for _, scenario := range []string{"missing-path", "duplicate-path", "missing-affected", "missing-run"} {
+		t.Run(scenario, func(t *testing.T) {
+			bad := final
+			switch scenario {
+			case "missing-path":
+				bad.Paths = bad.Paths[1:]
+			case "duplicate-path":
+				bad.Paths = append(append([]string{}, bad.Paths...), bad.Paths[0])
+			case "missing-affected":
+				bad.AffectedCases = bad.AffectedCases[1:]
+			case "missing-run":
+				bad.CaseRuns = bad.CaseRuns[1:]
+			}
+			if err := s.validateFinalRepairEvidence(work, bad); err == nil {
+				t.Fatal("final verification accepted incomplete member evidence")
 			}
 		})
 	}
