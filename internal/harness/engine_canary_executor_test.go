@@ -737,8 +737,8 @@ func canaryLocalDocumentMatches(path, content string) bool {
 // Equal local action IDs belong to different runs. A blocked failing worker
 // still reports a typed completion while independent work can finish and refill.
 func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
-	home := t.TempDir()
-	jobs := t.TempDir()
+	home := resolveNativePath(t.TempDir())
+	jobs := resolveNativePath(t.TempDir())
 	input, approval := io.Pipe()
 	defer input.Close()
 	defer approval.Close()

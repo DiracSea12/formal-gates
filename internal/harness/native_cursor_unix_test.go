@@ -239,8 +239,8 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 }
 func (s *cursorScenario) save(t *testing.T) {
 	t.Helper()
-	model := textOf(s.request["model"])
-	effort := textOf(s.request["reasoning_effort"])
+	model, _ := s.request["model"].(string)
+	effort, _ := s.request["reasoning_effort"].(string)
 	if effort != "" && !strings.Contains(model, "effort=") {
 		if strings.Contains(model, "[") {
 			model = model[:len(model)-1] + ",effort=" + effort + "]"
@@ -882,5 +882,25 @@ func TestCursorRequestCarriesExactSavedSource(t *testing.T) {
 	identity, sourceJob, err = store.SessionSource(ctx, "worker")
 	if err != nil || identity != "" || sourceJob != "" {
 		t.Fatal("restart retained native source")
+	}
+}
+
+// Absent overrides retain the CLI's native selection and saved context.
+func TestCursorAbsentModelOptionsUseNativeSelection(t *testing.T) {
+	s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "native-default", "", true)
+	delete(s.request, "model")
+	delete(s.request, "reasoning_effort")
+	s.save(t)
+	source, err := runNativeJob(s.directory)
+	if err != nil || getOf(source["selection"], "model") != "native-default" || getOf(source["selection"], "reasoning_effort") != "" || strings.Contains(strings.Join(s.peer.Args, "\n"), "--model") {
+		t.Fatalf("absent native overrides: %v %v argv=%q", source, err, s.peer.Args)
+	}
+	s.resume(t)
+	continued, err := runNativeJob(s.directory)
+	if err != nil || continued["identity"] != source["identity"] || continued["native_store"] != source["native_store"] || getOf(continued["selection"], "model") != "native-default" || cursorCalls(t, s) != 3 {
+		t.Fatalf("absent native continuation: %v %v", continued, err)
+	}
+	if err := cursorVerifySource(s.directory, continued); err != nil {
+		t.Fatal(err)
 	}
 }

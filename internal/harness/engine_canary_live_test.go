@@ -2455,7 +2455,10 @@ func (c *engineCanary) executeNative(request any, dir string, probe bool) (map[s
 // with the native owner.
 func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) error {
 	if strings.TrimSpace(candidate) == "" {
-		return fmt.Errorf("canary requires a prepared host root (ZCODE_DATA_BASE_DIR for ZCode; FORMAL_GATES_ENGINE_CANARY_HOME for other hosts)")
+		if c.nativeName() == canaryProvider {
+			return fmt.Errorf("canary requires a prepared ZCODE_DATA_BASE_DIR")
+		}
+		return fmt.Errorf("canary requires a prepared FORMAL_GATES_ENGINE_CANARY_HOME")
 	}
 	info, err := os.Stat(candidate)
 	if err != nil || !info.IsDir() {
