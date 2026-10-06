@@ -78,7 +78,17 @@ func canaryPending(run facade.Run, id string) *protocol.PendingAction {
 	return &pending
 }
 func (c *engineCanary) materials(id, role string, input protocol.ValidationInput) canaryMaterials {
-	return canaryMaterials{Role: role, RunID: c.currentRunID(), Slice: c.childSlice(), ActionID: id, Input: &input, RequirementPath: input.RequirementDocument.Path, RequirementRevision: input.Binding.RequirementRevision, Pending: canaryPending(c.run, id)}
+	material := canaryMaterials{Role: role, RunID: c.currentRunID(), Slice: c.childSlice(), ActionID: id, Input: &input, RequirementPath: input.RequirementDocument.Path, RequirementRevision: input.Binding.RequirementRevision, Pending: canaryPending(c.run, id)}
+	if input.Handler == "engine.qa.design" && c.run.Validation != nil {
+		if set := c.run.Validation.Sets[input.Manifest.Binding.ReviewKind]; set != nil {
+			for _, prior := range set.ReviewHistory {
+				if prior.Review.Verdict() == coverage.StatusFail {
+					material.ReviewHistory = append(material.ReviewHistory, prior)
+				}
+			}
+		}
+	}
+	return material
 }
 func canaryCaseMode(input protocol.ValidationInput) coverage.CaseMode {
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewMerge {
@@ -522,5 +532,47 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 	after, _ := json.Marshal(sample.Finding.Raw)
 	if !bytes.Equal(before, after) {
 		t.Fatal("material consumption altered raw locations")
+	}
+}
+
+// A new design sees only its own mode's failed reviews, with complete evidence
+// values intact even after current review/candidate have been cleared.
+func TestCanaryDesignMaterialsRetainFailedReviewIdentity(t *testing.T) {
+	var sample struct {
+		Answer  struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }
+		CaseSet protocol.CaseSet
+	}
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "rejected_case_review.json")), &sample); err != nil {
+		t.Fatal(err)
+	}
+	c := &engineCanary{t: t, jobs: t.TempDir(), run: facade.Run{RunID: "issued-run", Validation: &protocol.Validation{Sets: map[coverage.ReviewKind]*protocol.CaseSet{}}}}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
+		manifest := sample.CaseSet.Manifest
+		manifest.Binding.ReviewKind = mode
+		manifest.Binding.RunID = "original-" + string(mode)
+		review := coverage.ReviewResult{Binding: manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: c.modelReviewDecisions("source", sample.Answer.SourceDecisions), PointDecisions: c.modelReviewDecisions("point", sample.Answer.PointDecisions), CaseDecisions: c.modelReviewDecisions("case", sample.Answer.CaseDecisions)}
+		prior := protocol.CaseReviewEvidence{Candidate: "original-candidate-" + string(mode), Manifest: manifest, Review: review}
+		approved := prior
+		approved.Review = coverage.ReviewResult{Binding: manifest.Binding, Scope: coverage.ScopeFull, CaseDecisions: []coverage.ReviewDecision{{ID: "approved-case", Status: coverage.StatusPass, Reason: "approved reason"}}}
+		c.run.Validation.Sets[mode] = &protocol.CaseSet{Status: "DRAFT", Version: sample.CaseSet.Version, Manifest: manifest, ReviewHistory: []protocol.CaseReviewEvidence{prior, approved}}
+	}
+	for mode, set := range c.run.Validation.Sets {
+		t.Run(string(mode), func(t *testing.T) {
+			input := protocol.ValidationInput{Handler: "engine.qa.design", Binding: protocol.WorkBinding{RequirementRevision: "new-revision", Candidate: "new-candidate", CaseVersion: "new-version"}, Manifest: set.Manifest}
+			input.RequirementDocument.Content = "confirmed current requirement"
+			material := c.materials("design-"+string(mode), "QA case design", input)
+			prompt := c.prompt("QA case design", material, "design issued obligations", true)
+			var emitted canaryMaterials
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(c.jobDirectory(material.ActionID), "materials.json")), &emitted); err != nil {
+				t.Fatal(err)
+			}
+			if len(emitted.ReviewHistory) != 1 || !canaryValuesEqual(emitted.ReviewHistory[0], set.ReviewHistory[0]) || !canaryValuesEqual(emitted.Input, &input) || emitted.RunID != c.run.RunID || !strings.Contains(prompt, "materials.reviewHistory") {
+				t.Fatalf("failed review identity changed in design material: %+v", emitted)
+			}
+			input.Handler = "engine.qa.review.rationale"
+			if len(c.materials("review", "QA case review", input).ReviewHistory) != 0 {
+				t.Fatal("design feedback leaked into another handler")
+			}
+		})
 	}
 }

@@ -45,13 +45,18 @@ func TestCanaryInstalledGitFlows(t *testing.T) {
 	}
 }
 
+// A rejected case oracle must reopen design before the ordinary flag repair.
+func TestCanaryInstalledCaseReviewRedesign(t *testing.T) {
+	runCanaryInstalledFlow(t, "git", true, canaryProvider, func(e *canaryLocalExecutor) { e.rejectBadOracle = true })
+}
+
 func TestCanaryInstalledHostGitFlows(t *testing.T) {
 	for _, nativeHost := range host.InstallableNames() {
 		t.Run(nativeHost, func(t *testing.T) { runCanaryInstalledFlow(t, "git", false, nativeHost) })
 	}
 }
 
-func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHost string) {
+func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHost string, configure ...func(*canaryLocalExecutor)) {
 	name := "split"
 	if !split {
 		name = "no-split"
@@ -122,6 +127,9 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 	c.approvalInput = bufio.NewReader(input)
 	c.approvalOutput = canaryLocalApproval{approval}
 	executor := &canaryLocalExecutor{t: t, canary: c, split: split, developmentStarted: make(chan struct{})}
+	for _, setup := range configure {
+		setup(executor)
+	}
 	c.execute = executor.execute
 	if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
 		started, release := make(chan struct{}), make(chan struct{})
@@ -190,6 +198,13 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 			}
 		}
 		executor.assertOverlap(t)
+	}
+	if executor.rejectBadOracle {
+		set := c.run.Termination.Validation.Sets[coverage.ReviewMerge]
+		if executor.rejectedReview == nil || !executor.redesignFeedback || set == nil || set.Review == nil || set.Review.Verdict() != coverage.StatusPass || len(set.ReviewHistory) < 2 || !canaryValuesEqual(set.ReviewHistory[0], *executor.rejectedReview) {
+			t.Fatalf("review rejection/redesign did not survive promotion: %+v", set)
+		}
+		t.Logf("review FAIL retained original evidence, DRAFT design consumed feedback, new review PASS, flag repair and native cleanup completed")
 	}
 	t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
 }
@@ -332,6 +347,9 @@ type canaryLocalExecutor struct {
 	transportFailure   func(canaryMaterials) error
 	canary             *engineCanary
 	publicNative       sync.Once
+	rejectBadOracle    bool
+	rejectedReview     *protocol.CaseReviewEvidence
+	redesignFeedback   bool
 }
 
 func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source map[string]any, err error) {
@@ -515,7 +533,30 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 		}
 		return answer, nil
 	case "engine.qa.design":
-		return e.design(input, workspace)
+		answer, err := e.design(input, workspace)
+		if err != nil || !e.rejectBadOracle || input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
+			return answer, err
+		}
+		if len(m.ReviewHistory) == 0 {
+			if e.rejectedReview != nil {
+				return nil, fmt.Errorf("new design lost failed review feedback")
+			}
+			for _, raw := range answer["cases"].([]any) {
+				row := raw.(map[string]any)
+				if row["pointId"] == "AC-001" && row["scenario"] == "SUCCESS" {
+					row["args"] = []string{"straße"}
+					row["oracle"] = "exit=0 output=frob: STRASSE bytes=7"
+				}
+			}
+		} else {
+			run := e.canary.readRunID("show", m.RunID)
+			set := run.Validation.Sets[coverage.ReviewMerge]
+			if e.rejectedReview == nil || len(m.ReviewHistory) != 1 || !canaryValuesEqual(m.ReviewHistory[0], *e.rejectedReview) || set.Status != "DRAFT" || set.Review != nil || set.Candidate != "" || !canaryValuesEqual(input.Manifest, e.rejectedReview.Manifest) {
+				return nil, fmt.Errorf("reopened design lost original failed manifest/review/candidate or DRAFT boundary")
+			}
+			e.redesignFeedback = true
+		}
+		return answer, nil
 	case "engine.qa.review.rationale":
 		decisions := func(ids []string) []any {
 			out := []any{}
@@ -531,7 +572,33 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 		for _, c := range input.Manifest.Cases {
 			cases = append(cases, c.CaseID)
 		}
-		return map[string]any{"sourceDecisions": decisions(input.Manifest.Sources), "pointDecisions": decisions(points), "caseDecisions": decisions(cases)}, nil
+		answer := map[string]any{"sourceDecisions": decisions(input.Manifest.Sources), "pointDecisions": decisions(points), "caseDecisions": decisions(cases)}
+		if e.rejectBadOracle && input.Manifest.Binding.ReviewKind == coverage.ReviewMerge {
+			for _, designed := range input.Manifest.Cases {
+				if designed.Oracle != "exit=0 output=frob: STRASSE bytes=7" {
+					continue
+				}
+				if e.rejectedReview != nil {
+					return nil, fmt.Errorf("redesign repeated the rejected oracle")
+				}
+				reason := "strings.ToUpper leaves ß unchanged; the STRASSE oracle rejects a conformant implementation"
+				for layer, id := range map[string]string{"sourceDecisions": "REQ-001", "pointDecisions": "AC-001", "caseDecisions": designed.CaseID} {
+					for _, raw := range answer[layer].([]any) {
+						row := raw.(map[string]any)
+						if row["id"] == id {
+							row["status"], row["reason"] = "FAIL", reason
+						}
+					}
+				}
+				var submitted struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }
+				body, _ := json.Marshal(answer)
+				if err := json.Unmarshal(body, &submitted); err != nil {
+					return nil, err
+				}
+				e.rejectedReview = &protocol.CaseReviewEvidence{Candidate: input.Binding.Candidate, Manifest: input.Manifest, Review: coverage.ReviewResult{Binding: input.Manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: e.canary.modelReviewDecisions("source", submitted.SourceDecisions), PointDecisions: e.canary.modelReviewDecisions("point", submitted.PointDecisions), CaseDecisions: e.canary.modelReviewDecisions("case", submitted.CaseDecisions)}}
+			}
+		}
+		return answer, nil
 	case "engine.qa.execution":
 		records := []any{}
 		for _, observation := range m.HostObservations {

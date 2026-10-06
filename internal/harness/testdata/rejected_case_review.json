@@ -1,0 +1,326 @@
+{
+  "answer": {
+    "caseDecisions": [
+      {
+        "id": "QA-AC001-01",
+        "reason": "Executable: build frob, run ./frob hello, oracle requires exit 0 and stdout exactly 'frob: HELLO bytes=5'. 'hello' is 5 ASCII bytes; the placeholder (identity return, fixed 0) would output 'frob: hello bytes=0' and fails, so the case genuinely verifies the implemented UpperWord on ASCII input.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC001-02",
+        "reason": "The oracle demands stdout exactly 'frob: STRASSE bytes=7' on the theory that ß(U+00DF) must map to SS, but the bound requirement defines UPPER as the strings.ToUpper result, and Go's strings.ToUpper performs simple 1:1 case mapping that leaves ß unchanged (ß→SS is a Unicode SpecialCasing full mapping, not applied by the Go stdlib; see golang/go issue #75228). A conformant implementation outputs 'frob: STRAßE bytes=7' and false-fails this case, while an implementation that prints STRASSE would actually violate strings.ToUpper semantics. The input byte count (7) is correct, but the expected output string makes the oracle unsatisfiable by the acceptance point it claims to verify; ß also fails to discriminate Unicode-aware from ASCII-only uppercasing since neither changes it.",
+        "status": "FAIL"
+      },
+      {
+        "id": "QA-AC001-03",
+        "reason": "Steps and preconditions give the exact executable command ./frob \"\" (one empty argument, not zero args), and the oracle is correct: frob.go passes len(os.Args)>=2 so it prints 'frob: %s bytes=%d' with UpperWord(\"\")=\"\" yielding 'frob:  bytes=0' (two spaces, as the oracle states), exit 0, no usage. Verifies the empty-word clause of AC-001 (the placeholder also passes it, but QA-AC001-01 distinguishes on non-empty input).",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC002-01",
+        "reason": "./frob café with oracle 'frob: CAFÉ bytes=5': é is U+00E9, 2 UTF-8 bytes, so 1+1+1+2=5 bytes vs 4 runes — correctly distinguishes byte count from rune count, and é→É is a simple mapping strings.ToUpper does perform. The fixed-0 placeholder fails this oracle, so the case verifies AC-002.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC002-02",
+        "reason": "./frob 日本 with oracle 'frob: 日本 bytes=6': two CJK characters at 3 bytes each = 6 bytes vs 2 runes; case mapping leaves them unchanged. Correct, executable, and discriminating against both the placeholder and a rune-counting implementation.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC002-03",
+        "reason": "./frob 😀 with oracle 'frob: 😀 bytes=4': U+1F600 encodes to 4 UTF-8 bytes, 1 rune, and has no case mapping so UpperWord leaves it unchanged. Byte math and Unicode facts are correct; boundary case for max rune width is sound.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC002-04",
+        "reason": "Executable ./frob \"\" with oracle 'frob:  bytes=0' and exit 0, matching WordSize(\"\")=0 required by AC-002. The oracle text is honest that the empty-word case is indistinguishable from the fixed-0 placeholder on its own and depends on the non-empty sibling cases (QA-AC002-01..03) for discrimination — which exist and are correct.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC003-01",
+        "reason": "./frob héLLo with oracle exit 0 and stdout exactly 'frob: HÉLLO bytes=6': h→H, é→É (simple mapping), L,L unchanged, o→O; input bytes h1+é2+L1+L1+o1=6 as stated. Matches AC-003's exact required output; also exercises the composite wiring of UpperWord and WordSize through frob.go's printf format, verified against the source.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC003-02",
+        "reason": "Executable ./frob \"\" (explicitly one empty word, not zero args) with oracle exit 0 and stdout exactly 'frob:  bytes=0', no usage, no non-zero exit. Matches the second exact-output clause of AC-003 and frob.go's actual behavior (len(os.Args)==2 skips the usage branch).",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC003-03",
+        "reason": "./frob with no positional arguments; oracle requires non-zero exit and empty stdout with no 'frob: ' line. Verified against frob.go: len(os.Args)<2 prints 'usage: frob <word>' to stderr and exits 2 — the oracle wisely constrains only non-zero (the requirement's only constraint) and does not hard-code exit code 2 or stderr text. Covers the 参数不足 clause of the requirement under the composite command.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC004-01",
+        "reason": "./frob --unknown-flag hello with oracle: non-zero exit and no 'frob: ' line on stdout. This is exactly AC-004 (stderr deliberately unconstrained, matching the AC text). The precondition honestly documents the known baseline gap, and the cited baseline output 'frob: --UNKNOWN-FLAG bytes=14' is correct (14 bytes in --unknown-flag) once UpperWord is implemented. Executable and decisive: baseline exits 0 and prints the frob line, so only the authorized frob.go rework passes.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC004-02",
+        "reason": "./frob --unknown-flag with the flag as sole argument; oracle requires non-zero exit and no 'frob: ' line. Baseline treats it as the word and prints 'frob: --UNKNOWN-FLAG bytes=14' with exit 0, so the case catches a rework that only rejects flags when a word follows. Correct variant coverage for AC-004.",
+        "status": "PASS"
+      },
+      {
+        "id": "QA-AC004-03",
+        "reason": "./frob hello on the same build as QA-AC004-01, requiring exit 0 and stdout exactly 'frob: HELLO bytes=5'. Correct regression guard: without it, a flag-rejection rework that rejects or mangles all invocations (e.g., breaking normal arg parsing) would pass QA-AC004-01/02. Sound complement to the MISUSE cases.",
+        "status": "PASS"
+      }
+    ],
+    "pointDecisions": [
+      {
+        "id": "AC-001",
+        "reason": "Empty-word behavior has executable coverage (QA-AC001-03: ./frob \"\" → exit 0, 'frob:  bytes=0' with two spaces, consistent with frob.go's format string) and ASCII uppercase is covered by QA-AC001-01 (hello→HELLO distinguishes the placeholder). But the 'Unicode 大写' claim has no sound executable case: QA-AC001-02, the only non-ASCII case on this point, asserts ß→SS, which contradicts the bound requirement's own definition (UPPER = strings.ToUpper result, which leaves ß unchanged). Executing this case set against a conformant implementation yields a false FAIL for AC-001, so the point's verification is unsound.",
+        "status": "FAIL"
+      },
+      {
+        "id": "AC-002",
+        "reason": "Four executable cases with byte math verified: café=5 bytes vs 4 runes (é is 2 bytes), 日本=6 bytes vs 2 runes (3 bytes each), 😀=4 bytes vs 1 rune (U+1F600, no case mapping), and empty word → 0. The non-empty cases distinguish byte count from rune count, so the placeholder WordSize (fixed 0) fails them; QA-AC002-04's oracle honestly notes the empty-word case alone is equivalent to the placeholder and relies on the others for discrimination.",
+        "status": "PASS"
+      },
+      {
+        "id": "AC-003",
+        "reason": "QA-AC003-01 checks the exact line 'frob: HÉLLO bytes=6' (h1+é2+L1+L1+o1=6, h→H/é→É/o→O via simple mappings, which strings.ToUpper does perform); QA-AC003-02 checks the exact empty-word line 'frob:  bytes=0' with exit 0 and no usage; QA-AC003-03 executes ./frob with no args and requires non-zero exit with empty stdout, matching frob.go's baseline (usage to stderr, exit 2) and the requirement's 参数不足非零退出. Full and executable coverage of the composite command behavior.",
+        "status": "PASS"
+      },
+      {
+        "id": "AC-004",
+        "reason": "QA-AC004-01 executes ./frob --unknown-flag hello and requires non-zero exit plus no 'frob: ' line on stdout — exactly the AC text (stderr correctly left unconstrained since AC-004 does not constrain it); it also correctly documents the baseline gap ('frob: --UNKNOWN-FLAG bytes=14', 14 bytes verified for --unknown-flag). QA-AC004-02 covers the flag-as-sole-argument variant. QA-AC004-03 guards that the flag-rejection rework in frob.go does not break the normal 'frob hello' path. Sound executable coverage.",
+        "status": "PASS"
+      }
+    ],
+    "sourceDecisions": [
+      {
+        "id": "REQ-001",
+        "reason": "Most of the obligation is soundly carried: no-args non-zero exit (QA-AC003-03 matches frob.go baseline exit 2 + usage on stderr), exact combined line frob: UPPER bytes=N (QA-AC003-01/02), UTF-8 byte counting (QA-AC002-01..04), and AC-004 flag rejection with rework guard (QA-AC004-01..03). However REQ-001 normatively defines UPPER as the result of strings.ToUpper, and its case set contains QA-AC001-02 whose oracle demands strings.ToUpper map ß(U+00DF) to 'SS'. Go's strings.ToUpper implements simple 1:1 case mapping and leaves ß unchanged (ß→SS is a SpecialCasing full mapping requiring x/text/cases; see golang/go issue #75228), so a conformant merge outputs 'frob: STRAßE bytes=7' and would false-fail that case. The source's AC-001 obligation is therefore not soundly carried by the case set.",
+        "status": "FAIL"
+      }
+    ]
+  },
+  "caseSet": {
+    "designTask": "validation/qa.design/3:MERGE:1:",
+    "manifest": {
+      "binding": {
+        "runId": "engine-canary",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "solutionRevision": "78146b0c2d8c8be5401c4f98ec85cb234664cccf3912db97400cb7f9a855dcb5",
+        "reviewKind": "MERGE",
+        "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+        "topologyScope": "sha256:4e872e52740362acc2a2097ee57f68cc375e092b1f4bd1d46c9c9b9df5ffba91"
+      },
+      "sources": [
+        "REQ-001"
+      ],
+      "points": [
+        {
+          "pointId": "AC-001",
+          "observableBehavior": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。",
+          "oracle": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。"
+        },
+        {
+          "pointId": "AC-002",
+          "observableBehavior": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。",
+          "oracle": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。"
+        },
+        {
+          "pointId": "AC-003",
+          "observableBehavior": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。",
+          "oracle": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。"
+        },
+        {
+          "pointId": "AC-004",
+          "observableBehavior": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+          "oracle": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。"
+        }
+      ],
+      "cases": [
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC001-01",
+          "mode": "MERGE",
+          "publicEntry": "frob hello",
+          "preconditions": "MERGE 工作区已检出且 go build ./... 成功，frob 可执行文件已构建；在仓库根目录以 UTF-8 终端执行。",
+          "steps": "运行 `./frob hello`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码为 0；stdout 恰为一行 `frob: HELLO bytes=5`（含行尾换行，无任何其他输出），证明 UpperWord 将 ASCII 词转为大写。"
+        },
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC001-02",
+          "mode": "MERGE",
+          "publicEntry": "frob straße",
+          "preconditions": "frob 已构建；终端为 UTF-8 环境，参数按 UTF-8 原样传递。",
+          "steps": "运行 `./frob straße`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob: STRASSE bytes=7`：ß(U+00DF) 必须映射为 SS（输入 6 个 rune 输出 7 个字符），证明是 Unicode 大写而非仅 ASCII 大写；bytes=7 为输入词的 UTF-8 字节数。"
+        },
+        {
+          "scenario": "BOUNDARY",
+          "caseId": "QA-AC001-03",
+          "mode": "MERGE",
+          "publicEntry": "frob ",
+          "preconditions": "frob 已构建；shell 中以空字符串参数调用（如 `./frob \"\"`），保证传入一个空词而非零参数。",
+          "steps": "运行 `./frob \"\"`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob:  bytes=0`（`frob:` 后为两个连续空格，因为 UpperWord 对空词返回空串）；不输出 usage、不非零退出。"
+        },
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC002-01",
+          "mode": "MERGE",
+          "publicEntry": "frob café",
+          "preconditions": "frob 已构建；终端为 UTF-8 环境。",
+          "steps": "运行 `./frob café`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob: CAFÉ bytes=5`：é 编码为 2 个 UTF-8 字节，故 N=5 而非 rune 数 4，证明 WordSize 按 UTF-8 字节数而非字符数计数。"
+        },
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC002-02",
+          "mode": "MERGE",
+          "publicEntry": "frob 日本",
+          "preconditions": "frob 已构建；终端为 UTF-8 环境。",
+          "steps": "运行 `./frob 日本`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob: 日本 bytes=6`：两个 CJK 字符各 3 字节，N=6 而非 rune 数 2（大小写转换不变，N 只反映输入词字节数）。"
+        },
+        {
+          "scenario": "BOUNDARY",
+          "caseId": "QA-AC002-03",
+          "mode": "MERGE",
+          "publicEntry": "frob 😀",
+          "preconditions": "frob 已构建；终端为 UTF-8 环境。",
+          "steps": "运行 `./frob 😀`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob: 😀 bytes=4`：单 rune 最大宽度 4 字节（U+1F600 无大小写映射，原样输出），N=4 而非 rune 数 1。"
+        },
+        {
+          "scenario": "BOUNDARY",
+          "caseId": "QA-AC002-04",
+          "mode": "MERGE",
+          "publicEntry": "frob ",
+          "preconditions": "frob 已构建；以空字符串参数调用（`./frob \"\"`）。",
+          "steps": "运行 `./frob \"\"`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob:  bytes=0`：空词的 WordSize 必须返回 0（当前占位实现固定返回 0，需与真实实现对空词等价、对非空词可区分）。"
+        },
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC003-01",
+          "mode": "MERGE",
+          "publicEntry": "frob héLLo",
+          "preconditions": "frob 已由 master-merge 工作区构建（UpperWord 与 WordSize 均为已实现版本）；终端为 UTF-8 环境。",
+          "steps": "运行 `./frob héLLo`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 精确为一行 `frob: HÉLLO bytes=6`（strings.ToUpper 将 h→H、é→É、o→O；字节数 h1+é2+L1+L1+o1=6），除该行与行尾换行外无任何其他输出。"
+        },
+        {
+          "scenario": "BOUNDARY",
+          "caseId": "QA-AC003-02",
+          "mode": "MERGE",
+          "publicEntry": "frob ",
+          "preconditions": "frob 已构建；以空字符串参数调用（`./frob \"\"`），确保是“一个空词”而非“无参数”。",
+          "steps": "运行 `./frob \"\"`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 精确为 `frob:  bytes=0`（冒号后两个连续空格后接 bytes=0）；不得非零退出或输出 usage。"
+        },
+        {
+          "scenario": "MISUSE",
+          "caseId": "QA-AC003-03",
+          "mode": "MERGE",
+          "publicEntry": "frob ",
+          "preconditions": "frob 已构建；不传任何位置参数。",
+          "steps": "运行 `./frob`（argv 仅有程序名），捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码为非 0（基线实现为 2 且向 stderr 打印 `usage: frob <word>`，验收只约束非零）；stdout 为空，不含任何以 `frob: ` 开头的行。"
+        },
+        {
+          "scenario": "MISUSE",
+          "caseId": "QA-AC004-01",
+          "mode": "MERGE",
+          "publicEntry": "frob --unknown-flag hello",
+          "preconditions": "frob 已由 master-merge 工作区构建（含 frob.go flag 处理返修）；已知基线缺口是本场景当前会以 0 退出并把 flag 当作词输出。",
+          "steps": "运行 `./frob --unknown-flag hello`，捕获 stdout、stderr 与退出码。",
+          "oracle": "frob 以非零退出码拒绝执行；stdout 不含任何以 `frob: ` 开头的行（尤其不得出现基线的 `frob: --UNKNOWN-FLAG bytes=14`）；stderr 内容不作强制要求。"
+        },
+        {
+          "scenario": "MISUSE",
+          "caseId": "QA-AC004-02",
+          "mode": "MERGE",
+          "publicEntry": "frob --unknown-flag",
+          "preconditions": "frob 已构建；仅传入未知 flag、无后续词。",
+          "steps": "运行 `./frob --unknown-flag`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码非 0；stdout 无任何 `frob: ` 行——未知 flag 即使是唯一参数也不得被当作普通词处理输出。"
+        },
+        {
+          "scenario": "SUCCESS",
+          "caseId": "QA-AC004-03",
+          "mode": "MERGE",
+          "publicEntry": "frob hello",
+          "preconditions": "frob 已构建（与 QA-AC004-01 同一构建产物）；验证 flag 拒绝逻辑不误伤正常调用。",
+          "steps": "运行 `./frob hello`，捕获 stdout、stderr 与退出码。",
+          "oracle": "退出码 0；stdout 恰为 `frob: HELLO bytes=5`——引入未知 flag 拒绝后，不带 flag 的正常词仍须成功输出 frob: 行。"
+        }
+      ],
+      "edges": [
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-001",
+          "caseId": "QA-AC001-01"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-001",
+          "caseId": "QA-AC001-02"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-001",
+          "caseId": "QA-AC001-03"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-002",
+          "caseId": "QA-AC002-01"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-002",
+          "caseId": "QA-AC002-02"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-002",
+          "caseId": "QA-AC002-03"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-002",
+          "caseId": "QA-AC002-04"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-003",
+          "caseId": "QA-AC003-01"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-003",
+          "caseId": "QA-AC003-02"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-003",
+          "caseId": "QA-AC003-03"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-004",
+          "caseId": "QA-AC004-01"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-004",
+          "caseId": "QA-AC004-02"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-004",
+          "caseId": "QA-AC004-03"
+        }
+      ]
+    },
+    "version": "sha256:f158718c6163b551607acfef28fe7e253a4c513765abd61d0b636bcb1f014229",
+    "status": "REVIEW"
+  }
+}
