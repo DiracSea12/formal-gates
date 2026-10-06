@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -45,8 +46,11 @@ type peerFile struct {
 }
 
 type peerScript struct {
-	Steps []peerStep `json:"steps"`
-	Echo  string     `json:"echo"`
+	Args        []string          `json:"args,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Workspace   string            `json:"workspace,omitempty"`
+	Steps       []peerStep        `json:"steps"`
+	Echo        string            `json:"echo"`
 }
 
 // TestScriptedPeer is the helper-process entry: when
@@ -68,6 +72,32 @@ func runScriptedPeer(scriptPath string) int {
 	var script peerScript
 	if err := json.Unmarshal(body, &script); err != nil {
 		return 2
+	}
+	if script.Args != nil {
+		args := os.Args
+		for len(args) > 0 && args[0] != "--" {
+			args = args[1:]
+		}
+		if len(args) > 0 {
+			args = args[1:]
+		}
+		if !reflect.DeepEqual(args, script.Args) {
+			fmt.Fprintf(os.Stderr, "native argv differs: %q != %q\n", args, script.Args)
+			return 91
+		}
+	}
+	for key, expected := range script.Environment {
+		if os.Getenv(key) != expected {
+			fmt.Fprintf(os.Stderr, "native env %s differs\n", key)
+			return 91
+		}
+	}
+	if script.Workspace != "" {
+		cwd, err := os.Getwd()
+		if err != nil || resolveNativePath(cwd) != resolveNativePath(script.Workspace) {
+			fmt.Fprintf(os.Stderr, "native cwd differs: %s != %s\n", cwd, script.Workspace)
+			return 91
+		}
 	}
 	var echo *os.File
 	if script.Echo != "" {

@@ -894,9 +894,13 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s := cursorScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
 		s.save(e.t)
 	case "dsh":
+		peerEnvironment := map[string]string{}
+		for _, key := range []string{"HOME", "DSH_HOME", "DSH_PROJECT_DIR", "FORMAL_GATES_HARNESS_ROOT"} {
+			peerEnvironment[key] = environment[key].(string)
+		}
 		schema := mustCanonical(e.t, request["schema"])
 		events := peerEvent(identity, "assistant/message", map[string]any{"turn": 1, "step": 0, "usage": map[string]any{"inputTokens": len(textOf(request["prompt"])), "outputTokens": len(answerJSON)}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": answerJSON}}}}) + "\n" + peerEvent(identity, "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
-		peer := peerScript{Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: []peerStep{
+		peer := peerScript{Args: []string{"--profile", "acp", "--patch", filepath.Join(dir, "profile.json")}, Environment: peerEnvironment, Workspace: workspace, Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: []peerStep{
 			{On: `"method":"initialize"`, Params: map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}, Send: `{"id":"@ID@","result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{},"close":{}}}}}`},
 			{On: `"method":"session/new"`, Params: map[string]any{"cwd": workspace, "mcpServers": []any{}}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`},
 			{On: `"method":"session/prompt"`, Params: map[string]any{"sessionId": identity, "prompt": []any{map[string]any{"type": "text", "text": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this result schema:\n" + schema}}}, Files: []peerFile{{Path: filepath.Join(dir, "native-source.json"), Body: `{"sessionId":"` + identity + `","inputId":"input-` + identity + `","turn":1}`}, {Path: filepath.Join(dir, "native-events.jsonl"), Body: events}}, Send: `{"id":"@ID@","result":{"stopReason":"end_turn"}}`},
@@ -906,6 +910,10 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 			return err
 		}
 	case "zcode":
+		peerEnvironment := map[string]string{}
+		for _, key := range []string{"HOME", "USERPROFILE", "ZCODE_DATA_BASE_DIR", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", "FORMAL_GATES_HARNESS_ROOT"} {
+			peerEnvironment[key] = environment[key].(string)
+		}
 		input := "formal-gates-" + filepath.Base(dir)
 		turn := "turn-" + identity
 		schema, err := schemaForPrompt(request["schema"])
@@ -930,7 +938,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		if delivered != nil {
 			steps = append(steps, peerStep{On: `"method":"` + zcodeAccountConfigMethod + `"`, Params: delivered["configuration"], Send: `{"id":"@ID@","result":{"status":"received","providerCount":` + strconv.Itoa(len(listOf(delivered["providers"]))) + `}}`})
 		}
-		if err := writeAtomicJSON(script, peerScript{Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: steps}); err != nil {
+		if err := writeAtomicJSON(script, peerScript{Args: []string{textOf(launch["script"]), "--cwd", workspace, "app-server"}, Environment: peerEnvironment, Workspace: workspace, Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: steps}); err != nil {
 			return err
 		}
 	}
@@ -987,6 +995,126 @@ func TestCanaryACPAndAppServerCancellation(t *testing.T) {
 			}
 			if got, err := readJSONFile(filepath.Join(dir, "native-request.json")); err != nil || !valuesEqual(got, request) {
 				t.Fatalf("cancel rewrote request: %v %v", got, err)
+			}
+		})
+	}
+}
+
+// Public native jobs reject each wrong launch input before the peer can emit
+// its canned session or write successful evidence; binding proofs stay valid.
+func TestCanaryNativePeersValidateLaunchInputs(t *testing.T) {
+	binary := supervisorBinary(t)
+	for _, nativeHost := range []string{"dsh", "zcode"} {
+		t.Run(nativeHost, func(t *testing.T) {
+			cases := []string{"valid", "argv", "cwd", "home"}
+			if nativeHost == "dsh" {
+				cases = append(cases, "dsh-home")
+			}
+			for _, dimension := range cases {
+				t.Run(dimension, func(t *testing.T) {
+					home := resolveNativePath(t.TempDir())
+					t.Setenv("HOME", home)
+					t.Setenv("DSH_HOME", filepath.Join(home, ".dsh"))
+					var request map[string]any
+					var dir, workspace, echo string
+					if nativeHost == "dsh" {
+						s := newDSHScenario(t, successSteps(), func(request map[string]any) { request["model"], request["reasoning_effort"] = "test-model", "high" })
+						request, dir, workspace, echo = s.request, s.directory, s.workspace, s.echoPath
+					} else {
+						s := newZcodeScenario(t, zcodeSuccessSteps, nil)
+						request, dir, workspace, echo = s.request, s.directory, s.workspace, s.echoPath
+					}
+					binding := objectOrEmpty(request["binding"])
+					launch := objectOrEmpty(binding["launch"])
+					expected := peerScript{Workspace: workspace, Environment: map[string]string{"HOME": home}}
+					if nativeHost == "dsh" {
+						expected.Args = []string{"--profile", "acp", "--patch", filepath.Join(dir, "profile.json")}
+						expected.Environment["DSH_HOME"] = filepath.Join(home, ".dsh")
+					} else {
+						expected.Args = []string{textOf(launch["script"]), "--cwd", workspace, "app-server"}
+						binding["environment"] = map[string]any{"HOME": home}
+					}
+					scriptPath := os.Getenv("FORMAL_GATES_NATIVE_PEER_SCRIPT")
+					body := readTestFileBytes(t, scriptPath)
+					var script peerScript
+					if err := json.Unmarshal(body, &script); err != nil {
+						t.Fatal(err)
+					}
+					script.Args, script.Environment, script.Workspace = expected.Args, expected.Environment, expected.Workspace
+					if err := writeAtomicJSON(scriptPath, script); err != nil {
+						t.Fatal(err)
+					}
+					wrapper := textOf(launch["executable"])
+					wrapperBody := readTestFile(t, wrapper)
+					prefix, suffix, refusal := "", "", ""
+					switch dimension {
+					case "argv":
+						suffix, refusal = " --unexpected", "native argv differs"
+					case "cwd":
+						prefix, refusal = "cd '"+resolveNativePath(t.TempDir())+"'\n", "native cwd differs"
+					case "home":
+						prefix, refusal = "export HOME='"+resolveNativePath(t.TempDir())+"'\n", "native env HOME differs"
+					case "dsh-home":
+						prefix, refusal = "export DSH_HOME='"+resolveNativePath(t.TempDir())+"'\n", "native env DSH_HOME differs"
+					}
+					wrapperBody = strings.Replace(wrapperBody, "#!/bin/sh\n", "#!/bin/sh\n"+prefix, 1)
+					wrapperBody = strings.Replace(wrapperBody, "\"$@\"\n", "\"$@\""+suffix+"\n", 1)
+					if err := os.WriteFile(wrapper, []byte(wrapperBody), 0755); err != nil {
+						t.Fatal(err)
+					}
+					environment := binding["environment"]
+					bound, err := buildCaptureBinding(nativeHost, launch)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if environment != nil {
+						bound["environment"] = environment
+					}
+					request["binding"] = bound
+					impl, err := nativeImplementationFor(nativeHost)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := impl.validateBinding(bound); err != nil {
+						t.Fatalf("negative control has invalid binding: %v", err)
+					}
+					if err := writeAtomicJSON(filepath.Join(dir, "native-request.json"), request); err != nil {
+						t.Fatal(err)
+					}
+					command := exec.Command(binary, "harness", "native", dir)
+					command.Dir = workspace
+					output, err := command.CombinedOutput()
+					t.Logf("public native host=%s input=%s exit=%v output=%s", nativeHost, dimension, err, output)
+					if dimension == "valid" {
+						if err != nil {
+							t.Fatal(err)
+						}
+						source, err := readJSONFile(filepath.Join(dir, "source.json"))
+						if err != nil || getOf(source, "provider") != nativeHost {
+							t.Fatalf("valid launch source: %v %v", source, err)
+						}
+						if err := impl.verifySource(dir, source); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if err == nil {
+							t.Fatal("wrong launch returned successful source")
+						}
+						stderr := readTestFile(t, filepath.Join(dir, "host.stderr"))
+						if !strings.Contains(stderr, refusal) {
+							t.Fatalf("expected peer launch refusal %q, got %s", refusal, stderr)
+						}
+						if _, err := os.Stat(filepath.Join(dir, "source.json")); !os.IsNotExist(err) {
+							t.Fatal("wrong launch wrote successful source")
+						}
+						if _, err := os.Stat(filepath.Join(dir, "identity.json")); !os.IsNotExist(err) {
+							t.Fatal("wrong launch emitted a session identity")
+						}
+						if _, err := os.Stat(echo); !os.IsNotExist(err) {
+							t.Fatal("wrong launch processed RPC before refusal")
+						}
+					}
+				})
 			}
 		})
 	}
