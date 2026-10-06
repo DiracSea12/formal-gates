@@ -15,8 +15,8 @@
       "verification": {},
       "message": "AC-004 is not yet satisfied by the candidate: frob still accepts unknown flags and answers with a frob: line at exit 0. The bound requirement explicitly designates this as a known baseline gap owned by master-merge and states the two function-development batches must not fix it, so it is outside this slice:uppercase correctness gate's native range and does not block this verdict; recorded for traceability of the deferral.",
       "locations": [
-        "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/frob.go:3",
-        "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/.gates/results/engine-canary.merge-cases.md:104"
+        "/fixture/issued-workspace/frob.go:3",
+        "/fixture/issued-workspace/.gates/results/engine-canary.merge-cases.md:104"
       ]
     },
     "history": null
@@ -54,8 +54,8 @@
           "verification": {},
           "message": "AC-004 is not yet satisfied by the candidate: frob still accepts unknown flags and answers with a frob: line at exit 0. The bound requirement explicitly designates this as a known baseline gap owned by master-merge and states the two function-development batches must not fix it, so it is outside this slice:uppercase correctness gate's native range and does not block this verdict; recorded for traceability of the deferral.",
           "locations": [
-            "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/frob.go:3",
-            "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/.gates/results/engine-canary.merge-cases.md:104"
+            "/fixture/issued-workspace/frob.go:3",
+            "/fixture/issued-workspace/.gates/results/engine-canary.merge-cases.md:104"
           ]
         }
       ]
@@ -72,7 +72,7 @@
       "handle": {},
       "owner": "engine-canary",
       "role": "gate",
-      "path": "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
+      "path": "/fixture/issued-workspace",
       "ref": "refs/formal-gates/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
       "source": "d28358fb3608583f695eee1d33414d8ad93e6ba9",
       "identity": "d28358fb3608583f695eee1d33414d8ad93e6ba9",
