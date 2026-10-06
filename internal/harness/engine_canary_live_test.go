@@ -1909,7 +1909,7 @@ func (c *engineCanary) adjudicate() {
 		if err != nil {
 			c.fail("finding %s issued material: %v", id, err)
 		}
-		resolution, err := canaryFlagFindingResolution(workspace, materialDir, target, finding, point)
+		resolution, err := canaryFlagFindingResolution(workspace, materialDir, target, finding, point, c.run.MasterRunID != "")
 		if err != nil {
 			c.fail("flag fixture cannot adjudicate %s: %v", id, err)
 		}
@@ -2039,8 +2039,9 @@ func canaryFindingMaterialDirectory(jobs string, state *protocol.State, target *
 }
 
 // The user stand-in is limited to the declared flag gap, not a general finding
-// classifier. An independent file, acceptance reference or failed slice stops it.
-func canaryFlagFindingResolution(workspace, materialDir string, target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
+// classifier. An independent file, acceptance reference or actual child failure
+// stops it; a master target may retain its original child gate provenance.
+func canaryFlagFindingResolution(workspace, materialDir string, target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string, childRun bool) (protocol.FindingResolution, error) {
 	raw := finding.Raw
 	if target == nil || target.Kind != "GATE" || raw == nil || !strings.Contains(raw.Requirement, point) {
 		return protocol.FindingResolution{}, fmt.Errorf("finding is outside the verified flag defect")
@@ -2071,11 +2072,10 @@ func canaryFlagFindingResolution(workspace, materialDir string, target *protocol
 		return protocol.FindingResolution{}, fmt.Errorf("finding has no flag implementation location")
 	}
 	decision, scope, reason := "SAME_AS", "public command contract", "verified flag failure in the master responsibility"
-	if target.SliceID != "" {
-		if target.Status != protocol.OutcomePass || raw.Severity != "P2" && raw.Severity != "P3" {
-			return protocol.FindingResolution{}, fmt.Errorf("slice finding needs its own responsibility decision")
-		}
+	if (childRun || target.SliceID != "") && target.Status == protocol.OutcomePass && (raw.Severity == "P2" || raw.Severity == "P3") {
 		decision, scope, reason = "DISMISSED", "outside the function slice", "frob.go flag handling belongs to master-merge, not the passed function slice"
+	} else if childRun {
+		return protocol.FindingResolution{}, fmt.Errorf("slice finding needs its own responsibility decision")
 	} else if target.Status != protocol.OutcomeFail {
 		return protocol.FindingResolution{}, fmt.Errorf("master finding has no failed gate responsibility")
 	}

@@ -1,0 +1,103 @@
+{
+  "finding": {
+    "id": "sha256:9bb604b73f0dec83391e8da71d3365db0038946e096f107e1ab3cfec357da5a4",
+    "waveId": "42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d",
+    "target": "validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness",
+    "raw": {
+      "id": "",
+      "digest": "",
+      "severity": "P1",
+      "severityRationale": "This is an actual violation of a bound acceptance condition on the public entry contract: the program accepts invalid input and reports success, which fails the bound oracle and QA cases qa-ac004-01/qa-ac004-02 and blocks final acceptance of REQ-001. It is not P0 because the core functionality of the run (AC-001 UpperWord, AC-002 WordSize, AC-003 composed output, and the insufficient-args non-zero exit) is correct, and the gap is a pre-declared baseline deficiency rather than a regression introduced by the delivered slices. It is not P2/P3 because a user-facing acceptance condition is genuinely unmet, and the gap has survived the master-merge step it was deferred to, so the deferral's own remedy (authorized frob.go flag-handling rework) still needs to execute before the run can close.",
+      "requirement": "REQ-001 / AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+      "normalPath": "Invoking frob with an unknown flag (e.g. argv [\"--unknown-flag\",\"hello\"] or [\"--unknown-flag\"]) rejects execution: non-zero exit code, no `frob:` line on stdout, rejection/usage message on stderr.",
+      "actualError": "frob.go:3 has no flag parsing — its only guard is len(os.Args)<2. With argv [\"--unknown-flag\",\"hello\"] it treats \"--unknown-flag\" as the input word: UpperWord yields \"--UNKNOWN-FLAG\" and WordSize yields 15, so it prints `frob: --UNKNOWN-FLAG bytes=15` and exits 0. With argv [\"--unknown-flag\"] alone, len(os.Args)==2 passes the guard and it likewise prints `frob: --UNKNOWN-FLAG bytes=15` and exits 0. Verified by reading frob.go (the only entry point; the package contains only frob.go, uppercase.go, size.go and imports only fmt/os).",
+      "deferralImpact": "The requirement explicitly declares AC-004 a known baseline gap that the two function dev batches must not fix; its satisfaction is expected via the master-merge verification-and-rework loop, with frob.go flag handling authorized as in-run rework. The workspace under judgment is already the post-merge candidate (identity cb6ecdb, after merge commits bf514e1 and d7afc0c, with MERGE-mode QA cases recorded in .gates/results/engine-canary.merge-cases.md), yet frob.go still contains no flag handling — the deferred rework has not landed. Until it does, AC-004 remains unsatisfied, QA cases qa-ac004-01 and qa-ac004-02 fail, and REQ-001 cannot be fully accepted; the authorized fix is confined to frob.go flag handling per the requirement.",
+      "verification": {},
+      "message": "AC-004 is violated on the merged candidate: frob performs no unknown-flag validation, so `frob --unknown-flag ...` exits 0 and prints a `frob:` success line instead of rejecting with a non-zero exit code.",
+      "locations": [
+        "frob.go:3"
+      ]
+    },
+    "history": null
+  },
+  "target": {
+    "sliceId": "uppercase",
+    "task": "validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness",
+    "kind": "GATE",
+    "gate": "correctness",
+    "status": "FAIL",
+    "resultAction": "act:validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness"
+  },
+  "result": {
+    "validation": {
+      "binding": {
+        "workspaceId": "1ee33a807746e6a127ee01f604a4bd3dbff8e98ed71663e83aa8abfb9ef5fd3e",
+        "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "generation": 3,
+        "candidate": "cb6ecdb8f302a6db61c76a2ee18ea3d7aab9676c",
+        "waveId": "42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d",
+        "task": "validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness"
+      },
+      "status": "FAIL",
+      "findings": [
+        {
+          "id": "",
+          "digest": "",
+          "severity": "P1",
+          "severityRationale": "This is an actual violation of a bound acceptance condition on the public entry contract: the program accepts invalid input and reports success, which fails the bound oracle and QA cases qa-ac004-01/qa-ac004-02 and blocks final acceptance of REQ-001. It is not P0 because the core functionality of the run (AC-001 UpperWord, AC-002 WordSize, AC-003 composed output, and the insufficient-args non-zero exit) is correct, and the gap is a pre-declared baseline deficiency rather than a regression introduced by the delivered slices. It is not P2/P3 because a user-facing acceptance condition is genuinely unmet, and the gap has survived the master-merge step it was deferred to, so the deferral's own remedy (authorized frob.go flag-handling rework) still needs to execute before the run can close.",
+          "requirement": "REQ-001 / AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+          "normalPath": "Invoking frob with an unknown flag (e.g. argv [\"--unknown-flag\",\"hello\"] or [\"--unknown-flag\"]) rejects execution: non-zero exit code, no `frob:` line on stdout, rejection/usage message on stderr.",
+          "actualError": "frob.go:3 has no flag parsing — its only guard is len(os.Args)<2. With argv [\"--unknown-flag\",\"hello\"] it treats \"--unknown-flag\" as the input word: UpperWord yields \"--UNKNOWN-FLAG\" and WordSize yields 15, so it prints `frob: --UNKNOWN-FLAG bytes=15` and exits 0. With argv [\"--unknown-flag\"] alone, len(os.Args)==2 passes the guard and it likewise prints `frob: --UNKNOWN-FLAG bytes=15` and exits 0. Verified by reading frob.go (the only entry point; the package contains only frob.go, uppercase.go, size.go and imports only fmt/os).",
+          "deferralImpact": "The requirement explicitly declares AC-004 a known baseline gap that the two function dev batches must not fix; its satisfaction is expected via the master-merge verification-and-rework loop, with frob.go flag handling authorized as in-run rework. The workspace under judgment is already the post-merge candidate (identity cb6ecdb, after merge commits bf514e1 and d7afc0c, with MERGE-mode QA cases recorded in .gates/results/engine-canary.merge-cases.md), yet frob.go still contains no flag handling — the deferred rework has not landed. Until it does, AC-004 remains unsatisfied, QA cases qa-ac004-01 and qa-ac004-02 fail, and REQ-001 cannot be fully accepted; the authorized fix is confined to frob.go flag handling per the requirement.",
+          "verification": {},
+          "message": "AC-004 is violated on the merged candidate: frob performs no unknown-flag validation, so `frob --unknown-flag ...` exits 0 and prints a `frob:` success line instead of rejecting with a non-zero exit code.",
+          "locations": [
+            "frob.go:3"
+          ]
+        }
+      ]
+    },
+    "actionId": "act:validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness",
+    "provider": "zcode",
+    "outcome": "PASS",
+    "payloadDigest": "sha256:74252484f0c82c52794894af20d25d554a38e27e0f7c94e7be9f0b1635b6156c",
+    "digest": "sha256:e802a54a80dd97c5ea78c5f969d0f5da293eea58acd79be2931f952c27d9e550"
+  },
+  "resource": {
+    "id": "1ee33a807746e6a127ee01f604a4bd3dbff8e98ed71663e83aa8abfb9ef5fd3e",
+    "handle": {},
+    "owner": "engine-canary",
+    "role": "gate",
+    "path": "/fixture/issued-workspace",
+    "ref": "refs/formal-gates/engine-canary/1ee33a807746e6a127ee01f604a4bd3dbff8e98ed71663e83aa8abfb9ef5fd3e",
+    "source": "cb6ecdb8f302a6db61c76a2ee18ea3d7aab9676c",
+    "identity": "cb6ecdb8f302a6db61c76a2ee18ea3d7aab9676c",
+    "status": "READY"
+  },
+  "run": {
+    "runId": "engine-canary"
+  },
+  "input": {
+    "binding": {
+      "workspaceId": "1ee33a807746e6a127ee01f604a4bd3dbff8e98ed71663e83aa8abfb9ef5fd3e",
+      "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+      "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+      "generation": 3,
+      "candidate": "cb6ecdb8f302a6db61c76a2ee18ea3d7aab9676c",
+      "waveId": "42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d",
+      "task": "validation/validation.gate/42da90ee51967e1fc91412c0a34fdaa8833c620a094fd2b246708b33545cf73d:slice:uppercase:correctness"
+    },
+    "gate": {
+      "gate": "correctness",
+      "baseSnapshot": "c68028162e591ec00db964e207299d555d4bbb10",
+      "candidate": {
+        "identity": "cb6ecdb8f302a6db61c76a2ee18ea3d7aab9676c",
+        "digest": "0cad8de3aeb9d2137f8be271b106f30cd562e013"
+      },
+      "testOwnedPaths": [
+        ".gates/results/engine-canary.merge-cases.md"
+      ]
+    }
+  }
+}
