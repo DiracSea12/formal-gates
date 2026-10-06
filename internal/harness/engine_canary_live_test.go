@@ -822,6 +822,9 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 			if err != nil {
 				return err
 			}
+			if _, err := os.Stat(filepath.Join(c.workspace(input), relative)); err != nil {
+				return fmt.Errorf("authored file %q is missing: %w", relative, err)
+			}
 			answer.Paths[index] = relative
 		}
 		for _, designed := range answer.Cases {
@@ -851,7 +854,8 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 // repo-relative workspace form the engine's path vocabulary uses (manifest
 // paths, diff ranges); the model may instead report the absolute path of the
 // file it wrote, possibly spelled through a resolved symlink prefix. The
-// path must stay inside the workspace and name an existing file.
+// path must stay inside the workspace. Authoring callers check existence;
+// completion declarations may also name a deleted artifact.
 func canaryWorkspacePath(project, path string) (string, error) {
 	if filepath.IsAbs(path) {
 		prefixes := []string{project}
@@ -872,9 +876,6 @@ func canaryWorkspacePath(project, path string) (string, error) {
 	path = filepath.Clean(path)
 	if path == "." || path == ".." || strings.HasPrefix(path, "../") {
 		return "", fmt.Errorf("path %q is not a file inside the workspace", path)
-	}
-	if _, err := os.Stat(filepath.Join(project, path)); err != nil {
-		return "", fmt.Errorf("authored file %q is missing: %w", path, err)
 	}
 	return path, nil
 }
@@ -1177,7 +1178,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 		return canaryDevelopmentShape(&answer, true)
 	}
 	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
-	return c.developmentEvidence(id, input.Binding, &answer, turn.digest, true)
+	return c.developmentEvidence(id, input, &answer, turn.digest, true)
 }
 
 // repairResult runs the writable repair turn for the adjudicated problems.
@@ -1205,7 +1206,7 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 	if answer.Plan != nil && len(answer.Paths) == 0 {
 		return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, GranularityReview: answer.Plan}
 	}
-	result := c.developmentEvidence(id, input.Binding, &answer, turn.digest, input.Development != nil)
+	result := c.developmentEvidence(id, input, &answer, turn.digest, input.Development != nil)
 	result.GranularityReview = answer.Plan
 	return result
 }
@@ -1237,16 +1238,24 @@ func canaryDevelopmentShape(answer *canaryDevelopmentAnswer, batch bool) error {
 	return nil
 }
 
-func (c *engineCanary) developmentEvidence(id string, binding protocol.WorkBinding, answer *canaryDevelopmentAnswer, digest string, batch bool) protocol.ValidationResult {
+func (c *engineCanary) developmentEvidence(id string, input protocol.ValidationInput, answer *canaryDevelopmentAnswer, digest string, batch bool) protocol.ValidationResult {
 	c.t.Helper()
+	paths := make([]string, len(answer.Paths))
+	for i, path := range answer.Paths {
+		relative, err := canaryWorkspacePath(c.workspace(input), path)
+		if err != nil {
+			c.fail("development artifact path: %v", err)
+		}
+		paths[i] = relative
+	}
 	evidence := protocol.DevelopmentEvidence{
-		Paths: answer.Paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests,
+		Paths: paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests,
 		AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns,
 	}
 	if batch {
 		evidence.Completion = &protocol.DevelopmentCompletion{DoD: answer.DoD, Checks: answer.Checks, Handoff: answer.Handoff}
 	}
-	return protocol.ValidationResult{Binding: binding, Status: protocol.OutcomePass, Development: &evidence}
+	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Development: &evidence}
 }
 
 // --- the real host turn -----------------------------------------------------
@@ -2176,6 +2185,84 @@ func TestCanaryAnswerDecodesEveryAttemptFresh(t *testing.T) {
 	}
 }
 
+// Development and repair completions use the issued workspace's path vocabulary
+// without rewriting the model answer or borrowing another workspace's files.
+func TestCanaryDevelopmentPathsUseIssuedWorkspace(t *testing.T) {
+	workspace, other := t.TempDir(), t.TempDir()
+	want := map[string]string{"analytics.go": "package main\nfunc analytics() {}\n", "frob.go": "package main\nfunc main() { analytics() }\n"}
+	for name, body := range want {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(other, name), []byte("different workspace\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := protocol.ValidationInput{Binding: protocol.WorkBinding{WorkspaceID: "issued-workspace"}, Workspace: &protocol.NativeResource{ID: "issued-workspace", Path: alias, Status: "READY"}}
+	c := &engineCanary{t: t, project: other, worker: true}
+	for _, spelling := range []string{"relative", "absolute", "resolved"} {
+		for _, batch := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/batch=%t", spelling, batch), func(t *testing.T) {
+				paths := []string{"analytics.go", "frob.go"}
+				if spelling != "relative" {
+					prefix := alias
+					if spelling == "resolved" {
+						prefix = resolved
+					}
+					for i, path := range paths {
+						paths[i] = filepath.Join(prefix, path)
+					}
+				}
+				raw := map[string]any{"paths": paths, "summary": "authored exact command artifacts", "build": []string{"go build exit=0"}, "tests": []string{"command behavior verified"}, "dod": map[string]string{"command": "complete"}, "checks": map[string]string{"build": "pass"}, "handoff": "artifacts ready"}
+				var answer canaryDevelopmentAnswer
+				if err := decodeCanaryAnswer(raw, &answer); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(answer)
+				result := c.developmentEvidence("completion", input, &answer, "answer-digest", batch)
+				after, _ := json.Marshal(answer)
+				if !bytes.Equal(before, after) || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{"analytics.go", "frob.go"}) || result.Development.Summary != answer.Summary || !slices.Equal(result.Development.Build, answer.Build) || !slices.Equal(result.Development.Tests, answer.Tests) {
+					t.Fatal("completion changed the answer evidence or lost issued identity")
+				}
+				for _, path := range result.Development.Paths {
+					if body, err := os.ReadFile(filepath.Join(input.Workspace.Path, path)); err != nil || string(body) != want[path] {
+						t.Fatalf("relative declaration points to different bytes: %s %q %v", path, body, err)
+					}
+				}
+			})
+		}
+	}
+	t.Run("other-workspace", func(t *testing.T) {
+		defer func() {
+			if failure := recover(); failure == nil || !strings.Contains(fmt.Sprint(failure), "not inside the workspace") {
+				t.Fatalf("another workspace's same-named artifact was accepted: %v", failure)
+			}
+		}()
+		c.developmentEvidence("completion", input, &canaryDevelopmentAnswer{Paths: []string{filepath.Join(other, "analytics.go")}}, "answer-digest", false)
+	})
+	t.Run("deleted-artifact", func(t *testing.T) {
+		removed := filepath.Join(alias, "removed.go")
+		if err := os.WriteFile(removed, []byte("package main\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(removed); err != nil {
+			t.Fatal(err)
+		}
+		result := c.developmentEvidence("completion", input, &canaryDevelopmentAnswer{Paths: []string{filepath.Join(alias, "removed.go")}}, "answer-digest", false)
+		if !slices.Equal(result.Development.Paths, []string{"removed.go"}) {
+			t.Fatal("deleted artifact declaration was discarded")
+		}
+	})
+}
+
 // Plan admission preserves the supplied plan and reports the core contract's
 // refusal before a readiness or repair result is submitted.
 func TestCanaryPlanAdmissionUsesCoreContract(t *testing.T) {
@@ -2395,7 +2482,7 @@ func canaryDevelopmentSchema(batch bool) map[string]any {
 	properties := map[string]any{
 		"affectedCases": canaryArr(canaryStr()),
 		"caseRuns":      canaryArr(canarySchema([]string{"mode", "caseId", "procedure", "observation", "comparison", "result"}, map[string]any{"mode": canaryEnum("BLACKBOX", "WHITEBOX", "MERGE"), "caseId": canaryStr(), "procedure": canaryStr(), "observation": canaryStr(), "comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS")})),
-		"paths":         canaryArr(canaryStr()),
+		"paths":         map[string]any{"type": "array", "items": canaryStr(), "description": "Declared changed file paths in input.workspace: repository-relative paths or absolute paths inside that exact issued workspace, including deleted artifacts."},
 		"summary":       canaryStr(),
 		"build":         canaryArr(canaryStr()),
 		"tests":         canaryArr(canaryStr()),

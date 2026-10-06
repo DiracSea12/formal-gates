@@ -183,6 +183,12 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 		executor.assertOverlap(t)
 	} else {
 		c.assertTerminal(base, evidence)
+		wantMain := strings.Replace(canaryFrobSource, "fmt.Printf(\"frob: %s\\n\", os.Args[1])", "if len(os.Args[1])>0 && os.Args[1][0]=='-' {fmt.Fprintln(os.Stderr,\"unknown flag\");os.Exit(2)}\n\tfmt.Printf(\"frob: %s\\n\", os.Args[1])\n\tusage(os.Args[1])", 1)
+		for path, want := range map[string]string{"analytics.go": "package main\nimport \"fmt\"\nfunc usage(word string){fmt.Printf(\"usage: runs=1 words=%d\\n\",len(word))}\n", "frob.go": wantMain} {
+			if actual, err := os.ReadFile(filepath.Join(c.project, path)); err != nil || string(actual) != want {
+				t.Fatalf("promoted artifact bytes differ: %s %q %v", path, actual, err)
+			}
+		}
 		executor.assertOverlap(t)
 	}
 	t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
@@ -499,6 +505,9 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 			return nil, fmt.Errorf("local build failed: %+v", build)
 		}
 		tests := canaryLocalObserve(workspace, []string{"go", "test", "./..."})
+		for i, path := range paths {
+			paths[i] = filepath.Join(workspace, path)
+		}
 		answer := map[string]any{"paths": paths, "summary": "implemented declared artifact contract", "build": []string{fmt.Sprintf("go build ./... exit=%d %s", build.ExitCode, build.Output)}, "tests": []string{fmt.Sprintf("go test ./... exit=%d %s", tests.ExitCode, tests.Output)}}
 		if input.Development != nil {
 			answer["dod"], answer["checks"], answer["handoff"] = dod, checks, "declared artifacts ready"
