@@ -346,7 +346,7 @@ func TestCanaryFlagFindingsKeepResponsibility(t *testing.T) {
 		}
 		finding := &protocol.ValidationFinding{ID: sample.FindingID, Raw: &sample.Raw}
 		before, _ := json.Marshal(finding.Raw)
-		resolution, err := canaryFlagFindingResolution(target, finding, "AC-004")
+		resolution, err := canaryFlagFindingResolution(t.TempDir(), target, finding, "AC-004")
 		decision := "DISMISSED"
 		if i == 2 {
 			decision = "SAME_AS"
@@ -360,13 +360,85 @@ func TestCanaryFlagFindingsKeepResponsibility(t *testing.T) {
 		}
 		independent := sample.Raw
 		independent.Locations = append(slices.Clone(sample.Raw.Locations), "size.go:2")
-		if _, err := canaryFlagFindingResolution(target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+		if _, err := canaryFlagFindingResolution(t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
 			t.Fatal("mixed production responsibility was merged")
 		}
 		independent = sample.Raw
 		independent.Requirement = "AC-001"
-		if _, err := canaryFlagFindingResolution(target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+		if _, err := canaryFlagFindingResolution(t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
 			t.Fatal("independent acceptance responsibility was merged")
 		}
+	}
+}
+
+// Result binding, not the controller project or filename, owns a finding path.
+func TestCanaryFindingLocationsUseIssuedResource(t *testing.T) {
+	var sample struct {
+		Finding   protocol.ValidationFinding         `json:"finding"`
+		Target    protocol.ValidationTarget          `json:"target"`
+		Result    protocol.WorkerResult              `json:"result"`
+		Resources map[string]protocol.NativeResource `json:"nativeResources"`
+	}
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "issued_flag_finding.json")), &sample); err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal(sample.Finding.Raw)
+	bound, err := canaryFindingWorkspace(&sample.Target, sample.Result, sample.Resources)
+	if err != nil || bound != sample.Resources[sample.Result.Validation.Binding.WorkspaceID].Path {
+		t.Fatalf("accepted result lost resource: %s %v", bound, err)
+	}
+	if _, err := canaryFlagFindingResolution(bound, &sample.Target, &sample.Finding, "AC-004"); err != nil {
+		t.Fatalf("original issued absolute positions refused: %v", err)
+	}
+	workspace, other := t.TempDir(), t.TempDir()
+	for _, root := range []string{workspace, other} {
+		if err := os.WriteFile(filepath.Join(root, "frob.go"), []byte("package main\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "issued")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sample.Result.Validation.Binding.WorkspaceID
+	resource := sample.Resources[id]
+	resource.Path = alias
+	resources := map[string]protocol.NativeResource{id: resource}
+	bound, err = canaryFindingWorkspace(&sample.Target, sample.Result, resources)
+	if err != nil || bound != alias {
+		t.Fatalf("local binding selected another resource: %s %v", bound, err)
+	}
+	for _, prefix := range []string{"", alias, canonical} {
+		raw := *sample.Finding.Raw
+		raw.Locations = []string{filepath.Join(prefix, "frob.go") + ":3", filepath.Join(prefix, ".gates/results/engine-canary.merge-cases.md") + ":104"}
+		finding := sample.Finding
+		finding.Raw = &raw
+		if _, err := canaryFlagFindingResolution(bound, &sample.Target, &finding, "AC-004"); err != nil {
+			t.Fatalf("same issued file refused: %v", err)
+		}
+	}
+	for _, location := range []string{filepath.Join(other, "frob.go") + ":3", filepath.Join(alias, "size.go") + ":2"} {
+		raw := *sample.Finding.Raw
+		raw.Locations = []string{location}
+		finding := sample.Finding
+		finding.Raw = &raw
+		if _, err := canaryFlagFindingResolution(bound, &sample.Target, &finding, "AC-004"); err == nil {
+			t.Fatalf("independent location accepted: %s", location)
+		}
+	}
+	wrong := sample.Result
+	copyValidation := *wrong.Validation
+	wrong.Validation = &copyValidation
+	wrong.Validation.Binding.WorkspaceID = "other-resource"
+	if _, err := canaryFindingWorkspace(&sample.Target, wrong, resources); err == nil {
+		t.Fatal("unregistered result resource was replaced with another workspace")
+	}
+	after, _ := json.Marshal(sample.Finding.Raw)
+	if !bytes.Equal(original, after) {
+		t.Fatal("location interpretation rewrote the raw positions")
 	}
 }

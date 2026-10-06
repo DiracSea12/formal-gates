@@ -1,0 +1,82 @@
+{
+  "finding": {
+    "id": "sha256:1ed2db06f8f2003f6ba16a8c72d08f8e4e4e2acb667a1649820ce7b75449bec6",
+    "waveId": "550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779",
+    "target": "validation/validation.gate/550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779:slice:uppercase:correctness",
+    "raw": {
+      "id": "",
+      "digest": "",
+      "severity": "P3",
+      "severityRationale": "P3 informational: the requirement itself scopes AC-004 to master-merge (此条件归 master-merge) and authorizes closure via the master-merge validation/rework loop within this run. The gate's own range (uppercase slice) is fully correct: UpperWord is implemented with strings.ToUpper, and the composed AC-003 outputs were verified byte-exact against the candidate binary. A higher severity would wrongly attribute the sanctioned baseline gap to correct slice work.",
+      "requirement": "REQ-001 / AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+      "normalPath": "frob --unknown-flag hello (and any unknown flag such as -x) exits with a non-zero status code, emits no line beginning with 'frob: ' on stdout, and places any diagnostic/usage text on stderr only; the plain-word path (e.g. frob hello → 'frob: HELLO bytes=5', exit 0) keeps working.",
+      "actualError": "frob.go main() treats os.Args[1] as the word unconditionally with no flag parsing, so './frob --unknown-flag hello' exits 0 and prints 'frob: --UNKNOWN-FLAG bytes=14' (and './frob -x' likewise emits a frob: line), violating the flag contract. Verified by code inspection of frob.go:3; consistent with the requirement's own description of the baseline gap.",
+      "deferralImpact": "No impact on this slice gate's verdict: the uppercase slice delivered its function and the composed AC-003 behavior is exact. The flag-contract gap remains open in the merged candidate until the master-merge validation/rework loop fixes frob.go flag handling within this run; if master-merge shipped without that rework, the final deliverable would violate the user's flag contract and MERGE-mode cases qa-ac004-m1-unknown-long-flag-rejected and qa-ac004-m2-unknown-short-flag-rejected would fail.",
+      "verification": {},
+      "message": "AC-004 is not yet satisfied by the candidate: frob still accepts unknown flags and answers with a frob: line at exit 0. The bound requirement explicitly designates this as a known baseline gap owned by master-merge and states the two function-development batches must not fix it, so it is outside this slice:uppercase correctness gate's native range and does not block this verdict; recorded for traceability of the deferral.",
+      "locations": [
+        "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/frob.go:3",
+        "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/.gates/results/engine-canary.merge-cases.md:104"
+      ]
+    },
+    "history": null
+  },
+  "target": {
+    "sliceId": "uppercase",
+    "task": "validation/validation.gate/550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779:slice:uppercase:correctness",
+    "kind": "GATE",
+    "gate": "correctness",
+    "status": "PASS",
+    "resultAction": "act:validation/validation.gate/550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779:slice:uppercase:correctness"
+  },
+  "result": {
+    "validation": {
+      "binding": {
+        "workspaceId": "1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
+        "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "generation": 3,
+        "candidate": "d28358fb3608583f695eee1d33414d8ad93e6ba9",
+        "waveId": "550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779",
+        "task": "validation/validation.gate/550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779:slice:uppercase:correctness"
+      },
+      "status": "PASS",
+      "findings": [
+        {
+          "id": "",
+          "digest": "",
+          "severity": "P3",
+          "severityRationale": "P3 informational: the requirement itself scopes AC-004 to master-merge (此条件归 master-merge) and authorizes closure via the master-merge validation/rework loop within this run. The gate's own range (uppercase slice) is fully correct: UpperWord is implemented with strings.ToUpper, and the composed AC-003 outputs were verified byte-exact against the candidate binary. A higher severity would wrongly attribute the sanctioned baseline gap to correct slice work.",
+          "requirement": "REQ-001 / AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+          "normalPath": "frob --unknown-flag hello (and any unknown flag such as -x) exits with a non-zero status code, emits no line beginning with 'frob: ' on stdout, and places any diagnostic/usage text on stderr only; the plain-word path (e.g. frob hello → 'frob: HELLO bytes=5', exit 0) keeps working.",
+          "actualError": "frob.go main() treats os.Args[1] as the word unconditionally with no flag parsing, so './frob --unknown-flag hello' exits 0 and prints 'frob: --UNKNOWN-FLAG bytes=14' (and './frob -x' likewise emits a frob: line), violating the flag contract. Verified by code inspection of frob.go:3; consistent with the requirement's own description of the baseline gap.",
+          "deferralImpact": "No impact on this slice gate's verdict: the uppercase slice delivered its function and the composed AC-003 behavior is exact. The flag-contract gap remains open in the merged candidate until the master-merge validation/rework loop fixes frob.go flag handling within this run; if master-merge shipped without that rework, the final deliverable would violate the user's flag contract and MERGE-mode cases qa-ac004-m1-unknown-long-flag-rejected and qa-ac004-m2-unknown-short-flag-rejected would fail.",
+          "verification": {},
+          "message": "AC-004 is not yet satisfied by the candidate: frob still accepts unknown flags and answers with a frob: line at exit 0. The bound requirement explicitly designates this as a known baseline gap owned by master-merge and states the two function-development batches must not fix it, so it is outside this slice:uppercase correctness gate's native range and does not block this verdict; recorded for traceability of the deferral.",
+          "locations": [
+            "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/frob.go:3",
+            "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0/.gates/results/engine-canary.merge-cases.md:104"
+          ]
+        }
+      ]
+    },
+    "actionId": "act:validation/validation.gate/550d3eb071a2800bdbfd9ca1049e325b44ef537feeebf5afcc57d05b7103e779:slice:uppercase:correctness",
+    "provider": "zcode",
+    "outcome": "PASS",
+    "payloadDigest": "sha256:5bf79789277f8183646bec7969fa38bcaf62922b3e573d8b6a4e92de096866aa",
+    "digest": "sha256:a89f9b1a7479f179e8f9804b481f016397d98e709e12a48d33f488311d00d295"
+  },
+  "nativeResources": {
+    "1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0": {
+      "id": "1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "gate",
+      "path": "/private/tmp/root-repair-development/zcode-adjudication-home-pt0lr6km/.formal-gates-resources/engine-canary-3610295958/.gates/qa-isolation/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
+      "ref": "refs/formal-gates/engine-canary/1dba591af2322c3e29fd7ca40ad6ef7c9219191c419889b2d859bd861be7dce0",
+      "source": "d28358fb3608583f695eee1d33414d8ad93e6ba9",
+      "identity": "d28358fb3608583f695eee1d33414d8ad93e6ba9",
+      "status": "READY"
+    }
+  }
+}

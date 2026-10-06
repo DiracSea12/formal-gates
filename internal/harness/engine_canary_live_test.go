@@ -69,6 +69,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
@@ -1816,6 +1817,18 @@ func (c *engineCanary) adjudicate() {
 	if wave == nil {
 		c.fail("adjudication fact without a current wave")
 	}
+	store, err := persistence.NewStore(filepath.Join(c.project, filepath.FromSlash(facade.EngineNamespace), c.run.RunID), persistence.Config{PackageDigest: c.run.Envelope.PackageDigest, DefinitionSource: c.run.Envelope.DefinitionSource, InstalledTargetIdentity: c.run.Envelope.InstalledTargetIdentity})
+	if err != nil {
+		c.fail("finding result store: %v", err)
+	}
+	snapshot, err := store.Load()
+	if err != nil {
+		c.fail("finding result snapshot: %v", err)
+	}
+	var state protocol.State
+	if err := json.Unmarshal(snapshot.Content, &state); err != nil {
+		c.fail("finding result bindings: %v", err)
+	}
 	if !c.sawWaveFailure {
 		c.sawWaveFailure = true
 		var gateFailed, qaFailed bool
@@ -1865,7 +1878,15 @@ func (c *engineCanary) adjudicate() {
 		if finding.Raw == nil {
 			continue
 		}
-		resolution, err := canaryFlagFindingResolution(wave.Targets[finding.Target], finding, point)
+		target := wave.Targets[finding.Target]
+		if target == nil {
+			c.fail("finding %s has no issued target", id)
+		}
+		workspace, err := canaryFindingWorkspace(target, state.Results[target.ResultAction], state.NativeResources)
+		if err != nil {
+			c.fail("finding %s result workspace: %v", id, err)
+		}
+		resolution, err := canaryFlagFindingResolution(workspace, target, finding, point)
 		if err != nil {
 			c.fail("flag fixture cannot adjudicate %s: %v", id, err)
 		}
@@ -1966,21 +1987,40 @@ func (c *engineCanary) adjudicate() {
 	}
 }
 
+// Finding locations use the exact accepted result's issued workspace.
+func canaryFindingWorkspace(target *protocol.ValidationTarget, result protocol.WorkerResult, resources map[string]protocol.NativeResource) (string, error) {
+	if target == nil || target.ResultAction == "" || result.ActionID != target.ResultAction || result.Validation == nil {
+		return "", fmt.Errorf("finding has no accepted result binding")
+	}
+	id := result.Validation.Binding.WorkspaceID
+	resource, ok := resources[id]
+	if !ok || resource.ID != id || resource.Status != "READY" || resource.Path == "" {
+		return "", fmt.Errorf("finding result has no exact ready resource")
+	}
+	return resource.Path, nil
+}
+
 // The user stand-in is limited to the declared flag gap, not a general finding
 // classifier. An independent file, acceptance reference or failed slice stops it.
-func canaryFlagFindingResolution(target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
+func canaryFlagFindingResolution(workspace string, target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
 	raw := finding.Raw
 	if target == nil || target.Kind != "GATE" || raw == nil || !strings.Contains(raw.Requirement, point) {
 		return protocol.FindingResolution{}, fmt.Errorf("finding is outside the verified flag defect")
 	}
 	physical := false
 	for _, location := range raw.Locations {
-		path := strings.SplitN(location, ":", 2)[0]
+		if strings.HasPrefix(location, "materials.json ") {
+			continue
+		}
+		path, err := canaryWorkspacePath(workspace, strings.SplitN(location, ":", 2)[0])
+		if err != nil {
+			return protocol.FindingResolution{}, err
+		}
 		if path == "frob.go" {
 			physical = true
 			continue
 		}
-		if strings.HasPrefix(location, ".gates/results/") || strings.HasPrefix(location, "materials.json ") {
+		if strings.HasPrefix(path, ".gates/results/") {
 			continue
 		}
 		return protocol.FindingResolution{}, fmt.Errorf("finding includes independent production location %s", location)
