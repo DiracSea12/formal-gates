@@ -176,7 +176,7 @@ func TestCanaryTurnAuthorizationFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		write("identity.json", map[string]any{"identity": identity})
+		write("identity.json", map[string]any{"provider": canaryProvider, "identity": identity})
 		write("native-events.jsonl", map[string]any{"sessionId": identity, "payload": map[string]any{"usage": usage}})
 		if strings.Contains(scenario, "execute") && calls == 1 {
 			refusal = errors.New("fixture execution failed")

@@ -134,7 +134,8 @@ func runEngineSplitCanary(t *testing.T, name string) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
-	c := &engineCanary{t: t, split: true, deadline: time.Now().Add(canaryRunBudget), caseArgs: map[string][]string{}, caseTests: map[string]string{}, approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: zcodeExecute}
+	c := &engineCanary{t: t, nativeHost: canaryProvider, split: true, deadline: time.Now().Add(canaryRunBudget), caseArgs: map[string][]string{}, caseTests: map[string]string{}, approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: nil}
+	c.execute = c.executeNative
 	_, file, _, _ := runtime.Caller(0)
 	stable, err := os.UserHomeDir()
 	if err != nil {

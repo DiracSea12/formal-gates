@@ -28,7 +28,7 @@ func TestCanaryInstalledNativeFlows(t *testing.T) {
 				if !split {
 					name = "no-split"
 				}
-				t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, provider, split) })
+				t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, provider, split, canaryProvider) })
 			}
 		})
 	}
@@ -53,7 +53,7 @@ func TestEngineNativeCanary(t *testing.T) {
 	for _, provider := range []string{"svn", "p4"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Run("split", func(t *testing.T) { runEngineSplitCanary(t, provider) })
-			t.Run("no-split", func(t *testing.T) { runEngineNoSplitCanary(t, provider) })
+			t.Run("no-split", func(t *testing.T) { runEngineNoSplitCanary(t, provider, canaryProvider) })
 		})
 	}
 }

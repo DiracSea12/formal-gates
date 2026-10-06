@@ -441,3 +441,44 @@ func TestDSHExecuteMissingPromptKey(t *testing.T) {
 		t.Fatalf("error = %q", got)
 	}
 }
+
+// Continuation keeps the explicit native session, model and current prompt.
+func TestDSHNativeContinuation(t *testing.T) {
+	first := newDSHScenario(t, successSteps(), func(request map[string]any) {
+		request["model"], request["reasoning_effort"] = "test-model", "high"
+	})
+	original, err := runNativeJob(first.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := readTestFileBytes(t, filepath.Join(first.directory, "source.json"))
+	steps := successSteps()
+	steps[1].On = `"method":"session/resume"`
+	steps[1].Send = `{"id":"@ID@","result":{"sessionId":"s-1","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`
+	steps = append(steps[:2], steps[3:]...)
+	steps[2].Files[0].Body = `{"sessionId":"s-1","inputId":"in-2","turn":2}`
+	steps[2].Files[1].Body = peerEvent("s-1", "assistant/message", map[string]any{"turn": 2, "step": 0, "usage": map[string]any{"inputTokens": 23, "outputTokens": 5}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"status":"PASS","summary":"continued exact task","findings":[],"check_ids":[]}`}}}}) + "\n" + peerEvent("s-1", "turn/end", map[string]any{"turn": 2, "reason": map[string]any{"kind": "completed"}}) + "\n"
+	continued := newDSHScenario(t, steps, func(request map[string]any) {
+		request["workspace"], request["identity"], request["prompt"] = first.workspace, original["identity"], "Continue the exact second task."
+		request["model"], request["reasoning_effort"] = "test-model", "high"
+	})
+	source, err := runNativeJob(continued.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source["identity"] != original["identity"] || !valuesEqual(source["native_turn"], 2) || valuesEqual(source["usage_evidence"], original["usage_evidence"]) || !bytes.Equal(before, readTestFileBytes(t, filepath.Join(first.directory, "source.json"))) {
+		t.Fatalf("continuation: %v", source)
+	}
+	answer, err := readJSONFile(filepath.Join(continued.directory, "answer.json"))
+	if err != nil || getOf(answer, "summary") != "continued exact task" {
+		t.Fatalf("continued answer: %v %v", answer, err)
+	}
+	echo := readTestFile(t, continued.echoPath)
+	resume := frameByMethod(t, echo, "session/resume")
+	if !valuesEqual(getOf(resume, "params"), map[string]any{"cwd": first.workspace, "sessionId": original["identity"], "mcpServers": []any{}}) || strings.Contains(echo, `"method":"session/new"`) || strings.Contains(echo, `"method":"session/set_config_option"`) {
+		t.Fatalf("continued input: %s", echo)
+	}
+	if err := dshVerifySource(continued.directory, source); err != nil {
+		t.Fatal(err)
+	}
+}

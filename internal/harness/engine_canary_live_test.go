@@ -33,7 +33,8 @@ package harness
 // `go test` does not forward stdin to its test process, so it cannot approve
 // live calls. Ordinary test runs keep the live canary skipped.
 //
-// Before running, the operator prepares a disjoint ZCODE_DATA_BASE_DIR with
+// Before running, the operator prepares a disjoint FORMAL_GATES_ENGINE_CANARY_HOME
+// (ZCODE_DATA_BASE_DIR for ZCode) with
 // native configuration and account provisioning as required by the host.
 // UI settings, provider readiness and selection remain native responsibilities.
 // The same root carries HOME, CLI
@@ -170,6 +171,8 @@ type canaryMaterials struct {
 type engineCanary struct {
 	t              *testing.T
 	binary, home   string
+	nativeHost     string
+	localPeer      bool
 	run            facade.Run
 	project        string
 	vcs            *vcs.Provider
@@ -236,25 +239,33 @@ type canaryDevelopmentAnswer struct {
 }
 
 func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
-	runEngineNoSplitCanary(t, "git")
+	runEngineNoSplitCanary(t, "git", canaryProvider)
 }
 
-func runEngineNoSplitCanary(t *testing.T, name string) {
+// Each live cell is explicitly selected and still requires approval per turn.
+func TestEngineHostGitNoSplitCanary(t *testing.T) {
+	for _, nativeHost := range host.InstallableNames() {
+		t.Run(nativeHost, func(t *testing.T) { runEngineNoSplitCanary(t, "git", nativeHost) })
+	}
+}
+
+func runEngineNoSplitCanary(t *testing.T, name, nativeHost string) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
 	_, file, _, _ := runtime.Caller(0)
 	c := &engineCanary{
-		t: t, deadline: time.Now().Add(canaryRunBudget),
+		t: t, nativeHost: nativeHost, deadline: time.Now().Add(canaryRunBudget),
 		repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{},
-		approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: zcodeExecute,
+		approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout,
 	}
 
+	c.execute = c.executeNative
 	stableHome, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.prepareHome(os.Getenv("ZCODE_DATA_BASE_DIR"), stableHome, filepath.Dir(filepath.Dir(filepath.Dir(file)))); err != nil {
+	if err := c.prepareHome(c.preparedRoot(), stableHome, filepath.Dir(filepath.Dir(filepath.Dir(file)))); err != nil {
 		t.Fatal(err)
 	}
 	resources := filepath.Join(c.home, ".formal-gates-resources")
@@ -588,7 +599,7 @@ func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input
 				interruption = source
 			}
 			c.t.Logf("canary worker failure: run=%s action=%s class=%s error=%v", done.runID, id, interruption.Class, interruption)
-			event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomeRuntimeError, resultDigest(protocol.ValidationResult{Status: interruption.Error()}), interruption.Class)
+			event, err := protocol.NewWorkerResultEvent("worker-result", id, c.provider(), protocol.OutcomeRuntimeError, resultDigest(protocol.ValidationResult{Status: interruption.Error()}), interruption.Class)
 			if err != nil {
 				panic(err)
 			}
@@ -658,7 +669,7 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) protocol.
 		Findings:     []review.Finding{},
 		Verification: review.OperatorVerification{Checks: answer.Verification.Checks, Evidence: answer.Verification.Evidence},
 	}
-	event, err := protocol.NewReviewWorkerResultEvent("worker-result", id, canaryProvider, turn.digest, evidence)
+	event, err := protocol.NewReviewWorkerResultEvent("worker-result", id, c.provider(), turn.digest, evidence)
 	if err != nil {
 		c.fail("review event for %s: %v", id, err)
 	}
@@ -689,7 +700,7 @@ func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInpu
 	default:
 		c.fail("no canary bridge for handler %q", input.Handler)
 	}
-	event, err := protocol.NewWorkerResultEvent("worker-result", id, canaryProvider, protocol.OutcomePass, resultDigest(result), "")
+	event, err := protocol.NewWorkerResultEvent("worker-result", id, c.provider(), protocol.OutcomePass, resultDigest(result), "")
 	if err != nil {
 		c.fail("pipeline event for %s: %v", id, err)
 	}
@@ -1205,7 +1216,7 @@ type canaryTurnResult struct {
 // receipt declares the dispatch on the engine before the turn runs.
 func (c *engineCanary) receipt(actionID string) {
 	c.t.Helper()
-	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, canaryProvider, c.dispatchKey(actionID), protocol.SpawnStatusSpawned)
+	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, c.provider(), c.dispatchKey(actionID), protocol.SpawnStatusSpawned)
 	if err != nil {
 		c.fail("spawn receipt for %s: %v", actionID, err)
 	}
@@ -1220,19 +1231,22 @@ func (c *engineCanary) receipt(actionID string) {
 	c.dispatched = append(c.dispatched, c.dispatchKey(actionID))
 }
 
-// canaryAttemptUsage books one failed attempt's spend from its own evidence:
-// zcodeExecute can fail after the real call (a result-framing refusal is the
-// live precedent), and the turn's cumulative provider usage then lives only
-// in the attempt's native event stream. The last provider usage wins; an
-// unreadable or usage-less stream returns the attempt's identity and zero
-// usage, so the call is still booked.
-func canaryAttemptUsage(dir string) (string, map[string]any) {
+// canaryAttemptUsage reports a failed attempt's original receipt when available.
+// ZCode may retain provider usage only in its session event stream after a
+// framing failure; other native shapes stay unavailable without a receipt.
+func canaryAttemptUsage(dir string) (string, any) {
+	if source, err := readJSONFile(filepath.Join(dir, "source.json")); err == nil {
+		return textOf(getOf(source, "identity")), getOf(source, "usage_evidence")
+	}
 	usage := map[string]any{}
 	raw, err := readJSONFile(filepath.Join(dir, "identity.json"))
 	if err != nil {
 		return "", usage
 	}
 	identity := getOf(raw, "identity")
+	if getOf(raw, "provider") != "zcode" {
+		return textOf(identity), nil
+	}
 	_ = forEachSessionEvent(dir, identity, func(event map[string]any) error {
 		payload := objectOrEmpty(getOrOf(event, "payload", map[string]any{}))
 		if candidate := objectOrEmpty(getOf(payload, "usage")); textOf(getOf(candidate, "source")) == "provider" {
@@ -1243,7 +1257,7 @@ func canaryAttemptUsage(dir string) (string, map[string]any) {
 	return textOf(identity), usage
 }
 
-// turn runs the dispatch's model turn: a real zcode execution with at most
+// turn runs the dispatch's native model turn with at most
 // canaryTurnBudget attempts, lifecycle evidence captured for the engine's
 // dispatch accounting, and every real call logged with its native usage the
 // moment it returns — shape-refused and unread answers included. A shape
@@ -1273,7 +1287,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		}
 		dir := filepath.Join(c.jobDirectory(actionID), fmt.Sprintf("attempt-%d", attempt))
 		request := map[string]any{
-			"provider": canaryProvider, "binding": c.binding, "workspace": workspace,
+			"provider": c.nativeName(), "binding": c.binding, "workspace": workspace,
 			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
 		}
 		if c.approvalMu != nil {
@@ -1294,7 +1308,9 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 			c.failWithClass(authoring.FailureUserActionRequired, "dispatch %s (%s) attempt %d not authorized: %v", actionID, role, attempt, err)
 		}
 		watchCtx, stopWatcher := context.WithCancel(context.Background())
-		go c.answerHeldInteractions(watchCtx, dir)
+		if c.localPeer {
+			go c.answerHeldInteractions(watchCtx, dir)
+		}
 		source, err := c.execute(request, dir, false)
 		stopWatcher()
 		if c.worker {
@@ -1315,15 +1331,22 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 				}
 			}
 			// The call is spent even when it fails: book its native usage
-			// from the attempt's own event stream, zero when unreadable.
+			// from the attempt's own source and original stream; missing usage stays unavailable.
 			identity, usage := canaryAttemptUsage(dir)
 			usageJSON, _ := json.Marshal(usage)
 			c.t.Logf("canary spend: action=%s role=%s attempt=%d provider=%s identity=%s usage=%s",
-				actionID, role, attempt, canaryProvider, identity, usageJSON)
+				actionID, role, attempt, c.provider(), identity, usageJSON)
 			c.t.Logf("canary dispatch %s (%s) attempt %d failed: %v", actionID, role, attempt, err)
 			continue
 		}
 		if c.run.RunID != "" {
+			impl, implErr := nativeImplementationFor(c.nativeName())
+			if implErr != nil {
+				c.fail("native implementation: %v", implErr)
+			}
+			if err := impl.verifySource(dir, source); err != nil {
+				c.fail("native source proof: %v", err)
+			}
 			identity, identityErr := readJSONFile(filepath.Join(dir, "identity.json"))
 			if identityErr != nil || canaryCanonicalPath(textOf(getOf(identity, "workspace"))) != canaryCanonicalPath(workspace) || textOf(getOf(identity, "identity")) != textOf(getOf(source, "identity")) {
 				c.fail("native identity does not match issued workspace/source: %v", identityErr)
@@ -1333,7 +1356,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		// its spend line here, including the ones refused below.
 		usage, _ := json.Marshal(getOf(source, "usage_evidence"))
 		c.t.Logf("canary spend: action=%s role=%s attempt=%d provider=%s identity=%s usage=%s",
-			actionID, role, attempt, canaryProvider, textOf(getOf(source, "identity")), usage)
+			actionID, role, attempt, c.provider(), textOf(getOf(source, "identity")), usage)
 		rawAnswer, err := readJSONFile(filepath.Join(dir, "answer.json"))
 		if err != nil {
 			lastErr = fmt.Errorf("native answer is unavailable: %w", err)
@@ -1454,8 +1477,8 @@ func (c *engineCanary) plainSchema(actionID string, schema map[string]any) map[s
 	return plain
 }
 
-// answerHeldInteractions is the turn's user stand-in for held host
-// interactions (the live precedent: answer with the first offered option).
+// answerHeldInteractions answers only the synthetic peer's offered options.
+// Live requests remain pending for native-show/native-respond and human input.
 // While the model turn runs, any request the host parks on the attempt's
 // interaction-pending.json gets interaction-answer.json with its first
 // offered option, in the native-respond answer shape; the job process
@@ -1523,12 +1546,27 @@ func firstOfferedOption(options any) string {
 // resolves from real lifecycle evidence instead of staying pending.
 func (c *engineCanary) captureDispatchLifecycle(actionID, transcriptDir string) {
 	c.t.Helper()
-	start := fmt.Sprintf(`{"tool_use_id":%q}`, c.dispatchKey(actionID))
-	if _, err := lifecycle.Capture(c.project, canaryProvider, "PreToolUse", []byte(start)); err != nil {
+	descriptor, _ := host.Lookup(c.nativeName())
+	key := c.dispatchKey(actionID)
+	payload := map[string]any{"subagent_id": key, "agent_id": key, "cwd": c.project}
+	if descriptor.ID == host.ZCode {
+		payload = map[string]any{"tool_use_id": key}
+	}
+	if descriptor.ID == host.Cursor {
+		payload["parentConversationId"], payload["generationId"] = c.run.RunID, actionID
+		payload["subagentType"], payload["task"] = "canary-worker", key
+	}
+	start, _ := json.Marshal(payload)
+	if _, err := lifecycle.Capture(c.project, descriptor.ID, descriptor.LifecycleEvents[0], start); err != nil {
 		c.fail("lifecycle start for %s: %v", actionID, err)
 	}
-	stop := fmt.Sprintf(`{"tool_use_id":%q,"transcript_path":%q}`, c.dispatchKey(actionID), filepath.Join(transcriptDir, "native-events.jsonl"))
-	if _, err := lifecycle.Capture(c.project, canaryProvider, "PostToolUse", []byte(stop)); err != nil {
+	pending := facade.CostSourceBridge(c.project, c.run.RunID)(protocol.CostSourceRef{RunID: c.run.RunID, ActionID: actionID, Provider: c.provider(), Correlation: key})
+	if c.run.RunID != "" && pending.State != protocol.CostSourcePending {
+		c.fail("lifecycle source before stop is %s", pending.State)
+	}
+	payload["transcript_path"], payload["agent_transcript_path"] = filepath.Join(transcriptDir, "native-events.jsonl"), filepath.Join(transcriptDir, "native-events.jsonl")
+	stop, _ := json.Marshal(payload)
+	if _, err := lifecycle.Capture(c.project, descriptor.ID, descriptor.LifecycleEvents[1], stop); err != nil {
 		c.fail("lifecycle stop for %s: %v", actionID, err)
 	}
 }
@@ -1957,6 +1995,13 @@ func (c *engineCanary) assertTerminal(base, evidenceDir string) {
 	if entries < len(c.dispatched) {
 		c.fail("dispatch cost ledger holds %d entries for %d dispatches", entries, len(c.dispatched))
 	}
+	if c.localPeer {
+		for action, entry := range final.Cost.Dispatches {
+			if entry.Source != "unavailable" {
+				c.fail("synthetic native stream has no supported cost transcript: %s %+v", action, entry)
+			}
+		}
+	}
 	if !c.sawWaveFailure {
 		c.fail("the pass never observed the first wave's real failures")
 	}
@@ -2335,7 +2380,7 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 		copyFile(filepath.Join(root, rel), filepath.Join(source, rel), os.FileMode(entry.Mode))
 	}
 	copyFile(c.binary, filepath.Join(source, "bin", "formal-gates"), 0755)
-	args := []string{"install", "--source", source, "--host", canaryProvider, "--scope", "global", "--binary-target", c.binary, "--force"}
+	args := []string{"install", "--source", source, "--host", c.nativeName(), "--scope", "global", "--binary-target", c.binary, "--force"}
 	output := c.cli(nil, args...)
 	begin := bytes.Index(output, []byte("\n{")) + 1
 	if begin == 0 || json.Unmarshal(output[begin:], &c.installed) != nil || len(c.installed.Targets) != 1 {
@@ -2349,8 +2394,18 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 			c.fail("save %s: %v", name, err)
 		}
 	}
+	if c.installed.Targets[0].Host != c.nativeName() || c.installed.PackageDigest == "" || c.installed.Targets[0].InstalledDigest == "" {
+		c.fail("installed host/package identity lost: %+v", c.installed)
+	}
+	if c.provider() == host.DeepSeek {
+		patch, err := os.ReadFile(c.installed.Targets[0].HookConfig)
+		plugin, pluginErr := os.ReadFile(filepath.Join(c.installed.Targets[0].TargetPath, "plugin", "formal-gates.mjs"))
+		if err != nil || pluginErr != nil || !bytes.Contains(patch, []byte("./skills/formal-gates/plugin/formal-gates.mjs")) || !bytes.Contains(plugin, []byte("lifecycle")) {
+			c.fail("candidate Cordis bridge readback: %v %v", err, pluginErr)
+		}
+	}
 	if err := c.captureBinding(); err != nil {
-		c.fail("capture private zcode binding: %v", err)
+		c.fail("capture private native binding: %v", err)
 	}
 	path := filepath.Join(c.jobs, "intake.json")
 	data, _ := json.Marshal(intake)
@@ -2363,13 +2418,44 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 	}
 }
 
-// prepareHome checks the operator's existing root before any installation or
-// binding. It observes path identity only; provisioning and entitlement stay
-// with the native account owner. The finite paths are the ZCode descriptor
-// and native data locations used by this canary.
+func (c *engineCanary) nativeName() string {
+	if c.nativeHost == "" {
+		return canaryProvider
+	}
+	return c.nativeHost
+}
+
+func (c *engineCanary) provider() string {
+	descriptor, err := host.Lookup(c.nativeName())
+	if err != nil {
+		c.fail("native host: %v", err)
+	}
+	return descriptor.ID
+}
+
+func (c *engineCanary) preparedRoot() string {
+	if c.nativeName() == canaryProvider {
+		return os.Getenv("ZCODE_DATA_BASE_DIR")
+	}
+	return os.Getenv("FORMAL_GATES_ENGINE_CANARY_HOME")
+}
+
+func (c *engineCanary) executeNative(request any, dir string, probe bool) (map[string]any, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	if err := writeAtomicJSON(filepath.Join(dir, "native-request.json"), request); err != nil {
+		return nil, err
+	}
+	return runNativeJob(dir)
+}
+
+// prepareHome checks the prepared root before installation or capture. Host
+// paths come from the native protocol and descriptor; account contents stay
+// with the native owner.
 func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) error {
 	if strings.TrimSpace(candidate) == "" {
-		return fmt.Errorf("canary requires a prepared ZCODE_DATA_BASE_DIR")
+		return fmt.Errorf("canary requires a prepared host root (ZCODE_DATA_BASE_DIR for ZCode; FORMAL_GATES_ENGINE_CANARY_HOME for other hosts)")
 	}
 	info, err := os.Stat(candidate)
 	if err != nil || !info.IsDir() {
@@ -2380,23 +2466,27 @@ func (c *engineCanary) prepareHome(candidate, stableHome, sourceRoot string) err
 		return err
 	}
 	home = resolveNativePath(home)
-	descriptor, err := host.Lookup(canaryProvider)
-	if err != nil {
-		return err
-	}
+	stable := *c
+	stable.home = stableHome
+	stablePaths := stable.hostPaths()
 	separate := map[string]string{
 		"source":      sourceRoot,
-		"stable home": stableHome, "stable host": filepath.Join(stableHome, ".zcode"),
-		"stable config":    filepath.Join(stableHome, ".zcode", "v2"),
-		"stable install":   filepath.Join(stableHome, descriptor.Paths.GlobalBase, "formal-gates"),
-		"stable hook":      filepath.Join(stableHome, descriptor.Paths.GlobalHookConfig),
-		"stable rules":     filepath.Join(stableHome, descriptor.Paths.GlobalManaged),
+		"stable home": stableHome, "stable host": stablePaths["host"],
+		"stable config":    stablePaths["config"],
+		"stable install":   stablePaths["install"],
+		"stable hook":      stablePaths["hook"],
+		"stable rules":     stablePaths["rules"],
 		"stable launcher":  filepath.Join(stableHome, ".local", "bin", "formal-gates"),
 		"stable registry":  filepath.Join(stableHome, ".formal-gates", "registry.json"),
 		"stable state":     filepath.Join(stableHome, ".gates"),
 		"stable resources": filepath.Join(stableHome, ".formal-gates-resources"),
 	}
 	for _, key := range []string{"USERPROFILE", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv} {
+		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
+			separate["stable "+key] = path
+		}
+	}
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "NODE_COMPILE_CACHE", "DSH_HOME"} {
 		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
 			separate["stable "+key] = path
 		}
@@ -2433,36 +2523,73 @@ func canaryCanonicalPath(path string) string {
 }
 
 func (c *engineCanary) hostPaths() map[string]string {
-	hostRoot := filepath.Join(c.home, ".zcode")
-	config := filepath.Join(hostRoot, "v2")
-	descriptor, _ := host.Lookup(canaryProvider)
-	return map[string]string{
-		"home": c.home, "host": hostRoot, "config": config,
-		"personal":    filepath.Join(config, zcodePersonalConfig),
-		"setting":     filepath.Join(config, zcodeSettingFile),
-		"credentials": filepath.Join(config, zcodeCredentialsFile),
-		"runtime":     filepath.Join(config, "runtime"),
-		"catalogue":   filepath.Join(config, "runtime", "provider", "zcode-builtin.json"),
-		"hook":        filepath.Join(c.home, descriptor.Paths.GlobalHookConfig),
-		"rules":       filepath.Join(c.home, descriptor.Paths.GlobalManaged),
-		"install":     filepath.Join(c.home, descriptor.Paths.GlobalBase, "formal-gates"),
-		"launcher":    filepath.Join(c.home, ".local", "bin", "formal-gates"),
-		"registry":    filepath.Join(c.home, ".formal-gates", "registry.json"),
-		"state":       filepath.Join(c.home, ".gates"),
-		"resources":   filepath.Join(c.home, ".formal-gates-resources"),
-		"log":         filepath.Join(hostRoot, "log"), "mailbox": filepath.Join(hostRoot, "mailbox"),
-
-		"sessionDatabase": filepath.Join(hostRoot, "cli", "db", "db.sqlite"),
+	descriptor, _ := host.Lookup(c.nativeName())
+	paths := map[string]string{
+		"home":      c.home,
+		"hook":      filepath.Join(c.home, descriptor.Paths.GlobalHookConfig),
+		"rules":     filepath.Join(c.home, descriptor.Paths.GlobalManaged),
+		"install":   filepath.Join(c.home, descriptor.Paths.GlobalBase, "formal-gates"),
+		"launcher":  filepath.Join(c.home, ".local", "bin", "formal-gates"),
+		"registry":  filepath.Join(c.home, ".formal-gates", "registry.json"),
+		"state":     filepath.Join(c.home, ".gates"),
+		"resources": filepath.Join(c.home, ".formal-gates-resources"),
 	}
+	switch descriptor.ID {
+	case host.Claude:
+		paths["host"], paths["config"] = filepath.Join(c.home, ".claude"), filepath.Join(c.home, ".claude")
+	case host.Codex:
+		paths["host"], paths["config"] = filepath.Join(c.home, ".codex"), filepath.Join(c.home, ".codex")
+	case host.Cursor:
+		paths["host"], paths["config"] = filepath.Join(c.home, ".cursor"), filepath.Join(c.home, ".cursor")
+		paths["data"], paths["cache"] = filepath.Join(c.home, ".cursor", "data"), filepath.Join(c.home, ".cursor", "cache")
+	case host.DeepSeek:
+		paths["host"], paths["config"] = filepath.Join(c.home, ".dsh"), filepath.Join(c.home, ".dsh")
+		paths["install"] = filepath.Join(paths["host"], "skills", "formal-gates")
+		paths["hook"], paths["rules"] = filepath.Join(paths["host"], "cordis.patch.yml"), filepath.Join(paths["host"], "AGENTS.md")
+	case host.ZCode:
+		hostRoot := filepath.Join(c.home, ".zcode")
+		config := filepath.Join(hostRoot, "v2")
+		for key, value := range map[string]string{
+			"host": hostRoot, "config": config,
+			"personal": filepath.Join(config, zcodePersonalConfig), "setting": filepath.Join(config, zcodeSettingFile),
+			"credentials": filepath.Join(config, zcodeCredentialsFile), "runtime": filepath.Join(config, "runtime"),
+			"catalogue": filepath.Join(config, "runtime", "provider", "zcode-builtin.json"),
+			"log":       filepath.Join(hostRoot, "log"), "mailbox": filepath.Join(hostRoot, "mailbox"),
+			"sessionDatabase": filepath.Join(hostRoot, "cli", "db", "db.sqlite"),
+		} {
+			paths[key] = value
+		}
+	}
+	return paths
 }
 
-// hostEnvironment is shared by the installed CLI and the native binding.
-// Only known data overrides are replaced; Node and the app-server remain the
-// operator's native runtime. The credential helper uses the actual installed
-// target after the installer has reported it. The native script layout owns
-// the read-only bundled release; the active catalogue stays in the host root.
+// hostEnvironment pins private writable paths for the installed CLI and
+// native binding. Host detection keys come from the lifecycle registry.
+// ZCode's script layout owns its read-only bundled release; the installed
+// target supplies the credential helper and the active catalogue stays private.
 func (c *engineCanary) hostEnvironment() map[string]string {
 	paths := c.hostPaths()
+	if c.nativeName() != canaryProvider {
+		environment := map[string]string{"HOME": c.home, "USERPROFILE": c.home,
+			"PATH": filepath.Dir(paths["launcher"]) + string(os.PathListSeparator) + os.Getenv("PATH")}
+		for _, key := range lifecycle.ProviderEnvironmentKeys() {
+			environment[key] = ""
+		}
+		switch c.provider() {
+		case host.Claude:
+			environment["CLAUDE_CONFIG_DIR"] = paths["config"]
+		case host.Codex:
+			environment["CODEX_HOME"] = paths["config"]
+		case host.Cursor:
+			environment["CURSOR_CONFIG_DIR"], environment["CURSOR_DATA_DIR"], environment["NODE_COMPILE_CACHE"] = paths["config"], paths["data"], paths["cache"]
+		case host.DeepSeek:
+			environment["DSH_HOME"], environment["DSH_PROJECT_DIR"] = paths["host"], c.project
+		}
+		if len(c.installed.Targets) == 1 {
+			environment["FORMAL_GATES_HARNESS_ROOT"] = c.installed.Targets[0].TargetPath
+		}
+		return environment
+	}
 	script, _ := getOf(getOf(c.binding, "launch"), "script").(string)
 	if script == "" {
 		var configured bool
@@ -2500,6 +2627,9 @@ func (c *engineCanary) hostEnvironment() map[string]string {
 		"PATH":     searchPath,
 		"AI_AGENT": "", "CODEX_HOME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
 	}
+	for _, key := range lifecycle.ProviderEnvironmentKeys() {
+		environment[key] = ""
+	}
 	if len(c.installed.Targets) == 1 {
 		environment["FORMAL_GATES_HARNESS_ROOT"] = c.installed.Targets[0].TargetPath
 	}
@@ -2510,7 +2640,11 @@ func (c *engineCanary) captureBinding() error {
 	for key, value := range c.hostEnvironment() {
 		c.t.Setenv(key, value)
 	}
-	binding, err := zcodeCaptureBinding()
+	impl, err := nativeImplementationFor(c.nativeName())
+	if err != nil {
+		return err
+	}
+	binding, err := impl.capture()
 	if err != nil {
 		return err
 	}
@@ -2533,6 +2667,11 @@ func (c *engineCanary) recordIsolation() error {
 	paths["jobs"] = c.jobs
 	target := c.installed.Targets[0]
 	paths["install"], paths["launcher"], paths["hook"], paths["rules"] = target.TargetPath, target.LauncherPath, target.HookConfig, target.ManagedRulePath
+	for name, path := range paths {
+		if path == "" {
+			delete(paths, name)
+		}
+	}
 	observed := map[string]bool{}
 	for name, path := range paths {
 		paths[name] = canaryCanonicalPath(path)
@@ -2549,7 +2688,7 @@ func (c *engineCanary) recordIsolation() error {
 		bundled = canaryCanonicalPath(bundled)
 	}
 	return writeAtomicJSON(filepath.Join(c.jobs, "host-isolation.json"), map[string]any{
-		"provider": canaryProvider, "separateRoots": c.separateRoots, "candidate": paths,
+		"provider": c.provider(), "nativeHost": c.nativeName(), "separateRoots": c.separateRoots, "candidate": paths,
 		"observed": observed, "installReport": c.installed, "binding": c.binding["launch"],
 		"nativeRuntime": map[string]any{"bundledCatalogue": bundled, "bundledCatalogueObserved": zcodeIsRegularFile(bundled)},
 	})

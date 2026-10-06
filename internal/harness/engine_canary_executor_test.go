@@ -4,11 +4,13 @@ package harness
 
 import (
 	"bufio"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +30,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/host"
 )
 
 // Local answers replace only host transport. Installed CLI commands, issued
@@ -37,17 +41,26 @@ func TestCanaryInstalledGitFlows(t *testing.T) {
 		if !split {
 			name = "no-split"
 		}
-		t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, "git", split) })
+		t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, "git", split, canaryProvider) })
 	}
 }
 
-func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
+func TestCanaryInstalledHostGitFlows(t *testing.T) {
+	for _, nativeHost := range host.InstallableNames() {
+		t.Run(nativeHost, func(t *testing.T) { runCanaryInstalledFlow(t, "git", false, nativeHost) })
+	}
+}
+
+func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHost string) {
 	name := "split"
 	if !split {
 		name = "no-split"
 	}
 	if provider != "git" {
 		name = filepath.Join(provider, name)
+	}
+	if nativeHost != canaryProvider {
+		name = filepath.Join(nativeHost, name)
 	}
 	_, file, _, _ := runtime.Caller(0)
 	source := filepath.Dir(filepath.Dir(filepath.Dir(file)))
@@ -60,7 +73,9 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
 			t.Fatal(err)
 		}
 	}
-	writeCanaryHostFixture(t, home, "local-only-provider")
+	if nativeHost == canaryProvider {
+		writeCanaryHostFixture(t, home, "local-only-provider")
+	}
 	runtimeRoot := t.TempDir()
 	script := filepath.Join(runtimeRoot, "glm", "zcode.cjs")
 	bundled := filepath.Join(runtimeRoot, "config", "provider", "zcode-builtin.json")
@@ -76,7 +91,20 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
 		t.Fatal(err)
 	}
 	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
-	c := &engineCanary{t: t, split: split, deadline: time.Now().Add(8 * time.Minute), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(8 * time.Minute), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+	if nativeHost != canaryProvider {
+		nativeBinary := nativeHost
+		if nativeHost == "cursor" {
+			nativeBinary = "cursor-agent"
+		}
+		peerTest := map[string]string{"claude": "TestClaudeCLI", "codex": "TestCodexRPCPeer", "cursor": "TestCursorCLI", "dsh": "TestScriptedPeer"}[nativeHost]
+		if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, ".local", "bin", nativeBinary), []byte(canaryPeerWrapper(peerTest, "", "")), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := c.prepareHome(home, t.TempDir(), source); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +121,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
 	defer approval.Close()
 	c.approvalInput = bufio.NewReader(input)
 	c.approvalOutput = canaryLocalApproval{approval}
-	executor := &canaryLocalExecutor{t: t, split: split, flagContract: split && provider != "git", developmentStarted: make(chan struct{})}
+	executor := &canaryLocalExecutor{t: t, canary: c, split: split, flagContract: split && provider != "git", developmentStarted: make(chan struct{})}
 	c.execute = executor.execute
 	if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
 		started, release := make(chan struct{}), make(chan struct{})
@@ -155,6 +183,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool) {
 		executor.assertOverlap(t)
 	} else {
 		c.assertTerminal(base, evidence)
+		executor.assertOverlap(t)
 	}
 	t.Logf("local installed identity=%s package=%s evidence=%s actual_model_calls=0 actual_spend=unknown", c.installed.Targets[0].TargetPath, c.installed.PackageDigest, evidence)
 }
@@ -296,6 +325,8 @@ type canaryLocalExecutor struct {
 	developmentStarted chan struct{}
 	developmentOnce    sync.Once
 	transportFailure   func(canaryMaterials) error
+	canary             *engineCanary
+	publicNative       sync.Once
 }
 
 func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source map[string]any, err error) {
@@ -328,7 +359,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 	}
 	call := canaryLocalCall{RunID: material.RunID, ActionID: material.ActionID, Handler: handler, Start: time.Now()}
 	defer func() { call.End = time.Now(); e.mu.Lock(); e.calls = append(e.calls, call); e.mu.Unlock() }()
-	if e.split && handler == "engine.development.batch" {
+	if handler == "engine.development.batch" {
 		e.developmentOnce.Do(func() { close(e.developmentStarted) })
 	}
 	if e.transportFailure != nil {
@@ -336,7 +367,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 			return nil, err
 		}
 	}
-	if e.split && handler == "engine.qa.design" {
+	if handler == "engine.qa.design" && material.Input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox {
 		select {
 		case <-e.developmentStarted:
 		case <-time.After(time.Minute):
@@ -351,17 +382,51 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	identity := "local-executor:" + material.RunID + "/" + material.ActionID + ":" + filepath.Base(dir)
-	source = map[string]any{"provider": "zcode", "identity": identity, "model_calls": 0, "usage_evidence": map[string]any{"source": "unavailable"}}
-	for name, value := range map[string]any{"answer.json": answer, "identity.json": map[string]any{"identity": identity, "workspace": workspace, "runId": material.RunID, "actionId": material.ActionID, "handler": handler}, "native-source.json": source, "native-events.jsonl": map[string]any{"sessionId": identity, "payload": map[string]any{"fixture": "local-only", "runId": material.RunID, "actionId": material.ActionID}}} {
-		body, _ := json.Marshal(value)
-		if err := os.WriteFile(filepath.Join(dir, name), append(body, '\n'), 0600); err != nil {
-			return nil, err
-		}
+	body, err := json.Marshal(answer)
+	if err != nil {
+		return nil, err
 	}
-	raw, _ := json.Marshal(answer)
-	err = os.WriteFile(filepath.Join(dir, "answer.raw.txt"), raw, 0600)
-	return source, err
+	decoded, err := decodeNativeJSON(body)
+	if err != nil {
+		return nil, err
+	}
+	answer = objectOrEmpty(decoded)
+	if err := e.prepareNativePeer(request, dir, answer); err != nil {
+		return nil, err
+	}
+	public := false
+	e.publicNative.Do(func() { public = true })
+	if public {
+		command := exec.Command(e.canary.binary, "harness", "native", dir)
+		command.Dir = workspace
+		output, err := command.CombinedOutput()
+		if writeErr := os.WriteFile(filepath.Join(dir, "public-native.log"), output, 0600); writeErr != nil {
+			return nil, writeErr
+		}
+		if err != nil {
+			return nil, fmt.Errorf("installed native: %w %s", err, output)
+		}
+		var observed any
+		observed, err = readJSONFile(filepath.Join(dir, "source.json"))
+		source = objectOrEmpty(observed)
+	} else {
+		source, err = runNativeJob(dir)
+	}
+	if err != nil {
+		return nil, err
+	}
+	impl, err := nativeImplementationFor(e.canary.nativeName())
+	if err != nil {
+		return nil, err
+	}
+	if err := impl.verifySource(dir, source); err != nil {
+		return nil, err
+	}
+	observed, err := readJSONFile(filepath.Join(dir, "answer.json"))
+	if err != nil || !valuesEqual(observed, answer) || source["provider"] != e.canary.nativeName() || getOf(source, "selection") == nil {
+		return nil, fmt.Errorf("native observer lost exact role answer/provider/selection: %v", err)
+	}
+	return source, nil
 }
 
 func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[string]any, error) {
@@ -651,13 +716,13 @@ func (e *canaryLocalExecutor) assertOverlap(t *testing.T) {
 			continue
 		}
 		for _, qa := range e.calls {
-			if (qa.Handler == "engine.qa.design" || qa.Handler == "engine.qa.review.rationale") && dev.RunID != qa.RunID && dev.Start.Before(qa.End) && qa.Start.Before(dev.End) {
+			if (qa.Handler == "engine.qa.design" || qa.Handler == "engine.qa.review.rationale") && (!e.split || dev.RunID != qa.RunID) && dev.Start.Before(qa.End) && qa.Start.Before(dev.End) {
 				overlapping = true
 			}
 		}
 	}
 	if !overlapping {
-		t.Fatal("child development and master merge case preparation did not execute concurrently")
+		t.Fatal("development and independent case preparation did not execute concurrently")
 	}
 	for _, call := range e.calls {
 		t.Logf("local actual call interval run=%s action=%s handler=%s start=%s end=%s", call.RunID, call.ActionID, call.Handler, call.Start.UTC().Format(time.RFC3339Nano), call.End.UTC().Format(time.RFC3339Nano))
@@ -682,7 +747,6 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 	completed := make(chan canaryCompletion)
 	release := make(chan struct{})
 	started := make(chan struct{})
-	executor := &canaryLocalExecutor{t: t}
 	launch := func(runID string) {
 		project := filepath.Join(home, ".formal-gates-resources", runID)
 		if err := os.MkdirAll(project, 0700); err != nil {
@@ -693,7 +757,14 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		pending := protocol.PendingAction{ActionID: "same-action", ReviewSeries: review.ProductReview}
-		c := &engineCanary{t: t, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+		config := filepath.Join(home, ".claude")
+		if err := os.MkdirAll(config, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte(`{}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
 		// One reader is shared together with its authorization mutex.
 		if runID == "failed" {
 			c.execute = func(any, string, bool) (map[string]any, error) {
@@ -706,6 +777,8 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 				return nil, fmt.Errorf("local worker transport failed")
 			}
 		} else {
+			executor := &canaryLocalExecutor{t: t, canary: c}
+			executor.publicNative.Do(func() {})
 			c.execute = executor.execute
 		}
 		go func() { completed <- c.dispatch("same-action", pending, protocol.ValidationInput{}) }()
@@ -730,12 +803,191 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 	}
 	for _, runID := range []string{"independent", "refilled"} {
 		identity, err := readJSONFile(filepath.Join(jobs, runID, "same-action", "attempt-1", "identity.json"))
-		if err != nil || getOf(identity, "runId") != runID || getOf(identity, "actionId") != "same-action" {
-			t.Fatalf("job identity=%#v error=%v", identity, err)
+		request, requestErr := readJSONFile(filepath.Join(jobs, runID, "same-action", "attempt-1", "native-request.json"))
+		material, materialErr := readJSONFile(filepath.Join(jobs, runID, "same-action", "materials.json"))
+		dir := filepath.Join(jobs, runID, "same-action", "attempt-1")
+		if err != nil || requestErr != nil || materialErr != nil || getOf(material, "runId") != runID || getOf(material, "actionId") != "same-action" || getOf(identity, "identity") != codexPeerID(dir+textOf(getOf(request, "workspace"))+textOf(getOf(request, "prompt"))) {
+			t.Fatalf("job identity=%#v material=%#v errors=%v %v %v", identity, material, err, requestErr, materialErr)
 		}
 	}
 }
 
 func (e *canaryLocalExecutor) flagPoint(point string) bool {
 	return !e.split && point == "AC-002" || e.flagContract && point == "AC-004"
+}
+
+// Each native call owns its peer script. The wrapper fixes that script before
+// process launch, including DSH whose adapter uses the calling environment.
+func canaryPeerWrapper(testName, key, script string) string {
+	binary, _ := os.Executable()
+	quote := func(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'" }
+	prefix := ""
+	if key != "" {
+		prefix = "export " + key + "=" + quote(script) + "\n"
+	}
+	return "#!/bin/sh\n" + prefix + "exec " + quote(binary) + " -test.run='^" + testName + "$' -- \"$@\"\n"
+}
+
+func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir string, answer map[string]any) error {
+	c := e.canary
+	workspace := textOf(request["workspace"])
+	identity := codexPeerID(dir + workspace + textOf(request["prompt"]))
+	binding := maps.Clone(objectOrEmpty(request["binding"]))
+	environment := maps.Clone(objectOrEmpty(binding["environment"]))
+	launch := maps.Clone(objectOrEmpty(binding["launch"]))
+	script := filepath.Join(dir, "peer.json")
+	wrapper := filepath.Join(dir, "native-peer")
+	testName, key := "TestScriptedPeer", "FORMAL_GATES_NATIVE_PEER_SCRIPT"
+	switch c.nativeName() {
+	case "claude":
+		testName, key = "TestClaudeCLI", "CLAUDE_PEER_SCRIPT"
+	case "codex":
+		testName, key = "TestCodexRPCPeer", "CODEX_PEER_SCRIPT"
+	case "cursor":
+		testName, key = "TestCursorCLI", "CURSOR_PEER_SCRIPT"
+	}
+	if err := os.WriteFile(wrapper, []byte(canaryPeerWrapper(testName, key, script)), 0755); err != nil {
+		return err
+	}
+	launch["executable"] = wrapper
+	var err error
+	binding, err = buildCaptureBinding(c.nativeName(), launch)
+	if err != nil {
+		return err
+	}
+	binding["environment"] = environment
+	request["binding"] = binding
+	paths := c.hostPaths()
+	answerJSON := mustCanonical(e.t, answer)
+	switch c.nativeName() {
+	case "claude":
+		peer := claudePeer{Workspace: workspace, Calls: filepath.Join(dir, "peer-calls.jsonl"), Environment: map[string]string{"HOME": c.home, "CLAUDE_CONFIG_DIR": paths["config"]}, Events: []any{
+			map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace, "model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity},
+			map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity, "uuid": "result-" + identity, "num_turns": 1, "structured_output": answer, "usage": map[string]any{"input_tokens": len(textOf(request["prompt"])), "output_tokens": len(answerJSON)}},
+		}}
+		s := claudeScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
+		s.save(e.t)
+	case "codex":
+		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Answer: answer,
+			Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
+		s.peer.ThreadParams = map[string]any{"cwd": workspace, "ephemeral": false}
+		if request["read_only"] == true {
+			s.peer.ThreadParams["sandbox"] = "read-only"
+		}
+		if model, _ := request["model"].(string); model != "" {
+			s.peer.ThreadParams["model"] = model
+		}
+		s.peer.TurnParams = map[string]any{"input": []any{map[string]any{"type": "text", "text": request["prompt"]}}, "outputSchema": request["schema"]}
+		for _, pair := range [][2]string{{"model", "model"}, {"reasoning_effort", "effort"}} {
+			if value, _ := request[pair[0]].(string); value != "" {
+				s.peer.TurnParams[pair[1]] = value
+			}
+		}
+		if err := writeAtomicJSON(script, s.peer); err != nil {
+			return err
+		}
+	case "cursor":
+		sum := md5.Sum([]byte(workspace))
+		peer := cursorPeer{UUID: identity, Workspace: workspace, Environment: map[string]string{"HOME": c.home, "CURSOR_CONFIG_DIR": paths["config"], "CURSOR_DATA_DIR": paths["data"], "NODE_COMPILE_CACHE": paths["cache"]}, Calls: filepath.Join(dir, "peer-calls.jsonl"), Store: filepath.Join(paths["config"], "chats", hex.EncodeToString(sum[:]), identity, "store.db"),
+			Config: map[string]any{"model": map[string]any{"modelId": "model-a", "displayModelId": "model-a", "displayName": "model-a high"}, "selectedModel": map[string]any{"modelId": "model-a", "parameters": []any{map[string]any{"id": "effort", "value": "high"}}}},
+			Events: []any{map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace, "model": "model-a high", "permissionMode": "default"}, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity, "request_id": "request-" + identity, "result": answerJSON, "usage": map[string]any{"inputTokens": len(textOf(request["prompt"])), "outputTokens": len(answerJSON)}}}}
+		s := cursorScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
+		s.save(e.t)
+	case "dsh":
+		schema := mustCanonical(e.t, request["schema"])
+		events := peerEvent(identity, "assistant/message", map[string]any{"turn": 1, "step": 0, "usage": map[string]any{"inputTokens": len(textOf(request["prompt"])), "outputTokens": len(answerJSON)}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": answerJSON}}}}) + "\n" + peerEvent(identity, "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
+		peer := peerScript{Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: []peerStep{
+			{On: `"method":"initialize"`, Params: map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}, Send: `{"id":"@ID@","result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{},"close":{}}}}}`},
+			{On: `"method":"session/new"`, Params: map[string]any{"cwd": workspace, "mcpServers": []any{}}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`},
+			{On: `"method":"session/prompt"`, Params: map[string]any{"sessionId": identity, "prompt": []any{map[string]any{"type": "text", "text": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this result schema:\n" + schema}}}, Files: []peerFile{{Path: filepath.Join(dir, "native-source.json"), Body: `{"sessionId":"` + identity + `","inputId":"input-` + identity + `","turn":1}`}, {Path: filepath.Join(dir, "native-events.jsonl"), Body: events}}, Send: `{"id":"@ID@","result":{"stopReason":"end_turn"}}`},
+			{On: `"method":"session/close"`, Params: map[string]any{"sessionId": identity}, Send: `{"id":"@ID@","result":{}}`},
+		}}
+		if err := writeAtomicJSON(script, peer); err != nil {
+			return err
+		}
+	case "zcode":
+		input := "formal-gates-" + filepath.Base(dir)
+		turn := "turn-" + identity
+		schema, err := schemaForPrompt(request["schema"])
+		if err != nil {
+			return err
+		}
+		create := map[string]any{"workspace": map[string]any{"workspacePath": workspace, "workspaceKey": workspace}, "persistence": "immediate"}
+		if request["read_only"] == true {
+			create["toolAllowlist"] = zcodeReadOnlyToolsValue()
+		}
+		steps := []peerStep{
+			{On: `"method":"runtime/capabilities"`, Params: map[string]any{}, Send: `{"id":"@ID@","result":{}}`},
+			{On: `"method":"session/create"`, Params: create, Send: zcodeSnapshotFrame(identity, zcodeSettings)},
+			{On: `"method":"session/subscribe"`, Params: map[string]any{"sessionId": identity, "deliveryKind": "desktop-continuous", "includeSnapshot": false}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `"}}`},
+			{On: `"method":"session/send"`, Params: map[string]any{"sessionId": identity, "inputId": input, "content": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this schema:\n" + string(schema)}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","accepted":true}}` + "\n" + zcodeEventLine(identity, 1, "turn.started", turn, zcodeTurnPayload(input, "")) + "\n" + zcodeEventLine(identity, 2, "turn.completed", turn, zcodeTurnPayload(input, `,"resultType":"success","response":`+mustCanonical(e.t, answerJSON)+`,"usage":{"inputTokens":`+strconv.Itoa(len(textOf(request["prompt"])))+`,"outputTokens":`+strconv.Itoa(len(answerJSON))+`}`))},
+			{On: `"method":"session/close"`, Params: map[string]any{"sessionId": identity}, Send: `{"id":"@ID@","result":{}}`},
+		}
+		delivered, err := zcodeAccountProviderConfiguration(paths["catalogue"], nil)
+		if err != nil {
+			return err
+		}
+		if delivered != nil {
+			steps = append(steps, peerStep{On: `"method":"` + zcodeAccountConfigMethod + `"`, Params: delivered["configuration"], Send: `{"id":"@ID@","result":{"status":"received","providerCount":` + strconv.Itoa(len(listOf(delivered["providers"]))) + `}}`})
+		}
+		if err := writeAtomicJSON(script, peerScript{Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: steps}); err != nil {
+			return err
+		}
+	}
+	return writeAtomicJSON(filepath.Join(dir, "native-request.json"), request)
+}
+
+// Cancellation uses the same public supervisor and native job as completion.
+func TestCanaryACPAndAppServerCancellation(t *testing.T) {
+	binary := supervisorBinary(t)
+	for _, nativeHost := range []string{"dsh", "zcode"} {
+		t.Run(nativeHost, func(t *testing.T) {
+			var request map[string]any
+			var dir, workspace string
+			if nativeHost == "dsh" {
+				steps := successSteps()
+				steps[3] = peerStep{On: `"method":"session/prompt"`, IgnoreEOF: true}
+				s := newDSHScenario(t, steps, nil)
+				request, dir, workspace = s.request, s.directory, s.workspace
+			} else {
+				s := newZcodeScenario(t, func(input string) []peerStep {
+					steps := zcodeSuccessSteps(input)
+					steps = append(steps[:2], peerStep{On: `"method":"session/send"`, IgnoreEOF: true})
+					return steps
+				}, nil)
+				request, dir, workspace = s.request, s.directory, s.workspace
+			}
+			writeRequest(t, dir, map[string]any{"kind": "native", "argv": []string{binary, "harness", "native", dir}, "cwd": workspace, "stdin": ""})
+			command := exec.Command(binary, "harness", "supervise", dir)
+			command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitForFile(t, filepath.Join(dir, "identity.json"))
+			if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			if err := command.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			receipt := readReceipt(t, dir)
+			if !valuesEqual(receipt["exit_code"], 130) || receipt["error"] != "owned job was cancelled" {
+				t.Fatalf("cancel receipt: %v", receipt)
+			}
+			if _, err := settleNativeReceipt(dir, receipt); err == nil {
+				t.Fatal("cancelled native output admitted")
+			}
+			process, err := readJSONFile(filepath.Join(dir, "native-process.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, err := strconv.Atoi(textOf(getOf(process, "pid")))
+			if err != nil || syscall.Kill(pid, 0) == nil {
+				t.Fatalf("native process survived: %v %v", process, err)
+			}
+			if got, err := readJSONFile(filepath.Join(dir, "native-request.json")); err != nil || !valuesEqual(got, request) {
+				t.Fatalf("cancel rewrote request: %v %v", got, err)
+			}
+		})
+	}
 }

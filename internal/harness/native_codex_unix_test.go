@@ -31,6 +31,7 @@ type codexPeerInput struct {
 	Configuration map[string]any `json:"configuration"`
 	Mode          string         `json:"mode"`
 	Reverse       []any          `json:"reverse"`
+	Answer        map[string]any `json:"answer,omitempty"`
 	Replies       []any          `json:"replies"`
 }
 
@@ -43,7 +44,11 @@ func TestCodexRPCPeer(t *testing.T) {
 	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--stdio" {
 		return
 	}
-	raw, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "peer.json"))
+	script := os.Getenv("CODEX_PEER_SCRIPT")
+	if script == "" {
+		script = filepath.Join(os.Getenv("CODEX_HOME"), "peer.json")
+	}
+	raw, err := os.ReadFile(script)
 	if err != nil {
 		panic(err)
 	}
@@ -180,6 +185,9 @@ func TestCodexRPCPeer(t *testing.T) {
 		status = peer.Mode
 	}
 	answer := map[string]any{"status": "PASS", "summary": strings.Join(history, " / "), "findings": []any{}, "check_ids": []any{}}
+	if peer.Answer != nil {
+		answer = peer.Answer
+	}
 	text, _ := json.Marshal(answer)
 	if peer.Mode == "bad_json" {
 		text = []byte("invalid business json")

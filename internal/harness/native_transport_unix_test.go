@@ -26,6 +26,7 @@ import (
 // the On substring. In Send, the token "@ID@" (bare, unquoted) is replaced by
 // the received frame's id, so one script answers whatever id the client used.
 type peerStep struct {
+	Params    any        `json:"params,omitempty"`
 	On        string     `json:"on,omitempty"`
 	Send      string     `json:"send,omitempty"`
 	Garbage   string     `json:"garbage,omitempty"`
@@ -96,6 +97,13 @@ func runScriptedPeer(scriptPath string) int {
 			step := script.Steps[i]
 			if step.On == "" || !strings.Contains(line, step.On) {
 				continue
+			}
+			if step.Params != nil {
+				frame, decodeErr := decodeNativeJSON([]byte(line))
+				if decodeErr != nil || !valuesEqual(getOf(frame, "params"), step.Params) {
+					fmt.Fprintf(os.Stderr, "native params differ: %s != %s\n", line, textOf(step.Params))
+					return 91
+				}
 			}
 			script.Steps[i].On = "" // each step fires at most once
 			if step.IgnoreEOF {
