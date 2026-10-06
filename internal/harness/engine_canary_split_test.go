@@ -471,7 +471,11 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 	if _, err := canaryFlagFindingResolution(workspace, materialDir, &sample.Target, &sample.Finding, "AC-004"); err != nil {
 		t.Fatalf("original exact material position refused: %v", err)
 	}
-	jobs, work := t.TempDir(), t.TempDir()
+	jobsRoot, work := t.TempDir(), t.TempDir()
+	jobs := filepath.Join(t.TempDir(), "issued-jobs")
+	if err := os.Symlink(jobsRoot, jobs); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(work, "frob.go"), []byte("package main\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -491,12 +495,12 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 	if string(readTestFileBytes(t, filepath.Join(materialDir, "requirements.md"))) != input.RequirementDocument.Content {
 		t.Fatal("prompt requirement content differs")
 	}
-	alias := filepath.Join(t.TempDir(), "materials")
-	if err := os.Symlink(materialDir, alias); err != nil {
+	canonical, err := filepath.EvalSymlinks(materialDir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range []string{"materials.json", "requirements.md"} {
-		for _, prefix := range []string{"", materialDir, alias} {
+		for _, prefix := range []string{"", materialDir, canonical} {
 			raw := *sample.Finding.Raw
 			raw.Locations = []string{"frob.go:3", filepath.Join(prefix, file) + ":2-8"}
 			finding := sample.Finding
