@@ -419,3 +419,55 @@ func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
 		})
 	}
 }
+
+// A candidate cannot freeze a workspace with an undeclared verification artifact.
+func TestNativeCandidateRejectsUndeclaredChangesWithoutWrites(t *testing.T) {
+	root := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Candidate Fixture", "GIT_AUTHOR_EMAIL=candidate@example.invalid", "GIT_COMMITTER_NAME=Candidate Fixture", "GIT_COMMITTER_EMAIL=candidate@example.invalid")
+		body, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, body)
+		}
+		return strings.TrimSpace(string(body))
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	write("command.go", "package main\nfunc main() {}\n")
+	git("add", "command.go")
+	git("commit", "-qm", "Candidate input")
+	base := git("rev-parse", "HEAD")
+	write("command.go", "package main\nfunc main() { println(\"verified\") }\n")
+	write("verification-output", "temporary verification executable")
+	r := protocol.NativeResource{ID: "candidate", Role: "development", Path: root, Source: base, Identity: base, Status: "READY"}
+	state := &protocol.State{RunID: "candidate-run", NativeResources: map[string]protocol.NativeResource{r.ID: r}}
+	params, err := evidenceFields(protocol.CandidateParameters{Stage: "DEVELOPMENT", WorkspaceID: r.ID, Base: base, Paths: []string{"command.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := protocol.HostActionIntent{ActionID: "freeze", PayloadDigest: "candidate-input", Adapter: &protocol.AdapterHostAction{Operation: "op.candidate", Params: params}}
+	f := &Facade{root: root, vcs: vcs.New(root, nil)}
+	before := git("status", "--porcelain=v1", "--untracked-files=all") + git("write-tree") + git("rev-parse", "HEAD")
+	for range 2 {
+		invoked := false
+		result, complete, refusal := f.candidateEvidence(state, intent, true, &invoked)
+		_, _, shared := f.vcs.ValidateDeclaredChanges(base, []string{"command.go"})
+		if refusal == nil || shared == nil || refusal.Error() != shared.Error() || refusal.Error() != "candidate contains undeclared change: verification-output" || invoked || complete || result.Candidate != nil {
+			t.Fatalf("candidate admission wrote or changed refusal: %v %+v complete=%v invoked=%v", refusal, result, complete, invoked)
+		}
+		if now := git("status", "--porcelain=v1", "--untracked-files=all") + git("write-tree") + git("rev-parse", "HEAD"); now != before {
+			t.Fatal("candidate rejection changed workspace")
+		}
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "verification-output")); err != nil || string(body) != "temporary verification executable" {
+		t.Fatal("candidate removed or changed undeclared bytes")
+	}
+}

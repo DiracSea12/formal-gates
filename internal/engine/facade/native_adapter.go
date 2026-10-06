@@ -710,18 +710,9 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	}
 	paths := slices.Clone(p.Paths)
 	if !completed {
-		changes, err := native.ChangedPaths()
+		changes, pending, err := native.ValidateDeclaredChanges(p.Base, paths)
 		if err != nil {
 			return nativeResult{}, false, err
-		}
-		pending, err := native.Pending(p.Base, "")
-		if err != nil {
-			return nativeResult{}, false, err
-		}
-		for _, path := range changes {
-			if !slices.Contains(paths, path) && !slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
-				return nativeResult{}, false, fmt.Errorf("candidate contains undeclared change: %s", path)
-			}
 		}
 		if p.MergeManifest != nil {
 			target := filepath.Join(r.Path, ".gates", "results", s.RunID+".merge-cases.md")

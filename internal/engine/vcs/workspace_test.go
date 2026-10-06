@@ -279,3 +279,27 @@ func (r ownershipRunner) RunRaw(dir, command string, input []byte, args ...strin
 	out, err := r.Run(dir, command, args...)
 	return []byte(out), err
 }
+
+// Only a new property-free directory containing declared descendants can be
+// implicit; directory metadata, deletion and independent directories stay declared.
+func TestDeclaredDirectoryContainerRequiresExactNativeChange(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		change  Change
+		paths   []string
+		allowed bool
+	}{
+		{"parent", Change{Path: "source", Kind: "A", Metadata: entryValue(nativeEntry{Kind: "dir"})}, []string{"source/command.go"}, true},
+		{"metadata", Change{Path: "source", Kind: "A", Metadata: entryValue(nativeEntry{Kind: "dir", Properties: map[string][]byte{"custom": []byte("value")}})}, []string{"source/command.go"}, false},
+		{"removed", Change{Path: "source", Kind: "D", BaseMetadata: entryValue(nativeEntry{Kind: "dir"})}, []string{"source/command.go"}, false},
+		{"existing", Change{Path: "source", Kind: "M", BaseMetadata: entryValue(nativeEntry{Kind: "dir"}), Metadata: entryValue(nativeEntry{Kind: "dir"})}, []string{"source/command.go"}, false},
+		{"empty", Change{Path: "source", Kind: "A", Metadata: entryValue(nativeEntry{Kind: "dir"})}, []string{"command.go"}, false},
+		{"sibling-prefix", Change{Path: "source", Kind: "A", Metadata: entryValue(nativeEntry{Kind: "dir"})}, []string{"source-other/command.go"}, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if actual := scenario.change.IsDirectoryContainer(scenario.paths); actual != scenario.allowed {
+				t.Fatalf("directory change allowance=%v want=%v", actual, scenario.allowed)
+			}
+		})
+	}
+}

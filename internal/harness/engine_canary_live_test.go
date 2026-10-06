@@ -1170,13 +1170,16 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "development batch", input)
-	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		return canaryDevelopmentShape(&answer, true)
+		if err := canaryDevelopmentShape(&answer, true); err != nil {
+			return err
+		}
+		return c.declaredDevelopmentChanges(input, &answer)
 	}
 	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
 	return c.developmentEvidence(id, input, &answer, turn.digest, true)
@@ -1186,13 +1189,16 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required; report other actual regression runs in tests. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required; report other actual regression runs in tests. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		return canaryRepairShape(&answer, input)
+		if err := canaryRepairShape(&answer, input); err != nil {
+			return err
+		}
+		return c.declaredDevelopmentChanges(input, &answer)
 	}
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
 		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
@@ -1253,6 +1259,25 @@ func canaryDevelopmentShape(answer *canaryDevelopmentAnswer, batch bool) error {
 		return fmt.Errorf("batch answer lacks DoD, check or handoff completion")
 	}
 	return nil
+}
+
+// declaredDevelopmentChanges uses the candidate freeze's workspace predicate
+// inside output correction; planning and integrated self-runs do not freeze files.
+func (c *engineCanary) declaredDevelopmentChanges(input protocol.ValidationInput, answer *canaryDevelopmentAnswer) error {
+	if answer.Plan != nil && len(answer.Paths) == 0 || input.Repair != nil && input.Repair.FinalCandidate != nil {
+		return nil
+	}
+	workspace := c.workspace(input)
+	paths := make([]string, len(answer.Paths))
+	for i, path := range answer.Paths {
+		relative, err := canaryWorkspacePath(workspace, path)
+		if err != nil {
+			return err
+		}
+		paths[i] = relative
+	}
+	_, _, err := c.vcs.At(workspace, input.Workspace.Handle).ValidateDeclaredChanges(input.Workspace.Identity, paths)
+	return err
 }
 
 func (c *engineCanary) developmentEvidence(id string, input protocol.ValidationInput, answer *canaryDevelopmentAnswer, digest string, batch bool) protocol.ValidationResult {
