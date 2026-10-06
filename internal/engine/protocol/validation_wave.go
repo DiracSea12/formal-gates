@@ -39,7 +39,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 	if fact := s.candidateFailureFact(cd); fact != nil {
 		view.OperatorFacts = append(view.OperatorFacts, *fact)
 	}
-	if !s.dualReviewPass() {
+	// Accepted abort retires ordinary delivery obligations; native failure
+	// facts above remain authoritative until their effects are reconciled.
+	if s.abortRequested() || !s.dualReviewPass() {
 		return
 	}
 	message := ""

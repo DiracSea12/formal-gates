@@ -45,6 +45,11 @@ func TestCanaryInstalledGitFlows(t *testing.T) {
 	}
 }
 
+// Early cancellation retains actual native stop evidence before slice delivery.
+func TestCanaryInstalledAbortBeforeSliceDelivery(t *testing.T) {
+	runCanaryInstalledFlow(t, "git", true, canaryProvider, func(e *canaryLocalExecutor) { e.abortBeforeDelivery = true })
+}
+
 // A rejected case oracle must reopen design before the ordinary flag repair.
 func TestCanaryInstalledCaseReviewRedesign(t *testing.T) {
 	runCanaryInstalledFlow(t, "git", true, canaryProvider, func(e *canaryLocalExecutor) { e.rejectBadOracle = true })
@@ -185,6 +190,10 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 		c.install(base, protocol.IntakeConfirmationReceipt{Source: "stable-driver", Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solution}}, SolutionRevision: solution, SolutionDigest: "sha256:" + solution})
 	}
 	c.drive()
+	if executor.abortBeforeDelivery {
+		executor.abortBeforeSliceDelivery()
+		return
+	}
 	c.loop()
 	if split {
 		c.assertSplitTerminal(base)
@@ -338,18 +347,173 @@ type canaryLocalCall struct {
 	Start, End               time.Time
 }
 type canaryLocalExecutor struct {
-	t                  *testing.T
-	split              bool
-	mu                 sync.Mutex
-	calls              []canaryLocalCall
-	developmentStarted chan struct{}
-	developmentOnce    sync.Once
-	transportFailure   func(canaryMaterials) error
-	canary             *engineCanary
-	publicNative       sync.Once
-	rejectBadOracle    bool
-	rejectedReview     *protocol.CaseReviewEvidence
-	redesignFeedback   bool
+	t                   *testing.T
+	split               bool
+	mu                  sync.Mutex
+	calls               []canaryLocalCall
+	developmentStarted  chan struct{}
+	developmentOnce     sync.Once
+	transportFailure    func(canaryMaterials) error
+	canary              *engineCanary
+	publicNative        sync.Once
+	abortBeforeDelivery bool
+	rejectBadOracle     bool
+	rejectedReview      *protocol.CaseReviewEvidence
+	redesignFeedback    bool
+}
+
+// Only the pre-development reviews and one actual stopped native design turn
+// are needed to cancel a master whose children have not delivered any receipts.
+func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
+	c := e.canary
+	for len(c.run.SliceChildren) != 2 {
+		if time.Now().After(c.deadline) {
+			c.fail("early abort preparation exceeded its budget")
+		}
+		advanced := false
+		for id, pending := range c.run.PendingActions {
+			if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness {
+				continue
+			}
+			c.receipt(id)
+			event := c.dispatchReview(id, pending.ReviewSeries)
+			if event.Result.Review.GranularityReview != nil {
+				c.masterPlan = event.Result.Review.GranularityReview
+			}
+			c.submit(event)
+			advanced = true
+			break
+		}
+		if !advanced && !c.serveOperator() {
+			c.fail("early abort cannot advance preparation: %+v", c.run.Next)
+		}
+		c.drive()
+	}
+	c.run = c.readRunID("show", c.run.RunID)
+	if c.run.Next.Kind != decision.KindOperator || c.run.Next.Operator == nil || !strings.Contains(c.run.Next.Operator.Facts[0].Value, "slice receipts: 0/2") {
+		c.fail("master did not wait for undelivered slices: %+v", c.run.Next)
+	}
+	observed := false
+	for id, input := range c.run.ValidationInputs {
+		if input.Handler != "engine.qa.design" {
+			continue
+		}
+		close(e.developmentStarted)
+		c.receipt(id)
+		// The actual local native turn is observed stopped, but its business result
+		// remains unsubmitted when the user cancels this delivery obligation.
+		c.dispatchPipeline(id, input)
+		observed = true
+		break
+	}
+	if !observed {
+		c.fail("early abort has no issued native design turn")
+	}
+	request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop before slice delivery"})
+	if err != nil {
+		c.fail("abort request: %v", err)
+	}
+	c.submit(request)
+	for _, ask := range c.run.PendingAsks {
+		if ask.RequestID == string(request.ID) {
+			c.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: ask.Token, Choice: "abort"}})
+			break
+		}
+	}
+	c.drive()
+	if c.run.Status != "ABORTING" || c.run.Next.Kind != decision.KindHostAction || len(c.run.ValidationInputs) != 0 {
+		c.fail("accepted abort did not expose termination alone: %+v", c.run.Next)
+	}
+	processFiles, err := filepath.Glob(filepath.Join(c.jobs, c.run.RunID, "*", "*", "attempt-*", "native-process.json"))
+	if err != nil || len(processFiles) != 3 {
+		c.fail("early abort lacks its three actual native process records: %v %v", processFiles, err)
+	}
+	for _, path := range processFiles {
+		process, err := readJSONFile(path)
+		if err != nil {
+			c.fail("native process record: %v", err)
+		}
+		pid, err := strconv.Atoi(textOf(getOf(process, "pid")))
+		if err != nil || syscall.Kill(pid, 0) != syscall.ESRCH {
+			c.fail("native stop has not been observed for %s: %v %v", path, process, err)
+		}
+	}
+	var captures []string
+	for _, event := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+		var paths []string
+		paths, err = filepath.Glob(filepath.Join(c.project, ".gates", "tmp", c.run.RunID, "lifecycle", "events", "*", event+".json"))
+		if err != nil {
+			break
+		}
+		captures = append(captures, paths...)
+	}
+	if err != nil || len(captures) != 6 {
+		c.fail("early abort lacks its six captured lifecycle facts: %v %v", captures, err)
+	}
+	stopped := map[string]bool{}
+	for _, path := range captures {
+		var captured struct {
+			Provider, Correlation, Identity, Event string
+			TranscriptPath                         string
+		}
+		if err := json.Unmarshal(readTestFileBytes(c.t, path), &captured); err != nil {
+			c.fail("captured lifecycle record: %v", err)
+		}
+		if captured.Provider != c.provider() || captured.Identity != captured.Correlation || !slices.Contains(c.dispatched, captured.Correlation) || (captured.Event != protocol.LifecycleStart && captured.Event != protocol.LifecycleStop) {
+			c.fail("captured lifecycle differs from the actual native dispatch: %+v", captured)
+		}
+		if captured.Event == protocol.LifecycleStop {
+			processPath := filepath.Join(filepath.Dir(captured.TranscriptPath), "native-process.json")
+			if !slices.Contains(processFiles, processPath) {
+				c.fail("captured stop has no observed native process: %+v", captured)
+			}
+			stopped[captured.Identity] = true
+		}
+		event, err := protocol.NewCorrelatedLifecycleEvent(c.eventID(), captured.Provider, captured.Correlation, captured.Identity, captured.Event)
+		if err != nil {
+			c.fail("captured lifecycle protocol event: %v", err)
+		}
+		c.submit(event)
+	}
+	for id, intent := range c.run.AdapterIntents {
+		if intent.Terminate == nil || !stopped[intent.Terminate.Identity] {
+			c.fail("termination has no actual stopped native source: %+v", intent)
+		}
+		receipt, err := protocol.NewAgentHostActionReceiptEvent(c.eventID(), id, intent.Operation, c.provider(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		if err != nil {
+			c.fail("observed termination receipt: %v", err)
+		}
+		c.submit(receipt)
+	}
+	c.drive()
+	final := c.terminalRun()
+	if final.Status != "ABORTED" || final.Termination == nil || !final.Termination.ResourcesCleaned() || len(final.Termination.SliceReceipts) != 2 {
+		c.fail("early abort failed to clean released children: %+v", final.Next)
+	}
+	stops := 0
+	for _, event := range final.Termination.LifecycleEvents {
+		if event.Event == protocol.LifecycleStop {
+			stops++
+		}
+	}
+	if stops < 3 {
+		c.fail("terminal evidence lost the actual native review/design stops")
+	}
+	for _, receipt := range final.Termination.SliceReceipts {
+		if receipt.Receipt.Status != "ABORTED" {
+			c.fail("aborted child was projected as ready")
+		}
+	}
+	for _, resource := range final.Termination.NativeResources {
+		if resource.Status != "CLEANED" {
+			c.fail("native resource has no cleanup receipt")
+		}
+		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+			c.fail("native workspace survives abort: %s %v", resource.Path, err)
+		}
+	}
+	c.assertTerminalReplay(final)
+	c.t.Logf("installed early abort retained %d actual native stops, two ABORTED child receipts, native cleanup and repeated reopened drive/show; actual_model_calls=0 evidence=%s", stops, c.jobs)
 }
 
 func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source map[string]any, err error) {
