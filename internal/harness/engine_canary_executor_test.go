@@ -556,10 +556,10 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 		// taking it as slice work; the merge gate is its blocking responsibility.
 		if e.split && m.Slice == "" {
 			index := -1
-			if strings.Contains(input.Binding.Task.Scope, ":slice:uppercase:") {
+			if input.Gate.Gate == "correctness" && strings.Contains(input.Binding.Task.Scope, ":slice:uppercase:") {
 				index = 0
 			}
-			if strings.Contains(input.Binding.Task.Scope, ":slice:word-size:") {
+			if input.Gate.Gate == "correctness" && strings.Contains(input.Binding.Task.Scope, ":slice:word-size:") {
 				index = 1
 			}
 			if input.Gate.Gate == "merge-gate" {
