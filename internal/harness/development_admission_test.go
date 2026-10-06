@@ -21,9 +21,9 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-// Writable completion feedback uses actual issued-workspace changes before
-// admission, so the worker can remove a verification artifact and answer again.
-func TestCanaryDevelopmentRejectsUndeclaredChangesBeforeAdmission(t *testing.T) {
+// Repair completion feedback checks its isolated workspace before admission;
+// ordinary batch completions leave workspace-wide validation to candidate freeze.
+func TestCanaryWritableCompletionUsesWorkspaceDeclarationScope(t *testing.T) {
 	for _, role := range []string{"development", "repair", "repair-member"} {
 		t.Run(role, func(t *testing.T) {
 			var sample struct {
@@ -120,10 +120,14 @@ func TestCanaryDevelopmentRejectsUndeclaredChangesBeforeAdmission(t *testing.T) 
 			} else {
 				result = c.repairResult("completion", sample.Input)
 			}
-			if calls != 2 || !slices.Equal(result.Development.Paths, []string{"frob.go"}) || result.Binding != sample.Input.Binding {
+			expectedCalls := 2
+			if role == "development" {
+				expectedCalls = 1
+			}
+			if calls != expectedCalls || !slices.Equal(result.Development.Paths, []string{"frob.go"}) || result.Binding != sample.Input.Binding {
 				t.Fatalf("completion admitted without worker correction: calls=%d result=%+v", calls, result)
 			}
-			for _, attempt := range []int{1, 2} {
+			for attempt := 1; attempt <= expectedCalls; attempt++ {
 				for _, name := range []string{"answer.json", "answer.raw.txt"} {
 					actual := readTestFileBytes(t, filepath.Join(c.jobDirectory("completion"), fmt.Sprintf("attempt-%d", attempt), name))
 					if !bytes.Equal(actual, answerBytes) {
@@ -131,7 +135,11 @@ func TestCanaryDevelopmentRejectsUndeclaredChangesBeforeAdmission(t *testing.T) 
 					}
 				}
 			}
-			if status := git("status", "--porcelain=v1", "--untracked-files=all"); status != "M frob.go" {
+			expectedStatus := "M frob.go"
+			if role == "development" {
+				expectedStatus += "\n?? frob"
+			}
+			if status := git("status", "--porcelain=v1", "--untracked-files=all"); status != expectedStatus {
 				t.Fatalf("worker correction changed declared content: %s", status)
 			}
 		})
@@ -215,5 +223,88 @@ func TestCanaryDeclaredDevelopmentChangesPreserveWorkspaceBoundaries(t *testing.
 	answer.Paths = []string{filepath.Join(c.project, "command.go")}
 	if err := c.declaredDevelopmentChanges(input, &answer); err == nil || !strings.Contains(err.Error(), "not inside the workspace") {
 		t.Fatalf("other workspace accepted: %v", err)
+	}
+}
+
+// Two ordinary batches can complete in one mutable workspace; the later
+// batch's answer does not have to declare the earlier batch's unfrozen edits.
+func TestCanaryDevelopmentBatchesShareUnfrozenWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, ".formal-gates-resources", "shared")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workspace
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Workspace Fixture", "GIT_AUTHOR_EMAIL=workspace@example.invalid", "GIT_COMMITTER_NAME=Workspace Fixture", "GIT_COMMITTER_EMAIL=workspace@example.invalid")
+		body, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, body)
+		}
+		return strings.TrimSpace(string(body))
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(workspace, path), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	write("parse.go", "package command\n")
+	write("format.go", "package command\n")
+	git("add", ".")
+	git("commit", "-qm", "Workspace inputs")
+	base := git("rev-parse", "HEAD")
+	approvalRead, approvalWrite := io.Pipe()
+	defer approvalRead.Close()
+	defer approvalWrite.Close()
+	c := &engineCanary{t: t, home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+	resource := &protocol.NativeResource{ID: "shared-development", Path: workspace, Source: base, Identity: base, Status: "READY"}
+	for _, batch := range []string{"parse", "format"} {
+		input := protocol.ValidationInput{Workspace: resource, Binding: protocol.WorkBinding{WorkspaceID: resource.ID, BatchID: batch, Candidate: base}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: batch, Artifacts: []string{batch + ".go"}}}}
+		calls := 0
+		c.execute = func(value any, directory string, writeSource bool) (map[string]any, error) {
+			request := value.(map[string]any)
+			calls++
+			if calls != 1 || request["workspace"] != workspace || request["read_only"] != false || writeSource || strings.Contains(request["prompt"].(string), "Your previous answer was refused") {
+				t.Fatal("ordinary batch was subjected to workspace-wide completion admission")
+			}
+			var material canaryMaterials
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(c.jobDirectory(batch), "materials.json")), &material); err != nil {
+				t.Fatal(err)
+			}
+			if material.Input.Development.Batch.ID != batch || material.Input.Binding.BatchID != batch || !slices.Equal(material.Input.Development.Batch.Artifacts, []string{batch + ".go"}) {
+				t.Fatal("transport did not receive the distinct issued batch")
+			}
+			write(batch+".go", "package command\nfunc "+strings.Title(batch)+"() {}\n")
+			if batch == "format" {
+				if changed, err := c.vcs.ChangedPaths(); err != nil || !slices.Equal(changed, []string{"format.go", "parse.go"}) {
+					t.Fatalf("peer changes were not present in shared workspace: %v %v", changed, err)
+				}
+			}
+			answer := canaryDevelopmentAnswer{Paths: []string{batch + ".go"}, Summary: batch + " complete", Build: []string{batch + " build evidence"}, Tests: []string{batch + " test evidence"}, DoD: map[string]string{batch: "complete"}, Checks: map[string]string{batch: "pass"}, Handoff: batch + " ready"}
+			body, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"answer.json", "answer.raw.txt"} {
+				if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return map[string]any{"identity": "worker-" + batch}, nil
+		}
+		result := c.developmentResult(batch, input)
+		if calls != 1 || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{batch + ".go"}) {
+			t.Fatalf("ordinary batch borrowed peer declarations: %+v", result)
+		}
+	}
+	if git("rev-parse", "HEAD") != base || git("diff", "--cached", "--name-only") != "" {
+		t.Fatal("ordinary completion froze shared workspace before combined candidate")
 	}
 }

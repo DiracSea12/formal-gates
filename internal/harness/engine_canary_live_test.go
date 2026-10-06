@@ -1176,10 +1176,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		if err := canaryDevelopmentShape(&answer, true); err != nil {
-			return err
-		}
-		return c.declaredDevelopmentChanges(input, &answer)
+		return canaryDevelopmentShape(&answer, true)
 	}
 	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
 	return c.developmentEvidence(id, input, &answer, turn.digest, true)
