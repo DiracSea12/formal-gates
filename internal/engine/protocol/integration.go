@@ -226,6 +226,9 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 			}
 			continue
 		}
+		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
+			continue
+		}
 		if work.result == nil || !s.repairGatesComplete(work) {
 			return nil, nil, "", false
 		}

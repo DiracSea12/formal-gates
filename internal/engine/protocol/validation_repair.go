@@ -116,11 +116,25 @@ func (s *State) nextRepairWork() *repairWork {
 	return nil
 }
 func (s *State) repairReady(w *repairWork) bool {
-	return w != nil && s.repairDependenciesReady(*w)
+	if w == nil || !s.repairDependenciesReady(*w) {
+		return false
+	}
+	if len(s.repairMembers(w.wave)) == 1 && s.requirementRevisionForTask(w.task) != "" {
+		if s.Validation.DevelopmentSnapshot == "" {
+			return false
+		}
+		for _, member := range s.repairWork() {
+			if member.result == nil && len(s.repairMembers(member.wave)) == 1 && s.requirementRevisionForTask(member.task) != "" {
+				return member.task == w.task
+			}
+		}
+	}
+	return true
 }
 
 // RepairInput carries the original problem evidence, not only lookup IDs.
 type RepairInput struct {
+	OriginTask        runtime.TaskKey               `json:"originTask"`
 	FinalCandidate    *coverage.ValidationCandidate `json:"finalCandidate,omitempty"`
 	MemberResults     []WorkerResult                `json:"memberResults,omitempty"`
 	Plan              *GranularityReview            `json:"plan,omitempty"`
@@ -169,7 +183,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 		if w.task != task {
 			continue
 		}
-		input := &RepairInput{Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: w.wave.Repair.Task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
+		input := &RepairInput{OriginTask: w.wave.Repair.Task, Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
 		if w.verification {
 			_, proof, _ := s.repairFinalSource(w)
 			input.FinalCandidate = &coverage.ValidationCandidate{Identity: proof.Identity, Digest: proof.Digest}
@@ -207,6 +221,11 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 				}
 			}
 			input.Findings = append(input.Findings, copy)
+			if a.Decision != "DISMISSED" && a.ProblemID != "" && !slices.ContainsFunc(input.Problems, func(problem ValidationProblem) bool { return problem.ID == a.ProblemID }) {
+				if problem := s.Validation.Problems[a.ProblemID]; problem != nil {
+					input.Problems = append(input.Problems, *problem)
+				}
+			}
 			if f.ExecutionFailure != nil {
 				input.ExecutionFailures = append(input.ExecutionFailures, RepairExecutionFailure{FindingID: f.ID, Binding: s.DispatchBindings[f.ExecutionFailure.ResultAction], Records: s.executionFailureRecords(f)})
 			}

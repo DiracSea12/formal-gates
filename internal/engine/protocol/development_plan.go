@@ -656,6 +656,9 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 			}
 			continue
 		}
+		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
+			continue
+		}
 		if work.result == nil || !s.repairGatesComplete(work) {
 			return nil, nil, "", false
 		}

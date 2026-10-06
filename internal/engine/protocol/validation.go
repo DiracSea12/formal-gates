@@ -494,6 +494,9 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 					_, proof, _ := s.repairFinalSource(work)
 					b.Candidate = proof.Identity
 				}
+				if len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
+					b.Candidate = v.DevelopmentSnapshot
+				}
 				b.PlanRequest = work.planAction
 				if work.batch != nil {
 					b.BatchID = work.batch.ID
@@ -647,15 +650,7 @@ func (s *State) completedValidationWaves() int {
 			if wave.Counted {
 				n++
 			}
-			if wave.Repair != nil {
-				depth := 0
-				for _, member := range s.repairMembers(&wave) {
-					if member.businessRepairs > depth {
-						depth = member.businessRepairs
-					}
-				}
-				n += depth
-			}
+			n += s.repairBusinessRounds(&wave, "")
 		}
 	}
 	return n

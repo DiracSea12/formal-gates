@@ -208,7 +208,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
 		}
-		if work.result == nil {
+		if s.repairReady(work) {
 			return changed, nil
 		}
 	}

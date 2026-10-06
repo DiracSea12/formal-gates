@@ -166,6 +166,9 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 						source = prior.Identity
 					}
 				}
+				if len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" && s.Validation.DevelopmentSnapshot != "" {
+					source = s.Validation.DevelopmentSnapshot
+				}
 				scope = work.wave.ID + ":" + key.String()
 			}
 		}

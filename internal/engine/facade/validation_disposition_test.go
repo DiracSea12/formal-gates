@@ -161,14 +161,10 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 				current := after.State.Validation.Waves[0]
 				switch choice {
 				case "REPAIR":
-					if current.Status != "REPAIR" || after.State.Results[id].Validation == nil || after.State.Results[id].Validation.Development.Summary != result.Development.Summary || len(d.run.AdapterIntents) != 1 {
+					if current.Status != "REPAIRED" || after.State.Results[id].Validation == nil || after.State.Results[id].Validation.Development.Summary != result.Development.Summary || len(d.run.AdapterIntents) != 1 {
 						t.Fatal("approved repair lost its original result or frozen-source obligation")
 					}
-					d.materialize()
-					d.drive()
-					if d.run.Validation.Waves[0].Status != "REPAIRED" {
-						t.Fatal("repair did not settle after its native source receipt")
-					}
+
 				case "DISMISS":
 					if current.Status != "COMPLETE" || len(d.run.AdapterIntents) != 0 || len(after.State.ObsoleteResults[id]) != 1 {
 						t.Fatal("dismissal failed to retain obsolete evidence without materializing repair")

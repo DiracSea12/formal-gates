@@ -237,7 +237,10 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 		sources, paths, base, complete := s.developmentSources(cd)
 		if s.NativeRoot != "" && !s.mergeMaster() {
 			if base == "" {
-				base = s.NativeResources[p.WorkspaceID].Source
+				base = s.NativeResources[p.WorkspaceID].Identity
+				if base == "" {
+					base = s.NativeResources[p.WorkspaceID].Source
+				}
 			}
 		}
 		if s.mergeMaster() {

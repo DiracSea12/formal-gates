@@ -45,11 +45,10 @@ func (s *State) repairMembers(w *ValidationWave) []repairWork {
 			member.previous = completion
 			member.task.Scope += ":correction:" + failed
 			member.pureP2 = pureP2
-			if !pureP2 {
-				member.businessRepairs++
-			}
+
 			member.task = s.replacementFold(member.task)
 		}
+		member.businessRepairs = s.repairBusinessRounds(w, p.Batches[i].ID)
 		members = append(members, member)
 	}
 	return members
@@ -686,4 +685,44 @@ func (s *State) repairGateDismissed(w *ValidationWave, target *ValidationTarget)
 
 func repairGateScope(source, gate string) string {
 	return "repair:" + strings.TrimPrefix(digestOfCanonical(source), "sha256:") + ":" + gate
+}
+
+// Gate task scopes identify an issued source. Different gates on that source
+// consume one business round; parallel batches share the greatest depth.
+func (s *State) repairBusinessRounds(w *ValidationWave, batch string) int {
+	if w.Repair == nil {
+		return 0
+	}
+	sources := map[string]map[string]bool{}
+	for _, target := range w.Repair.Targets {
+		binding, known := s.DispatchBindings[target.ResultAction]
+		if !known || batch != "" && binding.BatchID != batch {
+			continue
+		}
+		failed := false
+		for _, finding := range s.Validation.Findings {
+			if finding.WaveID != w.ID || finding.Target != target.Task.String() {
+				continue
+			}
+			for _, resolution := range finding.History {
+				if resolution.Decision != "DISMISSED" && (resolution.Severity == "P0" || resolution.Severity == "P1") {
+					failed = true
+				}
+			}
+		}
+		if !failed {
+			continue
+		}
+		if sources[binding.BatchID] == nil {
+			sources[binding.BatchID] = map[string]bool{}
+		}
+		sources[binding.BatchID][strings.TrimSuffix(target.Task.Scope, ":"+target.Gate)] = true
+	}
+	depth := 0
+	for _, observed := range sources {
+		if len(observed) > depth {
+			depth = len(observed)
+		}
+	}
+	return depth
 }

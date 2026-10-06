@@ -264,7 +264,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	d.reopen()
 	d.drive()
 	correction, ci := planBatchAction(d, "logging")
-	if ci.Binding.Task == li.Binding.Task || ci.Repair.Obligation.Task != initial.Repair.Obligation.Task {
+	if ci.Binding.Task == li.Binding.Task || ci.Repair.OriginTask != initial.Repair.OriginTask {
 		t.Fatal("correction lost its source generation or original obligation")
 	}
 	prior, err := os.ReadFile(filepath.Join(ci.Workspace.Path, "logging.go"))
