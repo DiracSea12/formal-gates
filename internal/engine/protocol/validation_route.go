@@ -48,15 +48,31 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if w.Status != "INVALIDATED" {
 		return false
 	}
+	_, issued := s.repairIssue(w.Repair.Task)
+	for id, decision := range s.Decisions {
+		request := s.PendingAsks[id].Validation
+		if request != nil && decision.Choice == "approve" && decision.Revision > issued && decision.Revision > s.requirementGeneration() && (request.Kind == "THAW" || request.Kind == "QA_ARTIFACT_REPAIR" || request.Kind == "VALIDATION_DETAIL_DISPOSITION" && decision.Validation != nil && decision.Validation.Remedy == "QA_ARTIFACT_REPAIR") {
+			return false
+		}
+	}
 	if s.Validation.Candidate != nil && *s.Validation.Candidate == w.Candidate && w.RouteDigest != s.validationRouteDigest() {
 		return true
 	}
 	for _, member := range s.repairMembers(w) {
-		if s.validationWorkCarryAuthorized("", member.task) {
-			return true
+		if s.repairTaskFinished(member.task) && s.developmentResultRecord(member.task) == nil {
+			return false
+		}
+		if !s.validationWorkCarryAuthorized("", member.task) && s.requirementRevisionForTask(member.task) != s.Validation.RequirementRevision {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+// Completed source work remains usable; invalidated validation can continue
+// only under the original duty's explicit carry/replacement authority.
+func (s *State) repairDutyCurrent(w *ValidationWave) bool {
+	return w != nil && w.Repair != nil && !s.abortRequested() && (w.Status == "REPAIRED" || s.validationRepairPending(w))
 }
 
 func (e *Engine) rebindValidationRoute(s *State) {

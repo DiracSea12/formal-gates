@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"formal-gates/internal/engine/vcs"
 	"os"
@@ -14,6 +15,95 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 )
+
+func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
+	d, initial, id := nativeRepairReady(t, "P2")
+	p := repairBatchPlan("FINAL")
+	p.Batches = p.Batches[:2]
+	d.business(id, protocol.ValidationResult{Binding: initial.Binding, Status: "PASS", GranularityReview: p})
+	d.drive()
+	parser, pi := planBatchAction(d, "parser")
+	logging, li := planBatchAction(d, "logging")
+	nativeMemberCompletion(t, d, parser, pi)
+	nativeMemberCompletion(t, d, logging, li)
+	verify, old := d.action("engine.repair")
+	if old.Repair.FinalCandidate == nil {
+		t.Fatal("initial closure lacks final verification")
+	}
+	oldSource := old.Repair.FinalCandidate.Identity
+	document := validationDocument + "\n"
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	var choices []protocol.RequirementWorkDecision
+	for _, item := range d.run.RequirementWork {
+		disposition := protocol.RequirementWorkCarry
+		if item.Task == pi.Binding.Task || item.Task == li.Binding.Task {
+			disposition = protocol.RequirementWorkRedo
+		}
+		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "repeat selected implementation under confirmed document"})
+	}
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "formatting", ImpactDigest: "member-source", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(event)
+	ask := d.run.PendingRequirementAsk
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirm member replacement"}}})
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	d.reopen()
+	d.drive()
+	var current []protocol.WorkBinding
+	for _, batch := range []string{"logging", "parser"} {
+		action, input := planBatchAction(d, batch)
+		if input.Binding.Task == pi.Binding.Task || input.Binding.Task == li.Binding.Task {
+			t.Fatal("REDO did not replace execution identity")
+		}
+		if input.Binding.Generation == initial.Binding.Generation {
+			t.Fatal("replacement lost current requirement occurrence")
+		}
+		nativeMemberCompletion(t, d, action, input)
+		current = append(current, input.Binding)
+		d.reopen()
+		d.drive()
+	}
+	var action string
+	var input protocol.ValidationInput
+	for id, pending := range d.run.ValidationInputs {
+		if pending.Repair != nil && pending.Repair.FinalCandidate != nil && pending.Binding.Task != old.Binding.Task {
+			action, input = id, pending
+		}
+	}
+	if input.Repair == nil || input.Repair.FinalCandidate == nil || len(input.Repair.MemberResults) != 2 || input.Repair.FinalCandidate.Identity == oldSource || action == verify {
+		t.Fatal("replacement sources reused the old assembly or verification")
+	}
+	for _, binding := range current {
+		found := false
+		for _, result := range input.Repair.MemberResults {
+			found = found || result.Validation.Binding.Task == binding.Task
+		}
+		if !found {
+			t.Fatal("final closure omitted a current member")
+		}
+	}
+	final := gateRepairResult(input).Development
+	final.Paths = []string{"parser.go", "logging.go"}
+	final.CaseRuns = nativeRepairSelfRun(t, input.Workspace.Path)
+	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: final})
+	d.reopen()
+	d.drive()
+	for _, pending := range d.run.ValidationInputs {
+		if pending.Repair != nil && pending.Repair.FinalCandidate != nil {
+			t.Fatal("accepted final self-run repeated after reopen")
+		}
+	}
+	for _, binding := range current {
+		for _, oldBinding := range []protocol.WorkBinding{pi.Binding, li.Binding} {
+			if binding.Task == oldBinding.Task {
+				t.Fatal("current source retained a retired member identity")
+			}
+		}
+	}
+}
 
 func repairBatchPlan(tier string) *protocol.GranularityReview {
 	p := commandPlan()

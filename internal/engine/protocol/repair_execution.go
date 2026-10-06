@@ -365,7 +365,7 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 	}
 	for i := range s.Validation.Waves {
 		w := &s.Validation.Waves[i]
-		if w.Repair == nil || w.Status == "INVALIDATED" || len(s.repairMembers(w)) == 1 {
+		if !s.repairDutyCurrent(w) || len(s.repairMembers(w)) == 1 {
 			continue
 		}
 		r := s.repairAssemblyResource(w)
@@ -565,7 +565,7 @@ func (s *State) repairFinalSource(work repairWork) (HostActionIntent, CandidateE
 // Pure P2 split repairs self-run the exact integrated content once. This is
 // development verification under the same obligation, not another review wave.
 func (s *State) repairVerificationWork(w *ValidationWave) *repairWork {
-	if w.Repair == nil || w.Status == "INVALIDATED" {
+	if !s.repairDutyCurrent(w) {
 		return nil
 	}
 	members := s.repairMembers(w)

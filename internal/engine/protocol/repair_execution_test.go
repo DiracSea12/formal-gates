@@ -139,6 +139,54 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 	}
 }
 
+func TestInvalidatedRepairDutyUsesConfirmedMemberAuthority(t *testing.T) {
+	for _, boundary := range []string{"carry", "member-redo", "all-redo", "retired-task", "thaw", "artifact-disposition", "unconfirmed"} {
+		t.Run(boundary, func(t *testing.T) {
+			root := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
+			w := ValidationWave{ID: "wave", Generation: 1, Status: "INVALIDATED", Repair: &ValidationRepair{Task: root}}
+			s := &State{Validation: &Validation{Generation: 20, RequirementRevision: "current", Waves: []ValidationWave{w}}, Results: map[string]WorkerResult{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
+			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
+			s.Results["plan"] = WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: root}, GranularityReview: &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser"}, {ID: "logging"}}}}}
+			members := s.repairMembers(&s.Validation.Waves[0])
+			entry := ConfirmedRevision{Revision: "current", StateRevision: 20}
+			for i, member := range members {
+				disposition := RequirementWorkCarry
+				if boundary == "all-redo" || boundary == "member-redo" && i == 1 {
+					disposition = RequirementWorkRedo
+				}
+				entry.WorkDecisions = append(entry.WorkDecisions, RequirementWorkDecision{Work: RequirementWork{Task: member.task}, Disposition: disposition})
+			}
+			s.RequirementRevisions = []ConfirmedRevision{entry}
+			initialResource := s.repairAssemblyResource(&s.Validation.Waves[0])
+			if boundary == "retired-task" {
+				s.Tasks[members[0].task] = runtime.TaskTerminal
+			}
+			if boundary == "thaw" || boundary == "artifact-disposition" {
+				kind := "THAW"
+				decision := RecordedDecision{Choice: "approve", Revision: 30}
+				if boundary == "artifact-disposition" {
+					kind = "VALIDATION_DETAIL_DISPOSITION"
+					decision.Validation = &ValidationDecision{Remedy: "QA_ARTIFACT_REPAIR"}
+				}
+				s.PendingAsks["retire"] = PendingAsk{Validation: &ValidationRequest{Kind: kind, Binding: WorkBinding{WaveID: w.ID}}}
+				s.Decisions["retire"] = decision
+			}
+			if boundary == "unconfirmed" {
+				s.RequirementRevisions = nil
+			}
+			current := s.repairDutyCurrent(&s.Validation.Waves[0])
+			if current != (boundary == "carry" || boundary == "member-redo" || boundary == "all-redo") {
+				t.Fatalf("duty authority boundary %s: %t", boundary, current)
+			}
+			if boundary == "member-redo" || boundary == "all-redo" {
+				if initialResource.ID == s.resource("repair-integration", "", w.ID+":"+digestOfCanonical([]runtime.TaskKey{members[0].task, members[1].task})).ID {
+					t.Fatal("replacement closure reused the original assembly identity")
+				}
+			}
+		})
+	}
+}
+
 func TestRepairMembersRetainOneObligation(t *testing.T) {
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
 	w := &ValidationWave{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task, Problems: []string{"problem"}}}
