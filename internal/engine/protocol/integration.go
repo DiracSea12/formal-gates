@@ -13,14 +13,17 @@ import (
 // Integration parameters bind one fixed-order child and its original prefix.
 // Completed native receipts, rather than an extra cursor, own that prefix.
 type IntegrationParameters struct {
-	SliceID            string `json:"sliceId"`
-	ChildRunID         string `json:"childRunId"`
-	ChildReceiptDigest string `json:"childReceiptDigest"`
-	TopologyDigest     string `json:"topologyDigest"`
-	MapDigest          string `json:"mapDigest"`
-	Incoming           string `json:"incoming"`
-	IncomingTree       string `json:"incomingTree"`
-	StartAction        string `json:"startAction,omitempty"`
+	RepairTask         *runtime.TaskKey `json:"repairTask,omitempty"`
+	SourceAction       string           `json:"sourceAction,omitempty"`
+	TargetTask         *runtime.TaskKey `json:"targetTask,omitempty"`
+	SliceID            string           `json:"sliceId"`
+	ChildRunID         string           `json:"childRunId"`
+	ChildReceiptDigest string           `json:"childReceiptDigest"`
+	TopologyDigest     string           `json:"topologyDigest"`
+	MapDigest          string           `json:"mapDigest"`
+	Incoming           string           `json:"incoming"`
+	IncomingTree       string           `json:"incomingTree"`
+	StartAction        string           `json:"startAction,omitempty"`
 }
 
 type MergeConflict struct {
@@ -96,6 +99,9 @@ func (s *State) integrationResource() NativeResource {
 // A confirmed child CARRY preserves the original native merge effect. Its
 // workspace and prefix are facts of the original candidate intent and receipt.
 func (s *State) integrationCarryAuthorized(p CandidateParameters) bool {
+	if p.Integration != nil && p.Integration.RepairTask != nil {
+		return p.RouteScope == s.validationRouteDigest() && s.validationWorkCarryAuthorized("", *p.Integration.RepairTask) && (p.Integration.TargetTask == nil || s.validationWorkCarryAuthorized("", *p.Integration.TargetTask)) && s.repairIntegrationCurrent(p)
+	}
 	if p.Integration == nil || !s.mergeMaster() || p.RouteScope != s.validationRouteDigest() || p.Integration.TopologyDigest != digestOfCanonical(s.Topology) || p.Integration.MapDigest != digestOfCanonical(s.SliceChildren) {
 		return false
 	}
@@ -214,12 +220,26 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 	paths = append(paths, ".gates/results/"+s.RunID+".merge-cases.md")
 	var tasks []runtime.TaskKey
 	for _, work := range s.repairWork() {
-		if work.result == nil {
+		if work.verification {
+			if work.result == nil {
+				return nil, nil, "", false
+			}
 			continue
+		}
+		if work.result == nil || !s.repairGatesComplete(work) {
+			return nil, nil, "", false
+		}
+		if s.NativeRoot != "" {
+			_, proof, ok := s.repairFinalSource(work)
+			if !ok {
+				return nil, nil, "", false
+			}
+			prefix = proof.Identity
+		} else {
+			prefix = work.result.Validation.Binding.Candidate
 		}
 		tasks = append(tasks, work.task)
 		paths = append(paths, work.result.Validation.Development.Paths...)
-		prefix = work.result.Validation.Binding.Candidate
 	}
 	slices.Sort(paths)
 	slices.SortFunc(tasks, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
@@ -262,7 +282,7 @@ func (e *Engine) advanceIntegration(s *State, revision uint64) (bool, error) {
 			return false, nil
 		}
 	}
-	r := s.integrationResource()
+	r := s.candidateResource(p, e.cfg.Definition)
 	if !s.resourceUsable(r.ID) || r.Status != "READY" {
 		return e.ensureWorkspace(s, r, revision)
 	}
@@ -272,4 +292,11 @@ func (e *Engine) advanceIntegration(s *State, revision uint64) (bool, error) {
 	}
 	s.PendingHostActions[intent.ActionID] = intent
 	return true, nil
+}
+
+func (s *State) nextIntegrationParameters(cd *compiler.CompiledDefinition) (CandidateParameters, bool) {
+	if p, ready := s.repairCandidateParameters(cd); ready && p.Integration != nil {
+		return p, true
+	}
+	return s.integrationParameters(cd)
 }

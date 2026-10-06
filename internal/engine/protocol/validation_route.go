@@ -39,7 +39,7 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if w == nil || w.Repair == nil {
 		return false
 	}
-	if s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
+	if len(s.repairMembers(w)) == 1 && s.repairMembers(w)[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
 		return false
 	}
 	if w.Status == "REPAIR" {
@@ -51,9 +51,12 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if s.Validation.Candidate != nil && *s.Validation.Candidate == w.Candidate && w.RouteDigest != s.validationRouteDigest() {
 		return true
 	}
-	_, running := s.Attempts[w.Repair.Task]
-	_, ended := s.EndedAttempts[w.Repair.Task]
-	return (running || ended) && s.validationWorkCarryAuthorized("", w.Repair.Task)
+	for _, member := range s.repairMembers(w) {
+		if s.validationWorkCarryAuthorized("", member.task) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) rebindValidationRoute(s *State) {
@@ -87,7 +90,13 @@ func (s *State) validationFindingTarget(w *ValidationWave, finding *ValidationFi
 		return nil
 	}
 	if finding.WaveID == w.ID {
-		return w.Targets[finding.Target]
+		if target := w.Targets[finding.Target]; target != nil {
+			return target
+		}
+		if w.Repair != nil {
+			return w.Repair.Targets[finding.Target]
+		}
+		return nil
 	}
 	for _, target := range w.Targets {
 		binding, known := s.DispatchBindings[target.ResultAction]

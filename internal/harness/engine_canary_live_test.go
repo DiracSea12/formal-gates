@@ -228,14 +228,16 @@ func (a canaryFindingAnswer) finding() review.Finding {
 
 // canaryDevelopmentAnswer is the writable-turn answer (batch or repair).
 type canaryDevelopmentAnswer struct {
-	Paths         []string          `json:"paths"`
-	Summary       string            `json:"summary"`
-	Build         []string          `json:"build"`
-	Tests         []string          `json:"tests"`
-	AffectedCases []string          `json:"affectedCases"`
-	DoD           map[string]string `json:"dod"`
-	Checks        map[string]string `json:"checks"`
-	Handoff       string            `json:"handoff"`
+	Plan          *protocol.GranularityReview   `json:"granularityReview"`
+	CaseRuns      []protocol.RepairCaseEvidence `json:"caseRuns"`
+	Paths         []string                      `json:"paths"`
+	Summary       string                        `json:"summary"`
+	Build         []string                      `json:"build"`
+	Tests         []string                      `json:"tests"`
+	AffectedCases []string                      `json:"affectedCases"`
+	DoD           map[string]string             `json:"dod"`
+	Checks        map[string]string             `json:"checks"`
+	Handoff       string                        `json:"handoff"`
 }
 
 func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
@@ -1172,16 +1174,36 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair in the current workspace, verify the fix with a real build, and report the changed paths, summary, build and test evidence and the manifest case IDs whose behavior the repair affects. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. To split, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; do not edit production content during that planning turn. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		return canaryDevelopmentShape(&answer, false)
+		if answer.Plan != nil && len(answer.Paths) == 0 {
+			if input.Development != nil || len(answer.Plan.Batches) == 0 {
+				return fmt.Errorf("plan must belong to the original repair worker and contain batches")
+			}
+			return nil
+		}
+		return canaryDevelopmentShape(&answer, input.Development != nil)
 	}
-	turn := c.turnIn(c.workspace(input), id, "repair", c.prompt("repair", materials, instructions, false), canaryDevelopmentSchema(false), false, shape)
-	return c.developmentEvidence(id, input.Binding, &answer, turn.digest, false)
+	if input.Repair != nil && input.Repair.FinalCandidate != nil {
+		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
+	}
+	schema := canaryDevelopmentSchema(input.Development != nil)
+	if input.Development == nil {
+		schema["required"] = []string{}
+		properties := schema["properties"].(map[string]any)
+		properties["granularityReview"] = canaryReviewSchema(true)["properties"].(map[string]any)["plan"]
+	}
+	turn := c.turnIn(c.workspace(input), id, "repair", c.prompt("repair", materials, instructions, false), schema, input.Repair != nil && input.Repair.FinalCandidate != nil, shape)
+	if answer.Plan != nil && len(answer.Paths) == 0 {
+		return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, GranularityReview: answer.Plan}
+	}
+	result := c.developmentEvidence(id, input.Binding, &answer, turn.digest, input.Development != nil)
+	result.GranularityReview = answer.Plan
+	return result
 }
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
@@ -1199,7 +1221,7 @@ func (c *engineCanary) developmentEvidence(id string, binding protocol.WorkBindi
 	c.t.Helper()
 	evidence := protocol.DevelopmentEvidence{
 		Paths: answer.Paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests,
-		AffectedCases: answer.AffectedCases,
+		AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns,
 	}
 	if batch {
 		evidence.Completion = &protocol.DevelopmentCompletion{DoD: answer.DoD, Checks: answer.Checks, Handoff: answer.Handoff}
@@ -2209,10 +2231,13 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 			"handoff":     canaryStr(),
 			"contextCost": canaryStr(),
 			"spike":       map[string]any{"type": "boolean"},
+			"route":       canarySchema([]string{"mode", "gates"}, map[string]any{"mode": canaryEnum("full", "custom"), "gates": canaryArr(canaryStr()), "selected": canaryArr(canaryStr())}),
 		})
 		properties["plan"] = canarySchema([]string{"reason", "batches", "verificationTier"}, map[string]any{
 			"reason": canaryStr(), "verificationTier": canaryEnum("FINAL", "CHECKPOINT"),
-			"batches": canaryArr(batch),
+			"batches":          canaryArr(batch),
+			"checkpointGroups": canaryArr(canaryArr(canaryStr())),
+			"checkpointReason": canaryStr(),
 		})
 	}
 	return canarySchema(required, properties)
@@ -2278,10 +2303,12 @@ func canaryGateSchema() map[string]any {
 
 func canaryDevelopmentSchema(batch bool) map[string]any {
 	properties := map[string]any{
-		"paths":   canaryArr(canaryStr()),
-		"summary": canaryStr(),
-		"build":   canaryArr(canaryStr()),
-		"tests":   canaryArr(canaryStr()),
+		"affectedCases": canaryArr(canaryStr()),
+		"caseRuns":      canaryArr(canarySchema([]string{"mode", "caseId", "procedure", "observation", "comparison", "result"}, map[string]any{"mode": canaryEnum("BLACKBOX", "WHITEBOX", "MERGE"), "caseId": canaryStr(), "procedure": canaryStr(), "observation": canaryStr(), "comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS")})),
+		"paths":         canaryArr(canaryStr()),
+		"summary":       canaryStr(),
+		"build":         canaryArr(canaryStr()),
+		"tests":         canaryArr(canaryStr()),
 	}
 	required := []string{"paths", "summary", "build", "tests"}
 	if batch {

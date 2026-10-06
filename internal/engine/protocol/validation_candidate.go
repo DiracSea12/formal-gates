@@ -42,6 +42,7 @@ func candidateCorrelation(p CandidateParameters) string {
 		key.Integration, key.Base = p.Integration, p.Base
 	case "DEVELOPMENT":
 		key.MergeManifest = p.MergeManifest
+		key.RepairTask = p.RepairTask
 		key.SourceTasks, key.Paths, key.Base = p.SourceTasks, p.Paths, p.Base
 	case "AUTHORING":
 		key.Base = p.Base
@@ -222,13 +223,22 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 		return false
 	}
 	if p.Integration != nil {
+		if p.Integration.RepairTask != nil {
+			return s.repairIntegrationCurrent(p)
+		}
 		child := s.SliceReceipts[p.Integration.ChildRunID]
 		return s.mergeMaster() && p.Integration.ChildReceiptDigest == child.Digest && p.Integration.TopologyDigest == digestOfCanonical(s.Topology) && p.Integration.MapDigest == digestOfCanonical(s.SliceChildren) && p.Integration.Incoming == child.Receipt.Snapshot && p.Integration.IncomingTree == child.Receipt.Tree
+	}
+	if p.Stage == "DEVELOPMENT" && p.RepairTask != nil {
+		work := s.repairMember(*p.RepairTask)
+		return work != nil && work.result != nil && sameTaskSet(p.SourceTasks, []runtime.TaskKey{work.task}) && slices.Equal(p.Paths, work.result.Validation.Development.Paths) && p.WorkspaceID == work.result.Validation.Binding.WorkspaceID
 	}
 	if p.Stage == "DEVELOPMENT" {
 		sources, paths, base, complete := s.developmentSources(cd)
 		if s.NativeRoot != "" && !s.mergeMaster() {
-			base = s.NativeResources[p.WorkspaceID].Source
+			if base == "" {
+				base = s.NativeResources[p.WorkspaceID].Source
+			}
 		}
 		if s.mergeMaster() {
 			set := v.Sets[coverage.ReviewMerge]
@@ -468,7 +478,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	if v == nil || s.abortRequested() {
 		return CandidateParameters{}, false, nil
 	}
-	if integration, ready := s.integrationParameters(cd); ready {
+	if integration, ready := s.nextIntegrationParameters(cd); ready {
 		if integration.Stage == "MERGE_FINISH" {
 			input := s.conflictInput(integration.Integration.StartAction)
 			if len(input.Evidence.Conflicts) > 0 && s.integrationResolution(input.StartAction) == nil {
@@ -476,6 +486,9 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			}
 		}
 		return integration, true, nil
+	}
+	if p, ready := s.repairCandidateParameters(cd); ready && p.Integration == nil {
+		return p, true, nil
 	}
 	sources, paths, base, complete := s.developmentSources(cd)
 	if !complete {
@@ -556,7 +569,10 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 		}
 	}
 	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" && !s.mergeMaster() {
-		params.Base = s.candidateResource(params, cd).Source
+		params.Base = s.candidateResource(params, cd).Identity
+		if params.Base == "" {
+			params.Base = s.candidateResource(params, cd).Source
+		}
 	}
 	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" {
 		if s.mergeMaster() {

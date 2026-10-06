@@ -21,6 +21,7 @@ type GranularityReview struct {
 	CheckpointReason string             `json:"checkpointReason,omitempty"`
 }
 type DevelopmentBatch struct {
+	Route         *RouteDecision         `json:"route,omitempty"`
 	ID            string                 `json:"id"`
 	Subtasks      []DevelopmentSubtask   `json:"subtasks"`
 	DependsOn     []string               `json:"dependsOn,omitempty"`
@@ -648,21 +649,30 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 		}
 	}
 	base := ""
-	var latest uint64
 	for _, work := range s.repairWork() {
-		if work.result == nil {
+		if work.verification {
+			if work.result == nil {
+				return nil, nil, "", false
+			}
 			continue
 		}
-		sources = append(sources, work.task)
-		for _, path := range work.result.Validation.Development.Paths {
-			if !slices.Contains(paths, path) {
-				paths = append(paths, path)
+		if work.result == nil || !s.repairGatesComplete(work) {
+			return nil, nil, "", false
+		}
+		if s.NativeRoot != "" {
+			_, proof, ok := s.repairFinalSource(work)
+			if !ok {
+				return nil, nil, "", false
 			}
+			base = proof.Identity
+		} else {
+			base = work.result.Validation.Binding.Candidate
 		}
-		if issued := s.issuedRevisionOf(work.result.ActionID); issued > latest {
-			latest, base = issued, work.result.Validation.Binding.Candidate
-		}
+		sources = append(sources, work.task)
+		paths = append(paths, work.result.Validation.Development.Paths...)
 	}
+	slices.Sort(paths)
+	paths = slices.Compact(paths)
 	slices.SortFunc(sources, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
 	slices.Sort(paths)
 	return sources, paths, base, len(sources) > 0

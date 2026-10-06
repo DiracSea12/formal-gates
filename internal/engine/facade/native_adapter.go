@@ -619,7 +619,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, err
 	}
 	workspaceBase := p.Base
-	if native.Name() != "git" && r.Role != "merge" {
+	if native.Name() != "git" && r.Role != "merge" && r.Role != "repair-integration" && p.RepairTask == nil {
 		workspaceBase = s.ResourceStartIdentity(r)
 	}
 	message := "formal-gates candidate " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
@@ -880,8 +880,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		evidence.TestOnly = true
 		evidence.ProductionViewEqual = true
 	}
-	if p.Stage == "REVIEW_READY" {
-		changes, err := native.Changes(p.ReviewBase, head)
+	if p.Stage == "REVIEW_READY" || p.RepairTask != nil {
+		reviewBase := p.ReviewBase
+		if reviewBase == "" {
+			reviewBase = p.Base
+		}
+		changes, err := native.Changes(reviewBase, head)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -895,7 +899,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			}
 			owned[".gates/results/"+s.RunID+".merge-cases.md"] = true
 		}
-		baseOwned, err := f.ownershipAt(s, p.ReviewBase)
+		baseOwned, err := f.ownershipAt(s, reviewBase)
 		if err != nil {
 			return nativeResult{}, false, err
 		}

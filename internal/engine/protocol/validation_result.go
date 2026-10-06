@@ -293,6 +293,9 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
+	if p.GranularityReview != nil && role != "engine.repair" {
+		return validationError("only a repair worker can submit a repair execution plan")
+	}
 	if p.Checkpoint && role != "engine.qa.design" && role != "engine.qa.execution" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
@@ -322,7 +325,9 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		if len(expected) == 0 || !slices.Equal(actual, expected) {
 			return validationError("resolution manifest must cover exactly the original conflict paths")
 		}
-	case "engine.development.batch", "engine.repair":
+	case "engine.repair":
+		return s.acceptRepairResult(record)
+	case "engine.development.batch":
 		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" || len(p.Development.Build) == 0 || len(p.Development.Tests) == 0 {
 			return validationError("development requires declared paths, summary, build and test evidence")
 		}
@@ -341,22 +346,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 					set.reopen(nil)
 				}
 			}
-		} else {
-			work := s.nextRepairWork()
-			if work == nil || work.wave.ID != b.WaveID || work.task != b.Task {
-				return validationError("repair result is not the current authorized repair obligation")
-			}
-			w := work.wave
-			if err := s.validateRepairEvidence(*p.Development, w.Repair.PureP2); err != nil {
-				return err
-			}
-			if work.task == w.Repair.Task {
-				w.Repair.Evidence = p.Development
-				w.Repair.ResultAction = record.ActionID
-				w.Status = "REPAIR"
-			}
-			s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""
-			s.Validation.Candidate = nil
+
 		}
 	case "engine.qa.design":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
@@ -425,10 +415,14 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		}
 	case "engine.qa.execution", "engine.gate":
 		w := s.validationWave(b.WaveID)
-		if w == nil || w.Status != "COLLECTING" && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
+		_, repairTarget := s.repairGateTarget(b.Task)
+		if w == nil || w.Status != "COLLECTING" && repairTarget == nil && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
 			return validationError("validation wave is not collecting this result")
 		}
 		target := w.Targets[b.Task.String()]
+		if repairTarget != nil {
+			target = repairTarget
+		}
 		if target == nil || target.Status == "DISPOSED" || target.Status == "PASS" || target.Status == "FAIL" {
 			return validationError("validation target is already settled or unknown")
 		}

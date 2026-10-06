@@ -125,6 +125,22 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 		work = append(work, item)
 	}
 	queued := state.requiredWorkTasks()
+	for _, member := range state.repairWork() {
+		if member.result == nil && !slices.Contains(queued, member.task) {
+			queued = append(queued, member.task)
+		}
+	}
+	if state.Validation != nil {
+		for _, wave := range state.Validation.Waves {
+			if wave.Repair != nil {
+				for _, target := range wave.Repair.Targets {
+					if target.Status == "PENDING" && !slices.Contains(queued, target.Task) {
+						queued = append(queued, target.Task)
+					}
+				}
+			}
+		}
+	}
 	for _, key := range state.planTasks(e.cfg.Definition) {
 		if !slices.Contains(queued, key) && state.developmentResult(key) == nil {
 			queued = append(queued, key)
@@ -141,6 +157,9 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 		revision := state.requirementRevisionForTask(key)
 		if revision == "" {
 			_, _, revision = state.confirmedDevelopmentPlan()
+			if member := state.repairMember(key); member != nil {
+				revision = member.wave.RequirementRevision
+			}
 		}
 		work = append(work, RequirementWork{ActionID: actionID, Task: key, RequirementRevision: revision})
 	}

@@ -147,12 +147,26 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		role = "development"
 	case "engine.merge.resolve":
-		return s.integrationResource()
+		if intent, ok := s.hostIntent(key.Scope); ok {
+			if p, err := candidateParameters(intent); err == nil {
+				return s.NativeResources[p.WorkspaceID]
+			}
+		}
+		return NativeResource{}
 	case "engine.repair":
 		for _, work := range s.repairWork() {
 			if work.task == key {
+				if work.verification {
+					return s.repairAssemblyResource(work.wave)
+				}
 				source = work.wave.Candidate.Identity
-				scope = work.wave.ID
+				if work.previous != nil {
+					_, prior, ok := s.repairSource(work.previous.Validation.Binding.Task)
+					if ok {
+						source = prior.Identity
+					}
+				}
+				scope = work.wave.ID + ":" + key.String()
 			}
 		}
 		role = "development"
@@ -175,6 +189,10 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		return s.taskResource(set.DesignTask, cd)
 	case "engine.qa.execution", "engine.gate":
+		if binding, ok := s.repairGateBinding(key); ok {
+			source, scope, role = binding.Candidate, key.String(), "gate"
+			break
+		}
 		wave := s.currentValidationWave()
 		if wave == nil {
 			return NativeResource{}
@@ -208,8 +226,27 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) NativeResource {
 	switch p.Stage {
 	case "MERGE_START", "MERGE_FINISH":
+		if p.Integration.RepairTask != nil {
+			if p.Integration.TargetTask != nil {
+				return s.taskResource(*p.Integration.TargetTask, cd)
+			}
+			if member := s.repairMember(*p.Integration.RepairTask); member != nil {
+				return s.repairAssemblyResource(member.wave)
+			}
+		}
 		return s.integrationResource()
 	case "DEVELOPMENT":
+		if p.RepairTask != nil {
+			return s.taskResource(*p.RepairTask, cd)
+		}
+		for _, work := range s.repairWork() {
+			if slices.Contains(p.SourceTasks, work.task) {
+				if len(s.repairMembers(work.wave)) == 1 {
+					return s.taskResource(work.task, cd)
+				}
+				return s.repairAssemblyResource(work.wave)
+			}
+		}
 		if s.mergeMaster() && len(p.SourceTasks) == 0 {
 			return s.integrationResource()
 		}

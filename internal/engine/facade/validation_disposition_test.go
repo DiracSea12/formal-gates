@@ -137,7 +137,7 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if before.State.Validation.Waves[0].Repair.Evidence != nil || len(d.run.AdapterIntents) != 0 || before.State.StagedResults[id].PayloadDigest != "verified-repair" {
+				if before.State.Results[id].Validation != nil || len(d.run.AdapterIntents) != 0 || before.State.StagedResults[id].PayloadDigest != "verified-repair" {
 					t.Fatal("undecided repair advanced or lost its staged evidence")
 				}
 				if _, visible := d.run.ValidationInputs[id]; visible {
@@ -161,15 +161,20 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 				current := after.State.Validation.Waves[0]
 				switch choice {
 				case "REPAIR":
-					if current.Status != "REPAIRED" || current.Repair.ResultAction != id || current.Repair.Evidence.Summary != result.Development.Summary || len(d.run.AdapterIntents) != 1 {
-						t.Fatal("approved repair did not settle once from its original evidence")
+					if current.Status != "REPAIR" || after.State.Results[id].Validation == nil || after.State.Results[id].Validation.Development.Summary != result.Development.Summary || len(d.run.AdapterIntents) != 1 {
+						t.Fatal("approved repair lost its original result or frozen-source obligation")
+					}
+					d.materialize()
+					d.drive()
+					if d.run.Validation.Waves[0].Status != "REPAIRED" {
+						t.Fatal("repair did not settle after its native source receipt")
 					}
 				case "DISMISS":
 					if current.Status != "COMPLETE" || len(d.run.AdapterIntents) != 0 || len(after.State.ObsoleteResults[id]) != 1 {
 						t.Fatal("dismissal failed to retain obsolete evidence without materializing repair")
 					}
 				case "decline":
-					if current.Repair.Evidence != nil || len(d.run.AdapterIntents) != 0 || after.State.StagedResults[id].PayloadDigest != "verified-repair" {
+					if after.State.Results[id].Validation != nil || len(d.run.AdapterIntents) != 0 || after.State.StagedResults[id].PayloadDigest != "verified-repair" {
 						t.Fatal("decline released a repair")
 					}
 				}
@@ -218,7 +223,7 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 			if _, ok := snapshot.State.Results[id]; ok {
 				t.Fatal("retired repair became an effective result")
 			}
-			if d.run.Validation.Waves[0].Status != "COMPLETE" || d.run.Validation.Waves[0].Repair.Evidence != nil || len(d.run.AdapterIntents) != 0 {
+			if d.run.Validation.Waves[0].Status != "COMPLETE" || snapshot.State.Results[id].Validation != nil || len(d.run.AdapterIntents) != 0 {
 				t.Fatal("late completion revived a disposed duty")
 			}
 		})

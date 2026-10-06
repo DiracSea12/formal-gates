@@ -246,7 +246,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		}
 	}
 	if state.Validation != nil {
-		if p, ready := state.integrationParameters(e.cfg.Definition); ready && p.Integration.StartAction != "" && len(state.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 {
+		if p, ready := state.nextIntegrationParameters(e.cfg.Definition); ready && p.Integration.StartAction != "" && len(state.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 {
 			if err := declare(pipelineTask(e.cfg.Definition, "engine.merge.resolve", p.Integration.StartAction)); err != nil {
 				return guard.Basis{}, err
 			}
@@ -268,6 +268,15 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			}
 			if err := declare(state.replacementFold(repairWave.Repair.Task)); err != nil {
 				return guard.Basis{}, err
+			}
+		}
+		for _, repairWave := range state.Validation.Waves {
+			if repairWave.Repair != nil {
+				for _, target := range repairWave.Repair.Targets {
+					if err := declare(target.Task); err != nil {
+						return guard.Basis{}, err
+					}
+				}
 			}
 		}
 		for _, work := range state.repairWork() {
@@ -474,6 +483,9 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		// mode 集）是其授权来源。
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
 	case "engine.gate":
+		if _, target := state.repairGateTarget(source); target != nil {
+			return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
+		}
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}
@@ -500,6 +512,19 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			// 折叠后的来源任务与该 wave 的返修义务互为同源。
 			if w.Repair.Task == source {
 				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: source.String(), Revision: w.ExpectedDigest}}, maxAttempts, true
+			}
+		}
+		for _, work := range state.repairWork() {
+			if state.sourceValidationTask(work.task) == source {
+				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: work.wave.Repair.Task.String(), Revision: work.wave.ExpectedDigest}}, maxAttempts, true
+			}
+		}
+		for _, binding := range state.DispatchBindings {
+			if state.sourceValidationTask(binding.Task) != source {
+				continue
+			}
+			if wave := state.validationWave(binding.WaveID); wave != nil && wave.Repair != nil && source.Step == wave.Repair.Task.Step {
+				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: wave.Repair.Task.String(), Revision: wave.ExpectedDigest}}, maxAttempts, true
 			}
 		}
 		return guard.Provenance{}, 0, false

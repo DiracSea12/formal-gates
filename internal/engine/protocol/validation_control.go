@@ -26,6 +26,8 @@ func (s *State) allowanceFaces() (engineAllowance, ownerCost, tokenCap string) {
 // 逐条理由/归并与历史裁决）、执行失败、QA scope（当前 wave 的逐 target 状态与
 // 必跑用例）、已用/剩余轮数、dispatch signature/TaskKey 与需求/快照/wave 上下文。
 type repairAskFace struct {
+	Members []repairAskMember
+
 	RequirementRevision string
 	DevelopmentSnapshot string
 	Wave                string
@@ -36,6 +38,13 @@ type repairAskFace struct {
 	RemainingAutomatic  int
 	TaskKey             string
 	DispatchActionID    string
+}
+
+type repairAskMember struct {
+	Binding    WorkBinding
+	Input      *RepairInput
+	Completion *WorkerResult
+	Source     *CandidateEvidence
 }
 
 type repairAskTarget struct {
@@ -127,6 +136,16 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 		WavesUsed:           s.completedValidationWaves(),
 		RemainingAutomatic:  remaining,
 		TaskKey:             work.task.String(),
+	}
+	for _, member := range s.repairWork() {
+		if member.wave.ID != work.wave.ID {
+			continue
+		}
+		item := repairAskMember{Binding: WorkBinding{Task: member.task, WaveID: member.wave.ID, PlanRequest: member.planAction}, Input: s.repairInput(member.task), Completion: member.result}
+		if _, source, frozen := s.repairFinalSource(member); frozen {
+			item.Source = &source
+		}
+		face.Members = append(face.Members, item)
 	}
 	if s.Validation != nil {
 		face.DevelopmentSnapshot = s.Validation.DevelopmentSnapshot
@@ -472,7 +491,7 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 			return validationError("unsupported pre-wave remedy")
 		}
 	case "REPAIR":
-		if work.task == work.wave.Repair.Task {
+		if work.businessRepairs == 0 {
 			work.wave.ExtraAuthorized = true
 		}
 	case "THAW", "QA_ARTIFACT_REPAIR":

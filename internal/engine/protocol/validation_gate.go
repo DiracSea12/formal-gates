@@ -62,6 +62,9 @@ type GateInput struct {
 }
 
 func (s *State) gateInput(binding WorkBinding, task runtime.TaskKey) *GateInput {
+	if input := s.repairGateInput(binding); input != nil {
+		return input
+	}
 	wave := s.validationWave(binding.WaveID)
 	if wave == nil {
 		return nil

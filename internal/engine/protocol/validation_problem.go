@@ -78,7 +78,7 @@ func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
 	}
 	work := s.repairWork()
 	for _, repair := range work {
-		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 {
+		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 && s.repairCompleted(repair.wave) {
 			for _, id := range repair.wave.Repair.Problems {
 				complete(id)
 			}

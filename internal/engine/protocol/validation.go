@@ -85,18 +85,19 @@ type DevelopmentEvidence struct {
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
 // transport; Status and per-item results describe the business verdict.
 type ValidationResult struct {
-	Resolution  *ConflictResolution          `json:"resolution,omitempty"`
-	Binding     WorkBinding                  `json:"binding"`
-	Status      string                       `json:"status"`
-	Development *DevelopmentEvidence         `json:"development,omitempty"`
-	Manifest    *coverage.AcceptanceManifest `json:"manifest,omitempty"`
-	Review      *coverage.ReviewResult       `json:"review,omitempty"`
-	Suggestions []QASuggestion               `json:"suggestions,omitempty"`
-	Execution   *coverage.ExecutionReport    `json:"execution,omitempty"`
-	Tool        string                       `json:"tool,omitempty"`
-	Environment string                       `json:"environment,omitempty"`
-	Checkpoint  bool                         `json:"checkpoint,omitempty"`
-	Findings    []review.Finding             `json:"findings,omitempty"`
+	GranularityReview *GranularityReview           `json:"granularityReview,omitempty"`
+	Resolution        *ConflictResolution          `json:"resolution,omitempty"`
+	Binding           WorkBinding                  `json:"binding"`
+	Status            string                       `json:"status"`
+	Development       *DevelopmentEvidence         `json:"development,omitempty"`
+	Manifest          *coverage.AcceptanceManifest `json:"manifest,omitempty"`
+	Review            *coverage.ReviewResult       `json:"review,omitempty"`
+	Suggestions       []QASuggestion               `json:"suggestions,omitempty"`
+	Execution         *coverage.ExecutionReport    `json:"execution,omitempty"`
+	Tool              string                       `json:"tool,omitempty"`
+	Environment       string                       `json:"environment,omitempty"`
+	Checkpoint        bool                         `json:"checkpoint,omitempty"`
+	Findings          []review.Finding             `json:"findings,omitempty"`
 }
 
 // WorkBinding accompanies every issued business task and its result. Revision
@@ -162,11 +163,10 @@ type ValidationTarget struct {
 	DispositionReason string                    `json:"dispositionReason,omitempty"`
 }
 type ValidationRepair struct {
-	Task         runtime.TaskKey      `json:"task"`
-	Problems     []string             `json:"problems"`
-	PureP2       bool                 `json:"pureP2"`
-	Evidence     *DevelopmentEvidence `json:"evidence,omitempty"`
-	ResultAction string               `json:"resultAction,omitempty"`
+	Targets  map[string]*ValidationTarget `json:"targets,omitempty"`
+	Task     runtime.TaskKey              `json:"task"`
+	Problems []string                     `json:"problems"`
+	PureP2   bool                         `json:"pureP2"`
 }
 
 // A finding owns exactly one original evidence domain and one adjudication history.
@@ -230,6 +230,7 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	RepairTask          *runtime.TaskKey                          `json:"repairTask,omitempty"`
 	Integration         *IntegrationParameters                    `json:"integration,omitempty"`
 	MergeManifest       *coverage.AcceptanceManifest              `json:"mergeManifest,omitempty"`
 	Promotion           *PromotionParameters                      `json:"promotion,omitempty"`
@@ -442,9 +443,15 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		return WorkBinding{Task: key}
 	}
 	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), Task: key}
+	if gate, ok := s.repairGateBinding(key); ok {
+		if r := s.taskResource(key, cd); r.Status == "READY" {
+			gate.WorkspaceID = r.ID
+		}
+		return gate
+	}
 	role := s.validationRole(key, cd)
 	if role == "engine.merge.resolve" {
-		if params, ready := s.integrationParameters(cd); ready && params.Integration != nil {
+		if params, ready := s.nextIntegrationParameters(cd); ready && params.Integration != nil {
 			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
 		}
 	}
@@ -477,8 +484,19 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				b.WaveID, b.Candidate = work.wave.ID, work.wave.Candidate.Identity
-				if key != work.wave.Repair.Task {
-					b.Candidate = v.DevelopmentSnapshot
+				if work.previous != nil {
+					_, prior, ok := s.repairSource(work.previous.Validation.Binding.Task)
+					if ok {
+						b.Candidate = prior.Identity
+					}
+				}
+				if work.verification {
+					_, proof, _ := s.repairFinalSource(work)
+					b.Candidate = proof.Identity
+				}
+				b.PlanRequest = work.planAction
+				if work.batch != nil {
+					b.BatchID = work.batch.ID
 				}
 			}
 		}
@@ -535,7 +553,8 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: reason})
 	}
 	s.projectDevelopmentTasks(view, cd)
-	if p, ready := s.integrationParameters(cd); ready && p.Integration.StartAction != "" && len(s.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 && s.integrationResolution(p.Integration.StartAction) == nil {
+	s.projectRepairGates(view, cd)
+	if p, ready := s.nextIntegrationParameters(cd); ready && p.Integration.StartAction != "" && len(s.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 && s.integrationResolution(p.Integration.StartAction) == nil {
 		add("engine.merge.resolve", p.Integration.StartAction, false)
 	}
 	for _, mode := range s.validationKinds() {
@@ -571,8 +590,12 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			}
 		}
 	}
-	if work := s.nextRepairWork(); work != nil {
-		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2
+	for _, member := range s.repairWork() {
+		if member.result != nil {
+			continue
+		}
+		work := &member
+		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies
@@ -623,6 +646,15 @@ func (s *State) completedValidationWaves() int {
 		for _, wave := range s.Validation.Waves {
 			if wave.Counted {
 				n++
+			}
+			if wave.Repair != nil {
+				depth := 0
+				for _, member := range s.repairMembers(&wave) {
+					if member.businessRepairs > depth {
+						depth = member.businessRepairs
+					}
+				}
+				n += depth
 			}
 		}
 	}

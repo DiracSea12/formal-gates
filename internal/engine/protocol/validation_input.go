@@ -14,7 +14,7 @@ type ValidationInput struct {
 	// RequirementDocument supplies the current confirmed context alongside
 	// the original issued work binding, including explicitly carried work.
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
-	Workspace                *NativeResource                            `json:"workspace,omitempty"`
+	Workspace                *NativeResource                         `json:"workspace,omitempty"`
 	Interruption             *RecoveryRecord                         `json:"interruption,omitempty"`
 	Gate                     *GateInput                              `json:"gate,omitempty"`
 	InheritableSharedReviews []coverage.ReviewDecision               `json:"inheritableSharedReviews,omitempty"`
@@ -85,6 +85,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	case "engine.repair":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)
+		if work := s.repairMember(pending.Task); work != nil {
+			input.Development = s.repairDevelopmentInput(*work)
+		}
 	}
 	_, input.SourcePoints = s.coveragePoints()
 	input.Manifest.Binding = coverage.ManifestBinding{SourceBinding: c.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}

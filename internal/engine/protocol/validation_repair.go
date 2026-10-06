@@ -10,9 +10,16 @@ import (
 // identity; Results discharge the duty. Issued work retains its original wave;
 // unissued work follows its latest projection.
 type repairWork struct {
-	wave   *ValidationWave
-	task   runtime.TaskKey
-	result *WorkerResult
+	wave            *ValidationWave
+	task            runtime.TaskKey
+	result          *WorkerResult
+	plan            *GranularityReview
+	batch           *DevelopmentBatch
+	planAction      string
+	verification    bool
+	previous        *WorkerResult
+	pureP2          bool
+	businessRepairs int
 }
 
 func (s *State) repairWork() []repairWork {
@@ -26,31 +33,34 @@ func (s *State) repairWork() []repairWork {
 		if w.Repair == nil {
 			continue
 		}
-		task := s.replacementFold(w.Repair.Task)
-		binding, issued := s.repairIssue(task)
-		if issued != 0 && binding.WaveID != w.ID {
-			continue
-		}
-		record := s.developmentResultRecord(task)
-		if record != nil {
-			b := record.Validation.Binding
-			if b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized(record.ActionID, task) {
-				record = nil
+		for _, current := range s.repairMembers(w) {
+			task := current.task
+			binding, issued := s.repairIssue(task)
+			if issued != 0 && binding.WaveID != w.ID {
+				continue
+			}
+			current.result = s.developmentResultRecord(task)
+			if current.result != nil && current.result.Validation.Binding.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized(current.result.ActionID, task) {
+				current.result = nil
+			}
+			owed := slices.Contains(required, task) || s.validationRepairPending(w)
+			if current.result == nil && s.repairTaskFinished(task) {
+				owed = false
+			}
+			if current.result == nil && !owed {
+				continue
+			}
+			if prior := slices.IndexFunc(work, func(previous repairWork) bool { return previous.task == task }); prior >= 0 {
+				work[prior] = current
+			} else {
+				work = append(work, current)
 			}
 		}
-		owed := slices.Contains(required, task) || s.validationRepairPending(w) && task == w.Repair.Task
-		if record == nil && s.repairTaskFinished(task) {
-			owed = false
+	}
+	for i := range s.Validation.Waves {
+		if verification := s.repairVerificationWork(&s.Validation.Waves[i]); verification != nil {
+			work = append(work, *verification)
 		}
-		if record == nil && !owed {
-			continue
-		}
-		current := repairWork{wave: w, task: task, result: record}
-		if prior := slices.IndexFunc(work, func(previous repairWork) bool { return previous.task == task }); prior >= 0 {
-			work[prior] = current
-			continue
-		}
-		work = append(work, current)
 	}
 	return work
 }
@@ -106,15 +116,19 @@ func (s *State) nextRepairWork() *repairWork {
 	return nil
 }
 func (s *State) repairReady(w *repairWork) bool {
-	return w != nil && (w.task == w.wave.Repair.Task || s.Validation.DevelopmentSnapshot != "")
+	return w != nil && s.repairDependenciesReady(*w)
 }
 
 // RepairInput carries the original problem evidence, not only lookup IDs.
 type RepairInput struct {
-	Obligation        ValidationRepair         `json:"obligation"`
-	Findings          []ValidationFinding      `json:"findings"`
-	Problems          []ValidationProblem      `json:"problems"`
-	ExecutionFailures []RepairExecutionFailure `json:"executionFailures,omitempty"`
+	FinalCandidate    *coverage.ValidationCandidate `json:"finalCandidate,omitempty"`
+	MemberResults     []WorkerResult                `json:"memberResults,omitempty"`
+	Plan              *GranularityReview            `json:"plan,omitempty"`
+	Route             RouteDecision                 `json:"route"`
+	Obligation        ValidationRepair              `json:"obligation"`
+	Findings          []ValidationFinding           `json:"findings"`
+	Problems          []ValidationProblem           `json:"problems"`
+	ExecutionFailures []RepairExecutionFailure      `json:"executionFailures,omitempty"`
 }
 
 // RepairExecutionFailure expands the reference from the immutable source target.
@@ -155,8 +169,20 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 		if w.task != task {
 			continue
 		}
-		input := &RepairInput{Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
-		_, cutoff := s.repairIssue(task)
+		input := &RepairInput{Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: w.wave.Repair.Task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2}}
+		if w.verification {
+			_, proof, _ := s.repairFinalSource(w)
+			input.FinalCandidate = &coverage.ValidationCandidate{Identity: proof.Identity, Digest: proof.Digest}
+			for _, member := range s.repairMembers(w.wave) {
+				if r := s.developmentResultRecord(member.task); r != nil {
+					input.MemberResults = append(input.MemberResults, *r)
+				}
+			}
+		}
+		_, cutoff := s.repairIssue(w.wave.Repair.Task)
+		if w.previous != nil {
+			_, cutoff = s.repairIssue(task)
+		}
 		for _, id := range w.wave.Repair.Problems {
 			problem := ValidationProblem{ID: id}
 			for _, f := range s.Validation.Findings {
@@ -209,8 +235,8 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 }
 
 func (s *State) repairExtraAuthorized(work *repairWork) bool {
-	if work.task == work.wave.Repair.Task {
-		return work.wave.ExtraAuthorized
+	if work.wave.ExtraAuthorized && work.businessRepairs == 0 {
+		return true
 	}
 	for request, decision := range s.Decisions {
 		ask := s.PendingAsks[request].Validation

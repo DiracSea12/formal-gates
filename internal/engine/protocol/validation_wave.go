@@ -193,18 +193,22 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		}
 		changed = settled || changed
 	}
-	if s.validationRepairPending(w) && w.Repair.Evidence != nil {
+	changed = s.ensureRepairGates(e.cfg.Definition) || changed
+	if s.validationRepairPending(w) && s.repairCompleted(w) {
 		w.Status = "REPAIRED"
 		changed = true
+	}
+	if _, ready := s.repairCandidateParameters(e.cfg.Definition); ready {
+		return e.advanceIntegration(s, nextRevision)
 	}
 	if work := s.nextRepairWork(); work != nil {
 		if s.validationDispositionBlocked(work.wave) {
 			return changed, nil
 		}
-		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 {
+		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
 		}
-		if work.task == work.wave.Repair.Task || v.DevelopmentSnapshot != "" {
+		if work.result == nil {
 			return changed, nil
 		}
 	}
@@ -321,8 +325,8 @@ func validateCandidateReceipt(provider string, intent HostActionIntent, receipt 
 			}
 		}
 	}
-	if evidence.GateView != nil && params.Stage != "REVIEW_READY" {
-		return params, CandidateEvidence{}, validationError("gate ownership evidence belongs to the issued REVIEW_READY range")
+	if evidence.GateView != nil && params.Stage != "REVIEW_READY" && !(params.Stage == "DEVELOPMENT" && params.RepairTask != nil) {
+		return params, CandidateEvidence{}, validationError("gate ownership evidence belongs to an issued final or repair source range")
 	}
 	switch params.Stage {
 	case "PROMOTION":
@@ -388,6 +392,15 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		}
 		return nil
 	case "DEVELOPMENT":
+		if params.RepairTask != nil {
+			r := s.NativeResources[params.WorkspaceID]
+			r.Identity = evidence.Identity
+			s.NativeResources[r.ID] = r
+			if work := s.repairMember(*params.RepairTask); work != nil && len(s.repairMembers(work.wave)) == 1 {
+				v.DevelopmentSnapshot = evidence.Identity
+			}
+			return nil
+		}
 		if v.DevelopmentSnapshot != "" {
 			return nil
 		}
@@ -570,7 +583,7 @@ func (s *State) carryGateResult(target *ValidationTarget, prior, current *Valida
 			return
 		}
 		for _, repair := range repairs {
-			if !repair.wave.Repair.PureP2 {
+			if !repair.wave.Repair.PureP2 || !s.repairCompleted(repair.wave) {
 				return
 			}
 		}
@@ -694,7 +707,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 	// Settlement belongs to the current adjudicating projection or an unfinished
 	// original repair. Replacement tasks retain their source wave as evidence.
 	currentProjection := w == s.currentValidationWave() && w.Generation == s.Validation.Generation && w.RequirementRevision == s.Validation.RequirementRevision && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE")
-	pending := s.validationRepairPending(w) && s.developmentResultRecord(w.Repair.Task) == nil
+	pending := s.validationRepairPending(w) && !s.repairCompleted(w)
 	if !currentProjection && !pending || !s.validationFindingsAdjudicated(w) {
 		return false, nil
 	}
@@ -713,8 +726,10 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 	if len(problems) == 0 {
 		changed := false
 		if s.validationRepairPending(w) {
-			if err := s.retireRepairWork(repairWork{wave: w, task: w.Repair.Task}, "candidate repair obligations were explicitly waived"); err != nil {
-				return false, err
+			for _, work := range s.repairMembers(w) {
+				if err := s.retireRepairWork(work, "candidate repair obligations were explicitly waived"); err != nil {
+					return false, err
+				}
 			}
 			w.Status = "ADJUDICATING"
 			changed = true
