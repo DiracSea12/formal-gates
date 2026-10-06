@@ -6,6 +6,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // FrameResult accepts exactly one JSON object out of a model's final message,
@@ -72,6 +74,14 @@ func hasJSONStructure(text string) bool {
 	for i, ch := range text {
 		if ch != '{' && ch != '[' {
 			continue
+		}
+		// An opening attached to an identifier or closed expression belongs to
+		// that same text token, rather than starting an independent JSON value.
+		if i > 0 {
+			previous, _ := utf8.DecodeLastRuneInString(text[:i])
+			if unicode.IsLetter(previous) || unicode.IsNumber(previous) || unicode.IsMark(previous) || strings.ContainsRune("_.)]}", previous) {
+				continue
+			}
 		}
 		_, _, err := rawDecode(text[i:])
 		_, typed := refusalFor(err)

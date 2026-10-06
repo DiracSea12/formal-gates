@@ -185,3 +185,58 @@ func TestFrameResultKeepsDamagedJSONStructure(t *testing.T) {
 		}
 	}
 }
+
+// Program indices in native explanations do not change the original gate
+// verdict, severity, locations or findings in the single framed result.
+func TestFrameResultRetainsGateResponsesWithIndices(t *testing.T) {
+	var replies []struct {
+		Response string         `json:"response"`
+		Result   map[string]any `json:"result"`
+	}
+	body, err := os.ReadFile(filepath.Join("testdata", "gate_responses_with_indices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &replies); err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 2 {
+		t.Fatal("both original indexed explanations are required")
+	}
+	for _, reply := range replies {
+		result, refusal := FrameResult(reply.Response)
+		if refusal != "" || canon(result) != canon(reply.Result) || result["status"] != "FAIL" {
+			t.Fatalf("gate result changed: %s %s", canon(result), refusal)
+		}
+	}
+}
+
+func TestFrameResultDistinguishesAttachedIndicesFromIndependentStructures(t *testing.T) {
+	result := `{"findings":[],"status":"PASS"}`
+	fence := "```json\n" + result + "\n```"
+	for _, expression := range []string{"items[0]", "table[42][2]", "lookup()[3]", "σ₂[-12]", "名称[true]", "name\u0301[0]", "object.field[column+1]", "value[null]", "node{\"field\":1}"} {
+		for _, wrapped := range []string{result, fence} {
+			for _, text := range []string{expression + "\n" + wrapped, wrapped + "\n" + expression} {
+				value, refusal := FrameResult(text)
+				if refusal != "" || canon(value) != result {
+					t.Fatalf("attached expression %q changed result: %s %s", expression, canon(value), refusal)
+				}
+			}
+		}
+	}
+	for _, outside := range []string{`[1]`, `{"other":true}`, `[1][2]`, `{"a":1}{"b":2}`, `["unfinished`, `[tru`, `[-1e`, `{"unfinished`, `{"a":1,"a":2}`, `[NaN]`, `[Infinity]`} {
+		for _, wrapped := range []string{result, fence} {
+			for _, text := range []string{"items[0] " + outside + "\n" + wrapped, wrapped + "\nitems[0] " + outside} {
+				_, refusal := FrameResult(text)
+				if refusal == "" {
+					t.Fatalf("independent competitor %q was lost in indexed prose", outside)
+				}
+			}
+		}
+	}
+	for _, text := range []string{result + `[1]`, result + `{"other":true}`, result + `["unfinished`} {
+		if _, refusal := FrameResult(text); refusal != "NATIVE_RESULT: competing structured content outside result" {
+			t.Fatalf("adjacent competitor was lost: %s", refusal)
+		}
+	}
+}
