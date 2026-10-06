@@ -20,6 +20,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
 
@@ -836,11 +837,11 @@ func mustMarshalCanary(t *testing.T, value any) string {
 // The peer observes real child environment, cwd, argv and configuration files.
 // Its session identity depends on the request workspace; it refuses unexpected
 // methods and never sends a model request or a credential request.
-const canaryNativePathPeer = `
+var canaryNativePathPeer = `
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const keys = ['HOME','USERPROFILE','ZCODE_DATA_BASE_DIR','ZCODE_HOME','ZCODE_STORAGE_DIR','ZCODE_SESSION_DB_PATH','ZCODE_SESSION_DB','ZCODE_LOG_DIR','ZCODE_MAILBOX_ROOT','ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_SCRIPT','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT','AI_AGENT','CODEX_HOME','DSH_HOME','DSH_PROJECT_DIR'];
+const keys = ['HOME','USERPROFILE','ZCODE_DATA_BASE_DIR','ZCODE_HOME','ZCODE_STORAGE_DIR','ZCODE_SESSION_DB_PATH','ZCODE_SESSION_DB','ZCODE_LOG_DIR','ZCODE_MAILBOX_ROOT','ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_SCRIPT','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT','` + strings.Join(lifecycle.ProviderEnvironmentKeys(), "','") + `'];
 const environment = Object.fromEntries(keys.map(key => [key, process.env[key] ?? '']));
 const config = path.join(process.env.ZCODE_DATA_BASE_DIR, '.zcode', 'v2');
 const paths = Object.fromEntries(['ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT'].map(key => [key, fs.realpathSync(process.env[key])]));
