@@ -1185,7 +1185,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. To split, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; do not edit production content during that planning turn. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1196,7 +1196,7 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
 		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
 	}
-	schema := canaryDevelopmentSchema(input.Development != nil)
+	schema := canaryDevelopmentSchema(true)
 	if input.Development == nil {
 		schema["required"] = []string{}
 		properties := schema["properties"].(map[string]any)
@@ -1206,25 +1206,25 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 	if answer.Plan != nil && len(answer.Paths) == 0 {
 		return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, GranularityReview: answer.Plan}
 	}
-	result := c.developmentEvidence(id, input, &answer, turn.digest, input.Development != nil)
+	result := c.developmentEvidence(id, input, &answer, turn.digest, input.Development != nil || answer.Plan != nil)
 	result.GranularityReview = answer.Plan
 	return result
 }
 
-// canaryRepairShape checks proposed plans through the same contract as readiness.
+// canaryRepairShape checks the core repair plan/result contract before submission.
 func canaryRepairShape(answer *canaryDevelopmentAnswer, batch bool) error {
 	if answer.Plan != nil {
-		if err := protocol.ValidateGranularity(answer.Plan); err != nil {
+		if batch {
+			return fmt.Errorf("only the original repair worker can freeze its plan")
+		}
+		if err := protocol.ValidateRepairPlan(answer.Plan, len(answer.Paths) > 0); err != nil {
 			return err
 		}
 		if len(answer.Paths) == 0 {
-			if batch {
-				return fmt.Errorf("plan must belong to the original repair worker and contain batches")
-			}
 			return nil
 		}
 	}
-	return canaryDevelopmentShape(answer, batch)
+	return canaryDevelopmentShape(answer, batch || answer.Plan != nil)
 }
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
@@ -2266,6 +2266,106 @@ func TestCanaryDevelopmentPathsUseIssuedWorkspace(t *testing.T) {
 	})
 }
 
+// Repair proposals preserve their supplied values and use the core plan/result
+// contract; a lawful single-batch completion retains its batch evidence.
+func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "repair_plan_with_invalid_route.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, boundary := range []string{"invalid-full", "full", "custom", "inherited", "multi-plan", "multi-completion", "spike", "qa", "reserved-gate", "default-route", "nested-plan", "small-repair"} {
+		t.Run(boundary, func(t *testing.T) {
+			var raw map[string]any
+			if err := json.Unmarshal(body, &raw); err != nil {
+				t.Fatal(err)
+			}
+			var answer canaryDevelopmentAnswer
+			if err := decodeCanaryAnswer(raw, &answer); err != nil {
+				t.Fatal(err)
+			}
+			plan := answer.Plan
+			if boundary != "invalid-full" {
+				plan.Batches[0].Route.Selected = nil
+				answer.DoD, answer.Checks = map[string]string{}, map[string]string{}
+				for _, criterion := range plan.Batches[0].DoD {
+					answer.DoD[criterion.ID] = "criterion completed"
+				}
+				for _, check := range plan.Batches[0].Checks {
+					answer.Checks[check.ID] = "check performed"
+				}
+				answer.Handoff = "completed batch artifacts"
+			}
+			switch boundary {
+			case "custom":
+				plan.Batches[0].Route.Mode = "custom"
+				plan.Batches[0].Route.Selected = []string{"regression"}
+			case "inherited":
+				plan.Batches[0].Route = nil
+			case "multi-plan", "multi-completion":
+				other := plan.Batches[0]
+				other.ID = "dependent"
+				other.DependsOn = []string{plan.Batches[0].ID}
+				other.Subtasks = []protocol.DevelopmentSubtask{{ID: "dependent-contract", Description: "consume completed behavior"}}
+				plan.Batches = append(plan.Batches, other)
+				if boundary == "multi-plan" {
+					answer.Paths = nil
+				}
+			case "spike":
+				plan.Batches[0].Spike = true
+			case "qa":
+				plan.Batches[0].Route.Gates = []string{"blackbox"}
+			case "reserved-gate":
+				plan.Batches[0].Route.Gates = []string{"merge"}
+			case "default-route":
+				plan.Batches[0].Route.Mode = "default"
+			case "nested-plan":
+				plan.Batches[0].Route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{}
+			case "small-repair":
+				answer.Plan = nil
+				answer.DoD, answer.Checks, answer.Handoff = nil, nil, ""
+			}
+			before, _ := json.Marshal(answer)
+			var coreErr error
+			if answer.Plan != nil {
+				coreErr = protocol.ValidateRepairPlan(answer.Plan, len(answer.Paths) > 0)
+			}
+			refusal := canaryRepairShape(&answer, false)
+			valid := boundary == "full" || boundary == "custom" || boundary == "inherited" || boundary == "multi-plan" || boundary == "small-repair"
+			if (refusal == nil) != valid || (refusal == nil) != (coreErr == nil) || refusal != nil && refusal.Error() != coreErr.Error() {
+				t.Fatalf("repair admission boundary %s: consumer=%v core=%v", boundary, refusal, coreErr)
+			}
+			if valid && answer.Plan != nil {
+				if err := canaryRepairShape(&answer, true); err == nil || !strings.Contains(err.Error(), "only the original repair worker can freeze its plan") {
+					t.Fatalf("member tried to freeze another plan: %v", err)
+				}
+			}
+			if boundary == "invalid-full" && (refusal == nil || !strings.Contains(refusal.Error(), "full route selects the complete gate list without a subset")) {
+				t.Fatal("original full-route refusal changed")
+			}
+			after, _ := json.Marshal(answer)
+			if !bytes.Equal(before, after) {
+				t.Fatal("repair admission altered the model values")
+			}
+			if valid && len(answer.Paths) > 0 {
+				workspace := t.TempDir()
+				if err := os.WriteFile(filepath.Join(workspace, "frob.go"), []byte("package main\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				input := protocol.ValidationInput{Binding: protocol.WorkBinding{WorkspaceID: "repair"}, Workspace: &protocol.NativeResource{ID: "repair", Path: workspace, Status: "READY"}}
+				c := &engineCanary{t: t}
+				result := c.developmentEvidence("repair", input, &answer, "model-digest", answer.Plan != nil)
+				result.GranularityReview = answer.Plan
+				if result.GranularityReview != answer.Plan || result.Binding != input.Binding || (result.Development.Completion != nil) != (answer.Plan != nil) {
+					t.Fatal("repair result lost its plan, binding or completion")
+				}
+				if completion := result.Development.Completion; completion != nil && (!maps.Equal(completion.DoD, answer.DoD) || !maps.Equal(completion.Checks, answer.Checks) || completion.Handoff != answer.Handoff) {
+					t.Fatal("repair result altered batch completion evidence")
+				}
+			}
+		})
+	}
+}
+
 // Plan admission preserves the supplied plan and reports the core contract's
 // refusal before a readiness or repair result is submitted.
 func TestCanaryPlanAdmissionUsesCoreContract(t *testing.T) {
@@ -2411,7 +2511,7 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 			"handoff":     canaryStr(),
 			"contextCost": canaryStr(),
 			"spike":       map[string]any{"type": "boolean"},
-			"route":       canarySchema([]string{"mode", "gates"}, map[string]any{"mode": canaryEnum("full", "custom"), "gates": canaryArr(canaryStr()), "selected": canaryArr(canaryStr())}),
+			"route":       canarySchema([]string{"mode", "gates"}, map[string]any{"mode": canaryEnum("full", "custom"), "gates": map[string]any{"type": "array", "items": canaryStr(), "description": "Ordinary gate IDs, not QA case IDs. Repair slices exclude blackbox/whitebox QA and reserved merge gates."}, "selected": map[string]any{"type": "array", "items": canaryStr(), "description": "Empty or omitted for full. For custom, a non-empty subset of gates using gate IDs, never case IDs."}}),
 		})
 		properties["plan"] = canarySchema([]string{"reason", "batches", "verificationTier"}, map[string]any{
 			"reason": canaryStr(), "verificationTier": canaryEnum("FINAL", "CHECKPOINT"),

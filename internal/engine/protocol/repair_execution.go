@@ -100,6 +100,37 @@ func (s *State) repairGates(work repairWork) []string {
 	return route.Gates
 }
 
+// ValidateRepairPlan checks the shared plan contract and the repair-specific
+// slice routes, including whether this proposal may also complete its work.
+func ValidateRepairPlan(p *GranularityReview, completion bool) error {
+	if err := ValidateGranularity(p); err != nil {
+		return err
+	}
+
+	for _, batch := range p.Batches {
+		if batch.Spike {
+			return validationError("repair batches must deliver the original obligation")
+		}
+		if batch.Route != nil {
+			if batch.Route.DevelopmentPlan != nil || batch.Route.Mode != routeModeFull && batch.Route.Mode != routeModeCustom {
+				return validationError("repair slice route must be full or custom without another development plan")
+			}
+			if err := validateRouteDecision(batch.Route); err != nil {
+				return err
+			}
+			for _, gate := range batch.Route.Gates {
+				if gate == "blackbox" || gate == "whitebox" {
+					return validationError("repair slices do not select ordinary QA")
+				}
+			}
+		}
+	}
+	if len(p.Batches) > 1 && completion {
+		return validationError("a multi-batch plan must precede its isolated member completions")
+	}
+	return nil
+}
+
 func (s *State) acceptRepairResult(record WorkerResult) error {
 	p := record.Validation
 	work := s.repairMember(p.Binding.Task)
@@ -110,30 +141,8 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		if work.plan != nil || work.task != s.replacementFold(work.wave.Repair.Task) {
 			return validationError("only the original repair worker can freeze its plan")
 		}
-		if err := ValidateGranularity(p.GranularityReview); err != nil {
+		if err := ValidateRepairPlan(p.GranularityReview, p.Development != nil); err != nil {
 			return err
-		}
-
-		for _, batch := range p.GranularityReview.Batches {
-			if batch.Spike {
-				return validationError("repair batches must deliver the original obligation")
-			}
-			if batch.Route != nil {
-				if batch.Route.DevelopmentPlan != nil || batch.Route.Mode != routeModeFull && batch.Route.Mode != routeModeCustom {
-					return validationError("repair slice route must be full or custom without another development plan")
-				}
-				if err := validateRouteDecision(batch.Route); err != nil {
-					return err
-				}
-				for _, gate := range batch.Route.Gates {
-					if gate == "blackbox" || gate == "whitebox" {
-						return validationError("repair slices do not select ordinary QA")
-					}
-				}
-			}
-		}
-		if len(p.GranularityReview.Batches) > 1 && p.Development != nil {
-			return validationError("a multi-batch plan must precede its isolated member completions")
 		}
 		if p.Development == nil {
 			if p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil {

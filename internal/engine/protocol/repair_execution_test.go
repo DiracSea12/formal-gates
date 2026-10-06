@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
@@ -181,6 +182,36 @@ func TestInvalidatedRepairDutyUsesConfirmedMemberAuthority(t *testing.T) {
 			if boundary == "member-redo" || boundary == "all-redo" {
 				if initialResource.ID == s.resource("repair-integration", "", w.ID+":"+digestOfCanonical([]runtime.TaskKey{members[0].task, members[1].task})).ID {
 					t.Fatal("replacement closure reused the original assembly identity")
+				}
+			}
+		})
+	}
+}
+
+// A single planned completion discharges the original task through the same
+// batch-completion contract as isolated members.
+func TestSingleRepairPlanCompletionKeepsOriginalTask(t *testing.T) {
+	task := runtime.TaskKey{Node: "validation", Step: "repair", Scope: "candidate"}
+	batch := DevelopmentBatch{ID: "command", Subtasks: []DevelopmentSubtask{{ID: "input", Description: "implement input contract"}}, Deliverable: "command", PublicEntry: "app", Artifacts: []string{"app.go"}, Interfaces: "arguments", StateBoundary: "no state", Risk: "normal input", DoD: []DevelopmentCriterion{{ID: "normal", Description: "normal command"}}, Checks: []DevelopmentCheck{{ID: "build", Command: "go build ./..."}}, Rollback: "revert", Recovery: "retry", Handoff: "command", ContextCost: "one file"}
+	plan := &GranularityReview{Reason: "one coherent command", VerificationTier: "FINAL", Batches: []DevelopmentBatch{batch}}
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("completion=%t", complete), func(t *testing.T) {
+			s := &State{Results: map[string]WorkerResult{}, Validation: &Validation{Generation: 1, RequirementRevision: "req", Waves: []ValidationWave{{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}}}
+			binding := WorkBinding{Task: task, WaveID: "wave", Generation: 1, RequirementRevision: "req"}
+			evidence := &DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "command completed", Build: []string{"build passed"}, Tests: []string{"test passed"}}
+			if complete {
+				evidence.Completion = &DevelopmentCompletion{DoD: map[string]string{"normal": "verified"}, Checks: map[string]string{"build": "passed"}, Handoff: "command ready"}
+			}
+			r := WorkerResult{ActionID: "completion", Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: "PASS", GranularityReview: plan, Development: evidence}}
+			err := s.acceptRepairResult(r)
+			if (err == nil) != complete {
+				t.Fatalf("single-batch completion boundary: %v", err)
+			}
+			if complete {
+				s.Results[r.ActionID] = r
+				members := s.repairMembers(&s.Validation.Waves[0])
+				if len(members) != 1 || members[0].task != task || s.developmentResultRecord(task) == nil {
+					t.Fatal("single-batch completion created another task or lost its result")
 				}
 			}
 		})
