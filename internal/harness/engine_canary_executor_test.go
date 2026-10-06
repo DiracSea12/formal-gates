@@ -367,7 +367,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 			return nil, err
 		}
 	}
-	if handler == "engine.qa.design" && material.Input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox {
+	if handler == "engine.qa.design" && (e.split || material.Input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox) {
 		select {
 		case <-e.developmentStarted:
 		case <-time.After(time.Minute):
