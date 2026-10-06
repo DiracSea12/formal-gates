@@ -247,5 +247,5 @@ func (r *canaryPromotionRecovery) assertTerminal(c *engineCanary) {
 	if err := os.WriteFile(filepath.Join(r.directory, "recovered-terminal.json"), body, 0600); err != nil {
 		c.fail("terminal recovery evidence: %v", err)
 	}
-	c.t.Logf("installed promotion recovery confirmed: provider=%s original intent=%s native delivery commands=1 terminal cleanup/replay passed", c.vcs.Name(), r.intent.ActionID)
+	c.t.Logf("installed promotion recovery confirmed: provider=%s original intent=%s native delivery commands=1", c.vcs.Name(), r.intent.ActionID)
 }
