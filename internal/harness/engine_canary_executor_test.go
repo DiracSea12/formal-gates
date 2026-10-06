@@ -940,6 +940,9 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 			{On: `"method":"session/send"`, Params: map[string]any{"sessionId": identity, "inputId": input, "content": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this schema:\n" + string(schema)}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","accepted":true}}` + "\n" + zcodeEventLine(identity, 1, "turn.started", turn, zcodeTurnPayload(input, "")) + "\n" + zcodeEventLine(identity, 2, "turn.completed", turn, zcodeTurnPayload(input, `,"resultType":"success","response":`+mustCanonical(e.t, answerJSON)+`,"usage":{"inputTokens":`+strconv.Itoa(len(textOf(request["prompt"])))+`,"outputTokens":`+strconv.Itoa(len(answerJSON))+`}`))},
 			{On: `"method":"session/close"`, Params: map[string]any{"sessionId": identity}, Send: `{"id":"@ID@","result":{}}`},
 		}
+		if mode, _ := request["permission_mode"].(string); mode != "" {
+			steps = append(steps, peerStep{On: `"method":"session/setMode"`, Params: map[string]any{"sessionId": identity, "mode": mode}, Send: `{"id":"@ID@","result":{"settings":{"mode":{"current":` + strconv.Quote(mode) + `}}}}`})
+		}
 		delivered, err := zcodeAccountProviderConfiguration(paths["catalogue"], nil)
 		if err != nil {
 			return err

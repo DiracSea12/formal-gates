@@ -1341,6 +1341,9 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 			"provider": c.nativeName(), "binding": c.binding, "workspace": workspace,
 			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
 		}
+		if c.nativeName() == canaryProvider && !readOnly {
+			request["permission_mode"] = "yolo"
+		}
 		if c.approvalMu != nil {
 			c.approvalMu.Lock()
 		}

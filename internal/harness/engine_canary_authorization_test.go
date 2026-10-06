@@ -111,11 +111,74 @@ func TestCanaryTurnRequiresCurrentApproval(t *testing.T) {
 			if tc.failure == "" && !strings.Contains(text, "fixture accepted digest: sha256:") {
 				t.Fatal("successful turn did not retain its native answer digest")
 			}
-			if !strings.Contains(text, `model="unavailable" reasoning_effort="unavailable" permission_mode="unavailable"`) {
+			mode := "unavailable"
+			if strings.Contains(tc.name, "execute") {
+				mode = "yolo"
+			}
+			if !strings.Contains(text, fmt.Sprintf(`model="unavailable" reasoning_effort="unavailable" permission_mode=%q`, mode)) {
 				t.Fatal("unobserved host selection was not marked unavailable")
 			}
 			if strings.Contains(tc.name, "execute") && !strings.Contains(text, `usage={"attempt":1,"source":"provider"}`) {
 				t.Fatal("failed execution lost its own native usage evidence")
+			}
+		})
+	}
+}
+
+// Writable ZCode turns request the native headless mode; read-only and other
+// providers retain their native session policy and all issued request identity.
+func TestCanaryTurnRequestsNativeHeadlessMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, mode string
+		readOnly             bool
+	}{
+		{"zcode-write", "zcode", "yolo", false},
+		{"zcode-read", "zcode", "", true},
+		{"other-write", "codex", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, jobs := t.TempDir(), t.TempDir()
+			workspace := filepath.Join(home, ".formal-gates-resources", "issued")
+			if err := os.MkdirAll(workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			action, prompt := "issued-"+tc.name, "bound prompt "+tc.name
+			sum := sha256.Sum256([]byte(prompt))
+			approval := fmt.Sprintf("approve %s 1 %x\n", action, sum)
+			binding := map[string]any{"provider": tc.provider, "launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}
+			schema := map[string]any{"type": "object"}
+			var report bytes.Buffer
+			c := &engineCanary{t: t, nativeHost: tc.provider, home: home, jobs: jobs, binding: binding, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(strings.NewReader(approval)), approvalOutput: &report}
+			calls := 0
+			c.execute = func(value any, dir string, probe bool) (map[string]any, error) {
+				calls++
+				want := map[string]any{"provider": tc.provider, "binding": binding, "workspace": workspace, "read_only": tc.readOnly, "identity": "", "prompt": prompt, "schema": schema}
+				if tc.mode != "" {
+					want["permission_mode"] = tc.mode
+				}
+				if calls != 1 || probe || !reflect.DeepEqual(value, want) || dir != filepath.Join(jobs, canaryName(action), "attempt-1") {
+					t.Fatalf("native request identity changed: %#v %s", value, dir)
+				}
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range []string{"answer.json", "answer.raw.txt"} {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(`{"accepted":true}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return map[string]any{"identity": "fixture-session"}, nil
+			}
+			c.turnIn(workspace, action, "issued role", prompt, schema, tc.readOnly, nil)
+			if calls != 1 {
+				t.Fatal("turn did not execute the exact approved request")
+			}
+			mode := tc.mode
+			if mode == "" {
+				mode = "unavailable"
+			}
+			if !strings.Contains(report.String(), fmt.Sprintf("permission_mode=%q", mode)) {
+				t.Fatalf("requested mode absent from report: %s", report.String())
 			}
 		})
 	}
@@ -158,6 +221,9 @@ func TestCanaryTurnAuthorizationFixture(t *testing.T) {
 			wantPrompt += "\n\nYour previous answer was refused: " + refusal.Error() + "\nReturn one corrected JSON object only."
 		}
 		want := map[string]any{"provider": canaryProvider, "binding": binding, "workspace": workspace, "read_only": readOnly, "identity": "", "prompt": wantPrompt, "schema": schema}
+		if !readOnly {
+			want["permission_mode"] = "yolo"
+		}
 		if probe || !reflect.DeepEqual(request, want) || dir != filepath.Join(jobs, canaryName(actionID), fmt.Sprintf("attempt-%d", calls)) {
 			t.Fatalf("native request identity changed: request=%#v dir=%q probe=%v", request, dir, probe)
 		}
