@@ -114,6 +114,25 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 	return slices.Compact(paths), nil
 }
 
+// ValidateDeclaredChanges admits only declared workspace changes and native
+// directory containers required to hold declared descendants.
+func (p *Provider) ValidateDeclaredChanges(base string, paths []string) ([]string, Pending, error) {
+	changes, err := p.ChangedPaths()
+	if err != nil {
+		return nil, Pending{}, err
+	}
+	pending, err := p.Pending(base, "")
+	if err != nil {
+		return nil, Pending{}, err
+	}
+	for _, path := range changes {
+		if !slices.Contains(paths, path) && !slices.ContainsFunc(pending.Changes, func(c Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
+			return nil, Pending{}, fmt.Errorf("candidate contains undeclared change: %s", path)
+		}
+	}
+	return changes, pending, nil
+}
+
 // Track stages only declared differences between the working files and index.
 // An artifact's already staged removal or addition is an observed prefix.
 func (p *Provider) Track(paths []string) error {
