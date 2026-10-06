@@ -358,3 +358,65 @@ func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 		t.Fatal("unexpected response loss")
 	}
 }
+
+// A successful root-property commit moves the root while untouched WC nodes
+// retain their base revisions until the exact submitted operation is updated.
+func TestSVNObservedCommitRequiresWorkingCopySynchronization(t *testing.T) {
+	p, runner := svnFixture(t)
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, runner, p.root, "svn", "propset", "custom:delivery", "changed", p.root)
+	message := "bound interrupted delivery"
+	runner.lost = message
+	if err := p.Commit(message); err == nil || !runner.didLose {
+		t.Fatal("actual SVN commit response-loss window not reached")
+	}
+	runner.lost = ""
+	observed, found, err := p.ObservedCommit(base, message)
+	if err != nil || !found {
+		t.Fatalf("native operation absent: %s %t %v", observed, found, err)
+	}
+	head, err := p.Resolve()
+	if err != nil || head != observed {
+		t.Fatal("working-copy root did not move to the actual commit")
+	}
+	status, err := p.Status()
+	if err != nil || status != "mixed-revision working copy" {
+		t.Fatalf("actual interrupted prefix is not the expected mixed revision: %s %v", status, err)
+	}
+	pending, err := p.Pending(base, observed)
+	if err != nil || !pending.Clean || !pending.Equal {
+		t.Fatalf("native operation has independent business changes: %+v %v", pending, err)
+	}
+	t.Logf("actual commit exists, root equals observed identity, business pending clean/equal, strict readiness rejects: %v", p.VerifyReady())
+	// Another repository commit cannot move this continuation to HEAD.
+	other := filepath.Join(nativeFixtureDirectory(t), "other")
+	nativeCommand(t, runner, "", "svn", "checkout", mustNativeScope(t, observed), other)
+	nativeCommand(t, runner, other, "svn", "propset", "custom:later", "unrelated", other)
+	nativeCommand(t, runner, other, "svn", "commit", "-m", "unrelated later operation", other)
+	if err := p.Synchronize(observed); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.VerifyReady(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := p.Resolve()
+	if err != nil || after != observed {
+		t.Fatal("continuation updated beyond its exact operation")
+	}
+	count, err := p.CommitCount(base, observed)
+	if err != nil || count != 1 {
+		t.Fatal("continuation submitted another operation")
+	}
+}
+
+func mustNativeScope(t *testing.T, identity string) string {
+	t.Helper()
+	value, err := decodeNative(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.Scope
+}

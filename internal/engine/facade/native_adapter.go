@@ -628,9 +628,20 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		if found && observed != head {
+		status, err := native.Status()
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if found && (observed != head || status != "") {
 			if !mayWrite {
 				return nativeResult{observedEffect: true}, false, nil
+			}
+			pending, err := native.Pending(workspaceBase, "")
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			if !pending.Clean {
+				return nativeResult{}, false, native.VerifyReady()
 			}
 			if err = f.admission.write(func() error { *invoked = true; return native.Synchronize(observed) }); err != nil {
 				return nativeResult{}, false, err

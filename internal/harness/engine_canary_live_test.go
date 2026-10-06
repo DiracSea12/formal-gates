@@ -178,6 +178,7 @@ type engineCanary struct {
 	run            facade.Run
 	project        string
 	vcs            *vcs.Provider
+	promotion      *canaryPromotionRecovery
 	jobs           string
 	binding        map[string]any
 	installed      validate.InstallReport
@@ -2786,6 +2787,9 @@ func (c *engineCanary) cli(input []byte, args ...string) []byte {
 		c.fail("command evidence write: %v %v", writeErr, closeErr)
 	}
 	if err != nil {
+		if c.promotion != nil && c.promotion.recover(c, args, err) {
+			return c.cli(input, args...)
+		}
 		c.fail("installed %v: %v %s", args, err, output)
 	}
 	return output
@@ -2865,6 +2869,7 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		c.fail("intake: %v", err)
 	}
+	c.promotion = installCanaryPromotionRecovery(c)
 	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--vcs", c.vcs.Name(), "--base-snapshot", base, "--intake-receipt", path)
 	if err := c.recordIsolation(); err != nil {
 		c.fail("candidate isolation proof: %v", err)

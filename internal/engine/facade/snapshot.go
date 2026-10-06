@@ -127,6 +127,11 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		}
 	}
 	if !pending {
+		if intent.ActionID == "" {
+			if err := f.vcs.VerifyReady(); err != nil {
+				return "", err
+			}
+		}
 		observed, err := f.observePromotion()
 		if err != nil {
 			return "", err
@@ -560,9 +565,20 @@ func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.Host
 			return nativeResult{}, false, fmt.Errorf("observed native promotion values differ from candidate")
 		}
 	}
-	if found && observed != head {
+	status, err := f.vcs.Status()
+	if err != nil {
+		return nativeResult{}, false, err
+	}
+	if found && (observed != head || status != "") {
 		if !mayWrite {
 			return nativeResult{observedEffect: true}, false, nil
+		}
+		pending, err := f.vcs.Pending(p.TargetStart.Head, p.Source)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if !pending.Clean {
+			return nativeResult{}, false, f.vcs.VerifyReady()
 		}
 		if _, err := f.promotionPrefix(p); err != nil {
 			return nativeResult{}, false, err

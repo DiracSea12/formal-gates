@@ -793,3 +793,119 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 		}
 	}
 }
+
+// An exact committed operation explains only WC revision skew. Foreign file,
+// property and untracked content cannot be normalized by its continuation.
+func TestSVNPromotionRejectsForeignWorkingChanges(t *testing.T) {
+	root, base, runner := nativeProviderFixture(t, "svn")
+	native := vcs.NewNative(root, "svn", runner)
+	if _, err := runner.Run(root, "svn", "propset", "custom:delivery", "changed", root); err != nil {
+		t.Fatal(err)
+	}
+	message := "formal-gates delivery owned operation"
+	runner.interruptDelivery = true
+	if err := native.Commit(message); err == nil || !runner.lost {
+		t.Fatal("actual committed SVN response loss not reached")
+	}
+	runner.interruptDelivery = false
+	observed, found, err := native.ObservedCommit(base, message)
+	if err != nil || !found {
+		t.Fatal("original operation not found")
+	}
+	head, err := native.Resolve()
+	if err != nil || head != observed {
+		t.Fatal("root revision does not identify the successful operation")
+	}
+	digest, err := native.TreeDigest(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := protocol.CandidateParameters{Stage: "PROMOTION", Promotion: &protocol.PromotionParameters{Source: observed, SourceDigest: digest, TargetRoot: root, TargetBase: base, TargetStart: protocol.PromotionObservation{Head: base}, Message: message}}
+	f := &Facade{vcs: native}
+	invoked := false
+	result, complete, err := f.nativePromotionEvidence(&protocol.State{}, protocol.HostActionIntent{}, params, false, &invoked)
+	if err != nil || complete || !result.observedEffect || invoked {
+		t.Fatalf("mixed WC operation prematurely complete: %+v %t %v", result, complete, err)
+	}
+	for _, scenario := range []string{"file", "property", "untracked"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := filepath.Join(root, "app.go")
+			switch scenario {
+			case "file":
+				if err := os.WriteFile(path, []byte("package main // foreign edit\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "property":
+				if _, err := runner.Run(root, "svn", "propset", "custom:foreign", "unrelated", path); err != nil {
+					t.Fatal(err)
+				}
+			case "untracked":
+				if err := os.WriteFile(filepath.Join(root, "foreign.txt"), []byte("foreign"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := runner.synchronizations
+			_, complete, err := f.nativePromotionEvidence(&protocol.State{}, protocol.HostActionIntent{}, params, true, &invoked)
+			if err == nil || complete || invoked || runner.synchronizations != before {
+				t.Fatalf("foreign %s accepted/synchronized: %t %v", scenario, complete, err)
+			}
+			if _, err := runner.Run(root, "svn", "revert", "-R", root); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "untracked" {
+				if err := os.Remove(filepath.Join(root, "foreign.txt")); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	if err := native.VerifyReady(); err == nil {
+		t.Fatal("ordinary mixed revision was accepted without its signed continuation")
+	}
+}
+
+// Candidate freezing shares the same unfinished SVN commit boundary as delivery.
+func TestSVNCandidateResponseLossKeepsOriginalOperation(t *testing.T) {
+	root, base, runner := nativeProviderFixture(t, "svn")
+	native := vcs.NewNative(root, "svn", runner)
+	if _, err := runner.Run(root, "svn", "propset", "custom:candidate", "changed", root); err != nil {
+		t.Fatal(err)
+	}
+	intent := protocol.HostActionIntent{ActionID: "candidate", PayloadDigest: "parameters"}
+	message := "formal-gates candidate run candidate parameters"
+	runner.interruptOperation = "candidate"
+	if err := native.Commit(message); err == nil || !runner.lost {
+		t.Fatal("actual candidate commit response-loss window not reached")
+	}
+	runner.interruptOperation = ""
+	observed, found, err := native.ObservedCommit(base, message)
+	if err != nil || !found {
+		t.Fatal("original native candidate commit not observed")
+	}
+	head, err := native.Resolve()
+	if err != nil || head != observed {
+		t.Fatal("candidate root did not move to observed operation")
+	}
+	params := protocol.CandidateParameters{Stage: "DEVELOPMENT", WorkspaceID: "workspace", Base: base, Paths: []string{"app.go"}}
+	body, _ := json.Marshal(params)
+	var fields map[string]any
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	intent.Adapter = &protocol.AdapterHostAction{Operation: "op.candidate", Params: fields}
+	state := &protocol.State{RunID: "run", NativeResources: map[string]protocol.NativeResource{"workspace": {ID: "workspace", Path: root, Source: base, Identity: base, Status: "READY", Role: "candidate"}}}
+	f := &Facade{vcs: native}
+	invoked := false
+	result, complete, err := f.candidateEvidence(state, intent, false, &invoked)
+	if err != nil || complete || !result.observedEffect || invoked {
+		t.Fatalf("partially synchronized candidate was prematurely accepted: %+v %t %v", result, complete, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package command // foreign edit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := runner.synchronizations
+	_, complete, err = f.candidateEvidence(state, intent, true, &invoked)
+	if err == nil || complete || invoked || runner.synchronizations != before {
+		t.Fatalf("candidate continuation absorbed foreign content: %t %v", complete, err)
+	}
+}

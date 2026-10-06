@@ -281,8 +281,8 @@ func (p *Provider) svnCommit(message string) error {
 	if len(log.Entries) != 1 || log.Entries[0].Message != message {
 		return fmt.Errorf("SVN commit has no exact operation log")
 	}
-	_, err = p.runner.Run(p.root, "svn", "update", "-r", strconv.Itoa(log.Entries[0].Revision), p.root)
-	return err
+	bound.Revision = log.Entries[0].Revision
+	return p.Synchronize(encodeNative(bound))
 }
 func (p *Provider) svnMessage(id nativeIdentity) (string, error) {
 	var log svnLog
