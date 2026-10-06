@@ -185,9 +185,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 	} else {
 		base = c.buildFixtureProject()
 		c.doc = []byte(canaryRequirementDocument)
-		c.revision = canaryBytesRevision(c.doc)
-		solution := canaryBytesRevision([]byte(canaryFrobSource))
-		c.install(base, protocol.IntakeConfirmationReceipt{Source: "stable-driver", Authority: protocol.IntakeAuthorityStableDriver, Transport: protocol.IntakeTransportStableLauncher, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solution}}, SolutionRevision: solution, SolutionDigest: "sha256:" + solution})
+		c.install(base, c.confirmedIntake())
 	}
 	c.drive()
 	if executor.abortBeforeDelivery {

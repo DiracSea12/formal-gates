@@ -176,6 +176,7 @@ func (c *engineCanary) assertNativeTerminal(base string, final facade.Run, paths
 		c.fail("final native digest: %v", err)
 	}
 	c.promotion.assertTerminal(c)
+	c.assertCanonicalGuarantee(final)
 	terminal := final.Termination
 	if terminal == nil || !terminal.ResourcesCleaned() || terminal.CandidatePromotion == nil {
 		c.fail("terminal resource/promotion proof missing")

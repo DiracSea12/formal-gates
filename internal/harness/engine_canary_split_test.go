@@ -5,8 +5,6 @@ package harness
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,6 +36,9 @@ frob 接受一个词；参数不足以非零退出。正常输出为一行 frob:
 - AC-003：frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。
 #### 来源
 用户要求。
+
+## 方案
+保留 frob.go 已有的 UpperWord、WordSize 调用与命令输出格式。uppercase.go 只以 strings.ToUpper 实现 UpperWord；size.go 只以 len 实现 WordSize。两个已声明的独立开发批次各只修改自己文件，按 go build ./... 验证，沿既定 AC 主责拓扑提交给 master-merge；主线验证组合命令及保留的合并义务。公开 flag 缺口若由本 run 的需求声明，则仍只由 master-merge 的验证和同一返修义务完成 frob.go 的拒绝处理，不回传给函数开发批次。
 `
 const canarySplitMain = `package main
 import("fmt";"os")
@@ -213,11 +214,7 @@ func (c *engineCanary) buildSplitFixture() (string, facade.IntakeConfirmationRec
 		}
 	}
 	c.doc = []byte(document)
-	sum := sha256.Sum256(c.doc)
-	c.revision = hex.EncodeToString(sum[:])
-	solution := sha256.Sum256([]byte(canarySplitMain))
-	solutionRevision := hex.EncodeToString(solution[:])
-	intake := facade.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: c.revision, Artifacts: []facade.IntakeArtifact{{Path: "requirements.md", Revision: c.revision}, {Path: "frob.go", Revision: solutionRevision}}, SolutionRevision: solutionRevision, SolutionDigest: "sha256:" + solutionRevision}
+	intake := c.confirmedIntake()
 	return c.commitFixture([]string{".gitignore", "go.mod", "requirements.md", "frob.go", "uppercase.go", "size.go"}, "independent command functions"), intake
 }
 

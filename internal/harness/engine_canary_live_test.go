@@ -75,6 +75,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -101,6 +102,9 @@ frob 是一个单命令工具。本次开发批次交付 usage 统计功能：�
 - AC-002：传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。
 #### 来源
 用户要求。
+
+## 方案
+使用现有 frob.go 命令入口。analytics.go 只计算输入词的 UTF-8 字节数并输出 usage 统计，由 frob.go 在正常 frob 行之后调用；空词仍作为一个参数处理。本次开发只完成统计及接线，按 go build ./... 验证。已声明的未知 flag 缺口由本 run 的独立验证实际发现，再由同一返修义务修改 frob.go 的参数拒绝处理；不改变统计与普通词、空词的输出契约。
 `
 
 // canaryFrobSource is the seeded frob command: it accepts any first argument,
@@ -329,26 +333,8 @@ func runEngineNoSplitCanary(t *testing.T, name, nativeHost string) {
 	c.vcs = vcs.NewNative(c.project, name, nil)
 	base := c.buildFixtureProject()
 
-	// Intake binds the real artifact bytes: the requirement document is the
-	// requirement revision, the seeded frob source is the solution artifact.
-	// Revisions are bare hex — the one language intake artifact binding and
-	// QA worktree registration both recompute.
 	c.doc = []byte(canaryRequirementDocument)
-	reqSum := sha256.Sum256(c.doc)
-	c.revision = hex.EncodeToString(reqSum[:])
-	frobSum := sha256.Sum256([]byte(canaryFrobSource))
-	frobRevision := hex.EncodeToString(frobSum[:])
-	receipt := facade.IntakeConfirmationReceipt{
-		Source:            facade.DefaultIntakeSource,
-		Authority:         facade.DefaultIntakeAuthority,
-		Transport:         facade.DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: c.revision,
-		Artifacts: []facade.IntakeArtifact{
-			{Path: "requirements.md", Revision: c.revision},
-			{Path: "frob.go", Revision: frobRevision},
-		},
-		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
-	}
+	receipt := c.confirmedIntake()
 	c.install(base, receipt)
 	c.drive()
 	c.loop()
@@ -2886,6 +2872,11 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 	if err := c.captureBinding(); err != nil {
 		c.fail("capture private native binding: %v", err)
 	}
+	projection, precheckErr := requirement.ParseRequirementProjection("requirements.md", c.doc)
+	if precheckErr != nil || projection.ContentDigest != intake.RequirementRevision || len(intake.Artifacts) != 1 || intake.Artifacts[0].Path != "requirements.md" || intake.SolutionRevision != intake.RequirementRevision {
+		c.fail("confirmed canonical intake lost its single-document precheck: %v", precheckErr)
+	}
+	c.t.Logf("authorized canary user stand-in confirms this complete requirement/solution file before start: requirements.md revision=%s\n%s", intake.RequirementRevision, string(c.doc))
 	path := filepath.Join(c.jobs, "intake.json")
 	data, _ := json.Marshal(intake)
 	if err := os.WriteFile(path, data, 0600); err != nil {
