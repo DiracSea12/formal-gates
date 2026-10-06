@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 type codexPeerInput struct {
 	Workspace     string         `json:"workspace"`
 	Home          string         `json:"home"`
+	Config        string         `json:"config"`
 	ThreadParams  map[string]any `json:"thread_params"`
 	TurnParams    map[string]any `json:"turn_params"`
 	Configuration map[string]any `json:"configuration"`
@@ -41,8 +43,16 @@ func codexPeerID(text string) string {
 }
 
 func TestCodexRPCPeer(t *testing.T) {
-	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--stdio" {
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
 		return
+	}
+	args = args[1:]
+	if !reflect.DeepEqual(args, []string{"app-server", "--stdio"}) {
+		panic("native argv differs")
 	}
 	script := os.Getenv("CODEX_PEER_SCRIPT")
 	if script == "" {
@@ -60,8 +70,8 @@ func TestCodexRPCPeer(t *testing.T) {
 	if cwd != peer.Workspace || os.Getenv("HOME") != peer.Home {
 		panic("native environment/workspace differs")
 	}
-	if os.Args[len(os.Args)-2] != "app-server" {
-		panic("native argv differs")
+	if os.Getenv("CODEX_HOME") != peer.Config {
+		panic("native CODEX_HOME differs")
 	}
 	log, err := os.OpenFile(filepath.Join(os.Getenv("CODEX_HOME"), "rpc.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -289,12 +299,13 @@ func newCodexScenario(t *testing.T) *codexScenario {
 			}
 		})
 	}
-	s.peer = codexPeerInput{Workspace: workspace, Home: home, ThreadParams: map[string]any{}, TurnParams: map[string]any{}, Configuration: map[string]any{"model": "peer-default", "reasoningEffort": "medium", "sandbox": map[string]any{"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user"}}
+	s.peer = codexPeerInput{Workspace: workspace, Home: home, Config: config, ThreadParams: map[string]any{}, TurnParams: map[string]any{}, Configuration: map[string]any{"model": "peer-default", "reasoningEffort": "medium", "sandbox": map[string]any{"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user"}}
 	return s
 }
 
 func (s *codexScenario) save(t *testing.T) {
 	t.Helper()
+	s.peer.Config = s.config
 	s.peer.ThreadParams = map[string]any{"cwd": s.workspace}
 	if s.request["read_only"] == true {
 		s.peer.ThreadParams["sandbox"] = "read-only"
@@ -754,5 +765,88 @@ func TestCodexNativeCaptureAndEvidence(t *testing.T) {
 	os.WriteFile(filepath.Join(s.directory, "answer.raw.txt"), []byte("changed"), 0o644)
 	if err = codexVerifySource(s.directory, source); err == nil || !strings.Contains(err.Error(), "EVIDENCE_CHANGED") {
 		t.Fatalf("proof did not bind original bytes: %v", err)
+	}
+}
+
+// Native launch checks reject each changed input before successful RPC replies.
+// A valid explicit script and rebuilt wrapper proof isolate process validation.
+func TestCodexNativePeerRejectsWrongLaunchInputs(t *testing.T) {
+	binary := supervisorBinary(t)
+	for _, dimension := range []string{"valid", "argv", "config", "home", "cwd"} {
+		t.Run(dimension, func(t *testing.T) {
+			s := newCodexScenario(t)
+			s.save(t)
+			binding := objectOrEmpty(s.request["binding"])
+			launch := objectOrEmpty(binding["launch"])
+			wrapper := textOf(launch["executable"])
+			quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+			prefix := "export CODEX_PEER_SCRIPT=" + quote(filepath.Join(s.config, "peer.json")) + "\n"
+			refusal := ""
+			switch dimension {
+			case "config":
+				prefix += "export CODEX_HOME=" + quote(resolveNativePath(t.TempDir())) + "\n"
+				refusal = "native CODEX_HOME differs"
+			case "home":
+				prefix += "export HOME=" + quote(resolveNativePath(t.TempDir())) + "\n"
+				refusal = "native environment/workspace differs"
+			case "cwd":
+				prefix += "cd " + quote(resolveNativePath(t.TempDir())) + "\n"
+				refusal = "native environment/workspace differs"
+			case "argv":
+				refusal = "native argv differs"
+			}
+			body := strings.Replace(readTestFile(t, wrapper), "#!/bin/sh\n", "#!/bin/sh\n"+prefix, 1)
+			if dimension == "argv" {
+				body = strings.Replace(body, "-- \"$@\"", "-- --unexpected \"$@\"", 1)
+			}
+			if err := os.WriteFile(wrapper, []byte(body), 0755); err != nil {
+				t.Fatal(err)
+			}
+			bound, err := buildCaptureBinding("codex", launch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bound["environment"] = binding["environment"]
+			if err := codexValidateBinding(bound); err != nil {
+				t.Fatalf("launch control has invalid binding: %v", err)
+			}
+			s.request["binding"] = bound
+			if err := writeAtomicJSON(filepath.Join(s.directory, "native-request.json"), s.request); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(binary, "harness", "native", s.directory)
+			command.Dir = s.workspace
+			output, err := command.CombinedOutput()
+			t.Logf("public native input=%s exit=%v output=%s", dimension, err, output)
+			if dimension == "valid" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				source, err := readJSONFile(filepath.Join(s.directory, "source.json"))
+				if err != nil || getOf(source, "provider") != "codex" {
+					t.Fatalf("valid native source: %v %v", source, err)
+				}
+				if err := codexVerifySource(s.directory, source); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("wrong launch obtained successful source")
+				}
+				stderr := readTestFile(t, filepath.Join(s.directory, "host.stderr"))
+				t.Logf("peer rejection input=%s: %s", dimension, stderr)
+				if !strings.Contains(stderr, refusal) {
+					t.Fatalf("expected peer %q, got %s", refusal, stderr)
+				}
+				for _, name := range []string{"source.json", "identity.json"} {
+					if _, err := os.Stat(filepath.Join(s.directory, name)); !os.IsNotExist(err) {
+						t.Fatalf("wrong launch wrote %s", name)
+					}
+				}
+				if _, err := os.Stat(filepath.Join(s.config, "rpc.jsonl")); !os.IsNotExist(err) {
+					t.Fatal("wrong launch processed RPC")
+				}
+			}
+		})
 	}
 }

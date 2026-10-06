@@ -868,7 +868,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s := claudeScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
 		s.save(e.t)
 	case "codex":
-		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Answer: answer,
+		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
 			Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
 		s.peer.ThreadParams = map[string]any{"cwd": workspace, "ephemeral": false}
 		if request["read_only"] == true {
