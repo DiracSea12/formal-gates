@@ -66,6 +66,79 @@ func TestCandidateChildViewsUseFinalIssuedOwner(t *testing.T) {
 	}
 }
 
+func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
+	for _, boundary := range []string{"complete", "missing-member", "missing-self-run", "final-fail", "late-resolution", "same-problem-fail"} {
+		t.Run(boundary, func(t *testing.T) {
+			cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &State{RunID: "run", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
+			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
+			task := pipelineTask(cd, "engine.repair", "candidate")
+			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{"original": {ID: "original"}, "source": {ID: "source"}, "later": {ID: "later"}}, Waves: []ValidationWave{{ID: "source-wave", Generation: 1, Status: "REPAIR", Candidate: coverage.ValidationCandidate{Identity: "base"}, Targets: map[string]*ValidationTarget{}, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
+			w := &s.Validation.Waves[0]
+			plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser"}, {ID: "logging"}}}
+			s.Results["plan"] = WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}
+			members := s.repairMembers(w)
+			complete := func(key runtime.TaskKey, action string) {
+				s.Results[action] = WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: key, Generation: 1, WaveID: w.ID}, Development: &DevelopmentEvidence{Summary: "complete"}}}
+			}
+			complete(members[0].task, "parser")
+			complete(members[1].task, "logging")
+			s.ensureRepairGates(cd)
+			key, target := s.memberGateTarget(members[0], "quality")
+			target.Status = "FAIL"
+			target.ResultAction = "gate-failure"
+			_, other := s.memberGateTarget(members[1], "quality")
+			other.Status = "PASS"
+			f := &ValidationFinding{ID: "finding", WaveID: w.ID, Target: key.String(), History: []FindingResolution{{FindingID: "finding", ProblemID: "source", Decision: "NEW", Severity: "P2", AcceptedRevision: 10}}}
+			s.Validation.Findings[f.ID] = f
+			correction := s.repairMembers(w)[0]
+			complete(correction.task, "correction")
+			s.DispatchBindings["correction"] = WorkBinding{Task: correction.task, WaveID: w.ID, Generation: 1}
+			s.DispatchIssueRevisions["correction"] = 20
+			verification := s.repairVerificationWork(w)
+			if verification == nil {
+				t.Fatal("missing integrated verification projection")
+			}
+			complete(verification.task, "self-run")
+			final := ValidationWave{ID: "final", Generation: 1, Status: "COLLECTING", Candidate: coverage.ValidationCandidate{Identity: "final"}, SourceTasks: []runtime.TaskKey{correction.task, members[1].task}, Targets: map[string]*ValidationTarget{"gate": {Task: pipelineTask(cd, "engine.gate", "final:quality"), Kind: "GATE", Gate: "quality", Status: "PASS"}}}
+			switch boundary {
+			case "missing-member":
+				final.SourceTasks = final.SourceTasks[:1]
+			case "missing-self-run":
+				delete(s.Results, "self-run")
+			case "final-fail":
+				final.Targets["gate"].Status = "FAIL"
+			case "late-resolution":
+				f.History = append(f.History, FindingResolution{FindingID: f.ID, ProblemID: "source", Decision: "SAME_AS", Severity: "P2", AcceptedRevision: 30})
+			case "same-problem-fail":
+				final.Targets["other"] = &ValidationTarget{Task: pipelineTask(cd, "engine.gate", "final:security"), Kind: "GATE", Gate: "security", Status: "FAIL"}
+				s.Validation.Findings["other-finding"] = &ValidationFinding{ID: "other-finding", WaveID: final.ID, Target: final.Targets["other"].Task.String(), History: []FindingResolution{{FindingID: "other-finding", ProblemID: "source", Decision: "SAME_AS", Severity: "P2", AcceptedRevision: 30}}}
+			}
+			final.Targets = func() map[string]*ValidationTarget {
+				targets := map[string]*ValidationTarget{}
+				for _, target := range final.Targets {
+					targets[target.Task.String()] = target
+				}
+				return targets
+			}()
+			later := &ValidationFinding{ID: "later-finding", WaveID: w.ID, Target: key.String(), History: []FindingResolution{{FindingID: "later-finding", ProblemID: "later", Decision: "NEW", Severity: "P2", AcceptedRevision: 30}}}
+			if boundary == "complete" {
+				s.Validation.Findings[later.ID] = later
+			}
+			s.resolveValidationProblems(&final)
+			if (s.Validation.Problems["source"].ResolvedWave != "") != (boundary == "complete") {
+				t.Fatalf("source completion boundary %s: %+v", boundary, s.Validation.Problems["source"])
+			}
+			if s.Validation.Problems["later"].ResolvedWave != "" {
+				t.Fatal("old completion swallowed a later problem")
+			}
+		})
+	}
+}
+
 func TestRepairMembersRetainOneObligation(t *testing.T) {
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
 	w := &ValidationWave{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task, Problems: []string{"problem"}}}

@@ -305,6 +305,48 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	if state.Results[failed].Validation.Status != "FAIL" || state.Results[failed].Validation.Findings[0].Message != "normal output log text differs from the documented text" {
 		t.Fatal("repair rewrote original gate evidence")
 	}
+	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
+	for {
+		var action string
+		var input protocol.ValidationInput
+		for id, in := range d.run.ValidationInputs {
+			if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
+				action, input = id, in
+				break
+			}
+		}
+		if action == "" {
+			break
+		}
+		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
+		if input.Handler == "engine.qa.execution" {
+			report := executionFor(input)
+			result.Execution = &report
+			result.Tool = "built command"
+			result.Environment = "bound native workspace"
+		}
+		d.business(action, result)
+		d.drive()
+	}
+	d.reopen()
+	d.drive()
+	state = driverState(t, d)
+	last := state.Validation.Waves[len(state.Validation.Waves)-1]
+	if last.Status != "COMPLETE" || last.Scope != coverage.ScopeFull {
+		t.Fatalf("final validation did not complete FULL: %+v", last)
+	}
+	problem := state.Validation.Findings[finding].History[0].ProblemID
+	if state.Validation.Problems[problem].ResolvedWave == "" {
+		t.Fatal("completed member source problem stayed open")
+	}
+	for _, input := range d.run.ValidationInputs {
+		if input.Handler == "engine.repair" {
+			t.Fatal("completed source problem created another repair")
+		}
+	}
+	if state.Results[failed].Validation.Status != "FAIL" || state.Results[failed].Validation.Findings[0].Message != "normal output log text differs from the documented text" {
+		t.Fatal("final completion rewrote source FAIL")
+	}
 }
 
 func nativeRepairSelfRun(t *testing.T, workspace string) []protocol.RepairCaseEvidence {

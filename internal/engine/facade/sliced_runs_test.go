@@ -129,6 +129,9 @@ func decideRaw(t *testing.T, d *validationDriver, control protocol.ControlKind, 
 // driverState 读取 run 的权威状态投影。
 func driverState(t *testing.T, d *validationDriver) *protocol.State {
 	t.Helper()
+	if d.run.Termination != nil && d.run.Termination.Phase == runtime.PhaseTerminal {
+		return d.run.Termination
+	}
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)

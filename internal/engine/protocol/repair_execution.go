@@ -13,6 +13,23 @@ import (
 // A repair plan belongs to the original worker result. Tasks and dependency
 // frontiers are projections; a single unplanned repair has one member.
 func (s *State) repairMembers(w *ValidationWave) []repairWork {
+	var members []repairWork
+	for _, execution := range s.repairExecutions(w) {
+		prior := slices.IndexFunc(members, func(member repairWork) bool {
+			return member.batch != nil && execution.batch != nil && member.batch.ID == execution.batch.ID
+		})
+		if prior < 0 {
+			members = append(members, execution)
+		} else {
+			members[prior] = execution
+		}
+	}
+	return members
+}
+
+// Executions project the same member chain, including its exact predecessor
+// source. No execution history is stored outside the result and issue owners.
+func (s *State) repairExecutions(w *ValidationWave) []repairWork {
 	task := s.replacementFold(w.Repair.Task)
 	var proposal *WorkerResult
 	for _, r := range s.Results {
@@ -26,15 +43,16 @@ func (s *State) repairMembers(w *ValidationWave) []repairWork {
 		return []repairWork{{wave: w, task: task}}
 	}
 	p := proposal.Validation.GranularityReview
-	var members []repairWork
+	var executions []repairWork
 	for i := range p.Batches {
 		key := task
 		if len(p.Batches) > 1 || proposal.Validation.Development == nil {
 			key.Scope += ":" + strings.TrimPrefix(planContractDigest(p), "sha256:") + ":" + p.Batches[i].ID
 		}
-		member := repairWork{wave: w, task: s.replacementFold(key), plan: p, batch: &p.Batches[i], planAction: proposal.ActionID}
+		member := repairWork{wave: w, task: s.replacementFold(key), plan: p, batch: &p.Batches[i], planAction: proposal.ActionID, businessRepairs: s.repairBusinessRounds(w, p.Batches[i].ID)}
 		for {
 			completion := s.developmentResultRecord(member.task)
+			executions = append(executions, member)
 			if completion == nil {
 				break
 			}
@@ -48,10 +66,8 @@ func (s *State) repairMembers(w *ValidationWave) []repairWork {
 
 			member.task = s.replacementFold(member.task)
 		}
-		member.businessRepairs = s.repairBusinessRounds(w, p.Batches[i].ID)
-		members = append(members, member)
 	}
-	return members
+	return executions
 }
 
 func (s *State) repairMember(task runtime.TaskKey) *repairWork {

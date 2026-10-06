@@ -78,9 +78,11 @@ func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
 	}
 	work := s.repairWork()
 	for _, repair := range work {
-		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 && s.repairCompleted(repair.wave) {
-			for _, id := range repair.wave.Repair.Problems {
-				complete(id)
+		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 && s.repairSourcesComplete(wave, repair.wave) {
+			for _, id := range s.repairCompletedProblems(repair) {
+				if s.repairProblemValidationComplete(wave, repair, id, true) {
+					complete(id)
+				}
 			}
 		}
 	}
@@ -109,13 +111,12 @@ func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
 			return changed
 		}
 	}
-	open := s.validationObligations(wave)
 	for _, repair := range work {
-		if repair.result == nil || !slices.Contains(wave.SourceTasks, repair.task) {
+		if repair.result == nil || !slices.Contains(wave.SourceTasks, repair.task) || !s.repairSourcesComplete(wave, repair.wave) {
 			continue
 		}
-		for _, id := range repair.wave.Repair.Problems {
-			if !slices.Contains(open, id) {
+		for _, id := range s.repairCompletedProblems(repair) {
+			if s.repairProblemValidationComplete(wave, repair, id, false) {
 				complete(id)
 			}
 		}
@@ -177,4 +178,93 @@ func (s *State) validationObligationDetails(w *ValidationWave) []validationOblig
 		}
 	}
 	return obligations
+}
+
+func (s *State) repairSourcesComplete(wave, original *ValidationWave) bool {
+	if !s.repairCompleted(original) {
+		return false
+	}
+	for _, member := range s.repairMembers(original) {
+		if !slices.Contains(wave.SourceTasks, member.task) {
+			return false
+		}
+	}
+	return true
+}
+
+// Completion covers the signed input of each actual correction source. The
+// issue cutoff excludes later adjudications on the same original finding.
+func (s *State) repairProblemCoverage(work repairWork) []FindingResolution {
+	var covered []FindingResolution
+	_, cutoff := s.repairIssue(work.wave.Repair.Task)
+	for _, finding := range s.Validation.Findings {
+		resolution, known := findingResolutionAt(finding, cutoff)
+		if cutoff != 0 && known && slices.Contains(work.wave.Repair.Problems, resolution.ProblemID) && s.validationFindingTarget(work.wave, finding) != nil {
+			covered = append(covered, resolution)
+		}
+	}
+	executions := s.repairExecutions(work.wave)
+	for _, execution := range executions {
+		if execution.previous == nil || execution.batch == nil || s.developmentResultRecord(execution.task) == nil {
+			continue
+		}
+		_, cutoff := s.repairIssue(execution.task)
+		if cutoff == 0 {
+			continue
+		}
+		index := slices.IndexFunc(executions, func(source repairWork) bool { return source.task == execution.previous.Validation.Binding.Task })
+		if index < 0 {
+			continue
+		}
+		source := executions[index]
+		for _, gate := range s.repairGates(source) {
+			_, target := s.memberGateTarget(source, gate)
+			if target == nil {
+				continue
+			}
+			for _, finding := range s.Validation.Findings {
+				if finding.WaveID != work.wave.ID || finding.Target != target.Task.String() {
+					continue
+				}
+				resolution, known := findingResolutionAt(finding, cutoff)
+				if known && mandatoryValidationFinding(target, finding, resolution) {
+					covered = append(covered, resolution)
+				}
+			}
+		}
+	}
+	return covered
+}
+
+func (s *State) repairCompletedProblems(work repairWork) []string {
+	problems := slices.Clone(work.wave.Repair.Problems)
+	for _, covered := range s.repairProblemCoverage(work) {
+		if !slices.Contains(problems, covered.ProblemID) {
+			problems = append(problems, covered.ProblemID)
+		}
+	}
+	return problems
+}
+
+func (s *State) repairProblemValidationComplete(wave *ValidationWave, work repairWork, id string, carry bool) bool {
+	covered := s.repairProblemCoverage(work)
+	for _, finding := range s.Validation.Findings {
+		resolution, known := findingResolutionAt(finding, 0)
+		if !known || resolution.ProblemID != id {
+			continue
+		}
+		target := s.validationFindingResponsibility(wave, finding)
+		if target == nil {
+			continue
+		}
+		if !slices.ContainsFunc(covered, func(original FindingResolution) bool {
+			return original.FindingID == finding.ID && original.AcceptedRevision == resolution.AcceptedRevision && original.ProblemID == id
+		}) {
+			return false
+		}
+		if !carry && target.Status != "PASS" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" {
+			return false
+		}
+	}
+	return true
 }
