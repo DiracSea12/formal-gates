@@ -211,12 +211,12 @@ func validateRouteDecision(route *RouteDecision) error {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("route mode %q invalid for SELECT_ROUTE (closed set: default, full, custom)", route.Mode)}
 	}
 	// 计划确认的两种形态不得混携：内联片内提案（child，摘要＝提案内容摘
-	// 要、结构复用 validateGranularity）与 readiness 引用（普通 run）。
+	// 要、结构复用 ValidateGranularity）与 readiness 引用（普通 run）。
 	if plan := route.DevelopmentPlan; plan != nil && plan.Proposal != nil {
 		if plan.ReviewActionID != "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "an inline development plan proposal cannot also reference its readiness review action"}
 		}
-		if err := validateGranularity(plan.Proposal); err != nil {
+		if err := ValidateGranularity(plan.Proposal); err != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: err.Error()}
 		}
 		if plan.Digest != planContractDigest(plan.Proposal) {
@@ -376,7 +376,7 @@ func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidenc
 		return review.Set{}, err
 	}
 	if pipelineEnabled(state, e.cfg.Definition) && evidence.Action == review.StartReadiness && evidence.Status == "PASS" {
-		if err := validateGranularity(evidence.GranularityReview); err != nil {
+		if err := ValidateGranularity(evidence.GranularityReview); err != nil {
 			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
 	}

@@ -35,7 +35,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	extension.ID, extension.DependsOn, extension.Artifacts = "extension", []string{command.ID}, []string{"extension.go"}
 	extension.Subtasks = []DevelopmentSubtask{{ID: "extend", Description: "Consume the implemented input boundary"}}
 	plan := &GranularityReview{Reason: "Resolve uncertainty before implementation", VerificationTier: "FINAL", Batches: []DevelopmentBatch{batch, command, extension}}
-	if err := validateGranularity(plan); err != nil {
+	if err := ValidateGranularity(plan); err != nil {
 		t.Fatal(err)
 	}
 	s := &State{

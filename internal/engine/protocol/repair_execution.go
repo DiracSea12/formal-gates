@@ -110,7 +110,7 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		if work.plan != nil || work.task != s.replacementFold(work.wave.Repair.Task) {
 			return validationError("only the original repair worker can freeze its plan")
 		}
-		if err := validateGranularity(p.GranularityReview); err != nil {
+		if err := ValidateGranularity(p.GranularityReview); err != nil {
 			return err
 		}
 

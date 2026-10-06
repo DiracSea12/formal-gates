@@ -226,6 +226,33 @@ func (a canaryFindingAnswer) finding() review.Finding {
 	}
 }
 
+// canaryReviewAnswer carries the review conclusion and optional readiness plan.
+type canaryReviewAnswer struct {
+	Status       string                `json:"status"`
+	Findings     []canaryFindingAnswer `json:"findings"`
+	Verification struct {
+		Checks   []string `json:"checks"`
+		Evidence string   `json:"evidence"`
+	} `json:"verification"`
+	Plan *protocol.GranularityReview `json:"plan"`
+}
+
+// canaryReviewShape checks review evidence and the shared plan contract.
+func canaryReviewShape(answer *canaryReviewAnswer, withPlan bool) error {
+	if withPlan || answer.Plan != nil {
+		if err := protocol.ValidateGranularity(answer.Plan); err != nil {
+			return err
+		}
+	}
+	want := []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}
+	sorted := slices.Clone(answer.Verification.Checks)
+	slices.Sort(sorted)
+	if !slices.Equal(sorted, want) || strings.TrimSpace(answer.Verification.Evidence) == "" {
+		return fmt.Errorf("answer lacks the eight verification checks or their evidence")
+	}
+	return nil
+}
+
 // canaryDevelopmentAnswer is the writable-turn answer (batch or repair).
 type canaryDevelopmentAnswer struct {
 	Plan          *protocol.GranularityReview   `json:"granularityReview"`
@@ -631,35 +658,18 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) protocol.
 		instructions = "Judge the confirmed requirement document for implementability and verifiability as a delivery contract. Report PASS unless you find a real defect in the document itself. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	} else {
 		role = "start readiness"
-		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
+		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	}
 	materials := canaryMaterials{
 		Role: role, ActionID: id, RunID: c.currentRunID(), ReviewAction: string(series), Pending: canaryPending(c.run, id),
 		RequirementPath: filepath.Join(c.project, "requirements.md"), RequirementRevision: c.revision,
 	}
-	var answer struct {
-		Status       string                `json:"status"`
-		Findings     []canaryFindingAnswer `json:"findings"`
-		Verification struct {
-			Checks   []string `json:"checks"`
-			Evidence string   `json:"evidence"`
-		} `json:"verification"`
-		Plan *protocol.GranularityReview `json:"plan"`
-	}
-	want := []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}
+	var answer canaryReviewAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		if series == review.StartReadiness && answer.Plan == nil {
-			return fmt.Errorf("readiness answer carries no development plan")
-		}
-		sorted := slices.Clone(answer.Verification.Checks)
-		slices.Sort(sorted)
-		if !slices.Equal(sorted, want) || strings.TrimSpace(answer.Verification.Evidence) == "" {
-			return fmt.Errorf("answer lacks the eight verification checks or their evidence")
-		}
-		return nil
+		return canaryReviewShape(&answer, series == review.StartReadiness)
 	}
 	turn := c.turn(id, role, c.prompt(role, materials, instructions, true), canaryReviewSchema(series == review.StartReadiness), true, shape)
 	if answer.Status != protocol.OutcomePass || len(answer.Findings) > 0 {
@@ -1174,19 +1184,13 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. To split, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; do not edit production content during that planning turn. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. To split, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; do not edit production content during that planning turn. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		if answer.Plan != nil && len(answer.Paths) == 0 {
-			if input.Development != nil || len(answer.Plan.Batches) == 0 {
-				return fmt.Errorf("plan must belong to the original repair worker and contain batches")
-			}
-			return nil
-		}
-		return canaryDevelopmentShape(&answer, input.Development != nil)
+		return canaryRepairShape(&answer, input.Development != nil)
 	}
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
 		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
@@ -1204,6 +1208,22 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 	result := c.developmentEvidence(id, input.Binding, &answer, turn.digest, input.Development != nil)
 	result.GranularityReview = answer.Plan
 	return result
+}
+
+// canaryRepairShape checks proposed plans through the same contract as readiness.
+func canaryRepairShape(answer *canaryDevelopmentAnswer, batch bool) error {
+	if answer.Plan != nil {
+		if err := protocol.ValidateGranularity(answer.Plan); err != nil {
+			return err
+		}
+		if len(answer.Paths) == 0 {
+			if batch {
+				return fmt.Errorf("plan must belong to the original repair worker and contain batches")
+			}
+			return nil
+		}
+	}
+	return canaryDevelopmentShape(answer, batch)
 }
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
@@ -2156,6 +2176,76 @@ func TestCanaryAnswerDecodesEveryAttemptFresh(t *testing.T) {
 	}
 }
 
+// Plan admission preserves the supplied plan and reports the core contract's
+// refusal before a readiness or repair result is submitted.
+func TestCanaryPlanAdmissionUsesCoreContract(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "final_plan_with_checkpoint_reason.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range []string{"invalid-final", "FINAL", "CHECKPOINT"} {
+		var plan protocol.GranularityReview
+		if err := json.Unmarshal(body, &plan); err != nil {
+			t.Fatal(err)
+		}
+		if tier == "FINAL" {
+			plan.CheckpointReason = ""
+		}
+		if tier == "CHECKPOINT" {
+			plan.VerificationTier = tier
+			second := plan.Batches[0]
+			second.ID = "dependent"
+			second.DependsOn = []string{plan.Batches[0].ID}
+			second.Subtasks = []protocol.DevelopmentSubtask{{ID: "dependent-contract", Description: "consume the completed first batch"}}
+			plan.Batches = append(plan.Batches, second)
+			plan.CheckpointGroups = [][]string{{plan.Batches[0].ID}, {second.ID}}
+		}
+		coreErr := protocol.ValidateGranularity(&plan)
+		if tier == "invalid-final" {
+			if coreErr == nil || !strings.Contains(coreErr.Error(), "FINAL has no checkpoint grouping") {
+				t.Fatalf("invalid FINAL fixture did not retain its core refusal: %v", coreErr)
+			}
+		} else if coreErr != nil {
+			t.Fatalf("legal %s fixture rejected: %v", tier, coreErr)
+		}
+		planJSON, err := json.Marshal(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var planValue map[string]any
+		if err := json.Unmarshal(planJSON, &planValue); err != nil {
+			t.Fatal(err)
+		}
+		for _, consumer := range []string{"readiness", "repair"} {
+			t.Run(tier+"/"+consumer, func(t *testing.T) {
+				var got *protocol.GranularityReview
+				var refusal error
+				if consumer == "readiness" {
+					raw := map[string]any{"status": "PASS", "findings": []any{}, "plan": planValue, "verification": map[string]any{"checks": []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, "evidence": "checked bound requirement"}}
+					var answer canaryReviewAnswer
+					if err := decodeCanaryAnswer(raw, &answer); err != nil {
+						t.Fatal(err)
+					}
+					got, refusal = answer.Plan, canaryReviewShape(&answer, true)
+				} else {
+					var answer canaryDevelopmentAnswer
+					if err := decodeCanaryAnswer(map[string]any{"granularityReview": planValue}, &answer); err != nil {
+						t.Fatal(err)
+					}
+					got, refusal = answer.Plan, canaryRepairShape(&answer, false)
+				}
+				if (refusal == nil) != (coreErr == nil) || refusal != nil && refusal.Error() != coreErr.Error() {
+					t.Fatalf("consumer admission differs from core: consumer=%v core=%v", refusal, coreErr)
+				}
+				gotJSON, err := json.Marshal(got)
+				if err != nil || !bytes.Equal(gotJSON, planJSON) {
+					t.Fatalf("consumer altered submitted plan: %s %v", gotJSON, err)
+				}
+			})
+		}
+	}
+}
+
 // resultDigest identifies the submitted business result by its assembled
 // typed value.
 func resultDigest(result protocol.ValidationResult) string {
@@ -2216,7 +2306,7 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 			"dependsOn":     canaryArr(canaryStr()),
 			"deliverable":   canaryStr(),
 			"publicEntry":   canaryStr(),
-			"artifacts":     canaryArr(canaryStr()),
+			"artifacts":     map[string]any{"type": "array", "items": canaryStr(), "description": "Actual repository-relative file paths only; no appended descriptions."},
 			"interfaces":    canaryStr(),
 			"stateBoundary": canaryStr(),
 			"risk":          canaryStr(),
@@ -2236,8 +2326,8 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 		properties["plan"] = canarySchema([]string{"reason", "batches", "verificationTier"}, map[string]any{
 			"reason": canaryStr(), "verificationTier": canaryEnum("FINAL", "CHECKPOINT"),
 			"batches":          canaryArr(batch),
-			"checkpointGroups": canaryArr(canaryArr(canaryStr())),
-			"checkpointReason": canaryStr(),
+			"checkpointGroups": map[string]any{"type": "array", "items": canaryArr(canaryStr()), "description": "Empty or omitted for FINAL. CHECKPOINT requires at least two non-empty groups covering every batch exactly once; dependencies cannot point to a later group."},
+			"checkpointReason": map[string]any{"type": "string", "description": "Empty or omitted for FINAL. CHECKPOINT requires a non-empty structural rationale."},
 		})
 	}
 	return canarySchema(required, properties)

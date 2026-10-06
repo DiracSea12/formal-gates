@@ -80,7 +80,9 @@ type DevelopmentInput struct {
 	Dependencies map[string]WorkerResult `json:"dependencies"`
 }
 
-func validateGranularity(p *GranularityReview) error {
+// ValidateGranularity checks the shared development-plan contract for readiness
+// and repair proposals before they are accepted or submitted.
+func ValidateGranularity(p *GranularityReview) error {
 	if p == nil || strings.TrimSpace(p.Reason) == "" || len(p.Batches) == 0 {
 		return validationError("readiness requires a granularity review with batches and rationale")
 	}
@@ -246,7 +248,7 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 		}
 		id, p = "", route.DevelopmentPlan.Proposal
 	}
-	if err := validateGranularity(p); err != nil {
+	if err := ValidateGranularity(p); err != nil {
 		return nil, err
 	}
 	preview := &DevelopmentPlanPreview{Proposal: *p}
