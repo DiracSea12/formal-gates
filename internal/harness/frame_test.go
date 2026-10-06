@@ -152,3 +152,36 @@ func TestFrameResultDistinguishesCodeFromJSON(t *testing.T) {
 		}
 	}
 }
+
+// Explanation after an unfinished JSON member cannot erase a competing result.
+func TestFrameResultKeepsDamagedJSONStructure(t *testing.T) {
+	result := "```json\n{\"status\":\"PASS\",\"findings\":[]}\n```"
+	for _, partial := range []string{
+		`{"status":"FAIL"`,
+		`[1,`,
+		`["unfinished`,
+		`{"unfinished`,
+		`[tru`,
+		`[-1e`,
+	} {
+		for _, before := range []bool{true, false} {
+			text := partial + "\nI could not finish the preceding structure.\n" + result
+			if !before {
+				text = result + "\n" + partial + "\nI could not finish the preceding structure."
+			}
+			_, refusal := FrameResult(text)
+			if refusal != "NATIVE_RESULT: competing structured content outside result" {
+				t.Fatalf("unfinished structure %q before=%t: %s", partial, before, refusal)
+			}
+		}
+	}
+	for _, explanation := range []string{
+		"func size(word string) int { return len(word) }",
+		"A non-JSON description { ordinary text } and [ordinary text].",
+	} {
+		value, refusal := FrameResult(explanation + "\n" + result)
+		if refusal != "" || canon(value) != `{"findings":[],"status":"PASS"}` {
+			t.Fatalf("non-JSON explanation refused: %s %s", canon(value), refusal)
+		}
+	}
+}

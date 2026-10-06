@@ -78,6 +78,17 @@ func hasJSONStructure(text string) bool {
 		if err == nil || typed || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return true
 		}
+		decoder := newDecoder(text[i:])
+		if _, err := decoder.Token(); err != nil {
+			continue
+		}
+		_, err = decoder.Token()
+		var syntax *json.SyntaxError
+		// A member token or a syntax error after consuming its first byte
+		// proves JSON has started; invalid non-JSON content fails at entry.
+		if err == nil || errors.As(err, &syntax) && syntax.Offset > decoder.InputOffset()+1 {
+			return true
+		}
 	}
 	return false
 }
