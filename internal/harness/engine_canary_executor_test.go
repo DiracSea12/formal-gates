@@ -552,6 +552,57 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 		}
 		return map[string]any{"records": records}, nil
 	case "engine.gate":
+		// The projected slice gates describe the master-owned flag gap without
+		// taking it as slice work; the merge gate is its blocking responsibility.
+		if e.split && m.Slice == "" {
+			index := -1
+			if strings.Contains(input.Binding.Task.Scope, ":slice:uppercase:") {
+				index = 0
+			}
+			if strings.Contains(input.Binding.Task.Scope, ":slice:word-size:") {
+				index = 1
+			}
+			if input.Gate.Gate == "merge-gate" {
+				index = 2
+			}
+			if index >= 0 {
+				var probe canaryObservation
+				found := false
+				for _, observation := range m.HostObservations {
+					if observation.Label == "public flag-contract probe" {
+						probe, found = observation, true
+						break
+					}
+				}
+				if !found {
+					for _, observation := range m.HostObservations {
+						if observation.Label == "command contract" && len(observation.Command) > 0 {
+							probe = canaryLocalObserve(workspace, append([]string{observation.Command[0]}, canaryGateArgs...))
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf("flag finding has no issued candidate probe")
+				}
+				if probe.ExitCode == 0 && strings.Contains(probe.Output, "frob:") {
+					var samples []struct {
+						Raw review.Finding `json:"raw"`
+					}
+					if err := json.Unmarshal(readTestFileBytes(e.t, filepath.Join("testdata", "split_flag_findings.json")), &samples); err != nil {
+						return nil, err
+					}
+					raw := samples[index].Raw
+					status := "PASS"
+					if index == 2 {
+						status = "FAIL"
+					}
+					found := canaryFindingAnswer{Severity: raw.Severity, Message: raw.Message, SeverityRationale: raw.SeverityRationale, Requirement: raw.Requirement, NormalPath: raw.NormalPath, ActualError: raw.ActualError, DeferralImpact: raw.DeferralImpact, Locations: raw.Locations}
+					return map[string]any{"status": status, "findings": []any{found}}, nil
+				}
+			}
+		}
 		passed := true
 		for _, observation := range m.HostObservations {
 			if input.Gate.Gate == "regression" && e.split {

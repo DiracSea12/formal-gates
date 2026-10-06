@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -323,4 +325,48 @@ func canaryValuesEqual(a, b any) bool {
 	left, _ := json.Marshal(a)
 	right, _ := json.Marshal(b)
 	return string(left) == string(right)
+}
+
+// Differently worded raw reports retain their value and severity while the
+// typed gate responsibility determines scope. Independent work is never merged.
+func TestCanaryFlagFindingsKeepResponsibility(t *testing.T) {
+	body := readTestFileBytes(t, filepath.Join("testdata", "split_flag_findings.json"))
+	var samples []struct {
+		FindingID string                       `json:"findingID"`
+		Raw       review.Finding               `json:"raw"`
+		History   []protocol.FindingResolution `json:"history"`
+	}
+	if err := json.Unmarshal(body, &samples); err != nil {
+		t.Fatal(err)
+	}
+	for i, sample := range samples {
+		target := &protocol.ValidationTarget{Kind: "GATE", Gate: "correctness", Status: "PASS", SliceID: []string{"uppercase", "word-size", ""}[i]}
+		if i == 2 {
+			target.Gate, target.Status = "merge-gate", "FAIL"
+		}
+		finding := &protocol.ValidationFinding{ID: sample.FindingID, Raw: &sample.Raw}
+		before, _ := json.Marshal(finding.Raw)
+		resolution, err := canaryFlagFindingResolution(target, finding, "AC-004")
+		decision := "DISMISSED"
+		if i == 2 {
+			decision = "SAME_AS"
+		}
+		if err != nil || resolution.Decision != decision || resolution.Severity != sample.Raw.Severity {
+			t.Fatalf("raw responsibility %d: %+v %v", i, resolution, err)
+		}
+		after, _ := json.Marshal(finding.Raw)
+		if !bytes.Equal(before, after) {
+			t.Fatal("scope adjudication altered the raw finding")
+		}
+		independent := sample.Raw
+		independent.Locations = append(slices.Clone(sample.Raw.Locations), "size.go:2")
+		if _, err := canaryFlagFindingResolution(target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+			t.Fatal("mixed production responsibility was merged")
+		}
+		independent = sample.Raw
+		independent.Requirement = "AC-001"
+		if _, err := canaryFlagFindingResolution(target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+			t.Fatal("independent acceptance responsibility was merged")
+		}
+	}
 }

@@ -1808,10 +1808,8 @@ func (c *engineCanary) confirmRoute() {
 	c.submit(event)
 }
 
-// adjudicate closes the collected wave: it first verifies the wave really
-// carries the seeded failures (gate finding plus case execution failure),
-// files the raw gate findings as NEW problems, then merges the
-// execution-failure findings into that problem with SAME_AS.
+// The fixture verifies its one flag defect against the collected gate scope
+// and failed case points, then uses the public problem identity for every reference.
 func (c *engineCanary) adjudicate() {
 	c.t.Helper()
 	wave := c.currentWave()
@@ -1849,94 +1847,157 @@ func (c *engineCanary) adjudicate() {
 			c.fail("first wave did not really fail: gateFailed=%t qaFailed=%t rawFindings=%d executionFailures=%d", gateFailed, qaFailed, rawFindings, executionFailures)
 		}
 	}
-	findingIDs := make([]string, 0, len(c.run.Validation.Findings))
+	point := "AC-002"
+	if c.splitFlagContract() {
+		point = "AC-004"
+	}
+	ids := []string{}
 	for id, finding := range c.run.Validation.Findings {
-		if finding.WaveID == wave.ID && len(finding.History) == 0 {
-			findingIDs = append(findingIDs, id)
+		if finding.WaveID == wave.ID {
+			ids = append(ids, id)
 		}
 	}
-	slices.Sort(findingIDs)
-	resolutions := []protocol.FindingResolution{}
-	for _, id := range findingIDs {
+	slices.Sort(ids)
+	active := []protocol.FindingResolution{}
+	dismissed := []protocol.FindingResolution{}
+	for _, id := range ids {
 		finding := c.run.Validation.Findings[id]
 		if finding.Raw == nil {
 			continue
 		}
-		raw := finding.Raw
-		resolutions = append(resolutions, protocol.FindingResolution{
-			FindingID: id, Decision: "NEW",
-			Requirement:       firstNonEmpty(raw.Requirement, "AC-002"),
-			NormalPath:        firstNonEmpty(raw.NormalPath, "frob word"),
-			Module:            "flag handling",
-			RootCause:         firstNonEmpty(raw.ActualError, raw.Message),
-			Consequence:       firstNonEmpty(raw.DeferralImpact, raw.Message),
-			Severity:          raw.Severity,
-			SeverityRationale: firstNonEmpty(raw.SeverityRationale, "the public flag contract is violated on the normal entry"),
-			Verification: review.FindingVerification{
-				Scope: "public command contract", Severity: "contract violation on unknown flags",
-				Causality:      firstNonEmpty(raw.Message, "unknown flags are accepted"),
-				Reproduction:   firstNonEmpty(raw.NormalPath, "frob --unknown-flag canary"),
-				Classification: "implementation",
-			},
-			Reason: "verified against the host-captured flag probe for this candidate",
-		})
+		resolution, err := canaryFlagFindingResolution(wave.Targets[finding.Target], finding, point)
+		if err != nil {
+			c.fail("flag fixture cannot adjudicate %s: %v", id, err)
+		}
+		if resolution.Decision == "DISMISSED" {
+			if len(finding.History) == 0 {
+				dismissed = append(dismissed, resolution)
+			}
+		} else {
+			active = append(active, resolution)
+		}
 	}
-	if len(resolutions) == 0 {
-		c.fail("wave %s has no raw finding to adjudicate", wave.ID)
+	if len(active) == 0 {
+		c.fail("wave %s has no in-scope raw finding to adjudicate", wave.ID)
 	}
-	c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-		Subject:    wave.ID,
-		Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: resolutions},
-	}})
-	c.drive()
-	// The same-root-cause merge: execution-failure findings join the problem
-	// the raw findings just created.
-	problems := make([]string, 0, len(c.run.Validation.Problems))
-	for id := range c.run.Validation.Problems {
-		problems = append(problems, id)
-	}
-	slices.Sort(problems)
-	if len(problems) != 1 {
-		c.fail("expected exactly one adjudicated problem, have %d", len(problems))
-	}
-	merged := []protocol.FindingResolution{}
-	for _, id := range findingIDs {
+	for _, id := range ids {
 		finding := c.run.Validation.Findings[id]
-		if finding.ExecutionFailure == nil || len(finding.History) != 0 {
+		if finding.ExecutionFailure == nil {
 			continue
 		}
-		caseID := finding.ExecutionFailure.CaseID
-		point := "AC-002"
+		matched := false
 		for _, target := range wave.Targets {
 			if target.Execution == nil {
 				continue
 			}
 			for _, record := range target.Execution.Records {
-				if record.CaseID == caseID {
-					point = record.PointID
+				if record.CaseID == finding.ExecutionFailure.CaseID && record.Result == coverage.ExecutedFail {
+					if record.PointID != point {
+						c.fail("flag fixture has an independent failed acceptance point %s", record.PointID)
+					}
+					matched = true
 				}
 			}
 		}
-		merged = append(merged, protocol.FindingResolution{
-			FindingID: id, Decision: "SAME_AS", ProblemID: problems[0],
-			Requirement: point, NormalPath: "frob word", Module: "flag handling",
-			RootCause:   "unknown flags are accepted by the argument handling",
-			Consequence: "the unknown-flag rejection acceptance condition is violated by the same defect",
-			Verification: review.FindingVerification{
-				Scope:     "acceptance case execution",
-				Causality: "case oracle demands rejection, execution observed acceptance", Reproduction: "case " + caseID,
-				Classification: "implementation",
-			},
-			Reason: "the failed case execution shares the root cause of the gate finding",
-		})
+		if !matched {
+			c.fail("finding %s has no bound failed flag execution", id)
+		}
 	}
-	if len(merged) == 0 {
-		c.fail("wave %s has no execution-failure finding to merge", wave.ID)
+	problem := ""
+	for _, existing := range c.run.Validation.Findings {
+		if len(existing.History) == 0 {
+			continue
+		}
+		history := existing.History[len(existing.History)-1]
+		p := c.run.Validation.Problems[history.ProblemID]
+		if p != nil && p.ResolvedWave == "" && history.Requirement == point && history.Module == "flag handling" && history.RootCause == "unknown flags are accepted by the argument handling" {
+			if problem != "" && problem != p.ID {
+				c.fail("expected exactly one adjudicated problem, have multiple open flag problems")
+			}
+			problem = p.ID
+		}
 	}
-	c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-		Subject:    wave.ID,
-		Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: merged},
-	}})
+	anchor := active[0]
+	if len(c.run.Validation.Findings[anchor.FindingID].History) == 0 {
+		if problem == "" {
+			anchor.Decision = "NEW"
+		} else {
+			anchor.Decision, anchor.ProblemID = "SAME_AS", problem
+		}
+		c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: append(dismissed, anchor)}}})
+		c.drive()
+	} else if len(dismissed) > 0 {
+		c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: dismissed}}})
+	}
+	anchorFinding := c.run.Validation.Findings[anchor.FindingID]
+	if len(anchorFinding.History) == 0 {
+		c.fail("anchor finding has no public adjudication identity")
+	}
+	problem = anchorFinding.History[len(anchorFinding.History)-1].ProblemID
+	if problem == "" || c.run.Validation.Problems[problem] == nil {
+		c.fail("anchor has no public problem")
+	}
+	merged := []protocol.FindingResolution{}
+	for _, resolution := range active[1:] {
+		if len(c.run.Validation.Findings[resolution.FindingID].History) == 0 {
+			resolution.Decision, resolution.ProblemID = "SAME_AS", problem
+			merged = append(merged, resolution)
+		}
+	}
+	for _, id := range ids {
+		finding := c.run.Validation.Findings[id]
+		if finding.ExecutionFailure == nil || len(finding.History) != 0 {
+			continue
+		}
+		merged = append(merged, protocol.FindingResolution{FindingID: id, Decision: "SAME_AS", ProblemID: problem, Requirement: point, NormalPath: "frob --unknown-flag canary", Module: "flag handling", RootCause: "unknown flags are accepted by the argument handling", Consequence: "the unknown-flag rejection acceptance condition is violated by the same defect", Verification: review.FindingVerification{Scope: "acceptance case execution", Causality: "case oracle demands rejection, execution observed acceptance", Reproduction: "case " + finding.ExecutionFailure.CaseID, Classification: "implementation"}, Reason: "the bound failed flag execution shares the verified gate defect"})
+	}
+	if len(merged) > 0 {
+		c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: merged}}})
+	}
+	problems := map[string]bool{}
+	for _, id := range ids {
+		history := c.run.Validation.Findings[id].History
+		if len(history) > 0 && history[len(history)-1].Decision != "DISMISSED" {
+			problems[history[len(history)-1].ProblemID] = true
+		}
+	}
+	if len(problems) != 1 || !problems[problem] {
+		c.fail("expected exactly one adjudicated problem, have %d", len(problems))
+	}
+}
+
+// The user stand-in is limited to the declared flag gap, not a general finding
+// classifier. An independent file, acceptance reference or failed slice stops it.
+func canaryFlagFindingResolution(target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
+	raw := finding.Raw
+	if target == nil || target.Kind != "GATE" || raw == nil || !strings.Contains(raw.Requirement, point) {
+		return protocol.FindingResolution{}, fmt.Errorf("finding is outside the verified flag defect")
+	}
+	physical := false
+	for _, location := range raw.Locations {
+		path := strings.SplitN(location, ":", 2)[0]
+		if path == "frob.go" {
+			physical = true
+			continue
+		}
+		if strings.HasPrefix(location, ".gates/results/") || strings.HasPrefix(location, "materials.json ") {
+			continue
+		}
+		return protocol.FindingResolution{}, fmt.Errorf("finding includes independent production location %s", location)
+	}
+	if !physical {
+		return protocol.FindingResolution{}, fmt.Errorf("finding has no flag implementation location")
+	}
+	decision, scope, reason := "SAME_AS", "public command contract", "verified flag failure in the master responsibility"
+	if target.SliceID != "" {
+		if target.Status != protocol.OutcomePass || raw.Severity != "P2" && raw.Severity != "P3" {
+			return protocol.FindingResolution{}, fmt.Errorf("slice finding needs its own responsibility decision")
+		}
+		decision, scope, reason = "DISMISSED", "outside the function slice", "frob.go flag handling belongs to master-merge, not the passed function slice"
+	} else if target.Status != protocol.OutcomeFail {
+		return protocol.FindingResolution{}, fmt.Errorf("master finding has no failed gate responsibility")
+	}
+	return protocol.FindingResolution{FindingID: finding.ID, Decision: decision, Requirement: point, NormalPath: raw.NormalPath, Module: "flag handling", RootCause: "unknown flags are accepted by the argument handling", Consequence: raw.DeferralImpact, Severity: raw.Severity, SeverityRationale: raw.SeverityRationale, Verification: review.FindingVerification{Scope: scope, Severity: raw.SeverityRationale, Causality: raw.Message, Reproduction: raw.NormalPath, Classification: "implementation"}, Reason: reason}, nil
 }
 
 // executionScope fixes the host's AFFECTED-wave execution decision: after the
