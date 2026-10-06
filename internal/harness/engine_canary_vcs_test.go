@@ -3,6 +3,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -87,12 +88,17 @@ func (c *engineCanary) initFixtureRepository() {
 		}
 		return
 	}
-	// Native tools read configuration under HOME. Keep that lookup private while
-	// preserving the existing Go cache used by the real installer and probes.
-	cache := strings.Fields(c.fixtureCommand(c.project, "go", nil, "env", "GOMODCACHE", "GOCACHE"))
-	c.t.Setenv("GOMODCACHE", cache[0])
-	c.t.Setenv("GOCACHE", cache[1])
-	c.t.Setenv("HOME", c.home)
+	// Native tools and the installer share the host's private environment. Read
+	// Go's original cache values and resolve the runtime before HOME changes.
+	var cache struct{ GOMODCACHE, GOCACHE string }
+	if err := json.Unmarshal([]byte(c.fixtureCommand(c.project, "go", nil, "env", "-json", "GOMODCACHE", "GOCACHE")), &cache); err != nil {
+		c.fail("read configured Go caches: %v", err)
+	}
+	c.t.Setenv("GOMODCACHE", cache.GOMODCACHE)
+	c.t.Setenv("GOCACHE", cache.GOCACHE)
+	for key, value := range c.hostEnvironment() {
+		c.t.Setenv(key, value)
+	}
 	// Nested SVN working copies make Go stamping ambiguous; native snapshots
 	// are verified by Provider, while these builds check fixture behavior.
 	c.t.Setenv("GOFLAGS", strings.TrimSpace(os.Getenv("GOFLAGS")+" -buildvcs=false"))

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/validate"
 )
 
@@ -257,44 +258,59 @@ func TestCanaryRuntimeIdentitySurvivesPrivateHome(t *testing.T) {
 	}
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	for _, spelling := range []string{"absolute", "tilde"} {
-		t.Run(spelling, func(t *testing.T) {
-			stable, candidate := t.TempDir(), t.TempDir()
-			script := filepath.Join(stable, "runtime", "glm", "zcode.cjs")
-			if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			content := "// native runtime fixture\n"
-			if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("HOME", stable)
-			t.Setenv("USERPROFILE", stable)
-			configured := script
-			if spelling == "tilde" {
-				configured = "~/runtime/glm/zcode.cjs"
-			}
-			t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", configured)
-			original, err := zcodeCaptureBinding()
-			if err != nil {
-				t.Fatal(err)
-			}
-			c := &engineCanary{t: t}
-			if err := c.prepareHome(candidate, stable, sourceRoot); err != nil {
-				t.Fatal(err)
-			}
-			for repeat := 0; repeat < 2; repeat++ {
-				if err := c.captureBinding(); err != nil {
+	for _, provider := range []string{"git", "svn", "p4"} {
+		for _, spelling := range []string{"absolute", "tilde"} {
+			t.Run(provider+"/"+spelling, func(t *testing.T) {
+				stable, candidate := t.TempDir(), t.TempDir()
+				script := filepath.Join(stable, "runtime", "glm", "zcode.cjs")
+				if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if !valuesEqual(c.binding["launch"], original["launch"]) || !valuesEqual(c.binding["files"], original["files"]) || zcodeLaunchEnvironment(c.binding)["FORMAL_GATES_ZCODE_SCRIPT"] != canaryCanonicalPath(script) || os.Getenv("HOME") != c.home {
-					t.Fatalf("runtime identity across private HOME: %#v", c.binding)
+				content := "// native runtime fixture\n"
+				if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
 				}
-			}
-			if readTestFile(t, script) != content {
-				t.Fatal("capture changed the native runtime")
-			}
-		})
+				t.Setenv("HOME", stable)
+				t.Setenv("USERPROFILE", stable)
+				configured := script
+				if spelling == "tilde" {
+					configured = "~/runtime/glm/zcode.cjs"
+				}
+				t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", configured)
+				original, err := zcodeCaptureBinding()
+				if err != nil {
+					t.Fatal(err)
+				}
+				c := &engineCanary{t: t}
+				if err := c.prepareHome(candidate, stable, sourceRoot); err != nil {
+					t.Fatal(err)
+				}
+				c.project = filepath.Join(c.home, ".formal-gates-resources", "project")
+				c.jobs = filepath.Join(c.home, "jobs")
+				for _, path := range []string{c.project, c.jobs} {
+					if err := os.MkdirAll(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				c.vcs = vcs.NewNative(c.project, provider, nil)
+				c.initFixtureRepository()
+				bootstrapped, err := zcodeCaptureBinding()
+				if err != nil || !valuesEqual(bootstrapped["launch"], original["launch"]) || !valuesEqual(bootstrapped["files"], original["files"]) || c.hostEnvironment()["FORMAL_GATES_ZCODE_SCRIPT"] != canaryCanonicalPath(script) {
+					t.Fatalf("bootstrap changed runtime identity: binding=%#v error=%v", bootstrapped, err)
+				}
+				for repeat := 0; repeat < 2; repeat++ {
+					if err := c.captureBinding(); err != nil {
+						t.Fatal(err)
+					}
+					if !valuesEqual(c.binding["launch"], original["launch"]) || !valuesEqual(c.binding["files"], original["files"]) || zcodeLaunchEnvironment(c.binding)["FORMAL_GATES_ZCODE_SCRIPT"] != canaryCanonicalPath(script) || os.Getenv("HOME") != c.home {
+						t.Fatalf("runtime identity across private HOME: %#v", c.binding)
+					}
+				}
+				if readTestFile(t, script) != content {
+					t.Fatal("capture changed the native runtime")
+				}
+			})
+		}
 	}
 }
 
@@ -854,3 +870,30 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   process.stdout.write(JSON.stringify({id:request.id,result})+'\n');
 });
 `
+
+func TestCanaryNativeBootstrapPreservesConfiguredCachePaths(t *testing.T) {
+	for _, provider := range []string{"git", "svn", "p4"} {
+		t.Run(provider, func(t *testing.T) {
+			base := t.TempDir()
+			moduleCache := filepath.Join(base, "module cache")
+			buildCache := filepath.Join(base, "build cache")
+			t.Setenv("GOMODCACHE", moduleCache)
+			t.Setenv("GOCACHE", buildCache)
+			c := &engineCanary{t: t, home: filepath.Join(base, "home"), project: filepath.Join(base, "project"), jobs: filepath.Join(base, "jobs")}
+			for _, path := range []string{c.home, c.project, c.jobs} {
+				if err := os.MkdirAll(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.vcs = vcs.NewNative(c.project, provider, nil)
+			c.initFixtureRepository()
+			if gotModule, gotBuild := os.Getenv("GOMODCACHE"), os.Getenv("GOCACHE"); gotModule != moduleCache || gotBuild != buildCache {
+				t.Fatalf("configured cache values changed: module=%q want=%q build=%q want=%q", gotModule, moduleCache, gotBuild, buildCache)
+			}
+			observed := c.fixtureCommand(c.project, "go", nil, "env", "GOMODCACHE", "GOCACHE")
+			if observed != moduleCache+"\n"+buildCache {
+				t.Fatalf("Go did not consume the configured cache values: %q", observed)
+			}
+		})
+	}
+}
