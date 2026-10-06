@@ -346,7 +346,7 @@ func TestCanaryFlagFindingsKeepResponsibility(t *testing.T) {
 		}
 		finding := &protocol.ValidationFinding{ID: sample.FindingID, Raw: &sample.Raw}
 		before, _ := json.Marshal(finding.Raw)
-		resolution, err := canaryFlagFindingResolution(t.TempDir(), target, finding, "AC-004")
+		resolution, err := canaryFlagFindingResolution(t.TempDir(), t.TempDir(), target, finding, "AC-004")
 		decision := "DISMISSED"
 		if i == 2 {
 			decision = "SAME_AS"
@@ -360,12 +360,12 @@ func TestCanaryFlagFindingsKeepResponsibility(t *testing.T) {
 		}
 		independent := sample.Raw
 		independent.Locations = append(slices.Clone(sample.Raw.Locations), "size.go:2")
-		if _, err := canaryFlagFindingResolution(t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+		if _, err := canaryFlagFindingResolution(t.TempDir(), t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
 			t.Fatal("mixed production responsibility was merged")
 		}
 		independent = sample.Raw
 		independent.Requirement = "AC-001"
-		if _, err := canaryFlagFindingResolution(t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
+		if _, err := canaryFlagFindingResolution(t.TempDir(), t.TempDir(), target, &protocol.ValidationFinding{Raw: &independent}, "AC-004"); err == nil {
 			t.Fatal("independent acceptance responsibility was merged")
 		}
 	}
@@ -387,7 +387,7 @@ func TestCanaryFindingLocationsUseIssuedResource(t *testing.T) {
 	if err != nil || bound != sample.Resources[sample.Result.Validation.Binding.WorkspaceID].Path {
 		t.Fatalf("accepted result lost resource: %s %v", bound, err)
 	}
-	if _, err := canaryFlagFindingResolution(bound, &sample.Target, &sample.Finding, "AC-004"); err != nil {
+	if _, err := canaryFlagFindingResolution(bound, t.TempDir(), &sample.Target, &sample.Finding, "AC-004"); err != nil {
 		t.Fatalf("original issued absolute positions refused: %v", err)
 	}
 	workspace, other := t.TempDir(), t.TempDir()
@@ -417,7 +417,7 @@ func TestCanaryFindingLocationsUseIssuedResource(t *testing.T) {
 		raw.Locations = []string{filepath.Join(prefix, "frob.go") + ":3", filepath.Join(prefix, ".gates/results/engine-canary.merge-cases.md") + ":104"}
 		finding := sample.Finding
 		finding.Raw = &raw
-		if _, err := canaryFlagFindingResolution(bound, &sample.Target, &finding, "AC-004"); err != nil {
+		if _, err := canaryFlagFindingResolution(bound, t.TempDir(), &sample.Target, &finding, "AC-004"); err != nil {
 			t.Fatalf("same issued file refused: %v", err)
 		}
 	}
@@ -426,7 +426,7 @@ func TestCanaryFindingLocationsUseIssuedResource(t *testing.T) {
 		raw.Locations = []string{location}
 		finding := sample.Finding
 		finding.Raw = &raw
-		if _, err := canaryFlagFindingResolution(bound, &sample.Target, &finding, "AC-004"); err == nil {
+		if _, err := canaryFlagFindingResolution(bound, t.TempDir(), &sample.Target, &finding, "AC-004"); err == nil {
 			t.Fatalf("independent location accepted: %s", location)
 		}
 	}
@@ -440,5 +440,83 @@ func TestCanaryFindingLocationsUseIssuedResource(t *testing.T) {
 	after, _ := json.Marshal(sample.Finding.Raw)
 	if !bytes.Equal(original, after) {
 		t.Fatal("location interpretation rewrote the raw positions")
+	}
+}
+
+// Prompt evidence is limited to this accepted result's original issued attempt.
+func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
+	var sample struct {
+		Finding   protocol.ValidationFinding         `json:"finding"`
+		Target    protocol.ValidationTarget          `json:"target"`
+		Result    protocol.WorkerResult              `json:"result"`
+		Resources map[string]protocol.NativeResource `json:"nativeResources"`
+		Issued    uint64                             `json:"issuedRevision"`
+		Attempt   string                             `json:"derivedAttemptID"`
+		Jobs      string                             `json:"jobs"`
+		RunID     string                             `json:"runId"`
+	}
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "issued_material_finding.json")), &sample); err != nil {
+		t.Fatal(err)
+	}
+	state := &protocol.State{RunID: sample.RunID, Results: map[string]protocol.WorkerResult{sample.Target.ResultAction: sample.Result}, DispatchIssueRevisions: map[string]uint64{sample.Target.ResultAction: sample.Issued}}
+	materialDir, err := canaryFindingMaterialDirectory(sample.Jobs, state, &sample.Target)
+	if err != nil || filepath.Base(materialDir) != canaryName(sample.Attempt) {
+		t.Fatalf("retired Pending lost issued identity: %s %v", materialDir, err)
+	}
+	workspace, err := canaryFindingWorkspace(&sample.Target, sample.Result, sample.Resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(sample.Finding.Raw)
+	if _, err := canaryFlagFindingResolution(workspace, materialDir, &sample.Target, &sample.Finding, "AC-004"); err != nil {
+		t.Fatalf("original exact material position refused: %v", err)
+	}
+	jobs, work := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "frob.go"), []byte("package main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending := protocol.PendingAction{ActionID: sample.Target.ResultAction, AttemptID: sample.Attempt, Task: sample.Result.Validation.Binding.Task}
+	input := protocol.ValidationInput{Binding: sample.Result.Validation.Binding}
+	input.RequirementDocument.Content = "confirmed issued requirement\n"
+	c := &engineCanary{t: t, jobs: jobs, run: facade.Run{RunID: sample.RunID, PendingActions: map[string]protocol.PendingAction{pending.ActionID: pending}}}
+	c.prompt("gate", c.materials(pending.ActionID, "gate", input), "judge issued contract", true)
+	materialDir, err = canaryFindingMaterialDirectory(jobs, state, &sample.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var material canaryMaterials
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(materialDir, "materials.json")), &material); err != nil || material.Pending == nil || material.Input == nil || material.Pending.AttemptID != sample.Attempt || material.ActionID != sample.Result.ActionID || material.RunID != sample.RunID || material.Input.Binding != sample.Result.Validation.Binding {
+		t.Fatalf("prompt material identity differs: %+v %v", material, err)
+	}
+	if string(readTestFileBytes(t, filepath.Join(materialDir, "requirements.md"))) != input.RequirementDocument.Content {
+		t.Fatal("prompt requirement content differs")
+	}
+	alias := filepath.Join(t.TempDir(), "materials")
+	if err := os.Symlink(materialDir, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"materials.json", "requirements.md"} {
+		for _, prefix := range []string{"", materialDir, alias} {
+			raw := *sample.Finding.Raw
+			raw.Locations = []string{"frob.go:3", filepath.Join(prefix, file) + ":2-8"}
+			finding := sample.Finding
+			finding.Raw = &raw
+			if _, err := canaryFlagFindingResolution(work, materialDir, &sample.Target, &finding, "AC-004"); err != nil {
+				t.Fatalf("issued prompt file refused: %s %v", file, err)
+			}
+		}
+	}
+	for _, location := range []string{filepath.Join(jobs, "other-action", "materials.json") + ":1", filepath.Join(filepath.Dir(materialDir), "old-attempt", "requirements.md") + ":2", filepath.Join(t.TempDir(), "frob.go") + ":3", "size.go:2"} {
+		raw := *sample.Finding.Raw
+		raw.Locations = []string{"frob.go:3", location}
+		finding := sample.Finding
+		finding.Raw = &raw
+		if _, err := canaryFlagFindingResolution(work, materialDir, &sample.Target, &finding, "AC-004"); err == nil {
+			t.Fatalf("unrelated location accepted: %s", location)
+		}
+	}
+	after, _ := json.Marshal(sample.Finding.Raw)
+	if !bytes.Equal(before, after) {
+		t.Fatal("material consumption altered raw locations")
 	}
 }

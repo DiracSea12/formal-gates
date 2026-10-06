@@ -1886,7 +1886,11 @@ func (c *engineCanary) adjudicate() {
 		if err != nil {
 			c.fail("finding %s result workspace: %v", id, err)
 		}
-		resolution, err := canaryFlagFindingResolution(workspace, target, finding, point)
+		materialDir, err := canaryFindingMaterialDirectory(c.jobs, &state, target)
+		if err != nil {
+			c.fail("finding %s issued material: %v", id, err)
+		}
+		resolution, err := canaryFlagFindingResolution(workspace, materialDir, target, finding, point)
 		if err != nil {
 			c.fail("flag fixture cannot adjudicate %s: %v", id, err)
 		}
@@ -2000,30 +2004,49 @@ func canaryFindingWorkspace(target *protocol.ValidationTarget, result protocol.W
 	return resource.Path, nil
 }
 
+// Accepted results retain the revision that issued their engine attempt after
+// Pending retires. That fact and the original binding own the prompt directory.
+func canaryFindingMaterialDirectory(jobs string, state *protocol.State, target *protocol.ValidationTarget) (string, error) {
+	if target == nil {
+		return "", fmt.Errorf("finding has no issued target")
+	}
+	result := state.Results[target.ResultAction]
+	issued, ok := state.DispatchIssueRevisions[target.ResultAction]
+	if result.ActionID != target.ResultAction || result.Validation == nil || !ok || issued == 0 {
+		return "", fmt.Errorf("finding has no accepted issuance binding")
+	}
+	attempt := fmt.Sprintf("att:%s:%d", result.Validation.Binding.Task.String(), issued)
+	return canaryJobDirectory(jobs, state.RunID, target.ResultAction, attempt), nil
+}
+
 // The user stand-in is limited to the declared flag gap, not a general finding
 // classifier. An independent file, acceptance reference or failed slice stops it.
-func canaryFlagFindingResolution(workspace string, target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
+func canaryFlagFindingResolution(workspace, materialDir string, target *protocol.ValidationTarget, finding *protocol.ValidationFinding, point string) (protocol.FindingResolution, error) {
 	raw := finding.Raw
 	if target == nil || target.Kind != "GATE" || raw == nil || !strings.Contains(raw.Requirement, point) {
 		return protocol.FindingResolution{}, fmt.Errorf("finding is outside the verified flag defect")
 	}
 	physical := false
 	for _, location := range raw.Locations {
-		if strings.HasPrefix(location, "materials.json ") {
-			continue
+		file := strings.SplitN(location, ":", 2)[0]
+		if strings.HasPrefix(file, "materials.json ") {
+			file = "materials.json"
 		}
-		path, err := canaryWorkspacePath(workspace, strings.SplitN(location, ":", 2)[0])
-		if err != nil {
-			return protocol.FindingResolution{}, err
-		}
-		if path == "frob.go" {
+		path, err := canaryWorkspacePath(workspace, file)
+		if err == nil && path == "frob.go" {
 			physical = true
 			continue
 		}
-		if strings.HasPrefix(path, ".gates/results/") {
+		if err == nil && strings.HasPrefix(path, ".gates/results/") {
 			continue
 		}
-		return protocol.FindingResolution{}, fmt.Errorf("finding includes independent production location %s", location)
+		if materialDir != "" {
+			material, materialErr := canaryWorkspacePath(materialDir, file)
+			if materialErr == nil && (material == "materials.json" || material == "requirements.md") {
+				continue
+			}
+		}
+		return protocol.FindingResolution{}, fmt.Errorf("finding includes independent production or material location %s", location)
 	}
 	if !physical {
 		return protocol.FindingResolution{}, fmt.Errorf("finding has no flag implementation location")
