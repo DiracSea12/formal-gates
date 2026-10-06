@@ -419,10 +419,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		if w == nil || w.Status != "COLLECTING" && repairTarget == nil && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
 			return validationError("validation wave is not collecting this result")
 		}
-		target := w.Targets[b.Task.String()]
-		if repairTarget != nil {
-			target = repairTarget
-		}
+		target := w.target(b.Task.String())
 		if target == nil || target.Status == "DISPOSED" || target.Status == "PASS" || target.Status == "FAIL" {
 			return validationError("validation target is already settled or unknown")
 		}

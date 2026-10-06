@@ -56,14 +56,11 @@ func (s *State) endBusinessAttempt(pending PendingAction, attempt Attempt, reaso
 	s.Tasks[pending.Task] = runtime.TaskQueued
 	s.routingReleasedCapacity = true
 	s.RecoveryRecords = append(s.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: attempt.ID, Class: authoring.FailureTransientEngine, Action: RecoveryWait, InterruptionReason: s.RejectedResults[actionID].Payload.InterruptionReason, Detail: fmt.Sprintf("%s; attempts %d/%d", reason, attempt.Attempts, attempt.MaxAttempts), Revision: nextRevision})
-	if wave := s.currentValidationWave(); wave != nil && wave.Status == "COLLECTING" {
-		for _, target := range wave.Targets {
-			if target.Task == pending.Task {
-				target.Status = "RUNTIME_ERROR"
-				if attempt.RetryExhausted {
-					target.Status = "RETRY_EXHAUSTED"
-				}
-			}
+	if wave := s.validationWaveForTask(pending.Task); wave != nil {
+		target := wave.target(pending.Task.String())
+		target.Status = "RUNTIME_ERROR"
+		if attempt.RetryExhausted {
+			target.Status = "RETRY_EXHAUSTED"
 		}
 	}
 }

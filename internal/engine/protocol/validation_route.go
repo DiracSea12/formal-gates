@@ -90,13 +90,7 @@ func (s *State) validationFindingTarget(w *ValidationWave, finding *ValidationFi
 		return nil
 	}
 	if finding.WaveID == w.ID {
-		if target := w.Targets[finding.Target]; target != nil {
-			return target
-		}
-		if w.Repair != nil {
-			return w.Repair.Targets[finding.Target]
-		}
-		return nil
+		return w.target(finding.Target)
 	}
 	for _, target := range w.Targets {
 		binding, known := s.DispatchBindings[target.ResultAction]
@@ -169,7 +163,7 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 	binding, known := s.DispatchBindings[target.ResultAction]
 	if !known {
 		if original := s.validationWaveForTask(target.Task); original != nil && original.ID != wave.ID {
-			return s.targetResponsibility(original, original.Targets[target.Task.String()])
+			return s.targetResponsibility(original, original.target(target.Task.String()))
 		}
 		return wave, target
 	}
@@ -186,7 +180,7 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 		}
 	}
 	if original := s.validationWave(binding.WaveID); original != nil {
-		if prior := original.Targets[binding.Task.String()]; prior != nil {
+		if prior := original.target(binding.Task.String()); prior != nil {
 			return original, prior
 		}
 	}

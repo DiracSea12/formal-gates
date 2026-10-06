@@ -376,11 +376,8 @@ func (e *Engine) acceptValidationRequest(s *State, r *ValidationRequest, nextRev
 		}
 	}
 	if copy.Kind == "DISPOSE" {
-		w := s.currentValidationWave()
-		if w == nil || w.Status != "COLLECTING" {
-			return nil, validationError("error disposition requires a collecting wave")
-		}
-		t := w.Targets[copy.Target]
+		w := s.validationWave(copy.Binding.WaveID)
+		t := w.target(copy.Target)
 		if t == nil || (t.Status != "RUNTIME_ERROR" && t.Status != "RETRY_EXHAUSTED") {
 			return nil, validationError("only an unresolved runtime/invalid-result target can be disposed")
 		}

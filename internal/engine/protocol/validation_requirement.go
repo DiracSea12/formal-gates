@@ -73,9 +73,9 @@ func (s *State) sameValidationDuty(binding WorkBinding, current *ValidationWave)
 	if original == nil || original.Candidate != current.Candidate {
 		return false
 	}
-	target := original.Targets[binding.Task.String()]
+	target := original.target(binding.Task.String())
 	if target == nil {
-		target = original.Targets[s.sourceValidationTask(binding.Task).String()]
+		target = original.target(s.sourceValidationTask(binding.Task).String())
 	}
 	return target != nil && (target.Kind != "QA" || original.Scope == current.Scope && sameWaveCases(original, current, target.Mode))
 }

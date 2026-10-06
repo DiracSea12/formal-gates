@@ -58,10 +58,20 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 			options = nil
 		}
 	case "DISPOSE":
-		if w := s.currentValidationWave(); w != nil {
-			r.Binding.WaveID = w.ID
-			r.Binding.Candidate = w.Candidate.Identity
-			r.Obligations = []string{r.Target}
+		for i := range s.Validation.Waves {
+			w := &s.Validation.Waves[i]
+			if target := w.target(r.Target); target != nil {
+				r.Binding = WorkBinding{Task: target.Task, WaveID: w.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, Candidate: w.Candidate.Identity}
+				for _, binding := range s.DispatchBindings {
+					if binding.Task == target.Task {
+						r.Binding = binding
+						break
+					}
+				}
+				r.Binding.WaveID = w.ID
+				r.Obligations = []string{r.Target}
+				break
+			}
 		}
 	case "RETRY":
 		options[0].Label = "One additional execution attempt"
@@ -142,7 +152,7 @@ func (s *State) validationObligationWaived(w *ValidationWave, target *Validation
 		if source == nil || source.Candidate != w.Candidate {
 			continue
 		}
-		for _, original := range source.Targets {
+		for _, original := range source.controlTargets() {
 			if !sameTarget(original, target) || original.ResultAction == "" || original.ResultAction != target.ResultAction {
 				continue
 			}
@@ -265,7 +275,7 @@ func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision
 	}
 	if r.Kind == "RETRY" || r.Kind == "DISPOSE" {
 		for _, id := range d.Obligations {
-			target := w.Targets[id]
+			target := w.target(id)
 			if target == nil || target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
 				return validationError("skip requires an unavailable validation target")
 			}
@@ -282,13 +292,38 @@ func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision
 			delete(s.EndedAttempts, target.Task)
 		}
 	} else if w.Status == "REPAIR" || w.Status == "ADJUDICATING" {
+		previousWork := s.repairWork()
+		obligations := s.validationObligationDetails(w)
 		for _, id := range d.Obligations {
-			if target := w.Targets[id]; target != nil {
+			if target := w.target(id); target != nil {
 				target.Status = "AUTHORIZED_SKIP"
 				if d.Remedy == "DISMISS" {
 					target.Status = "DISPOSED"
 				}
 				target.DispositionReason = d.Reason
+			}
+		}
+		for _, obligation := range obligations {
+			if !slices.Contains(d.Obligations, obligation.id) {
+				continue
+			}
+			target := obligation.target
+			remaining := slices.ContainsFunc(obligations, func(other validationObligation) bool {
+				return other.target == target && !slices.Contains(d.Obligations, other.id)
+			})
+			if !remaining {
+				target.Status = "AUTHORIZED_SKIP"
+				if d.Remedy == "DISMISS" {
+					target.Status = "DISPOSED"
+				}
+				target.DispositionReason = d.Reason
+			}
+		}
+		for _, work := range previousWork {
+			if work.wave.ID == w.ID && work.result == nil && s.repairMember(work.task) == nil {
+				if err := s.retireRepairWork(work, "user waived the repair source obligation: "+d.Reason); err != nil {
+					return err
+				}
 			}
 		}
 	} else {

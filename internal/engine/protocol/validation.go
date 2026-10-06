@@ -169,6 +169,37 @@ type ValidationRepair struct {
 	PureP2   bool                         `json:"pureP2"`
 }
 
+// Target lookup includes repair gates without adding them to the frozen wave
+// expected set. The maps retain the original and replacement responsibilities.
+func (w *ValidationWave) target(id string) *ValidationTarget {
+	if w == nil {
+		return nil
+	}
+	if target := w.Targets[id]; target != nil {
+		return target
+	}
+	if w.Repair != nil {
+		return w.Repair.Targets[id]
+	}
+	return nil
+}
+
+func (w *ValidationWave) controlTargets() []*ValidationTarget {
+	if w == nil {
+		return nil
+	}
+	var targets []*ValidationTarget
+	for _, target := range w.Targets {
+		targets = append(targets, target)
+	}
+	if w.Repair != nil {
+		for _, target := range w.Repair.Targets {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
 // A finding owns exactly one original evidence domain and one adjudication history.
 // ExecutionFailure references the completed target's cumulative report, including
 // records accepted through checkpoints; it never assigns a severity to case FAIL.
@@ -680,7 +711,7 @@ func (s *State) validationWaveForTask(key runtime.TaskKey) *ValidationWave {
 		return nil
 	}
 	for i := range s.Validation.Waves {
-		if s.Validation.Waves[i].Targets[key.String()] != nil {
+		if s.Validation.Waves[i].target(key.String()) != nil {
 			return &s.Validation.Waves[i]
 		}
 	}

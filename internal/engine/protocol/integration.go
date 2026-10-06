@@ -266,13 +266,20 @@ func (s *State) candidateChildViews() map[string]ChildValidationView {
 	if s.Validation == nil || s.Validation.Candidate == nil {
 		return nil
 	}
-	for _, receipt := range s.HostActionReceipts {
+	var latest HostActionIntent
+	var views map[string]ChildValidationView
+	for action, receipt := range s.HostActionReceipts {
+		intent, exists := s.hostIntent(action)
+		p, err := candidateParameters(intent)
+		if !exists || err != nil || p.Stage != "REVIEW_READY" || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+			continue
+		}
 		v, err := decodeCandidateEvidence(receipt)
-		if err == nil && v.Identity == s.Validation.Candidate.Identity && v.Digest == s.Validation.Candidate.Digest && v.ChildViews != nil {
-			return v.ChildViews
+		if err == nil && v.Identity == s.Validation.Candidate.Identity && v.Digest == s.Validation.Candidate.Digest && v.ChildViews != nil && intent.Revision > latest.Revision {
+			latest, views = intent, v.ChildViews
 		}
 	}
-	return nil
+	return views
 }
 
 func (e *Engine) advanceIntegration(s *State, revision uint64) (bool, error) {

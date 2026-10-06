@@ -1,12 +1,70 @@
 package protocol
 
 import (
+	"encoding/json"
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"testing"
 )
+
+func TestValidationTargetControlsPreserveFrozenExpectedSet(t *testing.T) {
+	gate := runtime.TaskKey{Node: "validation", Step: "gate", Scope: "member-source"}
+	ordinary := runtime.TaskKey{Node: "validation", Step: "gate", Scope: "candidate"}
+	target := &ValidationTarget{Task: gate, Kind: "GATE", Gate: "quality", Status: "PENDING"}
+	w := ValidationWave{ID: "wave", Status: "REPAIR", ExpectedDigest: "frozen", Targets: map[string]*ValidationTarget{ordinary.String(): {Task: ordinary, Status: "PASS"}}, Repair: &ValidationRepair{Targets: map[string]*ValidationTarget{gate.String(): target}}}
+	s := &State{Validation: &Validation{Waves: []ValidationWave{w}}, PendingActions: map[string]PendingAction{}, Attempts: map[runtime.TaskKey]Attempt{}, EndedAttempts: map[runtime.TaskKey]Attempt{}, ObsoleteActions: map[string]ObsoleteAction{}}
+	s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
+	if s.validationWaveForTask(gate) == nil || !s.sameValidationDuty(WorkBinding{WaveID: w.ID, Task: gate}, &s.Validation.Waves[0]) {
+		t.Fatal("repair target lost its frozen duty")
+	}
+	s.endBusinessAttempt(PendingAction{ActionID: "attempt", Task: gate}, Attempt{ID: "attempt", RetryExhausted: true, Attempts: 2, MaxAttempts: 2}, "transport failed", 2)
+	if target.Status != "RETRY_EXHAUSTED" || s.Validation.Waves[0].ExpectedDigest != "frozen" || len(s.Validation.Waves[0].Targets) != 1 {
+		t.Fatal("attempt status changed frozen expected set or missed repair target")
+	}
+	ask := PendingAsk{Validation: &ValidationRequest{Kind: "RETRY", Binding: WorkBinding{WaveID: w.ID, Task: gate}, Obligations: []string{gate.String()}}}
+	if err := (&Engine{}).waiveValidation(s, ask, &ValidationDecision{Obligations: []string{gate.String()}, Reason: "skip unavailable source gate"}, &s.Validation.Waves[0]); err != nil {
+		t.Fatal(err)
+	}
+	if target.Status != "AUTHORIZED_SKIP" || target.DispositionReason != "skip unavailable source gate" || len(s.EndedAttempts) != 0 {
+		t.Fatal("waiver did not end the exact finite attempt")
+	}
+}
+
+func TestCandidateChildViewsUseFinalIssuedOwner(t *testing.T) {
+	s := &State{Validation: &Validation{Generation: 1, RequirementRevision: "req", Candidate: &coverage.ValidationCandidate{Identity: "candidate", Digest: "tree"}}, PendingHostActions: map[string]HostActionIntent{}, HostActionReceipts: map[string]HostActionReceipt{}}
+	for i, stage := range []string{"REVIEW_READY", "DEVELOPMENT"} {
+		action := stage
+		p := CandidateParameters{Stage: stage, Generation: 1, RequirementRevision: "req"}
+		parameters, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		params := map[string]any{}
+		if err = json.Unmarshal(parameters, &params); err != nil {
+			t.Fatal(err)
+		}
+		s.PendingHostActions[action] = HostActionIntent{ActionID: action, Revision: uint64(i + 1), Adapter: &AdapterHostAction{Operation: "op.candidate", Params: params}}
+		view := ChildValidationView{ContentEqual: stage == "REVIEW_READY"}
+		proof := CandidateEvidence{Identity: "candidate", Digest: "tree", ChildViews: map[string]ChildValidationView{"child": view}}
+		body, err := json.Marshal(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string]any{}
+		if err = json.Unmarshal(body, &values); err != nil {
+			t.Fatal(err)
+		}
+		s.HostActionReceipts[action] = HostActionReceipt{ActionID: action, Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+	}
+	for i := 0; i < 30; i++ {
+		if views := s.candidateChildViews(); !views["child"].ContentEqual {
+			t.Fatal("same native identity selected a partial source view")
+		}
+	}
+}
 
 func TestRepairMembersRetainOneObligation(t *testing.T) {
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}

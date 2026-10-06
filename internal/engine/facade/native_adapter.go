@@ -910,7 +910,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			}
 		}
 		evidence.Changes, evidence.GateView = changes, view
-		if s.RouteMode == "merge" {
+		if p.Stage == "REVIEW_READY" && s.RouteMode == "merge" {
 			evidence.ChildViews, err = f.childValidationViews(s, head, owned)
 			if err != nil {
 				return nativeResult{}, false, err

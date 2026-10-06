@@ -403,7 +403,7 @@ func (s *State) repairGateTarget(task runtime.TaskKey) (*ValidationWave, *Valida
 func (s *State) repairGatesComplete(work repairWork) bool {
 	for _, gate := range s.repairGates(work) {
 		_, target := s.memberGateTarget(work, gate)
-		if target == nil || target.Status != "PASS" && target.Status != "DISPOSED" && !s.repairGateDismissed(work.wave, target) {
+		if target == nil || target.Status != "PASS" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" && !s.repairGateDismissed(work.wave, target) {
 			return false
 		}
 	}
@@ -425,7 +425,8 @@ func (s *State) memberGateTarget(work repairWork, gate string) (runtime.TaskKey,
 	}
 	for _, target := range work.wave.Repair.Targets {
 		if target.Task.Scope == repairGateScope(source, gate) {
-			return target.Task, target
+			key := s.replacementFold(target.Task)
+			return key, work.wave.target(key.String())
 		}
 	}
 	return runtime.TaskKey{}, nil
@@ -446,7 +447,7 @@ func (s *State) ensureRepairGates(cd *compiler.CompiledDefinition) bool {
 			source = intent.ActionID
 		}
 		for _, gate := range s.repairGates(work) {
-			task := pipelineTask(cd, "engine.gate", repairGateScope(source, gate))
+			task := s.replacementFold(pipelineTask(cd, "engine.gate", repairGateScope(source, gate)))
 			if work.wave.Repair.Targets == nil {
 				work.wave.Repair.Targets = map[string]*ValidationTarget{}
 			}
@@ -620,22 +621,16 @@ func (s *State) repairGateCorrection(work repairWork) (string, bool) {
 	}
 	for _, gate := range s.repairGates(work) {
 		_, target := s.memberGateTarget(work, gate)
-		if target == nil || target.Status != "PASS" && target.Status != "FAIL" && target.Status != "DISPOSED" {
+		if target == nil || target.Status != "PASS" && target.Status != "FAIL" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" {
 			return "", false
 		}
 	}
-	source := result.ActionID
-	if s.NativeRoot != "" {
-		intent, _, ok := s.repairSource(work.task)
-		if !ok {
-			return "", false
-		}
-		source = intent.ActionID
-	}
+
 	var actions []string
 	pureP2 := true
-	for _, target := range work.wave.Repair.Targets {
-		if target.Status != "FAIL" || !strings.HasPrefix(target.Task.Scope, repairGateScope(source, "")) {
+	for _, gate := range s.repairGates(work) {
+		_, target := s.memberGateTarget(work, gate)
+		if target == nil || target.Status != "FAIL" {
 			continue
 		}
 		found, required := false, false
@@ -648,7 +643,7 @@ func (s *State) repairGateCorrection(work repairWork) (string, bool) {
 			if !ok {
 				return "", false
 			}
-			if resolution.Decision == "DISMISSED" || resolution.Severity == "P3" {
+			if resolution.Decision == "DISMISSED" || resolution.Severity == "P3" || s.validationObligationWaived(work.wave, target, resolution.ProblemID) {
 				continue
 			}
 			required = true
@@ -676,7 +671,7 @@ func (s *State) repairGateDismissed(w *ValidationWave, target *ValidationTarget)
 		}
 		found = true
 		resolution, ok := findingResolutionAt(finding, 0)
-		if !ok || resolution.Decision != "DISMISSED" && resolution.Severity != "P3" {
+		if !ok || resolution.Decision != "DISMISSED" && resolution.Severity != "P3" && !s.validationObligationWaived(w, target, resolution.ProblemID) {
 			return false
 		}
 	}
