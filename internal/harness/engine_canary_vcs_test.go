@@ -238,5 +238,5 @@ func (c *engineCanary) assertNativeTerminal(base string, final facade.Run, paths
 // The integration-owned flag gap is independent of the two function batches.
 // Merge QA and merge-gate observe it before the existing master repair closes it.
 func (c *engineCanary) splitFlagContract() bool {
-	return c.split && c.vcs.Name() != "git"
+	return c.split
 }

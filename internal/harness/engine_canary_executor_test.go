@@ -121,7 +121,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 	defer approval.Close()
 	c.approvalInput = bufio.NewReader(input)
 	c.approvalOutput = canaryLocalApproval{approval}
-	executor := &canaryLocalExecutor{t: t, canary: c, split: split, flagContract: split && provider != "git", developmentStarted: make(chan struct{})}
+	executor := &canaryLocalExecutor{t: t, canary: c, split: split, developmentStarted: make(chan struct{})}
 	c.execute = executor.execute
 	if failureMode := os.Getenv("FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE"); failureMode != "" {
 		started, release := make(chan struct{}), make(chan struct{})
@@ -325,7 +325,6 @@ type canaryLocalCall struct {
 type canaryLocalExecutor struct {
 	t                  *testing.T
 	split              bool
-	flagContract       bool
 	mu                 sync.Mutex
 	calls              []canaryLocalCall
 	developmentStarted chan struct{}
@@ -577,7 +576,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 			return map[string]any{"status": "PASS", "findings": []any{}}, nil
 		}
 		requirement := "AC-002"
-		if e.flagContract {
+		if e.canary.splitFlagContract() {
 			requirement = "AC-004"
 		}
 		finding := map[string]any{"severity": "P1", "message": "unknown flags are accepted", "severityRationale": "the public flag contract fails on its normal command entry", "requirement": requirement, "normalPath": "frob --unknown-flag canary", "actualError": "exit=0 and frob output", "deferralImpact": "unknown flags execute as words", "locations": []string{"frob.go"}}
@@ -822,7 +821,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 }
 
 func (e *canaryLocalExecutor) flagPoint(point string) bool {
-	return !e.split && point == "AC-002" || e.flagContract && point == "AC-004"
+	return !e.split && point == "AC-002" || e.canary.splitFlagContract() && point == "AC-004"
 }
 
 // Each native call owns its peer script. The wrapper fixes that script before
