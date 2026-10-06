@@ -8,7 +8,6 @@ package harness
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -18,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
@@ -719,15 +717,8 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 		}
 	}
 	base := c.buildFixtureProject()
-	reqSum := sha256.Sum256([]byte(canaryRequirementDocument))
-	frobSum := sha256.Sum256([]byte(canaryFrobSource))
-	reqRevision, frobRevision := hex.EncodeToString(reqSum[:]), hex.EncodeToString(frobSum[:])
-	intake := facade.IntakeConfirmationReceipt{
-		Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: reqRevision,
-		Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: reqRevision}, {Path: "frob.go", Revision: frobRevision}},
-		SolutionRevision: frobRevision, SolutionDigest: "sha256:" + frobRevision,
-	}
+	c.doc = []byte(canaryRequirementDocument)
+	intake := c.confirmedIntake()
 	c.install(base, intake)
 	target := c.installed.Targets[0]
 	if c.home != canaryCanonicalPath(candidate) || zcodeHostDataDirectory() != c.home || os.Getenv("HOME") != c.home || os.Getenv("USERPROFILE") != c.home {
