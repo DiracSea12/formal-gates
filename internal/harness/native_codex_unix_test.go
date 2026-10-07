@@ -32,6 +32,7 @@ type codexPeerInput struct {
 	TurnParams    map[string]any `json:"turn_params"`
 	Configuration map[string]any `json:"configuration"`
 	Mode          string         `json:"mode"`
+	StrictSchema  bool           `json:"strict_schema,omitempty"`
 	Reverse       []any          `json:"reverse"`
 	Answer        map[string]any `json:"answer,omitempty"`
 	Replies       []any          `json:"replies"`
@@ -164,6 +165,12 @@ func TestCodexRPCPeer(t *testing.T) {
 	}
 	expected["threadId"] = thread
 	check(getOf(frame, "params"), expected)
+	if peer.StrictSchema {
+		if err := codexPeerStrictSchema(getOf(getOf(frame, "params"), "outputSchema")); err != nil {
+			emit(map[string]any{"id": getOf(frame, "id"), "error": map[string]any{"code": 400, "message": "invalid_json_schema: " + err.Error()}})
+			os.Exit(0)
+		}
+	}
 	turn := codexPeerID(thread + textOf(expected))
 	reply(frame, map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
 	// Persist the original prompt immediately: interrupt/transport close leaves
@@ -319,12 +326,12 @@ func (s *codexScenario) save(t *testing.T) {
 	} else {
 		s.peer.ThreadParams["ephemeral"] = false
 	}
-	s.peer.TurnParams = map[string]any{"input": []any{map[string]any{"type": "text", "text": s.request["prompt"]}}, "outputSchema": s.request["schema"]}
-	for _, pair := range [][2]string{{"model", "model"}, {"reasoning_effort", "effort"}} {
-		if v, _ := s.request[pair[0]].(string); v != "" {
-			s.peer.TurnParams[pair[1]] = v
-		}
+	params, err := codexTurnParameters(s.request, "")
+	if err != nil {
+		t.Fatal(err)
 	}
+	delete(params, "threadId")
+	s.peer.TurnParams = params
 	if err := writeAtomicJSON(filepath.Join(s.directory, "native-request.json"), s.request); err != nil {
 		t.Fatal(err)
 	}

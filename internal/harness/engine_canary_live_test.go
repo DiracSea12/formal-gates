@@ -1192,7 +1192,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 		}
 		return canaryDevelopmentShape(&answer, true)
 	}
-	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(true), false, shape)
+	turn := c.turnIn(c.workspace(input), id, "development batch", c.prompt("development batch", materials, instructions, false), canaryDevelopmentSchema(input.Development), false, shape)
 	return c.developmentEvidence(id, input, &answer, turn.digest, true)
 }
 
@@ -1214,7 +1214,7 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
 		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
 	}
-	schema := canaryDevelopmentSchema(true)
+	schema := canaryDevelopmentSchema(input.Development)
 	if input.Development == nil {
 		schema["required"] = []string{}
 		properties := schema["properties"].(map[string]any)
@@ -2878,7 +2878,7 @@ func canaryGateSchema() map[string]any {
 	})
 }
 
-func canaryDevelopmentSchema(batch bool) map[string]any {
+func canaryDevelopmentSchema(development *protocol.DevelopmentInput) map[string]any {
 	properties := map[string]any{
 		"affectedCases": canaryArr(canaryStr()),
 		"caseRuns":      canaryArr(canarySchema([]string{"mode", "caseId", "procedure", "observation", "comparison", "result"}, map[string]any{"mode": canaryEnum("BLACKBOX", "WHITEBOX", "MERGE"), "caseId": canaryStr(), "procedure": canaryStr(), "observation": canaryStr(), "comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS")})),
@@ -2888,14 +2888,23 @@ func canaryDevelopmentSchema(batch bool) map[string]any {
 		"tests":         canaryArr(canaryStr()),
 	}
 	required := []string{"paths", "summary", "build", "tests"}
-	if batch {
-		properties["dod"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
-		properties["checks"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
-		properties["handoff"] = canaryStr()
+	properties["dod"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
+	properties["checks"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
+	properties["handoff"] = canaryStr()
+	if development != nil {
+		dod, checks := map[string]any{}, map[string]any{}
+		dodIDs, checkIDs := []string{}, []string{}
+		for _, criterion := range development.Batch.DoD {
+			dod[criterion.ID] = canaryStr()
+			dodIDs = append(dodIDs, criterion.ID)
+		}
+		for _, check := range development.Batch.Checks {
+			checks[check.ID] = canaryStr()
+			checkIDs = append(checkIDs, check.ID)
+		}
+		properties["dod"] = canarySchema(dodIDs, dod)
+		properties["checks"] = canarySchema(checkIDs, checks)
 		required = append(required, "dod", "checks", "handoff")
-	} else {
-		properties["affectedCases"] = canaryArr(canaryStr())
-		required = append(required, "affectedCases")
 	}
 	return canarySchema(required, properties)
 }

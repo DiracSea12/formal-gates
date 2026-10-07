@@ -42,7 +42,44 @@ func codexCaptureBinding() (map[string]any, error) {
 
 func codexValidateBinding(binding any) error { return validateNativeBinding(binding, "codex") }
 func codexVerifySource(directory string, source any) error {
-	return verifyNativeSource(directory, source, "codex")
+	if err := verifyNativeSource(directory, source, "codex"); err != nil {
+		return err
+	}
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	if err != nil {
+		return err
+	}
+	result, refusal := FrameResult(string(raw))
+	if refusal != "" {
+		return &blockedError{message: refusal}
+	}
+	decoded, err := readJSONFile(filepath.Join(directory, "answer.json"))
+	if err != nil {
+		return err
+	}
+	projected, err := codexDomainResult(getOf(request, "schema"), result)
+	if err != nil {
+		return err
+	}
+	if !valuesEqual(projected, decoded) {
+		return &blockedError{message: "CODEX_BINDING: domain result differs from original answer"}
+	}
+	original, err := readJSONFile(filepath.Join(directory, "native-source.json"))
+	if err != nil {
+		return err
+	}
+	expected, err := codexTurnParameters(request, textOf(getOf(source, "identity")))
+	if err != nil {
+		return err
+	}
+	if !valuesEqual(expected, getOf(original, "turn_request")) {
+		return &blockedError{message: "CODEX_BINDING: original turn request differs"}
+	}
+	return nil
 }
 
 func codexInteractionID(params map[string]any, frameID any) (string, error) {
@@ -279,13 +316,9 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 		}
 		return map[string]any{"provider": "codex", "binding": binding, "initialize": initialized, "selection": map[string]any{}, "capabilities": map[string]any{"source": "app-server-initialize-and-local-schema", "selection_observed": false}, "model_calls": 0}, nil
 	}
-	prompt, ok := getOf(request, "prompt").(string)
+	_, ok := getOf(request, "prompt").(string)
 	if !ok {
 		return nil, fmt.Errorf("prompt must be a string")
-	}
-	schema, err := mustEntry(request, "schema")
-	if err != nil {
-		return nil, err
 	}
 	readOnly, ok := getOf(request, "read_only").(bool)
 	if !ok {
@@ -328,13 +361,9 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	if err = codexCheckConfiguration(request, opened, thread); err != nil {
 		return nil, err
 	}
-	turnParams := map[string]any{"threadId": thread, "input": []any{map[string]any{"type": "text", "text": prompt}}, "outputSchema": schema}
-	if model != "" {
-		turnParams["model"] = model
-	}
-	effort, _ := getOf(request, "reasoning_effort").(string)
-	if effort != "" {
-		turnParams["effort"] = effort
+	turnParams, err := codexTurnParameters(request, thread)
+	if err != nil {
+		return nil, err
 	}
 	// TurnStartParams declares model/effort as overrides. Keep that request as
 	// provenance; Thread.model/reasoningEffort are configuration, not telemetry.
@@ -351,7 +380,7 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	}
 	nativeSource["turnId"] = turn
 	nativeSource["turn_ack"] = nativeTurn
-	if effort != "" {
+	if effort, _ := turnParams["effort"].(string); effort != "" {
 		selection["reasoning_effort"] = effort
 	}
 	// The native job receives the supervisor's cancellation signal. The RPC
@@ -434,11 +463,9 @@ func codexObserve(directory string) (map[string]any, error) {
 	if wanted, _ := getOf(request, "identity").(string); wanted != "" && wanted != thread {
 		return nil, &blockedError{message: "CODEX_BINDING: original request thread differs"}
 	}
-	expected := map[string]any{"threadId": thread, "input": []any{map[string]any{"type": "text", "text": getOf(request, "prompt")}}, "outputSchema": getOf(request, "schema")}
-	for _, pair := range [][2]string{{"model", "model"}, {"reasoning_effort", "effort"}} {
-		if v, _ := getOf(request, pair[0]).(string); v != "" {
-			expected[pair[1]] = v
-		}
+	expected, err := codexTurnParameters(request, thread)
+	if err != nil {
+		return nil, err
 	}
 	if !valuesEqual(expected, getOf(source, "turn_request")) {
 		return nil, &blockedError{message: "CODEX_BINDING: original turn request differs"}
@@ -528,7 +555,13 @@ func codexObserve(directory string) (map[string]any, error) {
 	if !ok {
 		return nil, &blockedError{message: "CODEX_RESULT: final agent message text is missing"}
 	}
-	if err = writeNativeAnswer(directory, answer, "CODEX"); err != nil {
+	if err = writeNativeAnswerProjected(directory, answer, "CODEX", func(result map[string]any) (map[string]any, error) {
+		projected, err := codexDomainResult(getOf(request, "schema"), result)
+		if err != nil {
+			return nil, err
+		}
+		return projected.(map[string]any), nil
+	}); err != nil {
 		return nil, err
 	}
 	return evidenceSource(directory, "codex", thread, map[string]any{"native_turn": turn, "native_result": terminal, "selection": getOf(source, "selection"), "selection_evidence": map[string]any{"configuration": getOf(source, "configuration"), "turn_request": getOf(source, "turn_request")}, "transcript": getOf(getOf(source, "thread"), "path"), "usage_evidence": usage})

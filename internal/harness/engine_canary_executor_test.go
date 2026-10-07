@@ -1169,12 +1169,12 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		if model, _ := request["model"].(string); model != "" {
 			s.peer.ThreadParams["model"] = model
 		}
-		s.peer.TurnParams = map[string]any{"input": []any{map[string]any{"type": "text", "text": request["prompt"]}}, "outputSchema": request["schema"]}
-		for _, pair := range [][2]string{{"model", "model"}, {"reasoning_effort", "effort"}} {
-			if value, _ := request[pair[0]].(string); value != "" {
-				s.peer.TurnParams[pair[1]] = value
-			}
+		params, err := codexTurnParameters(request, "")
+		if err != nil {
+			return err
 		}
+		delete(params, "threadId")
+		s.peer.TurnParams = params
 		if err := writeAtomicJSON(script, s.peer); err != nil {
 			return err
 		}

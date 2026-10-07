@@ -458,6 +458,12 @@ func handleSessionLine(path, line string, identity any, handle func(map[string]a
 // text read cannot observe is not a refusal. A framing refusal is a
 // blockedError whose text already carries the NATIVE_RESULT prefix.
 func writeNativeAnswer(directory, text, prefix string) error {
+	return writeNativeAnswerProjected(directory, text, prefix, nil)
+}
+
+// Host transport projection changes decoded values only; raw evidence and the
+// shared framing contract retain the native message exactly.
+func writeNativeAnswerProjected(directory, text, prefix string, project func(map[string]any) (map[string]any, error)) error {
 	raw := filepath.Join(directory, "answer.raw.txt")
 	if _, statErr := os.Stat(raw); statErr == nil {
 		body, err := os.ReadFile(raw)
@@ -477,6 +483,13 @@ func writeNativeAnswer(directory, text, prefix string) error {
 	result, refusal := FrameResult(text)
 	if refusal != "" {
 		return &blockedError{message: refusal}
+	}
+	if project != nil {
+		var err error
+		result, err = project(result)
+		if err != nil {
+			return err
+		}
 	}
 	return writeAtomicJSON(filepath.Join(directory, "answer.json"), result)
 }
