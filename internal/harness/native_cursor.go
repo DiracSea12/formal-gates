@@ -63,7 +63,11 @@ func cursorCaptureBinding() (map[string]any, error) {
 			cache = filepath.Join(home, ".cache", "cursor-compile-cache")
 		}
 	}
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CURSOR_CONFIG_DIR": resolveNativePath(config), "CURSOR_DATA_DIR": resolveNativePath(data), "NODE_COMPILE_CACHE": resolveNativePath(cache)}
+	store := os.Getenv("AGENT_CLI_CREDENTIAL_STORE")
+	if store != "file" && store != "memory" {
+		store = "default"
+	}
+	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CURSOR_CONFIG_DIR": resolveNativePath(config), "CURSOR_DATA_DIR": resolveNativePath(data), "NODE_COMPILE_CACHE": resolveNativePath(cache), "AGENT_CLI_CREDENTIAL_STORE": store}
 	return binding, nil
 }
 func cursorValidateBinding(binding any) error { return validateNativeBinding(binding, "cursor") }

@@ -904,3 +904,33 @@ func TestCursorAbsentModelOptionsUseNativeSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Credential-store selection is native input, independent of the caller's
+// ambient environment when a captured invocation is resumed.
+func TestCursorCredentialStoreRemainsBound(t *testing.T) {
+	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
+	executable := textOf(getOf(getOf(s.request["binding"], "launch"), "executable"))
+	t.Setenv("PATH", filepath.Dir(executable)+":"+os.Getenv("PATH"))
+	s.peer.Environment["AGENT_CLI_CREDENTIAL_STORE"] = "file"
+	for key, value := range s.peer.Environment {
+		t.Setenv(key, value)
+	}
+	binding, err := cursorCaptureBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["binding"] = binding
+	s.request["probe"] = true
+	s.save(t)
+	t.Setenv("AGENT_CLI_CREDENTIAL_STORE", "memory")
+	report, err := runNativeJob(s.directory)
+	if err != nil {
+		t.Fatalf("captured native credential selection was lost: %v", err)
+	}
+	if getOf(getOf(binding, "environment"), "AGENT_CLI_CREDENTIAL_STORE") != "file" || !valuesEqual(getOf(report, "model_calls"), 0) {
+		t.Fatalf("captured credential store/probe changed: %v %v", binding, report)
+	}
+	if cursorCalls(t, s) != 0 {
+		t.Fatal("credential probe created or prompted a session")
+	}
+}
