@@ -8,7 +8,11 @@ package validate
 // state exists. They use fresh fixtures independent of the shared helpers.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,93 +81,49 @@ func launcherChildEnvironment(overrides map[string]string) []string {
 	return environment
 }
 
-func launcherDiscoveryChild(t *testing.T) bool {
-	mode := os.Getenv("LAUNCHER_DISCOVERY_CHILD")
-	if mode == "" {
-		return false
-	}
-	root := os.Getenv("LAUNCHER_DISCOVERY_ROOT")
-	packageRoot := os.Getenv("LAUNCHER_DISCOVERY_PACKAGE")
-	runID := "launcher-" + mode
-	_, err := Start(StartOptions{
-		Root: root, PackageRoot: packageRoot, RunID: runID, Flow: "formal",
-		RequirementSource: "requirements.md", VCS: "git", Split: "no",
-	})
-	if mode == "stable" {
-		if err != nil {
-			t.Fatalf("fixed launcher did not discover its admission binding: %v", err)
-		}
-		persisted, loadErr := LoadRunState(root, runID)
-		if loadErr != nil {
-			t.Fatalf("started run could not be reloaded from persisted state: %v", loadErr)
-		}
-		expectedRegistry := filepath.Join(os.Getenv("HOME"), ".formal-gates", "registry.json")
-		if persisted.AdmissionRegistry != expectedRegistry || persisted.AdmissionRecordID != "launcher-project" ||
-			persisted.AdmissionRoot != root || persisted.AdmissionTarget != packageRoot ||
-			persisted.AdmissionEpoch != 7 || persisted.AdmissionGeneration != 7 ||
-			persisted.AdmissionLease != "launcher-lease" || persisted.AdmissionToken != "launcher-token" {
-			t.Fatalf("persisted run lost the exact admission identity: %+v", persisted)
-		}
-		return true
-	}
-	if err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") || !strings.Contains(err.Error(), "stable launcher") {
-		t.Fatalf("direct candidate executable was not rejected by launcher admission: %v", err)
-	}
-	if _, statErr := os.Stat(RunDir(root, runID)); !os.IsNotExist(statErr) {
-		t.Fatalf("candidate rejection occurred after run-state creation: %v", statErr)
-	}
-	return true
-}
-
 func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
-	if launcherDiscoveryChild(t) {
-		return
-	}
 	root := t.TempDir()
-	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0o600)
-	launcherRun(t, root, "git", "init")
-	launcherRun(t, root, "git", "config", "user.email", "launcher@example.invalid")
-	launcherRun(t, root, "git", "config", "user.name", "Launcher Discovery Test")
-	launcherRun(t, root, "git", "add", "requirements.md")
-	launcherRun(t, root, "git", "commit", "-m", "baseline")
-
-	packageRoot := launcherRepoRoot(t)
+	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0600)
 	home := t.TempDir()
+	source := copyPackageFixture(t)
+	binaryPath := filepath.Join(source, "bin", nativeBinaryName())
+	if err := os.Remove(binaryPath); err != nil {
+		t.Fatal(err)
+	}
+	launcherRun(t, launcherRepoRoot(t), "go", "build", "-o", binaryPath, "./cmd/formal-gates")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
 	candidate := filepath.Join(home, "candidate", nativeBinaryName())
-	testExecutable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	launcherCopyExecutable(t, testExecutable, launcher)
-	launcherCopyExecutable(t, testExecutable, candidate)
-
-	canonicalTarget := canonicalRegistryPath(packageRoot)
-	canonicalLauncher := canonicalRegistryPath(launcher)
-	canonicalRoot := canonicalRegistryPath(root)
-	stateRoot := canonicalRegistryPath(filepath.Join(root, ".gates"))
-	resourceRoot := canonicalRegistryPath(filepath.Join(root, ".formal-gates-resources"))
-	runtimeSibling := canonicalRegistryPath(filepath.Dir(packageRoot))
-	record := RegistryRecord{
-		ID: "launcher-project", Target: canonicalTarget, LauncherPath: canonicalLauncher,
-		Scope: "project", Host: "codex", ProjectRoot: canonicalRoot,
-		StateRoot: stateRoot, ResourceRoot: resourceRoot, RuntimeSibling: runtimeSibling,
-		Status: "active", Generation: 7, Lease: "launcher-lease", Token: "launcher-token",
-		CanonicalPaths: map[string]string{
-			"target": canonicalTarget, "launcher": canonicalLauncher, "projectRoot": canonicalRoot,
-			"stateRoot": stateRoot, "resourceRoot": resourceRoot, "runtimeSibling": runtimeSibling,
-		},
-	}
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
-	registryData, err := json.MarshalIndent(RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 7, Records: []RegistryRecord{record}}, "", "  ")
+	options := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: root, RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	report, err := Install(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	launcherWriteFile(t, registry, string(registryData)+"\n", 0o600)
-	// 文档化首启边界：发现式准入的 workflow start 同样要求已提交的 bootstrap
-	// receipt（fixture 直接构造 registry，须补写该 receipt）。
-	writeTestBootstrapReceipt(t, registry)
-
+	options.Bootstrap = true
+	if _, err = Install(options); err != nil {
+		t.Fatal(err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := admissionRecordByID(t, document, report.Targets[0].RegistryRecordID)
+	packageRoot := record.Target
+	launcherCopyExecutable(t, launcher, candidate)
+	raw, err := os.ReadFile(filepath.Join(root, "requirements.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := fmt.Sprintf("%x", sha256.Sum256(raw))
+	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
+	receiptBytes, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(t.TempDir(), "confirmation.json")
+	launcherWriteFile(t, receiptPath, string(receiptBytes), 0600)
 	baseEnvironment := map[string]string{
 		"HOME": home, "USERPROFILE": home,
 		"LAUNCHER_DISCOVERY_ROOT":    root,
@@ -183,13 +143,30 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 			for key, value := range baseEnvironment {
 				environment[key] = value
 			}
-			environment["LAUNCHER_DISCOVERY_CHILD"] = invocation.mode
-			command := exec.Command(invocation.executable, "-test.run", "^TestStableLauncherDiscoveryFencesCandidateWrites$", "-test.v")
+			runID := "launcher-" + invocation.mode
+			command := exec.Command(invocation.executable, "workflow", "start", "--root", root, "--run-id", runID, "--route", "lightweight", "--intake-receipt", receiptPath)
 			command.Dir = root
 			command.Env = launcherChildEnvironment(environment)
 			output, childErr := command.CombinedOutput()
-			if childErr != nil {
-				t.Fatalf("%s child failed: %v\n%s", invocation.mode, childErr, output)
+			if invocation.mode == "stable" {
+				if childErr != nil {
+					t.Fatalf("stable launcher failed: %v\n%s", childErr, output)
+				}
+				persisted := admissionCurrentRequest(t, root, runID)
+				if persisted.AdmissionRegistryPath != registry || persisted.InstalledTargetIdentity != record.ID || persisted.AdmissionRoot != root || persisted.AdmissionTarget != packageRoot || persisted.AdmissionGeneration != record.Generation || persisted.AdmissionLease != record.Lease || persisted.AdmissionToken != record.Token {
+					t.Fatalf("persisted exact launcher binding lost: %+v", persisted)
+				}
+				after, err := LoadRegistry(registry)
+				if err != nil || after.Epoch != document.Epoch {
+					t.Fatalf("launcher start changed registry epoch: %+v %v", after, err)
+				}
+			} else {
+				if childErr == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL:") || !strings.Contains(string(output), "no active registry record matches candidate package root") {
+					t.Fatalf("candidate not fenced by actual launcher owner: %v\n%s", childErr, output)
+				}
+				if _, err := os.Stat(admissionEngineDirectory(root, runID)); !os.IsNotExist(err) {
+					t.Fatalf("candidate rejection created authority: %v", err)
+				}
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/facade"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -512,14 +513,14 @@ func TestAdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
 				test.id = "absent"
 			}
 			runID := "install-" + test.id
-			_, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: runID, Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: test.id})
+			_, err := admissionStartCurrent(root, packageRoot, registry, test.id, runID, "lightweight")
 			if err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 				t.Fatalf("invalid admission was accepted: %v", err)
 			}
 			if got := installReadFile(t, registry); !bytes.Equal(got, before) {
 				t.Fatalf("authoritative registry bytes changed on rejected admission: before=%q after=%q", before, got)
 			}
-			if _, err := os.Stat(RunDir(root, runID)); !os.IsNotExist(err) {
+			if _, err := os.Stat(admissionEngineDirectory(root, runID)); !os.IsNotExist(err) {
 				t.Fatalf("rejected admission created a run directory: %v", err)
 			}
 			// 判据是“无业务命名空间残留”，不是“.gates 不存在”：Start 在
@@ -568,107 +569,118 @@ func installWorkflowNamespaceResidue(t *testing.T, root string) []string {
 }
 
 func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
-	packageRoot := installRepoRoot(t)
+	source := copyPackageFixture(t)
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
 	installGitProjectAt(t, nested)
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "launcher", nativeBinaryName())
-	parentRecord := installRecord("parent", packageRoot, launcher, "project", "codex", parent, "active")
-	nestedRecord := installRecord("nested", packageRoot, launcher, "project", "codex", nested, "active")
-	installWriteRegistry(t, registry, 12, parentRecord, nestedRecord)
-	writeTestBootstrapReceipt(t, registry)
-	if _, err := Start(StartOptions{Root: nested, PackageRoot: packageRoot, RunID: "install-parent", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: parentRecord.ID}); err == nil || !strings.Contains(err.Error(), "workflow root") {
-		t.Fatalf("less-specific project binding was accepted for nested root: %v", err)
-	}
-	state, err := Start(StartOptions{Root: nested, PackageRoot: packageRoot, RunID: "install-nested", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: nestedRecord.ID})
+	parentOptions := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: parent, RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	parentInstall, err := Install(parentOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := LoadRunState(nested, state.RunID)
+	parentOptions.Bootstrap = true
+	if _, err = Install(parentOptions); err != nil {
+		t.Fatal(err)
+	}
+	nestedOptions := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: nested, RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	nestedInstall, err := Install(nestedOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.AdmissionRecordID != nestedRecord.ID || loaded.AdmissionRoot != nested || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != nestedRecord.Generation || loaded.AdmissionLease != nestedRecord.Lease || loaded.AdmissionToken != nestedRecord.Token {
-		t.Fatalf("reloaded state lost the nested binding identity: %+v", loaded)
-	}
-}
-
-func TestGlobalAdmissionDerivesProjectLocalRoots(t *testing.T) {
-	packageRoot := installRepoRoot(t)
-	hostRoot := t.TempDir()
-	project := installGitProject(t)
-	otherProject := t.TempDir()
-	registry := filepath.Join(t.TempDir(), "registry.json")
-	launcher := filepath.Join(hostRoot, "bin", nativeBinaryName())
-	global := installRecord("global", packageRoot, launcher, "global", "codex", hostRoot, "active")
-	installWriteRegistry(t, registry, 20, global)
-	writeTestBootstrapReceipt(t, registry)
-	state, err := Start(StartOptions{Root: project, PackageRoot: packageRoot, RunID: "install-global", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: global.ID})
-	if err != nil {
+	nestedOptions.Bootstrap = true
+	if _, err = Install(nestedOptions); err != nil {
 		t.Fatal(err)
-	}
-	loaded, err := LoadRunState(project, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.AdmissionRecordID == global.ID || loaded.AdmissionRoot != project || loaded.AdmissionTarget != packageRoot {
-		t.Fatalf("global invocation did not derive a project binding: %+v", loaded)
 	}
 	document, err := LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived := installRecordByID(t, document, loaded.AdmissionRecordID)
-	if derived.Target != global.Target || derived.LauncherPath != global.LauncherPath || derived.ProjectRoot != canonicalRegistryPath(project) || derived.StateRoot != canonicalRegistryPath(filepath.Join(project, ".gates")) || derived.ResourceRoot != canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources")) {
-		t.Fatalf("derived global binding has the wrong project-local roots: %+v", derived)
+	parentRecord := installRecordByID(t, document, parentInstall.Targets[0].RegistryRecordID)
+	nestedRecord := installRecordByID(t, document, nestedInstall.Targets[0].RegistryRecordID)
+	packageRoot := nestedRecord.Target
+	if _, err := admissionStartCurrent(nested, packageRoot, registry, parentRecord.ID, "install-parent", "lightweight"); err == nil || !strings.Contains(err.Error(), "workflow root") {
+		t.Fatalf("less-specific project binding accepted: %v", err)
 	}
+	run, err := admissionStartCurrent(nested, packageRoot, registry, nestedRecord.ID, "install-nested", "lightweight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := admissionCurrentRequest(t, nested, run.RunID)
+	if loaded.InstalledTargetIdentity != nestedRecord.ID || loaded.AdmissionRoot != nested || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != nestedRecord.Generation || loaded.AdmissionLease != nestedRecord.Lease || loaded.AdmissionToken != nestedRecord.Token {
+		t.Fatalf("reloaded nested binding lost identity: %+v", loaded)
+	}
+}
+
+func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
+	source := copyPackageFixture(t)
+	hostRoot := t.TempDir()
+	t.Setenv("HOME", hostRoot)
+	t.Setenv("USERPROFILE", hostRoot)
+	project := installGitProject(t)
+	otherProject := t.TempDir()
+	registry := filepath.Join(hostRoot, ".formal-gates", "registry.json")
+	launcher := filepath.Join(hostRoot, ".local", "bin", nativeBinaryName())
+	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	report, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Bootstrap = true
+	if _, err = Install(options); err != nil {
+		t.Fatal(err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := installRecordByID(t, document, report.Targets[0].RegistryRecordID)
+	packageRoot := global.Target
+	resourceRoot := filepath.Join(hostRoot, ".formal-gates-resources")
+	resourcesBefore, err := os.ReadDir(resourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := admissionSeedGlobalSibling(t, registry, global.ID, project)
+	run, err := admissionStartCurrent(project, packageRoot, registry, derived.ID, "install-global", "lightweight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := admissionCurrentRequest(t, project, run.RunID)
+	if loaded.InstalledTargetIdentity == global.ID || loaded.AdmissionRoot != project || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != derived.Generation || loaded.AdmissionLease != derived.Lease || loaded.AdmissionToken != derived.Token {
+		t.Fatalf("global admission lost project binding: %+v", loaded)
+	}
+	if derived.Target != global.Target || derived.LauncherPath != global.LauncherPath || derived.ProjectRoot != canonicalRegistryPath(project) || derived.StateRoot != canonicalRegistryPath(filepath.Join(project, ".gates")) || derived.ResourceRoot != canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources")) {
+		t.Fatalf("existing project-local roots differ: %+v", derived)
+	}
+
 	if _, err := os.Stat(filepath.Join(hostRoot, ".gates")); !os.IsNotExist(err) {
 		t.Fatalf("global host namespace received project state: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(hostRoot, ".formal-gates-resources")); !os.IsNotExist(err) {
-		t.Fatalf("global host namespace received project resources: %v", err)
+	resourcesAfter, err := os.ReadDir(resourceRoot)
+	if err != nil || fmt.Sprint(resourcesAfter) != fmt.Sprint(resourcesBefore) {
+		t.Fatalf("run changed host installation resources: before=%v after=%v err=%v", resourcesBefore, resourcesAfter, err)
 	}
 	if _, err := os.Stat(filepath.Join(otherProject, ".gates")); !os.IsNotExist(err) {
 		t.Fatalf("unrelated project namespace was modified: %v", err)
 	}
 }
 
-func TestLegacyLifecyclePreservesExistingStateAndNamespaces(t *testing.T) {
+func TestUnsupportedRunHasNoCurrentWriterFallback(t *testing.T) {
 	root := installGitProject(t)
-	packageRoot := installRepoRoot(t)
-	resourceSentinel := filepath.Join(t.TempDir(), "resources", "sentinel")
-	registrySentinel := filepath.Join(t.TempDir(), "registry.json")
-	installWriteFile(t, resourceSentinel, []byte("resource\n"), 0o600)
-	installWriteFile(t, registrySentinel, []byte("registry\n"), 0o600)
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "install-legacy", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no"})
-	if err != nil {
-		t.Fatal(err)
+	runID := "unsupported-run"
+	statePath := filepath.Join(root, ".gates", "tmp", runID, "state.json")
+	raw := []byte(`{"runId":"unsupported-run","status":"ACTIVE"}`)
+	installWriteFile(t, statePath, raw, 0600)
+	if _, err := facade.Open(root, runID); err == nil {
+		t.Fatal("unsupported raw run opened a current writer")
 	}
-	statePath := RunStatePath(root, state.RunID)
-	beforeState := installReadFile(t, statePath)
-	if strings.Contains(string(beforeState), "stateSchemaVersion") || strings.Contains(string(beforeState), "workflowDefinitionVersion") || strings.Contains(string(beforeState), "definitionDigest") {
-		t.Fatalf("legacy state unexpectedly has future envelope fields: %s", beforeState)
+	if got := installReadFile(t, statePath); !bytes.Equal(got, raw) {
+		t.Fatal("unsupported state changed")
 	}
-	if _, err := LoadRunState(root, state.RunID); err != nil {
-		t.Fatal(err)
-	}
-	resume, err := ResumeReport(root, packageRoot, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resume.ClassificationRequired || resume.NativeDrifted {
-		t.Fatalf("legacy resume reported an unexpected drift: %+v", resume)
-	}
-	diagnose, err := DiagnoseState(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diagnose.Summary["status"] != "ACTIVE" || diagnose.Summary["runId"] != state.RunID {
-		t.Fatalf("legacy diagnose lost terminal fallback fields: %+v", diagnose)
-	}
-	if got := installReadFile(t, statePath); !bytes.Equal(got, beforeState) || !bytes.Equal(installReadFile(t, resourceSentinel), []byte("resource\n")) || !bytes.Equal(installReadFile(t, registrySentinel), []byte("registry\n")) {
-		t.Fatal("legacy show/resume/diagnose changed existing state or unrelated namespaces")
+	if _, err := os.Stat(admissionEngineDirectory(root, runID)); !os.IsNotExist(err) {
+		t.Fatalf("fallback created current authority: %v", err)
 	}
 }
 

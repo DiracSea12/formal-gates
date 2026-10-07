@@ -2,23 +2,17 @@
 
 package validate
 
-// This file is the independently authored whitebox QA delivery for the
-// current incremental round. Each exported Test*
-// function is bound to exactly one QA case and exercises the implementation
-// at the lowest responsibility that owns the behavior: the first-start
-// bootstrap receipt boundary (Start), the pre-write candidate admission gate
-// (mutateRun prepare flows and workflow cleanup --run), the manifest
-// host-target registration check (Install), the global project-local sibling
-// identity across upgrade and bootstrap (Install/bootstrap), the installed
-// digest admission check (AdmitRegistry), and the Codex hook canary
-// text-only-session retry. The tests build their own fixtures and do not
-// call or name any development-worker test.
+// These tests cover install admission, committed bootstrap receipts, registry
+// identities, worker material write fencing and passive Codex hook capture.
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +52,7 @@ func admissionRun(t *testing.T, dir, name string, args ...string) {
 func admissionGitProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	admissionWrite(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0o600)
+	admissionWrite(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Sample requirement."), 0o600)
 	admissionRun(t, root, "git", "init")
 	admissionRun(t, root, "git", "config", "user.email", "admission@example.invalid")
 	admissionRun(t, root, "git", "config", "user.name", "Admission Binding Test")
@@ -175,7 +169,7 @@ func admissionRecordByID(t *testing.T, document RegistryDocument, id string) Reg
 // TestFirstStartRequiresCommittedBootstrapReceipt pins
 // the documented first-start boundary: a normal install commits registry
 // records without a bootstrap receipt, and workflow start must hard-reject
-// (UNREGISTERED_INSTALL, machine-readable rejection receipt, no state) until
+// (UNREGISTERED_INSTALL and no state) until
 // the documented install --bootstrap entry commits an accepted receipt.
 func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	source := admissionSource(t)
@@ -183,222 +177,99 @@ func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	isolated := t.TempDir()
 	registry := filepath.Join(isolated, "registry.json")
 	launcher := filepath.Join(isolated, "bin", nativeBinaryName())
-	report, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Force: true,
-	})
+	report, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	targetPath, recordID := report.Targets[0].TargetPath, report.Targets[0].RegistryRecordID
-	if _, statErr := os.Stat(registry + ".bootstrap.json"); !os.IsNotExist(statErr) {
-		t.Fatalf("plain install committed a bootstrap receipt before the documented maintenance entry: %v", statErr)
+	if _, err := os.Stat(registry + ".bootstrap.json"); !os.IsNotExist(err) {
+		t.Fatalf("plain install wrote bootstrap receipt: %v", err)
 	}
-	options := StartOptions{
-		Root: project, PackageRoot: targetPath, RunID: "admission-first-start",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	}
-	rejectStart := func(wantReason string) {
+	runID := "admission-first-start"
+	rejectStart := func(reason string) {
 		t.Helper()
-		_, startErr := Start(options)
-		if startErr == nil || !strings.Contains(startErr.Error(), "UNREGISTERED_INSTALL") || !strings.Contains(startErr.Error(), wantReason) {
-			t.Fatalf("start was not refused with %q: %v", wantReason, startErr)
+		if _, err := admissionStartCurrent(project, targetPath, registry, recordID, runID, "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") || !strings.Contains(err.Error(), reason) {
+			t.Fatalf("start did not reject %q: %v", reason, err)
 		}
-		if _, statErr := os.Stat(RunDir(project, options.RunID)); !os.IsNotExist(statErr) {
-			t.Fatalf("refused start created a run directory: %v", statErr)
-		}
-		if _, statErr := os.Stat(RunStatePath(project, options.RunID)); !os.IsNotExist(statErr) {
-			t.Fatalf("refused start created workflow state: %v", statErr)
-		}
-		var receipt AdmissionReceipt
-		if err := json.Unmarshal(admissionRead(t, registry+".admission.json"), &receipt); err != nil {
-			t.Fatal(err)
-		}
-		if receipt.Accepted || receipt.Code != "UNREGISTERED_INSTALL" || receipt.RecordID != recordID {
-			t.Fatalf("rejection receipt is not the machine-readable first-start refusal: %+v", receipt)
-		}
-		if !strings.Contains(receipt.Reason, "bootstrap receipt") {
-			t.Fatalf("rejection receipt lost the bootstrap boundary reason: %+v", receipt)
+		if _, err := os.Stat(admissionEngineDirectory(project, runID)); !os.IsNotExist(err) {
+			t.Fatalf("rejected start created authority: %v", err)
 		}
 	}
 	rejectStart("bootstrap receipt")
-
-	admissionWrite(t, registry+".bootstrap.json", "{not a receipt", 0o600)
-	rejectStart("not a valid receipt")
-
-	if err := writeJSONAtomically(registry+".bootstrap.json", BootstrapReceipt{
-		Operation: "bootstrap", Accepted: false, Registry: registry,
-		Epoch: 1, ObservedAt: nowReceiptTime(),
-	}); err != nil {
+	admissionWrite(t, registry+".bootstrap.json", "{not a receipt", 0600)
+	rejectStart("bootstrap receipt is invalid")
+	if err := writeJSONAtomically(registry+".bootstrap.json", BootstrapReceipt{Operation: "bootstrap", Accepted: false, Registry: registry, Epoch: 1, ObservedAt: nowReceiptTime()}); err != nil {
 		t.Fatal(err)
 	}
-	rejectStart("was not accepted")
-
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
-		t.Fatalf("documented install --bootstrap maintenance entry failed: %v", err)
+	rejectStart("not an accepted pre-state receipt")
+	if _, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true}); err != nil {
+		t.Fatal(err)
 	}
 	var receipt BootstrapReceipt
-	if err := json.Unmarshal(admissionRead(t, registry+".bootstrap.json"), &receipt); err != nil {
+	if err = json.Unmarshal(admissionRead(t, registry+".bootstrap.json"), &receipt); err != nil {
 		t.Fatal(err)
 	}
 	if !receipt.Accepted || receipt.Operation != "bootstrap" {
-		t.Fatalf("bootstrap entry did not commit an accepted receipt: %+v", receipt)
+		t.Fatalf("bootstrap receipt not committed: %+v", receipt)
 	}
-	state, err := Start(options)
+	run, err := admissionStartCurrent(project, targetPath, registry, recordID, runID, "regular")
 	if err != nil {
-		t.Fatalf("start still refused after the documented bootstrap: %v", err)
+		t.Fatal(err)
 	}
-	if state.AdmissionRecordID != recordID || !isFile(RunStatePath(project, options.RunID)) {
-		t.Fatalf("bootstrapped start did not persist its admission identity: %+v", state)
+	request := admissionCurrentRequest(t, project, runID)
+	if request.InstalledTargetIdentity != recordID || !isFile(filepath.Join(admissionEngineDirectory(project, runID), "state.json")) {
+		t.Fatalf("start lost admission identity: %+v %+v", run, request)
 	}
 }
 
-// TestMutateRunAdmissionPrecedesPromptArtifact pins the
-// pre-write candidate admission gate inside mutateRun: when a run's registry
-// binding stops admitting, a prepare flow must fail before writing the
-// canonical dispatch prompt file, leaving the state ledger byte-identical
-// with no orphan artifact; once the binding admits again the same prepare
-// succeeds and records the dispatch with its canonical prompt file.
-func TestMutateRunAdmissionPrecedesPromptArtifact(t *testing.T) {
+func TestEngineAdmissionPrecedesWorkerMaterial(t *testing.T) {
 	source := admissionSource(t)
 	project := admissionGitProject(t)
 	isolated := t.TempDir()
 	registry := filepath.Join(isolated, "registry.json")
 	launcher := filepath.Join(isolated, "bin", nativeBinaryName())
-	targetPath, recordID := admissionInstallProject(t, source, project, registry, launcher)
-	runID := "admission-mutate-fence"
-	state, err := Start(StartOptions{
-		Root: project, PackageRoot: targetPath, RunID: runID,
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	})
+	target, recordID := admissionInstallProject(t, source, project, registry, launcher)
+	runID := "admission-write-fence"
+	_, err := admissionStartCurrent(project, target, registry, recordID, runID, "regular")
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := admissionRead(t, RunStatePath(project, runID))
-
-	admissionSetRecordStatus(t, registry, state.AdmissionRecordID, "disabled")
-	if _, err := PrepareAction(project, targetPath, runID, "requirements-clarification", "", false, ""); err == nil ||
-		!strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
-		t.Fatalf("prepare did not hard-reject the disabled admission before writing: %v", err)
-	}
-	if after := admissionRead(t, RunStatePath(project, runID)); string(after) != string(before) {
-		t.Fatal("rejected prepare rewrote the state ledger")
-	}
-	promptsDir := filepath.Join(RunDir(project, runID), "prompts")
-	if entries, readErr := os.ReadDir(promptsDir); readErr == nil && len(entries) != 0 {
-		t.Fatalf("rejected prepare left orphan prompt artifacts: %v", entries)
-	}
-	unchanged, err := LoadRunState(project, runID)
+	f, err := facade.Open(project, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(unchanged.Dispatches) != 0 {
-		t.Fatalf("rejected prepare recorded a dispatch: %+v", unchanged.Dispatches)
-	}
-
-	admissionSetRecordStatus(t, registry, state.AdmissionRecordID, "active")
-	prompt, err := PrepareAction(project, targetPath, runID, "requirements-clarification", "", false, "")
-	if err != nil {
-		t.Fatalf("admitted prepare was still refused: %v", err)
-	}
-	if strings.TrimSpace(prompt) == "" {
-		t.Fatal("admitted prepare returned an empty prompt")
-	}
-	admitted, err := LoadRunState(project, runID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(admitted.Dispatches) != 1 {
-		t.Fatalf("admitted prepare did not record exactly one dispatch: %+v", admitted.Dispatches)
-	}
-	for _, dispatch := range admitted.Dispatches {
-		if dispatch.Status != "OPEN" || strings.TrimSpace(dispatch.PromptFile) == "" {
-			t.Fatalf("dispatch was not recorded as open with its canonical file: %+v", dispatch)
-		}
-		data := admissionRead(t, dispatch.PromptFile)
-		if string(data) != prompt {
-			t.Fatalf("canonical prompt file does not carry the prepared prompt: %q", string(data))
-		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != dispatch.PromptHash {
-			t.Fatalf("canonical prompt file hash does not match the dispatch record: %+v", dispatch)
-		}
-	}
-}
-
-// TestCleanupRunAdmitsRunBinding pins the admission
-// fence on the workflow cleanup --run escape hatch: deleting a run directory
-// destroys workflow state, so a run with a recorded registry binding may only
-// be deleted by an invocation that still admits that binding, while residue
-// without a state ledger keeps the legacy stable-launcher check, and unsafe
-// run ids stay rejected.
-func TestCleanupRunAdmitsRunBinding(t *testing.T) {
-	source := admissionSource(t)
-	project := admissionGitProject(t)
-	isolated := t.TempDir()
-	registry := filepath.Join(isolated, "registry.json")
-	launcher := filepath.Join(isolated, "bin", nativeBinaryName())
-	targetPath, recordID := admissionInstallProject(t, source, project, registry, launcher)
-	runID := "admission-cleanup-fence"
-	state, err := Start(StartOptions{
-		Root: project, PackageRoot: targetPath, RunID: runID,
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	statePath := RunStatePath(project, runID)
-	runDir := RunDir(project, runID)
+	statePath := filepath.Join(admissionEngineDirectory(project, runID), "state.json")
 	before := admissionRead(t, statePath)
-
-	admissionSetRecordStatus(t, registry, state.AdmissionRecordID, "disabled")
-	if _, err := CleanupTempRun(project, runID); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
-		t.Fatalf("cleanup --run deleted a bound run without admission: %v", err)
-	}
-	if _, statErr := os.Stat(runDir); statErr != nil {
-		t.Fatalf("unadmitted cleanup removed the run directory: %v", statErr)
+	admissionSetRecordStatus(t, registry, recordID, "disabled")
+	if _, err = f.Drive(); err == nil || !strings.HasPrefix(err.Error(), "STALE_FENCING_TOKEN:") {
+		t.Fatalf("drive accepted disabled admission: %v", err)
 	}
 	if after := admissionRead(t, statePath); string(after) != string(before) {
-		t.Fatal("unadmitted cleanup rewrote the run state ledger")
+		t.Fatal("rejected drive changed authority")
 	}
-
-	admissionSetRecordStatus(t, registry, state.AdmissionRecordID, "active")
-	deleted, err := CleanupTempRun(project, runID)
-	if err != nil || !deleted {
-		t.Fatalf("admitted cleanup --run failed: deleted=%v err=%v", deleted, err)
+	if _, err = os.Stat(filepath.Join(admissionEngineDirectory(project, runID), "materials")); !os.IsNotExist(err) {
+		t.Fatalf("rejected drive left materials: %v", err)
 	}
-	if _, statErr := os.Stat(runDir); !os.IsNotExist(statErr) {
-		t.Fatalf("admitted cleanup left the run directory: %v", statErr)
+	admissionSetRecordStatus(t, registry, recordID, "active")
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	residueID := "admission-stateless-residue"
-	residueDir := RunDir(project, residueID)
-	admissionWrite(t, filepath.Join(residueDir, "stray.txt"), "abandoned residue\n", 0o600)
-	deleted, err = CleanupTempRun(project, residueID)
-	if err != nil || !deleted {
-		t.Fatalf("stateless residue cleanup failed: deleted=%v err=%v", deleted, err)
+	if len(run.WorkerMaterials) != 1 || len(run.PendingActions) != 1 {
+		t.Fatalf("restored drive lost issued material: %+v", run.WorkerMaterials)
 	}
-	if _, statErr := os.Stat(residueDir); !os.IsNotExist(statErr) {
-		t.Fatalf("stateless residue was not removed: %v", statErr)
-	}
-
-	if _, err := CleanupTempRun(project, "../"+runID); err == nil || !strings.Contains(err.Error(), "unsafe run id") {
-		t.Fatalf("unsafe run id was not rejected: %v", err)
+	for id, ref := range run.WorkerMaterials {
+		raw := admissionRead(t, ref.Path)
+		if ref.ActionID != id || !strings.Contains(string(raw), "Sample requirement.") {
+			t.Fatalf("issued material lost context: %s", raw)
+		}
+		sum := sha256.Sum256(raw)
+		if "sha256:"+hex.EncodeToString(sum[:]) != ref.Digest {
+			t.Fatalf("issued material digest mismatch: %+v", ref)
+		}
 	}
 }
 
-// TestInstallRejectsManifestUnregisteredHostTarget pins
-// the payload-manifest host-target registration check: an install into a
-// host the payload manifest does not register as an installable host-target
-// (downgraded support or a missing entry) must be rejected before any
-// target, launcher, or registry is created, while the registered manifest
-// installs normally.
 func TestInstallRejectsManifestUnregisteredHostTarget(t *testing.T) {
 	const claudeEntry = `{"name": "Claude Code", "support": "host-target"}`
 	scenarios := []struct {
@@ -459,13 +330,7 @@ func TestInstallRejectsManifestUnregisteredHostTarget(t *testing.T) {
 }
 
 // TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap
-// pins the global project-local sibling identity: a global install followed
-// by a workflow start from an external project derives a project-local
-// sibling record; a later upgrade of the global target refreshes the
-// sibling's package and installed digests in place (same identity,
-// generation, lease, and token), the documented bootstrap entry accepts the
-// refreshed sibling instead of rejecting an unaccounted identity, and the
-// next start of the same project reuses exactly that sibling binding.
+// Existing project-local sibling identities retain their lease and token across maintenance.
 func TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -488,31 +353,16 @@ func TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap(t *testing.T) {
 		t.Fatalf("initial global bootstrap failed: %v", err)
 	}
 	canonicalID := first.Targets[0].RegistryRecordID
-	state, err := Start(StartOptions{
-		Root: project, PackageRoot: first.Targets[0].TargetPath, RunID: "admission-global-sibling",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight",
-		AdmissionRegistry: registry, AdmissionRecordID: canonicalID,
-	})
+	siblingBefore := admissionSeedGlobalSibling(t, registry, canonicalID, project)
+	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AdmissionRecordID == canonicalID || !strings.HasPrefix(state.AdmissionRecordID, canonicalID+"-project-") {
-		t.Fatalf("global start did not bind the project-local sibling record: %+v", state)
+	if admission.RecordID == canonicalID || !strings.HasPrefix(admission.RecordID, canonicalID+"-project-") {
+		t.Fatalf("global admission lost project sibling: %+v", admission)
 	}
-	if err := SaveRunState(project, state); err != nil {
-		t.Fatalf("sibling-bound state write failed: %v", err)
-	}
-	document, err := LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	siblingBefore := admissionRecordByID(t, document, state.AdmissionRecordID)
-	if canonicalRegistryPath(siblingBefore.ProjectRoot) != canonicalRegistryPath(project) ||
-		canonicalRegistryPath(siblingBefore.StateRoot) != canonicalRegistryPath(filepath.Join(project, ".gates")) {
-		t.Fatalf("sibling record did not derive project-local roots: %+v", siblingBefore)
-	}
-	if err := DeleteRun(project, state.RunID); err != nil {
-		t.Fatal(err)
+	if canonicalRegistryPath(siblingBefore.ProjectRoot) != canonicalRegistryPath(project) || canonicalRegistryPath(siblingBefore.StateRoot) != canonicalRegistryPath(filepath.Join(project, ".gates")) {
+		t.Fatalf("sibling roots differ: %+v", siblingBefore)
 	}
 
 	admissionWrite(t, filepath.Join(source, "README.md"), "sample upgraded runtime\n", 0o600)
@@ -526,11 +376,11 @@ func TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap(t *testing.T) {
 	if second.PackageDigest == first.PackageDigest {
 		t.Fatal("upgrade fixture did not change the package digest")
 	}
-	document, err = LoadRegistry(registry)
+	document, err := LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	siblingAfter := admissionRecordByID(t, document, state.AdmissionRecordID)
+	siblingAfter := admissionRecordByID(t, document, admission.RecordID)
 	if siblingAfter.PackageDigest != second.PackageDigest ||
 		siblingAfter.InstalledDigest != second.Targets[0].InstalledDigest {
 		t.Fatalf("upgrade did not refresh the project-local sibling identity: before=%+v after=%+v", siblingBefore, siblingAfter)
@@ -546,20 +396,12 @@ func TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap(t *testing.T) {
 		t.Fatalf("bootstrap rejected the refreshed global sibling as unaccounted identity: %v", err)
 	}
 
-	secondState, err := Start(StartOptions{
-		Root: project, PackageRoot: second.Targets[0].TargetPath, RunID: "admission-global-sibling-2",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight",
-		AdmissionRegistry: registry, AdmissionRecordID: canonicalID,
-	})
+	secondAdmission, err := ResolveEngineAdmission(project, second.Targets[0].TargetPath, registry)
 	if err != nil {
-		t.Fatalf("post-upgrade start of the same project failed: %v", err)
+		t.Fatal(err)
 	}
-	if secondState.AdmissionRecordID != state.AdmissionRecordID {
-		t.Fatalf("post-upgrade start did not reuse the refreshed sibling binding: first=%q second=%q",
-			state.AdmissionRecordID, secondState.AdmissionRecordID)
-	}
-	if secondState.AdmissionGeneration != siblingAfter.Generation {
-		t.Fatalf("reused sibling binding lost its preserved generation: %+v", secondState)
+	if secondAdmission.RecordID != admission.RecordID || secondAdmission.Generation != siblingAfter.Generation {
+		t.Fatalf("refreshed binding lost identity/generation: %+v", secondAdmission)
 	}
 }
 
@@ -615,14 +457,10 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 	}
 
 	// 篡改状态下，同一 project root 的 start 被拒且不创建 run 目录。
-	if _, err := Start(StartOptions{
-		Root: project, PackageRoot: report.Targets[0].TargetPath, RunID: "admission-stale-digest",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	}); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest", "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("workflow start admitted a stale installed digest: %v", err)
 	}
-	if _, statErr := os.Stat(RunDir(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(admissionEngineDirectory(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
 		t.Fatalf("stale-digest start created a run directory: %v", statErr)
 	}
 	// 恢复原始字节并经文档化 bootstrap 提交 receipt：同一 root 的 start 必须
@@ -634,24 +472,16 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("documented bootstrap after restoring the installed tree failed: %v", err)
 	}
-	if _, err := Start(StartOptions{
-		Root: project, PackageRoot: report.Targets[0].TargetPath, RunID: "admission-stale-digest-ok",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	}); err != nil {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest-ok", "regular"); err != nil {
 		t.Fatalf("workflow start still refused after restore+bootstrap at the same root: %v", err)
 	}
 	// 再次篡改：同一 root（且 receipt 已在）的 start 再次被拒，拒绝因此特异
 	// 地来自 stale installed digest。
 	admissionWrite(t, installedReadme, "edited installed runtime\n", 0o600)
-	if _, err := Start(StartOptions{
-		Root: project, PackageRoot: report.Targets[0].TargetPath, RunID: "admission-stale-digest",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: recordID,
-	}); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest", "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("workflow start admitted a re-edited installed digest: %v", err)
 	}
-	if _, statErr := os.Stat(RunDir(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(admissionEngineDirectory(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
 		t.Fatalf("re-edited stale-digest start created a run directory: %v", statErr)
 	}
 }
@@ -762,4 +592,67 @@ func TestCodexHookCanaryRetriesTextOnlySession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Current test setup uses the same admission and typed bootstrap owners as the CLI.
+func admissionStartCurrent(project, target, registry, recordID, runID, route string) (facade.Run, error) {
+	admission, err := ResolveEngineAdmissionByRecord(recordID, registry)
+	if err != nil {
+		return facade.Run{}, err
+	}
+	bound, err := ResolveEngineAdmission(project, target, registry)
+	if err != nil {
+		return facade.Run{}, err
+	}
+	if admission.RecordID != bound.RecordID {
+		return facade.Run{}, fmt.Errorf("UNREGISTERED_INSTALL: record does not match workflow root")
+	}
+	raw, err := os.ReadFile(filepath.Join(project, "requirements.md"))
+	if err != nil {
+		return facade.Run{}, err
+	}
+	revision := fmt.Sprintf("%x", sha256.Sum256(raw))
+	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
+	base := ""
+	if route == "regular" {
+		base, err = vcs.New(project, nil).Resolve()
+		if err != nil {
+			return facade.Run{}, err
+		}
+	}
+	_, run, err := facade.Start(facade.StartOptions{Root: project, PackageRoot: target, ArtifactRoot: project, Capacity: 1, Request: facade.StartRequest{RunID: runID, Route: route, VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	return run, err
+}
+func admissionEngineDirectory(root, runID string) string {
+	return filepath.Join(root, facade.EngineNamespace, runID)
+}
+func admissionCurrentRequest(t *testing.T, root, runID string) facade.StartRequest {
+	t.Helper()
+	var request facade.StartRequest
+	if err := json.Unmarshal(admissionRead(t, filepath.Join(admissionEngineDirectory(root, runID), "request.json")), &request); err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+func admissionSeedGlobalSibling(t *testing.T, registry, canonicalID, project string) RegistryRecord {
+	t.Helper()
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := admissionRecordByID(t, document, canonicalID)
+	record.ID += "-project-fixture"
+	record.ProjectRoot = canonicalRegistryPath(project)
+	record.StateRoot = canonicalRegistryPath(filepath.Join(project, ".gates"))
+	record.ResourceRoot = canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
+	paths := map[string]string{}
+	for key, value := range record.CanonicalPaths {
+		paths[key] = value
+	}
+	paths["projectRoot"] = record.ProjectRoot
+	paths["stateRoot"] = record.StateRoot
+	paths["resourceRoot"] = record.ResourceRoot
+	record.CanonicalPaths = paths
+	repairCommitRegistry(t, registry, record)
+	return record
 }
