@@ -392,34 +392,6 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 	}
 }
 
-// TestOwnerOverlapDetectsLegacyActiveRun：同一 owner transcript 上存在 ACTIVE
-// legacy run（.gates/tmp 平坦形状 state.json）时，owner 区间记 UNAVAILABLE 零
-// 数字（迁移期两代并存可见）。
-func TestOwnerOverlapDetectsLegacyActiveRun(t *testing.T) {
-	root := t.TempDir()
-	transcript := filepath.Join(root, "shared-owner.jsonl")
-	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"base-1","message":{"usage":{"input_tokens":9,"output_tokens":4,"cache_read_input_tokens":1}}}`})
-	legacyDir := filepath.Join(root, ".gates", "tmp", "legacy-run")
-	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacyState := `{"runId":"legacy-run","flow":"lightweight","status":"ACTIVE","ownerTranscript":"` + transcript + `","ownerProvider":"` + meteredProvider + `"}`
-	if err := os.WriteFile(filepath.Join(legacyDir, "state.json"), []byte(legacyState), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: "engine-owner", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := f.Drive()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Cost.Owner == nil || run.Cost.Owner.Source != "unavailable" || run.Cost.Owner.TotalInputTokens != 0 || run.Cost.Owner.OutputTokens != 0 {
-		t.Fatalf("owner interval = %+v, want UNAVAILABLE with zero numbers", run.Cost.Owner)
-	}
-}
-
 // TestTerminalRunEndsLifecycleAttribution：run 终态收口移除 lifecycle 活动标
 // 记（幂等）——终态后晚到的宿主事件归属无 run，不再落入该 run 的事件树。
 func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
@@ -648,9 +620,8 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 }
 
 // TestOwnerOverlapMarksBothRunsUnavailable：owner 区间重叠是双边持久事实——后
-// 启动 run 经协议幂等入口把重叠补写进先启动 run 的 owner 投影（其启动布尔不随
-// 后续重叠更新），双方终态都记 UNAVAILABLE 零数字（legacy beginOwnerCost 的双
-// 边标记语义）。
+// 启动 run 经协议幂等入口把重叠补写进先启动 run 的 owner 投影，
+// 双方终态都记 UNAVAILABLE 零数字。
 func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
 	root := t.TempDir()
 	transcript := filepath.Join(root, "shared.jsonl")

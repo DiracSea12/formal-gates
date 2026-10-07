@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -233,27 +232,7 @@ func TestInstallFaultMatrixRecoveryReceiptIdentity(t *testing.T) {
 	}
 }
 
-func faultStableDocs(t *testing.T, root string) []string {
-	t.Helper()
-	docs := []string{
-		filepath.Join(root, "SKILL.md"),
-		filepath.Join(root, "README.md"),
-		filepath.Join(root, "README_EN.md"),
-	}
-	for _, pattern := range []string{
-		filepath.Join(root, "prompts", "*.md"),
-		filepath.Join(root, "prompts", "actions", "*.md"),
-	} {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			t.Fatal(err)
-		}
-		docs = append(docs, matches...)
-	}
-	return docs
-}
-
-func TestStableHelpAndDocsRejectFutureCommandTokens(t *testing.T) {
+func TestInstalledPackageInventoryAndHelp(t *testing.T) {
 	root := faultRepoRoot(t)
 	packageRoot := t.TempDir()
 	faultCopyPackage(t, root, packageRoot)
@@ -316,20 +295,6 @@ func TestStableHelpAndDocsRejectFutureCommandTokens(t *testing.T) {
 		t.Fatal("installed manifest differs from the built package manifest")
 	}
 
-	for _, path := range faultStableDocs(t, target) {
-		content := string(faultReadFile(t, path))
-		for _, token := range []string{"drive", "submit"} {
-			standalone := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])` + token + `([^[:alnum:]_-]|$)`)
-			backticked := regexp.MustCompile("(?i)`" + token + "`")
-			if match := standalone.FindString(content); match != "" {
-				t.Fatalf("stable document %s contains standalone future command token %q", path, match)
-			}
-			if match := backticked.FindString(content); match != "" {
-				t.Fatalf("stable document %s contains backticked future command token %q", path, match)
-			}
-		}
-	}
-
 	helpCases := []struct {
 		args   []string
 		marker string
@@ -343,33 +308,11 @@ func TestStableHelpAndDocsRejectFutureCommandTokens(t *testing.T) {
 		{[]string{"workflow", "start", "--help"}, "workflow start"},
 		{[]string{"workflow", "show", "--help"}, "workflow show"},
 		{[]string{"workflow", "diagnose", "--help"}, "workflow diagnose"},
-		{[]string{"workflow", "resume", "--help"}, "workflow resume"},
-		{[]string{"workflow", "abort", "--help"}, "workflow abort"},
-		{[]string{"workflow", "reset", "--help"}, "workflow reset"},
-		{[]string{"workflow", "requirement", "--help"}, "workflow requirement"},
-		{[]string{"workflow", "route-candidates", "--help"}, "workflow route-candidates"},
-		{[]string{"workflow", "route", "--help"}, "workflow route"},
-		{[]string{"workflow", "route-add", "--help"}, "workflow route-add"},
-		{[]string{"workflow", "slicing", "--help"}, "workflow slicing"},
-		{[]string{"workflow", "settle-findings", "--help"}, "workflow settle-findings"},
-		{[]string{"workflow", "qa-worktree", "--help"}, "workflow qa-worktree"},
-		{[]string{"workflow", "prepare-gate", "--help"}, "workflow prepare-gate"},
-		{[]string{"workflow", "prepare-action", "--help"}, "workflow prepare-action"},
-		{[]string{"workflow", "claim-dispatch", "--help"}, "workflow claim-dispatch"},
-		{[]string{"workflow", "record-action", "--help"}, "workflow record-action"},
-		{[]string{"workflow", "record-gate", "--help"}, "workflow record-gate"},
-		{[]string{"workflow", "qa-design", "--help"}, "workflow qa-design"},
-		{[]string{"workflow", "qa-review", "--help"}, "workflow qa-review"},
-		{[]string{"workflow", "qa-execution", "--help"}, "workflow qa-execution"},
-		{[]string{"workflow", "qa-execution-scope", "--help"}, "workflow qa-execution-scope"},
-		{[]string{"workflow", "snapshot", "--help"}, "workflow snapshot"},
-		{[]string{"workflow", "cleanup", "--help"}, "workflow cleanup"},
-		{[]string{"workflow", "candidate", "--help"}, "workflow candidate"},
-		{[]string{"workflow", "candidate", "generate", "--help"}, "workflow candidate generate"},
-		{[]string{"workflow", "candidate", "view", "--help"}, "workflow candidate view"},
-		{[]string{"workflow", "carry", "--help"}, "workflow carry"},
-		{[]string{"workflow", "authorize-repair", "--help"}, "workflow authorize-repair"},
-		{[]string{"workflow", "seal", "--help"}, "workflow seal"},
+		{[]string{"workflow", "drive", "--help"}, "workflow drive"},
+		{[]string{"workflow", "submit", "--help"}, "workflow submit"},
+		{[]string{"workflow", "status", "--help"}, "workflow status"},
+		{[]string{"workflow", "next", "--help"}, "workflow next"},
+		{[]string{"workflow", "guard-preview", "--help"}, "workflow guard-preview"},
 		{[]string{"registry", "admit", "--help"}, "registry admit"},
 		{[]string{"registry", "show", "--help"}, "registry show"},
 		{[]string{"registry", "--help"}, "subcommands:"},
@@ -395,8 +338,5 @@ func TestStableHelpAndDocsRejectFutureCommandTokens(t *testing.T) {
 		if !strings.Contains(strings.ToLower(output), strings.ToLower(helpCase.marker)) {
 			t.Fatalf("help %q omitted %q: %s", strings.Join(helpCase.args, " "), helpCase.marker, output)
 		}
-		// The installed candidate exposes drive/submit in its CLI help; they
-		// are not future command tokens there. Stable package documentation is
-		// still checked above.
 	}
 }

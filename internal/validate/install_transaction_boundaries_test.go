@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -1235,7 +1234,7 @@ esac
 	}
 }
 
-func TestInstalledInventoryAndStableHelpStayWithinStageZero(t *testing.T) {
+func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 	root := installRepoRoot(t)
 	receipt, err := PackageReceipt(root)
 	if err != nil {
@@ -1275,38 +1274,6 @@ func TestInstalledInventoryAndStableHelpStayWithinStageZero(t *testing.T) {
 			t.Fatalf("inventory path is not present in installed tree: %s: %v", path, err)
 		}
 	}
-	stableDocFiles := []string{filepath.Join(root, "SKILL.md"), filepath.Join(root, "README.md"), filepath.Join(root, "README_EN.md")}
-	for _, pattern := range []string{filepath.Join(root, "prompts", "*.md"), filepath.Join(root, "prompts", "actions", "*.md")} {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			t.Fatal(err)
-		}
-		stableDocFiles = append(stableDocFiles, matches...)
-	}
-	futureCommandToken := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])(drive|submit)([^[:alnum:]_-]|$)`)
-	// Stable documents must not mention the candidate-only drive/submit
-	// commands; the candidate CLI intentionally exposes them in its help.
-	for _, path := range stableDocFiles {
-		content := string(installReadFile(t, path))
-		if token := futureCommandToken.FindString(content); token != "" {
-			t.Fatalf("stable document %s leaks future command token %q", path, token)
-		}
-	}
-	docFiles := append([]string{}, stableDocFiles...)
-	referenceFiles, err := filepath.Glob(filepath.Join(root, "references", "*.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	docFiles = append(docFiles, filepath.Join(root, "references", "requirements-precedence.md"))
-	docFiles = append(docFiles, referenceFiles...)
-	for _, path := range docFiles {
-		content := strings.ToLower(string(installReadFile(t, path)))
-		for _, forbidden := range []string{"workflow drive", "workflow submit", "drive/submit", "shadow"} {
-			if strings.Contains(content, forbidden) {
-				t.Fatalf("stable document %s leaks future public surface %q", path, forbidden)
-			}
-		}
-	}
 	var help strings.Builder
 	for _, surface := range []struct {
 		args   []string
@@ -1321,33 +1288,11 @@ func TestInstalledInventoryAndStableHelpStayWithinStageZero(t *testing.T) {
 		{[]string{"workflow", "start", "--help"}, "workflow start"},
 		{[]string{"workflow", "show", "--help"}, "workflow show"},
 		{[]string{"workflow", "diagnose", "--help"}, "workflow diagnose"},
-		{[]string{"workflow", "resume", "--help"}, "workflow resume"},
-		{[]string{"workflow", "abort", "--help"}, "workflow abort"},
-		{[]string{"workflow", "reset", "--help"}, "workflow reset"},
-		{[]string{"workflow", "requirement", "--help"}, "workflow requirement"},
-		{[]string{"workflow", "route-candidates", "--help"}, "workflow route-candidates"},
-		{[]string{"workflow", "route", "--help"}, "workflow route"},
-		{[]string{"workflow", "route-add", "--help"}, "workflow route-add"},
-		{[]string{"workflow", "slicing", "--help"}, "workflow slicing"},
-		{[]string{"workflow", "settle-findings", "--help"}, "workflow settle-findings"},
-		{[]string{"workflow", "qa-worktree", "--help"}, "workflow qa-worktree"},
-		{[]string{"workflow", "prepare-gate", "--help"}, "workflow prepare-gate"},
-		{[]string{"workflow", "prepare-action", "--help"}, "workflow prepare-action"},
-		{[]string{"workflow", "claim-dispatch", "--help"}, "workflow claim-dispatch"},
-		{[]string{"workflow", "record-action", "--help"}, "workflow record-action"},
-		{[]string{"workflow", "record-gate", "--help"}, "workflow record-gate"},
-		{[]string{"workflow", "qa-design", "--help"}, "workflow qa-design"},
-		{[]string{"workflow", "qa-review", "--help"}, "workflow qa-review"},
-		{[]string{"workflow", "qa-execution", "--help"}, "workflow qa-execution"},
-		{[]string{"workflow", "qa-execution-scope", "--help"}, "workflow qa-execution-scope"},
-		{[]string{"workflow", "snapshot", "--help"}, "workflow snapshot"},
-		{[]string{"workflow", "cleanup", "--help"}, "workflow cleanup"},
-		{[]string{"workflow", "candidate", "--help"}, "workflow candidate"},
-		{[]string{"workflow", "candidate", "generate", "--help"}, "workflow candidate generate"},
-		{[]string{"workflow", "candidate", "view", "--help"}, "workflow candidate view"},
-		{[]string{"workflow", "carry", "--help"}, "workflow carry"},
-		{[]string{"workflow", "authorize-repair", "--help"}, "workflow authorize-repair"},
-		{[]string{"workflow", "seal", "--help"}, "workflow seal"},
+		{[]string{"workflow", "drive", "--help"}, "workflow drive"},
+		{[]string{"workflow", "submit", "--help"}, "workflow submit"},
+		{[]string{"workflow", "status", "--help"}, "workflow status"},
+		{[]string{"workflow", "next", "--help"}, "workflow next"},
+		{[]string{"workflow", "guard-preview", "--help"}, "workflow guard-preview"},
 		{[]string{"registry", "admit", "--help"}, "registry admit"},
 		{[]string{"registry", "show", "--help"}, "registry show"},
 		{[]string{"registry", "--help"}, "subcommands:"},
@@ -1375,8 +1320,6 @@ func TestInstalledInventoryAndStableHelpStayWithinStageZero(t *testing.T) {
 		help.WriteByte('\n')
 	}
 	helpText := strings.ToLower(help.String())
-	// The installed candidate exposes workflow drive/submit as public
-	// commands, so they are not forbidden tokens in CLI help.
 	for _, forbidden := range []string{"shadow"} {
 		if strings.Contains(helpText, forbidden) {
 			t.Fatalf("public help leaks future surface %q: %s", forbidden, helpText)
