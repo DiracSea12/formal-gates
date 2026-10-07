@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
@@ -133,5 +134,83 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 	after, err := os.ReadFile(filepath.Join(f.stateDir, "state.json"))
 	if err != nil || string(before) != string(after) {
 		t.Fatal("auxiliary scope observation wrote authority")
+	}
+}
+
+func TestCarriedDevelopmentKeepsPublicWriteScope(t *testing.T) {
+	d := newValidationDriver(t, "quality")
+	binary := filepath.Join(t.TempDir(), "formal-gates")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = filepath.Clean("../../..")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build hook: %v %s", err, output)
+	}
+	observe := func(role, want string) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"tool_name": "Write", "tool_input": map[string]any{"file_path": filepath.Join(d.f.root, "app.go")}, "cwd": d.f.root, "agent_type": role})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(binary, "hook", "decide")
+		cmd.Stdin = bytes.NewReader(body)
+		output, runErr := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if runErr != nil && !errors.As(runErr, &exit) {
+			t.Fatal(runErr)
+		}
+		var response struct {
+			Decision string `json:"decision"`
+		}
+		if err := json.Unmarshal(output, &response); err != nil {
+			t.Fatalf("hook response: %v %s", err, output)
+		}
+		wantExit := 0
+		if want == "block" {
+			wantExit = 2
+		}
+		code := 0
+		if exit != nil {
+			code = exit.ExitCode()
+		}
+		if response.Decision != want || code != wantExit {
+			t.Fatalf("role %q decision=%s exit=%d want=%s/%d", role, response.Decision, code, want, wantExit)
+		}
+	}
+	before := driverState(t, d)
+	if !before.DevelopmentStarted() {
+		t.Fatal("initial issued development scope missing")
+	}
+	for _, role := range []string{"", "product-review"} {
+		observe(role, "block")
+	}
+	confirmValidationWork(d, "")
+	after := driverState(t, d)
+	if before.RequirementRevision() == after.RequirementRevision() || !after.DevelopmentStarted() {
+		t.Fatal("confirmed CARRY lost development scope")
+	}
+	if !reflect.DeepEqual(before.DispatchBindings, after.DispatchBindings) {
+		t.Fatal("CARRY rewrote original issued bindings")
+	}
+	statePath := filepath.Join(d.f.stateDir, "state.json")
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.reopen()
+	for _, role := range []string{"", "product-review"} {
+		observe(role, "block")
+	}
+	got, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(raw, got) {
+		t.Fatal("scope/reopen query changed authority", err)
+	}
+	action, _ := planBatchAction(d, "command")
+	confirmValidationDocument(d, action, nil, validationDocument+"\n\n")
+	replaced := driverState(t, d)
+	if replaced.DevelopmentStarted() {
+		t.Fatal("REDO retained obsolete development scope before replacement issue")
+	}
+	for _, role := range []string{"", "product-review"} {
+		observe(role, "approve")
 	}
 }

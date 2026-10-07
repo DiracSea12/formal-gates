@@ -57,11 +57,21 @@ type DevelopmentCompletion struct {
 	Handoff string            `json:"handoff"`
 }
 
-// DevelopmentStarted projects the current confirmation's issued work facts.
-// DispatchBindings survives completed work and is invalidated with its authority.
+// DevelopmentStarted projects current or explicitly carried issued work.
+// Completed work retains its binding; obsolete and replaced duties do not.
 func (s *State) DevelopmentStarted() bool {
-	for _, binding := range s.DispatchBindings {
-		if binding.RequirementRevision == s.RequirementRevision() && binding.PlanRequest != "" && binding.BatchID != "" {
+	for action, binding := range s.DispatchBindings {
+		if binding.PlanRequest == "" || binding.BatchID == "" {
+			continue
+		}
+		if _, obsolete := s.ObsoleteActions[action]; obsolete {
+			continue
+		}
+		current, _ := s.requirementWorkReplacement(binding.Task)
+		if current != binding.Task {
+			continue
+		}
+		if binding.RequirementRevision == s.RequirementRevision() || s.validationWorkCarryAuthorized(action, binding.Task) {
 			return true
 		}
 	}
