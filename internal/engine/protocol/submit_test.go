@@ -337,7 +337,7 @@ func TestReplayAcrossEngineRestart(t *testing.T) {
 // reopenEngine 用同一状态目录重开引擎（重启语义）。
 func reopenEngine(t *testing.T, dir string) *Engine {
 	t.Helper()
-	engine, err := New(mustStore(t, dir), Config{
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
 	}, nil)
 	if err != nil {

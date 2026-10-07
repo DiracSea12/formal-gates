@@ -126,7 +126,7 @@ func reviewEngine(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.R
 func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.Registry, capacity int) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: capacity}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: capacity}, nil)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 	if !bytes.Equal(beforeReplay, stateBytesOf(t, dir)) {
 		t.Fatal("CAS replay changed persisted state")
 	}
-	reopened, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	reopened, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1853,7 +1853,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}

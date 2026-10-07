@@ -121,7 +121,7 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}

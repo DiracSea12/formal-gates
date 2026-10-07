@@ -134,7 +134,7 @@ func TestPhase3ProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile definition: %v", err)
 	}
-	engine, err := protocol.New(store, protocol.Config{Definition: compiled, Registry: definition.Registry(), Capacity: 0}, nil)
+	engine, err := protocol.New(store, protocol.Config{InternalSteps: testkit.InternalSteps(), Definition: compiled, Registry: definition.Registry(), Capacity: 0}, nil)
 	if err != nil {
 		t.Fatalf("new protocol engine: %v", err)
 	}

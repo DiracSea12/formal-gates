@@ -1930,10 +1930,7 @@ func zcodeVerifySource(directory string, source any) error {
 	return verifyNativeSource(directory, source, "zcode")
 }
 
-// nativeImplementation is one execution adapter's Go entry points: the Go
-// spelling of one native_hosts._ADAPTERS entry. dshDispatch keeps the
-// refusal (and the adapters list it names); this table routes a dispatched
-// provider to its code, so adding a host stays one adapter file plus one row.
+// nativeImplementation is the execution boundary for one native provider.
 type nativeImplementation struct {
 	capture         func() (map[string]any, error)
 	validateBinding func(binding any) error
@@ -1942,47 +1939,31 @@ type nativeImplementation struct {
 	execute         func(request any, directory string, probe bool) (map[string]any, error)
 }
 
-var nativeImplementations = map[string]nativeImplementation{
-	"codex": {capture: codexCaptureBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, reconcile: codexReconcile, execute: codexExecute},
-	"cursor": {
-		capture: cursorCaptureBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource,
-		reconcile: cursorReconcile, execute: cursorExecute,
-	},
-	"claude": {
-		capture:         claudeCaptureBinding,
-		validateBinding: claudeValidateBinding,
-		verifySource:    claudeVerifySource,
-		reconcile:       claudeReconcile,
-		execute:         claudeExecute,
-	},
-	"dsh": {
-		capture:         dshCaptureBinding,
-		validateBinding: dshValidateBinding,
-		verifySource:    dshVerifySource,
-		reconcile:       dshReconcile,
-		execute:         dshExecute,
-	},
-	"zcode": {
-		capture:         zcodeCaptureBinding,
-		validateBinding: zcodeValidateBinding,
-		verifySource:    zcodeVerifySource,
-		reconcile:       zcodeReconcile,
-		execute:         zcodeExecute,
-	},
+// Ordered entries own both routing and unsupported-host diagnostics.
+var nativeImplementations = []struct {
+	provider string
+	nativeImplementation
+}{
+	{"dsh", nativeImplementation{capture: dshCaptureBinding, validateBinding: dshValidateBinding, verifySource: dshVerifySource, reconcile: dshReconcile, execute: dshExecute}},
+	{"zcode", nativeImplementation{capture: zcodeCaptureBinding, validateBinding: zcodeValidateBinding, verifySource: zcodeVerifySource, reconcile: zcodeReconcile, execute: zcodeExecute}},
+	{"claude", nativeImplementation{capture: claudeCaptureBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, reconcile: claudeReconcile, execute: claudeExecute}},
+	{"codex", nativeImplementation{capture: codexCaptureBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, reconcile: codexReconcile, execute: codexExecute}},
+	{"cursor", nativeImplementation{capture: cursorCaptureBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, reconcile: cursorReconcile, execute: cursorExecute}},
 }
 
-// nativeImplementationFor refuses every provider this binary does not
-// implement and routes an implemented one to its adapter.
+func dshDispatch(provider string) error {
+	_, err := nativeImplementationFor(provider)
+	return err
+}
+
 func nativeImplementationFor(provider string) (nativeImplementation, error) {
-	if err := dshDispatch(provider); err != nil {
-		return nativeImplementation{}, err
+	names := make([]string, 0, len(nativeImplementations))
+	for _, entry := range nativeImplementations {
+		if entry.provider == provider {
+			return entry.nativeImplementation, nil
+		}
+		names = append(names, entry.provider)
 	}
-	impl, ok := nativeImplementations[provider]
-	if !ok {
-		// The adapters list and the routing table diverged; the refusal text
-		// stays the one dshDispatch names.
-		return nativeImplementation{}, &blockedError{message: fmt.Sprintf(
-			"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(executionAdapters, ", "))}
-	}
-	return impl, nil
+	return nativeImplementation{}, &blockedError{message: fmt.Sprintf(
+		"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(names, ", "))}
 }

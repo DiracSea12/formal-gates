@@ -38,6 +38,7 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // 与 schema 以 Definition 中的 compiled payload 为唯一运行时来源。Capacity
 // 是并行在途任务上限，驱动与补位从 PendingActions 扣除已占槽位。CostSource 是派发计量
 // 来源的 sidecar 解析器（nil＝无宿主计量集成，cost 维度不参与判定）；
+// InternalSteps binds transaction-local implementations by compiled HandlerID.
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
@@ -48,6 +49,7 @@ type Config struct {
 	Definition           *compiler.CompiledDefinition
 	Registry             *compiler.Registry
 	Capacity             int
+	InternalSteps        map[authoring.HandlerID]InternalStep
 	CostSource           CostSourceResolver
 	ClaimDispatch        DispatchClaim
 }
@@ -82,6 +84,11 @@ func New(store *persistence.Store, cfg Config, collect func() (string, error)) (
 			return emptyObservationDigest()
 		}
 	}
+	bindings, err := bindInternalSteps(cfg.Definition, cfg.Registry, cfg.InternalSteps)
+	if err != nil {
+		return nil, err
+	}
+	cfg.InternalSteps = bindings
 	return &Engine{store: store, cfg: cfg, collect: collect}, nil
 }
 
@@ -288,7 +295,7 @@ func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) error {
 		return nil
 	}
 	review.ReleaseUpstreamVoid(&state.ReviewSeries)
-	return state.settleFrontierSteps(e.cfg.Definition)
+	return state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps)
 }
 
 // transactionEpilogue 是事务收尾单点：一切携业务后果的提交在落账前经此
@@ -408,7 +415,7 @@ func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) (bool, er
 	}
 	state.HeldHostSettles = nil
 	state.FrontierSettleHeld = false
-	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+	if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 		return false, err
 	}
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
@@ -616,10 +623,10 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 			return nil, revision, err
 		}
 		// 跨事务事实收敛点：wave COMPLETE 与晋升绑定两个收口事实无论先
-		// 后、无论落在哪个事务，下一次 Drive 都在此完成收口。settle 只完
+		// 后、无论落在哪个事务，下一次 Drive 都在此完成收口。settle 执行事务内 handler 并完
 		// 成步、不签发工作——观察类事务不自动签发的约束不受影响。
 		completed := len(state.Completed)
-		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return nil, revision, err
 		}
 		if advanced || len(state.Completed) != completed || e.reconcileReviewGrantAsks(state) {
@@ -1341,7 +1348,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		if state.requirementChangePending() || ev.Decide.Requirement != nil && len(ev.Decide.Requirement.Children) > 0 {
 			state.FrontierSettleHeld = true
 		} else {
-			if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 			issued, err := e.refill(state, nextRevision, expectedFingerprint)
@@ -1938,7 +1945,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 				return Acceptance{}, false, fmt.Errorf("protocol: complete step %s: %w", receipt.Task.Step, err)
 			}
 		}
-		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return Acceptance{}, false, err
 		}
 		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
@@ -2200,7 +2207,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 			return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)
 		}
 	}
-	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+	if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 		return nil, err
 	}
 	return e.refill(state, nextRevision, expectedFingerprint)

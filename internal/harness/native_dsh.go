@@ -23,22 +23,6 @@ import (
 // finish its own turn.
 const dshStartupTimeout = 40 * time.Second
 
-// executionAdapters lists the providers this Go binary implements, in the
-// order the unsupported-host refusal names them. The routing table that pairs
-// with it lives in native_zcode.go (nativeImplementations).
-var executionAdapters = []string{"dsh", "zcode", "claude", "codex", "cursor"}
-
-// dshDispatch refuses every provider this binary does not implement.
-func dshDispatch(provider string) error {
-	for _, name := range executionAdapters {
-		if provider == name {
-			return nil
-		}
-	}
-	return &blockedError{message: fmt.Sprintf(
-		"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(executionAdapters, ", "))}
-}
-
 // dshPermissionInteraction declares DSH's one held client-directed request.
 // Every frame shape below is reverse-read from the host's own protocol stack
 // (2026-09-20, dsh 0.1.5-rc.1):

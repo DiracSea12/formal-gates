@@ -60,7 +60,7 @@ func protocolEngine(t *testing.T, collect func() (string, error)) *protocol.Engi
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	engine, err := protocol.New(store, protocol.Config{
+	engine, err := protocol.New(store, protocol.Config{InternalSteps: testkit.InternalSteps(),
 		Definition: compiled,
 		Registry:   definition.Registry(),
 		Capacity:   2,

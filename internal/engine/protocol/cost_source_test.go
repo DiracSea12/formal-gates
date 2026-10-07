@@ -38,7 +38,7 @@ func costEngineFixture(t *testing.T, resolver CostSourceResolver) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{Definition: cd, Registry: reg, Capacity: 1, CostSource: resolver}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1, CostSource: resolver}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

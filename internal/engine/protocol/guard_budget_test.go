@@ -33,7 +33,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(mustStoreAt(t, dir), Config{
+	reopened, err := New(mustStoreAt(t, dir), Config{InternalSteps: fixtureInternalSteps(),
 		Definition: engine.cfg.Definition, Registry: engine.cfg.Registry, Capacity: 4,
 	}, nil)
 	if err != nil {
@@ -761,7 +761,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		Steps: []authoring.Step{parse, agent("development.worker", "engine.development.batch"), agent("qa.execution", "engine.qa.execution")},
 	}, reg)
 	must(err)
-	engine, err := New(mustStoreAt(t, t.TempDir()), Config{Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStoreAt(t, t.TempDir()), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

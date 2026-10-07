@@ -54,7 +54,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{Definition: compiled, Registry: registry, Capacity: 1}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: compiled, Registry: registry, Capacity: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 	dir := t.TempDir()
 	cd, reg := twoAgentFixture(t)
 	store := mustStore(t, dir)
-	engine, err := New(store, Config{Definition: cd, Registry: reg, Capacity: 1}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1}, nil)
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
@@ -963,7 +963,7 @@ func TestFreeUserEventRejectedThroughSubmit(t *testing.T) {
 func reopenEngineWith(t *testing.T, dir string) *Engine {
 	t.Helper()
 	cd, reg := twoAgentFixture(t)
-	engine, err := New(mustStore(t, dir), Config{Definition: cd, Registry: reg, Capacity: 1}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1}, nil)
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)
 	}

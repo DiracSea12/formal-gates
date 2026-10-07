@@ -860,7 +860,7 @@ func NewProtocolFixtureWithDefinition(root string, compiled *compiler.CompiledDe
 		return nil, err
 	}
 	engine, err := protocol.New(store, protocol.Config{
-		Definition: compiled, Registry: registry, Capacity: capacity,
+		Definition: compiled, Registry: registry, Capacity: capacity, InternalSteps: InternalSteps(),
 	}, vcs.Fingerprint)
 	if err != nil {
 		return nil, err
@@ -951,4 +951,13 @@ func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
 // around the checked-in task key without duplicating its import path.
 func TaskKey(node, step string) runtime.TaskKey {
 	return runtime.TaskKey{Node: authoring.NodeID(node), Step: authoring.StepID(step)}
+}
+
+// InternalSteps binds the fixture's transaction-local scheduling nodes.
+func InternalSteps() map[authoring.HandlerID]protocol.InternalStep {
+	bindings := make(map[authoring.HandlerID]protocol.InternalStep)
+	for _, id := range []authoring.HandlerID{"engine.fan.slice", "engine.fan.join", "engine.report.cost"} {
+		bindings[id] = protocol.InternalStep{Runner: authoring.RunnerEngineLocal, Run: func(*protocol.State, compiler.CompiledStep) (bool, error) { return true, nil }}
+	}
+	return bindings
 }

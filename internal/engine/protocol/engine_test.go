@@ -29,7 +29,7 @@ func newTestEngine(t *testing.T) (*Engine, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	engine, err := New(store, Config{
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
 	}, nil)
 	if err != nil {
@@ -199,7 +199,7 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store2: %v", err)
 	}
-	engine2, err := New(store2, Config{
+	engine2, err := New(store2, Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
 	}, nil)
 	if err != nil {

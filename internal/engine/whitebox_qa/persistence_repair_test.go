@@ -335,7 +335,7 @@ func qaP2Engine(t *testing.T, collect func() (string, error)) *protocol.Engine {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	engine, err := protocol.New(store, protocol.Config{
+	engine, err := protocol.New(store, protocol.Config{InternalSteps: testkit.InternalSteps(),
 		Definition: compiled,
 		Registry:   definition.Registry(),
 		Capacity:   2,

@@ -8,34 +8,10 @@ import (
 	"formal-gates/internal/engine/review"
 )
 
-// settleFrontierSteps completes every frontier step whose external boundary
-// has just been satisfied by a durable protocol fact, then mechanically
-// completes engine-internal steps (LOCAL / DURABLE / PARALLEL) that became
-// eligible. The canonical rule set:
-//
-//   - HUMAN_ASK step: complete when its own two-phase decision is durably
-//     recorded.
-//   - HOST_ACTION step: complete when its own intent has an EXECUTED or
-//     RECONCILED receipt.
-//   - AGENT steps: a step carrying a review-series mark (carrier step)
-//     completes iff its series' first-pass latch is set—a monotonic fact, so
-//     sibling carriers of a concluded series complete in dependency order
-//     without their own dispatches and a later PASS transaction idempotently
-//     skips already-completed carriers. Non-carrier agent steps split into two
-//     completion facts: a validation-period step is dispatched across waves,
-//     so a single recorded PASS is not evidence of process completion (the
-//     PASS admission guard keeps the step open) and it settles iff the
-//     pipeline concluded—final wave COMPLETE plus the candidate promotion
-//     bound; every other non-carrier step's completion fact is its recorded
-//     PASS result, and completeResult completes it directly.
-//   - LOCAL / DURABLE steps execute inside the engine's controller boundary;
-//     once eligible they complete mechanically in dependency order.
-//   - PARALLEL steps are pure scheduling markers; once eligible they complete
-//     immediately and unlock their children.
-//
-// Every completion still goes through CompleteStep, so version binding,
-// duplicate, and dependency-order checks remain authoritative.
-func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error {
+// settleFrontierSteps executes eligible transaction-local handlers and settles
+// external boundaries from their durable facts. CompleteStep owns completion,
+// version binding and dependency order; parallel steps are scheduling markers.
+func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindings map[authoring.HandlerID]InternalStep) error {
 	for pass := 0; pass < len(compiled.Steps); pass++ {
 		progressed := false
 		completedSet := make(map[authoring.StepID]bool, len(s.Completed))
@@ -65,11 +41,15 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 				if payload.Operation != "op.workspace" && payload.Operation != "op.cleanup" {
 					settle = s.hasSettledHostActionForStep(step.Header.ID)
 				}
-			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
-				settle = true
-				if step.Header.ID == "children.prepare" || step.Header.ID == "children.publish" {
-					settle = s.creationStepSettled(step.Header.ID)
+			case compiler.CompiledLocalStep, compiler.CompiledDurableStep:
+				binding := bindings[internalStepHandler(*step)]
+				var err error
+				settle, err = binding.Run(s, *step)
+				if err != nil {
+					return fmt.Errorf("protocol: execute step %s: %w", step.Header.ID, err)
 				}
+			case compiler.CompiledParallelStep:
+				settle = true
 			case compiler.CompiledAgentStep:
 				if validationHandler(*step) != "" {
 					settle = s.validationConcluded(compiled)
