@@ -1,4 +1,135 @@
-# 命令路由矩阵（§2.3 全列名 · 活文档）
+# 命令路由矩阵（活文档）
+
+义务来源：增量计划 §2.3、§5.11 与主需求 §3.1–3.2。实现落地后矩阵须与实际公开面
+一致，实际入口在矩阵中缺席即缺陷。现行归属以阶段 7 表为准；下方阶段 0–6 材料明确
+为 historical，只保留当时接口与原始证据，不授权当前命令或 writer。
+
+需求权威与 supersession 见 [唯一清单](../references/requirements-precedence.md)，
+调用形式与受理字段唯一见 [正式流程合同](../references/formal-flow.md)。
+
+## 当前阶段 7：身份、版本与证据
+
+源码尚未冻结。静态对应不表示执行 PASS；当前所有行的安装级、正常流程与负向执行
+证据均待绑定最终候选 commit、package digest、installed-target identity 和实际安装
+副本。历史 Seal/canary 不拼接为阶段 7 证据。
+
+| 绑定 | 当前归属/精确校验 | 源码出处 | 当前证据状态 |
+| --- | --- | --- | --- |
+| writer/namespace | Controller→protocol.Engine→persistence.Store；writer=`engine`，`.gates/engine/<run>/state.json` 为主需求 §5.9 的唯一权威投影，无数据库迁移或第二状态账本。 | `internal/engine/persistence/persistence.go`：Writer、expectedEnvelope；`internal/engine/facade/facade.go`：EngineNamespace、Start、Drive、Submit | 待固定候选执行。 |
+| schema/definition | encoder.StateSchemaVersion、同次 canonical 生成的 definition.WorkflowDefinitionVersion/WorkflowDefinitionDigest、DefaultDefinitionSource 精确匹配；host 不指定版本/digest。 | `internal/engine/encoder/encoder.go`；`internal/engine/definition/identity_gen.go`；`internal/engine/persistence/persistence.go`：ValidateEnvelopeWithIdentity | 未冻结源码观察为 schema `1`、definition `10`；最终值/digest 待源码交付绑定，不作为 release 证据。 |
+| package/install | owning packageDigest、installedTargetIdentity 与 admission generation/lease/token 来自登记安装；普通 loader 在业务处理前校验其与实际安装一致。 | `internal/cli/cli.go`：openEngineIfPresent；`internal/validate/engine_admission.go`：ResolveEngineAdmissionByRecord、ResolveEngineAdmission；`internal/engine/facade/facade.go`：Open、startRun | 待最终候选与安装 receipt；WIP 源码路径不能代替安装证据。 |
+| intake/freshness | 预检→展示全文/revision→用户确认→typed receipt start；首 drive 登记一次。request/action/Attempt/provider、digest 和当前 revision freshness 由统一 submit 校验。 | `internal/cli/cli.go`：runWorkflowStart；`internal/requirement/document.go`：ParseRequirementProjection；`internal/engine/facade/facade.go`：validateConfirmation、validateArtifactBindings、recordIntakeReceipt；`internal/engine/protocol/event.go` | 待最终候选验证预检无副作用、确认绑定和幂等接纳。 |
+
+precheck 是 start 的只读模式，不是第九 workflow 入口。普通 read-only 不改状态；
+bootstrap、机械 drive 和唯一外部 submit 仍使用同一 Controller writer。版本缺失或
+不匹配不得读成当前状态后改写；diagnose 是唯一原始只读例外，保留不支持原文件。
+
+## 当前阶段 7：八个 workflow 入口
+
+| 入口 | runtime | 唯一 writer | schema/definition/身份绑定 | 允许的状态变化 | 错误分类 | 是否只读 | 当前绑定/计划枚举 | 源码与执行证据 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| start | engine bootstrap；--precheck 为纯预检 | 普通启动 Controller→Store；precheck 无 | 普通启动按上表版本/安装/已确认材料；precheck 仅 UTF-8 正文与 REQ/AC 结构投影 | 普通启动创建当前 top-level regular/lightweight run；child 由 engine 创建。预检只输出 content/revision/requirementDocument，不触 admission/registry/run/receipt、不替确认 | UNREGISTERED_INSTALL、INVALID_INTAKE_CONFIRMATION、UNSUPPORTED_RUN_VERSION、LOCK_HELD；预检文件/结构/参数错误非零 | 普通否；precheck 是 | engine；计划内；无 split 意向/legacy mode/身份注入 | `internal/cli/cli.go`：runWorkflowStart；`internal/engine/facade/facade.go`：Start；待候选执行 |
+| drive | Controller 观察、决策、机械执行/对账 | Controller→protocol.Engine→Store | 普通 loader owning 绑定、pending action/Attempt/definition、CAS/fingerprint | 首次登记 intake，推进至 Ready/HostAction/Ask/Wait/Operator/Complete；恢复只找原执行事实，共用业务接纳/终结清理 | 版本/admission/integrity/CAS/fingerprint 拒绝；声明的业务/瞬态/UNKNOWN/invariant 分类 | 否；不接外部事件 | engine；计划内；无 --event | `internal/cli/cli.go`：runWorkflowDrive；`internal/engine/facade/facade.go`：Drive；六边界/恢复待候选执行 |
+| submit | engine typed event/native-result 接纳 | Controller→protocol.Engine→Store；唯一外部事件 writer | event ID/digest、schema、request/action/Attempt/provider、freshness/source bindings | 接纳用户决定、主动控制、worker 原始结果、HostAction/lifecycle receipt；同 ID 同 digest 幂等，不重放副作用 | UNKNOWN_EVENT_KIND、EVENT_SCHEMA_INVALID、STALE_FRESHNESS、DUPLICATE_EVENT_DIGEST_MISMATCH、STALE_ATTEMPT、PROVIDER_MISMATCH 与义务/guard 拒绝 | 否 | engine；计划内；无别名第二通道 | `internal/cli/cli.go`：runWorkflowSubmit；`internal/engine/facade/facade.go`：Submit；`internal/engine/facade/worker_material.go`：SubmitWorkerResult；待候选执行 |
+| show | engine 只读投影/终态摘要 | 无 | 普通 loader 精确版本/definition/package/installed-target；终态同 envelope | 无 | UNSUPPORTED_RUN_VERSION、STATE_INTEGRITY_MISMATCH、admission/文件/JSON 错误非零 | 是 | engine；计划内 | `internal/cli/cli.go`：runWorkflowShow；`internal/engine/facade/facade.go`：Show、projectOrSummary；bytes/mtime 不变待候选执行 |
+| status | engine 只读状态 | 无 | 同 show；freshness/availableActions 派生于权威状态 | 无 | 同 show | 是 | engine；计划内 | `internal/cli/cli.go`：runWorkflowStatus；`internal/engine/facade/facade.go`：Status；待候选执行 |
+| next | engine 只读 NextResult | 无 | 同 show；同 canonical plan 唯一六类边界，终态 Complete | 无 | 同 show | 是 | engine；计划内 | `internal/cli/cli.go`：runWorkflowNext；`internal/engine/facade/facade.go`：Next；待候选执行 |
+| diagnose | 最小 raw/envelope parser | 无 | 可原始检查 unsupported/corrupt/missing；报告 detected/supported identity 与安全可判定 integrity，无 owning identity 不猜 package 匹配 | 无；不迁移/续写/删除 | 不支持版本为 recommendation；malformed JSON 为 jsonReadable=false；文件不可读非零并返回可得报告 | 是 | raw diagnostic；计划内 | `internal/cli/cli.go`：runWorkflowDiagnose；`internal/engine/facade/facade.go`：Diagnose；原文件保持/缺失诊断待候选执行 |
+| guard-preview | 生产 guard.Calculate 纯计算 | 无 | basis schemaVersion=1；确认/definition/provenance/retry 是声明，不认证实际 run；runtimeIntegration 来自 protocol.GuardRuntimeIntegration | 无；不创建 run 或写额度 | 文件/JSON/schema/身份/provenance/retry 冲突非零，可定位错误 | 是 | non-authoritative preview；计划内；当前集成常量 ENGINE_AUTHORITATIVE | `internal/cli/guard_preview.go`：runWorkflowGuardPreview；`internal/engine/guard`；已知答案/零写入待候选执行 |
+
+### 当前错误与恢复归属
+
+主需求 §5.8 分类固定：TRANSIENT_ENGINE_ERROR 有限机械 retry；BUSINESS_REJECT 走
+声明业务边；USER_ACTION_REQUIRED 走 Ask；SIDE_EFFECT_UNKNOWN 先 observe/reconcile
+再 Wait/Operator；INVARIANT_VIOLATION/BLOCKED_BUG 明确失败并 diagnose；只有定义
+预先声明的 AGENT_RECOVERABLE_SEMANTIC_ERROR 可进入语义修复。外部派发默认
+MaxAttempts=2，定义可声明其他有限策略；次数耗尽进入对应 typed Ask，不作无限 Wait。
+
+FailureClass 与 compiled failure edges 归 `internal/engine/authoring` 和 Controller；
+实际 action 接纳/恢复归 `internal/engine/protocol`。持久化拒绝码归 persistence.go，
+typed event 拒绝码归 protocol.go，CLI 参数与未知入口错误归 cli.go。逐路径执行证据
+待固定候选，不以静态类型或测试名称标 PASS。
+
+## 当前阶段 7：适用维护与 transport 根
+
+`internal/cli/cli.go` 的 run switch 仅暴露 workflow 与下列九个维护根。维护根无
+workflow writer；registry/安装 owner 事务不是公开业务控制。help/version 只输出信息；
+缺省命令进入 package validate。各行实际运行结果均待同一最终候选。
+
+| 根入口与子入口 | 分类/owner | 权限、身份与副作用边界 | 恢复/拒绝 | 源码与证据状态 |
+| --- | --- | --- | --- | --- |
+| package validate / route-candidates / baseline | 前二者只读；baseline 只写外部 receipt | package/installed digest、原生 identity/canonical paths；不写 workflow state | 包/参数/输入错误非零 | `internal/cli/cli.go`：runPackage；待候选执行 |
+| registry admit / show | admit 外部 admission receipt；show 只读 | record generation/lease/token/owning paths；无独立 register/reconcile writer | 不可核对则拒绝；恢复归安装 owner | `internal/cli/cli.go`：runRegistry；`internal/validate/envelope.go`：AdmitRegistry、LoadRegistry；待候选执行 |
+| install（含 --bootstrap） | native installer owner，安装/registry/receipt | 固定 launcher admission/lease；bootstrap 不创建 run；不迁移旧 run/不成为 workflow writer | 同 owner journal observe/reconcile、failure/rollback receipt | `internal/cli/cli.go`：runInstall；`internal/validate/install.go`；待候选执行 |
+| uninstall | 同一 native installer owner | 清理自有 runtime/hook/规则/registry；不改 workflow state | 同锁/journal 恢复；活动资源条件按维护合同 | `internal/cli/cli.go`：runUninstall；`internal/validate/install.go`；待候选执行 |
+| hook decide | 原生载荷→辅助 write_block；可捕获 owner 输入外部观测 | 读取 engine issued batch/owner/确认文档/原生 identity；仓库根、owner 对话与开发阶段作用域；不签发/接纳业务 | provider/参数错误非零；不把 owner 观测当结果/用户授权 | `internal/cli/cli.go`：runHook；`internal/validate/write_block.go`、`owner_scope.go`；待候选执行 |
+| lifecycle capture / verify | capture 只写原生 observation；verify 只读 | action/SpawnReceipt/provider 身份配对，不直接改 workflow state | capture 重放幂等；UNKNOWN 由 drive/submit 共用路径对账 | `internal/cli/cli.go`：runLifecycle；`internal/lifecycle/provider.go`；待候选执行 |
+| canary portable / fault-matrix / codex-hook / codex-hook-probe | 检查、隔离 fixture 与原始证据 | 明确测试 namespace；真实模型按用户授权，不把未执行项记 PASS | fault-matrix 复用安装 journal；检查失败非零 | `internal/cli/cli.go`：runCanary；`internal/validate/canary.go`；待候选执行 |
+| gate run / report | 脱离 run 的提示词/结果只读校验 | 不持久化正式门结论，不接纳 workflow 结果 | schema/参数/合同错误非零 | `internal/cli/cli.go`：runGate；待候选执行 |
+| coverage validate / project-whitelist / reconcile-execution | 纯函数校验/投影 | stdin typed contract→stdout，无 state/VCS/QA义务变化 | coverage code/path；JSON/合同错误非零 | `internal/cli/coverage.go`：runCoverage；待候选执行 |
+
+## 当前阶段 7：退役与负向边界
+
+以下 36 个 workflow 名称为 removed/unsupported，不在 workflowSubcommands 中。
+CLI 在进入 loader/writer/cleanup 前返回非零 unknown workflow subcommand，不按版本
+分流到兼容 handler。业务能力只归内部 Controller handler 或当前 availableActions 的
+typed Ask/submit；这些名称不是公共入口。
+
+| 退役名称 | 当前绑定 | writer/状态变化 | 源码/负向执行状态 |
+| --- | --- | --- | --- |
+| resume | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| abort | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| reset | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| requirement | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| review-delta-preview | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| requirement-impact-preview | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| authorize-retry | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| route-candidates | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| slicing | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| settle-findings | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| route | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| route-add | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-worktree | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| prepare-gate | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| prepare-action | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| claim-dispatch | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| record-action | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| record-gate | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-design | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-review | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-execution | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-execution-scope | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-thaw | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| qa-suggestion | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| prepare-candidate | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| prepare-review-wave | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| adjudicate-wave | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| resolve-wave-target | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| snapshot | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| cleanup | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| candidate | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| carry | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| authorize-repair | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| repair-preview | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| complete-p2-repair | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+| seal | removed/unsupported | 无；零业务写入 | `internal/cli/workflow_surface_test.go`：TestWorkflowPublicSurface；待最终候选执行 |
+
+| 其他禁止形态 | 当前绑定/拒绝 | 源码与负向证据状态 |
+| --- | --- | --- |
+| workflow submit-result / migrate / authority-handoff / 兼容别名 | unsupported；unknown workflow subcommand；无迁移/第二 writer | `internal/cli/cli.go`：runWorkflow/workflowSubcommands；待最终候选执行 |
+| drive --event | unsupported flag；drive 不读外部事件 | `internal/cli/cli.go`：runWorkflowDrive/newFlagSet；待最终候选执行 |
+| start --split / --retained-overall / --master / legacy mode / runtime 或 digest 注入 | unsupported flag；只绑定 typed intake 与当前安装；child 由 engine 创建 | `internal/cli/cli.go`：runWorkflowStart；待最终参数拒绝/零写入证据 |
+| registry bootstrap / register / reconcile | unsupported public subcommand；register/reconcile 归安装 owner；bootstrap 仅 install --bootstrap | `internal/cli/cli.go`：runRegistry；`internal/cli/registry_surface_test.go`：TestRegistryMutationSurfaceOwnedByInstaller；待候选执行 |
+| top-level cutover / rollback / bootstrap / migrate / authority-handoff | unsupported public root，unknown command；安装事务内部切换/rollback 不构成公共业务入口 | `internal/cli/cli.go`：run switch；待候选执行 |
+| show/status/next/drive/submit 读取旧、缺版本或 mismatch run | UNSUPPORTED_RUN_VERSION；原文件仅供 diagnose，不改写/删除 | `internal/cli/workflow_surface_test.go`：TestWorkflowUnsupportedStateIsDiagnosticOnly；`internal/cli/engine_writer_exclusivity_test.go`；待最终零写入证据 |
+| 绕过 launcher/lease、底层 package/installed identity 或 registry path 注入 | unsupported；admission/版本/参数写前拒绝；维护根不得代写业务 state | `internal/cli/cli.go`：openEngineIfPresent/runWorkflowStart/runInstall；registry_surface_test.go；待候选执行 |
+
+## Historical：阶段 0–6 路由与原始证据
+
+下方完整保留各阶段时点的表格与证据。段内“当前”“权威覆盖”“未迁移”等词只指
+当时阶段，不能覆盖阶段 7 现行表；历史测试名/行号不是当前源码位置。
+
+# Historical：命令路由矩阵（§2.3 全列名）
 
 > 义务来源：`refactor-plan/incremental-seal-plan.md` §2.3（唯一写入者与版本绑定）、§5 第 11 项
 > （每阶段退出条件）。本矩阵为阶段 0/1 交付义务补漏实物（2026-08-22），阶段 2 开始按
