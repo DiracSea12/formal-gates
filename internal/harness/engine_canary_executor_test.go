@@ -1122,7 +1122,7 @@ func canaryPeerWrapper(testName, key, script string) string {
 
 func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir string, answer map[string]any) error {
 	c := e.canary
-	workspace := textOf(request["workspace"])
+	workspace := resolveNativePath(textOf(request["workspace"]))
 	identity := codexPeerID(dir + workspace + textOf(request["prompt"]))
 	binding := maps.Clone(objectOrEmpty(request["binding"]))
 	environment := maps.Clone(objectOrEmpty(binding["environment"]))
