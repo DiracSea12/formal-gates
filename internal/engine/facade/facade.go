@@ -1154,6 +1154,9 @@ func (f *Facade) sealDelivered() error {
 	if _, _, err := f.verifyDelivered(); err != nil {
 		return err
 	}
+	if err := f.writeSummaryValue(summary); err != nil {
+		return err
+	}
 	return f.engine.SealTerminal(identity, emptyFingerprint())
 }
 
@@ -1786,13 +1789,13 @@ func (f *Facade) recoverTerminalIntent() error {
 }
 
 func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
+	if err := f.writeSummaryValue(summary); err != nil {
+		return err
+	}
 	if err := f.cleanupCheckpoints(summary); err != nil {
 		return err
 	}
 	if err := f.store.CleanupTerminal(); err != nil {
-		return err
-	}
-	if err := f.writeSummaryValue(summary); err != nil {
 		return err
 	}
 	return f.admission.write(func() error {

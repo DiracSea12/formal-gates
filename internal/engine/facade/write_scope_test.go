@@ -86,6 +86,7 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 		t.Fatal("pre-development owner scope blocked ordinary work")
 	}
 	d.drive()
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
