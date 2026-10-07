@@ -554,6 +554,13 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 }
 
 func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source map[string]any, err error) {
+	defer func() {
+		if err != nil {
+			if body, readErr := os.ReadFile(filepath.Join(dir, "host.stderr")); readErr == nil && len(body) > 0 {
+				e.t.Logf("native peer stderr: %s", body)
+			}
+		}
+	}()
 	request := value.(map[string]any)
 	if probe {
 		return nil, fmt.Errorf("local executor requires exact dispatched material")
@@ -1240,7 +1247,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 	case "codex":
 		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
 			StrictSchema: true, Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
-		s.peer.ThreadParams = map[string]any{"cwd": workspace, "ephemeral": false}
+		s.peer.ThreadParams = map[string]any{"cwd": textOf(request["workspace"]), "ephemeral": false}
 		if request["read_only"] == true {
 			s.peer.ThreadParams["sandbox"] = "read-only"
 		}

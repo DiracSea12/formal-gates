@@ -68,7 +68,7 @@ func TestCodexRPCPeer(t *testing.T) {
 		panic(err)
 	}
 	cwd, _ := os.Getwd()
-	if cwd != peer.Workspace || os.Getenv("HOME") != peer.Home {
+	if resolveNativePath(cwd) != resolveNativePath(peer.Workspace) || os.Getenv("HOME") != peer.Home {
 		panic("native environment/workspace differs")
 	}
 	if os.Getenv("CODEX_HOME") != peer.Config {
