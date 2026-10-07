@@ -445,7 +445,12 @@ func (c *engineCanary) loop() {
 				progressed = true
 			}
 			switch c.run.Next.Kind {
-			case decision.KindReady, decision.KindWait:
+			case decision.KindReady:
+			case decision.KindWait:
+				if c.reviewFindingsWithOperator() {
+					c.drive()
+					progressed = true
+				}
 			case decision.KindHostAction:
 				c.drive()
 				progressed = true
@@ -1713,6 +1718,9 @@ func (c *engineCanary) answerAsks() bool {
 	c.t.Helper()
 	handled := false
 	for _, ask := range c.run.PendingAsks {
+		if ask.Control == protocol.ControlReviewFindingDecision {
+			return c.reviewFindingsWithOperator()
+		}
 		if ask.Control == protocol.ControlValidation && ask.Validation != nil && ask.Validation.Kind == "REPAIR" {
 			if c.repairAllowances <= 0 {
 				continue
