@@ -781,7 +781,7 @@ func (s *State) verifyPhaseAgainstLedgers(cd *compiler.CompiledDefinition) error
 	if s.Phase == runtime.PhaseSliceReady && s.SliceReceipt != nil {
 		return nil
 	}
-	if s.Phase == runtime.PhaseFinalizingCleanup && s.cleanupStarted(cd) {
+	if s.Phase == runtime.PhaseFinalizingCleanup && s.cleanupStarted() {
 		return nil
 	}
 	if phaseRank(s.Phase) > s.phaseLedgerFloor() {

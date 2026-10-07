@@ -585,6 +585,10 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 				if after := d.p.git(t, "worktree", "list", "--porcelain") + d.p.git(t, "for-each-ref", "--format=%(refname) %(objectname)", "refs/formal-gates/"); after != before {
 					t.Fatal("requirement barrier wrote native cleanup")
 				}
+				_, held := d.p.bindings(t, "candidate", "codex")
+				if !reflect.DeepEqual(held.CandidatePromotion, promotion) || !reflect.DeepEqual(held.HostActionReceipts[promotion.OperationID], promotionReceipt) || !reflect.DeepEqual(held.NativeResources, originalState.NativeResources) || !reflect.DeepEqual(held.PendingHostActions, originalState.PendingHostActions) {
+					t.Fatal("requirement barrier changed original native facts")
+				}
 			}
 			decide, err := protocol.NewDecideEvent(d.id(), protocol.RequestID(request.ID), d.token(string(request.ID)), "abort")
 			if err != nil {
@@ -592,6 +596,12 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 			}
 			d.submit(decide)
 			original := d.accepted[len(d.accepted)-1].receipt
+			_, decided := d.p.bindings(t, "candidate", "codex")
+			d.submit(decide)
+			_, replayed := d.p.bindings(t, "candidate", "codex")
+			if !reflect.DeepEqual(d.accepted[len(d.accepted)-1].receipt, original) || !reflect.DeepEqual(decided, replayed) {
+				t.Fatal("duplicate control decision changed its acceptance or durable state")
+			}
 			d.drive()
 			want := "COMPLETE"
 			if control == protocol.ControlAbort {
@@ -607,10 +617,10 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 			if control == protocol.ControlAbort && (summary.LastEvent == nil || !reflect.DeepEqual(summary.LastEvent.Acceptance, original)) {
 				t.Fatalf("abort identity changed: %+v != %+v", summary.LastEvent, original)
 			}
+			if target() != targetBefore || !reflect.DeepEqual(d.run.Termination.CandidatePromotion, promotion) || !reflect.DeepEqual(d.run.Termination.HostActionReceipts[promotion.OperationID], promotionReceipt) {
+				t.Fatal("cleanup control changed delivered native content or its original promotion proof")
+			}
 			if control == protocol.ControlAbort {
-				if target() != targetBefore || !reflect.DeepEqual(d.run.Termination.CandidatePromotion, promotion) || !reflect.DeepEqual(d.run.Termination.HostActionReceipts[promotion.OperationID], promotionReceipt) {
-					t.Fatal("cleanup Abort changed delivered native content or its original promotion proof")
-				}
 				d.assertAbortedResources()
 			} else {
 				d.assertClean()

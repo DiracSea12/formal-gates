@@ -7,10 +7,59 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
+
+// An unresolved requirement Ask freezes new writes while the original cleanup
+// intent and its exact resource receipt retain the native responsibility.
+func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource := NativeResource{ID: "work", Owner: "delivery", Role: "development", Path: "/work/delivery", Ref: "refs/delivery", Source: "base", Identity: "candidate", Status: "READY"}
+	values, err := normalizeHostActionParams(CleanupParameters{Resources: []NativeResource{resource}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := HostActionIntent{ActionID: "cleanup", Adapter: &AdapterHostAction{Operation: "op.cleanup", Params: values}, PayloadDigest: "parameters"}
+	s := &State{State: decision.State{Phase: runtime.PhaseFinalizingCleanup}, RunID: resource.Owner,
+		NativeResources: map[string]NativeResource{resource.ID: resource}, PendingHostActions: map[string]HostActionIntent{intent.ActionID: intent},
+		PendingAsks: map[string]PendingAsk{"change": {Control: ControlRequestRequirementChange}},
+	}
+	if s.CleanupEligible(cd) || s.NativeActionCurrent(intent, cd) {
+		t.Fatal("unresolved requirement Ask authorized a new cleanup write")
+	}
+	if !s.cleanupStarted() || !s.nativeEffectApplicable(intent, cd) || s.verifyPhaseAgainstLedgers(cd) != nil {
+		t.Fatal("requirement Ask discarded original cleanup authority")
+	}
+	resource.Status = "CLEANED"
+	proof, err := normalizeHostActionParams(WorkspaceCleanupReceipt{ParametersDigest: intent.PayloadDigest, Resources: []NativeResource{resource}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := HostActionReceipt{ActionID: intent.ActionID, AdapterOperation: "op.cleanup", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: proof}}
+	engine := &Engine{cfg: Config{Definition: cd}}
+	if err := engine.applyResourceReceipt(s, intent, receipt); err != nil {
+		t.Fatal(err)
+	}
+	delete(s.PendingHostActions, intent.ActionID)
+	s.HostActionReceipts = map[string]HostActionReceipt{intent.ActionID: receipt}
+	s.ReconciledEffects = map[string]ReconciledEffect{intent.ActionID: {Intent: &intent, Status: "FULFILLED"}}
+	if !s.cleanupStarted() || !s.ResourcesCleaned() || s.verifyPhaseAgainstLedgers(cd) != nil {
+		t.Fatal("accepted receipt discarded original cleanup authority")
+	}
+	if err := engine.applyResourceReceipt(s, intent, receipt); err != nil || s.NativeResources[resource.ID] != resource {
+		t.Fatal("replayed cleanup receipt changed the registered resource")
+	}
+	delete(s.ReconciledEffects, intent.ActionID)
+	if s.cleanupStarted() || s.verifyPhaseAgainstLedgers(cd) == nil {
+		t.Fatal("cleanup phase passed without its original intent")
+	}
+}
 
 // Resource selection follows confirmed business work, including explicit carry
 // and redo decisions. Native materialization is covered by installed tests.
