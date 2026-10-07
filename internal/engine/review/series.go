@@ -427,6 +427,9 @@ var requiredVerificationChecks = []string{
 	"severity",
 }
 
+// RequiredVerificationChecks returns the closed candidate-admission check IDs.
+func RequiredVerificationChecks() []string { return slices.Clone(requiredVerificationChecks) }
+
 // normalizeOperatorVerification 规范化核实记录：证据非空，八项检查齐全、
 // 无重复、无未知项；检查按固定序排序后存储。
 func normalizeOperatorVerification(input OperatorVerification) (OperatorVerification, error) {

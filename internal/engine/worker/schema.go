@@ -76,6 +76,16 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 }
 
 func resultTypeSchema(value reflect.Type) (map[string]any, error) {
+	if value == reflect.TypeOf(review.OperatorVerification{}) {
+		checks := []any{}
+		for _, id := range review.RequiredVerificationChecks() {
+			checks = append(checks, id)
+		}
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []any{"checks", "evidence"}, "properties": map[string]any{
+			"checks":   map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": checks}},
+			"evidence": map[string]any{"type": "string"},
+		}}, nil
+	}
 	// TaskKey's actual encoding is its text identity, not its Go fields.
 	if value == reflect.TypeOf(runtime.TaskKey{}) {
 		return map[string]any{"type": "string"}, nil

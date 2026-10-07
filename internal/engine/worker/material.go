@@ -37,7 +37,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		} else {
 			return Material{}, fmt.Errorf("unsupported review role %s", input.Review.Action)
 		}
-		value.ResultTemplate.Review = &protocol.ReviewResultEvidence{Action: input.Review.Action, DispatchID: input.Pending.ActionID, RequirementRevision: input.Review.RequirementRevision, AuthorizationID: input.Review.AuthorizationID}
+		value.ResultTemplate.Review = &protocol.ReviewResultEvidence{Action: input.Review.Action, DispatchID: input.Pending.ActionID, RequirementRevision: input.Review.RequirementRevision, AuthorizationID: input.Review.AuthorizationID, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks()}}
+		checks, _ := json.Marshal(review.RequiredVerificationChecks())
+		instructions += " The review.verification.checks field contains exactly these machine IDs once each: " + string(checks) + ". Record the actual completed checks; place narrative support in verification.evidence, never in checks. These are result-integrity checks, not user/Operator approval. Findings remain independent: preserve every actual P0/P1/P2/P3 finding and severity rationale; preferences outside scope stay P3."
+
 	} else if input.Validation != nil {
 		value.ResultTemplate.Validation = &protocol.ValidationResult{Binding: input.Validation.Binding}
 		switch input.Handler {
