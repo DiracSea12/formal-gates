@@ -9,32 +9,8 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-// gateResultContract renders the [Result contract] block shared by the run-bound
-// gate review and the standalone gate review. dispatchID selects the
-// run-bound form (adds the dispatch id and compared snapshot pair fields and
-// instructions); an empty dispatchID renders the standalone form.
-func gateResultContract(dispatchID string) string {
-	contract := "Return exactly one JSON object matching: {"
-	if dispatchID != "" {
-		contract += fmt.Sprintf("\"dispatchId\":%q,\"compared\":\"base..current\",", dispatchID)
-	}
-	if dispatchID != "" {
-		contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"severityRationale\":\"independent per-finding rationale\",\"requirement\":\"REQ-nnn\",\"normalPath\":\"documented normal-use path\",\"actualError\":\"current failure\",\"deferralImpact\":\"why P2 is insufficient\",\"verification\":{\"scope\":\"...\",\"severity\":\"...\",\"causality\":\"...\",\"reproduction\":\"...\"},\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
-	} else {
-		contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
-	}
-	if dispatchID != "" {
-		contract += "Report the exact snapshot pair you actually compared in compared (base..current). "
-	}
-	contract += "PASS permits no findings or P2/P3-only findings. FAIL requires at least one P0 or P1 finding"
-	if dispatchID != "" {
-		contract += " and may include P2/P3 findings"
-	}
-	contract += ". RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. "
-	if dispatchID != "" {
-		contract += "Return this dispatch ID unchanged. "
-	}
-	return "[Result contract]\n" + contract + "Do not add fields or Markdown fences."
+func gateResultContract() string {
+	return "[Result contract]\nReturn exactly one JSON object matching: {\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS permits no findings or P2/P3-only findings. FAIL requires at least one P0 or P1 finding. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Do not add fields or Markdown fences."
 }
 
 // ComposeStandaloneGatePrompt assembles a standalone gate review prompt that
@@ -65,7 +41,7 @@ func ComposeStandaloneGatePrompt(catalog prompts.PromptCatalog, gateID, root, vc
 		"[Shared reviewer contract]\n" + catalog.Base,
 		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
 		standaloneChangeBlock(root, vcs, base, scope),
-		gateResultContract(""),
+		gateResultContract(),
 	}
 	return strings.Join(parts, "\n\n") + "\n", nil
 }
@@ -105,7 +81,7 @@ func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return StandaloneGateResult{}, fmt.Errorf("standalone gate result is not valid JSON: %w", err)
 	}
-	status, _, err := validateSemanticResult("", result.Status, result.Message, result.Findings, true)
+	status, _, err := validateSemanticResult(result.Status, result.Message, result.Findings)
 	if err != nil {
 		return StandaloneGateResult{}, err
 	}

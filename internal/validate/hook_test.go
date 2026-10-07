@@ -1,27 +1,13 @@
 package validate
 
-import "testing"
+import (
+	"fmt"
+	"path/filepath"
+	"testing"
+)
 
-func TestHookDeniesPassWithoutCurrentRunBinding(t *testing.T) {
-	for _, command := range []string{
-		`formal-gates workflow record-gate --gate quality --status PASS --run-id run`,
-		`formal-gates workflow record-gate --status PASS --run-id run --dispatch dispatch-1`,
-		`formal-gates workflow record-gate --gate quality --status PASS --dispatch dispatch-1`,
-		`formal-gates workflow record-gate --gate quality --status PASS --run-id run --live-snapshot current`,
-	} {
-		decision, err := Hook([]byte(`{"command":"` + command + `"}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if decision.PermissionDecision != "deny" {
-			t.Fatalf("command was allowed: %s", command)
-		}
-	}
-}
-
-func TestHookAllowsBoundPassAndOtherCommands(t *testing.T) {
+func TestHookAllowsNonWriteCommands(t *testing.T) {
 	for _, payload := range []string{
-		`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run --dispatch dispatch-1"}`,
 		`{"command":"go test ./..."}`,
 		`{"event":"PreToolUse","value":{"text":"not a command"}}`,
 	} {
@@ -36,7 +22,9 @@ func TestHookAllowsBoundPassAndOtherCommands(t *testing.T) {
 }
 
 func TestHookExitCodeUsesCodexJSONDecisionProtocol(t *testing.T) {
-	decision, err := Hook([]byte(`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run"}`))
+	root := t.TempDir()
+	writeCurrentHookFixture(t, root, "hook", true, true, "", "owner")
+	decision, err := Hook([]byte(fmt.Sprintf(`{"cwd":%q,"session_id":"owner","tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.Join(root, "app.go"))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,18 +40,6 @@ func TestHookExitCodeUsesCodexJSONDecisionProtocol(t *testing.T) {
 	}
 	if got := HookExitCode("codex", allowed); got != 0 {
 		t.Fatalf("Codex allowed hook should exit 0, got %d", got)
-	}
-}
-
-func TestHookRejectsLegacyScriptCommands(t *testing.T) {
-	for _, command := range []string{"pwsh -File scripts/gate-workflow.ps1", "pwsh -File hooks/capture-subagent-receipt.ps1"} {
-		decision, err := Hook([]byte(`{"input":{"command":"` + command + `"}}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if decision.PermissionDecision != "deny" {
-			t.Fatalf("legacy command was allowed: %s", command)
-		}
 	}
 }
 

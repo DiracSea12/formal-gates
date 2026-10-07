@@ -32,9 +32,6 @@ func (execNativeCommandRunner) Run(dir, command string, args ...string) (string,
 
 type nativeVCSResolver interface {
 	Resolve(root string) (string, error)
-	Verify(root, identity string) error
-	VerifyReady(root string) error
-	IsAncestorOrEqual(root, ancestor, descendant string) error
 }
 
 type commandVCSResolver struct {
@@ -91,88 +88,6 @@ func resolverForVCS(name string, runner nativeCommandRunner) (nativeVCSResolver,
 	return commandVCSResolver{name: name, runner: runner}, nil
 }
 
-func (r commandVCSResolver) VerifyReady(root string) error {
-	if err := r.verifyRoot(root); err != nil {
-		return err
-	}
-	var pending string
-	var err error
-	switch r.name {
-	case "git":
-		// --untracked-files=all：让 git 自己把每个未跟踪且未忽略的文件逐路径列出
-		// （不存在折叠的目录条目），使「新增交付文件漏了 git add」在快照前就暴露、
-		// 而不是作为幽灵文件静默丢失。被 .gitignore 忽略的文件本来就不在 git 报告
-		// 的未提交内容里，不因目录枚举被重新当成交付。formal-gates 自身的运行期
-		// 目录（.gates/tmp、QA 隔离工作区等）在宿主仓库未必已写进 .gitignore，因此
-		// 只剔除这些保留目录的未跟踪输出，不把它们误判为未提交交付文件；其它未跟踪
-		// 文件仍照常拦截。
-		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1", "--untracked-files=all")
-		if err == nil {
-			pending = excludeRuntimeUntrackedGitStatus(pending)
-		}
-	case "svn":
-		pending, err = r.runner.Run(root, "svn", "status", "--quiet", root)
-	case "p4":
-		pending, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%depotFile%", "opened", "...")
-		if err != nil && strings.Contains(strings.ToLower(err.Error()), "file(s) not opened on this client") {
-			return nil
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("cannot inspect unsubmitted %s changes: %w", r.name, err)
-	}
-	if strings.TrimSpace(pending) != "" {
-		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot (including any untracked files that must be added)", r.name)
-	}
-	return nil
-}
-
-// runtimeGitStatusDirs are formal-gates 的保留运行期目录（git status 路径形
-// 式）：由 CLI 自身创建/维护，不是交付文件；宿主仓库未必预先 gitignore 它
-// 们。.gates/engine/ 是 engine 路线的运行期 run 目录——混代仓库（先后跑过
-// engine 与 legacy run）里 legacy 的工作区洁净检查不把它当未提交交付物。清
-// 单在这里单源持有，逐路径豁免读这一份。
-var runtimeGitStatusDirs = []string{
-	".gates/engine/", ".gates/tmp/", ".gates/run-locks/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/",
-}
-
-// excludeRuntimeUntrackedGitStatus removes porcelain "?? <path>" lines that sit
-// under formal-gates 的保留运行期目录。这些目录由 CLI 自身创建/维护，不是交付文件；
-// 宿主仓库未必预先 gitignore 它们。若这些路径被跟踪后出现修改（非 "?? " 行），仍照常
-// 作为未提交变更拦截——只豁免未跟踪的运行期产物。状态以 --untracked-files=all 获取：
-// git 已把未跟踪且未忽略的文件逐路径展开（被忽略的文件不在其中），这里只做纯逐路径
-// 判定，不对仓库目录做任何二次枚举或忽略推断。
-func excludeRuntimeUntrackedGitStatus(status string) string {
-	lines := strings.Split(status, "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(line, "?? ") {
-			path := normalizeGitStatusPath(strings.TrimSpace(line[3:]))
-			if isRuntimeGitStatusPath(path) {
-				continue
-			}
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "\n")
-}
-
-// normalizeGitStatusPath strips git porcelain's optional quoting and unifies
-// separators, so a path from "?? <path>" compares against the manifest.
-func normalizeGitStatusPath(path string) string {
-	path = strings.Trim(path, `"`)
-	return strings.ReplaceAll(path, `\`, "/")
-}
-
-func isRuntimeGitStatusPath(path string) bool {
-	for _, dir := range runtimeGitStatusDirs {
-		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r commandVCSResolver) Resolve(root string) (string, error) {
 	if err := r.verifyRoot(root); err != nil {
 		return "", err
@@ -213,61 +128,6 @@ func (r commandVCSResolver) Resolve(root string) (string, error) {
 		}
 	}
 	return strings.ToLower(identity), nil
-}
-
-func (r commandVCSResolver) Verify(root, identity string) error {
-	identity = strings.TrimSpace(identity)
-	if !r.validIdentity(identity) {
-		return fmt.Errorf("invalid %s snapshot identity %q", r.name, identity)
-	}
-	if err := r.verifyRoot(root); err != nil {
-		return err
-	}
-	var resolved string
-	var err error
-	switch r.name {
-	case "git":
-		resolved, err = r.runner.Run(root, "git", "rev-parse", "--verify", identity+"^{commit}")
-	case "svn":
-		resolved, err = r.runner.Run(root, "svn", "info", "--show-item", "revision", "-r", identity, root)
-	case "p4":
-		resolved, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%change%", "changes", "-m", "1", "...@"+identity)
-	}
-	if err != nil {
-		return fmt.Errorf("cannot verify %s snapshot %s: %w", r.name, identity, err)
-	}
-	if !strings.EqualFold(strings.TrimSpace(resolved), identity) {
-		return fmt.Errorf("%s cannot reproduce snapshot %s", r.name, identity)
-	}
-	return nil
-}
-
-// IsAncestorOrEqual reports whether ancestor is the descendant's ancestor or
-// equal to it. Git uses commit lineage; SVN and P4 revisions are server-wide
-// monotonically increasing numbers, so an earlier verifiable revision is an
-// ancestor-or-equal of a later one on the same workspace line.
-func (r commandVCSResolver) IsAncestorOrEqual(root, ancestor, descendant string) error {
-	switch r.name {
-	case "git":
-		resolved, err := r.runner.Run(root, "git", "merge-base", ancestor, descendant)
-		if err != nil {
-			return fmt.Errorf("cannot resolve %s ancestry of %s: %w", r.name, ancestor, err)
-		}
-		if !strings.EqualFold(strings.TrimSpace(resolved), ancestor) {
-			return fmt.Errorf("%s snapshot %s is not an ancestor of the current snapshot", r.name, ancestor)
-		}
-		return nil
-	default:
-		a, errA := strconv.ParseInt(strings.TrimSpace(ancestor), 10, 64)
-		d, errD := strconv.ParseInt(strings.TrimSpace(descendant), 10, 64)
-		if errA != nil || errD != nil {
-			return fmt.Errorf("%s snapshots %s and %s are not comparable revisions", r.name, ancestor, descendant)
-		}
-		if a > d {
-			return fmt.Errorf("%s snapshot %s is not an ancestor of the current snapshot %s", r.name, ancestor, descendant)
-		}
-		return nil
-	}
 }
 
 func (r commandVCSResolver) verifyRoot(root string) error {

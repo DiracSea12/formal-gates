@@ -80,14 +80,10 @@ func verifyRegisteredTargetIdentity(record RegistryRecord) error {
 	return nil
 }
 
-func validateSemanticResult(actionID, status, message string, findings []FindingInput, gateResult bool) (string, []Finding, error) {
+func validateSemanticResult(status, message string, findings []FindingInput) (string, []Finding, error) {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
 		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
-	}
-	reviewAction := actionID == "product-review" || actionID == "start-readiness"
-	if status == "PASS" && len(findings) != 0 && !gateResult && !reviewAction {
-		return "", nil, fmt.Errorf("PASS cannot include findings")
 	}
 	if status == "FAIL" && len(findings) == 0 {
 		return "", nil, fmt.Errorf("FAIL requires at least one finding")
@@ -114,32 +110,20 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 			locations = append(locations, strings.TrimSpace(location))
 		}
 		severity := strings.ToUpper(strings.TrimSpace(input.Severity))
-		if gateResult || reviewAction {
-			// 门与 product-review / start-readiness 的发现项必须分级 P0/P1/P2/P3（非空）；
-			// 仅 P2/P3 的审查记录 PASS 且 P2/P3 建议可见，存在 P0/P1 时记录 FAIL（驳回的
-			// P0/P1 由 enforceReviewRule 放行，确认的 P0/P1 置位需重审标记）。
-			if severity != "P0" && severity != "P1" && severity != "P2" && severity != "P3" {
-				if gateResult {
-					return "", nil, fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
-				}
-				return "", nil, fmt.Errorf("review finding severity must be P0, P1, P2, or P3")
-			}
-			if severity == "P0" || severity == "P1" {
-				hasBlocking = true
-			}
-		} else if severity != "" {
-			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings or product/start-readiness review findings")
+		if severity != "P0" && severity != "P1" && severity != "P2" && severity != "P3" {
+			return "", nil, fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
+		}
+		if severity == "P0" || severity == "P1" {
+			hasBlocking = true
 		}
 		finding := Finding{Severity: severity, SeverityRationale: strings.TrimSpace(input.SeverityRationale), Category: strings.ToUpper(strings.TrimSpace(input.Category)), Requirement: strings.TrimSpace(input.Requirement), NormalPath: strings.TrimSpace(input.NormalPath), ActualError: strings.TrimSpace(input.ActualError), DeferralImpact: strings.TrimSpace(input.DeferralImpact), Verification: input.Verification, Message: strings.TrimSpace(input.Message), Locations: locations}
 		finding.ID = findingStableID(finding)
 		converted = append(converted, finding)
 	}
-	// 门的 PASS 只允许 P2/P3；product-review/start-readiness 的 PASS 允许携带发现项（仅
-	// P2/P3 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。
-	if gateResult && status == "PASS" && hasBlocking {
+	if status == "PASS" && hasBlocking {
 		return "", nil, fmt.Errorf("PASS can include only P2/P3 findings")
 	}
-	if (gateResult || reviewAction) && status == "FAIL" && !hasBlocking {
+	if status == "FAIL" && !hasBlocking {
 		return "", nil, fmt.Errorf("FAIL requires at least one P0 or P1 finding")
 	}
 	return status, converted, nil

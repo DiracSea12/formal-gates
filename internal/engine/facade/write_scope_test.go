@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,14 +40,42 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 	decision := func(session, role, path string) struct {
 		Decision   string `json:"decision"`
 		Permission string `json:"permission"`
-	} { t.Helper(); payload, _ := json.Marshal(map[string]any{"tool_name": "Write", "tool_input": map[string]any{"file_path": filepath.Join(root, path)}, "cwd": root, "session_id": session, "agent_type": role}); cmd := exec.Command(binary, "hook", "decide"); cmd.Stdin = bytes.NewReader(payload); output, err := cmd.CombinedOutput(); if err != nil {
-		t.Fatalf("public hook: %v %s", err, output)
-	}; var decision struct {
-		Decision   string `json:"decision"`
-		Permission string `json:"permission"`
-	}; if err := json.Unmarshal(output, &decision); err != nil {
-		t.Fatal(err)
-	}; return decision }
+	} {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"tool_name": "Write", "tool_input": map[string]any{"file_path": filepath.Join(root, path)}, "cwd": root, "session_id": session, "agent_type": role})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(binary, "hook", "decide")
+		cmd.Stdin = bytes.NewReader(payload)
+		output, runErr := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if runErr != nil && !errors.As(runErr, &exit) {
+			t.Fatalf("public hook: %v %s", runErr, output)
+		}
+		actualExit := 0
+		if exit != nil {
+			actualExit = exit.ExitCode()
+		}
+		if actualExit != 0 && actualExit != 2 {
+			t.Fatalf("generic hook process exit=%d response=%s", actualExit, output)
+		}
+		var result struct {
+			Decision   string `json:"decision"`
+			Permission string `json:"permission"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("hook response: %v %s", err, output)
+		}
+		wantExit := 0
+		if result.Permission == "deny" {
+			wantExit = 2
+		}
+		if actualExit != wantExit {
+			t.Fatalf("generic hook protocol exit=%d want=%d response=%s", actualExit, wantExit, output)
+		}
+		return result
+	}
 	predev, err := f.engine.Load()
 	if err != nil {
 		t.Fatal(err)

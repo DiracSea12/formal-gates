@@ -4,6 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/protocol"
+	engineRuntime "formal-gates/internal/engine/runtime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +35,7 @@ func TestRunHookPassesOwnerProviderToStartBridge(t *testing.T) {
 }
 
 func TestRunHookUsesCodexJSONDecisionProtocol(t *testing.T) {
-	payload := `{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run"}`
+	payload := currentDeniedHookPayload(t)
 
 	var codexOut, codexErr bytes.Buffer
 	codexCode := Run("formal-gates", []string{"hook", "decide", "--provider", "codex"}, IO{
@@ -59,7 +65,7 @@ func TestRunHookUsesCodexJSONDecisionProtocol(t *testing.T) {
 }
 
 func TestRunHookUsesZCodeNestedDecisionProtocol(t *testing.T) {
-	payload := `{"tool_name":"Bash","tool_input":{"command":"formal-gates workflow record-gate --gate quality --status PASS"}}`
+	payload := currentDeniedHookPayload(t)
 	var out, errOut bytes.Buffer
 	code := Run("formal-gates", []string{"hook", "decide", "--provider", "zcode"}, IO{
 		Stdin:  strings.NewReader(payload),
@@ -74,4 +80,43 @@ func TestRunHookUsesZCodeNestedDecisionProtocol(t *testing.T) {
 			t.Fatalf("ZCode hook response missing %s: %q", expected, out.String())
 		}
 	}
+}
+
+func currentDeniedHookPayload(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runID := "hook-protocol"
+	active, started := true, true
+	transcript, session := "", "owner"
+	phase := engineRuntime.PhaseDevelopmentParallel
+	if !active {
+		phase = engineRuntime.PhaseTerminal
+	}
+	view, err := decision.NewState(authoring.DefinitionVersion(definition.WorkflowDefinitionVersion), phase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := protocol.NewState(*view)
+	state.RunID = runID
+	state.Route = "regular"
+	state.OwnerTranscript = transcript
+	state.OwnerSession = session
+	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "r1"}}
+	state.IntakeConfirmationReceipt = &protocol.IntakeConfirmationReceipt{RequirementRevision: "r1", Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: "r1"}, {Path: "design.md", Revision: "r1"}}}
+	if started {
+		state.DispatchBindings["development"] = protocol.WorkBinding{RequirementRevision: "r1", PlanRequest: "confirmed-plan", BatchID: "owned-work"}
+	}
+	store, err := persistence.NewStore(filepath.Join(root, ".gates", "engine", runID), persistence.Config{PackageDigest: "sha256:hook-fixture", DefinitionSource: "definitions/workflow.json", InstalledTargetIdentity: "hook-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(persistence.Transaction{ExpectedFingerprint: "fixture", CollectFingerprint: func() (string, error) { return "fixture", nil }, Content: state}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := json.Marshal(map[string]any{"cwd": root, "session_id": session, "tool_name": "Write", "tool_input": map[string]any{"file_path": filepath.Join(root, "app.go")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
 }
