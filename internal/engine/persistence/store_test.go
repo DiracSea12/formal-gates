@@ -249,7 +249,7 @@ func TestSaveNeverWritesOnUnsupportedEnvelope(t *testing.T) {
 		value any
 	}{
 		{"writer legacy", "writer", "legacy"},
-		{"schema 2", "stateSchemaVersion", "2"},
+		{"schema other", "stateSchemaVersion", expectedEnvelope(Config{PackageDigest: testPackageDigest}).StateSchemaVersion + "-other"},
 		{"definition version 1", "workflowDefinitionVersion", "1"},
 		{"definition digest other", "definitionDigest", "sha256:0123"},
 		{"package digest stale", "packageDigest", "sha256:stale"},

@@ -30,7 +30,6 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 			if d.run.Review.RouteMode != mode || !slices.Equal(d.run.Review.SelectedGates, selected) {
 				t.Fatalf("confirmed route = %s %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
 			}
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 			d.drive()
 			id, in := d.action("engine.development.batch")
 			author := filepath.Join(t.TempDir(), "author")

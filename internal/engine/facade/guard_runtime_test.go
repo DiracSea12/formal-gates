@@ -186,7 +186,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 		t.Fatalf("dispatch without stop resolved %s, want PENDING", source.State)
 	}
 	result, err := protocol.NewReviewWorkerResultEvent("result", action, "claude-code", "sha256:result", protocol.ReviewResultEvidence{
-		Action: review.ProductReview, DispatchID: action, RequirementRevision: "req-rev", Status: "PASS",
+		Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
 		Findings:     []review.Finding{},
 		Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
 	})

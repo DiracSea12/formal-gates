@@ -186,7 +186,7 @@ func TestDecodeRejectsEnvelopeAndCoherenceTampering(t *testing.T) {
 		mutate func(doc map[string]any)
 	}{
 		{"writer", func(doc map[string]any) { doc["writer"] = "legacy" }},
-		{"stateSchemaVersion", func(doc map[string]any) { doc["stateSchemaVersion"] = "2" }},
+		{"stateSchemaVersion", func(doc map[string]any) { doc["stateSchemaVersion"] = encoder.StateSchemaVersion + "-other" }},
 		{"entrypoints", func(doc map[string]any) { doc["entrypoints"] = []any{"workflow start"} }},
 		{"schema url", func(doc map[string]any) { doc["$schema"] = "https://elsewhere" }},
 		{"step authority", func(doc map[string]any) {

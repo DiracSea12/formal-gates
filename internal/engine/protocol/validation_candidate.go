@@ -203,7 +203,7 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 		r := s.NativeResources[p.Resource.ID]
 		return r.Owner == p.Resource.Owner && r.Path == p.Resource.Path && r.Ref == p.Resource.Ref && r.Source == p.Resource.Source
 	case "op.cleanup":
-		return s.cleanupStarted()
+		return s.cleanupStarted(false)
 	case "op.candidate":
 		p, err := candidateParameters(intent)
 		if err != nil {

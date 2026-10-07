@@ -20,10 +20,6 @@ func splitMasterDriver(t *testing.T) *validationDriver {
 	t.Helper()
 	d := nativeMasterDriver(t)
 	passPreDevelopmentReviews(t, d, commandPlan())
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-		Subject:    d.revision,
-		Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument},
-	}})
 	d.drive()
 	return d
 }
@@ -407,10 +403,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 				route.Selected = []string{"gate.quality"}
 			}
 			child.confirmSliceRoute(route, sliceLanePlan())
-			child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-				Subject:    child.revision,
-				Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
-			}})
+
 			child.drive()
 			child.reopen()
 			child.drive()
@@ -535,10 +528,7 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	if state := driverState(t, child); state.RouteMode != "custom" || len(state.SelectedGates) != 1 {
 		t.Fatalf("pre-development same-plan reselection = %q %v", state.RouteMode, state.SelectedGates)
 	}
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-		Subject:    child.revision,
-		Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
-	}})
+
 	child.drive()
 	old, oldInput := planBatchAction(child, "command")
 	if oldInput.Development == nil {
@@ -623,10 +613,7 @@ func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
 				route.Selected = route.Gates
 			}
 			child.confirmSliceRoute(route, sliceLanePlan())
-			child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-				Subject:    child.revision,
-				Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument},
-			}})
+
 			child.drive()
 			id, in := planBatchAction(child, "command")
 			if in.Binding.RequirementRevision == "" {

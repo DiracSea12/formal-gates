@@ -30,6 +30,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 )
 
@@ -373,10 +374,14 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 			if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness {
 				continue
 			}
+			material, ok := c.productionMaterial(id)
+			if !ok {
+				c.fail("early abort review has no issued production input")
+			}
 			if !c.receipt(id) {
 				continue
 			}
-			event := c.dispatchReview(id, pending.ReviewSeries)
+			event := c.dispatchProduction(id, material)
 			if event.Result.Review.GranularityReview != nil {
 				c.masterPlan = event.Result.Review.GranularityReview
 			}
@@ -389,7 +394,7 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 		}
 		c.drive()
 	}
-	c.run = c.readRunID("show", c.run.RunID)
+	c.run = c.readRunID("drive", c.run.RunID)
 	if c.run.Next.Kind != decision.KindOperator || c.run.Next.Operator == nil || !strings.Contains(c.run.Next.Operator.Facts[0].Value, "slice receipts: 0/2") {
 		c.fail("master did not wait for undelivered slices: %+v", c.run.Next)
 	}
@@ -399,12 +404,16 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 			continue
 		}
 		close(e.developmentStarted)
+		material, ok := c.productionMaterial(id)
+		if !ok {
+			c.fail("early abort design has no issued production input")
+		}
 		if !c.receipt(id) {
 			continue
 		}
 		// The actual local native turn is observed stopped, but its business result
 		// remains unsubmitted when the user cancels this delivery obligation.
-		c.dispatchPipeline(id, input)
+		c.dispatchProduction(id, material)
 		observed = true
 		break
 	}
@@ -520,17 +529,51 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 
 func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source map[string]any, err error) {
 	request := value.(map[string]any)
-	lines := strings.Split(textOf(request["prompt"]), "\n")
-	if len(lines) < 3 || probe {
+	if probe {
 		return nil, fmt.Errorf("local executor requires exact dispatched material")
 	}
-	data, err := os.ReadFile(lines[2])
-	if err != nil {
-		return nil, err
-	}
 	var material canaryMaterials
-	if err := json.Unmarshal(data, &material); err != nil {
-		return nil, err
+	var production *protocol.WorkerInput
+	prompt := textOf(request["prompt"])
+	if _, context, ok := strings.Cut(prompt, "[Action input]\n"); ok {
+		context, _, ok = strings.Cut(context, "\n\n[Dispatch]\n")
+		if !ok {
+			return nil, fmt.Errorf("production prompt has no dispatch boundary")
+		}
+		production = &protocol.WorkerInput{}
+		if err := json.Unmarshal([]byte(context), production); err != nil {
+			return nil, err
+		}
+		schema, err := worker.ResultSchema(*production)
+		if err != nil || !valuesEqual(request["schema"], e.canary.plainSchema(production.Pending.ActionID, schema)) {
+			return nil, fmt.Errorf("local peer lost production result schema: %v", err)
+		}
+		material = canaryMaterials{RunID: production.RunID, ActionID: production.Pending.ActionID, Pending: &production.Pending, Input: production.Validation, RequirementPath: production.RequirementDocument.Path, RequirementRevision: production.RequirementDocument.ContentDigest}
+		if production.Review != nil {
+			material.ReviewAction = string(production.Review.Action)
+		}
+		if e.canary.binary != "" {
+			run := e.canary.readRunID("show", production.RunID)
+			if run.MasterRunID != "" {
+				master := e.canary.readRunID("show", run.MasterRunID)
+				for slice, child := range master.SliceChildren {
+					if child == run.RunID {
+						material.Slice = slice
+					}
+				}
+			}
+			if production.Validation != nil && run.Validation != nil {
+				if set := run.Validation.Sets[production.Validation.Manifest.Binding.ReviewKind]; set != nil {
+					for _, prior := range set.ReviewHistory {
+						if prior.Review.Verdict() == coverage.StatusFail {
+							material.ReviewHistory = append(material.ReviewHistory, prior)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		return nil, fmt.Errorf("local engine peer requires production worker input")
 	}
 	workspace := textOf(request["workspace"])
 	handler := material.ReviewAction
@@ -538,10 +581,13 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 	if material.Input != nil {
 		input := material.Input
 		handler = input.Handler
-		if input.Workspace == nil || input.Workspace.Status != "READY" || input.Binding.WorkspaceID != input.Workspace.ID || workspace != input.Workspace.Path || material.RequirementRevision != input.Binding.RequirementRevision || !canaryLocalDocumentMatches(material.RequirementPath, input.RequirementDocument.Content) {
+		if input.Workspace == nil || input.Workspace.Status != "READY" || input.Binding.WorkspaceID != input.Workspace.ID || workspace != input.Workspace.Path || material.RequirementRevision != input.Binding.RequirementRevision || !canaryValuesEqual(production.RequirementDocument, input.RequirementDocument) {
 			return nil, fmt.Errorf("local dispatch lost issued run/workspace/requirement identity")
 		}
-		readOnly = handler != "engine.development.batch" && handler != "engine.repair" && handler != "engine.merge.resolve" && !(handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox)
+		readOnly = handler != "engine.development.batch" && handler != "engine.repair" && handler != "engine.merge.resolve" && handler != "engine.qa.execution" && !(handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox)
+	}
+	if err := e.observeProduction(&material); err != nil {
+		return nil, err
 	}
 	if request["read_only"] != readOnly || material.ActionID == "" || material.RunID == "" || material.Pending == nil || material.Pending.ActionID != material.ActionID || filepath.Dir(dir) != canaryJobDirectory(e.canary.jobs, material.RunID, material.ActionID, material.Pending.AttemptID) {
 		return nil, fmt.Errorf("local executor saw wrong method or dispatch identity")
@@ -565,6 +611,10 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 		time.Sleep(100 * time.Millisecond)
 	}
 	answer, err := e.answer(material, workspace)
+	if err != nil {
+		return nil, err
+	}
+	answer, err = e.coreAnswer(*production, workspace, answer)
 	if err != nil {
 		return nil, err
 	}
@@ -851,7 +901,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 					point = "AC-002"
 				}
 			}
-			if observation.Label == "public flag-contract probe" {
+			if e.split && observation.Label == "public flag-contract probe" {
 				point = "AC-004"
 			}
 			passed = passed && e.matches(point, observation.Command[1:], observation)
@@ -1021,11 +1071,6 @@ func (e *canaryLocalExecutor) assertOverlap(t *testing.T) {
 	}
 }
 
-func canaryLocalDocumentMatches(path, content string) bool {
-	data, err := os.ReadFile(path)
-	return err == nil && string(data) == content
-}
-
 // Equal local action IDs belong to different runs. A blocked failing worker
 // still reports a typed completion while independent work can finish and refill.
 func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
@@ -1036,7 +1081,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 	defer approval.Close()
 	shared := &sync.Mutex{}
 	reader := bufio.NewReader(input)
-	completed := make(chan canaryCompletion)
+	completed := make(chan canaryCompletion, 3)
 	release := make(chan struct{})
 	started := make(chan struct{})
 	launch := func(runID string) {
@@ -1048,7 +1093,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(project, "requirements.md"), doc, 0600); err != nil {
 			t.Fatal(err)
 		}
-		pending := protocol.PendingAction{ActionID: "same-action", ReviewSeries: review.ProductReview}
+		pending := protocol.PendingAction{ActionID: "same-action", AttemptID: "signed-attempt", ReviewSeries: review.ProductReview}
 		config := filepath.Join(home, ".claude")
 		if err := os.MkdirAll(config, 0700); err != nil {
 			t.Fatal(err)
@@ -1057,6 +1102,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+		bindCanaryReviewMaterial(t, c, pending, doc)
 		// One reader is shared together with its authorization mutex.
 		if runID == "failed" {
 			c.execute = func(any, string, bool) (map[string]any, error) {
@@ -1076,7 +1122,13 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 		go func() { completed <- c.dispatch("same-action", pending, protocol.ValidationInput{}) }()
 	}
 	launch("failed")
-	<-started
+	select {
+	case <-started:
+	case early := <-completed:
+		t.Fatalf("failing worker completed before transport: %+v", early)
+	case <-time.After(5 * time.Second):
+		t.Fatal("failing worker did not reach transport")
+	}
 	launch("independent")
 	done := <-completed
 	if done.runID != "independent" || done.event.Result.Outcome != protocol.OutcomePass {
@@ -1094,10 +1146,10 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 		t.Fatalf("failure lost completion: %+v", failed)
 	}
 	for _, runID := range []string{"independent", "refilled"} {
-		identity, err := readJSONFile(filepath.Join(jobs, runID, "same-action", "attempt-1", "identity.json"))
-		request, requestErr := readJSONFile(filepath.Join(jobs, runID, "same-action", "attempt-1", "native-request.json"))
-		material, materialErr := readJSONFile(filepath.Join(jobs, runID, "same-action", "materials.json"))
-		dir := filepath.Join(jobs, runID, "same-action", "attempt-1")
+		identity, err := readJSONFile(filepath.Join(canaryJobDirectory(jobs, runID, "same-action", "signed-attempt"), "attempt-1", "identity.json"))
+		request, requestErr := readJSONFile(filepath.Join(canaryJobDirectory(jobs, runID, "same-action", "signed-attempt"), "attempt-1", "native-request.json"))
+		material, materialErr := readJSONFile(filepath.Join(canaryJobDirectory(jobs, runID, "same-action", "signed-attempt"), "materials.json"))
+		dir := filepath.Join(canaryJobDirectory(jobs, runID, "same-action", "signed-attempt"), "attempt-1")
 		if err != nil || requestErr != nil || materialErr != nil || getOf(material, "runId") != runID || getOf(material, "actionId") != "same-action" || getOf(identity, "identity") != codexPeerID(dir+textOf(getOf(request, "workspace"))+textOf(getOf(request, "prompt"))) {
 			t.Fatalf("job identity=%#v material=%#v errors=%v %v %v", identity, material, err, requestErr, materialErr)
 		}
@@ -1413,4 +1465,190 @@ func TestCanaryNativePeersValidateLaunchInputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The local peer executes real fixture commands and authors the complete core
+// result before the native transport records its original answer bytes.
+func (e *canaryLocalExecutor) observeProduction(m *canaryMaterials) error {
+	local := *e.canary
+	local.run = facade.Run{RunID: m.RunID, PendingActions: map[string]protocol.PendingAction{m.ActionID: *m.Pending}}
+	local.slice = m.Slice
+	if m.Input == nil {
+		local.prompt(m.ReviewAction, *m, "", true)
+		return nil
+	}
+	input := *m.Input
+	workspace := input.Workspace.Path
+	switch input.Handler {
+	case "engine.gate":
+		binary := local.buildCandidate(workspace, m.ActionID)
+		switch input.Gate.Gate {
+		case "regression":
+			if e.split {
+				m.HostObservations = append(m.HostObservations, local.observe("regression build", workspace, []string{"go", "build", "-o", filepath.Join(local.jobDirectory(m.ActionID), "gate-build"), "./..."}))
+			} else {
+				m.HostObservations = append(m.HostObservations, local.observe("regression gate flag-contract probe", workspace, append([]string{binary}, canaryGateArgs...)))
+			}
+		case "correctness", "merge-gate":
+			for _, word := range []string{"héLLo", ""} {
+				m.HostObservations = append(m.HostObservations, local.observe("command contract", workspace, []string{binary, word}))
+			}
+		}
+		if !e.split && input.Gate.Gate == "implementation-quality-gate" || e.split && m.Slice == "" && input.Gate.Gate == "merge-gate" {
+			m.HostObservations = append(m.HostObservations, local.observe("public flag-contract probe", workspace, append([]string{binary}, canaryGateArgs...)))
+		}
+	case "engine.qa.execution":
+		binary := ""
+		if input.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
+			binary = local.buildCandidate(workspace, m.ActionID)
+		}
+		for _, id := range input.RequiredCases {
+			for _, designed := range input.Manifest.Cases {
+				if designed.CaseID != id {
+					continue
+				}
+				var command []string
+				if designed.TestRef != "" {
+					command = []string{"go", "test", "-count=1", "-run", "^" + designed.TestRef + "$", "."}
+				} else {
+					// Fixture public entries use the exact POSIX literals emitted by canaryPublicEntry.
+					script := "set -- " + designed.PublicEntry + "; shift; printf '%s\\0' \"$@\""
+					args, err := exec.Command("sh", "-c", script).Output()
+					if err != nil {
+						return err
+					}
+					command = append([]string{binary}, strings.Split(strings.TrimSuffix(string(args), "\x00"), "\x00")...)
+				}
+				m.HostObservations = append(m.HostObservations, local.observe("case "+id, workspace, command))
+			}
+		}
+	}
+	local.prompt(input.Handler, *m, "", false)
+	m.RequirementPath = filepath.Join(local.jobDirectory(m.ActionID), "requirements.md")
+	return nil
+}
+
+func (e *canaryLocalExecutor) coreAnswer(input protocol.WorkerInput, workspace string, answer map[string]any) (map[string]any, error) {
+	payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, Outcome: protocol.OutcomePass}
+	body, err := json.Marshal(answer)
+	if err != nil {
+		return nil, err
+	}
+	if input.Review != nil {
+		var decoded canaryReviewAnswer
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			return nil, err
+		}
+		payload.Review = &protocol.ReviewResultEvidence{Action: input.Review.Action, DispatchID: input.Pending.ActionID, RequirementRevision: input.Review.RequirementRevision, AuthorizationID: input.Review.AuthorizationID, Status: decoded.Status, GranularityReview: decoded.Plan, Verification: review.OperatorVerification{Checks: decoded.Verification.Checks, Evidence: decoded.Verification.Evidence}}
+		for _, found := range decoded.Findings {
+			payload.Review.Findings = append(payload.Review.Findings, found.finding())
+		}
+	} else {
+		issued := *input.Validation
+		result := protocol.ValidationResult{Binding: issued.Binding, Status: protocol.OutcomePass}
+		switch issued.Handler {
+		case "engine.development.batch", "engine.repair":
+			var decoded canaryDevelopmentAnswer
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			for i, path := range decoded.Paths {
+				relative, err := canaryWorkspacePath(workspace, path)
+				if err != nil {
+					return nil, err
+				}
+				decoded.Paths[i] = relative
+			}
+			result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, Build: decoded.Build, Tests: decoded.Tests, AffectedCases: decoded.AffectedCases, CaseRuns: decoded.CaseRuns}
+			if issued.Development != nil {
+				result.Development.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Checks: decoded.Checks, Handoff: decoded.Handoff}
+			}
+		case "engine.qa.design":
+			var decoded struct {
+				Cases []struct {
+					CaseID, PointID, Scenario, Oracle, TestRef, Preconditions, Steps string
+					Args                                                             []string
+				}
+				Paths        []string
+				Summary      string
+				Build, Tests []string
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			manifest := issued.Manifest
+			manifest.Cases, manifest.Edges = nil, nil
+			for _, designed := range decoded.Cases {
+				mode := canaryCaseMode(issued)
+				if issued.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+					mode = coverage.CaseWhitebox
+				}
+				entry := ""
+				if mode != coverage.CaseWhitebox {
+					entry = canaryPublicEntry(designed.Args)
+				}
+				manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: designed.CaseID, Mode: mode, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps})
+				for _, link := range issued.SourcePoints {
+					if link.PointID == designed.PointID {
+						manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: link.SourceID, PointID: link.PointID, CaseID: designed.CaseID})
+					}
+				}
+			}
+			result.Manifest = &manifest
+			if len(decoded.Paths) > 0 {
+				result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, Build: decoded.Build, Tests: decoded.Tests}
+			}
+		case "engine.qa.review.rationale":
+			var decoded struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			checked := coverage.ReviewResult{Binding: issued.Manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: e.canary.modelReviewDecisions("source", decoded.SourceDecisions), PointDecisions: e.canary.modelReviewDecisions("point", decoded.PointDecisions), CaseDecisions: e.canary.modelReviewDecisions("case", decoded.CaseDecisions)}
+			result.Review, result.Status = &checked, string(checked.Verdict())
+		case "engine.qa.execution":
+			var decoded struct {
+				Records []struct{ CaseID, Result, Procedure, Observation, Comparison string }
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			report := coverage.ExecutionReport{Binding: *issued.Execution, Records: slices.Clone(issued.Completed)}
+			for _, row := range decoded.Records {
+				for _, edge := range issued.Whitelist.Entries {
+					if edge.CaseID == row.CaseID {
+						report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: row.CaseID, Result: coverage.ExecutionStatus(row.Result), Provenance: coverage.ProvenanceExecuted, Procedure: row.Procedure, Observation: row.Observation, Comparison: row.Comparison})
+					}
+				}
+				if !slices.Contains(report.Binding.ActualCaseIDs, row.CaseID) {
+					report.Binding.ActualCaseIDs = append(report.Binding.ActualCaseIDs, row.CaseID)
+				}
+				if row.Result != string(coverage.ExecutedPass) {
+					result.Status = protocol.OutcomeFail
+				}
+			}
+			result.Execution, result.Tool, result.Environment = &report, "local-native-fixture", workspace
+		case "engine.gate":
+			var decoded struct {
+				Status   string
+				Findings []canaryFindingAnswer
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			result.Status = decoded.Status
+			for _, found := range decoded.Findings {
+				result.Findings = append(result.Findings, found.finding())
+			}
+		default:
+			return nil, fmt.Errorf("local core peer has no handler %s", issued.Handler)
+		}
+		payload.Validation = &result
+	}
+	body, err = json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	err = json.Unmarshal(body, &value)
+	return value, err
 }

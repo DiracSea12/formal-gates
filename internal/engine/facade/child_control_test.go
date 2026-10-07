@@ -329,7 +329,6 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 			passPreDevelopmentReviews(t, d, commandPlan())
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 			d.confirmRoute(routeDecisionForGates(gates))
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 			d.drive()
 			id, input := planBatchAction(d, "command")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
@@ -524,7 +523,7 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 	dependent.DependsOn = []string{"command"}
 	plan.Batches = append(plan.Batches, dependent)
 	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, plan)
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+
 	child.drive()
 	id, input := planBatchAction(child, "command")
 	if len(child.run.RequirementWork) != 2 {

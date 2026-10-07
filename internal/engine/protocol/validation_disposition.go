@@ -293,25 +293,10 @@ func (e *Engine) waiveValidation(s *State, ask PendingAsk, d *ValidationDecision
 		}
 	} else if w.Status == "REPAIR" || w.Status == "ADJUDICATING" {
 		previousWork := s.repairWork()
-		obligations := s.validationObligationDetails(w)
+		// A problem waiver preserves its target's result; only a target-ID waiver
+		// changes the whole target disposition.
 		for _, id := range d.Obligations {
 			if target := w.target(id); target != nil {
-				target.Status = "AUTHORIZED_SKIP"
-				if d.Remedy == "DISMISS" {
-					target.Status = "DISPOSED"
-				}
-				target.DispositionReason = d.Reason
-			}
-		}
-		for _, obligation := range obligations {
-			if !slices.Contains(d.Obligations, obligation.id) {
-				continue
-			}
-			target := obligation.target
-			remaining := slices.ContainsFunc(obligations, func(other validationObligation) bool {
-				return other.target == target && !slices.Contains(d.Obligations, other.id)
-			})
-			if !remaining {
 				target.Status = "AUTHORIZED_SKIP"
 				if d.Remedy == "DISMISS" {
 					target.Status = "DISPOSED"

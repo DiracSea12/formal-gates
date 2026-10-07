@@ -511,7 +511,6 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 		t.Fatal(err)
 	}
 	d.submit(event)
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, in := d.action("engine.development.batch")
 	d.receipt(id)

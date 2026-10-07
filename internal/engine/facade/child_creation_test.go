@@ -92,7 +92,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality", "security"}}, sliceLanePlan())
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: document}}})
+
 	child.drive()
 	assertInput := func(input protocol.ValidationInput) {
 		t.Helper()
@@ -164,7 +164,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
-	sibling.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: sibling.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: sibling.revision, Document: document}}})
+
 	sibling.drive()
 	siblingID, _ := planBatchAction(sibling, "command")
 	abortCreationChild(t, master.f)
@@ -462,7 +462,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	}
 	d := nativeMasterAt(t, root, base, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	prepared := prepareChildFrontier(t, d)
 	var wg sync.WaitGroup
@@ -532,7 +532,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: d.revision, git: f.vcs}
 	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+
 	child.drive()
 	id, input := planBatchAction(child, "command")
 	w := input.Workspace.Path
@@ -947,7 +947,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 					continue
 				}
 				child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
-				child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+
 				child.drive()
 				for id, input := range child.run.ValidationInputs {
 					actions[i] = append(actions[i], id)

@@ -253,10 +253,10 @@ func TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestPhase3FacadeDiagnoseRawVersionBarrierIsReadOnly checks the deliberately
+// TestFacadeDiagnoseRawVersionBarrierIsReadOnly checks the deliberately
 // minimal diagnostic parser for malformed JSON and a readable but unsupported
 // envelope, including exact detected fields and no file mutation.
-func TestPhase3FacadeDiagnoseRawVersionBarrierIsReadOnly(t *testing.T) {
+func TestFacadeDiagnoseRawVersionBarrierIsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	malformed := filepath.Join(root, "malformed-state.json")
 	if err := os.WriteFile(malformed, []byte(`{"writer":"engine",`), 0o600); err != nil {
@@ -264,7 +264,7 @@ func TestPhase3FacadeDiagnoseRawVersionBarrierIsReadOnly(t *testing.T) {
 	}
 	malformedBefore, _ := os.ReadFile(malformed)
 	report, err := facade.Diagnose(malformed, "sha256:pkg", "target")
-	if err != nil || report.JSONReadable || report.Integrity != "unknown" || !strings.Contains(report.Recommendation, "jsonReadable:false") {
+	if err != nil || report.JSONReadable || report.Integrity != "unknown" || report.Recommendation != "rebuild the state with the owning writer" {
 		t.Fatalf("malformed diagnose = %+v err=%v", report, err)
 	}
 	malformedAfter, _ := os.ReadFile(malformed)

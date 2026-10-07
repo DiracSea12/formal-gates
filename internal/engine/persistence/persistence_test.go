@@ -87,7 +87,7 @@ func TestValidateEnvelopeImpreciseValues(t *testing.T) {
 	wrong := map[string]func(*Envelope){
 		"writer=legacy":                 func(e *Envelope) { e.Writer = "legacy" },
 		"writer=engine (padded)":        func(e *Envelope) { e.Writer = " engine " },
-		"stateSchemaVersion=2":          func(e *Envelope) { e.StateSchemaVersion = "2" },
+		"stateSchemaVersion=other":      func(e *Envelope) { e.StateSchemaVersion += "-other" },
 		"workflowDefinitionVersion=1":   func(e *Envelope) { e.WorkflowDefinitionVersion = "1" },
 		"definitionDigest=other":        func(e *Envelope) { e.DefinitionDigest = "sha256:0000" },
 		"definitionDigest=no-prefix":    func(e *Envelope) { e.DefinitionDigest = strings.TrimPrefix(e.DefinitionDigest, "sha256:") },

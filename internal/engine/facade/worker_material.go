@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 )
@@ -82,15 +83,19 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	s := snapshot.State
-	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.ResetPending() {
+	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
+		return nil
+	}
+	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal {
 		return nil
 	}
 	receipt := s.IntakeConfirmationReceipt
+	revision := s.RequirementRevision()
 	data, err := os.ReadFile(filepath.Join(f.root, receipt.RequirementSource))
 	if err != nil {
 		return err
 	}
-	event := protocol.Event{ID: protocol.EventID("intake.requirement:" + receipt.RequirementRevision), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: receipt.RequirementRevision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: receipt.RequirementRevision, Document: string(data)}}}
+	event := protocol.Event{ID: protocol.EventID("intake.requirement:" + revision), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: string(data)}}}
 	_, err = f.engine.Submit(event, emptyFingerprint())
 	return err
 }

@@ -442,14 +442,15 @@ func (s *State) ResourcesCleaned() bool {
 
 // cleanupStarted retains the authority checked when the original cleanup intent
 // was issued. Current controls own permission to execute, not that durable fact.
-func (s *State) cleanupStarted() bool {
+// checkpointOnly binds child eligibility to its current checkpoint receipt.
+func (s *State) cleanupStarted(checkpointOnly bool) bool {
 	valid := func(intent HostActionIntent, cleaned bool) bool {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup" {
 			return false
 		}
 		var p CleanupParameters
 		raw, _ := json.Marshal(intent.Adapter.Params)
-		if json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 {
+		if json.Unmarshal(raw, &p) != nil || len(p.Resources) == 0 || checkpointOnly && !s.checkpointCleanupCurrent(p.Checkpoint) {
 			return false
 		}
 		for _, r := range p.Resources {
@@ -663,7 +664,7 @@ func (s *State) cleanupQuiescent() bool {
 }
 
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
-	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted())
+	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(true))
 }
 
 func (s *State) ResourceCleanupPending(id string) bool {

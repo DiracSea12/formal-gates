@@ -124,3 +124,34 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 		})
 	}
 }
+
+func bindCanaryReviewMaterial(t *testing.T, c *engineCanary, pending protocol.PendingAction, content []byte) {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := prompts.LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := requirement.ParseRequirementProjection(filepath.Join(c.project, "requirements.md"), content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := protocol.WorkerInput{RunID: c.run.RunID, Provider: c.provider(), VCS: "git", Handler: "engine.review.worker", Pending: pending, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: doc.ContentDigest}}
+	material, err := worker.Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "worker-material.json")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(body)
+	c.run.WorkerMaterials = map[string]facade.WorkerMaterial{pending.ActionID: {ActionID: pending.ActionID, AttemptID: pending.AttemptID, Path: path, Digest: "sha256:" + hex.EncodeToString(hash[:]), ReadOnly: material.ReadOnly}}
+}

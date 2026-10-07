@@ -387,3 +387,39 @@ func TestWorkerIntakeWaitsForResetConfirmation(t *testing.T) {
 		t.Fatal("reopened intake crossed pending reset confirmation")
 	}
 }
+
+func TestRequirementChangeBeforeFirstDrivePreservesConfirmationBarrier(t *testing.T) {
+	f, root := workerMaterialFacade(t)
+	document := validationDocument + "\n"
+	sum := sha256.Sum256([]byte(document))
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: hex.EncodeToString(sum[:]), DeltaDigest: "sha256:document-formatting", ImpactDigest: "sha256:unchanged-command", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved}
+	event, err := protocol.NewRequirementRequestEvent("document-confirmation", pkg, protocol.AskOption{ID: "proceed", Label: "Confirm complete document"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.PendingRequirementAsk == nil || run.PendingRequirementAsk.RequestID != string(event.ID) || run.Next.Kind != "ASK" {
+		t.Fatalf("unconfirmed document lost its human boundary: %+v", run.Next)
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.State.RequirementBarrierActive() || snapshot.State.Validation != nil || len(snapshot.State.PendingActions) != 0 {
+		t.Fatal("unconfirmed document acquired inventory or dispatch authority")
+	}
+	for _, record := range snapshot.State.Events {
+		if record.Acceptance.Kind == string(protocol.KindOperatorObservation) {
+			t.Fatal("automatic requirement observation crossed the confirmation barrier")
+		}
+	}
+}

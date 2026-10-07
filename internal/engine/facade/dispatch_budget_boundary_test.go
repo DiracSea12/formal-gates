@@ -368,7 +368,7 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 		t.Fatalf("attached identity = %q", got)
 	}
 	result, err := protocol.NewReviewWorkerResultEvent("result-attached", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{
-		Action: review.ProductReview, DispatchID: action, RequirementRevision: "req-rev", Status: "PASS",
+		Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
 		Findings:     []review.Finding{},
 		Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
 	})

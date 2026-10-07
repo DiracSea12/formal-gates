@@ -50,8 +50,6 @@ func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validation
 		if d.revision == originalIntake.RequirementRevision {
 			t.Fatal("normal confirmation did not change revision")
 		}
-	} else {
-		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: currentDocument}}})
 	}
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	prepared := prepareChildFrontier(t, d)
@@ -129,7 +127,7 @@ func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validation
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: d.revision, git: f.vcs}
 	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: currentDocument}}})
+
 	child.drive()
 	id, input := planBatchAction(child, "command")
 	assertConfirmedMaterial(t, child, input, currentDocument)

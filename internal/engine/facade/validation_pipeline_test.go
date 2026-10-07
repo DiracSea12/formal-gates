@@ -337,6 +337,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	}
 	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner)}
 	d.drive()
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
 	return d
 }
 func newValidationDriver(t *testing.T, gates ...string) *validationDriver {
@@ -417,7 +418,6 @@ func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vc
 	passPreDevelopmentReviews(t, d, plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 	d.confirmRoute(routeDecisionForGates(gates))
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	return d
 }
@@ -1046,6 +1046,9 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	}
 	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: admitted.PackageDigest, DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: admitted.InstalledTargetIdentity, AcquireAdmission: admitted.acquire})
 	if err != nil {
+		return nil, Run{}, err
+	}
+	if err := os.WriteFile(filepath.Join(root, req.IntakeConfirmationReceipt.RequirementSource), []byte(validationDocument), 0600); err != nil {
 		return nil, Run{}, err
 	}
 	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted)}, nil)

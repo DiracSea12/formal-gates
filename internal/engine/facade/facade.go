@@ -1149,17 +1149,8 @@ func (f *Facade) sealDelivered() error {
 			return err
 		}
 	}
-	// Complete material precedes retirement of active child evidence. Reentry
-	// consumes the same intent without rebuilding a child inventory.
-	if err := f.writeSummaryValue(summary); err != nil {
-		return err
-	}
-	if err := f.cleanupCheckpoints(summary); err != nil {
-		return err
-	}
-	if err := f.endLifecycle(); err != nil {
-		return err
-	}
+	// The complete intent precedes terminal publication and child retirement.
+	// Finalization consumes that same material after native identity is verified.
 	if _, _, err := f.verifyDelivered(); err != nil {
 		return err
 	}

@@ -1431,9 +1431,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		}
 		source, err := c.execute(request, dir, false)
 		stopWatcher()
-		if c.worker {
-			c.transcript = dir
-		}
+		c.transcript = dir
 		if err != nil {
 			lastErr = err
 			lastClass = authoring.FailureTransientEngine

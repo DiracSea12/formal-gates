@@ -33,7 +33,7 @@ func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
 	if s.CleanupEligible(cd) || s.NativeActionCurrent(intent, cd) {
 		t.Fatal("unresolved requirement Ask authorized a new cleanup write")
 	}
-	if !s.cleanupStarted() || !s.nativeEffectApplicable(intent, cd) || s.verifyPhaseAgainstLedgers(cd) != nil {
+	if !s.cleanupStarted(false) || !s.nativeEffectApplicable(intent, cd) || s.verifyPhaseAgainstLedgers(cd) != nil {
 		t.Fatal("requirement Ask discarded original cleanup authority")
 	}
 	resource.Status = "CLEANED"
@@ -49,14 +49,14 @@ func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
 	delete(s.PendingHostActions, intent.ActionID)
 	s.HostActionReceipts = map[string]HostActionReceipt{intent.ActionID: receipt}
 	s.ReconciledEffects = map[string]ReconciledEffect{intent.ActionID: {Intent: &intent, Status: "FULFILLED"}}
-	if !s.cleanupStarted() || !s.ResourcesCleaned() || s.verifyPhaseAgainstLedgers(cd) != nil {
+	if !s.cleanupStarted(false) || !s.ResourcesCleaned() || s.verifyPhaseAgainstLedgers(cd) != nil {
 		t.Fatal("accepted receipt discarded original cleanup authority")
 	}
 	if err := engine.applyResourceReceipt(s, intent, receipt); err != nil || s.NativeResources[resource.ID] != resource {
 		t.Fatal("replayed cleanup receipt changed the registered resource")
 	}
 	delete(s.ReconciledEffects, intent.ActionID)
-	if s.cleanupStarted() || s.verifyPhaseAgainstLedgers(cd) == nil {
+	if s.cleanupStarted(false) || s.verifyPhaseAgainstLedgers(cd) == nil {
 		t.Fatal("cleanup phase passed without its original intent")
 	}
 }

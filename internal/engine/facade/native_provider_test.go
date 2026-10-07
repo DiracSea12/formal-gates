@@ -290,7 +290,7 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 				passPreDevelopmentReviews(t, d, commandPlan())
 				d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one native command"}})
 				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "whitebox", "quality"}))
-				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+
 				if lost {
 					runner.interruptOperation = "workspace"
 					if _, err := d.f.Drive(); err == nil || !runner.lost {
@@ -521,7 +521,6 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			passPreDevelopmentReviews(t, d, plan)
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command removal"}})
 			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
 			d.drive()
 			action, input := d.action("engine.development.batch")
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
@@ -618,7 +617,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
 				master, runner := startNativeProviderDriver(t, name)
 				passPreDevelopmentReviews(t, master, commandPlan())
-				master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: master.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: master.revision, Document: validationDocument}}})
+
 				topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 2, Parallel: "independent command modules"}
 				master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 				prepared := prepareChildFrontier(t, master)
@@ -702,7 +701,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					path := plan.SliceID + ".go"
 					development.Batches[0].Artifacts = []string{path}
 					child.confirmSliceRoute(route, development)
-					child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+
 					child.drive()
 					id, input := planBatchAction(child, "command")
 					body := "package command\n// " + plan.SliceID + " behavior\n"

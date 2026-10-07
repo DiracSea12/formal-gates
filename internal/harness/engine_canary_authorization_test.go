@@ -202,6 +202,7 @@ func TestCanaryEngineAttemptsKeepIndependentEvidence(t *testing.T) {
 	for _, attempt := range []string{"att:gate:31", "att:gate:32"} {
 		pending := protocol.PendingAction{ActionID: action, AttemptID: attempt, ReviewSeries: review.ProductReview}
 		c := &engineCanary{t: t, worker: true, home: home, project: workspace, jobs: jobs, run: facade.Run{RunID: "bound-run", PendingActions: map[string]protocol.PendingAction{action: pending}}, deadline: time.Now().Add(time.Minute), binding: map[string]any{"launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}}
+		bindCanaryReviewMaterial(t, c, pending, []byte(canaryRequirementDocument))
 		base := filepath.Join(jobs, "bound-run", action, canaryName(attempt))
 		material := canaryMaterials{Role: "product review", RunID: c.run.RunID, ActionID: action, Pending: &pending, RequirementPath: "bound-requirement", RequirementRevision: "bound-revision"}
 		c.prompt("product review", material, "review the bound requirement", true)

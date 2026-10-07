@@ -527,7 +527,6 @@ func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing
 	route := protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}}
 	d.confirmRoute(route)
 	d.confirmRoute(route)
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, in := d.action("engine.development.batch")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
@@ -683,7 +682,6 @@ func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
 	if selections != 2 {
 		t.Fatalf("route selections recorded = %d, want 2", selections)
 	}
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, in := planBatchAction(d, "command")
 	if in.Development == nil || in.Development.Batch.ID != "command" {

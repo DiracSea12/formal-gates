@@ -39,6 +39,13 @@ func newInstalledStartProject(t *testing.T) installedStartProject {
 	p.binary = executablePath(filepath.Join(p.home, ".local", "bin", "formal-gates"))
 	buildInstalledBinaryAt(t, repository, "./cmd/formal-gates", p.binary)
 	p.source = isolatedInstallSource(t, repository, p.binary)
+	quality, err := os.ReadFile(filepath.Join(p.source, "gates", "implementation-quality-gate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.source, "gates", "quality.md"), quality, 0600); err != nil {
+		t.Fatal(err)
+	}
 	write := func(name, content string) string {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(p.project, name), []byte(content), 0o600); err != nil {
@@ -310,11 +317,11 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	wrongBase[len(wrongBase)-1] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
 	for _, route := range []string{"default", "full", "custom"} {
-		assertRejected(route, p.startArgs(route, route), "only supports --route lightweight or regular")
+		assertRejected(route, p.startArgs(route, route), "workflow start supports --route regular or lightweight")
 	}
 	for _, flag := range []string{"--split=no", "--master=parent", "--retained-overall=false", "--from-sealed-run=sealed"} {
 		name := strings.Split(strings.TrimPrefix(flag, "--"), "=")[0]
-		assertRejected(name, append(p.startArgs(name, "regular"), flag), "candidate engine start does not")
+		assertRejected(name, append(p.startArgs(name, "regular"), flag), "flag provided but not defined")
 	}
 	if err := os.WriteFile(filepath.Join(p.project, "design.md"), []byte("# Revised solution\n"), 0o600); err != nil {
 		t.Fatal(err)

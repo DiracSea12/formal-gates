@@ -30,8 +30,8 @@ func testReceipt() IntakeConfirmationReceipt {
 		Source:            DefaultIntakeSource,
 		Authority:         DefaultIntakeAuthority,
 		Transport:         DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: "req-rev",
-		Artifacts:        []IntakeArtifact{{Path: "requirements.md", Revision: "req-rev"}},
+		RequirementSource: "requirements.md", RequirementRevision: fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument))),
+		Artifacts:        []IntakeArtifact{{Path: "requirements.md", Revision: fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))}},
 		SolutionRevision: "solution-rev", SolutionDigest: "sha256:solution",
 	}
 }
@@ -385,7 +385,7 @@ func TestIntakeDigestCanonicalizesArtifactOrderAndIgnoresTimestamps(t *testing.T
 	left.Artifacts = append(left.Artifacts, IntakeArtifact{Path: "design.md", Revision: "design-rev"})
 	left.ConfirmedAt = "2026-01-01T00:00:00Z"
 	right := left
-	right.Artifacts = []IntakeArtifact{{Path: "design.md", Revision: "design-rev"}, {Path: "requirements.md", Revision: "req-rev"}}
+	right.Artifacts = []IntakeArtifact{{Path: "design.md", Revision: "design-rev"}, {Path: "requirements.md", Revision: left.RequirementRevision}}
 	right.ConfirmedAt = "2027-01-01T00:00:00Z"
 	a, err := IntakeDigest(left)
 	if err != nil {
@@ -712,8 +712,10 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "gates", "quality.md"), quality, 0600); err != nil {
-		t.Fatal(err)
+	for _, gate := range []string{"quality", "security", "performance"} {
+		if err := os.WriteFile(filepath.Join(target, "gates", gate+".md"), quality, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	a := &Admission{RegistryPath: registryPath, Target: target, Root: root,
 		Provider: provider, PackageDigest: packageDigest, InstalledTargetIdentity: recordID,

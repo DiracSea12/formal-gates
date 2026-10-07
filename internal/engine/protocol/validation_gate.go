@@ -73,14 +73,24 @@ func (s *State) gateInput(binding WorkBinding, task runtime.TaskKey) *GateInput 
 	if target == nil || target.Kind != "GATE" {
 		return nil
 	}
-	for _, receipt := range s.HostActionReceipts {
+	var selected HostActionIntent
+	var proof CandidateEvidence
+	for action, receipt := range s.HostActionReceipts {
 		if receipt.AdapterOperation != "op.candidate" || (receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled) {
 			continue
 		}
+		intent, exists := s.hostIntent(action)
+		params, err := candidateParameters(intent)
+		if !exists || err != nil || params.Stage != "REVIEW_READY" || !s.candidateContextCurrent(params) || params.ReviewBase != s.BaseSnapshot || !slices.Equal(params.SourceTasks, wave.SourceTasks) {
+			continue
+		}
 		evidence, err := decodeCandidateEvidence(receipt)
-		if err == nil && evidence.GateView != nil && evidence.Identity == wave.Candidate.Identity && evidence.Digest == wave.Candidate.Digest {
-			return &GateInput{Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(evidence.GateView.TestOwnedPaths)}
+		if err == nil && evidence.ParametersDigest == intent.PayloadDigest && evidence.GateView != nil && evidence.Identity == wave.Candidate.Identity && evidence.Digest == wave.Candidate.Digest && intent.Revision > selected.Revision {
+			selected, proof = intent, evidence
 		}
 	}
-	return nil
+	if selected.ActionID == "" {
+		return nil
+	}
+	return &GateInput{Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(proof.GateView.TestOwnedPaths)}
 }

@@ -30,7 +30,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	master := nativeMasterDriver(t)
 	base := master.run.BaseSnapshot
 	passPreDevelopmentReviews(t, master, commandPlan())
-	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: master.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: master.revision, Document: validationDocument}}})
+
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	options := sliceChildStart(master, "child", "lane-core", sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = base
@@ -45,7 +45,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 		route.Selected = []string{"security"}
 	}
 	child.confirmSliceRoute(route, sliceLanePlan())
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: child.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: child.revision, Document: validationDocument}}})
+
 	child.drive()
 	id, input := planBatchAction(child, "command")
 	author := input.Workspace.Path

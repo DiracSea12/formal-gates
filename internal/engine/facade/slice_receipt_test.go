@@ -33,7 +33,7 @@ func receiptMaster(t *testing.T, owner ...OwnerBinding) *validationDriver {
 	d := nativeMasterDriver(t)
 	meterReceiptDispatches(d, 3, 9, 4)
 	passPreDevelopmentReviews(t, d, commandPlan())
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	if len(owner) != 0 {
 		child, _, err := createdSliceFacade(t, d.f, "lane-core", owner[0])
@@ -95,7 +95,6 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 		route.Selected = []string{"security"}
 	}
 	d.confirmSliceRoute(route, sliceLanePlan())
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
 	d.drive()
 	id, input := planBatchAction(d, "command")
 	author := input.Workspace.Path

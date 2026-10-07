@@ -33,7 +33,7 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 			}
 			d := nativeMasterAt(t, root, base, nil)
 			passPreDevelopmentReviews(t, d, commandPlan())
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.revision, Document: validationDocument}}})
+
 			source, err := d.f.vcs.Resolve()
 			if err != nil {
 				t.Fatal(err)
