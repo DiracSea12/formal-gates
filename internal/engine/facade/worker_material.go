@@ -82,7 +82,7 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	s := snapshot.State
-	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil {
+	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.ResetPending() {
 		return nil
 	}
 	receipt := s.IntakeConfirmationReceipt
@@ -114,6 +114,9 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	if err := json.Unmarshal(body, &value); err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
+	if value.Input.Pending.ActionID != material.ActionID || value.Input.Pending.AttemptID != material.AttemptID || value.Input.RunID != f.runID {
+		return protocol.Acceptance{}, Run{}, fmt.Errorf("worker material identity differs from its issued reference or run")
+	}
 	provider := value.Input.Provider
 	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
 		provider = descriptor.InstallName
@@ -141,35 +144,15 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
+	if nativeSession == "" {
+		return protocol.Acceptance{}, Run{}, fmt.Errorf("native result session proof is missing")
+	}
 	event, err := worker.DecodeResult(value.Input, eventID, answer, digest)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
-	accepted, recorded, err := f.recordedEvent(event)
-	if err != nil {
-		return protocol.Acceptance{}, Run{}, err
-	}
-	if recorded {
-		run, err := f.projectOrSummary()
-		return accepted, run, err
-	}
-	snapshot, err := f.engine.Load()
-	if err != nil {
-		return protocol.Acceptance{}, Run{}, err
-	}
-	pending, ok := snapshot.State.PendingActions[material.ActionID]
-	if !ok || pending.AttemptID != material.AttemptID {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("worker material does not own the current issued attempt")
-	}
-	if value.Input.Pending != pending || value.Input.RunID != f.runID || value.Input.Provider != snapshot.State.RunProvider {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("worker material identity differs from current authority")
-	}
-	receipt, ok := snapshot.State.SpawnReceipts[material.ActionID]
-	if !ok || receipt.Provider != value.Input.Provider || receipt.Correlation == "" || nativeSession == "" {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("native source or signed dispatch correlation is missing")
-	}
 	// The verified original request's exact prompt carries run/action/attempt.
-	// The spawn correlation remains the lifecycle/dispatch key; nativeSession is
-	// the independently verified host thread/session, not that dispatch key.
+	// Submit alone owns current, terminal, duplicate and obsolete-result admission.
+	// The native session proof is distinct from the ledger's spawn correlation.
 	return f.Submit(event)
 }
