@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bufio"
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
@@ -102,7 +103,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 		t.Fatal(err)
 	}
 	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
-	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(8 * time.Minute), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(installedCanaryBudget), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
 	if nativeHost != canaryProvider {
 		nativeBinary := nativeHost
 		if nativeHost == "cursor" {
@@ -225,6 +226,40 @@ func TestCanaryInstalledTransportFailureKeepsIndependentFrontier(t *testing.T) {
 	}
 }
 
+const installedCanaryBudget = 8 * time.Minute
+
+func canaryStopPrivateBackend(t *testing.T, pidFile string) {
+	t.Helper()
+	body, err := os.ReadFile(pidFile)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+		t.Error(err)
+	}
+}
+
+func canarySubprocessOutput(cmd *exec.Cmd) (output []byte, err error) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = time.Second
+	defer func() {
+		if err != nil && cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}()
+	return cmd.CombinedOutput()
+}
+
 func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 	root := t.TempDir()
 	if base := os.Getenv("FORMAL_GATES_CANARY_LOCAL_DIR"); base != "" {
@@ -234,18 +269,21 @@ func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 	if provider != "git" {
 		selection = "^TestCanaryInstalledNativeFlows$/^" + provider + "$/^split$"
 	}
-	cmd := exec.Command(os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout=5m")
-	cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_LOCAL_DIR="+root, "FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE="+mode)
-	output, err := cmd.CombinedOutput()
-	t.Logf("installed %s transport fixture: exit=%v\n%s", mode, err, output)
-	if mode == "transient" && err != nil || mode == "permanent" && (err == nil || !strings.Contains(string(output), "unexpected ask boundary")) {
-		t.Fatalf("transport fixture reached the wrong public boundary: %v", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), installedCanaryBudget)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout="+installedCanaryBudget.String())
 	cell := "split"
 	if provider != "git" {
 		cell = filepath.Join(provider, cell)
 	}
 	jobs := filepath.Join(root, cell, "evidence", "jobs")
+	defer canaryStopPrivateBackend(t, filepath.Join(jobs, "p4d.pid"))
+	cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_LOCAL_DIR="+root, "FORMAL_GATES_CANARY_LOCAL_FAILURE_FIXTURE="+mode)
+	output, err := canarySubprocessOutput(cmd)
+	t.Logf("installed %s transport fixture: exit=%v\n%s", mode, err, output)
+	if mode == "transient" && err != nil || mode == "permanent" && (err == nil || !strings.Contains(string(output), "unexpected ask boundary")) {
+		t.Fatalf("transport fixture reached the wrong public boundary: %v", err)
+	}
 	journal := readTestFileBytes(t, filepath.Join(jobs, "installed-commands.jsonl"))
 	failures := 0
 	var failedRun facade.Run

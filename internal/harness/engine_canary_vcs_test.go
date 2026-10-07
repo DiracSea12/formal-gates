@@ -124,13 +124,14 @@ func (c *engineCanary) initFixtureRepository() {
 	if err != nil {
 		c.fail("private p4d log: %v", err)
 	}
-	server := exec.Command("p4d", "-r", c.t.TempDir(), "-p", address)
+	pidFile := filepath.Join(c.jobs, "p4d.pid")
+	server := exec.Command("p4d", "--pid-file="+pidFile, "-r", c.t.TempDir(), "-p", address)
 	server.Stdout, server.Stderr = log, log
 	if err := server.Start(); err != nil {
 		log.Close()
 		c.fail("private p4d start: %v", err)
 	}
-	c.t.Cleanup(func() { server.Process.Kill(); server.Wait(); log.Close() })
+	c.t.Cleanup(func() { server.Process.Kill(); server.Wait(); log.Close(); _ = os.Remove(pidFile) })
 	ready := false
 	for i := 0; i < 50; i++ {
 		if _, err := (vcs.ExecRunner{}).Run("", "p4", "info"); err == nil {
