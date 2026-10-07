@@ -81,16 +81,9 @@ import (
 	"formal-gates/internal/validate"
 )
 
-// canaryRequirementDocument is the confirmed REQ/AC document of the fixture
-// project. REQ-001 scopes the development batch to the usage-statistics
-// feature (new file analytics.go plus its wiring) only, so an honest
-// readiness plan puts the batch on analytics.go and schedules no flag work.
-// The unknown-flag rejection of AC-002 is declared as a known baseline gap —
-// frob currently accepts any first argument — whose satisfaction is expected
-// through this run's validation-and-repair loop: the gate really catches the
-// gap and the flag-handling repair is the document-authorized closure. Every
-// baseline claim in the document is true of canaryFrobSource, so an honest
-// review finds no document defect.
+// canaryRequirementDocument confirms one complete requirement and solution.
+// Product obligations belong to REQ/AC; implementation and development/repair
+// boundaries remain in the solution for technical review and quality gates.
 const canaryRequirementDocument = `# 交付
 
 ## 需求点
@@ -98,15 +91,15 @@ const canaryRequirementDocument = `# 交付
 ### REQ-001：usage 统计与公开 flag 契约
 
 #### 要求
-frob 是一个单命令工具。本次开发批次交付 usage 统计功能：统计实现放在新文件 analytics.go，并在 frob 的正常输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。开发验证命令为 go build ./...。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。本开发批次不实现、修复或放宽该条款；其满足预期经本 run 的验证与返修闭环完成：验证判定其不满足时，修复 frob.go 的 flag 处理属本 run 已授权的返修范围。
+frob 是一个单命令工具。新增 usage 统计功能：在正常 frob 输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。保持其他已存在的公开行为：首个词参数是本次所处理的词，额外普通参数不改变处理结果；空字符串是一个有效词参数；未提供词参数时以 2 退出，标准错误输出 usage: frob <word>，不产生 frob 输出或 usage 统计输出。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。最终交付必须满足该条款，不得放宽其拒绝和输出要求。
 #### 验收条件
-- AC-001：运行 frob word 后，输出在 frob: word 行之后包含精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数。
+- AC-001：运行 frob word 后，精确输出 frob: word 行，随后是精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数；空字符串参数为有效词，N 为 0。额外普通参数不改变首个词的结果。未提供词参数时保持退出码 2 和标准错误 usage: frob <word>，不产生 frob 输出或 usage 统计输出。
 - AC-002：传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。
 #### 来源
 用户要求。
 
 ## 方案
-使用现有 frob.go 命令入口。analytics.go 只计算输入词的 UTF-8 字节数并输出 usage 统计，由 frob.go 在正常 frob 行之后调用；空词仍作为一个参数处理。本次开发只完成统计及接线，按 go build ./... 验证。已声明的未知 flag 缺口由本 run 的独立验证实际发现，再由同一返修义务修改 frob.go 的参数拒绝处理；不改变统计与普通词、空词的输出契约。
+使用现有 frob.go 命令入口。本次开发批次只交付 usage 统计功能：统计实现放在新文件 analytics.go，只计算输入词的 UTF-8 字节数并输出 usage 统计，由 frob.go 在正常 frob 行之后调用；空词仍作为一个参数处理。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为。开发验证命令为 go build ./...。本开发批次不实现、修复或放宽 AC-002 的未知 flag 条款；其满足经本 run 的验证与返修闭环完成：验证判定其不满足时，修复 frob.go 的 flag 处理属本 run 已授权的返修范围。实现位置、调用接线及开发/返修改动边界由技术审、diff/代码审查与质量门核验，不要求黑盒 QA 检查源码；公开统计、参数和 flag 行为仍由 QA 验证。
 `
 
 // canaryFrobSource is the seeded frob command: it accepts any first argument,
@@ -792,13 +785,23 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 	for _, designed := range answer.Cases {
 		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
 			CaseID: designed.CaseID, Mode: canaryCaseMode(input), Scenario: designed.Scenario,
-			PublicEntry:   "frob " + strings.Join(designed.Args, " "),
+			PublicEntry:   canaryPublicEntry(designed.Args),
 			Preconditions: designed.Preconditions, Steps: designed.Steps, Oracle: designed.Oracle,
 		})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
 		c.caseArgs[c.caseKey(designed.CaseID)] = designed.Args
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest}
+}
+
+// canaryPublicEntry renders argv as POSIX shell literals; caseArgs remains the
+// execution authority. Empty strings and embedded spaces retain their identity.
+func canaryPublicEntry(args []string) string {
+	words := []string{"frob"}
+	for _, arg := range args {
+		words = append(words, "'"+strings.ReplaceAll(arg, "'", "'\\''")+"'")
+	}
+	return strings.Join(words, " ")
 }
 
 // whiteboxDesignResult runs the writable whitebox design turn in the
@@ -916,7 +919,7 @@ func (c *engineCanary) caseReviewResult(id string, input protocol.ValidationInpu
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 		caseFace = "its test reference and oracle"
 	}
-	instructions := fmt.Sprintf("Review the acceptance design at three layers, judging every item yourself. input.manifest.sources lists the requirement sources, points the acceptance points, cases the designed cases. For every source decide whether its obligation is really carried by the case set; for every point decide whether it has executable case coverage; for every case decide whether %s actually verifies the acceptance point it claims. Every decision needs its real rationale; report FAIL with the reason whenever that is the honest verdict.", caseFace)
+	instructions := fmt.Sprintf("Review the acceptance design at three layers, judging every item yourself. input.manifest.sources lists the requirement sources, points the acceptance points, cases the designed cases. For every source decide whether all its product or workflow behavior obligations are really carried by the case set, including behavior obligations not yet mapped to an acceptance point; incomplete mapping or missing behavior coverage requires FAIL even if the listed points have cases. For every point decide whether it has executable case coverage; for every case decide whether %s actually verifies the acceptance point it claims. Pure implementation locations, code wiring, build commands and development/repair code boundaries in the solution belong to technical review, diff/code review and quality gates. BLACKBOX cases verify public behavior with literal argv; they must not inspect production source, AST or diffs to prove those implementation constraints. WHITEBOX cases use their declared test references and scope. This ownership boundary does not exempt any product behavior requirement from coverage. Every decision needs its real rationale; report FAIL with the reason whenever that is the honest verdict.", caseFace)
 	var answer struct {
 		SourceDecisions []canaryReviewDecision `json:"sourceDecisions"`
 		PointDecisions  []canaryReviewDecision `json:"pointDecisions"`
