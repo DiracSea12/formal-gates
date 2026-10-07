@@ -78,6 +78,7 @@ func (c *engineCanary) fixtureCommand(dir, command string, input []byte, args ..
 // Provider owns snapshot, workspace, promotion and cleanup semantics.
 func (c *engineCanary) initFixtureRepository() {
 	c.t.Helper()
+	c.sourceBuildEnv = os.Environ()
 	if c.vcs == nil {
 		c.vcs = vcs.NewNative(c.project, "git", nil)
 	}

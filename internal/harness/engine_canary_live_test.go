@@ -187,6 +187,7 @@ type engineCanary struct {
 	binding        map[string]any
 	installed      validate.InstallReport
 	separateRoots  map[string]string
+	sourceBuildEnv []string
 	deadline       time.Time
 	seq            int
 	approvalInput  *bufio.Reader
@@ -2967,17 +2968,27 @@ func (c *engineCanary) readRunID(command, runID string) facade.Run {
 	}
 	return run
 }
+
+// Candidate builds use the source environment captured before native fixture isolation.
+func (c *engineCanary) buildInstalledCandidate(root string) {
+	build := exec.Command("go", "build", "-o", c.binary, "./cmd/formal-gates")
+	build.Dir = root
+	build.Env = c.sourceBuildEnv
+	if build.Env != nil {
+		build.Env = append(slices.Clone(build.Env), "PWD="+root)
+	}
+	if output, err := build.CombinedOutput(); err != nil {
+		c.fail("build installed candidate: %v %s", err, output)
+	}
+}
+
 func (c *engineCanary) install(base string, intake facade.IntakeConfirmationReceipt) {
 	root := c.separateRoots["source"]
 	c.binary = filepath.Join(c.home, ".local", "bin", "formal-gates")
 	if err := os.MkdirAll(filepath.Dir(c.binary), 0700); err != nil {
 		c.fail("binary directory: %v", err)
 	}
-	build := exec.Command("go", "build", "-o", c.binary, "./cmd/formal-gates")
-	build.Dir = root
-	if output, err := build.CombinedOutput(); err != nil {
-		c.fail("build installed candidate: %v %s", err, output)
-	}
+	c.buildInstalledCandidate(root)
 	receipt, err := validate.PackageReceipt(root)
 	if err != nil {
 		c.fail("package receipt: %v", err)

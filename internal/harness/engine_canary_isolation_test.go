@@ -7,7 +7,9 @@ package harness
 // model call. Native configuration files contain synthetic fixture values.
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"debug/buildinfo"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -886,6 +888,94 @@ func TestCanaryNativeBootstrapPreservesConfiguredCachePaths(t *testing.T) {
 			if observed != moduleCache+"\n"+buildCache {
 				t.Fatalf("Go did not consume the configured cache values: %q", observed)
 			}
+		})
+	}
+}
+
+// The installed CLI must keep the immutable source build identity while native
+// fixture builds consume their own stamping flag and private host environment.
+func TestCanaryCandidateBuildPreservesSourceInputs(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	source := filepath.Join(t.TempDir(), "source")
+	clone := exec.Command("git", "clone", "--local", "--no-hardlinks", filepath.Dir(filepath.Dir(filepath.Dir(file))), source)
+	if output, err := clone.CombinedOutput(); err != nil {
+		t.Fatalf("clone immutable source: %v %s", err, output)
+	}
+	packageRoot := t.TempDir()
+	receipt, err := validate.PackageReceipt(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range receipt.Entries {
+		rel := filepath.FromSlash(entry.Path)
+		data, err := os.ReadFile(filepath.Join(source, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(packageRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, data, os.FileMode(entry.Mode)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binary := filepath.Join(packageRoot, "bin", "formal-gates")
+	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
+		t.Fatal(err)
+	}
+	baseline := &engineCanary{t: t, binary: binary}
+	baseline.buildInstalledCandidate(source)
+	wantBytes := readTestFileBytes(t, binary)
+	wantInfo, err := buildinfo.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamped := false
+	for _, setting := range wantInfo.Settings {
+		if setting.Key == "vcs.revision" && setting.Value != "" {
+			stamped = true
+		}
+	}
+	if !stamped {
+		t.Fatal("baseline source build has no VCS identity")
+	}
+	wantPackage, err := validate.PackageReceipt(packageRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalFlags := os.Getenv("GOFLAGS")
+	for _, provider := range []string{"git", "svn", "p4"} {
+		t.Run(provider, func(t *testing.T) {
+			base := t.TempDir()
+			c := &engineCanary{t: t, binary: binary, home: filepath.Join(base, "home"), project: filepath.Join(base, "project"), jobs: filepath.Join(base, "jobs")}
+			for _, path := range []string{c.home, c.project, c.jobs} {
+				if err := os.MkdirAll(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.vcs = vcs.NewNative(c.project, provider, nil)
+			c.initFixtureRepository()
+			wantFlags := originalFlags
+			if provider != "git" {
+				wantFlags = strings.TrimSpace(originalFlags + " -buildvcs=false")
+			}
+			if got := c.fixtureCommand(c.project, "go", nil, "env", "GOFLAGS"); got != wantFlags {
+				t.Fatalf("fixture GOFLAGS=%q, want %q", got, wantFlags)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				c.buildInstalledCandidate(source)
+				gotBytes := readTestFileBytes(t, binary)
+				gotInfo, err := buildinfo.ReadFile(binary)
+				if err != nil || !bytes.Equal(gotBytes, wantBytes) || gotInfo.String() != wantInfo.String() {
+					t.Fatalf("candidate bytes or build info differ from source build: %v\nwant SHA256=%x info=%s\ngot SHA256=%x info=%s", err, sha256.Sum256(wantBytes), wantInfo.String(), sha256.Sum256(gotBytes), gotInfo.String())
+				}
+				gotPackage, err := validate.PackageReceipt(packageRoot)
+				if err != nil || gotPackage.Digest != wantPackage.Digest || !canaryValuesEqual(gotPackage.Entries, wantPackage.Entries) {
+					t.Fatalf("candidate package manifest differs from source build: %v", err)
+				}
+			}
+			t.Logf("candidate SHA256=%x package=%s entries=%d fixture GOFLAGS=%q buildinfo=%s", sha256.Sum256(wantBytes), wantPackage.Digest, len(wantPackage.Entries), wantFlags, wantInfo.String())
 		})
 	}
 }
