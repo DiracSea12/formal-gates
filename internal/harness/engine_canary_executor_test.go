@@ -373,7 +373,9 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 			if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness {
 				continue
 			}
-			c.receipt(id)
+			if !c.receipt(id) {
+				continue
+			}
 			event := c.dispatchReview(id, pending.ReviewSeries)
 			if event.Result.Review.GranularityReview != nil {
 				c.masterPlan = event.Result.Review.GranularityReview
@@ -397,7 +399,9 @@ func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 			continue
 		}
 		close(e.developmentStarted)
-		c.receipt(id)
+		if !c.receipt(id) {
+			continue
+		}
 		// The actual local native turn is observed stopped, but its business result
 		// remains unsubmitted when the user cancels this delivery obligation.
 		c.dispatchPipeline(id, input)

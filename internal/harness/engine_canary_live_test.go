@@ -589,11 +589,16 @@ func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- 
 			continue
 		}
 		pending := c.run.PendingActions[id]
+		if !canaryDispatchable(c.run, pending) {
+			continue
+		}
 		input, pipeline := c.run.ValidationInputs[id]
 		if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness && (!pipeline || input.Handler == "") {
 			continue
 		}
-		c.receipt(id)
+		if !c.receipt(id) {
+			continue
+		}
 		active[key] = true
 		worker := *c
 		worker.worker = true
@@ -605,6 +610,24 @@ func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- 
 		launched = true
 	}
 	return launched
+}
+
+// Pending retains obligations during recovery; only a current execution
+// without an accepted interruption can start through the ordinary worker path.
+func canaryDispatchable(run facade.Run, pending protocol.PendingAction) bool {
+	attempt, current := run.Attempts[pending.Task]
+	if !current || attempt.ID != pending.AttemptID || attempt.ActionID != pending.ActionID || attempt.AwaitingResult || run.Status == "ABORTING" || run.Status == "ABORTED" {
+		return false
+	}
+	if _, rejected := run.RejectedResults[pending.ActionID]; rejected {
+		return false
+	}
+	for _, recovery := range run.RecoveryRecords {
+		if recovery.ActionID == pending.ActionID && recovery.AttemptID == pending.AttemptID {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input protocol.ValidationInput) (done canaryCompletion) {
@@ -1291,11 +1314,14 @@ type canaryTurnResult struct {
 }
 
 // receipt declares the dispatch on the engine before the turn runs.
-func (c *engineCanary) receipt(actionID string) {
+func (c *engineCanary) receipt(actionID string) bool {
 	c.t.Helper()
 	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, c.provider(), c.dispatchKey(actionID), protocol.SpawnStatusSpawned)
 	if err != nil {
 		c.fail("spawn receipt for %s: %v", actionID, err)
+	}
+	if acceptance := c.submit(event); acceptance.Status != "ACCEPTED" {
+		return false
 	}
 	data, _ := json.MarshalIndent(event, "", "  ")
 	if err := os.MkdirAll(c.jobDirectory(actionID), 0700); err != nil {
@@ -1304,8 +1330,8 @@ func (c *engineCanary) receipt(actionID string) {
 	if err := os.WriteFile(filepath.Join(c.jobDirectory(actionID), "spawn-receipt.json"), data, 0600); err != nil {
 		c.fail("receipt evidence: %v", err)
 	}
-	c.submit(event)
 	c.dispatched = append(c.dispatched, c.dispatchKey(actionID))
+	return true
 }
 
 // canaryAttemptUsage reports a failed attempt's original receipt when available.
