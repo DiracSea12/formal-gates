@@ -15,12 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	engineRuntime "formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/requirement"
+	"reflect"
 )
 
 func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
@@ -213,5 +216,52 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 	after, _ := json.Marshal(schema)
 	if !bytes.Equal(before, after) {
 		t.Fatal("native schema mutated domain contract")
+	}
+}
+
+func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
+	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
+		t.Run(handler, func(t *testing.T) {
+			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
+			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: engineRuntime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: coverage.AcceptanceManifest{Binding: binding}}}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
+			switch handler {
+			case "engine.qa.design":
+				result.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: []coverage.CoverageEdge{{SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
+			case "engine.qa.review.rationale":
+				result.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}}
+			case "engine.qa.execution":
+				result.Execution = &coverage.ExecutionReport{Binding: coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}, ActualCaseIDs: []string{"case"}}, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
+				result.Tool = "app"
+				result.Environment = "issued workspace"
+			}
+			payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &result}
+			body, _ := json.Marshal(payload)
+			domain, err := decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := codexOutputSchema(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := codexPeerStrictSchema(codexPlain(t, native)); err != nil {
+				t.Fatal(err)
+			}
+			wire := codexPeerAnswer(codexPlain(t, schema), domain)
+			projected, err := codexDomainResult(schema, wire)
+			if err != nil || !valuesEqual(projected, domain) {
+				t.Fatal("native machine values changed", err)
+			}
+			actual, _ := json.Marshal(projected)
+			event, err := worker.DecodeResult(input, "result", actual, "sha256:original")
+			if err != nil || !reflect.DeepEqual(event.Result.Validation, &result) {
+				t.Fatal("typed role/issued binding lost", err)
+			}
+		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -72,6 +73,10 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			fields[name] = child
 		}
+		if input.Handler == "engine.qa.design" && input.Validation.Manifest.Binding.ReviewKind != "" {
+			caseFields := fields["manifest"].(map[string]any)["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+			caseFields["mode"] = map[string]any{"type": "string", "enum": []string{string(input.Validation.Manifest.Binding.ReviewKind)}}
+		}
 		properties["validation"] = body
 	} else {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
@@ -81,6 +86,24 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 }
 
 func resultTypeSchema(value reflect.Type) (map[string]any, error) {
+	var literals []string
+	switch value {
+	case reflect.TypeOf(coverage.CaseMode("")):
+		literals = coverage.CaseModes()
+	case reflect.TypeOf(coverage.ReviewKind("")):
+		literals = coverage.ReviewKinds()
+	case reflect.TypeOf(coverage.ScopeMode("")):
+		literals = coverage.ScopeModes()
+	case reflect.TypeOf(coverage.DecisionStatus("")):
+		literals = coverage.DecisionStatuses()
+	case reflect.TypeOf(coverage.ExecutionStatus("")):
+		literals = coverage.ExecutionStatuses()
+	case reflect.TypeOf(coverage.Provenance("")):
+		literals = coverage.Provenances()
+	}
+	if literals != nil {
+		return map[string]any{"type": "string", "enum": literals}, nil
+	}
 	if value == reflect.TypeOf(review.OperatorVerification{}) {
 		checks := []any{}
 		for _, id := range review.RequiredVerificationChecks() {
@@ -147,6 +170,15 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			}
 			if name == "" {
 				name = field.Name
+			}
+			if value == reflect.TypeOf(coverage.AcceptanceCase{}) && field.Name == "Scenario" {
+				child["enum"] = coverage.Scenarios()
+			}
+			if value == reflect.TypeOf(protocol.QASuggestion{}) && field.Name == "Severity" {
+				child["enum"] = []string{"P2", "P3"}
+			}
+			if value == reflect.TypeOf(protocol.QASuggestion{}) && field.Name == "Decision" {
+				child["enum"] = []string{""}
 			}
 			properties[name] = child
 			if !strings.Contains(options, "omitempty") {

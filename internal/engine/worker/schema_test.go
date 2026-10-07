@@ -139,3 +139,48 @@ func TestReviewMaterialCarriesClosedVerificationContract(t *testing.T) {
 		})
 	}
 }
+
+func TestQAMaterialCarriesFiniteDomainsAndIssuedBindings(t *testing.T) {
+	catalog := prompts.PromptCatalog{Base: "Independent QA", Actions: []prompts.PromptDefinition{{ID: "qa-design", Content: "Design"}, {ID: "qa-review", Content: "Review"}, {ID: "qa-execution", Content: "Execute"}}}
+	binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
+	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
+		t.Run(handler, func(t *testing.T) {
+			execution := coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate", Digest: "digest"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}}
+			input := protocol.WorkerInput{RunID: "run", Provider: "host", Handler: handler, Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: coverage.AcceptanceManifest{Binding: binding, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "behavior", Oracle: "oracle"}}}, Execution: &execution}}
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if material.ResultTemplate.Validation.Binding != input.Validation.Binding || !strings.Contains(material.Prompt, coverage.QAResultContract()) {
+				t.Fatal("issued binding or finite contract absent")
+			}
+			fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)
+			switch handler {
+			case "engine.qa.design":
+				if !reflect.DeepEqual(material.ResultTemplate.Validation.Manifest, &input.Validation.Manifest) {
+					t.Fatal("design template reconstructed manifest")
+				}
+				cases := fields["manifest"].(map[string]any)["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+				if !reflect.DeepEqual(cases["mode"].(map[string]any)["enum"], []string{"BLACKBOX"}) || !reflect.DeepEqual(cases["scenario"].(map[string]any)["enum"], coverage.Scenarios()) {
+					t.Fatal("case literals unconstrained")
+				}
+			case "engine.qa.review.rationale":
+				if material.ResultTemplate.Validation.Review.Binding != binding {
+					t.Fatal("review lost manifest binding")
+				}
+				decisions := fields["review"].(map[string]any)["properties"].(map[string]any)["caseDecisions"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+				if !reflect.DeepEqual(decisions["status"].(map[string]any)["enum"], coverage.DecisionStatuses()) {
+					t.Fatal("review status unconstrained")
+				}
+			case "engine.qa.execution":
+				if !reflect.DeepEqual(material.ResultTemplate.Validation.Execution.Binding, execution) {
+					t.Fatal("execution lost frozen binding")
+				}
+				records := fields["execution"].(map[string]any)["properties"].(map[string]any)["records"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+				if !reflect.DeepEqual(records["result"].(map[string]any)["enum"], coverage.ExecutionStatuses()) || !reflect.DeepEqual(records["provenance"].(map[string]any)["enum"], coverage.Provenances()) {
+					t.Fatal("execution semantics unconstrained")
+				}
+			}
+		})
+	}
+}

@@ -2,8 +2,12 @@ package coverage
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
+
+// Scenarios is the closed machine classification used by acceptance cases.
+func Scenarios() []string { return []string{"SUCCESS", "FAILURE", "MISUSE", "BOUNDARY"} }
 
 // ValidateScenarios requires each acceptance point to have an explicit normal
 // failure, misuse or boundary exercise. Reviewers judge whether it is sufficient.
@@ -33,9 +37,7 @@ func ValidateScenarios(manifest AcceptanceManifest) error {
 // the design's scenario coverage complete.
 func ValidateRecordedScenarios(manifest AcceptanceManifest) error {
 	for _, c := range manifest.Cases {
-		switch c.Scenario {
-		case "SUCCESS", "FAILURE", "MISUSE", "BOUNDARY":
-		default:
+		if !slices.Contains(Scenarios(), c.Scenario) {
 			return fmt.Errorf("case %s needs a scenario (SUCCESS, FAILURE, MISUSE, BOUNDARY)", c.CaseID)
 		}
 	}

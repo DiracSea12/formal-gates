@@ -58,11 +58,17 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Resolve only the issued conflict in the registered workspace, preserving the frozen child inputs and dependencies. Report resolution evidence and exact changed paths."
 			value.ReadOnly = false
 		case "engine.qa.design":
+			manifest := input.Validation.Manifest
+			value.ResultTemplate.Validation.Manifest = &manifest
 			instructions = "Design executable coverage for every required source and acceptance point. Preserve exact manifest binding and mappings. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and reports their artifact paths. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale":
+			value.ResultTemplate.Validation.Review = &coverage.ReviewResult{Binding: input.Validation.Manifest.Binding}
 			instructions = "Independently judge every required source, point and case, and every inherited/shared item supplied. Report each real rationale and honest PASS/FAIL. Missing or unmapped behavior coverage is FAIL; BLACKBOX must not inspect source to satisfy pure implementation constraints. Do not change manifests, bindings or approve user/Operator choices."
 		case "engine.qa.execution":
+			if input.Validation.Execution != nil {
+				value.ResultTemplate.Validation.Execution = &coverage.ExecutionReport{Binding: *input.Validation.Execution}
+			}
 			instructions = "Execute exactly the approved pending cases in the registered execution workspace. Preserve source and approved tests; normal test runtime outputs may be produced. Report each real procedure, observation and oracle comparison, binding the supplied whitelist/candidate/scope. Retain supplied completed/inherited evidence; do not invent a PASS or run unapproved cases."
 			value.ReadOnly = false
 		case "engine.gate":
@@ -72,6 +78,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
+	}
+	if input.Handler == "engine.qa.design" || input.Handler == "engine.qa.review.rationale" || input.Handler == "engine.qa.execution" {
+		instructions += " " + coverage.QAResultContract()
 	}
 	schema, err := ResultSchema(input)
 	if err != nil {

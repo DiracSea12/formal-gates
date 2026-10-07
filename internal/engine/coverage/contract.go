@@ -141,6 +141,30 @@ const (
 	CaseMerge    CaseMode = "MERGE"
 )
 
+// These finite wire domains are owned by the coverage contract.
+func CaseModes() []string {
+	return []string{string(CaseBlackbox), string(CaseWhitebox), string(CaseMerge)}
+}
+func ReviewKinds() []string {
+	return []string{string(ReviewBlackbox), string(ReviewWhitebox), string(ReviewMerge)}
+}
+func ScopeModes() []string { return []string{string(ScopeFull), string(ScopeAffected)} }
+func DecisionStatuses() []string {
+	return []string{string(StatusPass), string(StatusFail)}
+}
+func ExecutionStatuses() []string {
+	return []string{string(ExecutedPass), string(ExecutedFail), string(ExecutedPending), string(ExecutedUnknown), string(AuthorizedSkip)}
+}
+func Provenances() []string {
+	return []string{string(ProvenanceExecuted), string(ProvenanceInherited), string(ProvenanceNotExecuted)}
+}
+
+// QAResultContract describes the same binding and record-shape requirements
+// consumed by design, review and execution validators.
+func QAResultContract() string {
+	return "Keep the supplied work binding and manifest/execution binding byte-for-value: runId, requirementRevision, solutionRevision, reviewKind, routeScope, topologyScope, generation, task, workspace/candidate and all digests are issued identities, never worker choices. case.mode is uppercase BLACKBOX, WHITEBOX or MERGE and must equal the manifest reviewKind. case.scenario is exactly SUCCESS, FAILURE, MISUSE or BOUNDARY; put narrative details in steps/oracle, not scenario. Case IDs and shared-step IDs are unique, shared-step references must exist, each case has an oracle. BLACKBOX/MERGE require non-empty publicEntry/preconditions/steps and omit testRef; WHITEBOX requires a unique testRef and omits publicEntry/preconditions/steps. Preserve confirmed sources, acceptance-point content and legal source-point relations; map every declared source/point/case without unknown IDs, duplicates or orphans. Each point requires a FAILURE/MISUSE/BOUNDARY case for a complete design. QA review scope is FULL or AFFECTED; return separate complete sourceDecisions, pointDecisions, caseDecisions and supplied sharedStepDecisions with ID/status/reason and preserve supplied inherited evidence; never infer a decision from another layer or replace them with setStatus. Worker review decisions use PASS or FAIL, never PENDING, UNKNOWN or AUTHORIZED_SKIP; setStatus, if supplied, must match the item-level verdict and be PASS or FAIL. Execution result is EXECUTED_PASS, EXECUTED_FAIL, PENDING, UNKNOWN or AUTHORIZED_SKIP; provenance is EXECUTED, INHERITED or NOT_EXECUTED. FULL actually executes every expected approved edge; AFFECTED partitions all expected edges into actual execution, proved identical inheritance and not-executed records. Preserve expectedCaseIds, candidate and digest binding; list actualCaseIds as the exact represented-case set and follow the supplied actual/pending execution partition, report procedure/observation/comparison, and give inheritedFromCandidate/reuseEvidence for lawful inheritance. AUTHORIZED_SKIP never means EXECUTED_PASS; workers do not grant skip or user disposition. Suggestions, when allowed, use P2/P3 with message and no decision."
+}
+
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {
