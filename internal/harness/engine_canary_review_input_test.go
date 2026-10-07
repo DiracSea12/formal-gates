@@ -307,3 +307,20 @@ func TestCanaryReviewDecisionKeepsCoreRejections(t *testing.T) {
 		})
 	}
 }
+
+func TestCanaryReviewPassAdvisoryDoesNotReadOperator(t *testing.T) {
+	var series review.Series
+	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "operator_review_advisory.json")), &series); err != nil {
+		t.Fatal(err)
+	}
+	if series.Effective.Status != "PASS" || len(series.RawCandidates) != 1 || len(series.RawCandidates[0].Findings) == 0 {
+		t.Fatal("original PASS advisory missing")
+	}
+	state := protocol.State{ReviewSeries: review.Set{ProductReview: series}}
+	run := canaryReviewRun(&state, persistence.Envelope{}, 0)
+	var output bytes.Buffer
+	c := &engineCanary{t: t, run: run, deadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(nil)), approvalOutput: &output}
+	if c.reviewFindingsWithOperator() || output.Len() != 0 {
+		t.Fatal("PASS advisory created a mandatory Operator handoff")
+	}
+}

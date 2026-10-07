@@ -180,6 +180,19 @@ func (c *engineCanary) reviewFindingsWithOperator() bool {
 				if finding.EffectiveDecision != "" {
 					continue
 				}
+				explicitAsk := false
+				for _, ask := range c.run.PendingAsks {
+					if ask.Control == protocol.ControlReviewFindingDecision {
+						for _, option := range ask.Options {
+							if strings.HasSuffix(string(option.ID), ":"+finding.ID) {
+								explicitAsk = true
+							}
+						}
+					}
+				}
+				if action.EffectiveStatus != "FAIL" && !explicitAsk {
+					continue
+				}
 				if c.approvalMu != nil {
 					c.approvalMu.Lock()
 					defer c.approvalMu.Unlock()
@@ -193,8 +206,12 @@ func (c *engineCanary) reviewFindingsWithOperator() bool {
 				var token string
 				for _, ask := range c.run.PendingAsks {
 					if ask.Control == protocol.ControlReviewFindingDecision {
-						requestID, token = protocol.RequestID(ask.RequestID), ask.Token
-						break
+						for _, option := range ask.Options {
+							if option.ID == choice {
+								requestID, token = protocol.RequestID(ask.RequestID), ask.Token
+								break
+							}
+						}
 					}
 				}
 				if requestID == "" {
