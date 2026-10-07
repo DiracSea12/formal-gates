@@ -808,7 +808,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 	if input.Workspace == nil {
 		c.fail("whitebox design %s has no registered authoring workspace", id)
 	}
-	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths."
+	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
 	var answer struct {
 		Cases []struct {
 			CaseID   string `json:"caseId"`
@@ -847,7 +847,8 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 				return fmt.Errorf("case %s carries no test reference", designed.CaseID)
 			}
 		}
-		return nil
+		_, _, err := c.vcs.At(c.workspace(input), input.Workspace.Handle).ValidateDeclaredChanges(input.Workspace.Identity, answer.Paths)
+		return err
 	}
 	c.turnIn(c.workspace(input), id, "QA case design", c.prompt("QA case design", materials, instructions, false), canaryDesignSchema(true), false, shape)
 	for _, designed := range answer.Cases {
