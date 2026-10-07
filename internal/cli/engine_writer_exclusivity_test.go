@@ -105,11 +105,6 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 直接调用 legacy requirement writer：engine run 无 legacy state，写入被
-	// 拒绝（命名空间分离——engine 权威状态不可被 legacy writer 寻址）。
-	if _, err := validate.UpdateRequirement(root, "", "writer-exclusive", "requirements.md", true, "meaning-preserved", nil); err == nil {
-		t.Fatal("legacy UpdateRequirement accepted an engine run")
-	}
 	// CLI legacy 写入口：engine run 存在即非零退出，不创建 legacy state。
 	for _, command := range [][]string{
 		{"workflow", "requirement", "--run-id", "writer-exclusive", "--revision", "rev-2", "--root", root},
@@ -129,41 +124,6 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("legacy entry mutated the engine authoritative state")
-	}
-}
-
-// TestRepairPreviewProjectsEngineRun：repair-preview 对 engine run 展示引擎
-// 权威投影（pending REPAIR Ask＋cost/guard 投影＋三值可用性），legacy run 行
-// 为不变（无 legacy state 时按 legacy 错误报告）。
-func TestRepairPreviewProjectsEngineRun(t *testing.T) {
-	f, root, _ := startEngineRunForWriterTest(t)
-	run, err := f.Show()
-	if err != nil {
-		t.Fatal(err)
-	}
-	face := newEngineRepairPreview(run)
-	if face.RunID != "writer-exclusive" || face.Runtime != facade.RuntimeEngine {
-		t.Fatalf("face = %+v", face)
-	}
-	if face.EngineAllowance != "UNAVAILABLE" || face.OwnerCost != "UNAVAILABLE" || face.TokenCap != "UNAVAILABLE" {
-		t.Fatalf("availability = %q %q %q", face.EngineAllowance, face.OwnerCost, face.TokenCap)
-	}
-	if len(face.RepairAsks) != 0 {
-		t.Fatalf("unexpected repair asks: %+v", face.RepairAsks)
-	}
-	// 序列化稳定（JSON 面向 CLI 消费者）。
-	data, err := json.Marshal(face)
-	if err != nil || !strings.Contains(string(data), "\"runtime\":\"engine\"") {
-		t.Fatalf("marshal = %s err=%v", data, err)
-	}
-	// legacy run：无 legacy state，既有行为是可定位错误。
-	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{"workflow", "repair-preview", "--run-id", "writer-exclusive", "--root", root}, IO{Stdout: &stdout, Stderr: &stderr})
-	if code == 0 || stderr.Len() == 0 {
-		t.Fatalf("engine run without registered admission resolved the legacy preview: code=%d stderr=%q", code, stderr.String())
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("engine-run legacy preview wrote stdout: %q", stdout.String())
 	}
 }
 
@@ -235,11 +195,7 @@ func snapshotEngineRunTree(t *testing.T, root, runID string) map[string]string {
 	return files
 }
 
-// TestLegacyWriteCommandsRejectEngineRunPerCommand：route matrix 逐命令负测——
-// cli.go 落闸注册表（workflowLegacyWriteEntry）里的每个 legacy 公开写命令对
-// engine run 一律 UNSUPPORTED_ENGINE_ENTRY 快速拒绝（闸在 flag 解析前），engine
-// 权威 state 字节不变、不产生任何 legacy 写入。注册表增删命令时本表自动跟随
-// （遍历注册表本身），计划↔矩阵的结构锁定由 route_matrix_test 持有。
+// Removed workflow entries are rejected before loading or writing a run.
 func TestLegacyWriteCommandsRejectEngineRunPerCommand(t *testing.T) {
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
@@ -248,7 +204,7 @@ func TestLegacyWriteCommandsRejectEngineRunPerCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for command := range workflowLegacyWriteEntry {
+	for _, command := range retiredWorkflowCommands {
 		runFlag := "--run-id"
 		if command == "cleanup" {
 			runFlag = "--run"
@@ -259,8 +215,8 @@ func TestLegacyWriteCommandsRejectEngineRunPerCommand(t *testing.T) {
 		if code == 0 {
 			t.Errorf("workflow %s reached a legacy writer for an engine run", command)
 		}
-		if !strings.Contains(combined, facade.UnsupportedEngineEntry) {
-			t.Errorf("workflow %s rejected without %s: %s", command, facade.UnsupportedEngineEntry, combined)
+		if !strings.Contains(combined, "unknown workflow subcommand") {
+			t.Errorf("workflow %s rejected without %s: %s", command, "unknown workflow subcommand", combined)
 		}
 		if _, err := os.Stat(filepath.Join(root, ".gates", "tmp", "writer-exclusive", "state.json")); !os.IsNotExist(err) {
 			t.Errorf("workflow %s created legacy state", command)
@@ -284,7 +240,7 @@ func TestPublicCleanupCannotOperateOnActiveEngineRun(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run("formal-gates", []string{"workflow", "cleanup", "--run", "writer-exclusive", "--root", root}, IO{Stdout: &stdout, Stderr: &stderr})
 	combined := stdout.String() + stderr.String()
-	if code == 0 || !strings.Contains(combined, facade.UnsupportedEngineEntry) {
+	if code == 0 || !strings.Contains(combined, "unknown workflow subcommand") {
 		t.Fatalf("public cleanup operated on an active engine run (rc=%d): %s", code, combined)
 	}
 	if tree := snapshotEngineRunTree(t, root, "writer-exclusive"); !reflect.DeepEqual(before, tree) {

@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
-	"formal-gates/internal/validate"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +66,7 @@ func snapshot(q workspaceInput) (any, error) {
 	if _, err := hex.DecodeString(q.OperationID); err != nil {
 		return nil, fmt.Errorf("invalid operation id")
 	}
-	head, err := validate.HarnessResolveSnapshot(q.Root)
+	head, err := vcs.New(q.Root, nil).Resolve()
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func snapshot(q workspaceInput) (any, error) {
 	if _, err = git(q.Root, "-c", "user.name=formal-gates", "-c", "user.email=formal-gates@localhost", "-c", "commit.gpgsign=false", "commit", "-m", "Prepare harness candidate\n\n"+trailer); err != nil {
 		return nil, err
 	}
-	head, err = validate.HarnessResolveSnapshot(q.Root)
+	head, err = vcs.New(q.Root, nil).Resolve()
 	return map[string]any{"candidate": head, "replayed": false}, err
 }
 func scopeBinding(q bindingInput) (string, error) {
@@ -152,7 +152,7 @@ func certify(q sealInput) (any, error) {
 	if q.Revision != Digest(q.Spec) {
 		return nil, fmt.Errorf("requirement/spec revision mismatch")
 	}
-	head, err := validate.HarnessResolveSnapshot(q.Root)
+	head, err := vcs.New(q.Root, nil).Resolve()
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +338,7 @@ func dispatch(e envelope) (any, error) {
 		if e.Operation == "clean" {
 			return map[string]bool{"clean": true}, clean(q.Root)
 		}
-		head, err := validate.HarnessResolveSnapshot(q.Root)
+		head, err := vcs.New(q.Root, nil).Resolve()
 		return map[string]string{"candidate": head}, err
 	case "binding":
 		var q bindingInput

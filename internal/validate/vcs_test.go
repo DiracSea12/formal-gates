@@ -2,6 +2,7 @@ package validate
 
 import (
 	"errors"
+	engineVCS "formal-gates/internal/engine/vcs"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -216,11 +217,11 @@ func TestVerifyReadyExemptsEngineRuntimeFiles(t *testing.T) {
 	runGit(t, root, "add", "--all")
 	runGit(t, root, "commit", "-m", "base delivery")
 	writeTestFile(t, filepath.Join(root, ".gates", "engine", "mixed-run", "state.json"), "{}\n")
-	if err := verifySnapshotReady(root, "git"); err != nil {
+	if err := engineVCS.New(root, nil).VerifyReady(); err != nil {
 		t.Fatalf("engine runtime directory blocked the legacy readiness check: %v", err)
 	}
 	writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
-	if err := verifySnapshotReady(root, "git"); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
+	if err := engineVCS.New(root, nil).VerifyReady(); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
 		t.Fatalf("untracked delivery file was accepted beside engine runtime files: %v", err)
 	}
 }
@@ -260,62 +261,6 @@ func requireRunLockUntracked(t *testing.T, root, runID string) {
 // content and must not block a clean snapshot, while the runtime lock path
 // the host did NOT ignore is exempted per-path; an untracked non-runtime file
 // the host did not ignore is still intercepted.
-func TestSnapshotDirtyCheckFollowsGitIgnoreRules(t *testing.T) {
-	// Every sub-scenario runs in its own fresh repository, and each delivery
-	// commit names its paths explicitly: the untracked run lock Start created
-	// must survive as git-reported untracked content all the way into the
-	// readiness check, never get swept into a commit by git add --all.
-	scenarios := []struct {
-		name      string
-		runID     string
-		note      bool
-		intercept bool
-	}{
-		{name: "runtime_lock_only", runID: "ignored-policy-runtime-only"},
-		{name: "runtime_lock_and_ignored_local_note", runID: "ignored-policy-with-note", note: true},
-		{name: "runtime_lock_plus_untracked_delivery_intercept", runID: "ignored-policy-intercept", intercept: true},
-	}
-	for _, scenario := range scenarios {
-		t.Run(scenario.name, func(t *testing.T) {
-			root, pkg := workflowFixture(t)
-			// The host ignores the runtime tmp/results directories and a
-			// local note file, but NOT the persistent run-lock directory:
-			// VerifyReady explicitly supports runtime directories the host
-			// has not pre-ignored.
-			writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results/\n.gates/local-note.md\n")
-			writeTestFile(t, filepath.Join(root, "delivery.txt"), "base\n")
-			commitDeliveryPaths(t, root, "base delivery and ignore policy", ".gitignore", "delivery.txt")
-			if scenario.note {
-				writeTestFile(t, filepath.Join(root, ".gates", "local-note.md"), "local ignored notes\n")
-			}
-			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, scenario.runID), "custom", []string{"quality"})
-			dispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
-			writeTestFile(t, filepath.Join(root, "delivery.txt"), "new delivery\n")
-			// Only the delivery file is committed; the run lock stays untracked.
-			commitDeliveryPaths(t, root, "new delivery", "delivery.txt")
-			requireRunLockUntracked(t, root, state.RunID)
-			// An untracked, non-ignored delivery file beside the same runtime
-			// lock is still intercepted — the exemption never widens past the
-			// runtime manifest.
-			if scenario.intercept {
-				writeTestFile(t, filepath.Join(root, "delivery-new.txt"), "uncommitted delivery\n")
-				if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err == nil ||
-					!strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
-					t.Fatalf("untracked non-runtime file was accepted beside the runtime lock: %v", err)
-				}
-				return
-			}
-			// The framework's own persistent run lock under the NOT-ignored
-			// .gates/run-locks/ is untracked runtime content, and the ignored
-			// local note (when present) is not git-reported content at all:
-			// neither may block a clean snapshot.
-			if _, err := AdvanceSnapshot(root, pkg, state.RunID, dispatch, false, ""); err != nil {
-				t.Fatalf("ignored local note or unignored runtime lock blocked a clean snapshot: %v", err)
-			}
-		})
-	}
-}
-
 func TestP4ResolverAcceptsNoOpenedFiles(t *testing.T) {
 	runner := &scriptedNativeRunner{outputs: []string{"/repo"}, errors: []error{nil, errors.New("p4: File(s) not opened on this client.")}}
 	resolver, err := resolverForVCS("p4", runner)

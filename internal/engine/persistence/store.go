@@ -178,7 +178,7 @@ func (s *Store) CleanupTerminal() error {
 		// promotion.lock 是晋升执行窗互斥锁（facade 经 coordination 持有的等
 		// 待式文件锁）：锁文件永不删除（删除会让等待者与新开锁者各持不同
 		// inode），由内核在持有者退出时释放，与 write.lock 同属合法留存。
-		if name == "request.json" || name == "slice-guarantee.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupIntentPath()) || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock" {
+		if s.retainedTerminalEntry(name) || name == filepath.Base(s.cleanupIntentPath()) {
 			continue
 		}
 		residue = append(residue, name)
@@ -201,8 +201,7 @@ func (s *Store) terminalCleanupComplete() (bool, error) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name != "request.json" && name != "slice-guarantee.json" && name != "terminal-summary.json" && name != "terminal-summary.intent.json" &&
-			name != filepath.Base(s.cleanupReceiptPath()) && name != lockFileName && name != "promotion.lock" {
+		if !s.retainedTerminalEntry(name) {
 			return false, nil
 		}
 	}
@@ -222,6 +221,12 @@ func (s *Store) terminalCleanupComplete() (bool, error) {
 		return false, err
 	}
 	return receipt.Status == "reconciled" && !receipt.Residue && len(receipt.Entries) == 0, nil
+}
+
+// retainedTerminalEntry is the finite immutable evidence and lock inventory.
+// Cleanup and its recovered completion check use the same inventory.
+func (s *Store) retainedTerminalEntry(name string) bool {
+	return name == "request.json" || name == "materials" || name == "slice-guarantee.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock"
 }
 
 // Load 读取并校验当前 state。文件不存在时返回包装的 fs.ErrNotExist；

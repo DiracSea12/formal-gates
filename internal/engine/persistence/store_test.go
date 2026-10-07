@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -574,5 +575,45 @@ func TestCleanupTerminalRefusesUnknownResidue(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "cleanup.receipt.json"))
 	if err != nil || !strings.Contains(string(data), `"residue":true`) {
 		t.Fatalf("cleanup residue receipt = %s err=%v", data, err)
+	}
+}
+
+func TestCleanupTerminalRetainsIssuedMaterialEvidence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "materials", "issued-action", "input.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"runId":"run","actionId":"issued-action","document":"confirmed content"}`)
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupTerminal(); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := os.ReadFile(store.cleanupReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []*Store{store, reopened} {
+		if err := current.CleanupTerminal(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(body, after) {
+			t.Fatal("cleanup deleted or rewrote immutable issued input")
+		}
+		afterReceipt, err := os.ReadFile(current.cleanupReceiptPath())
+		if err != nil || !bytes.Equal(receipt, afterReceipt) {
+			t.Fatal("completed cleanup replay refreshed its receipt")
+		}
 	}
 }

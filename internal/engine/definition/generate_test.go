@@ -13,7 +13,6 @@ import (
 
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/encoder"
-	"formal-gates/internal/validate"
 )
 
 // repoRoot 返回仓库根（测试 CWD 是本包目录）。go.mod 存在性校验防止在错误
@@ -283,29 +282,6 @@ func TestCheckedInArtifactRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(canonical, decoded) {
 		t.Error("decoded IR differs from freshly compiled IR")
-	}
-}
-
-// TestCheckedInArtifactIsFutureDefinition：衔接 internal/validate/candidate.go
-// 的 LoadFutureDefinition——版本 bump 到 "2" 后，新制品解析路径（读
-// stateSchemaVersion/version 字段）仍然成立：作为新 future 候选被接受，
-// 不触发 "changed bytes without bump" 拒绝，且 digest 与同源常量一致。
-func TestCheckedInArtifactIsFutureDefinition(t *testing.T) {
-	future, err := validate.LoadFutureDefinition(repoRoot(t))
-	if err != nil {
-		t.Fatalf("LoadFutureDefinition rejected the v2 artifact: %v", err)
-	}
-	if future.SchemaVersion != encoder.StateSchemaVersion {
-		t.Errorf("stateSchemaVersion = %q, want %q", future.SchemaVersion, encoder.StateSchemaVersion)
-	}
-	if future.WorkflowVersion != WorkflowDefinitionVersion {
-		t.Errorf("workflowDefinitionVersion = %q, want %q", future.WorkflowVersion, WorkflowDefinitionVersion)
-	}
-	if future.Digest != WorkflowDefinitionDigest {
-		t.Errorf("future digest = %q, identity constant = %q", future.Digest, WorkflowDefinitionDigest)
-	}
-	if future.Source != validate.CurrentWorkflowDefinitionSource {
-		t.Errorf("definition source = %q, want %q", future.Source, validate.CurrentWorkflowDefinitionSource)
 	}
 }
 

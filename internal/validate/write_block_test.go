@@ -1,9 +1,14 @@
 package validate
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/protocol"
+	engineRuntime "formal-gates/internal/engine/runtime"
+
 	"path/filepath"
 	"testing"
 )
@@ -96,7 +101,7 @@ func TestWriteBlockTerminalRunAllows(t *testing.T) {
 	for _, status := range []string{"SEALED", "ABORTED"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
-			writeRunStateForWriteBlock(t, root, status, developmentVerified)
+			writeRunStateForWriteBlock(t, root, status, "VERIFIED")
 			payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.ToSlash(filepath.Join(root, "internal", "code.go")))
 			decision, err := Hook([]byte(payload))
 			if err != nil {
@@ -406,66 +411,52 @@ func TestGatesMentionNotTreatedAsWrite(t *testing.T) {
 // requirement artifact set (requirements.md, design.md) at root, matching the
 // shape the hook probes.
 func writeActiveRunState(t *testing.T, root string) {
-	writeRunStateForWriteBlock(t, root, "ACTIVE", developmentPrepared)
+	writeRunStateForWriteBlock(t, root, "ACTIVE", "PREPARED")
 }
 
 func writePreDevelopmentRunState(t *testing.T, root string) {
-	writeRunStateForWriteBlock(t, root, "ACTIVE", developmentPending)
+	writeRunStateForWriteBlock(t, root, "ACTIVE", "PENDING")
 }
 
 func writeRunStateForWriteBlock(t *testing.T, root, runStatus, developmentStatus string) {
+	writeCurrentHookFixture(t, root, "wb-test", runStatus == "ACTIVE", developmentStatus != "PENDING", "", "")
+}
+
+func writeCurrentHookFixture(t *testing.T, root, runID string, active, started bool, transcript, session string) {
 	t.Helper()
-	runDir := filepath.Join(root, ".gates", "tmp", "wb-test")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		t.Fatal(err)
+	phase := engineRuntime.PhaseDevelopmentParallel
+	if !active {
+		phase = engineRuntime.PhaseTerminal
 	}
-	state := map[string]any{
-		"status": runStatus,
-		"runId":  "wb-test",
-		"actions": map[string]any{
-			"development-worker": map[string]any{"status": developmentStatus},
-		},
-		"gates":              map[string]any{},
-		"carry":              map[string]any{},
-		"dispatches":         map[string]any{},
-		"skipAuthorizations": map[string]any{},
-		"selectedGates":      []string{},
-		"requirementArtifacts": []map[string]string{
-			{"path": "requirements.md", "revision": "r1"},
-			{"path": "design.md", "revision": "r2"},
-		},
-	}
-	data, err := json.Marshal(state)
+	view, err := decision.NewState(authoring.DefinitionVersion(definition.WorkflowDefinitionVersion), phase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "state.json"), append(data, '\n'), 0o600); err != nil {
+	state := protocol.NewState(*view)
+	state.RunID = runID
+	state.Route = "regular"
+	state.OwnerTranscript = transcript
+	state.OwnerSession = session
+	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "r1"}}
+	state.IntakeConfirmationReceipt = &protocol.IntakeConfirmationReceipt{RequirementRevision: "r1", Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: "r1"}, {Path: "design.md", Revision: "r1"}}}
+	if started {
+		state.DispatchBindings["development"] = protocol.WorkBinding{RequirementRevision: "r1", PlanRequest: "confirmed-plan", BatchID: "owned-work"}
+	}
+	store, err := persistence.NewStore(filepath.Join(root, ".gates", "engine", runID), persistence.Config{PackageDigest: "sha256:hook-fixture", DefinitionSource: "definitions/workflow.json", InstalledTargetIdentity: "hook-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(persistence.Transaction{ExpectedFingerprint: "fixture", CollectFingerprint: func() (string, error) { return "fixture", nil }, Content: state}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestWriteBlockTreatsPendingBetweenLegacyBatchesAsStarted(t *testing.T) {
+func TestWriteBlockRetainsCompletedDevelopmentScope(t *testing.T) {
 	root := t.TempDir()
-	runDir := filepath.Join(root, ".gates", "tmp", "batch-boundary")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	state := map[string]any{
-		"status":     "ACTIVE",
-		"actions":    map[string]any{"development-worker": map[string]any{"status": developmentPending}},
-		"dispatches": map[string]any{"d1": map[string]any{"status": "COMPLETED", "batchId": "A1"}},
-	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(runDir, "state.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	active, started, err := readHookRunWritePhase(path)
+	writeCurrentHookFixture(t, root, "completed-work", true, true, "", "")
+	active, started, err := readHookRunWritePhase(filepath.Join(root, ".gates", "engine", "completed-work", "state.json"))
 	if err != nil || !active || !started {
-		t.Fatalf("batch boundary phase = active %v started %v err %v", active, started, err)
+		t.Fatalf("completed current work scope=%v %v %v", active, started, err)
 	}
 }
 

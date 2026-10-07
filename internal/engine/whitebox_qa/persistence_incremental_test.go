@@ -12,13 +12,13 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
+	currentDefinition "formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/testkit"
-	definition "formal-gates/internal/engine/testkit/workflow"
-	"formal-gates/internal/validate"
 )
 
 func requirePhase2ProtocolCode(t *testing.T, err error, want string) {
@@ -473,27 +473,28 @@ func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) 
 // reporting the bytes it can safely understand. It never invokes the normal
 // versioned loader or creates recovery artifacts.
 func TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
-	supported := validate.VersionEnvelope{
+	supported := persistence.Envelope{
 		Writer:                    persistence.Writer,
 		StateSchemaVersion:        encoder.StateSchemaVersion,
-		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
-		DefinitionSource:          validate.CurrentWorkflowDefinitionSource,
-		DefinitionDigest:          definition.WorkflowDefinitionDigest,
+		WorkflowDefinitionVersion: currentDefinition.WorkflowDefinitionVersion,
+		DefinitionSource:          facade.DefaultDefinitionSource,
+		DefinitionDigest:          currentDefinition.WorkflowDefinitionDigest,
 		PackageDigest:             testkit.HarnessPackageDigest,
+		InstalledTargetIdentity:   "diagnostic-fixture",
 	}
 	fixtures := []struct {
 		name    string
 		content string
-		assert  func(*testing.T, validate.DiagnoseReport)
+		assert  func(*testing.T, facade.DiagnosticReport)
 	}{
 		{
 			name:    "legacy summary without envelope",
 			content: "{\n  \"status\": \"SEALED\",\n  \"runId\": \"legacy-run\"\n}\n",
-			assert: func(t *testing.T, report validate.DiagnoseReport) {
+			assert: func(t *testing.T, report facade.DiagnosticReport) {
 				if !report.JSONReadable || report.Integrity != "unsupported" ||
 					report.Summary["status"] != "SEALED" || report.Summary["runId"] != "legacy-run" ||
 					len(report.DetectedVersions) != 0 ||
-					report.Recommendation != validate.UnsupportedRunVersionCode+": state has no version envelope; rebuild it with the owning writer" {
+					report.Recommendation != persistence.UnsupportedRunVersionCode+": state has no version envelope; rebuild it with the owning writer" {
 					t.Fatalf("legacy diagnose report = %+v", report)
 				}
 			},
@@ -502,23 +503,23 @@ func TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
 			name: "mismatched engine envelope",
 			content: "{\n" +
 				"  \"writer\": \"engine\",\n" +
-				"  \"stateSchemaVersion\": \"1\",\n" +
+				"  \"stateSchemaVersion\": \"" + encoder.StateSchemaVersion + "\",\n" +
 				"  \"workflowDefinitionVersion\": \"old\",\n" +
 				"  \"definitionSource\": \"definitions/workflow.json\",\n" +
 				"  \"definitionDigest\": \"sha256:old\",\n" +
 				"  \"packageDigest\": \"sha256:old\",\n" +
 				"  \"status\": \"ACTIVE\"\n" +
 				"}\n",
-			assert: func(t *testing.T, report validate.DiagnoseReport) {
+			assert: func(t *testing.T, report facade.DiagnosticReport) {
 				wantDetected := map[string]any{
 					"writer":                    "engine",
-					"stateSchemaVersion":        "1",
+					"stateSchemaVersion":        encoder.StateSchemaVersion,
 					"workflowDefinitionVersion": "old",
 					"definitionSource":          "definitions/workflow.json",
 					"definitionDigest":          "sha256:old",
 					"packageDigest":             "sha256:old",
 				}
-				if !report.JSONReadable || report.Integrity != "readable" || !reflect.DeepEqual(report.DetectedVersions, wantDetected) ||
+				if !report.JSONReadable || report.Integrity != "unsupported" || !reflect.DeepEqual(report.DetectedVersions, wantDetected) ||
 					report.Summary["status"] != "ACTIVE" ||
 					report.Recommendation != (&persistence.UnsupportedRunVersionError{
 						Field: "workflowDefinitionVersion", Expected: supported.WorkflowDefinitionVersion, Observed: "old",
@@ -530,7 +531,7 @@ func TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
 		{
 			name:    "malformed JSON",
 			content: "{\"writer\":\"engine\"",
-			assert: func(t *testing.T, report validate.DiagnoseReport) {
+			assert: func(t *testing.T, report facade.DiagnosticReport) {
 				if report.JSONReadable || report.Integrity != "unknown" || report.DetectedVersions != nil || report.Summary != nil ||
 					report.Recommendation != "rebuild the state with the owning writer" {
 					t.Fatalf("malformed diagnose report = %+v", report)
@@ -553,7 +554,7 @@ func TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stat fixture: %v", err)
 			}
-			report, err := validate.DiagnoseStateWithSupported(path, supported)
+			report, err := facade.Diagnose(path, supported.PackageDigest, supported.InstalledTargetIdentity)
 			if err != nil {
 				t.Fatalf("DiagnoseStateWithSupported: %v", err)
 			}

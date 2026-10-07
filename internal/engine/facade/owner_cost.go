@@ -17,21 +17,16 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-// OwnerBinding 是受理方声明的主代理（owner）计量来源：transcript 路径＋
-// provider 身份，两者同时非空才承诺 owner 计量（REQ-012 AC-050；缺源＝
-// UNAVAILABLE 零数字）。
+// OwnerBinding carries bootstrap conversation scope and metering source.
+// Session alone identifies scope; metering still requires transcript and provider.
 type OwnerBinding struct {
 	Transcript string
+	Session    string
 	Provider   string
 }
 
-// lockOwnerCost 是两代 runtime 共同的 owner 区间协调锁（与 legacy 同路径＝同
-// 一内核锁对象：legacy 的快速失败 acquire 与本处的等待 acquire 互相互斥）。
-// engine 的区间操作段（启动：扫描＋自身绑定＋peer 标记；终态：重扫＋自身标
-// 记＋peer 标记＋量取）全部在锁内执行且冲突时等待——并行启动的区间判定必须
-// 串行闭合，不能把并发竞争当失败上抛。锁序＝协调锁→各 run 自身 store 锁
-// （与 legacy mutateRun 同序，不得反序；等待不构成环：无人持有 store/state
-// 锁的同时等待本锁）。
+// lockOwnerCost coordinates transcript intervals for engine runs at this root.
+// Lock order is interval coordination before the run store transaction.
 func lockOwnerCost(root string) (func(), error) {
 	return coordination.AcquirePathWaiting(filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp", "owner-cost.lock"), "owner cost")
 }
@@ -198,105 +193,8 @@ func engineSummaryOverlap(root, runID, transcript, startedAt string) bool {
 	return false
 }
 
-// legacyOwnerOverlap 检测 legacy runtime（internal/validate）侧与本 run 的区间
-// 相交，读两类只读工件（engine 不跨代写，legacy 的事实由其合法 writer 落盘）：
-//   - .gates/tmp/*/state.json（活动状态，终态留存仅出现在终态中断残留）：
-//     ACTIVE＝相交；终态残留只在其活动始于我方区间内（StartedAt 晚于我方绑定
-//     时点）时相交——早于我方启动而已终态的区间与我不相交。legacy 的启动身份
-//     与终态摘要都在其 owner 协调锁内落盘，StartedAt 因此是锁段内时点。
-//   - .gates/results/*.json（终态留存摘要，run 目录完成后即删）：OwnerTranscript
-//     相同且 StartedAt 晚于我方绑定时点＝其整个生命周期在我方区间内启动并于我
-//     方终态重扫前完成，必相交；无法解析的时间不可排除，按相交处理。
-//
-// 启动观察点传空 startedAt 时只判 ACTIVE（摘要与终态残留的 StartedAt 不可能晚
-// 于同锁段内刚盖下的本方时点，规则空转但语义一致）。
-func legacyOwnerOverlap(root, runID, transcript, startedAt string) bool {
-	canonical := filepath.Clean(transcript)
-	legacyPaths, err := filepath.Glob(filepath.Join(root, ".gates", "tmp", "*", "state.json"))
-	if err != nil {
-		return true
-	}
-	for _, path := range legacyPaths {
-		if other := filepath.Base(filepath.Dir(path)); other == runID {
-			continue
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			// An unreadable active interval cannot be excluded from attribution.
-			return true
-		}
-		var legacy struct {
-			Status          string `json:"status"`
-			OwnerTranscript string `json:"ownerTranscript"`
-			StartedAt       string `json:"startedAt"`
-		}
-		if err := json.Unmarshal(data, &legacy); err != nil {
-			return true
-		}
-		if legacy.OwnerTranscript == "" || filepath.Clean(legacy.OwnerTranscript) != canonical {
-			continue
-		}
-		if legacy.Status == "ACTIVE" {
-			return true
-		}
-		if startedAt != "" && legacyStartedWithin(legacy.StartedAt, startedAt) {
-			return true
-		}
-	}
-	return legacySummaryOverlap(root, canonical, startedAt)
-}
-
-// legacySummaryOverlap 扫描 legacy 终态留存摘要（.gates/results/*.json，含
-// ABORTED）：OwnerTranscript 相同且 StartedAt 晚于我方绑定时点＝该 run 在我方
-// 区间内启动并完成，区间相交。缺失/无法解析的 StartedAt 不可排除，按相交处理。
-func legacySummaryOverlap(root, canonical, startedAt string) bool {
-	if startedAt == "" {
-		return false
-	}
-	summaryPaths, err := filepath.Glob(filepath.Join(root, ".gates", "results", "*.json"))
-	if err != nil {
-		return true
-	}
-	for _, path := range summaryPaths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return true
-		}
-		var summary struct {
-			OwnerTranscript string `json:"ownerTranscript"`
-			StartedAt       string `json:"startedAt"`
-		}
-		if err := json.Unmarshal(data, &summary); err != nil {
-			return true
-		}
-		if summary.OwnerTranscript == "" || filepath.Clean(summary.OwnerTranscript) != canonical {
-			continue
-		}
-		if legacyStartedWithin(summary.StartedAt, startedAt) {
-			return true
-		}
-	}
-	return false
-}
-
-// legacyStartedWithin 报告 legacy peer 的活动是否始于我方区间内（其 StartedAt
-// 晚于我方绑定时点）。缺失或无法解析的时间按相交处理（不可排除）。
-func legacyStartedWithin(peerStartedAt, myStartedAt string) bool {
-	peer, err := time.Parse(time.RFC3339Nano, peerStartedAt)
-	if err != nil {
-		return true
-	}
-	mine, err := time.Parse(time.RFC3339Nano, myStartedAt)
-	if err != nil {
-		return true
-	}
-	return peer.After(mine)
-}
-
-// ownerOverlap 报告本 run 的 owner 区间是否与 peer 相交（两个命名空间：engine
-// run 与 legacy validate run，迁移期两代并存是产品支持形态）。终态观察点额外
-// 携带本方绑定时点，接纳「peer 在我方区间内启动且先于我方终态重扫消失」的区间
-// 事实；启动观察点传空串只判开放区间（活动或终态未发布摘要）。
+// ownerOverlap observes open peer intervals and retained engine summaries.
+// startedAt bounds closed peer intervals relative to this owner's binding.
 func ownerOverlap(root, runID, transcript, startedAt string) bool {
 	peers, resolvable := engineOverlapPeers(root, runID, transcript)
 	if len(peers) > 0 || !resolvable {
@@ -305,7 +203,7 @@ func ownerOverlap(root, runID, transcript, startedAt string) bool {
 	if engineSummaryOverlap(root, runID, transcript, startedAt) {
 		return true
 	}
-	return legacyOwnerOverlap(root, runID, transcript, startedAt)
+	return false
 }
 
 // markOverlappingEnginePeers 在自身来源绑定后把重叠事实补写进每个重叠 engine
@@ -339,9 +237,9 @@ func markOverlappingEnginePeers(root, runID, transcript string) error {
 // 扫描同处调用方的 lockOwnerCost 段内：锁内盖下的端点使对端的终态重扫可依
 // 时序闭合「对端先消失」的交错。
 func captureOwnerBinding(root, runID string, owner OwnerBinding) protocol.OwnerCostBinding {
-	binding := protocol.OwnerCostBinding{Transcript: strings.TrimSpace(owner.Transcript), Provider: strings.TrimSpace(owner.Provider)}
+	binding := protocol.OwnerCostBinding{Transcript: strings.TrimSpace(owner.Transcript), Session: strings.TrimSpace(owner.Session), Provider: strings.TrimSpace(owner.Provider)}
 	if binding.Transcript == "" || binding.Provider == "" {
-		return protocol.OwnerCostBinding{}
+		return protocol.OwnerCostBinding{Session: binding.Session}
 	}
 	binding.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	binding.Overlapped = ownerOverlap(root, runID, binding.Transcript, binding.StartedAt)
@@ -359,11 +257,9 @@ type ownerInterval struct {
 	endedAt    string
 }
 
-// finishOwnerCost 是 engine 的终态观察点：在 lockOwnerCost 内重扫两个命名空间
-// （ACTIVE peer ＋先于我方终态消失的 peer 留存工件），检出先经引擎事务持久
-// OwnerOverlapped 再量取，并把重叠补写进每个重叠 engine peer（对端终态报告同
-// 样不可记精确假数字）；量取后经引擎落账（幂等；REQ-012 AC-052）。差值只作
-// 报告：无法精确核对时记 UNAVAILABLE 零数字（AC-051）。
+// finishOwnerCost rescans engine owner intervals under the coordination lock,
+// records overlap through the core, then measures the bound terminal interval.
+// Missing or overlapping metering sources retain UNAVAILABLE without numbers.
 func (f *Facade) finishOwnerCost() (ownerInterval, error) {
 	if _, _, _, _, _, bound := f.engine.OwnerCostFacts(); !bound {
 		return ownerInterval{}, nil

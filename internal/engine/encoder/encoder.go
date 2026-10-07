@@ -29,22 +29,17 @@ import (
 	"formal-gates/internal/engine/compiler"
 )
 
-// 制品信封常量。信封沿冻结的 definitions/workflow.json 字段（统一到同一
-// encoder 产物，否则 freshness 验收被空白差异击穿），$schema 随
-// workflowDefinitionVersion "1"->"2" 同步演进；stateSchemaVersion 保持
-// "1"（状态 schema 未变，与 internal/validate 同值）。
-// LoadFutureDefinition（internal/validate/candidate.go）解析本制品时读取
-// stateSchemaVersion 与 version 两个字段，信封必须保留它们。
+// The canonical artifact declares the current engine writer and public surface.
 const (
 	artifactSchema           = "https://formal-gates.dev/schema/workflow-definition-v2.json"
 	ArtifactID               = "formal-gates.workflow"
-	StateSchemaVersion       = "1"
+	StateSchemaVersion       = "2"
 	artifactWriter           = "engine"
-	artifactTransactionOwner = "validate"
+	artifactTransactionOwner = "engine"
 )
 
 // artifactEntrypoints 是制品信封的公共入口声明（沿冻结值）。
-var artifactEntrypoints = []string{"workflow start", "workflow resume", "workflow seal"}
+var artifactEntrypoints = []string{"workflow start", "workflow drive", "workflow submit", "workflow show", "workflow status", "workflow next", "workflow diagnose", "workflow guard-preview"}
 
 // definitionWire 是制品顶层 wire 结构。字段声明序即 JSON 键序（encoding/json
 // 对 struct 字段按声明序输出）；信封字段在前，拓扑字段（entryNode/steps）在后。

@@ -5,14 +5,11 @@ package definition
 
 // 本文件与 definitions/workflow.json 由同一生成动作产出（Generate），禁止
 // 人工编辑。期望身份常量供 loader/校验方钉死当前 definition 身份。
-//
-// validate 的 CurrentWorkflowDefinitionDigest 绑定 definition version "1"
-// 信封的契约身份；本文件的 WorkflowDefinitionDigest 绑定 canonical 制品字节。
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。
-	WorkflowDefinitionVersion = "10"
+	WorkflowDefinitionVersion = "11"
 	// WorkflowDefinitionDigest 是 canonical 制品字节的 SHA-256 摘要
 	// （sha256: 前缀，与仓库现行格式一致）。
-	WorkflowDefinitionDigest = "sha256:dc6ed3ae3ec709513ce5d7627e0419d91623ee168f00bf10119005aa6e8498b2"
+	WorkflowDefinitionDigest = "sha256:bfd8dac2596dda58b80af8b05d0c9bf27123ccd3a91bed7633a79598d5273aa0"
 )

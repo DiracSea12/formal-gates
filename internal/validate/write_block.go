@@ -2,27 +2,22 @@ package validate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/protocol"
+	engineRuntime "formal-gates/internal/engine/runtime"
 )
 
-// 主代理与审查类代理写阻断（PreToolUse hook）。
-//
-// 正式流程进入开发阶段后，主代理（主线程，payload 无 agent_id/agent_type）与全部审查类
-// 代理不得写代码或直接改 run 状态；run 状态只能经 CLI 写入，代码与执行文件只能经
-// development-worker 派发写入。判定按调用者身份（agent_type 匹配）、不按文件路径
-// （无静态文件白名单，千项目通用）。只有活动正式 run 的 development-worker 状态离开
-// PENDING（即进入 PREPARED / REPAIR_PREPARED / PASS / VERIFIED）后才生效；开发前与无活动
-// run 均放行，不妨碍产品审、技术审及其文档修订。Seal / Abort 把 run 置为非 ACTIVE 后
-// 立即解除，即使终态临时文件因收尾重试而暂时保留，也不会造成永久阻断。
-//
-// 阻断：主代理与审查类代理对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
-// git commit、写文件 Bash）。
-// 放行：formal-gates CLI 命令（run 状态唯一合法写入者）与只读命令；development-worker
-// （写代码）；qa-design（白盒设计者写测试代码、黑盒设计者写用例文档）；主代理对已登记
-// 需求/设计文档的编辑（按活动 run 的 RequirementArtifacts 动态识别豁免）。
+// The auxiliary write wall reads current engine issuance, owner identity and
+// confirmed document paths. It does not admit events or decide workflow state.
+// Development/QA authors may edit their work; owners and reviewers remain read-only.
 
 // reviewerAgentTypes 是审查类代理的 agent_type：product-review、start-readiness、
 // qa-review、qa-execution、carry 继承判定、各门审查。这些代理不得写代码或 run 状态。
@@ -327,10 +322,8 @@ func isFormalGatesCLICommand(command string) bool {
 	return false
 }
 
-// activeDevelopmentRunArtifacts 在 cwd（或其祖先）下查找已经进入开发阶段的活动正式
-// run，返回这些 run 登记的需求/设计文档路径（RequirementArtifacts，相对 repo 根）、仓库
-// 根与 owner 身份。只有 ACTIVE 且 development-worker 已离开 PENDING 的 run 才启用写阻断；
-// 产品审、技术审等开发前阶段返回 ok=false。
+// activeDevelopmentRunArtifacts projects active engine work at cwd or an ancestor.
+// Development scope comes from the current confirmation's issued batch bindings.
 func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []string, owners []ownerIdentity, ok bool) {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
@@ -338,7 +331,7 @@ func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []str
 	}
 	root := cwd
 	for depth := 0; depth < 16; depth++ {
-		paths, err := filepath.Glob(filepath.Join(root, ".gates", "tmp", "*", "state.json"))
+		paths, err := filepath.Glob(filepath.Join(root, ".gates", "engine", "*", "state.json"))
 		if err == nil {
 			for _, statePath := range paths {
 				active, started, err := readHookRunWritePhase(statePath)
@@ -372,13 +365,24 @@ func hookBoundAgentType(repoRoot, identity string) string {
 	if repoRoot == "" || identity == "" {
 		return ""
 	}
-	statePaths, _ := filepath.Glob(filepath.Join(repoRoot, ".gates", "tmp", "*", "state.json"))
+	statePaths, _ := filepath.Glob(filepath.Join(repoRoot, ".gates", "engine", "*", "state.json"))
 	for _, statePath := range statePaths {
 		active, started, err := readHookRunWritePhase(statePath)
 		if err != nil || !active || !started {
 			continue
 		}
-		bindingPaths, _ := filepath.Glob(filepath.Join(filepath.Dir(statePath), "lifecycle", "*.json"))
+		state, err := readHookEngineState(statePath)
+		if err != nil {
+			continue
+		}
+		for action, receipt := range state.SpawnReceipts {
+			if receipt.Correlation == identity || receipt.LifecycleIdentity == identity {
+				if target := hookDispatchTarget(statePath, action); target != "" {
+					return target
+				}
+			}
+		}
+		bindingPaths, _ := filepath.Glob(filepath.Join(repoRoot, ".gates", "tmp", state.RunID, "lifecycle", "*.json"))
 		for _, bindingPath := range bindingPaths {
 			data, err := os.ReadFile(bindingPath)
 			if err != nil {
@@ -402,84 +406,79 @@ func hookBoundAgentType(repoRoot, identity string) string {
 	return ""
 }
 
-// hookDispatchTarget maps a binding's dispatch id to its write-wall agent type.
-// Gate reviews use the shared reviewer bucket so dynamically added gate ids are
-// all treated as reviewer-class agents.
-func hookDispatchTarget(statePath, dispatchID string) string {
-	dispatchID = strings.TrimSpace(dispatchID)
-	if dispatchID == "" {
-		return ""
-	}
+// readHookEngineState reads the current engine envelope for auxiliary scope.
+// Core loaders and Submit retain full integrity and business admission authority.
+func readHookEngineState(statePath string) (*protocol.State, error) {
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	var probe struct {
-		Dispatches map[string]struct {
-			Target     string `json:"target"`
-			TargetKind string `json:"targetKind"`
-		} `json:"dispatches"`
+	var doc struct {
+		Writer                    string         `json:"writer"`
+		StateSchemaVersion        string         `json:"stateSchemaVersion"`
+		WorkflowDefinitionVersion string         `json:"workflowDefinitionVersion"`
+		DefinitionSource          string         `json:"definitionSource"`
+		DefinitionDigest          string         `json:"definitionDigest"`
+		Content                   protocol.State `json:"content"`
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return ""
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
 	}
-	dispatch, ok := probe.Dispatches[dispatchID]
-	if !ok {
-		return ""
+	if doc.Writer != "engine" || doc.StateSchemaVersion != encoder.StateSchemaVersion || doc.WorkflowDefinitionVersion != definition.WorkflowDefinitionVersion || doc.DefinitionSource != "definitions/workflow.json" || doc.DefinitionDigest != definition.WorkflowDefinitionDigest {
+		return nil, fmt.Errorf("UNSUPPORTED_RUN_VERSION: hook scope requires current engine state")
 	}
-	if strings.EqualFold(strings.TrimSpace(dispatch.TargetKind), "gate") {
-		return "gate-review"
-	}
-	return strings.TrimSpace(dispatch.Target)
+	return &doc.Content, nil
 }
 
-// readHookRunWritePhase 读取 hook 判定所需的最小阶段字段（不触发完整性校验——hook 只做
-// 粗粒度阶段判断，不替代 CLI 的严格加载）。development-worker 的 PREPARED 是开发开始
-// 边界，与 workflow_transition.go 的 developmentStarted 保持一致。
-func readHookRunWritePhase(statePath string) (active bool, started bool, err error) {
-	data, err := os.ReadFile(statePath)
+func hookDispatchTarget(statePath, dispatchID string) string {
+	state, err := readHookEngineState(statePath)
 	if err != nil {
-		return false, false, err
+		return ""
 	}
-	var probe struct {
-		Status     string                  `json:"status"`
-		Actions    map[string]ActionResult `json:"actions"`
-		Dispatches map[string]struct {
-			Status  string `json:"status"`
-			BatchID string `json:"batchId,omitempty"`
-		} `json:"dispatches"`
+	receipt, known := state.SpawnReceipts[dispatchID]
+	if !known {
+		return ""
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return false, false, err
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		return ""
 	}
-	developmentStatus := strings.TrimSpace(probe.Actions["development-worker"].Status)
-	started = developmentStatus != "" && developmentStatus != developmentPending
-	if !started {
-		for _, dispatch := range probe.Dispatches {
-			if dispatch.Status == "COMPLETED" && strings.TrimSpace(dispatch.BatchID) != "" {
-				started = true
-				break
-			}
+	for _, step := range cd.Steps {
+		if step.Header.ID != receipt.Task.Step {
+			continue
+		}
+		agent, ok := step.Payload.(compiler.CompiledAgentStep)
+		if !ok {
+			return ""
+		}
+		switch string(agent.Handler) {
+		case "engine.development.batch", "engine.repair", "engine.merge.resolve":
+			return "development-worker"
+		case "engine.qa.design":
+			return "qa-design"
+		default:
+			return "gate-review"
 		}
 	}
-	return probe.Status == "ACTIVE", started, nil
+	return ""
 }
 
-// registeredHookArtifacts 读取 run 状态文件的 RequirementArtifacts 路径。
-func registeredHookArtifacts(statePath string) []string {
-	data, err := os.ReadFile(statePath)
+func readHookRunWritePhase(statePath string) (active bool, started bool, err error) {
+	state, err := readHookEngineState(statePath)
 	if err != nil {
+		return false, false, err
+	}
+	return state.Route == "regular" && state.Phase != engineRuntime.PhaseTerminal, state.DevelopmentStarted(), nil
+}
+
+func registeredHookArtifacts(statePath string) []string {
+	state, err := readHookEngineState(statePath)
+	if err != nil || state.IntakeConfirmationReceipt == nil {
 		return nil
 	}
-	var probe struct {
-		RequirementArtifacts []RequirementArtifact `json:"requirementArtifacts"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return nil
-	}
-	paths := make([]string, 0, len(probe.RequirementArtifacts))
-	for _, artifact := range probe.RequirementArtifacts {
-		paths = append(paths, strings.TrimSpace(artifact.Path))
+	paths := []string{}
+	for _, artifact := range state.IntakeConfirmationReceipt.Artifacts {
+		paths = append(paths, artifact.Path)
 	}
 	return paths
 }
@@ -495,8 +494,7 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 		return HookDecision{}, false
 	}
 	command := hookCommand(decoded)
-	// formal-gates CLI 命令是 run 状态唯一合法写入者：既有的命令级校验（legacy 脚本、
-	// PASS 绑定）继续负责，不在此阻断。
+	// CLI event and bootstrap admission remains in the engine command owner.
 	if strings.TrimSpace(command) != "" && isFormalGatesCLICommand(command) {
 		return HookDecision{}, false
 	}

@@ -1,19 +1,22 @@
 package validate
 
 import (
-	"formal-gates/internal/prompts"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/prompts"
 )
 
 // TestComposeStandaloneGatePrompt covers detached gate prompt: it reuses
 // the shared reviewer contract (contamination check applies), the gate block, and
 // a working-tree-vs-head change block with no requirement or dispatch binding.
 func TestComposeStandaloneGatePrompt(t *testing.T) {
-	root, pkg := workflowFixture(t)
+	root, pkg := standaloneGateFixture(t)
 	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +38,7 @@ func TestComposeStandaloneGatePrompt(t *testing.T) {
 	if !strings.Contains(prompt, "no requirement block") || !strings.Contains(prompt, "must not be reported as RUNTIME_ERROR") {
 		t.Fatalf("standalone prompt must state the missing requirement block is by design: %s", prompt)
 	}
-	if !strings.Contains(prompt, "base snapshot: "+gitHead(t, root)) || !strings.Contains(prompt, "git status + git diff") {
+	if !strings.Contains(prompt, "base snapshot: "+standaloneGateHead(t, root)) || !strings.Contains(prompt, "git status + git diff") {
 		t.Fatalf("standalone prompt missing the working-tree comparison: %s", prompt)
 	}
 	// 复用共享契约块使污染检查自动生效（契约文本本身由
@@ -92,112 +95,61 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 	}
 }
 
-// TestSharedReviewerContractInjectedIntoReviewersOnly verifies the
-// contamination-check composition scope: ComposeActionPrompt injects the shared
-// reviewer contract (which carries the first-step 任务完整性检查 block) into the
-// three zero-context reviewer actions — product-review、qa-review、start-readiness
-// — while the non-reviewer actions（development-worker、carry、qa-execution、
-// requirements-clarification、qa-design）do not get the injection. qa-design is
-// excluded because it is now a design-writer (whitebox writes test code, blackbox
-// writes case documents), so a "don't edit repository files"
-// contract would contradict its write role. This fixture-based check stays in
-// the unit suite; the real-catalog single-home invariant (任务完整性检查 lives once
-// in prompts/reviewer-base.md and no action prompt inlines it) is verified under
-// the integration tag.
+// Typed worker material carries the shared contract for review duties and
+// omits it for implementation, execution and whitebox authors.
 func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
-	// 组装层面：审查动作注入共享契约、非审查动作不注入。
 	root := promptPackage(t, map[string]string{"quality": "checks"})
 	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", PreRepairSnapshot: "old"}
-	reviewerActions := []string{"product-review", "qa-review", "start-readiness"}
-	for _, id := range reviewerActions {
-		prompt, err := ComposeActionPrompt(catalog, id, route, "input")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(prompt, "[Shared reviewer contract]\nshared contract\n") {
-			t.Fatalf("%s prompt did not inject the shared reviewer contract:\n%s", id, prompt)
-		}
+	roles := []struct {
+		handler  string
+		action   review.Action
+		readOnly bool
+	}{
+		{"engine.review.worker", review.ProductReview, true}, {"engine.readiness.plan", review.StartReadiness, true}, {"engine.qa.review.rationale", "", true}, {"engine.development.batch", "", false}, {"engine.qa.execution", "", false}, {"engine.qa.design", "", false},
 	}
-	for _, id := range []string{"requirements-clarification", "development-worker", "qa-execution", "carry", "qa-design"} {
-		prompt, err := ComposeActionPrompt(catalog, id, route, "input")
-		if err != nil {
-			t.Fatal(err)
+	for _, role := range roles {
+		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
+		input.RequirementDocument.Content = "Confirmed requirement"
+		if role.action != "" {
+			input.Review = &protocol.WorkerReviewInput{Action: role.action, RequirementRevision: "revision"}
+		} else {
+			input.Validation = &protocol.ValidationInput{Handler: role.handler}
+			input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
 		}
-		if strings.Contains(prompt, "[Shared reviewer contract]") {
-			t.Fatalf("%s (non-reviewer) prompt wrongly injected the shared reviewer contract:\n%s", id, prompt)
+		material, err := worker.Render(input, catalog)
+		if err != nil {
+			t.Fatalf("%s: %v", role.handler, err)
+		}
+		injected := strings.HasPrefix(material.Prompt, "[Shared reviewer contract]\nshared contract\n")
+		if injected != role.readOnly {
+			t.Fatalf("%s shared-contract scope=%t, want %t", role.handler, injected, role.readOnly)
 		}
 	}
 }
 
-// TestResumeGuardForcesResumeOrUserAuthorizationForGates covers the
-// gate prepare path: an unchanged claimed dispatch is forced to resume, while a
-// user-authorized fresh dispatch is allowed and its source recorded.
-func TestResumeReusesGateOrHonorsExplicitReplacement(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	state := readyDeliveryForRoute(t, root, pkg, "resume-gate", "custom", []string{"quality"})
-	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-	if prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil || !strings.Contains(prompt, dispatchID) {
-		t.Fatalf("unchanged claimed dispatch was not reused: %v", err)
+func standaloneGateFixture(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "delivery\n")
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "fixture@example.invalid"}, {"config", "user.name", "Gate fixture"}, {"add", "."}, {"commit", "--no-verify", "--no-gpg-sign", "-m", "Delivery"}} {
+		runGit(t, root, args...)
 	}
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", true, "user reopened the gate"); err != nil {
-		t.Fatalf("user-authorized fresh dispatch was rejected: %v", err)
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	if state.ReviewOverrides["quality"] == "" {
-		t.Fatalf("gate reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
-	}
-	// prepare SHALL NOT 作废任何派发——用户授权的新派发生成后，旧 CLAIMED 派发仍
-	// 在途；认领新派发时若读得前子代理的 stop 事件（手动终止例外）才把旧派发标 STALE。
-	if state.Dispatches[dispatchID].Status != "CLAIMED" {
-		t.Fatalf("prepare must not stale the claimed dispatch: %#v", state.Dispatches[dispatchID])
-	}
-	fresh := openDispatchID(state, "gate", "quality")
-	if fresh == "" || fresh == dispatchID {
-		t.Fatalf("fresh gate dispatch was not prepared: %#v", state.Dispatches)
-	}
-	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
-	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "fresh-gate-reviewer"); err != nil {
-		t.Fatalf("claim of the fresh gate dispatch after manual termination was rejected: %v", err)
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	if state.Dispatches[dispatchID].Status != "STALE" || state.Dispatches[fresh].Status != "CLAIMED" {
-		t.Fatalf("manual-terminated claimed dispatch was not staled at claim: %#v", state.Dispatches)
-	}
+	return root, promptPackage(t, map[string]string{"quality": "quality checks"})
 }
 
-// TestResumeGuardAllowsNewDispatchWhenTaskContentMoved covers task-changed
-// exception: editing a gate prompt makes the interrupted dispatch's task content
-// differ, so a fresh dispatch is allowed without a user authorization.
-func TestResumeGuardAllowsNewDispatchWhenTaskContentMoved(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	state := readyDeliveryForRoute(t, root, pkg, "resume-task-changed", "custom", []string{"quality"})
-	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-	if prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil || !strings.Contains(prompt, dispatchID) {
-		t.Fatalf("unchanged claimed dispatch was not reused: %v", err)
+func standaloneGateHead(t *testing.T, root string) string {
+	t.Helper()
+	return runGit(t, root, "rev-parse", "HEAD")
+}
+
+func runGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	value, err := (execNativeCommandRunner{}).Run(root, "git", args...)
+	if err != nil {
+		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
-		t.Fatalf("task-moved dispatch was not allowed a fresh dispatch: %v", err)
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	// prepare 不再作废——任务内容移动放行的新派发生成后，旧派发仍 CLAIMED。
-	if state.Dispatches[dispatchID].Status != "CLAIMED" {
-		t.Fatalf("prepare must not stale the claimed dispatch: %#v", state.Dispatches[dispatchID])
-	}
-	fresh := openDispatchID(state, "gate", "quality")
-	if fresh == "" || fresh == dispatchID {
-		t.Fatalf("fresh gate dispatch was not prepared: %#v", state.Dispatches)
-	}
-	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
-	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "fresh-gate-reviewer"); err != nil {
-		t.Fatalf("claim of the task-moved fresh dispatch was rejected: %v", err)
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	if state.Dispatches[dispatchID].Status != "STALE" || state.Dispatches[fresh].Status != "CLAIMED" {
-		t.Fatalf("manual-terminated claimed dispatch was not staled at claim: %#v", state.Dispatches)
-	}
+	return value
 }

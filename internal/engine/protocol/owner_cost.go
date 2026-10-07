@@ -14,6 +14,7 @@ import (
 // checkpoint 消费它。
 type OwnerCostBinding struct {
 	Transcript string                   `json:"transcript"`
+	Session    string                   `json:"session,omitempty"`
 	Provider   string                   `json:"provider"`
 	StartedAt  string                   `json:"startedAt,omitempty"`
 	Baseline   *cost.TranscriptSnapshot `json:"baseline,omitempty"`
@@ -31,12 +32,13 @@ func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expect
 	if state == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if (state.OwnerTranscript != "" && state.OwnerTranscript != owner.Transcript) || state.TokenCapMaxTokens != nil {
+	if (state.OwnerTranscript != "" && state.OwnerTranscript != owner.Transcript) || (state.OwnerSession != "" && state.OwnerSession != owner.Session) || state.TokenCapMaxTokens != nil {
 		return &RejectedError{Code: CodeReceiptConflict, Detail: "run cost sources are already bound"}
 	}
 	if revision > 1 {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "cost sources bind only at run bootstrap"}
 	}
+	state.OwnerSession = strings.TrimSpace(owner.Session)
 	if strings.TrimSpace(owner.Transcript) != "" {
 		state.OwnerTranscript = owner.Transcript
 		state.OwnerProvider = owner.Provider

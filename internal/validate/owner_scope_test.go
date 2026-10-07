@@ -62,7 +62,7 @@ func TestCaptureAndConsumeStartOwner(t *testing.T) {
 		"session_id":      "owner-session",
 	}
 	captureStartOwner(payload, "codex")
-	tr, se, provider := consumeStartOwner(root)
+	tr, se, provider := ConsumeStartOwner(root)
 	if tr != "/t/owner.jsonl" || se != "owner-session" || provider != "codex" {
 		t.Fatalf("capture/consume mismatch: got (%q,%q,%q)", tr, se, provider)
 	}
@@ -85,29 +85,34 @@ func TestCaptureStartOwnerSkipsNonStart(t *testing.T) {
 	}
 }
 
+func TestPrecheckDoesNotCaptureOrReplaceBootstrapOwner(t *testing.T) {
+	root := t.TempDir()
+	bootstrap := map[string]any{"command": fmt.Sprintf("formal-gates workflow start --root %q --intake-receipt receipt.json", root), "session_id": "bootstrap-owner"}
+	captureStartOwner(bootstrap, "codex")
+	before, err := os.ReadFile(ownerSidecarPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--precheck", "--precheck=true"} {
+		payload, _ := json.Marshal(map[string]any{"command": fmt.Sprintf("formal-gates workflow start %s --root %q --requirement requirement.md", flag, root), "session_id": "preview-owner"})
+		if _, err := Hook(payload, "codex"); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(ownerSidecarPath(root))
+		if err != nil || string(before) != string(after) {
+			t.Fatal("read-only precheck replaced the real bootstrap owner payload")
+		}
+	}
+}
+
 // writeOwnerRunState 写一个进入开发阶段（dev-worker PREPARED）且带 owner 的活动 run 状态。
-func writeOwnerRunState(t *testing.T, root, ownerTranscript, ownerSession string) {
-	t.Helper()
-	runDir := filepath.Join(root, ".gates", "tmp", "owner-test")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	state := map[string]any{
-		"status":          "ACTIVE",
-		"runId":           "owner-test",
-		"actions":         map[string]any{"development-worker": map[string]any{"status": "PREPARED"}},
-		"ownerTranscript": ownerTranscript,
-		"ownerSession":    ownerSession,
-	}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(runDir, "state.json"), append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func writeOwnerRunState(t *testing.T, root, transcript, session string) {
+	writeCurrentHookFixture(t, root, "owner-test", true, true, transcript, session)
 }
 
 // TestWriteBlockOwnerScope verifies the write-wall only blocks the conversation that
 // started the run: a different conversation is allowed, the owner conversation is
-// blocked, and an owner-less (legacy) run stays conservative (blocked).
+// blocked, and an owner-less current run stays conservative (blocked).
 func TestWriteBlockOwnerScope(t *testing.T) {
 	root := t.TempDir()
 	codePath := filepath.ToSlash(filepath.Join(root, "internal", "code.go"))
@@ -133,7 +138,7 @@ func TestWriteBlockOwnerScope(t *testing.T) {
 	}
 }
 
-// TestWriteBlockOwnerUnknownConservative verifies an owner-less legacy run still
+// TestWriteBlockOwnerUnknownConservative verifies an owner-less current run still
 // blocks the main thread (no regression of existing protection).
 func TestWriteBlockOwnerUnknownConservative(t *testing.T) {
 	root := t.TempDir()

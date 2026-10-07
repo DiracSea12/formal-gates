@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/testkit"
@@ -62,24 +61,6 @@ func testRequirementDocument(requirement string) string {
 // It is the single converged stub for the workflow's lifecycle seam; tests that
 // stub the lifecycle swap global state, so they must stay serial (no t.Parallel)
 // — the suite currently holds that, keep it.
-func stubLifecycle(t *testing.T, verification lifecycle.Verification, transcript, interruptionReason string) *workflowLifecycleStub {
-	t.Helper()
-	stub := &workflowLifecycleStub{verification: verification, transcript: transcript, interruptionReason: interruptionReason}
-	prior := workflowLifecycle
-	workflowLifecycle = stub
-	t.Cleanup(func() { workflowLifecycle = prior })
-	return stub
-}
-
-// stubParallelCooldown pins the global parallel-reminder cooldown for the
-// duration of the test and restores the production value on cleanup.
-func stubParallelCooldown(t *testing.T, duration time.Duration) {
-	t.Helper()
-	prior := parallelCooldown
-	parallelCooldown = duration
-	t.Cleanup(func() { parallelCooldown = prior })
-}
-
 func engineAdmissionFixture(t *testing.T, root, packageDigest, recordID string) *facade.Admission {
 	t.Helper()
 	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, facade.DefaultProvider)

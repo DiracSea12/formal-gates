@@ -220,11 +220,11 @@ func verifyEngineBootstrapReceipt(registryPath string, record RegistryRecord, pa
 	if !receipt.Accepted || receipt.StateCreated {
 		return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap receipt is not an accepted pre-state receipt")
 	}
-	if receipt.PackageDigest != packageDigest {
-		return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap package digest does not match admitted target")
-	}
 	for _, admitted := range receipt.Records {
 		if admitted.ID == record.ID && strings.EqualFold(admitted.Status, "active") && canonicalRegistryPath(admitted.Target) == canonicalRegistryPath(record.Target) {
+			if admitted.PackageDigest != packageDigest {
+				return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap package digest does not match admitted target")
+			}
 			return nil
 		}
 		// A global invocation sibling is created after the canonical global

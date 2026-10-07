@@ -56,9 +56,6 @@ package definition
 
 // 本文件与 definitions/workflow.json 由同一生成动作产出（Generate），禁止
 // 人工编辑。期望身份常量供 loader/校验方钉死当前 definition 身份。
-//
-// validate 的 CurrentWorkflowDefinitionDigest 绑定 definition version "1"
-// 信封的契约身份；本文件的 WorkflowDefinitionDigest 绑定 canonical 制品字节。
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。

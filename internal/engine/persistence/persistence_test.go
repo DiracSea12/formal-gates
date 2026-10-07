@@ -7,34 +7,24 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
-	"formal-gates/internal/validate"
 )
 
 // 测试用安装身份（packageDigest 的实际计算由安装事务交付，此处用固定
 // 注入值验证信封校验侧）。
 const testPackageDigest = "sha256:test-package-digest"
 
-// TestFrozenConstantAlignment 钉死常量同源与语义对齐：
-//   - stateSchemaVersion 复用的 encoder 引擎侧常量必须等于 validate 包冻结
-//     常量 CurrentStateSchemaVersion；
-//   - UnsupportedRunVersionCode 与 validate 包冻结错误码同值；
-//   - 信封的 definition 版本与摘要直接同源 definition 生成常量。
-//
-// validate 只在测试中导入：生产代码不依赖 legacy 包，测试钉死的是
-// 语义对齐本身。
+// TestFrozenConstantAlignment checks the current writer and generated definition identity.
 func TestFrozenConstantAlignment(t *testing.T) {
-	if encoder.StateSchemaVersion != validate.CurrentStateSchemaVersion {
-		t.Fatalf("engine stateSchemaVersion %q != validate frozen %q",
-			encoder.StateSchemaVersion, validate.CurrentStateSchemaVersion)
-	}
-	if UnsupportedRunVersionCode != validate.UnsupportedRunVersionCode {
-		t.Fatalf("engine unsupported-run-version code %q != validate frozen %q",
-			UnsupportedRunVersionCode, validate.UnsupportedRunVersionCode)
+	if UnsupportedRunVersionCode != "UNSUPPORTED_RUN_VERSION" {
+		t.Fatal("public unsupported-run-version error code changed")
 	}
 	if Writer != "engine" {
 		t.Fatalf("writer constant %q != %q", Writer, "engine")
 	}
 	env := expectedEnvelope(Config{PackageDigest: testPackageDigest})
+	if env.StateSchemaVersion != encoder.StateSchemaVersion {
+		t.Fatal("envelope schema does not use the current encoder identity")
+	}
 	if env.WorkflowDefinitionVersion != definition.WorkflowDefinitionVersion {
 		t.Fatalf("envelope definition version %q != identity_gen %q",
 			env.WorkflowDefinitionVersion, definition.WorkflowDefinitionVersion)

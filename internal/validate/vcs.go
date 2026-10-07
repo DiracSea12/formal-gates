@@ -91,30 +91,6 @@ func resolverForVCS(name string, runner nativeCommandRunner) (nativeVCSResolver,
 	return commandVCSResolver{name: name, runner: runner}, nil
 }
 
-func resolveNativeSnapshot(root, vcs string) (string, error) {
-	resolver, err := resolverForVCS(vcs, nil)
-	if err != nil {
-		return "", err
-	}
-	return resolver.Resolve(cleanWorktree(root))
-}
-
-func verifyNativeSnapshot(root, vcs, identity string) error {
-	resolver, err := resolverForVCS(vcs, nil)
-	if err != nil {
-		return err
-	}
-	return resolver.Verify(cleanWorktree(root), strings.TrimSpace(identity))
-}
-
-func verifySnapshotReady(root, vcs string) error {
-	resolver, err := resolverForVCS(vcs, nil)
-	if err != nil {
-		return err
-	}
-	return resolver.VerifyReady(cleanWorktree(root))
-}
-
 func (r commandVCSResolver) VerifyReady(root string) error {
 	if err := r.verifyRoot(root); err != nil {
 		return err
@@ -262,37 +238,6 @@ func (r commandVCSResolver) Verify(root, identity string) error {
 	}
 	if !strings.EqualFold(strings.TrimSpace(resolved), identity) {
 		return fmt.Errorf("%s cannot reproduce snapshot %s", r.name, identity)
-	}
-	return nil
-}
-
-// gitCommitCountInRange counts the commits in base..head (exclusive of base,
-// inclusive of head). It is the squash precondition: only ranges with more than
-// one commit are squashed.
-func gitCommitCountInRange(root, base, head string) (int, error) {
-	output, err := (execNativeCommandRunner{}).Run(root, "git", "rev-list", "--count", base+".."+head)
-	if err != nil {
-		return 0, err
-	}
-	count, err := strconv.Atoi(strings.TrimSpace(output))
-	if err != nil {
-		return 0, fmt.Errorf("git rev-list returned a non-numeric count %q", output)
-	}
-	return count, nil
-}
-
-// squashGitRangeToBase rewrites base..HEAD into a single commit while preserving
-// the final tree: git reset --soft <base> stages the whole range's diff onto the
-// base, then a fresh commit with the supplied message reproduces the exact final
-// tree. The intermediate commits become dangling (accepted audit impact); the
-// durable audit evidence is the identical final tree plus the run summary. Only
-// the last VCS operation of seal runs this.
-func squashGitRangeToBase(root, base, message string) error {
-	if _, err := (execNativeCommandRunner{}).Run(root, "git", "reset", "--soft", base); err != nil {
-		return fmt.Errorf("cannot squash: %w", err)
-	}
-	if _, err := (execNativeCommandRunner{}).Run(root, "git", "commit", "-m", message); err != nil {
-		return fmt.Errorf("cannot squash: %w", err)
 	}
 	return nil
 }

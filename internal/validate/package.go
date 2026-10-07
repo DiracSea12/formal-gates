@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/prompts"
+	yaml "gopkg.in/yaml.v3"
+
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
-	"gopkg.in/yaml.v3"
 )
 
 var requiredFiles = []string{
@@ -22,7 +23,7 @@ var requiredFiles = []string{
 	".github/workflows/portable-validation.yml",
 	"cmd/formal-gates/main.go",
 	"internal/cli/cli.go",
-	"internal/validate/catalog.go",
+	"internal/prompts/catalog.go",
 	"internal/validate/runner.go",
 	"internal/validate/runstate.go",
 	"internal/validate/install.go",

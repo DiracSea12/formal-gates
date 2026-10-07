@@ -352,26 +352,24 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 	}
 }
 
-func TestObsoleteResultHistoryReadsBothSupportedFormats(t *testing.T) {
+func TestObsoleteResultHistoryUsesCurrentArrayEncoding(t *testing.T) {
 	record := WorkerResult{ActionID: "dispatch", Provider: testProvider, Outcome: OutcomePass, PayloadDigest: "payload", Digest: "result-digest"}
-	for _, value := range []any{record, []WorkerResult{record}} {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var history WorkerResultHistory
-		if err := json.Unmarshal(encoded, &history); err != nil {
-			t.Fatal(err)
-		}
-		if len(history) != 1 || history[0].Digest != record.Digest || history[0].PayloadDigest != record.PayloadDigest {
-			t.Fatalf("result evidence changed on load: %+v", history)
-		}
-		written, err := json.Marshal(history)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(written) == 0 || written[0] != '[' {
-			t.Fatalf("new result history is not an array: %s", written)
-		}
+	encoded, err := json.Marshal([]WorkerResult{record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history WorkerResultHistory
+	if err := json.Unmarshal(encoded, &history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Digest != record.Digest || history[0].PayloadDigest != record.PayloadDigest {
+		t.Fatal("current array evidence changed on load")
+	}
+	legacy, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(legacy, &history); err == nil {
+		t.Fatal("single-object result history was accepted by current decoder")
 	}
 }

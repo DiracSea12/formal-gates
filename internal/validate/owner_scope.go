@@ -4,21 +4,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"formal-gates/internal/host"
 )
 
-// 本文件是「写墙 owner 作用域」的完整实现：把写墙收窄到「启动 formal-gates 的那个
-// 对话」，其它对话放行（子代理仍按 agent_type 维持现有逻辑，与 owner 无关）。三部分
-// 集中在此，不散落到其它文件：
-//   1. 捕获 —— 主线程执行 workflow start 的 PreToolUse 时，hook 把发起对话身份写入
-//      sidecar（<root>/.gates/tmp/start-owner.json）。
-//   2. 持久化 —— Start 读 sidecar 记进 run state 的 ownerTranscript/ownerSession。
-//   3. 比对 —— 写墙主线程分支按 payload 身份与 owner 是否匹配收窄。
-// 身份主键用 transcript_path（Claude Code / Codex 稳定、内嵌会话 UUID），session_id
-// 兜底（Cursor 用 conversation_id 并入 session 兜底）；三键都读 snake/camel 多候选名。
-// owner 未知时保守拦截，保证这是纯收窄、不回退保护。
+// The hook captures the initiating conversation into a one-use bootstrap payload.
+// The current engine State owns its persisted transcript/session identity; this
+// module compares the write caller against that authority.
 
 const startOwnerSidecarName = "start-owner.json"
 
@@ -56,6 +50,17 @@ func hookPayloadField(value any, names ...string) string {
 // isWorkflowStartCommand 识别「formal-gates workflow start」命令（复用
 // isFormalGatesExecutableToken 的命令结构解析）。
 func isWorkflowStartCommand(command string) bool {
+	for _, token := range splitCommand(command) {
+		if token == "--precheck" {
+			return false
+		}
+		if strings.HasPrefix(token, "--precheck=") {
+			precheck, err := strconv.ParseBool(strings.TrimPrefix(token, "--precheck="))
+			if err != nil || precheck {
+				return false
+			}
+		}
+	}
 	tokens := splitCommand(command)
 	for i, token := range tokens {
 		if !isFormalGatesExecutableToken(token) || i+2 >= len(tokens) {
@@ -113,9 +118,9 @@ func workflowStartRoot(command string) string {
 	return ""
 }
 
-// consumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
+// ConsumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
 // start），返回其中记录的 owner 身份。无 sidecar 或解析失败返回空串。
-func consumeStartOwner(root string) (transcript, session, provider string) {
+func ConsumeStartOwner(root string) (transcript, session, provider string) {
 	path := ownerSidecarPath(root)
 	data, err := os.ReadFile(path)
 	_ = os.Remove(path)
@@ -133,20 +138,20 @@ func consumeStartOwner(root string) (transcript, session, provider string) {
 	return strings.TrimSpace(probe.Transcript), strings.TrimSpace(probe.Session), strings.TrimSpace(probe.Provider)
 }
 
-// readRunOwner 读取 run 状态文件里的 owner 字段（旧 run 缺失时返回空串）。
+// readRunOwner obtains scope identity from the current engine authority.
+// Child work uses the retained master's owner when it has no separate identity.
 func readRunOwner(statePath string) (transcript, session string) {
-	data, err := os.ReadFile(statePath)
+	state, err := readHookEngineState(statePath)
 	if err != nil {
 		return "", ""
 	}
-	var probe struct {
-		OwnerTranscript string `json:"ownerTranscript"`
-		OwnerSession    string `json:"ownerSession"`
+	if state.OwnerTranscript == "" && state.OwnerSession == "" && state.SliceChild != nil {
+		parent := filepath.Join(filepath.Dir(filepath.Dir(statePath)), state.SliceChild.MasterRunID, "state.json")
+		if master, err := readHookEngineState(parent); err == nil {
+			state = master
+		}
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", ""
-	}
-	return strings.TrimSpace(probe.OwnerTranscript), strings.TrimSpace(probe.OwnerSession)
+	return strings.TrimSpace(state.OwnerTranscript), strings.TrimSpace(state.OwnerSession)
 }
 
 // ownerIdentity 是某个活动 run 的 owner 身份（启动对话 transcript / session）。

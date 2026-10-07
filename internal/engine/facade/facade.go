@@ -38,10 +38,8 @@ const (
 	terminalIntentName        = "terminal-summary.intent.json"
 	DefaultDefinitionSource   = "definitions/workflow.json"
 	RuntimeEngine             = "engine"
-	RuntimeLegacy             = "legacy"
 	DefaultProvider           = "engine"
 	UnregisteredInstall       = "UNREGISTERED_INSTALL"
-	UnsupportedEngineEntry    = "UNSUPPORTED_ENGINE_ENTRY"
 	InvalidIntakeConfirmation = "INVALID_INTAKE_CONFIRMATION"
 )
 
@@ -1962,12 +1960,13 @@ func Diagnose(path string, packageDigest, targetIdentity string) (DiagnosticRepo
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		report.Recommendation = "jsonReadable:false; rebuild with the owning writer"
+		report.Recommendation = "rebuild the state with the owning writer"
 		return report, nil
 	}
 	report.JSONReadable = true
 	report.Integrity = "readable"
 	report.DetectedVersions = map[string]any{}
+	report.Summary = raw
 	observedRaw := raw
 	if nested, ok := raw["envelope"].(map[string]any); ok {
 		observedRaw = nested
@@ -1978,6 +1977,11 @@ func Diagnose(path string, packageDigest, targetIdentity string) (DiagnosticRepo
 			report.DetectedVersions[key] = v
 		}
 	}
+	if len(report.DetectedVersions) == 0 {
+		report.Integrity = "unsupported"
+		report.Recommendation = persistence.UnsupportedRunVersionCode + ": state has no version envelope; rebuild it with the owning writer"
+		return report, nil
+	}
 	var observed Envelope
 	if value, ok := raw["envelope"].(map[string]any); ok {
 		observed = decodeEnvelope(value)
@@ -1987,7 +1991,7 @@ func Diagnose(path string, packageDigest, targetIdentity string) (DiagnosticRepo
 	if strings.TrimSpace(packageDigest) != "" && strings.TrimSpace(targetIdentity) != "" {
 		if err := persistence.ValidateEnvelopeWithIdentity(observed, packageDigest, report.Supported.DefinitionSource, targetIdentity); err != nil {
 			report.Integrity = "unsupported"
-			report.Recommendation = err.Error() + "; rebuild with the owning writer"
+			report.Recommendation = err.Error() + "; rebuild it with the owning writer"
 		}
 	} else {
 		for _, field := range []string{observed.Writer, observed.StateSchemaVersion, observed.WorkflowDefinitionVersion, observed.DefinitionSource, observed.DefinitionDigest, observed.PackageDigest, observed.InstalledTargetIdentity} {

@@ -3,6 +3,11 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/protocol"
+	engineRuntime "formal-gates/internal/engine/runtime"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,17 +16,36 @@ import (
 func TestHookResolvesDshAgentTypeFromLifecycleBinding(t *testing.T) {
 	root := t.TempDir()
 	runDir := filepath.Join(root, ".gates", "tmp", "run-1")
-	state := map[string]any{
-		"status": "ACTIVE",
-		"actions": map[string]any{
-			"development-worker": map[string]any{"status": developmentPrepared},
-		},
-		"dispatches": map[string]any{
-			"dispatch-dev":      map[string]any{"target": "development-worker", "targetKind": "action"},
-			"dispatch-reviewer": map[string]any{"target": "custom-gate", "targetKind": "gate"},
-		},
+	writeCurrentHookFixture(t, root, "run-1", true, true, "", "")
+	statePath := filepath.Join(root, ".gates", "engine", "run-1", "state.json")
+	state, err := readHookEngineState(statePath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	writeStateJSON(t, runDir, state)
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wanted := range []struct{ id, handler string }{{"dispatch-dev", "engine.development.batch"}, {"dispatch-reviewer", "engine.gate"}} {
+		for _, step := range cd.Steps {
+			agent, ok := step.Payload.(compiler.CompiledAgentStep)
+			if ok && string(agent.Handler) == wanted.handler {
+				state.SpawnReceipts[wanted.id] = protocol.SpawnReceipt{ActionID: wanted.id, Provider: "dsh", Correlation: wanted.id, Status: protocol.SpawnStatusSpawned, Task: engineRuntime.TaskKey{Node: "scope", Step: step.Header.ID}}
+				break
+			}
+		}
+	}
+	store, err := persistence.NewStore(filepath.Dir(statePath), persistence.Config{PackageDigest: "sha256:hook-fixture", DefinitionSource: "definitions/workflow.json", InstalledTargetIdentity: "hook-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(persistence.Transaction{ExpectedRevision: snap.Revision, ExpectedFingerprint: "fixture", CollectFingerprint: func() (string, error) { return "fixture", nil }, Content: state}); err != nil {
+		t.Fatal(err)
+	}
 	lifecycleDir := filepath.Join(runDir, "lifecycle")
 	if err := os.MkdirAll(lifecycleDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -42,20 +66,6 @@ func TestHookResolvesDshAgentTypeFromLifecycleBinding(t *testing.T) {
 	other := dshWritePayload(root, "dsh-agent-other")
 	if decision, err := Hook(other); err != nil || decision.PermissionDecision != "allow" {
 		t.Fatalf("unbound DSH subagent should be allowed: %#v %v", decision, err)
-	}
-}
-
-func writeStateJSON(t *testing.T, runDir string, state map[string]any) {
-	t.Helper()
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "state.json"), append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }
 

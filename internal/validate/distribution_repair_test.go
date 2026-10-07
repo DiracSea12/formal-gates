@@ -1,13 +1,19 @@
 package validate
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 )
 
 func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
@@ -37,22 +43,34 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first bootstrap rejected the fresh global install: %v", err)
 	}
-	if _, err := Start(StartOptions{
-		Root: project, PackageRoot: first.Targets[0].TargetPath, RunID: "global-binding",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: first.Targets[0].RegistryRecordID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	state, err := LoadRunState(project, "global-binding")
+	document, err := LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AdmissionRecordID == first.Targets[0].RegistryRecordID {
-		t.Fatalf("global workflow did not create the project-local admission sibling: %+v", state)
+	var sibling RegistryRecord
+	for _, record := range document.Records {
+		if record.ID == first.Targets[0].RegistryRecordID {
+			sibling = record
+		}
 	}
-	if err := DeleteRun(project, state.RunID); err != nil {
+	sibling.ID += "-project-fixture"
+	sibling.ProjectRoot = canonicalRegistryPath(project)
+	sibling.StateRoot = canonicalRegistryPath(filepath.Join(project, ".gates"))
+	sibling.ResourceRoot = canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
+	sibling.CanonicalPaths = map[string]string{}
+	for key, value := range document.Records[0].CanonicalPaths {
+		sibling.CanonicalPaths[key] = value
+	}
+	sibling.CanonicalPaths["projectRoot"] = sibling.ProjectRoot
+	sibling.CanonicalPaths["stateRoot"] = sibling.StateRoot
+	sibling.CanonicalPaths["resourceRoot"] = sibling.ResourceRoot
+	repairCommitRegistry(t, registry, sibling)
+	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if admission.RecordID == first.Targets[0].RegistryRecordID || admission.RecordID != sibling.ID {
+		t.Fatalf("global admission lost its existing project-local sibling: %+v", admission)
 	}
 
 	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("upgraded package\n"), 0o600); err != nil {
@@ -65,7 +83,7 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("global upgrade rejected the project-local sibling: %v", err)
 	}
-	document, err := LoadRegistry(registry)
+	document, err = LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +173,12 @@ func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
 		after.PackageDigest != before.PackageDigest || after.InstalledDigest != before.InstalledDigest {
 		t.Fatalf("bootstrap rotated registered identity: before=%+v after=%+v", before, after)
 	}
-	if _, err := Start(StartOptions{
-		Root: project, PackageRoot: first.Targets[0].TargetPath, RunID: "release-root-bootstrap",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: before.ID,
-	}); err != nil {
-		t.Fatalf("workflow start after release-root bootstrap failed: %v", err)
+	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
+	if err != nil {
+		t.Fatalf("admission after release-root bootstrap failed: %v", err)
+	}
+	if admission.RecordID != before.ID || admission.PackageDigest != before.PackageDigest {
+		t.Fatalf("bootstrap admission lost installed identity: %+v", admission)
 	}
 }
 
@@ -195,7 +213,7 @@ func TestAdmissionRejectsStaleInstalledDigest(t *testing.T) {
 func repairGitProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte("sample requirement\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(testRequirementDocument("Sample requirement.")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
@@ -267,131 +285,106 @@ func TestInstallRejectsManifestUnregisteredHostTargetBeforeTargetCreation(t *tes
 	}
 }
 
-// implementation-quality-gate P2 回归：普通 install 只提交 registry record；
-// bootstrap receipt 缺失时 workflow start 必须在创建 .gates/tmp 之前硬拒绝，
-// 补跑文档化 install --bootstrap 后才允许第一次 start。
+// Start requires the committed bootstrap receipt before creating engine state.
 func TestWorkflowStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	source := copyPackageFixture(t)
 	project := repairGitProject(t)
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
-	report, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Force: true,
-	})
+	options := InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}
+	report, err := Install(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := StartOptions{
-		Root: project, PackageRoot: report.Targets[0].TargetPath, RunID: "bootstrap-receipt",
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: report.Targets[0].RegistryRecordID,
+	if _, _, err := repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt"); err == nil || !strings.Contains(err.Error(), "bootstrap receipt") {
+		t.Fatalf("start accepted missing bootstrap receipt: %v", err)
 	}
-	if _, err := Start(options); err == nil || !strings.Contains(err.Error(), "bootstrap receipt") {
-		t.Fatalf("workflow start accepted a registry without a bootstrap receipt: %v", err)
+	if _, err := os.Stat(filepath.Join(project, facade.EngineNamespace, "bootstrap-receipt")); !os.IsNotExist(err) {
+		t.Fatalf("rejected start created authority: %v", err)
 	}
-	if _, statErr := os.Stat(RunDir(project, options.RunID)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected start created a run directory: %v", statErr)
+	options.Bootstrap = true
+	if _, err = Install(options); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
-		t.Fatalf("documented bootstrap maintenance entry failed: %v", err)
-	}
-	if _, err := Start(options); err != nil {
-		t.Fatalf("workflow start still refused after bootstrap: %v", err)
+	if _, _, err = repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt"); err != nil {
+		t.Fatalf("start refused committed bootstrap: %v", err)
 	}
 }
 
-// implementation-quality-gate P1 回归：mutateRun 操作（如 prepare-action）必须在
-// 写出 .gates/tmp/<run>/prompts/<dispatch>.md 之前完成 candidate 准入；准入被拒
-// 时不留下孤儿 workflow 工件。同一准入也保护 workflow cleanup --run：候选不得
-// 删除 run 目录与其状态。
-func TestMutateRunHardRejectsBeforeArtifactWriteAndCleanupIsAdmitted(t *testing.T) {
+// Drive checks current installation admission before writing worker materials.
+func TestEngineDriveRejectsDisabledAdmissionBeforeArtifactWrite(t *testing.T) {
 	source := copyPackageFixture(t)
 	project := repairGitProject(t)
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
-	report, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Force: true,
-	})
+	options := InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}
+	report, err := Install(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
+	options.Bootstrap = true
+	if _, err = Install(options); err != nil {
 		t.Fatal(err)
 	}
-	runID := "hard-reject-before-write"
-	state, err := Start(StartOptions{
-		Root: project, PackageRoot: report.Targets[0].TargetPath, RunID: runID,
-		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
-		AdmissionRegistry: registry, AdmissionRecordID: report.Targets[0].RegistryRecordID,
-	})
+	f, run, err := repairStartEngine(project, report.Targets[0].TargetPath, registry, "hard-reject-before-write")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 准入失效（record 置 disabled）：prepare-action 必须在任何工件写出前拒绝。
+	statePath := filepath.Join(project, facade.EngineNamespace, run.RunID, "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	document, err := LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := range document.Records {
-		if document.Records[index].ID == state.AdmissionRecordID {
-			document.Records[index].Status = "disabled"
+	record := document.Records[0]
+	record.Status = "disabled"
+	repairCommitRegistry(t, registry, record)
+	if _, err = f.Drive(); err == nil || !strings.HasPrefix(err.Error(), "STALE_FENCING_TOKEN:") {
+		t.Fatalf("drive did not reject disabled admission: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(project, facade.EngineNamespace, run.RunID, "materials")); !os.IsNotExist(err) {
+		t.Fatalf("rejected drive wrote worker artifacts: %v", err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("rejected drive changed authority: %v", err)
+	}
+	record.Status = "active"
+	repairCommitRegistry(t, registry, record)
+	restored, err := f.Drive()
+	if err != nil {
+		t.Fatalf("restored admission refused current drive: %v", err)
+	}
+	if len(restored.WorkerMaterials) != 1 {
+		t.Fatalf("restored regular drive did not issue material: %+v", restored.WorkerMaterials)
+	}
+	for _, ref := range restored.WorkerMaterials {
+		body, err := os.ReadFile(ref.Path)
+		if err != nil || !strings.Contains(string(body), "Sample requirement.") {
+			t.Fatalf("restored material lost actual requirement: %s %v", body, err)
 		}
 	}
-	unlock, err := acquireRegistryLock(registry)
+}
+
+func repairStartEngine(project, target, registry, runID string) (*facade.Facade, facade.Run, error) {
+	admission, err := ResolveEngineAdmission(project, target, registry)
 	if err != nil {
-		t.Fatal(err)
+		return nil, facade.Run{}, err
 	}
-	if _, err := commitRegistryRecordsUnlocked(registry, document, document.Records); err != nil {
-		t.Fatal(err)
-	}
-	unlock()
-	if _, err := PrepareAction(project, report.Targets[0].TargetPath, runID, "requirements-clarification", "", false, ""); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
-		t.Fatalf("prepare-action did not hard-reject a disabled admission: %v", err)
-	}
-	prompts, readErr := os.ReadDir(filepath.Join(RunDir(project, runID), "prompts"))
-	if readErr == nil && len(prompts) != 0 {
-		t.Fatalf("rejected prepare left orphan prompt artifacts: %v", prompts)
-	}
-	// 同一失效准入下 cleanup --run 也不得删除该 run 目录与状态。
-	if _, err := CleanupTempRun(project, runID); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
-		t.Fatalf("cleanup --run deleted a run without admission: %v", err)
-	}
-	if _, statErr := os.Stat(RunStatePath(project, runID)); statErr != nil {
-		t.Fatalf("unadmitted cleanup removed the run state: %v", statErr)
-	}
-	// 准入恢复后，文档化 escape hatch 仍可删除该 run。
-	document, err = LoadRegistry(registry)
+	raw, err := os.ReadFile(filepath.Join(project, "requirements.md"))
 	if err != nil {
-		t.Fatal(err)
+		return nil, facade.Run{}, err
 	}
-	for index := range document.Records {
-		if document.Records[index].ID == state.AdmissionRecordID {
-			document.Records[index].Status = "active"
-		}
-	}
-	unlock, err = acquireRegistryLock(registry)
+	revision := fmt.Sprintf("%x", sha256.Sum256(raw))
+	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
+	base, err := vcs.New(project, nil).Resolve()
 	if err != nil {
-		t.Fatal(err)
+		return nil, facade.Run{}, err
 	}
-	if _, err := commitRegistryRecordsUnlocked(registry, document, document.Records); err != nil {
-		t.Fatal(err)
-	}
-	unlock()
-	deleted, err := CleanupTempRun(project, runID)
-	if err != nil || !deleted {
-		t.Fatalf("admitted cleanup --run failed: deleted=%v err=%v", deleted, err)
-	}
-	if _, statErr := os.Stat(RunDir(project, runID)); !os.IsNotExist(statErr) {
-		t.Fatalf("admitted cleanup left the run directory: %v", statErr)
-	}
+	return facade.Start(facade.StartOptions{Root: project, Capacity: 1, PackageRoot: target, ArtifactRoot: project, Request: facade.StartRequest{RunID: runID, Route: "regular", VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 }
 
 func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {

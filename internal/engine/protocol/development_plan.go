@@ -56,6 +56,18 @@ type DevelopmentCompletion struct {
 	Checks  map[string]string `json:"checks"`
 	Handoff string            `json:"handoff"`
 }
+
+// DevelopmentStarted projects the current confirmation's issued work facts.
+// DispatchBindings survives completed work and is invalidated with its authority.
+func (s *State) DevelopmentStarted() bool {
+	for _, binding := range s.DispatchBindings {
+		if binding.RequirementRevision == s.RequirementRevision() && binding.PlanRequest != "" && binding.BatchID != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type DevelopmentPlanConfirmation struct {
 	ReviewActionID string `json:"reviewActionId"`
 	Digest         string `json:"digest"`

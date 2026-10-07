@@ -172,8 +172,6 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		t.Fatalf("installed terminal replay = %+v", replay)
 	}
 
-	runInstalledLegacyRegression(t, candidate, home, isolatedInstallSource(t, root, candidate))
-
 	final, err := project.Snapshot()
 	if err != nil {
 		t.Fatalf("final project snapshot: %v", err)
@@ -223,60 +221,6 @@ func isolatedInstallSource(t *testing.T, root, candidate string) string {
 	}
 	copyFile(candidate, filepath.Join(source, "bin", filepath.Base(candidate)), 0o700)
 	return source
-}
-
-func runInstalledLegacyRegression(t *testing.T, candidate, home, source string) {
-	t.Helper()
-	project := t.TempDir()
-	write := func(path, content string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(project, path), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("requirements.md", "requirement\n")
-	write("design.md", "design\n")
-	write(".gitignore", ".codex/\n.gates/tmp/\n.gates/results\n")
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "acceptance@example.invalid"}, {"config", "user.name", "Acceptance"}, {"add", "."}, {"commit", "-m", "baseline"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = project
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-		}
-	}
-	runCandidate(t, candidate, home, project, "install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks", "--force")
-	runCandidate(t, candidate, home, project, "install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--binary-target", candidate, "--bootstrap", "--skip-hooks", "--force")
-	installedPackage := filepath.Join(project, ".codex", "skills", "formal-gates")
-	runID := "installed-legacy-regression"
-	runCandidate(t, candidate, home, project, "workflow", "start", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git", "--split", "no")
-	runCandidate(t, candidate, home, project, "workflow", "prepare-action", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--action", "requirements-clarification")
-	state := installedLegacyState(t, candidate, home, project, runID)
-	dispatchID := ""
-	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == "action" && dispatch.Target == "requirements-clarification" && dispatch.Status == "OPEN" {
-			dispatchID = id
-		}
-	}
-	if dispatchID == "" {
-		t.Fatal("installed legacy requirements-clarification dispatch was not prepared")
-	}
-	runCandidate(t, candidate, home, project, "workflow", "record-action", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", dispatchID, "--status", "PASS")
-	runCandidate(t, candidate, home, project, "workflow", "requirement", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--confirmed")
-	state = installedLegacyState(t, candidate, home, project, runID)
-	if state.Actions["requirements-clarification"].Status != "PASS" || !state.RequirementConfirmed {
-		t.Fatalf("installed legacy requirement flow = %+v", state)
-	}
-	runCandidate(t, candidate, home, project, "workflow", "abort", "--root", project, "--run-id", runID, "--user-confirm")
-}
-
-func installedLegacyState(t *testing.T, candidate, home, project, runID string) validate.RunState {
-	t.Helper()
-	output := runCandidate(t, candidate, home, project, "workflow", "show", "--root", project, "--run-id", runID)
-	var state validate.RunState
-	if err := json.Unmarshal(output, &state); err != nil {
-		t.Fatalf("decode installed legacy state: %v\n%s", err, output)
-	}
-	return state
 }
 
 func runCandidate(t *testing.T, candidate, home, workdir string, args ...string) []byte {

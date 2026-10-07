@@ -27,9 +27,7 @@
 //   - workflowDefinitionVersion 与 definitionDigest 直接引用
 //     internal/engine/definition 的生成身份常量（identity_gen.go，与
 //     definitions/workflow.json 由同一生成动作产出）；
-//   - stateSchemaVersion 复用 encoder 的引擎侧常量 "1"，语义对齐
-//     internal/validate 的冻结常量 CurrentStateSchemaVersion，
-//     由测试钉死相等；
+//   - stateSchemaVersion directly uses the unique current encoder constant;
 //   - 本包不导入 internal/validate：engine 包不得反向依赖。
 //
 // Windows 平台分叉维持延期：execute 段的原子 rename 收敛在

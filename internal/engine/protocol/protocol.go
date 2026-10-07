@@ -29,7 +29,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -286,28 +285,8 @@ type WorkerResult struct {
 	Digest             string                 `json:"digest"`
 }
 
-// WorkerResultHistory retains all distinct received result evidence for a
-// dispatch. Persisted values support a single result object or a result array;
-// newly written values use the array representation.
+// WorkerResultHistory retains distinct dispatch evidence in array wire form.
 type WorkerResultHistory []WorkerResult
-
-func (h *WorkerResultHistory) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) > 0 && data[0] == '{' {
-		var result WorkerResult
-		if err := json.Unmarshal(data, &result); err != nil {
-			return err
-		}
-		*h = WorkerResultHistory{result}
-		return nil
-	}
-	var results []WorkerResult
-	if err := json.Unmarshal(data, &results); err != nil {
-		return err
-	}
-	*h = results
-	return nil
-}
 
 // archiveObsoleteResult is the single obsolete-evidence writer. Ordering by
 // digest makes archival independent of arrival order and map iteration.
@@ -639,6 +618,7 @@ type State struct {
 	//（AC-051 零数字）。收口差值只作报告（Cost.Owner），不参与 in-flight guard；
 	// child 的闭合端点和计量原值随 SliceReceipt 同事务冻结。
 	OwnerTranscript string                   `json:"ownerTranscript,omitempty"`
+	OwnerSession    string                   `json:"ownerSession,omitempty"`
 	OwnerProvider   string                   `json:"ownerProvider,omitempty"`
 	OwnerStartedAt  string                   `json:"ownerStartedAt,omitempty"`
 	OwnerBaseline   *cost.TranscriptSnapshot `json:"ownerBaseline,omitempty"`

@@ -117,24 +117,6 @@ func Hook(payload []byte, providers ...string) (HookDecision, error) {
 	if strings.TrimSpace(command) == "" {
 		return allowHook("no command-like field found"), nil
 	}
-	if mentionsLegacyFormalGatesCommand(command) {
-		return HookDecision{
-			Decision:                 "block",
-			Reason:                   "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-			Permission:               "deny",
-			PermissionDecision:       "deny",
-			PermissionDecisionReason: "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-		}, nil
-	}
-	if deniesFormalGatePassWithoutBinding(command) {
-		return HookDecision{
-			Decision:                 "block",
-			Reason:                   "formal gate PASS recording requires a run id, gate id, and dispatch id",
-			Permission:               "deny",
-			PermissionDecision:       "deny",
-			PermissionDecisionReason: "formal gate PASS recording requires a run id, gate id, and dispatch id",
-		}, nil
-	}
 	return allowHook("command allowed"), nil
 }
 
@@ -152,48 +134,6 @@ func allowHook(reason string) HookDecision {
 	}
 }
 
-func deniesFormalGatePassWithoutBinding(command string) bool {
-	tokens := splitCommand(command)
-	if !mentionsNativeRecord(tokens) {
-		return false
-	}
-	if !hasSwitchValue(tokens, "Status", "PASS") {
-		return false
-	}
-	for _, name := range []string{"run-id", "gate", "dispatch"} {
-		if !hasNonEmptySwitchValue(tokens, name) {
-			return true
-		}
-	}
-	return false
-}
-
-func mentionsLegacyFormalGatesCommand(command string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(command, "\\", "/"))
-	return strings.Contains(normalized, "gate-workflow.ps1") ||
-		strings.Contains(normalized, "gate-state.ps1") ||
-		strings.Contains(normalized, "gate-artifact-validation.ps1") ||
-		strings.Contains(normalized, "gate-proof-receipt.ps1") ||
-		strings.Contains(normalized, "install-formal-gates.ps1") ||
-		strings.Contains(normalized, "run-complexity-gate.ps1") ||
-		strings.Contains(normalized, "capture-subagent-receipt.ps1") ||
-		strings.Contains(normalized, "enforce-gate-sequence.ps1")
-}
-
-func mentionsNativeRecord(tokens []string) bool {
-	for i, token := range tokens {
-		if !isFormalGatesExecutableToken(token) || i+2 >= len(tokens) {
-			continue
-		}
-		group := strings.ToLower(tokens[i+1])
-		action := strings.ToLower(tokens[i+2])
-		if group == "workflow" && action == "record-gate" {
-			return true
-		}
-	}
-	return false
-}
-
 func isFormalGatesExecutableToken(token string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(token, "\\", "/"))
 	normalized = strings.Trim(normalized, `"'`)
@@ -201,24 +141,6 @@ func isFormalGatesExecutableToken(token string) bool {
 	base := parts[len(parts)-1]
 	return base == "formal-gates" ||
 		base == "formal-gates.exe"
-}
-
-func hasSwitchValue(tokens []string, name, expected string) bool {
-	for _, value := range switchValues(tokens, name) {
-		if strings.EqualFold(value, expected) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasNonEmptySwitchValue(tokens []string, name string) bool {
-	for _, value := range switchValues(tokens, name) {
-		if strings.TrimSpace(value) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func switchValues(tokens []string, name string) []string {

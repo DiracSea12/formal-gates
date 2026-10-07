@@ -4,11 +4,11 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	yaml "gopkg.in/yaml.v3"
+
 	"os"
 	"path/filepath"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // DeepSeek Harness (DSH) 没有内置的 hooks.json 协议。安装器改用一个最小 Cordis

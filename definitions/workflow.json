@@ -1,14 +1,19 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "10",
-  "stateSchemaVersion": "1",
+  "version": "11",
+  "stateSchemaVersion": "2",
   "writer": "engine",
-  "transactionOwner": "validate",
+  "transactionOwner": "engine",
   "entrypoints": [
     "workflow start",
-    "workflow resume",
-    "workflow seal"
+    "workflow drive",
+    "workflow submit",
+    "workflow show",
+    "workflow status",
+    "workflow next",
+    "workflow diagnose",
+    "workflow guard-preview"
   ],
   "entryNode": "entry",
   "steps": [
@@ -17,7 +22,7 @@
       "nodeId": "children",
       "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -43,7 +48,7 @@
       "nodeId": "children",
       "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "children.prepare"
       ],
@@ -73,7 +78,7 @@
       "nodeId": "children",
       "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "children.workspace"
       ],
@@ -99,7 +104,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -115,7 +120,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "entry.parse"
       ],
@@ -148,7 +153,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "entry.persist"
       ],
@@ -182,7 +187,7 @@
       "nodeId": "review",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.worker"
       ],
@@ -216,7 +221,7 @@
       "nodeId": "validation",
       "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -246,7 +251,7 @@
       "nodeId": "validation",
       "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -276,7 +281,7 @@
       "nodeId": "validation",
       "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -312,7 +317,7 @@
       "nodeId": "validation",
       "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -348,7 +353,7 @@
       "nodeId": "validation",
       "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -384,7 +389,7 @@
       "nodeId": "validation",
       "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -420,7 +425,7 @@
       "nodeId": "validation",
       "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -456,7 +461,7 @@
       "nodeId": "validation",
       "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -493,7 +498,7 @@
       "nodeId": "validation",
       "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],
@@ -530,7 +535,7 @@
       "nodeId": "validation",
       "ordinal": 16,
       "kind": "HOST_ACTION",
-      "definitionVersion": "10",
+      "definitionVersion": "11",
       "dependencies": [
         "review.readiness"
       ],

@@ -44,7 +44,7 @@ func coexistenceSource(t *testing.T) string {
 
 func coexistenceLegacyActiveState(t *testing.T, project, runID string) string {
 	t.Helper()
-	state := RunState{RunID: runID, Status: "ACTIVE"}
+	state := map[string]string{"runId": runID, "status": "ACTIVE"}
 	data, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 // install can replace the registered runtime while either state shape has an
 // active run, without rewriting that run. The candidate fixture is produced
 // through the façade so its nested content.phase is the real engine state
-// shape; the legacy fixture uses the documented ACTIVE RunState shape.
+// shape; the unsupported fixture is inert raw JSON and never opens a writer.
 func TestInstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -143,6 +143,11 @@ func TestInstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
 			}
 			if string(afterState) != string(beforeState) {
 				t.Fatal("install changed the active run state")
+			}
+			if testCase.name == "legacy-active" {
+				if _, err := facade.Open(project, testCase.runID); err == nil {
+					t.Fatal("unsupported raw state opened as a current run")
+				}
 			}
 			for _, path := range []string{registry, filepath.Join(project, ".claude", "skills", "formal-gates"), launcher} {
 				if _, statErr := os.Stat(path); statErr != nil {
