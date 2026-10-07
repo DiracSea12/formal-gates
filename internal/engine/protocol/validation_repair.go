@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"slices"
@@ -230,6 +231,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 				input.ExecutionFailures = append(input.ExecutionFailures, RepairExecutionFailure{FindingID: f.ID, Binding: s.DispatchBindings[f.ExecutionFailure.ResultAction], Records: s.executionFailureRecords(f)})
 			}
 		}
+		slices.SortFunc(input.Problems, func(a, b ValidationProblem) int { return cmp.Compare(a.ID, b.ID) })
 		slices.SortFunc(input.Findings, func(a, b ValidationFinding) int {
 			if a.ID < b.ID {
 				return -1
