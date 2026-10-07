@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -154,4 +155,63 @@ func bindCanaryReviewMaterial(t *testing.T, c *engineCanary, pending protocol.Pe
 	}
 	hash := sha256.Sum256(body)
 	c.run.WorkerMaterials = map[string]facade.WorkerMaterial{pending.ActionID: {ActionID: pending.ActionID, AttemptID: pending.AttemptID, Path: path, Digest: "sha256:" + hex.EncodeToString(hash[:]), ReadOnly: material.ReadOnly}}
+}
+
+func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(schema)
+	nativeSchema, err := codexOutputSchema(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codexPeerStrictSchema(codexPlain(t, nativeSchema)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
+		t.Run(tier, func(t *testing.T) {
+			plan := canaryLocalPlan(false)
+			plan.VerificationTier = tier
+			plan.CheckpointReason = ""
+			plan.CheckpointGroups = nil
+			if tier == "CHECKPOINT" {
+				second := plan.Batches[0]
+				second.ID = "second"
+				second.Subtasks = []protocol.DevelopmentSubtask{{ID: "second-task", Description: "consume the first artifact"}}
+				second.DependsOn = []string{plan.Batches[0].ID}
+				plan.Batches = append(plan.Batches, second)
+				plan.CheckpointReason = "independent batches preserve frozen interfaces"
+				plan.CheckpointGroups = [][]string{{plan.Batches[0].ID}, {second.ID}}
+			}
+			payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, Outcome: protocol.OutcomePass, Review: &protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: input.Pending.ActionID, RequirementRevision: "confirmed", Status: "PASS", GranularityReview: plan, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "checked current signed inputs"}}}
+			body, _ := json.Marshal(payload)
+			domain, err := decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := codexPeerAnswer(codexPlain(t, schema), domain)
+			if getOf(getOf(getOf(wire, "review"), "granularityReview"), "verificationTier") != tier || len(listOf(getOf(getOf(getOf(wire, "review"), "granularityReview"), "batches"))) != len(plan.Batches) {
+				t.Fatal("peer erased native plan fields")
+			}
+			projected, err := codexDomainResult(schema, wire)
+			if err != nil || !valuesEqual(projected, domain) {
+				t.Fatalf("tier transport changed domain evidence: %v", err)
+			}
+			raw, _ := json.Marshal(projected)
+			event, err := worker.DecodeResult(input, "result", raw, "sha256:original")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := protocol.ValidateGranularity(event.Result.Review.GranularityReview); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	after, _ := json.Marshal(schema)
+	if !bytes.Equal(before, after) {
+		t.Fatal("native schema mutated domain contract")
+	}
 }

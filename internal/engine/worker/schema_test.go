@@ -117,6 +117,18 @@ func TestReviewMaterialCarriesClosedVerificationContract(t *testing.T) {
 			if !reflect.DeepEqual(got, expected) || !reflect.DeepEqual(verification["required"], []any{"checks", "evidence"}) {
 				t.Fatal("schema lost exact verification contract")
 			}
+			if action == review.StartReadiness {
+				content, _, found := strings.Cut(material.Prompt, "\n\n[Dispatch]\n")
+				if !found || strings.Contains(material.Prompt, "[Available route candidates]") || !strings.Contains(content, "availableRouteCandidates") || !strings.Contains(material.Prompt, protocol.GranularityResultContract()) {
+					t.Fatal("readiness data left allowed blocks or lost full plan contract")
+				}
+				plan := material.ResultSchema["properties"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)
+				fields := plan["properties"].(map[string]any)
+				if !reflect.DeepEqual(fields["verificationTier"].(map[string]any)["enum"], []any{"", "FINAL", "CHECKPOINT"}) || plan["description"] != protocol.GranularityResultContract() {
+					t.Fatal("finite tier and conditional contract missing")
+				}
+
+			}
 			if !strings.Contains(material.Prompt, "narrative support in verification.evidence") || material.ResultTemplate.Review.Verification.Evidence != "" {
 				t.Fatal("template invents a verification verdict")
 			}

@@ -102,13 +102,21 @@ type DevelopmentInput struct {
 	Dependencies map[string]WorkerResult `json:"dependencies"`
 }
 
+// GranularityVerificationTiers is the finite proposal tier domain; empty uses FINAL.
+func GranularityVerificationTiers() []string { return []string{"", "FINAL", "CHECKPOINT"} }
+
+// GranularityResultContract describes the existing proposal admission rules.
+func GranularityResultContract() string {
+	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
+}
+
 // ValidateGranularity checks the shared development-plan contract for readiness
 // and repair proposals before they are accepted or submitted.
 func ValidateGranularity(p *GranularityReview) error {
 	if p == nil || strings.TrimSpace(p.Reason) == "" || len(p.Batches) == 0 {
 		return validationError("readiness requires a granularity review with batches and rationale")
 	}
-	if p.VerificationTier != "" && p.VerificationTier != "FINAL" && p.VerificationTier != "CHECKPOINT" {
+	if !slices.Contains(GranularityVerificationTiers(), p.VerificationTier) {
 		return validationError("verification tier must be FINAL or CHECKPOINT")
 	}
 	ids := map[string]int{}

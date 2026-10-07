@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -13,11 +14,15 @@ import (
 // ResultSchema renders the finite core result types; it does not validate
 // business values or interpret arbitrary schemas. Core Submit owns admission.
 func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
+	failures := []any{}
+	for _, class := range authoring.FailureClasses() {
+		failures = append(failures, string(class))
+	}
 	properties := map[string]any{
 		"actionId":     map[string]any{"type": "string", "enum": []any{input.Pending.ActionID}},
 		"provider":     map[string]any{"type": "string", "enum": []any{input.Provider}},
 		"outcome":      map[string]any{"type": "string", "enum": []any{protocol.OutcomePass, protocol.OutcomeFail, protocol.OutcomeRuntimeError}},
-		"failureClass": map[string]any{"type": "string"}, "interruptionReason": map[string]any{"type": "string"},
+		"failureClass": map[string]any{"type": "string", "enum": failures}, "interruptionReason": map[string]any{"type": "string"},
 	}
 	if input.Review != nil {
 		body, err := resultTypeSchema(reflect.TypeOf(protocol.ReviewResultEvidence{}))
@@ -148,6 +153,15 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 				required = append(required, name)
 			}
 		}
+		if value == reflect.TypeOf(protocol.GranularityReview{}) {
+			tiers := []any{}
+			for _, tier := range protocol.GranularityVerificationTiers() {
+				tiers = append(tiers, tier)
+			}
+			properties["verificationTier"] = map[string]any{"type": "string", "enum": tiers}
+			return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required, "description": protocol.GranularityResultContract()}, nil
+		}
+
 		return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}, nil
 	}
 	return nil, fmt.Errorf("worker result type %s has no supported native representation", value)

@@ -133,13 +133,17 @@ const (
 	FailureAgentRecoverable   FailureClass = "AGENT_RECOVERABLE_SEMANTIC_ERROR"
 )
 
-// Valid 报告 f 是否属于七值封闭集合。
+// FailureClasses returns the closed worker failure classification values.
+func FailureClasses() []FailureClass {
+	return []FailureClass{FailureTransientEngine, FailureBusinessReject, FailureUserActionRequired, FailureSideEffectUnknown, FailureInvariantViolation, FailureBlockedBug, FailureAgentRecoverable}
+}
+
+// Valid reports membership in the closed worker failure classification set.
 func (f FailureClass) Valid() bool {
-	switch f {
-	case FailureTransientEngine, FailureBusinessReject, FailureUserActionRequired,
-		FailureSideEffectUnknown, FailureInvariantViolation, FailureBlockedBug,
-		FailureAgentRecoverable:
-		return true
+	for _, known := range FailureClasses() {
+		if f == known {
+			return true
+		}
 	}
 	return false
 }
