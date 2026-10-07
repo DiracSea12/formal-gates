@@ -221,6 +221,14 @@ macOS 上使用解析符号链接后的 TMPDIR，避免临时路径别名影响�
 根角色完成证据和只读行为；不得为测试强行打开宿主本来关闭的能力。未执行的真实模型
 和相关工具验证必须明确标注，不能以模拟测试、口头声称或 doctor 结果替代。
 
-添加宿主只需一个薄适配器模块和 `native_hosts.py` 中一条注册项。适配器解释自己的
+添加宿主须实现薄适配器并在 `native_hosts.py` 注册。适配器解释自己的
 `binding.launch`，实现启动绑定、执行、完成证据校验/恢复，并声明必要的传输文件。
 共享图、Go 业务结果合同不需要增加宿主分支。安装、别名和展示继续由原有安装目录负责。
+
+普通 engine 业务节点的扩展边界见 [正式流程](formal-flow.md) 与
+[typed authoring ADR](../refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md)：
+实现、注册并接入编译定义，使用同一提交与恢复路径；不提供任意动态节点/控制语义插件 SDK。
+原生适配器返回原始证据，由 owning engine 统一校验输入身份、完成事实与 UNKNOWN 对账。
+
+真实模型调用按当前用户授权执行。无额度或未确认额度的宿主如实记 skip/未执行，
+不能用其他宿主结果、模拟或 doctor 替代该宿主 canary。

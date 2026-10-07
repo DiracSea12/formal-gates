@@ -88,8 +88,8 @@ Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook�
 
 DeepSeek Harness 的 hook 补丁是 home 级 `cordis.patch.yml`；DSH 不自动加载项目目录
 下的补丁文件，所以 `--host dsh --scope project` 只安装 skill 与 `AGENTS.md` 指令，不
-写 hook 补丁，需要 hook 集成时使用 global。项目级 DSH 二进制因此保持宽松默认
-provider，lifecycle verify 为 `UNAVAILABLE`，既有派发与身份检查仍是权威依据。
+写 hook 补丁，需要 hook 集成时使用 global。项目级安装不能代替绑定 DeepSeek provider 与隔离
+Cordis bridge 的完整原生 canary。
 其他兼容 Agent Skill 的 host 可以手工阅读这些 Markdown，但本包不声明为它们提供
 安装器或 hook 集成。
 
@@ -133,21 +133,13 @@ DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON �
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
-进入正式开发后，hook 还承担 RQ-011 主代理/审查类代理写阻断：以
-`development-worker` 从 `PENDING` 进入 `PREPARED` 为开发开始边界；在此之前的产品审、
-技术审及文档修订阶段不启用写阻断。开发开始后，PreToolUse 对代码与 run 状态的直接写入
-（Edit/Write/MultiEdit、git commit、写文件 Bash）按调用者身份阻断——主线程（payload
-无 agent 身份）与审查类代理被阻断，formal-gates CLI 命令、只读命令、development-worker、
-qa-design 与主代理对已登记需求/设计文档的编辑放行；未进入开发的活动 run 与无活动 run
-均放行。写墙只在 `status=ACTIVE && development-worker.status!=PENDING` 的区间内生效；
-Seal / Abort 先持久化 `SEALED` / `ABORTED` 再收尾删除临时状态，因此即使收尾失败留下终态
-文件，也会立即解除写阻断，不会永久锁住仓库。角色权限按身份（`agent_type`）而非静态
-文件白名单判定；路径只用于限定活动仓库根的空间边界。代理类型定义见
-`agents/agent-types.md`。Bash 写入判定只看**真实写目标**：命令文本只是
-提到 `.gates` 但只读（grep/ls/cat/find/python3 读、只读 git 查询如 `git status`
-`git log -- <path>`）一律放行；真实写（`git add`/`git commit`、`> .gates/...`、
-`tee .gates/...`）仍阻断，主线程与审查类代理一致。实机阻断仍须在同一 host 上经 live
-canary 验证。
+hook 的 write_block 是辅助写隔离，业务推进与接纳由 engine 门禁拥有。它读取当前
+engine state 的已签发开发 Batch、OwnerSession/OwnerTranscript、确认材料与
+SpawnReceipts/lifecycle 身份，限制主线程和审查角色直接写代码或 run 状态。开发/返修与
+QA 设计角色按已绑定身份工作；主代理编辑已确认需求/方案材料仍须走需求变更流程。
+作用域限定承载活动 run 的仓库根、owner 对话与开发阶段；未进入开发或终态解除写墙。
+角色分类是只读投影，不签发任务、不接纳结果、不改变状态。真实自动拦截仍须同一宿主
+和安装副本的 live canary 证明。代理职责见 [角色定义](../agents/agent-types.md)。
 
 写墙的空间范围只覆盖承载该活动 run 的仓库根，不是进程级或全局文件锁。即使窗口 cwd
 仍位于活动仓库，Edit/Write/MultiEdit 的目标明确位于仓库外时也直接放行；简单 Bash 写入
@@ -178,31 +170,21 @@ capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的
 Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动正式 run 时触发的 hook
 不会创建生命周期日志。
 
-在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
-视推导出的结果。固定 stable launcher 同时服务多个 host 时，认领必须显式给出
-`--provider <claude-code|codex|cursor|deepseek-harness|zcode>`；同一项目路径下存在冲突的
-active registry host 时不会猜测第一个记录：
+派发与原生身份绑定由 engine 的已签发 action 和 SpawnReceipt 持有；lifecycle capture
+只登记原生观测，drive/submit 经同一执行与对账路径处理。UNKNOWN 先查原始生命周期
+事实，不能盲目重派，也不能从配置文件推断代理已经完成。实际调用形式与结果提交见
+[正式流程公共合同](formal-flow.md#原生运行时派发)。
 
-```bash
-$HOME/.local/bin/formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --reviewer <identity> --provider codex
-```
-
-省略 `--provider` 只适用于没有歧义的正常开发构建/已登记 host；共享 launcher 的歧义
-会硬阻断，避免把生命周期证据绑定到错误 host。
+维护面的只读核验可使用：
 
 ```bash
 $HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
-  --dispatch <dispatch-id>
+  --dispatch <issued-action-id>
 ```
 
-全局安装的 Claude Code、Cursor、Codex、DeepSeek Harness 和 ZCode 都要求其适配器的生命周期事件配对；
-项目级 DSH/ZCode 因宿主不读取项目 hook 配置而保持宽松默认 provider，验证结果为 `UNAVAILABLE`。Codex
-派发独立代理走原生 `spawn_agent`，用返回的 `agent_id` 认领；DeepSeek Harness 的
-Cordis 插件把 `subagent/start`/`subagent/end` 转成同一身份对，claim → lifecycle 配对
-验证即可通过。ZCode 以 `tool_use_id`（或同等调用 ID）关联 Agent/Task 工具调用；这
-证明的是工具调用闭环，子代理“完成”语义仍需同版本实机 canary。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的
-默认 provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
+provider、bridge、原生会话、请求/轮次与完成证据分别绑定。缺少 transcript/usage 的
+宿主如实记 UNAVAILABLE；安装目录或 hook 配置存在不等于原生执行可用，更不等于
+Git 非分片完整 canary 通过。不同宿主、版本和安装副本的证据不能互相代用。
 
 一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目
 标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自

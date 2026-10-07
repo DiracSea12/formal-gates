@@ -1,226 +1,25 @@
-# 端到端走查示例
+# 一个正式流程示例
 
-> 目标读者：主代理（编排者）。本文用一个虚构场景把正式流程完整走一遍，每一步给出
-> 「读什么 reference、派发什么独立代理、认领时机、生命周期检查点」以及可照做的动
-> 作。九步顺序以 `SKILL.md` 为唯一本体；命令形式以 `references/formal-flow.md` 为
-> 准；本文只示范走法，不替代前两者。首次走完整流程前，先读完本文再动手。
+需求：“给 tdo 增加归档命令，把已完成任务移入归档，并能查看归档列表。”
+本示例展示角色和次序；具体字段与调用形式只见 [正式流程公共合同](formal-flow.md)。
 
-## 目录
+1. 普通修改请求先非阻塞提醒。用户明确要求 formal-gates 后，主代理读取仓库事实，
+   只澄清仍影响范围、公开行为、验收或主要架构的选择。无待澄清问题时明确说明。
+2. 把完整需求、方案和有限 REQ/AC/来源写入唯一正式文件。先结构预检，再展示全文
+   与精确 revision，单独等待用户确认。修改时仍更新该文件并重新预检与确认。
+3. 确认后如 mode 尚未明确，再选择 regular/lightweight。用 typed intake receipt 启动
+   run；首次 drive 自动登记同一确认，不重新发起全文确认。
+4. regular 先独立产品审，再独立技术审。Operator 核实 raw finding，完整展示有效
+   finding 后由用户逐项处置。技术审形成 Batch→Subtask 与 split/no-split 计划。
+5. 用户确认计划、拓扑与路线。engine 签发当前 Ready 集合，开发与基线隔离区中的黑盒
+   设计/审查并发；开发者仅实现已确认内容，审查者不接收开发解释。
+6. adapter 接纳开发 manifest，跟踪、提交并固定不可变快照。黑盒屏障完成后白盒独立
+   核对覆盖、编写/复用测试；全部 FROZEN case-set 纳入候选身份。
+7. engine 冻结完整验证 wave，按容量并行推进 QA 与门。所有目标终结并裁决后，失败
+   只归入一份统一 repair；未受影响证据经精确 receipt 继承。
+8. 必需义务全部通过后，promotion 固定同一候选并对账；engine 清理登记资源并核验
+   无残留，才完成 Seal。报告引用真实 receipt、snapshot 和原始证据。
 
-- [场景](#场景)
-- [1. 请求与受理](#1-请求与受理)
-- [2. 需求澄清与确认（受理阶段）](#2-需求澄清与确认受理阶段)
-- [3. 进入正式流程](#3-进入正式流程)
-- [4. 正式流程启动（Step 1）](#4-正式流程启动step-1)
-- [5. 需求澄清登记（Step 2）](#5-需求澄清登记step-2)
-- [6. 产品审（Step 4 Part 1）](#6-产品审step-4-part-1)
-- [7. 技术审（Step 4 Part 2）](#7-技术审step-4-part-2)
-- [8. 拆分决定（Step 3 前半）](#8-拆分决定step-3-前半)
-- [9. 路线确认（Step 3 后半）](#9-路线确认step-3-后半)
-- [10. 开发（Step 5）](#10-开发step-5)
-- [11. 固定当前快照（Step 6）](#11-固定当前快照step-6)
-- [12. 开发后 QA 与门（Step 7）](#12-开发后-qa-与门step-7)
-- [13. 修复与继承判定（Step 8）](#13-修复与继承判定step-8)
-- [14. Seal（Step 9）](#14-sealstep-9)
-
-## 场景
-
-`tdo` 是一个命令行任务清单工具，仓库用 Git，已有 `tdo add`、`tdo done`、`tdo
-list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成任务归档到独立文件；
-再让 `tdo list --archived` 能查看归档内容」。
-
-## 1. 请求与受理
-
-1. 收到创建、编辑、移动或删除项目内容的请求时，默认提醒一次：若需走 formal-gates 流程，
-   可直接提出。当需求过大、过复杂（规模、耦合、风险、验证复杂度足以超过普通直接处理的
-   能力）时，在需求澄清与方案确认完毕、准备开做之际再额外强调一次：检测到复杂需求，建
-   议走 formal-gates 流程。主代理不得自行触发正式流程。非修改性提问、解释、诊断、review不触发。
-2. 用户明确要求走正式流程（或明确要求触发 formal-gates）时，照读 `SKILL.md` 开发受
-   理流程操作。
-3. 本步不读 `references/formal-flow.md`——命令形式在正式流程启动时才需要。现在只按
-   `SKILL.md` 开发受理流程操作。
-
-**默认提醒分支**：普通请求提醒一次（「若需走 formal-gates 流程，可直接提出」）后按常规
-方式直接开发，不建 run、不问询、不审；大需求在需求与方案确认完毕、准备开做时额外强调
-一次（「检测到复杂需求，建议走 formal-gates 流程」），用户仍不选择也按常规方式直接处理。
-已有正式 run 进行中时的行为由主代理按情境决定。
-
-**走正式流程分支**：用户明确要求时，进入完整受理流程。继续。
-
-## 2. 需求澄清与确认（受理阶段）
-
-按 `SKILL.md` 开发受理流程第 2-4 条执行：
-
-1. 检视工作区，确定自己能直接判定的事实：先看 `tdo` 现有子命令、数据文件格式、已
-   有测试，别让用户替你查。
-2. 逐维核对目标、场景、范围、默认值、失败路径、验收、约束与取舍；先从仓库和已确认
-   记录解决事实问题。仅对会实质改变范围、公开行为、验收或主要架构的未决事项提问，
-   一次一个决策；次要实现细节自行决定，记录实际问答及“考虑过但放过”项的依据。
-3. 无待澄清问题时，显式说“无待澄清问题”。把完整需求与技术方案写入唯一正式需求文件，
-   按下节命令启动受理 run 并绑定该文件；运行结构预检，计算精确 revision。
-4. 预检通过后，展示绑定文件全文与精确 revision，单独请求并等待明确确认。修订时更新
-   同一文件、重新预检并呈现；提出方案或推荐不等于确认。
-5. 用户确认同一 revision 后继续该 run，不另建第二个 run；按 Step 2 记录澄清 PASS 并
-   执行 requirement --confirmed。路线 default/full/custom 在拆分决定之后确认。
-
-## 3. 进入正式流程
-
-1. 正式需求落盘、run 绑定和预检在最终确认之前完成；以下启动步骤是上述受理阶段所用
-   操作的展开，不是在确认之后重复启动。
-2. 用户确认后若尚未明确模式，再选择 `lightweight` 或 `regular`；轻量路线不经拆分决定
-   与 default/full/custom 路线选择。普通请求不进入本示例的正式流程分支，按默认提醒后的常规方式处理。
-
-## 4. 正式流程启动（Step 1）
-
-1. 先读 `references/formal-flow.md`「启动与 run 控制」，拿到 `workflow start` 的确切
-   命令形式（基线解析与采纳外部改动也在该节）。
-2. 用 Git 作外部 VCS，冻结原生基线标识。不指定 `--base-snapshot` 时，CLI 把当前 HEAD
-   解析为基线。
-3. 运行：
-   ```bash
-   formal-gates workflow start --root <tdo 仓库> --package-root <formal-gates 包> \
-     --run-id tdo-archive-001 --flow formal --requirement <需求文件> \
-     [--requirement-artifact <方案文档> ...] --vcs git --split no
-   ```
-   登记主需求和所有对应的需求/方案文档。不支持无 VCS 的正式开发流程。
-4. 生命周期检查点：`workflow show` 确认 run 已启动、需求已登记、状态为预期初始值。
-
-## 5. 需求澄清登记（Step 2）
-
-1. 先读 `references/formal-flow.md`「需求、拆分决定与路线」。
-2. 本步只登记受理阶段已对齐的需求（需求文件已在受理阶段写入），不重新澄清。运行
-   `workflow prepare-action --action requirements-clarification` 产出登记任务，由主代理
-   直接执行（不派零上下文子代理）。
-3. 取得用户最终确认后，用
-   `workflow record-action --action requirements-clarification --status PASS` 登记，
-   与 `requirement --confirmed` 绑定。
-4. 检查点：`workflow show` 确认该动作是 PASS、需求文件被 run 引用。
-5. 之后需求被修订时按三分支分类：meaning-preserved → 保留既有 PASS、快照重绑新修订
-   （开发开始后须同时传 `--confirmed`）；meaning changed → 作废全部结果、回需求澄清
-   重新登记；需求修订**或 start-readiness FAIL 时**，黑盒 QA 用例增量修订——只增删改
-   确实受影响的用例（未受影响保持 PASS）。
-
-## 6. 产品审（Step 4 Part 1）
-
-1. 出现发现项时读 `references/formal-flow.md`「开发之前」的处置/重审机制；Part 2 双
-   速调度与快速路径细节也见该节。
-2. 派发独立产品审代理：`workflow prepare-action --action product-review`。用全新零上
-   下文审查者审已实例化并确认的需求文档（承接需求细节澄清）：需求本身是否合理、需
-   求细节是否合理。
-3. 认领时机：host 启动审查者后，立即 `workflow claim-dispatch --dispatch <id>
-   --reviewer <host-agent-id>` 绑定 host 身份——这是生命周期检查点：claim 会先检查生
-   命周期模块，要求 start 与 stop 事件配对。
-4. 发现项分级 P0/P1/P2/P3，是候选输入不是终态。逐项转达用户处置：用户接受 → 该发现项
-   作废、不阻塞、不改需求；用户认同问题 → 按指示修订需求/方案。用户已拍板的发现项
-   不再重提。
-5. 是否重审：没审出问题 → 直接通过；认同的问题里不存在 P0/P1 → 修订后不重审、直接
-   进入下一步；存在 P0/P1 → 修订后重审。产品审不产生终态 FAIL，需求是否成立由用户
-   决定。
-6. Operator 逐项核验需求匹配、正常入口、证据、位置、范围、严重度、绑定与完整性后，
-   用完整 `--operator-check` 集及本次 `--operator-evidence` 记录：
-   `workflow record-action --action product-review --status PASS`（有候选发现项待处置时记
-   FAIL + 发现项）。Part 1 全部通过后进入 Part 2；完整参数见
-   `references/formal-flow.md`「开发之前」。
-
-## 7. 技术审（Step 4 Part 2）
-
-1. 承接技术方案选择与对齐。运行 `workflow prepare-action --action start-readiness`，
-   派发全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点同上）。
-2. 处置与重审规则同产品审；start-readiness 的 FAIL 发现项同样只是候选输入。若
-   start-readiness FAIL 触发黑盒 QA 用例增量修订，按第 5 步的修订规则执行。
-3. Operator 完成并提交同一组显式核验后记录：
-   `workflow record-action --action start-readiness --status PASS`；完整参数见
-   `references/formal-flow.md`「开发之前」。
-
-## 8. 拆分决定（Step 3 前半）
-
-1. 完整拆分流程读 `references/sliced-runs.md`；命令形式见 `references/formal-flow.md`
-   「需求、拆分决定与路线」。
-2. start-readiness PASS 后记录拆分决定。拆分建议对所有正式 run 必填呈现并留痕：拆分
-   理由、如何拆、哪些子任务可并行、改拆后果说明；仅高置信要拆时才需用户确认拆分方
-   案。命令：`workflow slicing --decision no-split --note '<原因>'`。
-3. 本例 `archive` + `list --archived` 是大而连贯的单一 run：拆太细会让子任务小至不值
-   得单独走完整流程，拆太粗会把可独立实现验收的逻辑单元塞进一个子任务，而这里都没
-   有。所以 `no-split`，留痕原因。
-4. 检查点：拆分决定记录后即为绑定点、不重切。分片 >= 2 时整体级产品审/技术审已足够，
-   切片继承整体结果、不重跑（本示例不分片，后续均为单 run 行为）。
-
-## 9. 路线确认（Step 3 后半）
-
-1. 拆分决定之后确认路线，时序见 `SKILL.md` 正式流程开头。运行
-   `workflow route-candidates` 查看可选：默认（default，推荐）选全部普通门、不选 QA；
-   full（QA 阶段较重，适合大型任务）选普通非分片 run 的双 QA 与全部门；custom 自选
-   候选项，至少一项，可选子集或全集。
-2. 主代理推荐默认（default），仍由用户确认；本示例需要展示 QA，用户选择
-   `workflow route --mode full`。选择默认的对应命令是 `workflow route --mode default`。
-3. 开发开始之后不能再加入 QA；default 未选中的 QA 与 custom 未选中的部分获得路线
-   跳过授权，Seal 时不会补做。
-
-## 10. 开发（Step 5）
-
-1. 先读 `references/formal-flow.md`「开发与快照」，拿到 `prepare-action
-   development-worker` 的确切命令形式、认领放宽与快照门机制。
-2. 运行 `workflow prepare-action --action development-worker`，把输出作为完整任务发给
-   独立开发工作者代理；任务内容与「派发即原样转发」等派发规则见 SKILL.md「独立派
-   发」。
-3. worker 启动后 `workflow claim-dispatch` 认领（生命周期检查点）。
-4. 任务中断后可用 `workflow resume` 继续同一个 PREPARED 任务，只重新组装提示词，已
-   记录的开发开始边界不变。
-
-## 11. 固定当前快照（Step 6）
-
-1. 先读 `references/formal-flow.md`「开发与快照」。
-2. 实现完成后用 Git 创建不可变标识，运行
-   `workflow snapshot --dispatch <development-dispatch-id>` 记录它；快照门机制与
-   worker 已提交 HEAD 时认领放宽容纳该情形的细节见该节。
-3. 生命周期检查点：snapshot 会先检查生命周期模块（claim 与 stop 已配对），通过后才
-   改变状态。
-
-## 12. 开发后 QA 与门（Step 7）
-
-1. 先读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并验证细节也见该
-   节（本示例不分片）。
-2. 黑盒 QA 用例已在开发期间于隔离工作区按**增量**设计：`qa-design` 只返回变更（新增不带 id、修改
-   用 `--case-id`、删除用 `--remove-case`、整体替换用 `--replace-all`），未提及的既有
-   用例与其 PASS 状态自动保留；每轮记录后用例镜像到隔离工作区
-   `.gates/cases/blackbox.md`（主干封板前不可见）。`qa-review` 审查完整合并集（提示词
-   注入本轮变更清单）。本阶段沿用已冻结用例，不因进入开发后阶段重新设计黑盒用例。
-3. 先形成 review-ready 快照：白盒路线先完成测试提交与 QA Review，全部已选 case-set
-   FROZEN 后，只用一次 `workflow prepare-review-wave` 冻结 expected-set/digest 并准备
-   eligible QA execution 与门审任务，再按依赖和宿主容量并行派发。
-4. 每个门都用全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点）。门任务组
-   装、QA 审查者输入、`compared` 快照对校验等规则见 SKILL.md「独立派发」「结果校验
-   与修复上限」与 formal-flow「开发后审查」。
-5. 记录：`workflow qa-execution --case-result ...` 与
-   `workflow record-gate --gate <id> --status PASS --compared <base>..<current>`。
-6. 状态询问只能询问进度，并明确告知审查者继续直到所有分配检查完成。
-
-## 13. 修复与继承判定（Step 8）
-
-1. 先读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
-2. 整个 review-wave 完成且发现项经主代理逐条核实、裁决与归并后，将 QA FAIL、有效
-   P0/P1 与门审 P2 放入唯一返修计划。P2/P3 本身不使门判 FAIL；门审 P2 仍需修复，
-   纯 P2 修复不复审、不计轮次，按既有规则完成全量自测与 completion/carry 凭据。
-   门审 P3 不触发或混入返修，只在 Seal 时提醒仍存在的项；纯 P3 继续向 Seal 推进。
-   QA Review P2/P3 仍按 suggestion ID 吸收后冻结，不属于此处门审 P3 的处置。
-3. 派发独立门审/QA 前，先用目标项目自己的构建/测试做便宜健全性检查，明显失败如编译
-   不过直接退回修复、不派发子代理；无校验入口则跳过。
-4. 修复继承判定按 `references/formal-flow.md`「继承判定、修复授权与 Seal」判定：修复
-   范围不影响任何此前已通过的被选验证 → 主代理直接做继承判定
-   （`workflow carry --main-agent --main-reason '<原因>'`）；否则对每个此前通过的被选
-   门单独派发继承判定（`prepare-action --action carry`）。
-5. 修复完成后固定快照，按 carry 判定重跑受影响的门，QA 按 AFFECTED/FULL 规则执行；
-   纯门审 P2 修复按 completion/carry 规则继承，不新增审查轮次。独立派发照常认领并经过
-   生命周期检查。
-
-## 14. Seal（Step 9）
-
-1. 先读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
-2. 核对已有门审 P3 与范围外 P3 在最终快照是否仍存在，仅一次性提醒仍存在且未处置的项；
-   不为 P3 新增审查或返修。汇总前后各确认一次当前 VCS 标识，再
-   `workflow seal --run-id tdo-archive-001`；只有
-   当每个被选中的结果都通过、或已获得允许的授权之后才 Seal。Seal 跳过与跳过授权规
-   则见该节与 SKILL.md 第 9 步。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
-   `.gates/results/tdo-archive-001.blackbox-cases.md`（本 run 的黑盒用例交付物）。
-3. Seal 后该快照的结论即最终。中断的 run 用 `workflow resume` 继续；需要作废则
-   `workflow abort`。
+lightweight 在第 3 步选择，不进入后续开发/QA/门流程；只留下明确 unverified 记录。
+中断恢复使用原 run 的 drive；UNKNOWN 先对账。需求变更、reset、abort、路线变更和
+合法节点跳转从当前 availableActions 发起 typed Ask，经 submit 记录实际用户决定。

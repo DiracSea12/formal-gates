@@ -1,4 +1,4 @@
-# Guard calculation preview (阶段 3.5b)
+# Guard calculation preview
 
 ```sh
 go build -o bin/formal-gates ./cmd/formal-gates
@@ -71,7 +71,7 @@ as displayed in the result, compact JSON, standard escaping, no trailing newline
 All identity/revision, provenance and retry fields participate. Input JSON field
 order, collection order and exact duplicates do not affect the result or digest.
 
-In stage 4 the Controller is responsible for accepting only confirmed plan expansion;
+The Controller is responsible for accepting only confirmed plan expansion;
 preauthorized repair slots may be added mechanically. Finding-derived sources require
 completed Operator adjudication and, for wave findings, a collected wave and its unique
 repair obligation. Raw findings, ordinary results, receipts and resume never add slots.
