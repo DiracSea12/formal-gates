@@ -252,11 +252,37 @@ func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 	var failedPending protocol.PendingAction
 	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
 		var command struct {
-			Exit          int `json:"exit"`
+			Exit          int      `json:"exit"`
+			Argv          []string `json:"argv"`
+			PID           int      `json:"pid"`
 			Input, Output string
 		}
-		if err := json.Unmarshal([]byte(line), &command); err != nil || command.Exit != 0 {
-			t.Fatalf("actual public command failed: %s (%v)", line, err)
+		if err := json.Unmarshal([]byte(line), &command); err != nil {
+			t.Fatal(err)
+		}
+		if command.Exit != 0 {
+			if command.Exit != -1 || len(command.Argv) < 3 || command.Argv[1] != "workflow" || command.Argv[2] != "drive" {
+				t.Fatalf("actual public command failed: %s", line)
+			}
+			// The private promotion peer records the native effect and the same
+			// original intent before the deliberate process interruption.
+			var window canaryPromotionWindow
+			var recovered struct {
+				Promotion              protocol.CandidatePromotionReceipt
+				NativeDeliveryCommands int
+				ResourcesCleaned       bool
+				Status                 string
+			}
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "promotion-recovery", "interruption.json")), &window); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(jobs, "promotion-recovery", "recovered-terminal.json")), &recovered); err != nil {
+				t.Fatal(err)
+			}
+			if window.NativeExit != 0 || command.PID != window.ParentPID || recovered.NativeDeliveryCommands != 1 || !recovered.ResourcesCleaned || recovered.Status != "COMPLETE" || recovered.Promotion.OperationID != window.Intent.ActionID {
+				t.Fatalf("interrupted public command has no original recovered promotion: %s", line)
+			}
+			continue
 		}
 		var event protocol.Event
 		if command.Input == "" || json.Unmarshal([]byte(command.Input), &event) != nil || event.Result == nil || event.Result.Outcome != protocol.OutcomeRuntimeError {
@@ -1213,7 +1239,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s.save(e.t)
 	case "codex":
 		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
-			Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
+			StrictSchema: true, Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
 		s.peer.ThreadParams = map[string]any{"cwd": workspace, "ephemeral": false}
 		if request["read_only"] == true {
 			s.peer.ThreadParams["sandbox"] = "read-only"
@@ -1225,6 +1251,20 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		if err != nil {
 			return err
 		}
+		nativeAnswer := canaryCodexNativeAnswer(request["schema"], answer)
+		nativeBody, err := json.Marshal(nativeAnswer)
+		if err != nil {
+			return err
+		}
+		plain, err := decodeNativeJSON(nativeBody)
+		if err != nil {
+			return err
+		}
+		projected, err := codexDomainResult(request["schema"], plain)
+		if err != nil || !valuesEqual(projected, answer) {
+			return fmt.Errorf("local Codex native result changed domain evidence: %v", err)
+		}
+		s.peer.Answer = objectOrEmpty(nativeAnswer)
 		delete(params, "threadId")
 		s.peer.TurnParams = params
 		if err := writeAtomicJSON(script, s.peer); err != nil {
@@ -1651,4 +1691,55 @@ func (e *canaryLocalExecutor) coreAnswer(input protocol.WorkerInput, workspace s
 	var value map[string]any
 	err = json.Unmarshal(body, &value)
 	return value, err
+}
+
+// The synthetic Codex peer emits the native spelling required by its actual
+// output schema. This runs before RPC output; original native bytes stay intact.
+func canaryCodexNativeAnswer(schema, value any) any {
+	if value == nil {
+		return nil
+	}
+	contract := objectOrEmpty(schema)
+	branches := listOf(contract["anyOf"])
+	if len(branches) == 2 {
+		if getOf(branches[0], "type") == "null" {
+			return canaryCodexNativeAnswer(branches[1], value)
+		}
+		if getOf(branches[1], "type") == "null" {
+			return canaryCodexNativeAnswer(branches[0], value)
+		}
+	}
+	if additional, ok := codexOpenMap(contract); ok {
+		rows := []any{}
+		dictionary := objectOrEmpty(value)
+		keys := make([]string, 0, len(dictionary))
+		for key := range dictionary {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			rows = append(rows, map[string]any{"key": key, "value": canaryCodexNativeAnswer(additional, dictionary[key])})
+		}
+		return rows
+	}
+	switch current := value.(type) {
+	case map[string]any:
+		out := maps.Clone(current)
+		for name, property := range objectOrEmpty(contract["properties"]) {
+			item, present := current[name]
+			if present {
+				out[name] = canaryCodexNativeAnswer(property, item)
+			} else if !slices.Contains(listOf(contract["required"]), any(name)) {
+				out[name] = nil
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(current))
+		for i, item := range current {
+			out[i] = canaryCodexNativeAnswer(contract["items"], item)
+		}
+		return out
+	}
+	return value
 }

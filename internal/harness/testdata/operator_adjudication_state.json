@@ -1,13 +1,13 @@
 {
   "writer": "engine",
-  "stateSchemaVersion": "1",
-  "workflowDefinitionVersion": "10",
+  "stateSchemaVersion": "2",
+  "workflowDefinitionVersion": "11",
   "definitionSource": "definitions/workflow.json",
-  "definitionDigest": "sha256:dc6ed3ae3ec709513ce5d7627e0419d91623ee168f00bf10119005aa6e8498b2",
+  "definitionDigest": "sha256:bfd8dac2596dda58b80af8b05d0c9bf27123ccd3a91bed7633a79598d5273aa0",
   "packageDigest": "7808d54940549cc05cc149acf1dfda016a23a84e05c4340d5ae9be62e12caf0a",
   "installedTargetIdentity": "zcode-global-e84fed778f7e",
   "revision": 43,
-  "contentDigest": "sha256:c3b6128e1af10c5f2c6b4aded86f31b4674e4000904afcd43b12e84b27ee23cc",
+  "contentDigest": "sha256:2daf2c07b24c3edb7032c6e67167b850a58bc5e1e4558b03119655058677e937",
   "content": {
     "requirementGuarantee": {
       "activationSource": "EXPLICIT_REQUIREMENT_CONFIRMATION",
@@ -4950,7 +4950,7 @@
       "requestAllowance": 8,
       "retryAllowance": 8,
       "totalAllowance": 16,
-      "budgetBasisDigest": "sha256:04daae1d97613e294da507bb3630009471897ba547bab863d9da56b8b59d5bd9",
+      "budgetBasisDigest": "sha256:ba8aef93d0f7c5f0906c3a16bbbf9c08dfc0443f36c2640bd6192115f01468eb",
       "usedRequests": 8,
       "usedRetries": 0,
       "tokenCapStatus": "UNAVAILABLE"

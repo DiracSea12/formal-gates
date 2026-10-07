@@ -2941,7 +2941,11 @@ func (c *engineCanary) cli(input []byte, args ...string) []byte {
 			exit = failure.ExitCode()
 		}
 	}
-	record, _ := json.Marshal(map[string]any{"argv": append([]string{c.binary}, args...), "cwd": cmd.Dir, "startedUTC": started.UTC().Format(time.RFC3339Nano), "elapsedSeconds": time.Since(started).Seconds(), "exit": exit, "input": string(input), "output": string(output)})
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	record, _ := json.Marshal(map[string]any{"pid": pid, "argv": append([]string{c.binary}, args...), "cwd": cmd.Dir, "startedUTC": started.UTC().Format(time.RFC3339Nano), "elapsedSeconds": time.Since(started).Seconds(), "exit": exit, "input": string(input), "output": string(output)})
 	journal, writeErr := os.OpenFile(filepath.Join(c.jobs, "installed-commands.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if writeErr != nil {
 		c.fail("command evidence: %v", writeErr)
