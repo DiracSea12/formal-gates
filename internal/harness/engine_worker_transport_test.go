@@ -264,3 +264,61 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
+	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
+	for _, role := range []string{"engine.development.batch", "engine.repair"} {
+		t.Run(role, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, _ := json.Marshal(schema)
+			native, err := codexOutputSchema(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := codexPlain(t, native)
+			if err = codexPeerStrictSchema(plain); err != nil {
+				t.Fatal(err)
+			}
+			completion := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)
+			nativeCompletion, err := codexOutputSchema(completion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := objectOrEmpty(getOf(nativeCompletion, "properties"))
+			for name, ids := range map[string][]string{"dod": {"behavior"}, "checks": {"build", "behavior-test"}} {
+				field := objectOrEmpty(fields[name])
+				properties := objectOrEmpty(field["properties"])
+				if field["type"] != "object" || field["additionalProperties"] != false || len(properties) != len(ids) || len(listOf(field["required"])) != len(ids) {
+					t.Fatalf("native %s did not retain its closed object", name)
+				}
+				for _, id := range ids {
+					if properties[id] == nil {
+						t.Fatalf("native %s omitted %s", name, id)
+					}
+				}
+			}
+			payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"command.go"}, Summary: "completed owned duty", Build: []string{"build passed"}, Tests: []string{"additional real check recorded here"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Checks: map[string]string{"build": "passed", "behavior-test": "passed"}, Handoff: "ready"}}}}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			domain, err := decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := codexPeerAnswer(schema, domain)
+			projected, err := codexDomainResult(schema, wire)
+			if err != nil || !valuesEqual(projected, domain) {
+				t.Fatalf("native projection changed completion evidence: %v", err)
+			}
+			after, _ := json.Marshal(schema)
+			if !bytes.Equal(original, after) {
+				t.Fatal("native translation mutated issued schema")
+			}
+		})
+	}
+}

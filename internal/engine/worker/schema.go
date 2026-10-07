@@ -73,6 +73,21 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			fields[name] = child
 		}
+		if batch := completionBatch(input); batch != nil {
+			completion := fields["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
+			dod, checks := map[string]any{}, map[string]any{}
+			dodIDs, checkIDs := []string{}, []string{}
+			for _, criterion := range batch.DoD {
+				dod[criterion.ID] = map[string]any{"type": "string", "minLength": 1}
+				dodIDs = append(dodIDs, criterion.ID)
+			}
+			for _, check := range batch.Checks {
+				checks[check.ID] = map[string]any{"type": "string", "minLength": 1}
+				checkIDs = append(checkIDs, check.ID)
+			}
+			completion["dod"] = map[string]any{"type": "object", "additionalProperties": false, "properties": dod, "required": dodIDs}
+			completion["checks"] = map[string]any{"type": "object", "additionalProperties": false, "properties": checks, "required": checkIDs}
+		}
 		if input.Handler == "engine.qa.design" && input.Validation.Manifest.Binding.ReviewKind != "" {
 			caseFields := fields["manifest"].(map[string]any)["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 			caseFields["mode"] = map[string]any{"type": "string", "enum": []string{string(input.Validation.Manifest.Binding.ReviewKind)}}
@@ -197,4 +212,16 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 		return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}, nil
 	}
 	return nil, fmt.Errorf("worker result type %s has no supported native representation", value)
+}
+
+// Completion keys come only from the issued member batch. Final-candidate
+// verification and repair planning have different evidence duties.
+func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch" && input.Handler != "engine.repair") {
+		return nil
+	}
+	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {
+		return nil
+	}
+	return &input.Validation.Development.Batch
 }

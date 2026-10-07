@@ -184,3 +184,64 @@ func TestQAMaterialCarriesFiniteDomainsAndIssuedBindings(t *testing.T) {
 		})
 	}
 }
+
+func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
+	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}, {ID: "interface", Description: "declared interface"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop the issued duty"}}}
+	for _, role := range []string{"engine.development.batch", "engine.repair"} {
+		t.Run(role, func(t *testing.T) {
+			input := protocol.WorkerInput{RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+			before, _ := json.Marshal(input)
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
+			for name, ids := range map[string][]string{"dod": {"behavior", "interface"}, "checks": {"build", "behavior-test"}} {
+				schema := fields[name].(map[string]any)
+				properties := schema["properties"].(map[string]any)
+				if schema["additionalProperties"] != false || !reflect.DeepEqual(schema["required"], ids) || len(properties) != len(ids) {
+					t.Fatalf("%s is not exactly the issued key set: %v", name, schema)
+				}
+				for _, id := range ids {
+					field := properties[id].(map[string]any)
+					if field["type"] != "string" || field["minLength"] != 1 {
+						t.Fatal("completion evidence lost non-empty string contract")
+					}
+				}
+			}
+			if !strings.Contains(material.Prompt, "do not omit or add keys") || !strings.Contains(material.Prompt, "development.tests, development.build or development.summary") {
+				t.Fatal("additional evidence destination missing")
+			}
+			after, _ := json.Marshal(input)
+			if string(before) != string(after) {
+				t.Fatal("schema/material mutated issued input")
+			}
+		})
+	}
+	for _, name := range []string{"no-batch", "empty-batch", "unfrozen-repair", "final-verification", "other-role"} {
+		t.Run(name, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			switch name {
+			case "empty-batch":
+				input.Validation.Development = &protocol.DevelopmentInput{}
+			case "unfrozen-repair":
+				input.Validation.Repair = &protocol.RepairInput{}
+			case "final-verification":
+				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
+				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "final"}}
+			case "other-role":
+				input.Handler = "engine.qa.design"
+				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
+			}
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			completion := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
+			if _, ok := completion["checks"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
+				t.Fatal("unissued or non-batch duty was restricted to another batch")
+			}
+		})
+	}
+}

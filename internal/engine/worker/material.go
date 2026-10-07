@@ -79,6 +79,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
+	if completionBatch(input) != nil {
+		instructions += " completion.dod and completion.checks must contain exactly the IDs declared in input.validation.development.batch.dod and .checks, each with non-empty evidence; do not omit or add keys. Report additional actual checks in development.tests, development.build or development.summary, never as extra completion IDs."
+	}
 	if input.Handler == "engine.qa.design" || input.Handler == "engine.qa.review.rationale" || input.Handler == "engine.qa.execution" {
 		instructions += " " + coverage.QAResultContract()
 	}
