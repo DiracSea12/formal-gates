@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
@@ -591,6 +593,10 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow submit", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
+	materialPath := fs.String("worker-material", "", "issued material reference JSON file")
+	nativeDirectory := fs.String("native-directory", "", "original native evidence directory")
+	sourcePath := fs.String("native-source", "", "original native source receipt JSON")
+	eventID := fs.String("event-id", "", "worker result event identity")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -600,6 +606,21 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	}
 	if err != nil {
 		return 1, err
+	}
+	if *materialPath != "" {
+		var material facade.WorkerMaterial
+		if err := readJSONFileInto(*materialPath, &material); err != nil {
+			return 1, err
+		}
+		var source map[string]any
+		if err := readJSONFileInto(*sourcePath, &source); err != nil {
+			return 1, err
+		}
+		acceptance, run, err := f.SubmitWorkerResult(protocol.EventID(*eventID), material, *nativeDirectory, source, harness.NativeResultEvidence)
+		if err != nil {
+			return 1, err
+		}
+		return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 	}
 	var event protocol.Event
 	if err := json.NewDecoder(streams.Stdin).Decode(&event); err != nil {
@@ -2460,4 +2481,14 @@ func runWorkflowPrepareCandidate(args []string, streams IO) (int, error) {
 	}
 	state, err := validate.PrepareCandidate(*root, *pkg, *runID, *message)
 	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func readJSONFileInto(path string, value any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(value)
 }

@@ -881,7 +881,7 @@ type workerResultEventWire struct {
 	ActionID           string                `json:"actionId"`
 	Provider           string                `json:"provider"`
 	Outcome            string                `json:"outcome"`
-	PayloadDigest      string                `json:"payloadDigest"`
+	PayloadDigest      string                `json:"payloadDigest,omitempty"`
 	FailureClass       string                `json:"failureClass,omitempty"`
 	Review             *ReviewResultEvidence `json:"review,omitempty"`
 }
@@ -1031,3 +1031,10 @@ func canonicalJSON(v any) ([]byte, error) {
 // WithResetPreview carries facade-observed document registration into the existing
 // request handler. It is engine input, not part of the external event identity.
 func (e Event) WithResetPreview(preview ResetPreview) Event { e.resetPreview = &preview; return e }
+
+// MarshalJSON uses the same worker wire as Event.CanonicalBytes. The worker
+// material template therefore names the actual submit fields rather than Go
+// struct field names; it does not perform business admission.
+func (p WorkerResultPayload) MarshalJSON() ([]byte, error) {
+	return canonicalJSON(workerResultEventWire{InterruptionReason: p.InterruptionReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
+}

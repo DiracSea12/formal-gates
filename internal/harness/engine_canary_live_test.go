@@ -75,6 +75,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/requirement"
@@ -129,7 +130,7 @@ var canaryGateArgs = []string{"--unknown-flag", "canary"}
 // canaryRouteCandidates is the gate universe this host requests for the
 // fixture run: both built-in QA modes plus the regression gate that owns the
 // public flag-contract probe.
-var canaryRouteCandidates = []string{"blackbox", "whitebox", "regression"}
+var canaryRouteCandidates = []string{"blackbox", "whitebox", "implementation-quality-gate"}
 
 const canaryProvider = "zcode"
 
@@ -589,6 +590,7 @@ func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- 
 			continue
 		}
 		input, pipeline := c.run.ValidationInputs[id]
+		materialRefs := maps.Clone(c.run.WorkerMaterials)
 		if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness && (!pipeline || input.Handler == "") {
 			continue
 		}
@@ -597,6 +599,7 @@ func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- 
 		}
 		active[key] = true
 		worker := *c
+		worker.run.WorkerMaterials = materialRefs
 		worker.worker = true
 		worker.caseArgs, worker.caseTests = maps.Clone(c.caseArgs), maps.Clone(c.caseTests)
 		if input.Handler == "engine.repair" {
@@ -645,7 +648,9 @@ func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input
 			done.event = event
 		}
 	}()
-	if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
+	if material, ok := c.productionMaterial(id); ok {
+		done.event = c.dispatchProduction(id, material)
+	} else if pending.ReviewSeries == review.ProductReview || pending.ReviewSeries == review.StartReadiness {
 		done.event = c.dispatchReview(id, pending.ReviewSeries)
 	} else {
 		done.event = c.dispatchPipeline(id, input)
@@ -1801,7 +1806,7 @@ func (c *engineCanary) confirmRoute() {
 	c.t.Helper()
 	candidates, mode := canaryRouteCandidates, "full"
 	if c.run.MasterRunID != "" {
-		candidates = []string{"regression", "correctness"}
+		candidates = []string{"implementation-quality-gate", "complexity-gate"}
 		if c.childSlice() == "word-size" {
 			mode = "custom"
 		}
@@ -1827,7 +1832,7 @@ func (c *engineCanary) confirmRoute() {
 	}
 	route := protocol.RouteDecision{Mode: mode, Gates: gates}
 	if mode == "custom" {
-		route.Selected = []string{"correctness"}
+		route.Selected = []string{"complexity-gate"}
 	}
 	if c.run.MasterRunID != "" {
 		route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: c.sliceProposal()}
@@ -2134,7 +2139,7 @@ func canaryFlagFindingResolution(workspace, materialDir string, target *protocol
 // each report still retains its own exact issued workspace and material scope.
 func canaryFlagWaveContext(jobs string, state *protocol.State, wave *protocol.ValidationWave) (protocol.FindingResolution, error) {
 	var target *protocol.ValidationTarget
-	for _, gate := range []string{"merge-gate", "regression"} {
+	for _, gate := range []string{"merge-gate", "implementation-quality-gate", "regression"} {
 		for _, candidate := range wave.Targets {
 			if candidate.Kind == "GATE" && candidate.Gate == gate {
 				if target != nil {
@@ -3548,4 +3553,94 @@ func TestCanaryRepairCompletionKeepsOriginalRunRows(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("consumer changed original completion fields")
 	}
+}
+
+// productionMaterial consumes the real Drive-produced immutable payload.
+// Standalone transport fixtures have no engine run and supply their own input.
+func (c *engineCanary) productionMaterial(action string) (worker.Material, bool) {
+	ref, ok := c.run.WorkerMaterials[action]
+	if !ok {
+		if c.run.RunID != "" {
+			c.fail("issued engine action %s has no production worker material", action)
+		}
+		return worker.Material{}, false
+	}
+	body, err := os.ReadFile(ref.Path)
+	if err != nil {
+		c.fail("production material unavailable: %v", err)
+	}
+	sum := sha256.Sum256(body)
+	if ref.Digest != "sha256:"+hex.EncodeToString(sum[:]) {
+		c.fail("production material digest differs")
+	}
+	var material worker.Material
+	if err := json.Unmarshal(body, &material); err != nil {
+		c.fail("production material decode: %v", err)
+	}
+	if material.Input.Pending.ActionID != action || material.Input.Pending.AttemptID != ref.AttemptID || material.Input.RunID != c.currentRunID() {
+		c.fail("production material differs from issued action/attempt/run")
+	}
+	return material, true
+}
+
+// dispatchProduction transports the complete core answer without converting
+// it to the fixture's partial result contracts. Frob facts remain observations
+// made by this fixture, not production defaults or a second result protocol.
+func (c *engineCanary) dispatchProduction(id string, material worker.Material) protocol.Event {
+	input := material.Input
+	workspace := c.project
+	if input.Validation != nil && input.Validation.Workspace != nil {
+		workspace = input.Validation.Workspace.Path
+	}
+	// This observation supports the fixture Operator's flag-cause adjudication;
+	// the worker independently consumes the unchanged production prompt.
+	if input.Validation != nil && input.Validation.Gate != nil && ((!c.split && input.Validation.Gate.Gate == "implementation-quality-gate") || (c.splitFlagContract() && c.childSlice() == "" && input.Validation.Gate.Gate == "merge-gate")) {
+		materials := c.materials(id, input.Validation.Gate.Gate+" gate", *input.Validation)
+		binary := c.buildCandidate(workspace, id)
+		materials.HostObservations = []canaryObservation{c.observe("public flag-contract probe", workspace, append([]string{binary}, canaryGateArgs...))}
+		body, err := json.MarshalIndent(materials, "", "  ")
+		if err != nil {
+			c.fail("fixture observation encode: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(c.jobDirectory(id), "materials.json"), body, 0600); err != nil {
+			c.fail("fixture observation save: %v", err)
+		}
+	}
+	var payload protocol.WorkerResultPayload
+	shape := func(answer map[string]any) error {
+		body, err := json.Marshal(answer)
+		if err != nil {
+			return err
+		}
+		// Native evidence verification and original raw proof are completed by
+		// turnIn before this answer reaches the final event below.
+		raw, err := os.ReadFile(filepath.Join(c.transcript, "answer.raw.txt"))
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(raw)
+		event, err := worker.DecodeResult(input, "worker-result", body, fmt.Sprintf("sha256:%x", sum))
+		if err != nil {
+			return err
+		}
+		payload = *event.Result
+		return nil
+	}
+	turn := c.turnIn(workspace, id, input.Handler, material.Prompt, material.ResultSchema, material.ReadOnly, shape)
+	payload.PayloadDigest = turn.digest
+	if payload.Review != nil {
+		if payload.Review.Action == review.StartReadiness {
+			c.masterPlan = payload.Review.GranularityReview
+		}
+	} else if payload.Validation != nil {
+		result := payload.Validation
+		if result.Manifest != nil {
+			for _, designed := range result.Manifest.Cases {
+				if designed.TestRef != "" {
+					c.caseTests[c.caseKey(designed.CaseID)] = designed.TestRef
+				}
+			}
+		}
+	}
+	return protocol.Event{Kind: protocol.KindWorkerResult, Result: &payload}
 }

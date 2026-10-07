@@ -99,8 +99,8 @@ func canaryCaseMode(input protocol.ValidationInput) coverage.CaseMode {
 }
 func (c *engineCanary) confirmRequirement() {
 	revision, document := c.run.Review.RequirementRevision, string(c.doc)
-	if c.run.Validation != nil && c.run.Validation.Document.Content != "" {
-		document = c.run.Validation.Document.Content
+	if c.run.Validation != nil && c.run.Validation.Document.Content != "" && c.run.Validation.RequirementRevision == revision {
+		return
 	}
 	c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 }
@@ -234,9 +234,9 @@ func (c *engineCanary) assertSplitTerminal(base string) {
 		if receipt.Digest != child.CanonicalDigest() || child.ChildRunID != runID || child.MasterRunID != final.RunID || child.SliceID != slice || child.Envelope != final.Envelope || child.RequirementRevision != c.revision || child.Status != "SLICE_READY" || child.Validation.Status != "COMPLETE" || len(child.SelectedQA) != 0 || len(child.ApprovedCases) != 0 {
 			c.fail("child %s has inconsistent frozen receipt", slice)
 		}
-		expected := []string{"correctness", "regression"}
+		expected := []string{"complexity-gate", "implementation-quality-gate"}
 		if slice == "word-size" {
-			expected = []string{"correctness"}
+			expected = []string{"complexity-gate"}
 			if child.RouteMode != "custom" {
 				c.fail("custom child route changed")
 			}

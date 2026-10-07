@@ -104,6 +104,7 @@ type Run struct {
 	ValidationRequests   map[string]protocol.PendingAsk       `json:"validationRequests,omitempty"`
 	NotGuaranteed        bool                                 `json:"notGuaranteed,omitempty"`
 	ValidationInputs     map[string]protocol.ValidationInput  `json:"validationInputs,omitempty"`
+	WorkerMaterials      map[string]WorkerMaterial            `json:"workerMaterials,omitempty"`
 	Attempts             map[runtime.TaskKey]protocol.Attempt `json:"attempts,omitempty"`
 	PendingActions       map[string]protocol.PendingAction    `json:"pendingActions,omitempty"`
 	RejectedResults      map[string]protocol.RejectedResult   `json:"rejectedResults,omitempty"`
@@ -965,6 +966,9 @@ func (f *Facade) driveInWindow() (Run, error) {
 	if err := f.recordIntakeReceipt(snap.State); err != nil {
 		return Run{}, err
 	}
+	if err := f.registerIntakeRequirement(); err != nil {
+		return Run{}, err
+	}
 	var plan *decision.Plan
 	if terminalReady {
 		plan, _, err = f.engine.Plan()
@@ -1038,6 +1042,13 @@ func (f *Facade) driveInWindow() (Run, error) {
 				return Run{}, deliveryErr
 			}
 		}
+	}
+	current, err := f.engine.Load()
+	if err != nil {
+		return Run{}, err
+	}
+	if _, err := f.workerMaterials(current.State, true); err != nil {
+		return Run{}, err
 	}
 	run, err := f.project()
 	if err != nil {
@@ -1377,6 +1388,14 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if err := f.recordChildReset(); err != nil {
 		return acceptance, Run{}, err
 	}
+	current, loadErr := f.engine.Load()
+	if loadErr == nil {
+		if _, err := f.workerMaterials(current.State, true); err != nil {
+			return acceptance, Run{}, err
+		}
+	} else if !isMissingEngineState(loadErr) {
+		return acceptance, Run{}, loadErr
+	}
 	run, err := f.projectOrSummary()
 	return acceptance, run, err
 }
@@ -1502,8 +1521,12 @@ func (f *Facade) project() (Run, error) {
 		}
 	}
 
+	materials, err := f.workerMaterials(snap.State, false)
+	if err != nil {
+		return Run{}, err
+	}
 	run := Run{
-
+		WorkerMaterials:  materials,
 		ValidationInputs: snap.State.ValidationInputs(f.definition),
 		Attempts:         snap.State.Attempts,
 		PendingActions:   snap.State.PendingActions,
