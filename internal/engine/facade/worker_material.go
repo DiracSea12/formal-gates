@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/prompts"
-	"net/url"
 	"os"
 	"path/filepath"
 
@@ -51,7 +50,7 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 		digest := hex.EncodeToString(sum[:])
 		// Content identity allows carried work to read current confirmed context
 		// without overwriting the input bytes of an already executing invocation.
-		path := filepath.Join(f.stateDir, "materials", url.QueryEscape(id), digest+".json")
+		path := filepath.Join(f.stateDir, "materials", digest+".json")
 		refs[id] = WorkerMaterial{ActionID: id, AttemptID: input.Pending.AttemptID, Path: path, Digest: "sha256:" + digest, ReadOnly: material.ReadOnly}
 		if !write {
 			continue

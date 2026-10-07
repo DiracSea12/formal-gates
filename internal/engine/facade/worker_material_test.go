@@ -76,6 +76,9 @@ func TestWorkerMaterialDriveAndReadOnlyRecovery(t *testing.T) {
 	for _, value := range first.WorkerMaterials {
 		ref = value
 	}
+	if filepath.Dir(ref.Path) != filepath.Join(f.stateDir, "materials") || filepath.Base(ref.Path) != strings.TrimPrefix(ref.Digest, "sha256:")+".json" {
+		t.Fatal("material path differs from its existing content identity")
+	}
 	body, err := os.ReadFile(ref.Path)
 	if err != nil {
 		t.Fatal(err)
