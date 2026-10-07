@@ -42,7 +42,7 @@ func canaryReviewPacket(t *testing.T) ([]byte, persistence.Envelope, protocol.St
 func canaryReviewRun(state *protocol.State, envelope persistence.Envelope, revision uint64) facade.Run {
 	run := facade.Run{RunID: state.RunID, Revision: revision, Envelope: envelope}
 	for _, series := range []review.Series{state.ReviewSeries.ProductReview, state.ReviewSeries.StartReadiness} {
-		action := facade.ReviewActionFace{Action: string(series.Action), EffectiveStatus: series.Effective.Status, EffectiveSource: series.Effective.ResultDigest, EffectiveRevision: series.Effective.Revision}
+		action := facade.ReviewActionFace{Action: string(series.Action), EffectiveStatus: series.Effective.Status, EffectiveSource: series.Effective.Source, EffectiveRevision: series.Effective.Revision}
 		for _, candidate := range series.RawCandidates {
 			face := facade.ReviewCandidateFace{DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, RawStatus: candidate.RawStatus, Excluded: review.ResultExcluded(series, candidate.ResultDigest)}
 			for _, finding := range candidate.Findings {
@@ -322,5 +322,144 @@ func TestCanaryReviewPassAdvisoryDoesNotReadOperator(t *testing.T) {
 	c := &engineCanary{t: t, run: run, deadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(nil)), approvalOutput: &output}
 	if c.reviewFindingsWithOperator() || output.Len() != 0 {
 		t.Fatal("PASS advisory created a mandatory Operator handoff")
+	}
+}
+
+// Accepted candidates from the review owner exercise continuation across
+// multiple decisions; the captured packet's source results remain unchanged.
+func TestCanaryReviewContinuesAcrossFindingDecisions(t *testing.T) {
+	for _, target := range []review.Action{review.ProductReview, review.StartReadiness} {
+		t.Run(string(target), func(t *testing.T) {
+			for _, pending := range []bool{false, true} {
+				t.Run(map[bool]string{false: "normal", true: "pending-reopen"}[pending], func(t *testing.T) {
+					body, envelope, state := canaryReviewPacket(t)
+					original := state.ReviewSeries.StartReadiness.RawCandidates[0]
+					first := original.Findings[0]
+					first.ID, first.Digest = "", ""
+					first.Message = "first independently checked review blocker"
+					second := first
+					second.Message = "second independently checked review blocker"
+					updated, _, err := review.RecordCandidate(state.ReviewSeries, state.RunID, target, review.Dispatch{ID: "independent-review", RequirementRevision: original.RequirementRevision}, review.Result{Status: "FAIL", Findings: []review.Finding{first, second}}, original.OperatorVerification)
+					if err != nil {
+						t.Fatal(err)
+					}
+					project := t.TempDir()
+					dir := filepath.Join(project, filepath.FromSlash(facade.EngineNamespace), state.RunID)
+					if err = os.MkdirAll(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.WriteFile(filepath.Join(dir, "state.json"), body, 0600); err != nil {
+						t.Fatal(err)
+					}
+					engine := canaryOperatorEngine(t, dir, envelope)
+					before, err := engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					fp, err := engine.ObserveFingerprint()
+					if err != nil {
+						t.Fatal(err)
+					}
+					state.ReviewSeries = updated
+					store, err := persistence.NewStore(dir, persistence.Config{PackageDigest: envelope.PackageDigest, DefinitionSource: envelope.DefinitionSource, InstalledTargetIdentity: envelope.InstalledTargetIdentity})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = store.Save(persistence.Transaction{ExpectedRevision: before.Revision, ExpectedFingerprint: fp, CollectFingerprint: engine.ObserveFingerprint, Content: &state}); err != nil {
+						t.Fatal(err)
+					}
+					snapshot, err := engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					run := canaryReviewRun(snapshot.State, envelope, snapshot.Revision)
+					var lines bytes.Buffer
+					count := 0
+					for _, action := range run.Review.Actions {
+						decisions := 0
+						for _, candidate := range action.Candidates {
+							if candidate.Excluded || candidate.RequirementRevision != original.RequirementRevision {
+								continue
+							}
+							for _, finding := range candidate.Findings {
+								if finding.EffectiveDecision != "" {
+									continue
+								}
+								correction := review.CorrectionInput{Action: review.Action(action.Action), DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, FindingID: finding.ID, Decision: "DISMISS", Reason: "explicit Operator judgment for this particular finding", ExpectedEffectiveRevision: action.EffectiveRevision + decisions}
+								if err = json.NewEncoder(&lines).Encode(correction); err != nil {
+									t.Fatal(err)
+								}
+								decisions++
+								count++
+							}
+						}
+					}
+
+					if count < 2 {
+						t.Fatal("multi-finding prerequisite missing")
+					}
+					executable, err := os.Executable()
+					if err != nil {
+						t.Fatal(err)
+					}
+					binary := filepath.Join(t.TempDir(), "submit")
+					quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+					if err = os.WriteFile(binary, []byte("#!/bin/sh\nexec "+quote(executable)+" -test.run=^TestCanaryReviewSubmissionFixture$ -- \"$@\"\n"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					var output bytes.Buffer
+					c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 2000, deadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(&lines), approvalOutput: &output}
+					for i := 0; i < count; i++ {
+						if pending && i == 1 {
+							var next review.CorrectionInput
+							nextLine, err := c.approvalInput.ReadString('\n')
+							if err != nil {
+								t.Fatal(err)
+							}
+							if err = json.Unmarshal([]byte(nextLine), &next); err != nil {
+								t.Fatal(err)
+							}
+							c.approvalInput = bufio.NewReader(io.MultiReader(strings.NewReader(nextLine), c.approvalInput))
+							choice := protocol.AskOptionID(next.Decision + ":" + next.FindingID)
+							request, err := protocol.NewRequestEvent(c.eventID(), protocol.ControlReviewFindingDecision, protocol.AskOption{ID: choice, Label: string(choice)})
+							if err != nil {
+								t.Fatal(err)
+							}
+							c.submit(request)
+							engine = canaryOperatorEngine(t, dir, envelope)
+						}
+						if !c.reviewFindingsWithOperator() {
+							t.Fatalf("finding %d disappeared after prior decision", i+1)
+						}
+						current := c.run.Review.Actions[0]
+						if target == review.StartReadiness {
+							current = c.run.Review.Actions[1]
+						}
+						if current.EffectiveSource == current.Candidates[len(current.Candidates)-1].ResultDigest {
+							t.Fatal("test projection concealed the adjudication Source")
+						}
+					}
+					if c.reviewFindingsWithOperator() {
+						t.Fatal("resolved findings consumed human input again")
+					}
+					snapshot, err = engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					final, _ := snapshot.State.ReviewSeries.Series(target)
+					if final.Effective.Status != "PASS" {
+						t.Fatal("per-finding decisions did not close the blockers")
+					}
+					expected := updated
+					actual := snapshot.State.ReviewSeries
+					if !reflect.DeepEqual(expected.ProductReview.RawCandidates, actual.ProductReview.RawCandidates) || !reflect.DeepEqual(expected.StartReadiness.RawCandidates, actual.StartReadiness.RawCandidates) || !reflect.DeepEqual(state.Results, snapshot.State.Results) {
+						t.Fatal("decisions changed raw candidate or source result")
+					}
+					if strings.Count(output.String(), "canary review correction accepted:") != count {
+						t.Fatal("explicit per-finding progress missing")
+					}
+				})
+			}
+		})
 	}
 }

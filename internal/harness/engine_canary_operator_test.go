@@ -166,12 +166,10 @@ func (c *engineCanary) readReviewCorrection(action facade.ReviewActionFace, cand
 
 func (c *engineCanary) reviewFindingsWithOperator() bool {
 	for _, action := range c.run.Review.Actions {
-		boundRevision := ""
-		for _, candidate := range action.Candidates {
-			if candidate.ResultDigest == action.EffectiveSource {
-				boundRevision = candidate.RequirementRevision
-			}
+		if len(action.Candidates) == 0 {
+			continue
 		}
+		boundRevision := action.Candidates[len(action.Candidates)-1].RequirementRevision
 		for _, candidate := range action.Candidates {
 			if candidate.Excluded || boundRevision == "" || candidate.RequirementRevision != boundRevision {
 				continue
