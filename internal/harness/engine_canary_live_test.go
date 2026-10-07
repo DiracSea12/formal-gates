@@ -1837,8 +1837,8 @@ func (c *engineCanary) confirmRoute() {
 	c.submit(event)
 }
 
-// The fixture verifies its one flag defect against the collected gate scope
-// and failed case points, then uses the public problem identity for every reference.
+// The fixture verifies the issued flag probe and failed case points, then
+// reuses the public problem identity only for the same verified cause.
 func (c *engineCanary) adjudicate() {
 	c.t.Helper()
 	wave := c.currentWave()
@@ -1900,6 +1900,7 @@ func (c *engineCanary) adjudicate() {
 	}
 	slices.Sort(ids)
 	active := []protocol.FindingResolution{}
+	var flagContext *protocol.FindingResolution
 	dismissed := []protocol.FindingResolution{}
 	for _, id := range ids {
 		finding := c.run.Validation.Findings[id]
@@ -1927,6 +1928,24 @@ func (c *engineCanary) adjudicate() {
 				dismissed = append(dismissed, resolution)
 			}
 		} else {
+			binding := state.Results[target.ResultAction].Validation.Binding
+			if binding.WaveID != wave.ID || binding.Candidate != wave.Candidate.Identity {
+				c.fail("finding %s is not bound to the current wave candidate", id)
+			}
+			if flagContext == nil {
+				context, err := canaryFlagWaveContext(c.jobs, &state, wave)
+				if err != nil {
+					c.fail("finding %s flag observation: %v", id, err)
+				}
+				flagContext = &context
+			}
+			context := *flagContext
+			resolution.RootCause, resolution.NormalPath, resolution.Verification = context.RootCause, context.NormalPath, context.Verification
+			if context.Severity != "" {
+				resolution.Severity, resolution.SeverityRationale = context.Severity, context.SeverityRationale
+			} else {
+				resolution.Verification.Severity = resolution.SeverityRationale
+			}
 			active = append(active, resolution)
 		}
 	}
@@ -1938,37 +1957,27 @@ func (c *engineCanary) adjudicate() {
 		if finding.ExecutionFailure == nil {
 			continue
 		}
+		target := wave.Targets[finding.Target]
+		result := state.Results[finding.ExecutionFailure.ResultAction]
+		if target == nil || target.Kind != "QA" || target.ResultAction != finding.ExecutionFailure.ResultAction || result.Validation == nil || result.Validation.Binding.WaveID != wave.ID || result.Validation.Binding.Candidate != wave.Candidate.Identity || target.Execution == nil {
+			c.fail("finding %s has no bound failed flag execution", id)
+		}
 		matched := false
-		for _, target := range wave.Targets {
-			if target.Execution == nil {
-				continue
-			}
-			for _, record := range target.Execution.Records {
-				if record.CaseID == finding.ExecutionFailure.CaseID && record.Result == coverage.ExecutedFail {
-					if record.PointID != point {
-						c.fail("flag fixture has an independent failed acceptance point %s", record.PointID)
-					}
-					matched = true
+		for _, record := range target.Execution.Records {
+			if record.CaseID == finding.ExecutionFailure.CaseID && record.Result == coverage.ExecutedFail {
+				if record.PointID != point {
+					c.fail("flag fixture has an independent failed acceptance point %s", record.PointID)
 				}
+				matched = true
 			}
 		}
 		if !matched {
 			c.fail("finding %s has no bound failed flag execution", id)
 		}
 	}
-	problem := ""
-	for _, existing := range c.run.Validation.Findings {
-		if len(existing.History) == 0 {
-			continue
-		}
-		history := existing.History[len(existing.History)-1]
-		p := c.run.Validation.Problems[history.ProblemID]
-		if p != nil && p.ResolvedWave == "" && history.Requirement == point && history.Module == "flag handling" && history.RootCause == "unknown flags are accepted by the argument handling" {
-			if problem != "" && problem != p.ID {
-				c.fail("expected exactly one adjudicated problem, have multiple open flag problems")
-			}
-			problem = p.ID
-		}
+	problem, err := canaryFlagProblem(c.run.Validation, active[0])
+	if err != nil {
+		c.fail("flag problem identity: %v", err)
 	}
 	anchor := active[0]
 	if len(c.run.Validation.Findings[anchor.FindingID].History) == 0 {
@@ -2002,7 +2011,14 @@ func (c *engineCanary) adjudicate() {
 		if finding.ExecutionFailure == nil || len(finding.History) != 0 {
 			continue
 		}
-		merged = append(merged, protocol.FindingResolution{FindingID: id, Decision: "SAME_AS", ProblemID: problem, Requirement: point, NormalPath: "frob --unknown-flag canary", Module: "flag handling", RootCause: "unknown flags are accepted by the argument handling", Consequence: "the unknown-flag rejection acceptance condition is violated by the same defect", Verification: review.FindingVerification{Scope: "acceptance case execution", Causality: "case oracle demands rejection, execution observed acceptance", Reproduction: "case " + finding.ExecutionFailure.CaseID, Classification: "implementation"}, Reason: "the bound failed flag execution shares the verified gate defect"})
+		resolution := anchor
+		resolution.FindingID, resolution.Decision, resolution.ProblemID = id, "SAME_AS", problem
+		resolution.Severity, resolution.SeverityRationale, resolution.Verification.Severity = "", "", ""
+		resolution.Consequence = "the bound failed flag case violates the same issued public command contract"
+		resolution.Verification.Scope = "acceptance case execution"
+		resolution.Verification.Reproduction += "; case " + finding.ExecutionFailure.CaseID
+		resolution.Reason = "the same-wave failed flag execution shares the verified gate cause"
+		merged = append(merged, resolution)
 	}
 	if len(merged) > 0 {
 		c.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: merged}}})
@@ -2057,10 +2073,16 @@ func canaryFlagFindingResolution(workspace, materialDir string, target *protocol
 	}
 	physical := false
 	for _, location := range raw.Locations {
-		file := strings.SplitN(location, ":", 2)[0]
+		file := strings.TrimSpace(location)
+		if strings.HasSuffix(file, ")") {
+			if annotation := strings.LastIndex(file, " ("); annotation >= 0 {
+				file = file[:annotation]
+			}
+		}
 		if strings.HasPrefix(file, "materials.json ") {
 			file = "materials.json"
 		}
+		file = strings.SplitN(file, ":", 2)[0]
 		path, err := canaryWorkspacePath(workspace, file)
 		if err == nil && path == "frob.go" {
 			physical = true
@@ -2088,7 +2110,113 @@ func canaryFlagFindingResolution(workspace, materialDir string, target *protocol
 	} else if target.Status != protocol.OutcomeFail {
 		return protocol.FindingResolution{}, fmt.Errorf("master finding has no failed gate responsibility")
 	}
-	return protocol.FindingResolution{FindingID: finding.ID, Decision: decision, Requirement: point, NormalPath: raw.NormalPath, Module: "flag handling", RootCause: "unknown flags are accepted by the argument handling", Consequence: raw.DeferralImpact, Severity: raw.Severity, SeverityRationale: raw.SeverityRationale, Verification: review.FindingVerification{Scope: scope, Severity: raw.SeverityRationale, Causality: raw.Message, Reproduction: raw.NormalPath, Classification: "implementation"}, Reason: reason}, nil
+	return protocol.FindingResolution{FindingID: finding.ID, Decision: decision, Requirement: point, NormalPath: raw.NormalPath, Module: "flag handling", RootCause: raw.Message, Consequence: raw.DeferralImpact, Severity: raw.Severity, SeverityRationale: raw.SeverityRationale, Verification: review.FindingVerification{Scope: scope, Severity: raw.SeverityRationale, Causality: raw.Message, Reproduction: raw.NormalPath, Classification: "implementation"}, Reason: reason}, nil
+}
+
+// The wave's accepted public-contract gate supplies the shared physical cause;
+// each report still retains its own exact issued workspace and material scope.
+func canaryFlagWaveContext(jobs string, state *protocol.State, wave *protocol.ValidationWave) (protocol.FindingResolution, error) {
+	var target *protocol.ValidationTarget
+	for _, gate := range []string{"merge-gate", "regression"} {
+		for _, candidate := range wave.Targets {
+			if candidate.Kind == "GATE" && candidate.Gate == gate {
+				if target != nil {
+					return protocol.FindingResolution{}, fmt.Errorf("wave has multiple public flag-contract gates")
+				}
+				target = candidate
+			}
+		}
+		if target != nil {
+			break
+		}
+	}
+	if target == nil || target.Status != protocol.OutcomeFail {
+		return protocol.FindingResolution{}, fmt.Errorf("wave has no failed public flag-contract gate")
+	}
+	result := state.Results[target.ResultAction]
+	if result.Validation == nil || result.Validation.Binding.WaveID != wave.ID || result.Validation.Binding.Candidate != wave.Candidate.Identity {
+		return protocol.FindingResolution{}, fmt.Errorf("public flag probe is not bound to this wave candidate")
+	}
+	workspace, err := canaryFindingWorkspace(target, result, state.NativeResources)
+	if err != nil {
+		return protocol.FindingResolution{}, err
+	}
+	materialDir, err := canaryFindingMaterialDirectory(jobs, state, target)
+	if err != nil {
+		return protocol.FindingResolution{}, err
+	}
+	return canaryFlagFindingContext(materialDir, workspace, state, target)
+}
+
+// The accepted engine issuance owns both the probe command and its candidate.
+func canaryFlagFindingContext(materialDir, workspace string, state *protocol.State, target *protocol.ValidationTarget) (protocol.FindingResolution, error) {
+	var material canaryMaterials
+	body, err := os.ReadFile(filepath.Join(materialDir, "materials.json"))
+	if err != nil {
+		return protocol.FindingResolution{}, err
+	}
+	if err := json.Unmarshal(body, &material); err != nil {
+		return protocol.FindingResolution{}, err
+	}
+	result := state.Results[target.ResultAction]
+	issued := state.DispatchIssueRevisions[target.ResultAction]
+	if result.Validation == nil || material.Input == nil || material.Input.Gate == nil || material.Pending == nil || material.RunID != state.RunID || material.ActionID != result.ActionID || material.Input.Binding != result.Validation.Binding || material.RequirementRevision != result.Validation.Binding.RequirementRevision || material.Pending.ActionID != result.ActionID || material.Pending.Task != result.Validation.Binding.Task || material.Pending.AttemptID != fmt.Sprintf("att:%s:%d", result.Validation.Binding.Task.String(), issued) || issued == 0 {
+		return protocol.FindingResolution{}, fmt.Errorf("flag probe has no exact accepted issuance binding")
+	}
+	input := material.Input
+	if input.Workspace == nil || input.Binding.Candidate == "" || input.Gate.Candidate.Identity != input.Binding.Candidate || input.Gate.Gate != target.Gate || input.Workspace.Source != input.Binding.Candidate || input.Workspace.ID != input.Binding.WorkspaceID || input.Workspace.Path != workspace || input.Workspace.Status != "READY" {
+		return protocol.FindingResolution{}, fmt.Errorf("flag probe candidate or workspace differs from accepted result")
+	}
+	var probe *canaryObservation
+	for i := range material.HostObservations {
+		observation := &material.HostObservations[i]
+		if observation.Label != "public flag-contract probe" && observation.Label != "regression gate flag-contract probe" {
+			continue
+		}
+		if len(observation.Command) != len(canaryGateArgs)+1 {
+			return protocol.FindingResolution{}, fmt.Errorf("flag probe has different arguments")
+		}
+		binary, binaryErr := canaryWorkspacePath(materialDir, observation.Command[0])
+		if probe != nil || observation.Directory != workspace || binaryErr != nil || binary != "frob-candidate" || !slices.Equal(observation.Command[1:], canaryGateArgs) {
+			return protocol.FindingResolution{}, fmt.Errorf("flag probe command differs from issued observation")
+		}
+		probe = observation
+	}
+	if probe == nil {
+		return protocol.FindingResolution{}, fmt.Errorf("issued material has no public flag probe")
+	}
+	context := protocol.FindingResolution{NormalPath: strings.Join(probe.Command, " "), Verification: review.FindingVerification{Scope: "public command contract", Reproduction: fmt.Sprintf("directory=%s argv=%q exit=%d output=%q", probe.Directory, probe.Command, probe.ExitCode, probe.Output), Classification: "implementation"}}
+	if probe.ExitCode == 0 && strings.Contains(probe.Output, "frob:") {
+		context.RootCause = "unknown flags are accepted by the argument handling"
+		context.Verification.Causality = "the issued unknown-flag probe succeeds and emits command output"
+	} else if probe.ExitCode != 0 && strings.Contains(probe.Output, "frob:") {
+		context.RootCause = "unknown-flag rejection emits the command output prefix"
+		context.Verification.Causality = "the issued unknown-flag probe exits nonzero but still emits the forbidden frob: prefix"
+		context.Severity = "P2"
+		context.SeverityRationale = "unknown flags already exit nonzero, allowing consumers to detect rejection from the exit status; the emitted prefix still violates the explicit no frob: output condition"
+		context.Verification.Severity = context.SeverityRationale
+	} else {
+		return protocol.FindingResolution{}, fmt.Errorf("issued probe does not verify either declared flag cause")
+	}
+	return context, nil
+}
+
+func canaryFlagProblem(validation *protocol.Validation, resolution protocol.FindingResolution) (string, error) {
+	problem := ""
+	for _, finding := range validation.Findings {
+		if len(finding.History) == 0 {
+			continue
+		}
+		history := finding.History[len(finding.History)-1]
+		p := validation.Problems[history.ProblemID]
+		if p != nil && p.ResolvedWave == "" && history.Requirement == resolution.Requirement && history.Module == resolution.Module && history.RootCause == resolution.RootCause {
+			if problem != "" && problem != p.ID {
+				return "", fmt.Errorf("multiple open problems for the same verified flag cause")
+			}
+			problem = p.ID
+		}
+	}
+	return problem, nil
 }
 
 // executionScope fixes the host's AFFECTED-wave execution decision: after the

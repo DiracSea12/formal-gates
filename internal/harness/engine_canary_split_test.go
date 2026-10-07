@@ -478,7 +478,10 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 	if _, err := canaryFlagFindingResolution(workspace, materialDir, &sample.Target, &sample.Finding, "AC-004", false); err != nil {
 		t.Fatalf("original exact material position refused: %v", err)
 	}
-	jobsRoot, work := t.TempDir(), t.TempDir()
+	jobsRoot, work := filepath.Join(t.TempDir(), "issued jobs with spaces"), t.TempDir()
+	if err := os.MkdirAll(jobsRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
 	jobs := filepath.Join(t.TempDir(), "issued-jobs")
 	if err := os.Symlink(jobsRoot, jobs); err != nil {
 		t.Fatal(err)
@@ -509,7 +512,7 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 	for _, file := range []string{"materials.json", "requirements.md"} {
 		for _, prefix := range []string{"", materialDir, canonical} {
 			raw := *sample.Finding.Raw
-			raw.Locations = []string{"frob.go:3", filepath.Join(prefix, file) + ":2-8"}
+			raw.Locations = []string{"frob.go:3", filepath.Join(prefix, file) + ":2-8 (hostObservations[2], public flag-contract probe)"}
 			finding := sample.Finding
 			finding.Raw = &raw
 			if _, err := canaryFlagFindingResolution(work, materialDir, &sample.Target, &finding, "AC-004", false); err != nil {
@@ -517,7 +520,7 @@ func TestCanaryFindingMaterialsUseRetainedIssuance(t *testing.T) {
 			}
 		}
 	}
-	for _, location := range []string{filepath.Join(jobs, "other-action", "materials.json") + ":1", filepath.Join(filepath.Dir(materialDir), "old-attempt", "requirements.md") + ":2", filepath.Join(t.TempDir(), "frob.go") + ":3", "size.go:2"} {
+	for _, location := range []string{filepath.Join(jobs, "other-action", "materials.json") + " (hostObservations[2], public flag-contract probe)", filepath.Join(filepath.Dir(materialDir), "old-attempt", "requirements.md") + ":2", filepath.Join(t.TempDir(), "frob.go") + ":3", "size.go:2"} {
 		raw := *sample.Finding.Raw
 		raw.Locations = []string{"frob.go:3", location}
 		finding := sample.Finding

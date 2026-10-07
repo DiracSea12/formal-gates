@@ -1,0 +1,379 @@
+{
+  "finding": {
+    "id": "sha256:b5a25922e9ffac968ad649e45fae7b98fa97ad6a252c0da394786819f8f118f4",
+    "waveId": "15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d",
+    "target": "validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+    "raw": {
+      "id": "",
+      "digest": "",
+      "severity": "P1",
+      "severityRationale": "A bound acceptance condition of the merge gate is directly violated, so the gate cannot pass; however the protective core of AC-004 (nonzero exit, no success output on stdout) already works and the defect is a one-line stderr message prefix in frob.go within the already-authorized rework scope — major contract violation requiring rework before merge, but not a total AC failure (exit 0 with success output) that would warrant P0.",
+      "requirement": "REQ-001 / AC-004: 传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行（此条件归 master-merge）。Issued criterion: unknown flags must exit nonzero and emit no frob: output.",
+      "normalPath": "frob --unknown-flag canary rejects execution with a nonzero exit code and emits no line beginning with the reserved 'frob: ' prefix on any stream; rejection diagnostics use a non-reserved wording (the codebase already does this on the insufficient-args path with 'usage: frob <word>'), keeping 'frob: ' an unambiguous marker of the normal success line 'frob: UPPER bytes=N'.",
+      "actualError": "frob.go:3 rejects any argument starting with '-' via fmt.Fprintf(os.Stderr, \"frob: unknown flag %q\\nusage: frob <word>\\n\", arg) followed by os.Exit(2). The first stderr line therefore begins with 'frob: ', so the program outputs a frob: line during rejection. Confirmed by host observation 'public flag-contract probe': exit 2 with captured output 'frob: unknown flag \"--unknown-flag\"\\nusage: frob <word>'.",
+      "deferralImpact": "If merged as-is, every consumer or harness that keys on 'frob: ' lines (grep over combined stdout/stderr, scripts treating any frob: output as a result line) cannot distinguish rejection from success; the public flag contract that AC-004 reserved at master-merge remains broken and downstream users inherit the ambiguity. The fix is a one-line stderr message change in frob.go, already inside this run's authorized rework scope, so deferral buys nothing.",
+      "verification": {},
+      "message": "AC-004 violated: the unknown-flag rejection emits a line starting with the reserved 'frob: ' prefix. The candidate correctly exits nonzero (2) and leaves stdout empty, but its rejection diagnostic 'frob: unknown flag \"--unknown-flag\"' is itself a 'frob: ' line, so frob does emit frob: output while rejecting an unknown flag. AC-001, AC-002 and AC-003 were independently verified against source and probes and are satisfied; only AC-004 fails.",
+      "locations": [
+        "/private/tmp/canary-flag-workspace/frob.go:3",
+        "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/materials.json (hostObservations[2], public flag-contract probe)"
+      ]
+    },
+    "history": null
+  },
+  "target": {
+    "task": "validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+    "kind": "GATE",
+    "gate": "merge-gate",
+    "status": "FAIL",
+    "resultAction": "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate"
+  },
+  "result": {
+    "validation": {
+      "binding": {
+        "workspaceId": "ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+        "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "generation": 3,
+        "candidate": "b8a881f467dfe887e859c960e9411eae75270a69",
+        "waveId": "15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d",
+        "task": "validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate"
+      },
+      "status": "FAIL",
+      "findings": [
+        {
+          "id": "",
+          "digest": "",
+          "severity": "P1",
+          "severityRationale": "A bound acceptance condition of the merge gate is directly violated, so the gate cannot pass; however the protective core of AC-004 (nonzero exit, no success output on stdout) already works and the defect is a one-line stderr message prefix in frob.go within the already-authorized rework scope — major contract violation requiring rework before merge, but not a total AC failure (exit 0 with success output) that would warrant P0.",
+          "requirement": "REQ-001 / AC-004: 传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行（此条件归 master-merge）。Issued criterion: unknown flags must exit nonzero and emit no frob: output.",
+          "normalPath": "frob --unknown-flag canary rejects execution with a nonzero exit code and emits no line beginning with the reserved 'frob: ' prefix on any stream; rejection diagnostics use a non-reserved wording (the codebase already does this on the insufficient-args path with 'usage: frob <word>'), keeping 'frob: ' an unambiguous marker of the normal success line 'frob: UPPER bytes=N'.",
+          "actualError": "frob.go:3 rejects any argument starting with '-' via fmt.Fprintf(os.Stderr, \"frob: unknown flag %q\\nusage: frob <word>\\n\", arg) followed by os.Exit(2). The first stderr line therefore begins with 'frob: ', so the program outputs a frob: line during rejection. Confirmed by host observation 'public flag-contract probe': exit 2 with captured output 'frob: unknown flag \"--unknown-flag\"\\nusage: frob <word>'.",
+          "deferralImpact": "If merged as-is, every consumer or harness that keys on 'frob: ' lines (grep over combined stdout/stderr, scripts treating any frob: output as a result line) cannot distinguish rejection from success; the public flag contract that AC-004 reserved at master-merge remains broken and downstream users inherit the ambiguity. The fix is a one-line stderr message change in frob.go, already inside this run's authorized rework scope, so deferral buys nothing.",
+          "verification": {},
+          "message": "AC-004 violated: the unknown-flag rejection emits a line starting with the reserved 'frob: ' prefix. The candidate correctly exits nonzero (2) and leaves stdout empty, but its rejection diagnostic 'frob: unknown flag \"--unknown-flag\"' is itself a 'frob: ' line, so frob does emit frob: output while rejecting an unknown flag. AC-001, AC-002 and AC-003 were independently verified against source and probes and are satisfied; only AC-004 fails.",
+          "locations": [
+            "/private/tmp/canary-flag-workspace/frob.go:3",
+            "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/materials.json (hostObservations[2], public flag-contract probe)"
+          ]
+        }
+      ]
+    },
+    "actionId": "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+    "provider": "zcode",
+    "outcome": "PASS",
+    "payloadDigest": "sha256:a5f64414f78e1bc9c0cb55c42ff2839e85167fbe9db22938599b0a9f9228291a",
+    "digest": "sha256:7ef82f47c89c65325be0655a87ecabba6fed136fa024047403aae094847d26a5"
+  },
+  "nativeResources": {
+    "0128e36cc800484631f45d3f41e44390a062f1aaa7e393704adbccd4443ee480": {
+      "id": "0128e36cc800484631f45d3f41e44390a062f1aaa7e393704adbccd4443ee480",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "gate",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/0128e36cc800484631f45d3f41e44390a062f1aaa7e393704adbccd4443ee480",
+      "ref": "refs/formal-gates/engine-canary/0128e36cc800484631f45d3f41e44390a062f1aaa7e393704adbccd4443ee480",
+      "source": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "identity": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "status": "READY"
+    },
+    "0b75efefa367f67645f99557bc69c15f59790f4162733a61af703bda8f009e84": {
+      "id": "0b75efefa367f67645f99557bc69c15f59790f4162733a61af703bda8f009e84",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "development",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/0b75efefa367f67645f99557bc69c15f59790f4162733a61af703bda8f009e84",
+      "ref": "refs/formal-gates/engine-canary/0b75efefa367f67645f99557bc69c15f59790f4162733a61af703bda8f009e84",
+      "source": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "status": "READY"
+    },
+    "67bc774356ca1e5af40b1df4e6ae269c4e6591b07876619bb303d3d41bb45e3b": {
+      "id": "67bc774356ca1e5af40b1df4e6ae269c4e6591b07876619bb303d3d41bb45e3b",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "child-target",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/67bc774356ca1e5af40b1df4e6ae269c4e6591b07876619bb303d3d41bb45e3b",
+      "ref": "refs/formal-gates/engine-canary/67bc774356ca1e5af40b1df4e6ae269c4e6591b07876619bb303d3d41bb45e3b",
+      "source": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "identity": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "status": "READY"
+    },
+    "75d3f8a0ad9f1ead8bd55dc605bf53dc33eacf926f0b3e4e7a35b805f8618f2a": {
+      "id": "75d3f8a0ad9f1ead8bd55dc605bf53dc33eacf926f0b3e4e7a35b805f8618f2a",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "child-target",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/75d3f8a0ad9f1ead8bd55dc605bf53dc33eacf926f0b3e4e7a35b805f8618f2a",
+      "ref": "refs/formal-gates/engine-canary/75d3f8a0ad9f1ead8bd55dc605bf53dc33eacf926f0b3e4e7a35b805f8618f2a",
+      "source": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "identity": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "status": "READY"
+    },
+    "94303c3cb2f27358838a1bcbb7667a9026337725e6ab2af994189726edb9dfda": {
+      "id": "94303c3cb2f27358838a1bcbb7667a9026337725e6ab2af994189726edb9dfda",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "candidate",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/94303c3cb2f27358838a1bcbb7667a9026337725e6ab2af994189726edb9dfda",
+      "ref": "refs/formal-gates/engine-canary/94303c3cb2f27358838a1bcbb7667a9026337725e6ab2af994189726edb9dfda",
+      "source": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "status": "READY"
+    },
+    "97cefb45b8fe019e48ee1d3ca56eb44a05d7aee436efd734b6e43f9993546edd": {
+      "id": "97cefb45b8fe019e48ee1d3ca56eb44a05d7aee436efd734b6e43f9993546edd",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "merge",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/97cefb45b8fe019e48ee1d3ca56eb44a05d7aee436efd734b6e43f9993546edd",
+      "ref": "refs/formal-gates/engine-canary/97cefb45b8fe019e48ee1d3ca56eb44a05d7aee436efd734b6e43f9993546edd",
+      "source": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "identity": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "status": "READY"
+    },
+    "b70ebf44afd157e199fc8c89112b034857680d9d10faebba977e5622f126a872": {
+      "id": "b70ebf44afd157e199fc8c89112b034857680d9d10faebba977e5622f126a872",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "merge-execution",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/b70ebf44afd157e199fc8c89112b034857680d9d10faebba977e5622f126a872",
+      "ref": "refs/formal-gates/engine-canary/b70ebf44afd157e199fc8c89112b034857680d9d10faebba977e5622f126a872",
+      "source": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "identity": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "status": "READY"
+    },
+    "c0425b9b34743e49d4b7d63a35268621fd9fa72802307318b1ad1c25ce8314b6": {
+      "id": "c0425b9b34743e49d4b7d63a35268621fd9fa72802307318b1ad1c25ce8314b6",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "merge-design",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/c0425b9b34743e49d4b7d63a35268621fd9fa72802307318b1ad1c25ce8314b6",
+      "ref": "refs/formal-gates/engine-canary/c0425b9b34743e49d4b7d63a35268621fd9fa72802307318b1ad1c25ce8314b6",
+      "source": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "identity": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+      "status": "READY"
+    },
+    "e2a77d6d1e9696a0ddc09620c288e3e5869d0c0c4f492b509d9fb9057a744ed8": {
+      "id": "e2a77d6d1e9696a0ddc09620c288e3e5869d0c0c4f492b509d9fb9057a744ed8",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "merge-execution",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/e2a77d6d1e9696a0ddc09620c288e3e5869d0c0c4f492b509d9fb9057a744ed8",
+      "ref": "refs/formal-gates/engine-canary/e2a77d6d1e9696a0ddc09620c288e3e5869d0c0c4f492b509d9fb9057a744ed8",
+      "source": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "status": "READY"
+    },
+    "ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5": {
+      "id": "ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "gate",
+      "path": "/private/tmp/canary-flag-workspace",
+      "ref": "refs/formal-gates/engine-canary/ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+      "source": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+      "status": "READY"
+    },
+    "f3b93276b47858c74b877038ac59f0f30856f988e7742d33a8e18d6c930e9040": {
+      "id": "f3b93276b47858c74b877038ac59f0f30856f988e7742d33a8e18d6c930e9040",
+      "handle": {},
+      "owner": "engine-canary",
+      "role": "candidate",
+      "path": "/private/tmp/root-repair-development/zcode-promotion-admitted-home-o79x2rbe/.formal-gates-resources/engine-canary-109736251/.gates/qa-isolation/engine-canary/f3b93276b47858c74b877038ac59f0f30856f988e7742d33a8e18d6c930e9040",
+      "ref": "refs/formal-gates/engine-canary/f3b93276b47858c74b877038ac59f0f30856f988e7742d33a8e18d6c930e9040",
+      "source": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "identity": "4ce59beb3ee1b0dc1db21cf8a84d26d054922001",
+      "status": "READY"
+    }
+  },
+  "dispatchIssueRevisions": {
+    "act:review/review.readiness": 7,
+    "act:review/review.worker": 5,
+    "act:validation/development.repair/888f00574ef72c76330e367506b1a03261565142350c9c161d609e6b5258ce2f": 51,
+    "act:validation/qa.design/3:MERGE:1:": 21,
+    "act:validation/qa.execution/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:MERGE": 63,
+    "act:validation/qa.execution/89cf9b4baf03a856cf05f601946e85bbd6483f82a98b36f416ae1911019b9805:MERGE": 36,
+    "act:validation/qa.review/3:MERGE:sha256:3aad9d4a36b18e9bc011d4fcfba036862bd9e5a61ef27c04d66e396db05d978f:fef7a65677dc64e1335bb5d4439ff1ce45e6ed93ada425f6cf34cd4c0a714a64:1": 23,
+    "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate": 58,
+    "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:slice:uppercase:correctness": 58,
+    "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:slice:uppercase:regression": 58,
+    "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:slice:word-size:correctness": 58,
+    "act:validation/validation.gate/89cf9b4baf03a856cf05f601946e85bbd6483f82a98b36f416ae1911019b9805:merge-gate": 37,
+    "act:validation/validation.gate/89cf9b4baf03a856cf05f601946e85bbd6483f82a98b36f416ae1911019b9805:slice:uppercase:correctness": 37,
+    "act:validation/validation.gate/89cf9b4baf03a856cf05f601946e85bbd6483f82a98b36f416ae1911019b9805:slice:uppercase:regression": 37,
+    "act:validation/validation.gate/89cf9b4baf03a856cf05f601946e85bbd6483f82a98b36f416ae1911019b9805:slice:word-size:correctness": 37
+  },
+  "runId": "engine-canary",
+  "materials": {
+    "role": "merge-gate gate",
+    "actionId": "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+    "runId": "engine-canary",
+    "pending": {
+      "actionId": "act:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+      "task": "validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate",
+      "step": "validation.gate",
+      "attemptId": "att:validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate:58",
+      "reviewSeries": "unaffiliated"
+    },
+    "requirementPath": "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/requirements.md",
+    "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+    "input": {
+      "requirementDocument": {
+        "path": "requirements.md",
+        "contentDigest": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "content": "# 交付\n\n## 需求点\n\n### REQ-001：独立文本转换与组合命令\n\n#### 要求\nfrob 接受一个词；参数不足以非零退出。正常输出为一行 frob: UPPER bytes=N，其中 UPPER 是 strings.ToUpper 的结果，N 是输入词的 UTF-8 字节数。入口 frob.go 已接线 UpperWord 与 WordSize。当前 uppercase.go 的 UpperWord 原样返回，size.go 的 WordSize 固定返回 0，这两个已知占位必须实现。两个独立开发批次分别只修改 uppercase.go 和 size.go；分别验证 go build ./...，交付对应函数。uppercase.go 的批次归 uppercase 片，size.go 的批次归 word-size 片。组合验收 AC-003 由保留 master-merge 负责。\n公开 flag 契约 AC-004 是已知的基线缺口：frob 当前接受未知 flag 并成功输出；两个函数开发批次不修此缺口。其满足预期通过 master-merge 的验证与返修闭环完成；验证发现缺口后修复 frob.go 的 flag 处理属于本 run 已授权的返修范围。\n#### 验收条件\n- AC-001：UpperWord 将输入词转换为 Unicode 大写；空词返回空串。\n- AC-002：WordSize 返回输入词的 UTF-8 字节数；空词返回 0。\n- AC-003：frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。\n- AC-004：传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。\n#### 来源\n用户要求。\n",
+        "requirements": [
+          {
+            "id": "REQ-001",
+            "title": "独立文本转换与组合命令",
+            "requirement": "frob 接受一个词；参数不足以非零退出。正常输出为一行 frob: UPPER bytes=N，其中 UPPER 是 strings.ToUpper 的结果，N 是输入词的 UTF-8 字节数。入口 frob.go 已接线 UpperWord 与 WordSize。当前 uppercase.go 的 UpperWord 原样返回，size.go 的 WordSize 固定返回 0，这两个已知占位必须实现。两个独立开发批次分别只修改 uppercase.go 和 size.go；分别验证 go build ./...，交付对应函数。uppercase.go 的批次归 uppercase 片，size.go 的批次归 word-size 片。组合验收 AC-003 由保留 master-merge 负责。\n公开 flag 契约 AC-004 是已知的基线缺口：frob 当前接受未知 flag 并成功输出；两个函数开发批次不修此缺口。其满足预期通过 master-merge 的验证与返修闭环完成；验证发现缺口后修复 frob.go 的 flag 处理属于本 run 已授权的返修范围。",
+            "source": "用户要求。",
+            "acceptanceConditions": [
+              {
+                "id": "AC-001",
+                "text": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。",
+                "line": 11
+              },
+              {
+                "id": "AC-002",
+                "text": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。",
+                "line": 12
+              },
+              {
+                "id": "AC-003",
+                "text": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。",
+                "line": 13
+              },
+              {
+                "id": "AC-004",
+                "text": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+                "line": 14
+              }
+            ]
+          }
+        ]
+      },
+      "workspace": {
+        "id": "ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+        "handle": {},
+        "owner": "engine-canary",
+        "role": "gate",
+        "path": "/private/tmp/canary-flag-workspace",
+        "ref": "refs/formal-gates/engine-canary/ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+        "source": "b8a881f467dfe887e859c960e9411eae75270a69",
+        "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+        "status": "READY"
+      },
+      "gate": {
+        "gate": "merge-gate",
+        "baseSnapshot": "56f89d542ddadb4eb69f4ce88f7c6e43813088d7",
+        "candidate": {
+          "identity": "b8a881f467dfe887e859c960e9411eae75270a69",
+          "digest": "0a30c59b9d730f75f6e1f636dfc6e0ae624948da"
+        },
+        "testOwnedPaths": []
+      },
+      "sourcePoints": [
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-001"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-002"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-003"
+        },
+        {
+          "sourceId": "REQ-001",
+          "pointId": "AC-004"
+        }
+      ],
+      "binding": {
+        "workspaceId": "ec930c8d712777d46484ad0e29ee9d5231856c4d2e39c31e8a8850a29fcc26d5",
+        "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+        "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+        "generation": 3,
+        "candidate": "b8a881f467dfe887e859c960e9411eae75270a69",
+        "waveId": "15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d",
+        "task": "validation/validation.gate/15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d:merge-gate"
+      },
+      "handler": "engine.gate",
+      "manifest": {
+        "binding": {
+          "runId": "engine-canary",
+          "requirementRevision": "517a10f00beb33a7f3ded156cf2dfb8a0f51220723986e8fefc0ddf774a4850a",
+          "solutionRevision": "78146b0c2d8c8be5401c4f98ec85cb234664cccf3912db97400cb7f9a855dcb5",
+          "reviewKind": "",
+          "routeScope": "sha256:ff098dd637cbf6b0ffd387ac27162ba60cb7117525fce2d8f4d78b6d775ef3c4",
+          "topologyScope": "sha256:4e872e52740362acc2a2097ee57f68cc375e092b1f4bd1d46c9c9b9df5ffba91"
+        },
+        "sources": [
+          "REQ-001"
+        ],
+        "points": [
+          {
+            "pointId": "AC-001",
+            "observableBehavior": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。",
+            "oracle": "UpperWord 将输入词转换为 Unicode 大写；空词返回空串。"
+          },
+          {
+            "pointId": "AC-002",
+            "observableBehavior": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。",
+            "oracle": "WordSize 返回输入词的 UTF-8 字节数；空词返回 0。"
+          },
+          {
+            "pointId": "AC-003",
+            "observableBehavior": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。",
+            "oracle": "frob héLLo 输出精确 frob: HÉLLO bytes=6，frob 空词输出精确 frob:  bytes=0。"
+          },
+          {
+            "pointId": "AC-004",
+            "observableBehavior": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。",
+            "oracle": "传入未知 flag（例如 --unknown-flag）时 frob 以非零退出码拒绝执行，且不输出 frob: 行；此条件归 master-merge。"
+          }
+        ],
+        "cases": null,
+        "edges": null
+      }
+    },
+    "hostObservations": [
+      {
+        "label": "command contract",
+        "directory": "/private/tmp/canary-flag-workspace",
+        "command": [
+          "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/frob-candidate",
+          "héLLo"
+        ],
+        "exitCode": 0,
+        "output": "frob: HÉLLO bytes=6"
+      },
+      {
+        "label": "command contract",
+        "directory": "/private/tmp/canary-flag-workspace",
+        "command": [
+          "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/frob-candidate",
+          ""
+        ],
+        "exitCode": 0,
+        "output": "frob:  bytes=0"
+      },
+      {
+        "label": "public flag-contract probe",
+        "directory": "/private/tmp/canary-flag-workspace",
+        "command": [
+          "/private/tmp/canary-flag-jobs/engine-canary/act_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate/att_validation_validation.gate_15ee8fd61229d74b3bfc53d90723305e2dec222c8e15c6f814fb82f373d6aa8d_merge-gate_58/frob-candidate",
+          "--unknown-flag",
+          "canary"
+        ],
+        "exitCode": 2,
+        "output": "frob: unknown flag \"--unknown-flag\"\nusage: frob <word>"
+      }
+    ]
+  },
+  "jobs": "/private/tmp/canary-flag-jobs"
+}
