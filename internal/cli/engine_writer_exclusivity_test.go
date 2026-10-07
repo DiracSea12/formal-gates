@@ -14,6 +14,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -54,20 +55,31 @@ func (frozenGitRunner) Run(dir, command string, args ...string) (string, error) 
 	return "", fmt.Errorf("frozen git fixture: unexpected command git %s", joined)
 }
 
+// The single confirmed artifact carries both the requirement and its plan.
+func writerIntakeReceipt(t *testing.T, root string) facade.IntakeConfirmationReceipt {
+	t.Helper()
+	path := "requirements.md"
+	content := cliStructuredRequirement("Engine entries preserve the authoritative run binding and reject legacy writes.") + "\n## 方案\n\nUse the engine namespace and its public entry points; legacy write commands must reject this run.\n"
+	mustWriteCLI(t, filepath.Join(root, path), content)
+	document, err := requirement.ParseRequirementProjection(path, []byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return facade.IntakeConfirmationReceipt{
+		Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport,
+		RequirementSource: path, RequirementRevision: document.ContentDigest,
+		Artifacts:        []facade.IntakeArtifact{{Path: path, Revision: document.ContentDigest}},
+		SolutionRevision: document.ContentDigest, SolutionDigest: "sha256:" + document.ContentDigest,
+	}
+}
+
 // startEngineRunForWriterTest 以 façade 建立真实 engine run（regular 路线，
 // 独立临时 root），返回 façade 与其权威 state.json 路径。
 func startEngineRunForWriterTest(t *testing.T) (*facade.Facade, string, string) {
 	t.Helper()
 	root := t.TempDir()
-	receipt := facade.IntakeConfirmationReceipt{
-		Source:            facade.DefaultIntakeSource,
-		Authority:         facade.DefaultIntakeAuthority,
-		Transport:         facade.DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: "rev-1",
-		Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: "rev-1"}},
-		SolutionRevision: "solution-rev", SolutionDigest: "sha256:solution",
-	}
-	f, _, err := facade.Start(facade.StartOptions{Root: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
+	receipt := writerIntakeReceipt(t, root)
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
 		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
@@ -186,17 +198,10 @@ func startAdmittedEngineRun(t *testing.T, root string) *facade.Facade {
 	if err != nil {
 		t.Fatalf("resolve admission: %v", err)
 	}
-	f, _, err := facade.Start(facade.StartOptions{Root: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
 		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot, Provider: admission.Provider,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
-		IntakeConfirmationReceipt: facade.IntakeConfirmationReceipt{
-			Source:            facade.DefaultIntakeSource,
-			Authority:         facade.DefaultIntakeAuthority,
-			Transport:         facade.DefaultIntakeTransport,
-			RequirementSource: "requirements.md", RequirementRevision: "rev-1",
-			Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: "rev-1"}},
-			SolutionRevision: "solution-rev", SolutionDigest: "sha256:solution",
-		},
+		IntakeConfirmationReceipt: writerIntakeReceipt(t, root),
 	}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		t.Fatal(err)
