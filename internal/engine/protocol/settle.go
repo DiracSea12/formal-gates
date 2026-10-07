@@ -12,6 +12,12 @@ import (
 // external boundaries from their durable facts. CompleteStep owns completion,
 // version binding and dependency order; parallel steps are scheduling markers.
 func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindings map[authoring.HandlerID]InternalStep) error {
+	// Business completion is frozen by the same control facts used by write
+	// admission. Control requests and signed external effects retain their own
+	// reconciliation paths; they do not authorize ordinary frontier execution.
+	if s.requirementChangePending() || s.abortRequested() {
+		return nil
+	}
 	for pass := 0; pass < len(compiled.Steps); pass++ {
 		progressed := false
 		completedSet := make(map[authoring.StepID]bool, len(s.Completed))
