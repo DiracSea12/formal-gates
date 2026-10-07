@@ -38,14 +38,19 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		body := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}, "required": []any{"binding", "status"}}
 		fields := body["properties"].(map[string]any)
 		allowed := map[string]bool{"Binding": true, "Status": true}
+		var statuses []string
 		switch input.Handler {
 		case "engine.development.batch":
 			allowed["Development"] = true
+			statuses = []string{protocol.OutcomePass}
 		case "engine.repair":
 			allowed["Development"], allowed["GranularityReview"] = true, true
+			statuses = []string{protocol.OutcomePass}
 		case "engine.merge.resolve":
 			allowed["Resolution"] = true
+			statuses = []string{protocol.OutcomePass}
 		case "engine.qa.design":
+			statuses = []string{protocol.OutcomePass}
 			for _, name := range []string{"Manifest", "Development", "Checkpoint"} {
 				allowed[name] = true
 			}
@@ -56,6 +61,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 				allowed[name] = true
 			}
 		case "engine.gate":
+			statuses = []string{protocol.OutcomePass, protocol.OutcomeFail}
 			allowed["Findings"] = true
 		default:
 			return nil, fmt.Errorf("worker validation schema has no role %s", input.Handler)
@@ -72,6 +78,9 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 				return nil, err
 			}
 			fields[name] = child
+		}
+		if statuses != nil {
+			fields["status"] = map[string]any{"type": "string", "enum": statuses}
 		}
 		if batch := completionBatch(input); batch != nil {
 			completion := fields["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)

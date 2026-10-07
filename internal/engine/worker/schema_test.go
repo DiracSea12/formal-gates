@@ -245,3 +245,55 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop"}, {ID: "qa-design", Content: "Design"}, {ID: "qa-review", Content: "Review"}, {ID: "qa-execution", Content: "Execute"}}, Gates: []prompts.PromptDefinition{{ID: "quality", Content: "Judge"}}}
+	for _, role := range []struct {
+		handler  string
+		statuses []string
+	}{{"engine.development.batch", []string{"PASS"}}, {"engine.repair", []string{"PASS"}}, {"engine.merge.resolve", []string{"PASS"}}, {"engine.qa.design", []string{"PASS"}}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
+		t.Run(role.handler, func(t *testing.T) {
+			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+			if status["type"] != "string" {
+				t.Fatal("status wire type changed")
+			}
+			if role.statuses == nil {
+				if _, exists := status["enum"]; exists {
+					t.Fatal("role without a core status restriction acquired one")
+				}
+			} else {
+				if !reflect.DeepEqual(status["enum"], role.statuses) {
+					t.Fatalf("wrong role status domain: %v", status)
+				}
+				values, _ := json.Marshal(role.statuses)
+				if !strings.Contains(material.Prompt, "validation.status must use exactly one of these machine values: "+string(values)) {
+					t.Fatal("prompt differs from schema's finite domain")
+				}
+			}
+			if material.ResultTemplate.Validation.Status != "" {
+				t.Fatal("template fabricated success")
+			}
+			if !material.ReadOnly && (!strings.Contains(material.Prompt, "Do not execute any VCS write operation; all VCS writes belong to engine adapters.") || !strings.Contains(material.Prompt, "Read-only VCS inspection remains permitted.")) {
+				t.Fatal("writable role lost adapter ownership or read-only inspection")
+			}
+			if strings.Contains(material.Prompt, "Do not stage, commit, submit or push") {
+				t.Fatal("partial VCS prohibition remained")
+			}
+		})
+	}
+	t.Run("whitebox-design-vcs-owner", func(t *testing.T) {
+		input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+		material, err := Render(input, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if material.ReadOnly || !strings.Contains(material.Prompt, "all VCS writes belong to engine adapters") {
+			t.Fatal("test authoring acquired VCS write ownership")
+		}
+	})
+}

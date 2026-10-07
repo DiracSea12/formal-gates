@@ -322,3 +322,67 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
+	for _, role := range []struct {
+		handler  string
+		statuses []string
+	}{{"engine.development.batch", []string{"PASS"}}, {"engine.repair", []string{"PASS"}}, {"engine.merge.resolve", []string{"PASS"}}, {"engine.qa.design", []string{"PASS"}}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
+		t.Run(role.handler, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: role.handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, _ := json.Marshal(schema)
+			native, err := codexOutputSchema(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := objectOrEmpty(codexPlain(t, native))
+			if err = codexPeerStrictSchema(plain); err != nil {
+				t.Fatal(err)
+			}
+			validation := objectOrEmpty(getOf(getOf(plain, "properties"), "validation"))
+			branches := listOf(validation["anyOf"])
+			if len(branches) != 2 {
+				t.Fatal("optional validation transport shape changed")
+			}
+			status := objectOrEmpty(getOf(getOf(branches[0], "properties"), "status"))
+			expected := []any{}
+			for _, literal := range role.statuses {
+				expected = append(expected, literal)
+			}
+			if role.statuses == nil {
+				if _, present := status["enum"]; present {
+					t.Fatal("native adapter invented a business status restriction")
+				}
+			} else if !valuesEqual(status["enum"], expected) {
+				t.Fatalf("native status domain differs: %v", status)
+			}
+			values := role.statuses
+			if values == nil {
+				values = []string{"COMPLETED"}
+			}
+			for _, literal := range values {
+				payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &protocol.ValidationResult{Binding: input.Validation.Binding, Status: literal}}
+				body, err := json.Marshal(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				domain, err := decodeNativeJSON(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				projected, err := codexDomainResult(schema, codexPeerAnswer(schema, domain))
+				if err != nil || !valuesEqual(projected, domain) {
+					t.Fatalf("native projection rewrote status: %v", err)
+				}
+			}
+			after, _ := json.Marshal(schema)
+			if !bytes.Equal(before, after) {
+				t.Fatal("native translation mutated role schema")
+			}
+		})
+	}
+}

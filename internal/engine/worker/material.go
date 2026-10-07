@@ -49,10 +49,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		value.ResultTemplate.Validation = &protocol.ValidationResult{Binding: input.Validation.Binding}
 		switch input.Handler {
 		case "engine.development.batch":
-			instructions = "Implement only input.validation.development.batch. Run its real build/check commands. Report declared changed paths, summary, build/test evidence, exact DoD/check completion and handoff. Do not stage, commit, submit or push."
+			instructions = "Implement only input.validation.development.batch. Run its real build/check commands. Report declared changed paths, summary, build/test evidence, exact DoD/check completion and handoff."
 			value.ReadOnly = false
 		case "engine.repair":
-			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member or finalCandidate is supplied, complete that exact duty. Preserve approved cases and report actual self-run evidence; do not stage, commit, submit or push."
+			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member or finalCandidate is supplied, complete that exact duty. Preserve approved cases and report actual self-run evidence."
 			value.ReadOnly = false
 		case "engine.merge.resolve":
 			instructions = "Resolve only the issued conflict in the registered workspace, preserving the frozen child inputs and dependencies. Report resolution evidence and exact changed paths."
@@ -79,6 +79,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
+	if !value.ReadOnly {
+		instructions += " Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted."
+	}
 	if completionBatch(input) != nil {
 		instructions += " completion.dod and completion.checks must contain exactly the IDs declared in input.validation.development.batch.dod and .checks, each with non-empty evidence; do not omit or add keys. Report additional actual checks in development.tests, development.build or development.summary, never as extra completion IDs."
 	}
@@ -90,6 +93,16 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		return Material{}, err
 	}
 	value.ResultSchema = schema
+	if input.Validation != nil {
+		status := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+		if values, present := status["enum"]; present {
+			literals, err := json.Marshal(values)
+			if err != nil {
+				return Material{}, err
+			}
+			instructions += " validation.status must use exactly one of these machine values: " + string(literals) + "; do not invent status labels. Fill it only from the actual completed role result. Template blanks are placeholders, not evidence of success."
+		}
+	}
 	actionID := ""
 	switch input.Handler {
 	case "engine.review.worker":
