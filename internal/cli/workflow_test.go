@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -472,7 +473,7 @@ func TestCLIRouteCandidatesReportsConfirmedRunCandidates(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("route-candidates output=%s err=%v", out, err)
 	}
-	want, err := validate.PackageRouteCandidates(pkg)
+	want, err := prompts.PackageRouteCandidates(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}

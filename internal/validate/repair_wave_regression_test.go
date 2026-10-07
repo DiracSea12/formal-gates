@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ func TestRepairWaveSplitChildCannotClaimGuaranteeScopeBeforeRevisionRebinding(t 
 	if err := guaranteeReadyForQA(state); err == nil || !strings.Contains(err.Error(), "responsibility binding is missing") {
 		t.Fatalf("revision-invalidated slice was considered QA-ready: %v", err)
 	}
-	testCase := QACase{ID: "CASE-001", Mode: blackboxQAID, AcceptanceCriteria: []string{"AC-001"}}
+	testCase := QACase{ID: "CASE-001", Mode: prompts.BlackboxQAID, AcceptanceCriteria: []string{"AC-001"}}
 	if err := validateGuaranteeCaseBindings(state, testCase); err == nil || !strings.Contains(err.Error(), "responsibility binding is missing") {
 		t.Fatalf("revision-invalidated slice claimed another owner's AC: %v", err)
 	}
@@ -42,16 +43,16 @@ func TestRepairWaveRetainedMasterExecutionUsesCanonicalMergedBinding(t *testing.
 	state := RunState{
 		RetainedOverall: true,
 		RouteMode:       "merge",
-		SelectedGates:   []string{mergeQAID, mergeGateID},
+		SelectedGates:   []string{prompts.MergeQAID, prompts.MergeGateID},
 		Slicing:         &Slicing{Decision: "split"},
 	}
-	for _, requested := range []string{"", blackboxQAID, whiteboxQAID} {
+	for _, requested := range []string{"", prompts.BlackboxQAID, prompts.WhiteboxQAID} {
 		if got := qaExecutionRecordMode(state, requested); got != "" {
 			t.Fatalf("retained-master execution mode for %q = %q, want canonical merged key", requested, got)
 		}
 	}
 	state.RetainedOverall = false
-	if got := qaExecutionRecordMode(state, whiteboxQAID); got != whiteboxQAID {
-		t.Fatalf("ordinary execution mode = %q, want %q", got, whiteboxQAID)
+	if got := qaExecutionRecordMode(state, prompts.WhiteboxQAID); got != prompts.WhiteboxQAID {
+		t.Fatalf("ordinary execution mode = %q, want %q", got, prompts.WhiteboxQAID)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,7 +79,7 @@ const (
 // carryAdoptKey is the reserved Carry map key recording an adopted external VCS
 // change: Decision ADOPT with Origin ADOPT, SourceSnapshot the pre-adoption
 // snapshot, TargetSnapshot the adopted native head, and Message the main-agent
-// reason. Gate ids cannot collide with it because they match promptIDPattern.
+// reason. Gate ids cannot collide with it because they match prompts.IDPattern.
 const carryAdoptKey = "__adopt__"
 
 const formalFlow = "formal"
@@ -170,7 +171,7 @@ func startRegular(options StartOptions) (RunState, error) {
 		}
 	}
 	if master != "" {
-		if !promptIDPattern.MatchString(master) {
+		if !prompts.IDPattern.MatchString(master) {
 			return RunState{}, fmt.Errorf("master run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
 		}
 		masterState, err := LoadRunState(root, master)
@@ -213,7 +214,7 @@ func startRegular(options StartOptions) (RunState, error) {
 		}
 		baseSnapshot = strings.ToLower(supplied)
 	}
-	catalog, err := LoadPromptCatalog(options.PackageRoot)
+	catalog, err := prompts.LoadPromptCatalog(options.PackageRoot)
 	if err != nil {
 		return RunState{}, err
 	}
@@ -229,7 +230,7 @@ func startRegular(options StartOptions) (RunState, error) {
 			return RunState{}, err
 		}
 	}
-	if !promptIDPattern.MatchString(runID) {
+	if !prompts.IDPattern.MatchString(runID) {
 		return RunState{}, fmt.Errorf("run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
 	}
 	runUnlock, err := coordination.AcquireRun(root, runID)
@@ -696,7 +697,7 @@ func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 	if err := requireActive(state); err != nil {
 		return ResumeStatus{}, err
 	}
-	catalog, err := LoadPromptCatalog(packageRoot)
+	catalog, err := prompts.LoadPromptCatalog(packageRoot)
 	if err != nil {
 		return ResumeStatus{}, err
 	}
@@ -1253,7 +1254,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 			if len(selected) != 0 {
 				return fmt.Errorf("default route selects every ordinary gate without --gate")
 			}
-			selected = slices.DeleteFunc(slices.Clone(candidates), func(id string) bool { return id == blackboxQAID || id == whiteboxQAID })
+			selected = slices.DeleteFunc(slices.Clone(candidates), func(id string) bool { return id == prompts.BlackboxQAID || id == prompts.WhiteboxQAID })
 		} else if mode == "full" {
 			if len(selected) != 0 {
 				return fmt.Errorf("full route selects the complete discovered list without --gate")
@@ -1358,7 +1359,7 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 		options = opts[0]
 	}
 	amend := options.UserConfirm
-	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog prompts.PromptCatalog) error {
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
@@ -1487,15 +1488,15 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			// prepare-gate 会死端。
 			mergeGateDiscovered := false
 			for _, gate := range catalog.Gates {
-				if gate.ID == mergeGateID {
+				if gate.ID == prompts.MergeGateID {
 					mergeGateDiscovered = true
 					break
 				}
 			}
 			if !mergeGateDiscovered {
-				return fmt.Errorf("merge gate %q is not discovered in the package catalog", mergeGateID)
+				return fmt.Errorf("merge gate %q is not discovered in the package catalog", prompts.MergeGateID)
 			}
-			if err := requireExplicitGuaranteeForQASelection(*state, []string{mergeQAID}); err != nil {
+			if err := requireExplicitGuaranteeForQASelection(*state, []string{prompts.MergeQAID}); err != nil {
 				return err
 			}
 			responsibilities, err := validateACResponsibilities(*state, slices, options.ACResponsibilities)
@@ -1504,7 +1505,7 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			}
 			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), ACResponsibilities: responsibilities}
 			state.RouteMode = "merge"
-			state.SelectedGates = []string{mergeQAID, mergeGateID}
+			state.SelectedGates = []string{prompts.MergeQAID, prompts.MergeGateID}
 			state.SkipAuthorizations = map[string]SkipAuthorization{}
 			state.QAExecutionByMode = map[string]QAExecutionResult{}
 			updateGuaranteeForRoute(state)
@@ -1665,7 +1666,7 @@ func ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIde
 		// requirement revision. Let it be claimed after document drift so its
 		// result can be recorded before requirement rebinding; all other claims
 		// retain the normal live-revision check.
-		var catalog PromptCatalog
+		var catalog prompts.PromptCatalog
 		if recordRecovery {
 			catalog, err = requireCurrentCatalog(*state, packageRoot)
 		} else {
@@ -1782,9 +1783,9 @@ func bindClaimDispatch(root, runID, dispatchID, identity, provider string) error
 // qa-execution）不经 record-action/record-gate、不在重绑守卫计数内、本无死锁，与其余
 // 记录命令一样保持漂移硬阻断。change receives the loaded catalog and performs the
 // record write.
-func openRecord(root, packageRoot, runID string, checkPending, skipDrift bool, change func(*RunState, PromptCatalog) error) (RunState, error) {
+func openRecord(root, packageRoot, runID string, checkPending, skipDrift bool, change func(*RunState, prompts.PromptCatalog) error) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		var catalog PromptCatalog
+		var catalog prompts.PromptCatalog
 		var err error
 		if skipDrift {
 			catalog, err = requireCurrentCatalog(*state, packageRoot)
@@ -1818,7 +1819,7 @@ type recordDispatchOptions struct {
 	requireIsolationNative  bool                          // verify QA isolation-worktree native == base
 	requireLifecycle        bool                          // verify lifecycle pairing
 	allowUserReviewOverride bool                          // prepared user-requested semantic re-review may record over current PASS
-	preCheck                func(*RunState, PromptCatalog) error
+	preCheck                func(*RunState, prompts.PromptCatalog) error
 }
 
 // openDispatchRecord opens a Record* state mutation for a dispatch-bound write
@@ -1829,8 +1830,8 @@ type recordDispatchOptions struct {
 // prepared dispatch, run the transition rule, and verify lifecycle pairing.
 // change receives the loaded catalog and resolved dispatch and performs the
 // record-specific write.
-func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts recordDispatchOptions, change func(*RunState, PromptCatalog, PreparedDispatch) error) (RunState, error) {
-	return openRecord(root, packageRoot, runID, false, targetRecordsViaRecordCommand(opts.targetKind, opts.target), func(state *RunState, catalog PromptCatalog) error {
+func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts recordDispatchOptions, change func(*RunState, prompts.PromptCatalog, PreparedDispatch) error) (RunState, error) {
+	return openRecord(root, packageRoot, runID, false, targetRecordsViaRecordCommand(opts.targetKind, opts.target), func(state *RunState, catalog prompts.PromptCatalog) error {
 		if audited, err := auditLateReviewResult(state, dispatchID, opts.targetKind, opts.target, opts.lateResultStatus, opts.lateResultMessage); audited || err != nil {
 			return err
 		}
@@ -1897,7 +1898,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		requireMainNative:       true,
 		allowUserReviewOverride: true,
 		requireLifecycle:        actionID == "development-worker",
-		preCheck: func(state *RunState, catalog PromptCatalog) error {
+		preCheck: func(state *RunState, catalog prompts.PromptCatalog) error {
 			if _, ok := catalog.Action(actionID); !ok {
 				return fmt.Errorf("unknown action prompt %q", actionID)
 			}
@@ -1909,7 +1910,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			}
 			return nil
 		},
-	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+	}, func(state *RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) error {
 		if actionID == "development-worker" {
 			// A failed attempt does not complete development or replace its
 			// prepared repair obligation. The next prepare reuses that TaskKey.
@@ -2119,13 +2120,13 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 		transitionTarget:  func(PreparedDispatch) string { return gateID },
 		requireMainNative: true,
 		requireLifecycle:  true,
-		preCheck: func(state *RunState, catalog PromptCatalog) error {
+		preCheck: func(state *RunState, catalog prompts.PromptCatalog) error {
 			if _, ok := catalog.Gate(gateID); !ok {
 				return fmt.Errorf("gate %q is not discovered", gateID)
 			}
 			return nil
 		},
-	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+	}, func(state *RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) error {
 		normalized, converted, err := validateStrictSemanticResult("", status, message, findings, true, root, *state)
 		if err != nil {
 			return rejectInvalidResult(state, dispatch, err)
@@ -2240,7 +2241,7 @@ func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 				return err
 			}
 			backfillDispatchCost(root, state, developmentDispatch)
-			blackboxSelected := isSelected(*state, blackboxQAID)
+			blackboxSelected := isSelected(*state, prompts.BlackboxQAID)
 			if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
 				if !userRequested {
 					return fmt.Errorf("blackbox QA Review must pass before an adopted development snapshot; development and blackbox QA review both need to complete")
@@ -2300,7 +2301,7 @@ func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
 		// 来源；已放行（SnapshotOverride 非空）后只延续绕过快照前 review 门，未批准用例
 		// 不进入需执行集、也不生成或冒充 PASS 记录。黑盒 review 真正 PASS 时清除放行授权。
-		blackboxSelected := isSelected(*state, blackboxQAID)
+		blackboxSelected := isSelected(*state, prompts.BlackboxQAID)
 		if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
 			if !userRequested {
 				return fmt.Errorf("blackbox QA Review must pass before a development snapshot; development and blackbox QA review both need to complete")
@@ -2523,10 +2524,10 @@ func requireActive(state RunState) error {
 	return nil
 }
 
-func requireCurrentCatalog(state RunState, packageRoot string) (PromptCatalog, error) {
-	catalog, err := LoadPromptCatalog(packageRoot)
+func requireCurrentCatalog(state RunState, packageRoot string) (prompts.PromptCatalog, error) {
+	catalog, err := prompts.LoadPromptCatalog(packageRoot)
 	if err != nil {
-		return PromptCatalog{}, err
+		return prompts.PromptCatalog{}, err
 	}
 	// Catalog content changes are a recoverable classification, not a run
 	// killer: the run continues with the live catalog, per-gate/action deltas
@@ -2534,14 +2535,14 @@ func requireCurrentCatalog(state RunState, packageRoot string) (PromptCatalog, e
 	return catalog, nil
 }
 
-func requireCurrentDefinitions(root string, state RunState, packageRoot string) (PromptCatalog, error) {
+func requireCurrentDefinitions(root string, state RunState, packageRoot string) (prompts.PromptCatalog, error) {
 	catalog, err := requireCurrentCatalog(state, packageRoot)
 	if err != nil {
-		return PromptCatalog{}, err
+		return prompts.PromptCatalog{}, err
 	}
 	changed, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
 	if err != nil {
-		return PromptCatalog{}, err
+		return prompts.PromptCatalog{}, err
 	}
 	if changed {
 		// 需求 6 第 1 条：需求 revision 漂移第一时间硬阻断。任何依赖需求修订的流程命令
@@ -2551,7 +2552,7 @@ func requireCurrentDefinitions(root string, state RunState, packageRoot string) 
 		// 发现。本命令（workflow requirement）不经过本函数，是更新修订的出口。仅 --confirmed
 		// 无法更新已变更的 revision，指引须带 --meaning preserved|changed；开发开始后的
 		// meaning-preserved 重绑另需 --confirmed。
-		return PromptCatalog{}, fmt.Errorf("需求文档已改动，先 `workflow requirement --meaning preserved|changed` 更新修订")
+		return prompts.PromptCatalog{}, fmt.Errorf("需求文档已改动，先 `workflow requirement --meaning preserved|changed` 更新修订")
 	}
 	return catalog, nil
 }

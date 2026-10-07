@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"strings"
 
 	"formal-gates/internal/engine/coverage"
@@ -365,7 +366,7 @@ func comparedRange(state RunState) string {
 // making a recorded authoritative result a candidate for the main agent's
 // per-gate judgment rather than a fixed conclusion. A base-only change therefore
 // enables per-gate re-dispatch too.
-func gatePromptChanged(state RunState, catalog PromptCatalog, gateID string) bool {
+func gatePromptChanged(state RunState, catalog prompts.PromptCatalog, gateID string) bool {
 	recorded, ok := state.PromptHashes["gate:"+gateID]
 	if !ok {
 		return false
@@ -384,7 +385,7 @@ func gatePromptChanged(state RunState, catalog PromptCatalog, gateID string) boo
 // (a base-only change moves every injected reviewer action's hash and triggers
 // the inheritance judgment, symmetric with the gate path); non-reviewer actions
 // hash only their own content.
-func actionPromptChanged(state RunState, catalog PromptCatalog, actionID string) bool {
+func actionPromptChanged(state RunState, catalog prompts.PromptCatalog, actionID string) bool {
 	recorded, ok := state.PromptHashes["action:"+actionID]
 	if !ok {
 		return false
@@ -407,7 +408,7 @@ func actionPromptChanged(state RunState, catalog PromptCatalog, actionID string)
 // disposition commands (carry / requirement / settle-findings) are exempt and
 // route around this gate; requirement-artifact reclassification is enforced
 // separately by requireCurrentDefinitions, which every entry already calls.
-func requireNoPendingInheritance(root string, state RunState, catalog PromptCatalog) error {
+func requireNoPendingInheritance(root string, state RunState, catalog prompts.PromptCatalog) error {
 	// 首个开发快照前没有继承边界：无开发快照时不存在"旧快照结果待判定"，且处置入口
 	// （carry --main-agent 继承判定）依赖开发快照才能记录。首个快照只是记录交付成果、
 	// 不是重跑/继续，跳过硬闸；快照之后（开发快照已存在）硬闸恢复，继承判定可正常记录。
@@ -470,7 +471,7 @@ func requireNoPendingInheritance(root string, state RunState, catalog PromptCata
 // responsibility, task content, requirement, method, or intent — or a recorded
 // non-objective interruption reason — lets the guard pass so a new dispatch is
 // allowed; an explicit --user-requested authorization is handled by the caller.
-func requireResumeInterrupted(root string, state RunState, catalog PromptCatalog, targetKind, target string, mode string) error {
+func requireResumeInterrupted(root string, state RunState, catalog prompts.PromptCatalog, targetKind, target string, mode string) error {
 	for id, dispatch := range state.Dispatches {
 		if dispatch.TargetKind != targetKind || dispatch.Target != target || dispatch.Status != "CLAIMED" {
 			continue
@@ -541,7 +542,7 @@ func isObjectiveInterruptionReason(reason string) bool {
 // dispatch's own id / attempt / review wave, so the [Dispatch] block is
 // identical and only the task content (catalog, requirement, snapshot, detail)
 // can move the hash.
-func dispatchTaskUnchanged(root string, state RunState, catalog PromptCatalog, dispatch PreparedDispatch) (bool, error) {
+func dispatchTaskUnchanged(root string, state RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) (bool, error) {
 	route := routeForState(root, state)
 	if isBlackboxQADispatch(dispatch) {
 		route.Worktree = absPath(state.QAWorktree)

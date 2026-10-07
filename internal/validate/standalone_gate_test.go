@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 // a working-tree-vs-head change block with no requirement or dispatch binding.
 func TestComposeStandaloneGatePrompt(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 	// 组装层面：审查动作注入共享契约、非审查动作不注入。
 	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}

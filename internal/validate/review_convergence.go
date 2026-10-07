@@ -9,6 +9,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"sort"
 	"strings"
@@ -395,7 +396,7 @@ func invalidateActiveReviewWave(state *RunState, reason string) {
 // The four categories are the documented product/acceptance changes; a
 // transient environment failure is therefore never a valid thaw category.
 func ThawQACaseSet(root, packageRoot, runID, mode, category, reason, sourceRevision string, caseIDs []string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		ensureConvergenceState(state)
 		mode = strings.TrimSpace(mode)
 		category = strings.ToUpper(strings.TrimSpace(category))
@@ -476,11 +477,11 @@ func ThawQACaseSet(root, packageRoot, runID, mode, category, reason, sourceRevis
 func qaSelectionID(mode string) string {
 	switch mode {
 	case "blackbox":
-		return blackboxQAID
+		return prompts.BlackboxQAID
 	case "whitebox":
-		return whiteboxQAID
+		return prompts.WhiteboxQAID
 	default:
-		return mergeQAID
+		return prompts.MergeQAID
 	}
 }
 
@@ -545,7 +546,7 @@ func reviewReadyCaseSetVersions(state RunState) (map[string]string, error) {
 			// The established merged QA path stores one case-set under "".
 			caseSet, ok = state.QACaseSets[""]
 		}
-		if mode == blackboxQAID && snapshotBlackboxReleased(state) {
+		if mode == prompts.BlackboxQAID && snapshotBlackboxReleased(state) {
 			// Preserve the existing explicit blackbox snapshot release. It does
 			// not release the whitebox test-snapshot barrier or create QA PASS.
 			continue
@@ -559,13 +560,13 @@ func reviewReadyCaseSetVersions(state RunState) (map[string]string, error) {
 }
 
 func initializeReviewWave(root, packageRoot, runID string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		ensureConvergenceState(state)
 		if !hasDevelopmentSnapshot(*state) {
 			return fmt.Errorf("an immutable development snapshot is required before review-wave initialization")
 		}
-		if isSelected(*state, whiteboxQAID) {
-			if err := requireWhiteboxReviewSnapshot(root, *state, whiteboxQAID); err != nil {
+		if isSelected(*state, prompts.WhiteboxQAID) {
+			if err := requireWhiteboxReviewSnapshot(root, *state, prompts.WhiteboxQAID); err != nil {
 				return err
 			}
 		}
@@ -804,7 +805,7 @@ func auditLateReviewResult(state *RunState, dispatchID, kind, target, status, me
 }
 
 func DisposeReviewWaveTarget(root, packageRoot, runID, targetKey, stateRevision, reason string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		ensureConvergenceState(state)
 		if strings.TrimSpace(stateRevision) == "" || stateRevision != state.StateIntegrity {
 			return fmt.Errorf("review-wave target disposition state revision is stale or missing")
@@ -1022,7 +1023,7 @@ func validatePostReviewVerification(value FindingVerification) error {
 }
 
 func AdjudicateReviewWave(root, packageRoot, runID string, input ReviewWaveAdjudicationInput) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		ensureConvergenceState(state)
 		if input.StateRevision == "" || input.StateRevision != state.StateIntegrity {
 			return fmt.Errorf("review-wave adjudication state revision is stale or missing")
@@ -1301,7 +1302,7 @@ func convergenceRepairInput(state RunState) (string, bool) {
 }
 
 func CompleteGateP2Repair(root, packageRoot, runID, waveID string, buildEvidence, testEvidence, affectedCases []string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		ensureConvergenceState(state)
 		wave, ok := state.ReviewWaves[waveID]
 		if !ok || wave.RepairPlan == nil || wave.RepairPlan.RepairSnapshot != state.CurrentSnapshot {

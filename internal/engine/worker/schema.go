@@ -33,18 +33,18 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields := body["properties"].(map[string]any)
 		allowed := map[string]bool{"Binding": true, "Status": true}
 		switch input.Handler {
-		case "engine.development.batch", "engine.repair":
-			for _, name := range []string{"Development", "GranularityReview"} {
-				allowed[name] = true
-			}
+		case "engine.development.batch":
+			allowed["Development"] = true
+		case "engine.repair":
+			allowed["Development"], allowed["GranularityReview"] = true, true
 		case "engine.merge.resolve":
 			allowed["Resolution"] = true
 		case "engine.qa.design":
-			for _, name := range []string{"Manifest", "Development", "Suggestions"} {
+			for _, name := range []string{"Manifest", "Development", "Checkpoint"} {
 				allowed[name] = true
 			}
 		case "engine.qa.review.rationale":
-			allowed["Review"] = true
+			allowed["Review"], allowed["Suggestions"] = true, true
 		case "engine.qa.execution":
 			for _, name := range []string{"Execution", "Tool", "Environment", "Checkpoint", "Findings"} {
 				allowed[name] = true

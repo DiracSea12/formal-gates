@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,7 +11,7 @@ import (
 
 func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	root := promptPackage(t, map[string]string{"z-last": "last checks", "a-first": "first checks"})
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +19,7 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 		t.Fatalf("gate order=%v want=%v", got, want)
 	}
 	writeTestFile(t, filepath.Join(root, "gates", "middle.md"), "middle checks\n")
-	added, err := LoadPromptCatalog(root)
+	added, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,7 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "gates", "a-first.md")); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := LoadPromptCatalog(root)
+	removed, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 
 func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 	root := promptPackage(t, map[string]string{"z-last": "last checks", "a-first": "first checks"})
-	candidates, err := PackageRouteCandidates(root)
+	candidates, err := prompts.PackageRouteCandidates(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 	}
 
 	emptyRoot := promptPackage(t, nil)
-	emptyCandidates, err := PackageRouteCandidates(emptyRoot)
+	emptyCandidates, err := prompts.PackageRouteCandidates(emptyRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 		t.Fatalf("empty candidates=%v want=%v", got, want)
 	}
 
-	if _, err := PackageRouteCandidates(t.TempDir()); err == nil {
+	if _, err := prompts.PackageRouteCandidates(t.TempDir()); err == nil {
 		t.Fatal("invalid prompt package was accepted")
 	}
 }
@@ -68,7 +69,7 @@ func TestGateDiscoveryIgnoresUnrelatedDirectEntries(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(root, "gates", "notes.txt"), "not a gate\n")
 
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := promptPackage(t, map[string]string{"good": "checks"})
 			tc.make(root)
-			if _, err := LoadPromptCatalog(root); err == nil {
+			if _, err := prompts.LoadPromptCatalog(root); err == nil {
 				t.Fatal("invalid gate entry was accepted")
 			}
 		})
@@ -120,7 +121,7 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "UNIQUE_GATE_CHECK"})
 	writeTestFile(t, filepath.Join(root, "prompts", "reviewer-base.md"), "UNIQUE_SHARED_RULE\n")
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
 
 func TestGatePromptDeclaresFullScopeOnRerunRound(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ func TestGatePromptDeclaresFullScopeOnRerunRound(t *testing.T) {
 
 func TestGateResultContractIncludesComparedPair(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func TestGateResultContractIncludesComparedPair(t *testing.T) {
 
 func TestActionPromptsDescribeTheirSemanticReturn(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestActionCatalogIsFixedWhileGatesRemainFileDriven(t *testing.T) {
 	} {
 		root := promptPackage(t, map[string]string{"quality": "checks"})
 		mutate(root)
-		if _, err := LoadPromptCatalog(root); err == nil {
+		if _, err := prompts.LoadPromptCatalog(root); err == nil {
 			t.Fatal("changed fixed action catalog was accepted")
 		}
 	}
@@ -238,7 +239,7 @@ func promptPackage(t *testing.T, gates map[string]string) string {
 	if err := os.MkdirAll(filepath.Join(root, "gates"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range requiredActionIDs {
+	for _, id := range prompts.RequiredActionIDs {
 		writeTestFile(t, filepath.Join(root, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	for id, text := range gates {
@@ -282,7 +283,7 @@ func TestCatalogDeltaReportsRemovedGate(t *testing.T) {
 	if err := os.Remove(filepath.Join(pkg, "gates", "architecture.md")); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}

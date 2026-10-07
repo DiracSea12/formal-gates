@@ -4,6 +4,7 @@ package validate
 // adjudication, repair and carry sequence is exercised as one state machine.
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +49,7 @@ func blackboxFrozenDelivery(t *testing.T, id string, selected []string) (string,
 
 func TestQAReviewSuggestionsMustBeDisposedBeforeFreeze(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "suggestion-freeze"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "suggestion-freeze"), "custom", []string{prompts.BlackboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	var err error
 	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
@@ -91,7 +92,7 @@ func TestQAReviewSuggestionsMustBeDisposedBeforeFreeze(t *testing.T) {
 
 func TestWhiteboxS1CannotInitializeWaveBeforeTestSnapshotAndFreeze(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-s2-wave"), "custom", []string{whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-s2-wave"), "custom", []string{prompts.WhiteboxQAID, "quality"})
 	development := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-whitebox-s2-wave.txt"), "delivery\n")
 	commitAll(t, root, "whitebox S1 delivery")
@@ -137,7 +138,7 @@ func TestWhiteboxS1CannotInitializeWaveBeforeTestSnapshotAndFreeze(t *testing.T)
 }
 
 func TestReviewWaveAdjudicationCreatesOneP2RepairAndCarry(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "wave-p2", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "wave-p2", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +220,7 @@ func TestReviewWaveAdjudicationCreatesOneP2RepairAndCarry(t *testing.T) {
 }
 
 func TestFrozenCaseSetRequiresLegalThawAndBuildsANewWave(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "case-set-thaw", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "case-set-thaw", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +265,7 @@ func TestFrozenCaseSetRequiresLegalThawAndBuildsANewWave(t *testing.T) {
 }
 
 func TestReviewWaveRetryRejectsLateAttemptAndRequiresErrorDisposition(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "wave-retry", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "wave-retry", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +320,7 @@ func TestReviewWaveRetryRejectsLateAttemptAndRequiresErrorDisposition(t *testing
 }
 
 func TestGatePromptOmitsQACasesAndP3RemainsSealAdvisory(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "wave-p3", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "wave-p3", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +367,7 @@ func TestGatePromptOmitsQACasesAndP3RemainsSealAdvisory(t *testing.T) {
 }
 
 func TestRepairPreviewIsReadOnlyAndStateBound(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "repair-preview", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "repair-preview", []string{prompts.BlackboxQAID, "quality"})
 	before := stateBytes(t, root, state.RunID)
 	estimate := RepairRerunEstimate{BuildTargets: []string{"go build ./..."}, TestTargets: []string{"go test ./..."}, QACases: map[string][]string{"blackbox": {state.qaModeCases("blackbox")[0].ID}}}
 	preview, err := PreviewRepairAuthorization(root, pkg, state.RunID, estimate)
@@ -383,7 +384,7 @@ func TestRepairPreviewIsReadOnlyAndStateBound(t *testing.T) {
 }
 
 func TestRepairAuthorizationUsesPreviewBoundAffectedSubset(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "repair-preview-scope", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "repair-preview-scope", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)

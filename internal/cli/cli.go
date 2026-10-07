@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"io"
 	"os"
 	"path/filepath"
@@ -166,7 +167,7 @@ func runPackage(args []string, streams IO) (int, error) {
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		candidates, err := validate.PackageRouteCandidates(*root)
+		candidates, err := prompts.PackageRouteCandidates(*root)
 		return printValue(streams.Stdout, candidates, err)
 	case "baseline":
 		fs := newFlagSet("package baseline", streams)
@@ -1649,7 +1650,7 @@ func runGate(program string, args []string, streams IO) (int, error) {
 				return 1, fmt.Errorf("gate run flags must precede the positional gate ids; put --flags before the ids (e.g. gate run --scope s <id...>)")
 			}
 		}
-		catalog, err := validate.LoadPromptCatalog(*pkg)
+		catalog, err := prompts.LoadPromptCatalog(*pkg)
 		if err != nil {
 			return 1, err
 		}

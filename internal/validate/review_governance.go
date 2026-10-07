@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -377,7 +378,7 @@ func rejectInvalidResult(state *RunState, dispatch PreparedDispatch, contractErr
 	return commitStateAndFail(fmt.Errorf("REJECTED_INVALID_RESULT %s: %s", receipt.ID, resultErr.Reason))
 }
 
-func dispatchPromptRevision(state RunState, catalog PromptCatalog, targetKind, target string) string {
+func dispatchPromptRevision(state RunState, catalog prompts.PromptCatalog, targetKind, target string) string {
 	key := targetKind + ":" + target
 	if value := catalogPromptHashes(catalog)[key]; value != "" {
 		return value
@@ -424,7 +425,7 @@ func dispatchWorkflowContext(state RunState, targetKind, target, mode string) st
 	return ""
 }
 
-func dispatchIdentity(state RunState, catalog PromptCatalog, targetKind, target, mode, actionInput string) (string, string) {
+func dispatchIdentity(state RunState, catalog prompts.PromptCatalog, targetKind, target, mode, actionInput string) (string, string) {
 	base := struct {
 		TargetKind, Target, Mode, BaseSnapshot, CurrentSnapshot string
 		RequirementRevision, CaseSetVersion, CatalogRevision    string

@@ -3,6 +3,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"strings"
 	"testing"
 )
@@ -103,12 +104,12 @@ func whiteboxAdvancementState(developmentStatus string) RunState {
 		Actions: map[string]ActionResult{
 			"development-worker": {Status: developmentStatus},
 		},
-		SelectedGates: []string{whiteboxQAID},
+		SelectedGates: []string{prompts.WhiteboxQAID},
 		QADesignByMode: map[string]ActionResult{
-			whiteboxQAID: {Status: "PASS", DispatchID: "wb-design-1"},
+			prompts.WhiteboxQAID: {Status: "PASS", DispatchID: "wb-design-1"},
 		},
 		Dispatches: map[string]PreparedDispatch{
-			"wb-design-1": {Target: "qa-design", Mode: whiteboxQAID, SourceSnapshot: "snap-S2"},
+			"wb-design-1": {Target: "qa-design", Mode: prompts.WhiteboxQAID, SourceSnapshot: "snap-S2"},
 		},
 		CurrentSnapshot: "snap-S2",
 	}
@@ -130,7 +131,7 @@ func TestWhiteboxTestCodeAdvancementRequiresDevelopmentComplete(t *testing.T) {
 
 func TestWhiteboxTestCodeAdvancementRequiresWhiteboxSelected(t *testing.T) {
 	state := whiteboxAdvancementState(developmentComplete)
-	state.SelectedGates = []string{blackboxQAID}
+	state.SelectedGates = []string{prompts.BlackboxQAID}
 	if whiteboxTestCodeAdvancement(state) {
 		t.Fatal("advancement opened when whitebox QA was not selected")
 	}
@@ -138,7 +139,7 @@ func TestWhiteboxTestCodeAdvancementRequiresWhiteboxSelected(t *testing.T) {
 
 func TestWhiteboxTestCodeAdvancementRequiresWhiteboxDesignPass(t *testing.T) {
 	state := whiteboxAdvancementState(developmentComplete)
-	state.QADesignByMode[whiteboxQAID] = ActionResult{Status: "PENDING", DispatchID: "wb-design-1"}
+	state.QADesignByMode[prompts.WhiteboxQAID] = ActionResult{Status: "PENDING", DispatchID: "wb-design-1"}
 	if whiteboxTestCodeAdvancement(state) {
 		t.Fatal("advancement opened while the whitebox design was still PENDING")
 	}
@@ -162,7 +163,7 @@ func TestWhiteboxTestCodeAdvancementRequiresPerModeDesign(t *testing.T) {
 		"": {Status: "PASS", DispatchID: "blackbox-design-1"},
 	}
 	state.Dispatches = map[string]PreparedDispatch{
-		"blackbox-design-1": {Target: "qa-design", Mode: blackboxQAID, SourceSnapshot: "snap-S2"},
+		"blackbox-design-1": {Target: "qa-design", Mode: prompts.BlackboxQAID, SourceSnapshot: "snap-S2"},
 	}
 	if whiteboxTestCodeAdvancement(state) {
 		t.Fatal("advancement opened from the merged blackbox design key instead of the whitebox per-mode design")
@@ -176,7 +177,7 @@ func TestWhiteboxSnapshotTransitionBypassesDevelopmentPrepare(t *testing.T) {
 	}
 	// 对比：开发未完成且无白盒设计时，快照过渡仍要求开发工作者已准备。
 	state.Actions["development-worker"] = ActionResult{Status: developmentPending}
-	state.SelectedGates = []string{blackboxQAID}
+	state.SelectedGates = []string{prompts.BlackboxQAID}
 	state.QADesignByMode = map[string]ActionResult{}
 	state.Dispatches = map[string]PreparedDispatch{}
 	if err := requireSnapshotTransition(state); err == nil || !strings.Contains(err.Error(), "development worker must be prepared") {
@@ -191,7 +192,7 @@ func TestWhiteboxIsQAModeRejectsLegacyQA(t *testing.T) {
 	if isQAMode("qa") {
 		t.Fatal(`legacy "qa" id is still recognized as a built-in QA mode`)
 	}
-	for _, id := range []string{blackboxQAID, whiteboxQAID, mergeQAID} {
+	for _, id := range []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, prompts.MergeQAID} {
 		if !isQAMode(id) {
 			t.Fatalf("real QA mode %q was not recognized", id)
 		}
@@ -203,7 +204,7 @@ func TestWhiteboxLegacyQANotQAselected(t *testing.T) {
 	if isSelectedQA(state) {
 		t.Fatal(`a run selecting only the legacy "qa" id is still treated as QA-selected`)
 	}
-	state = RunState{SelectedGates: []string{whiteboxQAID}}
+	state = RunState{SelectedGates: []string{prompts.WhiteboxQAID}}
 	if !isSelectedQA(state) {
 		t.Fatal("a run selecting whitebox QA was not treated as QA-selected")
 	}

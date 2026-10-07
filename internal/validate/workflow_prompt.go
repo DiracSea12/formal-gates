@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,7 +20,7 @@ func PrepareGate(root, packageRoot, runID, gateID string, userRequested bool, us
 		UserRequested bool
 		UserReason    string
 	}{userRequested, strings.TrimSpace(userReason)})
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog prompts.PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
@@ -66,7 +67,7 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 			UserReason    string
 		}{normalizedScope, userRequested, strings.TrimSpace(userReason)})
 	}
-	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, userRequested bool, userReason string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, actionInput, func(state *RunState, catalog prompts.PromptCatalog, route PromptRoute, userRequested bool, userReason string) (string, error) {
 		if actionID == "product-review" {
 			// An activated structured requirement makes every REQ's obligation→AC
 			// completeness a mandatory, enumerated product-review item. The normal
@@ -154,7 +155,7 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 // prepareBoundPrompt composes and registers a prepared dispatch. mode selects the
 // QA isolation binding for qa-design/qa-review blackbox dispatches; userRequested
 // carries the explicit user override signal for the review-rule enforcement.
-func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason, actionInput string, compose func(*RunState, PromptCatalog, PromptRoute, bool, string) (string, error)) (string, error) {
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason, actionInput string, compose func(*RunState, prompts.PromptCatalog, PromptRoute, bool, string) (string, error)) (string, error) {
 	if userRequested && strings.TrimSpace(userReason) == "" {
 		return "", fmt.Errorf("explicit re-review requires a non-empty --user-reason")
 	}
@@ -355,7 +356,7 @@ func verifyIsolatedRequirementRevisions(state RunState, worktree string) error {
 	return nil
 }
 
-func actionPromptDetail(root string, state RunState, catalog PromptCatalog, actionID, mode string) (string, error) {
+func actionPromptDetail(root string, state RunState, catalog prompts.PromptCatalog, actionID, mode string) (string, error) {
 	sharedKey := qaSharedStepStorageKey(state, mode)
 	if actionID == "qa-design" {
 		lines := []string{formatQASharedSteps(state.QACaseSets[sharedKey].SharedSteps)}
@@ -571,7 +572,7 @@ func prepareDevelopmentAction(root, packageRoot, runID string, userRequested boo
 		UserRequested bool
 		UserReason    string
 	}{userRequested, strings.TrimSpace(userReason)})
-	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog prompts.PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
@@ -667,7 +668,7 @@ func verifyCanonicalPromptFile(state RunState, dispatch PreparedDispatch) error 
 // would produce, mirroring the detail computation of prepareDevelopmentAction
 // and the actionPromptDetail injection of PrepareAction without re-running the
 // transition guards (they are not part of the task text).
-func composeDispatchPrompt(root string, state RunState, catalog PromptCatalog, route PromptRoute, dispatch PreparedDispatch) (string, error) {
+func composeDispatchPrompt(root string, state RunState, catalog prompts.PromptCatalog, route PromptRoute, dispatch PreparedDispatch) (string, error) {
 	if dispatch.TargetKind == "gate" {
 		return ComposeGatePrompt(catalog, dispatch.Target, route)
 	}

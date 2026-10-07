@@ -3,6 +3,7 @@ package validate
 import (
 	"fmt"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -64,7 +65,7 @@ type QAScopeInput struct {
 // and merge QA share the run's QA case set and QA Execution result; discovered
 // gate entries live in the per-gate result map instead.
 func isQAMode(id string) bool {
-	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID
+	return id == prompts.BlackboxQAID || id == prompts.WhiteboxQAID || id == prompts.MergeQAID
 }
 
 // whiteboxTestCodeAdvancement reports whether a snapshot advancement is the
@@ -85,15 +86,15 @@ func isQAMode(id string) bool {
 // second commit cannot be advanced again through this path without a fresh
 // whitebox design round (repair snapshots go through the normal repair gates).
 func whiteboxTestCodeAdvancement(state RunState) bool {
-	if state.Actions["development-worker"].Status != developmentComplete || !isSelected(state, whiteboxQAID) {
+	if state.Actions["development-worker"].Status != developmentComplete || !isSelected(state, prompts.WhiteboxQAID) {
 		return false
 	}
-	design, ok := state.QADesignByMode[whiteboxQAID]
+	design, ok := state.QADesignByMode[prompts.WhiteboxQAID]
 	if !ok || design.Status != "PASS" || design.DispatchID == "" {
 		return false
 	}
 	dispatch, ok := state.Dispatches[design.DispatchID]
-	if !ok || dispatch.Target != "qa-design" || dispatch.Mode != whiteboxQAID {
+	if !ok || dispatch.Target != "qa-design" || dispatch.Mode != prompts.WhiteboxQAID {
 		return false
 	}
 	return dispatch.SourceSnapshot != "" && dispatch.SourceSnapshot == state.CurrentSnapshot
@@ -127,10 +128,10 @@ func slicingRecorded(state RunState) bool {
 // the QA Design agent which modes' cases it must design.
 func selectedQAModes(state RunState) []string {
 	var modes []string
-	if isSelected(state, blackboxQAID) {
+	if isSelected(state, prompts.BlackboxQAID) {
 		modes = append(modes, "blackbox: real QA designed from the current confirmed requirement in the QA isolation worktree, executed against the built product on the main worktree after the snapshot")
 	}
-	if isSelected(state, whiteboxQAID) {
+	if isSelected(state, prompts.WhiteboxQAID) {
 		modes = append(modes, "whitebox: structure test cases designed by reading the implementation after development")
 	}
 	return modes
@@ -153,7 +154,7 @@ func selectedQAModes(state RunState) []string {
 // (snapshotBlackboxReleased), handled by AdvanceSnapshot. 黑盒门的
 // review 结果按 blackbox mode 独立读取，不读取另一 mode 的 review 判定。
 func blackboxReviewPassed(state RunState) bool {
-	if !isSelected(state, blackboxQAID) {
+	if !isSelected(state, prompts.BlackboxQAID) {
 		return true
 	}
 	hasBlackboxCases := false
@@ -197,7 +198,7 @@ func discardUnmatchedQADesign(state *RunState) {
 	if state.qaDesign("").Status != "PASS" || state.qaReview("").Status == "PASS" {
 		return
 	}
-	if isSelected(*state, blackboxQAID) {
+	if isSelected(*state, prompts.BlackboxQAID) {
 		return
 	}
 	// 废弃快速路径的投机黑盒设计时清空全部按 mode 存储的用例、执行结果与增量变更留痕
@@ -536,7 +537,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		transitionTarget:       func(dispatch PreparedDispatch) string { return dispatch.Mode },
 		requireIsolationNative: true,
 		requireLifecycle:       true,
-	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+	}, func(state *RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) error {
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(cases) != 0 || len(options.SharedSteps) != 0 || len(options.RemoveCases) != 0 || options.ReplaceAll {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
@@ -802,10 +803,10 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		transitionTarget:       func(dispatch PreparedDispatch) string { return dispatch.Mode },
 		requireIsolationNative: true,
 		requireLifecycle:       true,
-		preCheck: func(state *RunState, _ PromptCatalog) error {
+		preCheck: func(state *RunState, _ prompts.PromptCatalog) error {
 			return requireWhiteboxReviewSnapshot(root, *state, state.Dispatches[dispatchID].Mode)
 		},
-	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+	}, func(state *RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) error {
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(decisions) != 0 || len(setFindings) != 0 {
 				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
@@ -940,7 +941,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 // Use the existing VCS snapshot checks: review must see committed test code at
 // the registered snapshot, both when preparing and when recording the result.
 func requireWhiteboxReviewSnapshot(root string, state RunState, mode string) error {
-	if mode != whiteboxQAID {
+	if mode != prompts.WhiteboxQAID {
 		return nil
 	}
 	resolver, err := resolverForVCS(state.VCS, nil)
@@ -979,7 +980,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		transitionTarget:  func(dispatch PreparedDispatch) string { return dispatch.Mode },
 		requireMainNative: true,
 		requireLifecycle:  !options.Checkpoint || strings.TrimSpace(runtimeError) != "",
-	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+	}, func(state *RunState, catalog prompts.PromptCatalog, dispatch PreparedDispatch) error {
 		if options.Checkpoint && dispatch.Status != "CLAIMED" {
 			return fmt.Errorf("QA checkpoint requires a claimed dispatch")
 		}
@@ -1363,7 +1364,7 @@ func recordExecutionScope(state *RunState, mode, decision string, caseIDs []stri
 // have an authoritative QA execution result to rerun (first execution needs no
 // scope); the recorded BaseSnapshot is that result's snapshot. Source is PREPARE.
 func RecordExecutionScope(root, packageRoot, runID, mode, decision string, caseIDs []string, reason string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, true, false, func(state *RunState, _ prompts.PromptCatalog) error {
 		mode = strings.TrimSpace(mode)
 		if mode != "blackbox" && mode != "whitebox" && mode != "" {
 			return fmt.Errorf("非法 mode %q：qa-execution-scope 的 mode 只支持 blackbox、whitebox 或空（合并集）", mode)
@@ -1475,9 +1476,9 @@ func qaModeRecordedAtCurrent(state RunState, mode string) bool {
 // single merged (empty-mode) set.
 func qaDispatchMode(id string) string {
 	switch id {
-	case blackboxQAID:
+	case prompts.BlackboxQAID:
 		return "blackbox"
-	case whiteboxQAID:
+	case prompts.WhiteboxQAID:
 		return "whitebox"
 	default:
 		return ""

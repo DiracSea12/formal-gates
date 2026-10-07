@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"formal-gates/internal/prompts"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -185,7 +186,7 @@ func qaRequirementFixture(t *testing.T) (string, string, RunState, ReviewDeltaPa
 	revision, err := RequirementRevision(filepath.Join(root, "requirement.md"))
 	qaOK(t, err)
 	d := qaDelta(t, &s, revision)
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	qaOK(t, err)
 	s.CatalogRevision, s.BasePromptRevision, s.PromptHashes = catalog.CatalogRevision, catalog.BaseRevision, catalogPromptHashes(catalog)
 	qaOK(t, SaveRunState(root, s))

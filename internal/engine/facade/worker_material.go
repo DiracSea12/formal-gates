@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
-	"formal-gates/internal/validate"
 )
 
 // WorkerMaterial is a thin pointer to immutable evidence for an issued action.
@@ -32,7 +32,7 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 	if len(inputs) == 0 {
 		return refs, nil
 	}
-	catalog, err := validate.LoadPromptCatalog(f.admission.Target)
+	catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
 	if err != nil {
 		return nil, err
 	}

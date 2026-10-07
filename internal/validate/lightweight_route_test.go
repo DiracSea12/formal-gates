@@ -27,6 +27,7 @@ package validate
 
 import (
 	"encoding/json"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,7 +140,7 @@ func TestSetRouteLightweightSelectsZeroGates(t *testing.T) {
 	if len(state.SelectedGates) != 0 {
 		t.Fatalf("lightweight route must select zero gates, got %v", state.SelectedGates)
 	}
-	for _, id := range []string{blackboxQAID, whiteboxQAID, "quality", "architecture"} {
+	for _, id := range []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality", "architecture"} {
 		auth, ok := state.SkipAuthorizations[id]
 		if !ok || auth.Origin != "ROUTE" || auth.Status != "UNSELECTED" {
 			t.Fatalf("candidate %q: want ROUTE/UNSELECTED skip, got %#v ok=%v", id, auth, ok)
@@ -294,7 +295,7 @@ func TestLightweightRequirementCanConfirmWithoutClarificationAction(t *testing.T
 // behavior instead of silently turning it into the record-only lightweight route.
 func TestQuickE2ECanaryRunsFullVerifiedRoute(t *testing.T) {
 	packageRoot := repoRootValidateTest(t)
-	catalog, err := LoadPromptCatalog(packageRoot)
+	catalog, err := prompts.LoadPromptCatalog(packageRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

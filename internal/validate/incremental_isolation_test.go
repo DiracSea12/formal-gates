@@ -18,6 +18,7 @@ package validate
 
 import (
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func assertBlackboxMirrorContent(t *testing.T, path, want string) {
 // procedure/oracle/review status；主干不可见；补全轮每轮重写 mirror。
 func TestWhiteboxMirrorDerivedFromRunStateBlackboxCases(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-mirror-derived"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-mirror-derived"), "custom", []string{prompts.BlackboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -95,7 +96,7 @@ func TestWhiteboxMirrorDerivedFromRunStateBlackboxCases(t *testing.T) {
 // .gates/cases/blackbox.md；黑盒设计轮才写，且 mirror 只含黑盒用例。
 func TestWhiteboxMirrorOnlyForBlackboxDesignWithRegisteredWorktree(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-mirror-gate"), "custom", []string{blackboxQAID, whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-mirror-gate"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -180,7 +181,7 @@ func TestWhiteboxMaterializeOnlyApprovedBlackboxCasesFromRunState(t *testing.T) 
 // 黑盒 review PASS 已清空隔离工作区登记，物化仍成功（读 run-state 单一来源）。
 func TestWhiteboxSealMaterializesApprovedBlackboxCasesToLedgerDir(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-seal-materialize"), "custom", []string{blackboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-seal-materialize"), "custom", []string{prompts.BlackboxQAID, "quality"})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -441,7 +442,7 @@ func TestWhiteboxRemoveAndReplaceAllSemantics(t *testing.T) {
 // mode 的用例列表，不触碰黑盒列表；各 mode 设计结果独立记录。
 func TestWhiteboxDesignPerModeIsolation(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-permode"), "custom", []string{blackboxQAID, whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-permode"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -482,7 +483,7 @@ func TestWhiteboxDesignPerModeIsolation(t *testing.T) {
 // 新 id 生成保留全部 mode 已占用 id，白盒新增用例不与黑盒既有用例撞号。
 func TestWhiteboxNewCaseIDsGloballyUniqueAcrossModes(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-globalid"), "custom", []string{blackboxQAID, whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-globalid"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -642,7 +643,7 @@ func TestWhiteboxTestBindingEnforced(t *testing.T) {
 // 同时指向隔离工作区的用例 mirror 文件；白盒提示词不指黑盒 mirror。
 func TestWhiteboxReviewPromptInjectsIncrementalChangeContext(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-review-context"), "custom", []string{blackboxQAID, whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-review-context"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {

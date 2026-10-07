@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -462,10 +463,10 @@ func normalizeACIDs(values []string) []string {
 }
 
 func coverageKind(mode string, merge bool) coverage.ReviewKind {
-	if merge || mode == mergeQAID {
+	if merge || mode == prompts.MergeQAID {
 		return coverage.ReviewMerge
 	}
-	if mode == whiteboxQAID {
+	if mode == prompts.WhiteboxQAID {
 		return coverage.ReviewWhitebox
 	}
 	return coverage.ReviewBlackbox
@@ -1621,7 +1622,7 @@ func validateACResponsibilities(state RunState, slices, inputs []string) (map[st
 	allowedOwners := map[string]bool{masterMergeOwner: true}
 	for _, raw := range slices {
 		owner := strings.TrimSpace(raw)
-		if !promptIDPattern.MatchString(owner) {
+		if !prompts.IDPattern.MatchString(owner) {
 			return nil, fmt.Errorf("guaranteed split slice %q must be a concrete run id", raw)
 		}
 		allowedOwners[owner] = true

@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,7 +15,7 @@ import (
 // snapshot, not write a spurious Gates["qa"] entry.
 func TestReproQACarryRegression(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := readyDeliveryForRoute(t, root, pkg, "repro-qa-carry", "custom", []string{blackboxQAID, "architecture"})
+	state := readyDeliveryForRoute(t, root, pkg, "repro-qa-carry", "custom", []string{prompts.BlackboxQAID, "architecture"})
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
 	var err error
 	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
@@ -26,7 +27,7 @@ func TestReproQACarryRegression(t *testing.T) {
 	}
 	state = recordGateResult(t, root, pkg, state, "architecture", "repro-arch", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "repro-repair")
-	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{blackboxQAID}) {
+	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{prompts.BlackboxQAID}) {
 		t.Fatalf("eligible carry results=%v want=[blackbox]", got)
 	}
 	state, err = RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior")

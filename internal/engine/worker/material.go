@@ -6,12 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"io"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
-	"formal-gates/internal/validate"
 	"strings"
 )
 
@@ -23,7 +23,7 @@ type Material struct {
 	ResultSchema   map[string]any               `json:"resultSchema"`
 }
 
-func Render(input protocol.WorkerInput, catalog validate.PromptCatalog) (Material, error) {
+func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material, error) {
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}

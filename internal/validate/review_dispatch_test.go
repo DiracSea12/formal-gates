@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,7 +76,7 @@ func qaStore(t *testing.T, s RunState) (string, string, RunState) {
 	qaOK(t, err)
 	s.RequirementArtifacts = artifacts
 	s.RequirementSource = "requirement.md"
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	qaOK(t, err)
 	s.CatalogRevision, s.BasePromptRevision, s.PromptHashes = catalog.CatalogRevision, catalog.BaseRevision, catalogPromptHashes(catalog)
 	qaOK(t, SaveRunState(root, s))
@@ -302,7 +303,7 @@ func TestExactlyOneAdditionalAttemptAuthorization(t *testing.T) {
 func TestDispatchSignatureBindsAuthoritativeInputs(t *testing.T) {
 	s := qaState()
 	s.QACasesByMode["whitebox"] = []QACase{{ID: "CASE-A", Description: "first"}}
-	c := PromptCatalog{CatalogRevision: "catalog", BaseRevision: "prompt"}
+	c := prompts.PromptCatalog{CatalogRevision: "catalog", BaseRevision: "prompt"}
 	key, signature := dispatchIdentity(s, c, "action", "qa-design", "whitebox", "input")
 	for _, name := range []string{"kind", "target", "mode", "base", "current", "requirement", "case", "catalog", "prompt", "input"} {
 		t.Run(name, func(t *testing.T) {

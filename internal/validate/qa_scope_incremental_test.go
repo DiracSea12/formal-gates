@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"reflect"
 	"strings"
 	"testing"
@@ -188,7 +189,7 @@ func TestInvalidateRequirementClearsScopesAndPriors(t *testing.T) {
 // FULL decision with Source AUTHORIZE_REPAIR (or a host-supplied override).
 func TestQaRerunModesAndBundleScopesUnit(t *testing.T) {
 	perMode := RunState{
-		SelectedGates:     []string{blackboxQAID, whiteboxQAID},
+		SelectedGates:     []string{prompts.BlackboxQAID, prompts.WhiteboxQAID},
 		CurrentSnapshot:   "s2",
 		QAExecutionByMode: map[string]QAExecutionResult{"blackbox": {Status: "FAIL", Snapshot: "s2"}, "whitebox": {Status: "PASS", Snapshot: "s2"}},
 		ExecutionScopes:   map[string]QAExecutionScope{},
@@ -204,7 +205,7 @@ func TestQaRerunModesAndBundleScopesUnit(t *testing.T) {
 	}
 	// 合并执行：合并 "" FAIL → 只返回合并 mode。
 	merged := RunState{
-		SelectedGates:     []string{blackboxQAID},
+		SelectedGates:     []string{prompts.BlackboxQAID},
 		CurrentSnapshot:   "s2",
 		QAExecutionByMode: map[string]QAExecutionResult{"": {Status: "FAIL", Snapshot: "s2"}},
 		ExecutionScopes:   map[string]QAExecutionScope{},
@@ -224,7 +225,7 @@ func TestQaRerunModesAndBundleScopesUnit(t *testing.T) {
 // when every selected QA mode and gate result is PASS at the current snapshot.
 func TestNoRepairableBlockerWhenNothingFailed(t *testing.T) {
 	state := RunState{
-		SelectedGates:     []string{blackboxQAID, whiteboxQAID, "quality"},
+		SelectedGates:     []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"},
 		CurrentSnapshot:   "s2",
 		QAExecutionByMode: map[string]QAExecutionResult{"blackbox": {Status: "PASS", Snapshot: "s2"}, "whitebox": {Status: "PASS", Snapshot: "s2"}},
 		Gates:             map[string]GateResult{"quality": {Status: "PASS", Snapshot: "s2"}},

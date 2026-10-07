@@ -18,11 +18,11 @@ func TestResultSchemaUsesRoleWireContract(t *testing.T) {
 		fields  []string
 		result  protocol.ValidationResult
 	}{
-		{"engine.development.batch", []string{"binding", "status", "development", "granularityReview"}, protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implemented behavior", Build: []string{"go build"}, Tests: []string{"go test"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Checks: map[string]string{"build": "passed"}, Handoff: "app.go"}}}},
+		{"engine.development.batch", []string{"binding", "status", "development"}, protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implemented behavior", Build: []string{"go build"}, Tests: []string{"go test"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Checks: map[string]string{"build": "passed"}, Handoff: "app.go"}}}},
 		{"engine.repair", []string{"binding", "status", "development", "granularityReview"}, protocol.ValidationResult{GranularityReview: &protocol.GranularityReview{}}},
 		{"engine.merge.resolve", []string{"binding", "status", "resolution"}, protocol.ValidationResult{Resolution: &protocol.ConflictResolution{}}},
-		{"engine.qa.design", []string{"binding", "status", "development", "manifest", "suggestions"}, protocol.ValidationResult{Manifest: &coverage.AcceptanceManifest{}}},
-		{"engine.qa.review.rationale", []string{"binding", "status", "review"}, protocol.ValidationResult{Review: &coverage.ReviewResult{}}},
+		{"engine.qa.design", []string{"binding", "status", "development", "manifest", "checkpoint"}, protocol.ValidationResult{Manifest: &coverage.AcceptanceManifest{}, Checkpoint: true}},
+		{"engine.qa.review.rationale", []string{"binding", "status", "review", "suggestions"}, protocol.ValidationResult{Review: &coverage.ReviewResult{}, Suggestions: []protocol.QASuggestion{{Severity: "P3", Message: "observed optional improvement"}}}},
 		{"engine.qa.execution", []string{"binding", "status", "execution", "tool", "environment", "checkpoint", "findings"}, protocol.ValidationResult{Execution: &coverage.ExecutionReport{}, Tool: "go test", Environment: "isolated candidate"}},
 		{"engine.gate", []string{"binding", "status", "findings"}, protocol.ValidationResult{Findings: []review.Finding{{Severity: "P3", Message: "evidence"}}}},
 	}

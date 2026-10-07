@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +28,7 @@ func installLegacyBatchPlan(t *testing.T, root string, state RunState) RunState 
 
 func TestLegacySerialPlanContinuesWithoutIntermediateQA(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "legacy-batches"), "custom", []string{blackboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "legacy-batches"), "custom", []string{prompts.BlackboxQAID, "quality"})
 	installLegacyBatchPlan(t, root, state)
 	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "")
 
@@ -81,7 +82,7 @@ func TestLegacySerialPlanContinuesWithoutIntermediateQA(t *testing.T) {
 	if state.Dispatches[secondDispatch].BatchID != "A2" {
 		t.Fatalf("second dispatch batch = %+v", state.Dispatches[secondDispatch])
 	}
-	catalog, _ := LoadPromptCatalog(pkg)
+	catalog, _ := prompts.LoadPromptCatalog(pkg)
 	route := routeForState(root, state)
 	route.DispatchID, route.DispatchAttempt, route.ReviewWave = secondDispatch, state.Dispatches[secondDispatch].Attempt, state.Dispatches[secondDispatch].ReviewWave
 	recomposed, err := composeDispatchPrompt(root, state, catalog, route, state.Dispatches[secondDispatch])

@@ -682,6 +682,39 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 		return a
 	}
 	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, provider)
+
+	source, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{"prompts", "gates"} {
+		err := filepath.WalkDir(filepath.Join(source, directory), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			relative, _ := filepath.Rel(source, path)
+			destination := filepath.Join(target, relative)
+			if entry.IsDir() {
+				return os.MkdirAll(destination, 0700)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(destination, body, 0600)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Unit workflows issue this declared custom gate from their private catalog.
+	quality, err := os.ReadFile(filepath.Join(source, "gates", "implementation-quality-gate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "gates", "quality.md"), quality, 0600); err != nil {
+		t.Fatal(err)
+	}
 	a := &Admission{RegistryPath: registryPath, Target: target, Root: root,
 		Provider: provider, PackageDigest: packageDigest, InstalledTargetIdentity: recordID,
 		Generation: generation, Lease: lease, Token: token}

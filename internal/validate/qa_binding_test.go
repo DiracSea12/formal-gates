@@ -9,6 +9,7 @@ package validate
 
 import (
 	"encoding/json"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 // 测试给 B 用例标 PASS"必须可被发现，不能只做任意文本非空校验。
 func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-missing"), "custom", []string{whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-missing"), "custom", []string{prompts.WhiteboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	_, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes"}}, "")
 	if err == nil || !strings.Contains(err.Error(), "requires a --test") {
@@ -33,7 +34,7 @@ func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
 // 拒绝记录（与既有用例撞引用同理）。
 func TestWhiteboxBindingRejectsSharedReference(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-shared"), "custom", []string{whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-shared"), "custom", []string{prompts.WhiteboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	_, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
 		{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"},
@@ -50,7 +51,7 @@ func TestWhiteboxBindingRejectsSharedReference(t *testing.T) {
 // 实际运行验证。
 func TestWhiteboxBindingDefersExistence(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-deferred"), "custom", []string{whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-deferred"), "custom", []string{prompts.WhiteboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "not_delivered_test.go::TestNotDeliveredYet"}}, "")
 	if err != nil {
@@ -66,7 +67,7 @@ func TestWhiteboxBindingDefersExistence(t *testing.T) {
 // 白盒设计权威结果与白盒执行结果不受影响（黑盒失败不得把白盒设计重置为 PENDING）。
 func TestDesignRuntimeErrorPerModeIndependent(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-runtime-error"), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-runtime-error"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"})
 	worktree := createQAWorktree(t, root, state)
 	var err error
 	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)

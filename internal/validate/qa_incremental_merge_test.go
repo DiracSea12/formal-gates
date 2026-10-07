@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,7 +166,7 @@ func TestQADesignIncrementalMergeSemantics(t *testing.T) {
 // .gates/cases/blackbox.md（主干看不到）；后续补全轮重写 mirror。白盒/无工作区不写。
 func TestBlackboxDesignMirrorWritesIsolationWorktreeCaseFile(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "mirror"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "mirror"), "custom", []string{prompts.BlackboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -224,7 +225,7 @@ func TestBlackboxDesignMirrorWritesIsolationWorktreeCaseFile(t *testing.T) {
 // ledger 同目录），只含已批准黑盒用例；中止（abort）不物化。非分片 run 直接物化。
 func TestSealMaterializesApprovedBlackboxCases(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "seal-materialize"), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "seal-materialize"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -311,7 +312,7 @@ func TestSealMaterializesApprovedBlackboxCases(t *testing.T) {
 // 不是 seal，不产出 .gates/results/<run-id>.blackbox-cases.md 物化文件。
 func TestAbortDoesNotMaterializeBlackboxCases(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "abort-no-materialize"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "abort-no-materialize"), "custom", []string{prompts.BlackboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -361,7 +362,7 @@ func TestBlackboxCasePathsAreVCSUnified(t *testing.T) {
 // 隔离工作区的用例 mirror 文件路径。
 func TestReviewPromptInjectsChangeListAndMirrorPath(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-context"), "custom", []string{blackboxQAID, whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-context"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID})
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {

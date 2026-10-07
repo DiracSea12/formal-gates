@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -64,7 +65,7 @@ var parallelStageTable = []parallelStage{
 				tasks = append(tasks, parallelTask{name: "开发子代理", match: matchDispatch("action", "development-worker", "")})
 			}
 			// 并行提示按 blackbox mode 读黑盒 review 权威结果。
-			if isSelected(state, blackboxQAID) && state.qaReview("blackbox").Status != "PASS" {
+			if isSelected(state, prompts.BlackboxQAID) && state.qaReview("blackbox").Status != "PASS" {
 				tasks = append(tasks, parallelTask{name: "黑盒 QA 设计/审查", match: func(d PreparedDispatch) bool {
 					return d.TargetKind == "action" && d.Mode == "blackbox" && (d.Target == "qa-design" || d.Target == "qa-review")
 				}})

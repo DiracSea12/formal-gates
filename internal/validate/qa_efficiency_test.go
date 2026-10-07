@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,7 +241,7 @@ func TestQAEfficiencyAcceptedChangeRequiresAffectedReview(t *testing.T) {
 
 func TestQAEfficiencyThawRetainsUnchangedCheckpointRows(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "thaw-checkpoint"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "thaw-checkpoint"), "custom", []string{prompts.BlackboxQAID})
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, createQAWorktree(t, root, state))
 	if err != nil {
 		t.Fatal(err)

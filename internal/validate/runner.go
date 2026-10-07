@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"strings"
 
 	"formal-gates/internal/lifecycle"
@@ -23,7 +24,7 @@ type PromptRoute struct {
 	ReviewWave           int
 }
 
-func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) (string, error) {
+func ComposeGatePrompt(catalog prompts.PromptCatalog, gateID string, route PromptRoute) (string, error) {
 	gate, ok := catalog.Gate(gateID)
 	if !ok {
 		return "", fmt.Errorf("unknown discovered gate %q", gateID)
@@ -82,7 +83,7 @@ func gateResultContract(dispatchID string) string {
 // inspects the diff through the named VCS's native commands (git status + git
 // diff, svn status + svn diff, p4 opened + p4 diff). An optional logical scope
 // narrows the review when supplied.
-func ComposeStandaloneGatePrompt(catalog PromptCatalog, gateID, root, vcs, scope string) (string, error) {
+func ComposeStandaloneGatePrompt(catalog prompts.PromptCatalog, gateID, root, vcs, scope string) (string, error) {
 	gate, ok := catalog.Gate(gateID)
 	if !ok {
 		return "", fmt.Errorf("unknown discovered gate %q", gateID)
@@ -164,7 +165,7 @@ func isReviewerAction(actionID string) bool {
 	return false
 }
 
-func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRoute, detail string) (string, error) {
+func ComposeActionPrompt(catalog prompts.PromptCatalog, actionID string, route PromptRoute, detail string) (string, error) {
 	action, ok := catalog.Action(actionID)
 	if !ok {
 		return "", fmt.Errorf("unknown action prompt %q", actionID)

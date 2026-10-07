@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"formal-gates/internal/prompts"
 	"io"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := validate.LoadPromptCatalog(catalogRoot)
+	catalog, err := prompts.LoadPromptCatalog(catalogRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -564,7 +565,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 // user-authorized snapshot release.
 func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-action-fail"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-action-fail"), "custom", []string{prompts.BlackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -726,11 +727,11 @@ func TestQADesignRequiresSelectedQA(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil || !strings.Contains(err.Error(), "QA is not selected") {
 		t.Fatalf("qa-design without selected QA mode: %v", err)
 	}
-	state, err := AddRouteGates(root, pkg, state.RunID, []string{blackboxQAID})
+	state, err := AddRouteGates(root, pkg, state.RunID, []string{prompts.BlackboxQAID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isSelected(state, blackboxQAID) {
+	if !isSelected(state, prompts.BlackboxQAID) {
 		t.Fatalf("blackbox QA was not added to the route: %#v", state.SelectedGates)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err != nil {
@@ -1045,7 +1046,7 @@ func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	if _, ok := persisted.SkipAuthorizations["quality"]; ok {
 		t.Fatalf("Seal authorization survived a repair snapshot: %#v", persisted.SkipAuthorizations)
 	}
-	if authorization := persisted.SkipAuthorizations[blackboxQAID]; authorization.Origin != "ROUTE" {
+	if authorization := persisted.SkipAuthorizations[prompts.BlackboxQAID]; authorization.Origin != "ROUTE" {
 		t.Fatalf("route authorization was cleared with snapshot authorization: %#v", persisted.SkipAuthorizations)
 	}
 	if persisted.CompletedReviewWaves != 0 {
@@ -1223,7 +1224,7 @@ func TestStartRejectsNonAncestorBaseSnapshot(t *testing.T) {
 func TestRunStateRecordsPerGateActionPromptHashes(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := mustStart(t, root, pkg, "prompt-hashes")
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1318,7 +1319,7 @@ func TestSelectedGatePromptChangeRecordedByMainAgentCarry(t *testing.T) {
 	if record := state.Carry["quality"]; record.Decision != "INHERIT" || !strings.Contains(record.Message, "wording") {
 		t.Fatalf("carry judgment was not recorded: %#v", record)
 	}
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1354,7 +1355,7 @@ func TestChangedGateStaysReDispatchableAfterMainAgentCarry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1742,7 +1743,7 @@ func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
 	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 || !strings.Contains(state.Slicing.Parallel, "parallel") {
 		t.Fatalf("split decision not captured: %#v", state.Slicing)
 	}
-	if state.RouteMode != "merge" || !reflect.DeepEqual(state.SelectedGates, []string{mergeQAID, mergeGateID}) {
+	if state.RouteMode != "merge" || !reflect.DeepEqual(state.SelectedGates, []string{prompts.MergeQAID, prompts.MergeGateID}) {
 		t.Fatalf("split retained overall did not auto-attach merge verification: %#v", state)
 	}
 	// 保留总任务实例不涉常规路线选择。
@@ -1817,12 +1818,12 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 		t.Fatalf("merge QA zero-case execution: %#v", state.qaExecution(""))
 	}
 	// 合并门。
-	gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, mergeGateID, "merge-gate-reviewer")
-	state, err = RecordGate(root, pkg, state.RunID, mergeGateID, gateDispatch, "PASS", "", comparedRange(state), nil)
+	gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, prompts.MergeGateID, "merge-gate-reviewer")
+	state, err = RecordGate(root, pkg, state.RunID, prompts.MergeGateID, gateDispatch, "PASS", "", comparedRange(state), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.CompletedReviewWaves != 1 || state.Gates[mergeGateID].Status != "PASS" {
+	if state.CompletedReviewWaves != 1 || state.Gates[prompts.MergeGateID].Status != "PASS" {
 		t.Fatalf("merge gate review did not complete the wave: %#v", state)
 	}
 	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
@@ -1905,7 +1906,7 @@ func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
 	// 切片实例：钉死主干、继承整体级审查，走黑盒 QA + 开发 + 快照 + 执行。
 	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "slice-cost", master.RunID))
 	slice = recordSlicing(t, root, pkg, slice, "split", master.RunID)
-	slice = setRoute(t, root, pkg, slice, "custom", []string{blackboxQAID})
+	slice = setRoute(t, root, pkg, slice, "custom", []string{prompts.BlackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, slice.RunID, "qa-design")
 	slice, err = RecordQADesign(root, pkg, slice.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -1968,8 +1969,8 @@ func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mergeGateDispatch := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "slice-cost-merge-gate")
-	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, mergeGateDispatch, "PASS", "", comparedRange(master), nil)
+	mergeGateDispatch := prepareAndClaim(t, root, pkg, master.RunID, prompts.MergeGateID, "slice-cost-merge-gate")
+	master, err = RecordGate(root, pkg, master.RunID, prompts.MergeGateID, mergeGateDispatch, "PASS", "", comparedRange(master), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1993,8 +1994,8 @@ func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mergeGateDispatch = prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "slice-cost-final-merge-gate")
-	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, mergeGateDispatch, "PASS", "", comparedRange(master), nil)
+	mergeGateDispatch = prepareAndClaim(t, root, pkg, master.RunID, prompts.MergeGateID, "slice-cost-final-merge-gate")
+	master, err = RecordGate(root, pkg, master.RunID, prompts.MergeGateID, mergeGateDispatch, "PASS", "", comparedRange(master), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2079,7 +2080,7 @@ func TestSliceAbortWritesNoLedgerAndSidecarKeepsCost(t *testing.T) {
 	// 切片实例：确认需求、记录一次派发产生成本投影，然后中止。
 	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "slice-abort", master.RunID))
 	slice = recordSlicing(t, root, pkg, slice, "split", master.RunID)
-	slice = setRoute(t, root, pkg, slice, "custom", []string{blackboxQAID})
+	slice = setRoute(t, root, pkg, slice, "custom", []string{prompts.BlackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, slice.RunID, "qa-design")
 	slice, err = RecordQADesign(root, pkg, slice.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -2137,23 +2138,23 @@ func TestSliceAbortWritesNoLedgerAndSidecarKeepsCost(t *testing.T) {
 // candidates; the normal candidates expose blackbox and whitebox QA modes.
 func TestMergeGateRegisteredButExcludedFromNormalRouteCandidates(t *testing.T) {
 	pkg := promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := catalog.Gate(mergeGateID); !ok {
+	if _, ok := catalog.Gate(prompts.MergeGateID); !ok {
 		t.Fatal("merge gate is not registered in the catalog")
 	}
-	candidates, err := PackageRouteCandidates(pkg)
+	candidates, err := prompts.PackageRouteCandidates(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range candidates {
-		if id == mergeGateID || id == mergeQAID {
+		if id == prompts.MergeGateID || id == prompts.MergeQAID {
 			t.Fatalf("merge verification appeared in normal route candidates: %v", candidates)
 		}
 	}
-	if !containsString(candidates, blackboxQAID) || !containsString(candidates, whiteboxQAID) {
+	if !containsString(candidates, prompts.BlackboxQAID) || !containsString(candidates, prompts.WhiteboxQAID) {
 		t.Fatalf("normal route candidates missing QA modes: %v", candidates)
 	}
 }
@@ -2174,8 +2175,8 @@ func TestRouteCandidatesRunStateRequiresConfirmedRequirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 与包级 PackageRouteCandidates 同源：黑盒、白盒加除合并门外的全部门。
-	packaged, err := PackageRouteCandidates(pkg)
+	// 与包级 prompts.PackageRouteCandidates 同源：黑盒、白盒加除合并门外的全部门。
+	packaged, err := prompts.PackageRouteCandidates(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2183,7 +2184,7 @@ func TestRouteCandidatesRunStateRequiresConfirmedRequirement(t *testing.T) {
 		t.Fatalf("run-state RouteCandidates=%v want %v", candidates, packaged)
 	}
 	for _, id := range candidates {
-		if id == mergeGateID || id == mergeQAID {
+		if id == prompts.MergeGateID || id == prompts.MergeQAID {
 			t.Fatalf("run-state route candidates included merge verification: %v", candidates)
 		}
 	}
@@ -2195,8 +2196,8 @@ func TestRouteCandidatesRunStateRequiresConfirmedRequirement(t *testing.T) {
 // set-level coverage judgment.
 func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-blackbox-only"), "custom", []string{blackboxQAID})
-	if !isSelected(state, blackboxQAID) || isSelected(state, whiteboxQAID) {
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-blackbox-only"), "custom", []string{prompts.BlackboxQAID})
+	if !isSelected(state, prompts.BlackboxQAID) || isSelected(state, prompts.WhiteboxQAID) {
 		t.Fatalf("blackbox-only route: %#v", state.SelectedGates)
 	}
 	// 不设机械化质量下限：被选中模式零用例由 qa-review 的 set-level 覆盖判定承担。
@@ -2209,8 +2210,8 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 		t.Fatalf("blackbox design did not pass: %#v", state.qaDesign(""))
 	}
 
-	whitebox := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-whitebox-only"), "custom", []string{whiteboxQAID})
-	if !isSelected(whitebox, whiteboxQAID) || isSelected(whitebox, blackboxQAID) {
+	whitebox := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-whitebox-only"), "custom", []string{prompts.WhiteboxQAID})
+	if !isSelected(whitebox, prompts.WhiteboxQAID) || isSelected(whitebox, prompts.BlackboxQAID) {
 		t.Fatalf("whitebox-only route: %#v", whitebox.SelectedGates)
 	}
 	// 白盒设计在开发后读实现进行：先完成开发与快照再设计。
@@ -2231,7 +2232,7 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	}
 
 	full := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-full"), "full", nil)
-	if !isSelected(full, blackboxQAID) || !isSelected(full, whiteboxQAID) {
+	if !isSelected(full, prompts.BlackboxQAID) || !isSelected(full, prompts.WhiteboxQAID) {
 		t.Fatalf("full route must select both QA modes: %#v", full.SelectedGates)
 	}
 }
@@ -2273,7 +2274,7 @@ func TestDefaultRouteSelectsEveryDiscoveredOrdinaryGate(t *testing.T) {
 	ready = recordProductReview(t, root, pkg, ready)
 	ready = recordReadiness(t, root, pkg, ready)
 	ready = recordSlicing(t, root, pkg, ready, "no-split")
-	for _, selected := range [][]string{{"quality"}, {blackboxQAID, whiteboxQAID, "architecture", "delivery", "quality"}} {
+	for _, selected := range [][]string{{"quality"}, {prompts.BlackboxQAID, prompts.WhiteboxQAID, "architecture", "delivery", "quality"}} {
 		if _, err := SetRoute(root, pkg, ready.RunID, "default", selected); err == nil || !strings.Contains(err.Error(), "without --gate") {
 			t.Fatalf("default accepted manual selection %v: %v", selected, err)
 		}
@@ -2291,7 +2292,7 @@ func TestDefaultRouteSelectsEveryDiscoveredOrdinaryGate(t *testing.T) {
 	if err != nil || state.RouteMode != "default" || !reflect.DeepEqual(state.SelectedGates, want) {
 		t.Fatalf("persisted default route = %q %v, %v", state.RouteMode, state.SelectedGates, err)
 	}
-	for _, id := range []string{blackboxQAID, whiteboxQAID} {
+	for _, id := range []string{prompts.BlackboxQAID, prompts.WhiteboxQAID} {
 		auth := state.SkipAuthorizations[id]
 		if auth.Origin != "ROUTE" || auth.Status != "UNSELECTED" {
 			t.Fatalf("unselected default QA %s = %+v", id, auth)
@@ -2331,7 +2332,7 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 	splitMaster := sliceMaster(t, root, pkg, "split-path-master")
 	split := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "split-path", splitMaster))
 	split = recordSlicing(t, root, pkg, split, "split", splitMaster)
-	split = setRoute(t, root, pkg, split, "custom", []string{blackboxQAID})
+	split = setRoute(t, root, pkg, split, "custom", []string{prompts.BlackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, split.RunID, "qa-design")
 	split, err := RecordQADesign(root, pkg, split.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -2507,7 +2508,7 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 // seals with that test code in the delivered snapshot.
 func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-post-dev"), "custom", []string{whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-post-dev"), "custom", []string{prompts.WhiteboxQAID})
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("whitebox development blocked before QA design: %v", err)
 	}
@@ -2780,7 +2781,7 @@ func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
 	}
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 	if state.qaDesign("").Status != "PASS" {
 		t.Fatalf("fast-path design lost after route confirmation: %#v", state.qaDesign(""))
 	}
@@ -2808,7 +2809,7 @@ func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
 	}
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{whiteboxQAID})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.WhiteboxQAID})
 	if state.qaDesign("").Status != "PENDING" || len(state.allQACases()) != 0 {
 		t.Fatalf("fast-path design not discarded on a route without blackbox QA: %#v", state.qaDesign(""))
 	}
@@ -3077,7 +3078,7 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string, modes ...str
 		mode = modes[0]
 	}
 	var err error
-	if target == "quality" || target == "architecture" || target == mergeGateID {
+	if target == "quality" || target == "architecture" || target == prompts.MergeGateID {
 		_, err = PrepareGate(root, pkg, runID, target, false, "")
 	} else {
 		_, err = PrepareAction(root, pkg, runID, target, mode, false, "")
@@ -3090,7 +3091,7 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string, modes ...str
 		t.Fatal(err)
 	}
 	kind := "action"
-	if target == "quality" || target == "architecture" || target == mergeGateID {
+	if target == "quality" || target == "architecture" || target == prompts.MergeGateID {
 		kind = "gate"
 	}
 	dispatchID := openDispatchID(state, kind, target)
@@ -3310,7 +3311,7 @@ func TestRegisterQAWorktreeRejectsInjectedRevisionMismatch(t *testing.T) {
 // gate requires development complete 且 黑盒 qa-review PASS.
 func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-blackbox-gate"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-blackbox-gate"), "custom", []string{prompts.BlackboxQAID})
 	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区再设计（按 mode 存储）。
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
@@ -3346,7 +3347,7 @@ func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 // (the review judged the set coverage sufficient) lets the snapshot proceed.
 func TestZeroCaseBlackboxReviewPassAllowsSnapshot(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox"), "custom", []string{prompts.BlackboxQAID})
 	// 黑盒设计零用例：设计 PASS、待定集为空，进入 review 的集合覆盖判定。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
@@ -3379,7 +3380,7 @@ func TestZeroCaseBlackboxReviewPassAllowsSnapshot(t *testing.T) {
 // PENDING so the run can never seal.
 func TestZeroCaseBlackboxReviewPassAllowsQAExecution(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-exec"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-exec"), "custom", []string{prompts.BlackboxQAID})
 	// 黑盒设计零用例：设计 PASS、待定集为空，进入 review 的集合覆盖判定。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
@@ -3426,7 +3427,7 @@ func TestZeroCaseBlackboxReviewPassAllowsQAExecution(t *testing.T) {
 // TestZeroCaseBlackboxReviewPassAllowsSnapshot).
 func TestZeroCaseBlackboxSnapshotBlockedBeforeReviewPass(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-blocked"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-blocked"), "custom", []string{prompts.BlackboxQAID})
 	// 黑盒设计零用例：设计 PASS、待定集为空，但 review 尚未派发/记录（qa-review 仍 PENDING）。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
@@ -3450,7 +3451,7 @@ func TestZeroCaseBlackboxSnapshotBlockedBeforeReviewPass(t *testing.T) {
 // qa-execution covers only approved cases without fabricating skipped PASS rows.
 func TestSnapshotUserReleaseAllowsWithoutBlackboxReview(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-user-release"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-user-release"), "custom", []string{prompts.BlackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -3491,7 +3492,7 @@ func TestSnapshotUserReleaseAllowsWithoutBlackboxReview(t *testing.T) {
 // blackbox cases, without recording those cases as execution PASS.
 func TestSnapshotReleasePersistsToRepairSnapshot(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "release-persist"), "custom", []string{blackboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "release-persist"), "custom", []string{prompts.BlackboxQAID, "quality"})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
@@ -3841,7 +3842,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 // modes.
 func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-per-mode"), "custom", []string{whiteboxQAID, blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-per-mode"), "custom", []string{prompts.WhiteboxQAID, prompts.BlackboxQAID})
 	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区。
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
@@ -4320,7 +4321,7 @@ func TestLoadRunStateFriendlyMissingRun(t *testing.T) {
 // qa-execution-scope 非法 mode 明确报"非法 mode"。
 func TestRecordExecutionScopeRejectsInvalidMode(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "scope-mode"), "custom", []string{blackboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "scope-mode"), "custom", []string{prompts.BlackboxQAID})
 	if _, err := RecordExecutionScope(root, pkg, state.RunID, "purple", "FULL", nil, "reason"); err == nil || !strings.Contains(err.Error(), "非法 mode") {
 		t.Fatalf("invalid scope mode was not rejected clearly: %v", err)
 	}

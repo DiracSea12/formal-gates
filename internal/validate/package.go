@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -130,7 +131,7 @@ func Package(root string) Result {
 }
 
 func validatePromptCatalog(root string, result *Result) {
-	if _, err := LoadPromptCatalog(root); err != nil {
+	if _, err := prompts.LoadPromptCatalog(root); err != nil {
 		result.add("prompts/gates", err.Error())
 	}
 }

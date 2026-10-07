@@ -6,6 +6,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -60,7 +61,7 @@ func independentStore(t *testing.T, root string, s RunState) (string, RunState) 
 	s.RequirementSource = "requirement.md"
 	s.RequirementArtifacts, err = requirementArtifactSet(root, s.RequirementSource, nil)
 	independentOK(t, err)
-	catalog, err := LoadPromptCatalog(pkg)
+	catalog, err := prompts.LoadPromptCatalog(pkg)
 	independentOK(t, err)
 	s.CatalogRevision, s.BasePromptRevision, s.PromptHashes = catalog.CatalogRevision, catalog.BaseRevision, catalogPromptHashes(catalog)
 	independentOK(t, SaveRunState(root, s))

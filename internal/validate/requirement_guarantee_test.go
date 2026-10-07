@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -258,7 +259,7 @@ func advanceGuaranteeSnapshot(t *testing.T, root, pkg string, state RunState, na
 func TestRequirementGuaranteeGitSquashRequiresFinalCandidateQA(t *testing.T) {
 	root, pkg, state := readyGuaranteeRoute(t, "guarantee-squash-final-candidate", false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 	state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "both confirmed outcomes", Procedure: "run the documented public command", Oracle: "both outcomes pass", AcceptanceCriteria: []string{"AC-001", "AC-009"}}})
 
 	development := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
@@ -358,7 +359,7 @@ func TestRequirementGuaranteeNonSplitPassAndWaiver(t *testing.T) {
 	t.Run("complete closure", func(t *testing.T) {
 		root, pkg, state := readyGuaranteeRoute(t, "guarantee-pass", false)
 		state = recordSlicing(t, root, pkg, state, "no-split")
-		state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+		state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 		if state.RequirementGuarantee.Activation != guaranteeActive {
 			t.Fatalf("QA route did not activate guarantee: %#v", state.RequirementGuarantee)
 		}
@@ -392,7 +393,7 @@ func TestRequirementGuaranteeNonSplitPassAndWaiver(t *testing.T) {
 	t.Run("incomplete closure requires explicit audited waiver", func(t *testing.T) {
 		root, pkg, state := readyGuaranteeRoute(t, "guarantee-waiver", false)
 		state = recordSlicing(t, root, pkg, state, "no-split")
-		state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+		state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 		state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "partial behavior", Procedure: "use the public command", Oracle: "first outcome passes", AcceptanceCriteria: []string{"AC-001"}}})
 		state = advanceGuaranteeSnapshot(t, root, pkg, state, "guarantee-waiver")
 		execution := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
@@ -424,7 +425,7 @@ func TestRequirementGuaranteeNonSplitPassAndWaiver(t *testing.T) {
 func TestActiveGuaranteeRepairUsesAffectedThenFinalFull(t *testing.T) {
 	root, pkg, state := readyGuaranteeRoute(t, "guarantee-repair-full", false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID, "quality"})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID, "quality"})
 	state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "all confirmed behavior", Procedure: "use the public command", Oracle: "both outcomes pass", AcceptanceCriteria: []string{"AC-001", "AC-009"}}})
 	state = advanceGuaranteeSnapshot(t, root, pkg, state, "guarantee-repair-initial")
 	oldSnapshot := state.CurrentSnapshot
@@ -547,7 +548,7 @@ func TestRequirementGuaranteeRouteArtifactAndRevisionBehavior(t *testing.T) {
 	t.Run("revision drift invalidates all guarantee evidence", func(t *testing.T) {
 		root, pkg, state := readyGuaranteeRoute(t, "guarantee-drift", false)
 		state = recordSlicing(t, root, pkg, state, "no-split")
-		state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+		state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 		state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run", Oracle: "pass", AcceptanceCriteria: []string{"AC-001", "AC-009"}}})
 		oldDigest := state.RequirementGuarantee.ManifestDigest
 		writeTestFile(t, filepath.Join(root, "requirements.md"), guaranteeRequirementDocument("修订后的第二个结果可观察并通过。"))
@@ -575,7 +576,7 @@ func TestRequirementGuaranteeFullRouteUsesUnionAcrossQAModes(t *testing.T) {
 	state = advanceGuaranteeSnapshot(t, root, pkg, state, "full-union")
 
 	const whiteboxTestFile = "whitebox_delivered_test.go"
-	design := prepareDispatch(t, root, pkg, state.RunID, "qa-design", whiteboxQAID)
+	design := prepareDispatch(t, root, pkg, state.RunID, "qa-design", prompts.WhiteboxQAID)
 	writeTestFile(t, filepath.Join(root, whiteboxTestFile), whiteboxDeliveredTestCode)
 	state, err := RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{{Mode: "whitebox", Description: "second structure", Procedure: "run structure test", Oracle: "second passes", Test: whiteboxTestFile + "::TestWhiteboxStructure", AcceptanceCriteria: []string{"AC-009"}}}, "")
 	if err != nil {
@@ -586,8 +587,8 @@ func TestRequirementGuaranteeFullRouteUsesUnionAcrossQAModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	review := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "full-union-whitebox-review", whiteboxQAID)
-	decisions, options := guaranteeReviewInputs(state, whiteboxQAID)
+	review := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "full-union-whitebox-review", prompts.WhiteboxQAID)
+	decisions, options := guaranteeReviewInputs(state, prompts.WhiteboxQAID)
 	state, err = RecordQAReview(root, pkg, state.RunID, review, decisions, "", nil, options)
 	if err != nil {
 		t.Fatal(err)
@@ -606,7 +607,7 @@ func TestRequirementGuaranteeReviewRequiresOnlyTheModeRepresentedProjection(t *t
 	state := guaranteedRunState(t)
 	cases := []QACase{{
 		ID:                 "CASE-ONLY-ONE-AC",
-		Mode:               whiteboxQAID,
+		Mode:               prompts.WhiteboxQAID,
 		Oracle:             "the covered condition passes",
 		Test:               "requirement_guarantee_test.go::TestRequirementGuaranteeReviewRequiresOnlyTheModeRepresentedProjection",
 		AcceptanceCriteria: []string{"AC-001"},
@@ -617,7 +618,7 @@ func TestRequirementGuaranteeReviewRequiresOnlyTheModeRepresentedProjection(t *t
 		PointDecisions:  []string{"AC-001=PASS"},
 		CaseDecisions:   []string{"CASE-ONLY-ONE-AC=PASS"},
 	}
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, partial); err != nil {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, partial); err != nil {
 		t.Fatalf("mode-local REQ/AC review was rejected: %v", err)
 	}
 	state.RequirementGuarantee.ReviewsByMode = map[string]GuaranteeReviewRecord{}
@@ -627,13 +628,13 @@ func TestRequirementGuaranteeReviewRequiresOnlyTheModeRepresentedProjection(t *t
 		PointDecisions:  []string{"AC-001=PASS", "AC-002=PASS", "AC-011=PASS"},
 		CaseDecisions:   []string{"CASE-ONLY-ONE-AC=PASS"},
 	}
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, complete); err == nil || !strings.Contains(err.Error(), "unknown source decision") {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, complete); err == nil || !strings.Contains(err.Error(), "unknown source decision") {
 		t.Fatalf("cross-mode REQ/AC decisions were accepted by one mode: %v", err)
 	}
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, partial); err != nil {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, partial); err != nil {
 		t.Fatal(err)
 	}
-	record := state.RequirementGuarantee.ReviewsByMode[whiteboxQAID]
+	record := state.RequirementGuarantee.ReviewsByMode[prompts.WhiteboxQAID]
 	if len(record.Review.SourceDecisions) != 1 || len(record.Review.PointDecisions) != 1 || record.Whitelist == nil {
 		t.Fatalf("mode-local explicit review was not retained before union projection: %#v", record)
 	}
@@ -705,7 +706,7 @@ func TestRequirementGuaranteeSplitMasterFinalFullExecution(t *testing.T) {
 	if slice.RequirementGuarantee == nil || !strings.Contains(slice.RequirementGuarantee.ActivationSource, master.RunID) {
 		t.Fatalf("slice did not inherit the master's frozen projection: %#v", slice.RequirementGuarantee)
 	}
-	slice = setRoute(t, root, pkg, slice, "custom", []string{blackboxQAID})
+	slice = setRoute(t, root, pkg, slice, "custom", []string{prompts.BlackboxQAID})
 	slice = recordGuaranteeDesignAndReview(t, root, pkg, slice, "", []QACaseInput{{Mode: "blackbox", Description: "slice behavior", Procedure: "run slice command", Oracle: "slice passes", AcceptanceCriteria: []string{"AC-001"}, AdditionalAcceptanceCriteria: []string{"AC-009"}}})
 	slice = advanceGuaranteeSnapshot(t, root, pkg, slice, "guarantee-slice")
 	sliceExec := prepareDispatch(t, root, pkg, slice.RunID, "qa-execution")
@@ -747,8 +748,8 @@ func TestRequirementGuaranteeSplitMasterFinalFullExecution(t *testing.T) {
 			t.Fatalf("master final FULL execution inherited a slice result: %#v", record)
 		}
 	}
-	gate := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "guarantee-merge-gate")
-	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, gate, "PASS", "", comparedRange(master), nil)
+	gate := prepareAndClaim(t, root, pkg, master.RunID, prompts.MergeGateID, "guarantee-merge-gate")
+	master, err = RecordGate(root, pkg, master.RunID, prompts.MergeGateID, gate, "PASS", "", comparedRange(master), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +801,7 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 		guarantee.ReviewsByMode = map[string]GuaranteeReviewRecord{}
 		sliceBinding := *master.Slicing
 		sliceBinding.MasterRunID = master.RunID
-		testCase := QACase{ID: "CASE-001", Mode: blackboxQAID, Description: owner + " behavior", Procedure: "run slice", Oracle: "slice passes", AcceptanceCriteria: []string{acID}, ReviewStatus: "PASS", SharedSteps: []string{"fixture"}}
+		testCase := QACase{ID: "CASE-001", Mode: prompts.BlackboxQAID, Description: owner + " behavior", Procedure: "run slice", Oracle: "slice passes", AcceptanceCriteria: []string{acID}, ReviewStatus: "PASS", SharedSteps: []string{"fixture"}}
 		slice := RunState{
 			RunID:                owner,
 			SplitMasterRunID:     master.RunID,
@@ -808,15 +809,15 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 			CurrentSnapshot:      master.CurrentSnapshot,
 			RouteMode:            "custom",
 			Slicing:              &sliceBinding,
-			QACasesByMode:        map[string][]QACase{blackboxQAID: {testCase}},
-			QACaseSets:           map[string]QACaseSetState{blackboxQAID: {SharedSteps: []QASharedStep{{ID: "fixture", Procedure: "prepare clean " + owner + " fixture", ReviewStatus: "PASS", ReviewReason: "checked " + owner + " preparation once"}}}},
+			QACasesByMode:        map[string][]QACase{prompts.BlackboxQAID: {testCase}},
+			QACaseSets:           map[string]QACaseSetState{prompts.BlackboxQAID: {SharedSteps: []QASharedStep{{ID: "fixture", Procedure: "prepare clean " + owner + " fixture", ReviewStatus: "PASS", ReviewReason: "checked " + owner + " preparation once"}}}},
 			RequirementGuarantee: &guarantee,
 		}
-		decisions, options := guaranteeReviewInputs(slice, blackboxQAID)
+		decisions, options := guaranteeReviewInputs(slice, prompts.BlackboxQAID)
 		if len(decisions) != 0 {
 			t.Fatalf("pre-approved slice fixture unexpectedly required case decisions: %#v", decisions)
 		}
-		if err := recordGuaranteeReview(&slice, blackboxQAID, []QACase{testCase}, options); err != nil {
+		if err := recordGuaranteeReview(&slice, prompts.BlackboxQAID, []QACase{testCase}, options); err != nil {
 			t.Fatalf("record %s review: %v", owner, err)
 		}
 		if err := saveSliceGuaranteeRecord(root, slice); err != nil {
@@ -853,12 +854,12 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 	// Reproduce the public candidate that carried a concrete mode on the final
 	// retained-master execution dispatch. Its local merge design/review remains
 	// authoritative under the merged key; only the transition aliases are set.
-	master.QADesignByMode[blackboxQAID] = ActionResult{Status: "PASS"}
-	master.QAReviewByMode[blackboxQAID] = ActionResult{Status: "PASS"}
+	master.QADesignByMode[prompts.BlackboxQAID] = ActionResult{Status: "PASS"}
+	master.QAReviewByMode[prompts.BlackboxQAID] = ActionResult{Status: "PASS"}
 	if err := SaveRunState(root, master); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := PrepareAction(root, pkg, master.RunID, "qa-execution", blackboxQAID, false, "")
+	prompt, err := PrepareAction(root, pkg, master.RunID, "qa-execution", prompts.BlackboxQAID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +868,7 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 			t.Fatalf("master execution prompt omitted %s shared procedure: %s", owner, prompt)
 		}
 	}
-	execution := prepareDispatch(t, root, pkg, master.RunID, "qa-execution", blackboxQAID)
+	execution := prepareDispatch(t, root, pkg, master.RunID, "qa-execution", prompts.BlackboxQAID)
 	master, err = RecordQAExecution(root, pkg, master.RunID, execution, passingExecution(finalCases), "")
 	if err != nil {
 		t.Fatalf("complete retained-master FULL execution was rejected: %v", err)
@@ -875,8 +876,8 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 	if master.RequirementGuarantee.Report.Status != "pass" || master.qaExecution("").Status != "PASS" {
 		t.Fatalf("complete retained-master execution did not close the guarantee: QA=%#v guarantee=%#v", master.qaExecution(""), master.RequirementGuarantee.Report)
 	}
-	gate := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "two-slice-merge-review")
-	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, gate, "PASS", "", comparedRange(master), nil)
+	gate := prepareAndClaim(t, root, pkg, master.RunID, prompts.MergeGateID, "two-slice-merge-review")
+	master, err = RecordGate(root, pkg, master.RunID, prompts.MergeGateID, gate, "PASS", "", comparedRange(master), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

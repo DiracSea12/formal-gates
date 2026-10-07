@@ -3,6 +3,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,7 +98,7 @@ func TestContaminationCheckSingleHomeInRealCatalog(t *testing.T) {
 		t.Fatalf("prompts/reviewer-base.md missing the first-step contamination check")
 	}
 	// 所有动作提示词文件不再内联该块（注入由 ComposeActionPrompt 对审查动作统一完成）。
-	for _, id := range requiredActionIDs {
+	for _, id := range prompts.RequiredActionIDs {
 		actionData, err := os.ReadFile(filepath.Join("..", "..", "prompts", "actions", id+".md"))
 		if err != nil {
 			t.Fatalf("read prompts/actions/%s.md: %v", id, err)

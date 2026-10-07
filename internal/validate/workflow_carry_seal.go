@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +16,7 @@ import (
 type CarryInput struct{ GateID, Decision, Message string }
 
 func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryInput, runtimeError string, mainAgent bool, mainReason string) (RunState, error) {
-	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog prompts.PromptCatalog) error {
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
@@ -255,7 +256,7 @@ func isAdoptionBoundary(state RunState) bool {
 // preserving the recorded hash of every gate whose composed prompt changed, so
 // a selected gate whose prompt moved stays re-dispatchable until a fresh review
 // at the accepted catalog settles it.
-func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
+func acceptCatalogHashes(state *RunState, catalog prompts.PromptCatalog) {
 	current := catalogPromptHashes(catalog)
 	merged := make(map[string]string, len(current))
 	for id, hash := range current {

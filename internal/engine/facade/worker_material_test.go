@@ -56,30 +56,6 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	receipt.SolutionRevision = revision
 	receipt.SolutionDigest = "sha256:" + revision
 	admission := testAdmission(t, root, "worker-target", "sha256:worker-package", "zcode")
-	source, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, directory := range []string{"prompts", "gates"} {
-		err := filepath.WalkDir(filepath.Join(source, directory), func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			relative, _ := filepath.Rel(source, path)
-			target := filepath.Join(admission.Target, relative)
-			if entry.IsDir() {
-				return os.MkdirAll(target, 0700)
-			}
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(target, body, 0600)
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
 	if err != nil {
 		t.Fatal(err)

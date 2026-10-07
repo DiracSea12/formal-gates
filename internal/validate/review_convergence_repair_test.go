@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -295,7 +296,7 @@ func repairGuaranteedDelivery(t *testing.T, id string) (string, string, RunState
 	t.Helper()
 	root, pkg, state := readyGuaranteeRoute(t, id, false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID, "quality"})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID, "quality"})
 	var err error
 	state, err = RegisterQAWorktree(root, pkg, state.RunID, createQAWorktree(t, root, state))
 	if err != nil {
@@ -622,7 +623,7 @@ func TestRepairNonReviewImpactAndSelectiveThaw(t *testing.T) {
 }
 
 func TestRepairRepeatWaveAfterOneTargetPass(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "repeat-wave-pass", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "repeat-wave-pass", []string{prompts.BlackboxQAID, "quality"})
 	wave, err := PrepareReviewWave(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -641,7 +642,7 @@ func TestRepairRepeatWaveAfterOneTargetPass(t *testing.T) {
 
 func TestRepairFirstWaveGateUsesReadinessBarrier(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "first-wave-barrier"), "custom", []string{whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "first-wave-barrier"), "custom", []string{prompts.WhiteboxQAID, "quality"})
 	state = advanceGuaranteeSnapshot(t, root, pkg, state, "first-wave-S1")
 	before := stateBytes(t, root, state.RunID)
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "FROZEN") || stateBytes(t, root, state.RunID) != before {
@@ -706,7 +707,7 @@ func repairDocumentJSON(t *testing.T, marker string, bindings map[string]string)
 
 func TestRepairDocumentExamplesUseProductionParsersAndBindings(t *testing.T) {
 	t.Run("adjudication", func(t *testing.T) {
-		root, pkg, state := blackboxFrozenDelivery(t, "document-adjudication", []string{blackboxQAID, "quality"})
+		root, pkg, state := blackboxFrozenDelivery(t, "document-adjudication", []string{prompts.BlackboxQAID, "quality"})
 		wave, err := PrepareReviewWave(root, pkg, state.RunID)
 		if err != nil {
 			t.Fatal(err)
@@ -764,7 +765,7 @@ func TestRepairDocumentExamplesUseProductionParsersAndBindings(t *testing.T) {
 }
 
 func TestRepairSealRejectsUnadjudicatedAndUnfinishedP2(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "seal-p2-boundary", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "seal-p2-boundary", []string{prompts.BlackboxQAID, "quality"})
 	if _, err := PrepareReviewWave(root, pkg, state.RunID); err != nil {
 		t.Fatal(err)
 	}
@@ -787,7 +788,7 @@ func TestRepairSealRejectsUnadjudicatedAndUnfinishedP2(t *testing.T) {
 }
 
 func TestRepairPreviewSurvivesReadingTimeButNotStateChange(t *testing.T) {
-	root, pkg, state := blackboxFrozenDelivery(t, "preview-reading-time", []string{blackboxQAID, "quality"})
+	root, pkg, state := blackboxFrozenDelivery(t, "preview-reading-time", []string{prompts.BlackboxQAID, "quality"})
 	dispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
 	results := passingExecution(state.qaModeCases("blackbox"))
 	results[0].Outcome = "FAIL"
@@ -886,7 +887,7 @@ func TestRepairBlackboxFindingAndSuggestionInputsUseIsolation(t *testing.T) {
 	for _, severity := range []string{"P1", "P2", "P3"} {
 		t.Run(severity, func(t *testing.T) {
 			root, pkg := workflowFixture(t)
-			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-location-"+strings.ToLower(severity)), "custom", []string{blackboxQAID})
+			state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-location-"+strings.ToLower(severity)), "custom", []string{prompts.BlackboxQAID})
 			var err error
 			state, err = RegisterQAWorktree(root, pkg, state.RunID, createQAWorktree(t, root, state))
 			if err != nil {

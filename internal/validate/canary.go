@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,7 +184,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	} else {
 		add("package-validate", fmt.Errorf("%s", resultSummary(packageResult)))
 	}
-	catalog, err := LoadPromptCatalog(root)
+	catalog, err := prompts.LoadPromptCatalog(root)
 	add("prompt-catalog", err)
 	decision, err := Hook([]byte(`{"command":"pwsh -File ./scripts/gate-workflow.ps1"}`))
 	if err == nil && decision.PermissionDecision != "deny" {
@@ -201,7 +202,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			recordID := strings.TrimSpace(os.Getenv("FORMAL_GATES_CANARY_RECORD"))
 			if packageRoot == "" || workflowRoot == "" || registry == "" || recordID == "" {
 				add("installed-binary-regression", fmt.Errorf("installed canary is missing its package/workflow/registry binding"))
-			} else if installedCatalog, loadErr := LoadPromptCatalog(packageRoot); loadErr != nil {
+			} else if installedCatalog, loadErr := prompts.LoadPromptCatalog(packageRoot); loadErr != nil {
 				add("installed-binary-regression", loadErr)
 			} else {
 				add("installed-binary-regression", runQuickE2ECanaryAt(packageRoot, installedCatalog, workflowRoot, registry, recordID))
@@ -247,7 +248,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 // runQuickE2ECanary exercises the quick end-to-end formal workflow (full route)
 // against a temp git repo, from start through requirement registration, slicing,
 // route confirmation, QA design/review/execution, snapshot, gate review and Seal.
-func runQuickE2ECanary(packageRoot string, catalog PromptCatalog) error {
+func runQuickE2ECanary(packageRoot string, catalog prompts.PromptCatalog) error {
 	return runQuickE2ECanaryAt(packageRoot, catalog, "", "", "")
 }
 
@@ -255,7 +256,7 @@ func runQuickE2ECanary(packageRoot string, catalog PromptCatalog) error {
 // Source-tree canaries leave workflowRoot empty and take the default
 // admission path; installed-binary evidence must supply all three registry
 // coordinates.
-func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot, registry, recordID string) error {
+func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, workflowRoot, registry, recordID string) error {
 	root := strings.TrimSpace(workflowRoot)
 	removeRoot := false
 	if root == "" {
@@ -454,7 +455,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	for index, gate := range catalog.Gates {
 		// 合并门是条件自动门：只在分片 >= 2 的保留总任务实例自动附加，不进入正常
 		// 路线的门审循环。
-		if gate.ID == mergeGateID {
+		if gate.ID == prompts.MergeGateID {
 			continue
 		}
 		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID, false, ""); err != nil {

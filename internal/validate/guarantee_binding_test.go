@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -78,7 +79,7 @@ func guaranteedRunState(t *testing.T) RunState {
 		[]RequirementArtifact{{Path: projection.Path, Revision: "requirement-revision"}},
 	)
 	state.RouteMode = "full"
-	state.SelectedGates = []string{blackboxQAID, whiteboxQAID, "quality-gate"}
+	state.SelectedGates = []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality-gate"}
 	state.RequirementGuarantee = &RequirementGuarantee{
 		Activation:          guaranteeActive,
 		ActivationSource:    "EXPLICIT_REQUIREMENT_CONFIRMATION",
@@ -125,24 +126,24 @@ func completeGuaranteeState(t *testing.T) RunState {
 	t.Helper()
 	state := guaranteedRunState(t)
 	state.QACasesByMode = map[string][]QACase{
-		blackboxQAID: {
+		prompts.BlackboxQAID: {
 			{ID: "CASE-001", Mode: "blackbox", Description: "exercise public behavior", Procedure: "invoke the public entry", Oracle: "the first and third conditions are observed", AcceptanceCriteria: []string{"AC-001", "AC-011"}, ReviewStatus: "PASS"},
 		},
-		whiteboxQAID: {
+		prompts.WhiteboxQAID: {
 			{ID: "CASE-002", Mode: "whitebox", Description: "exercise the direct structure", Procedure: "run the bound structure test", Oracle: "the second condition is enforced", Test: guaranteeBindingTestFile + "::TestGuaranteePassRequiresUnionCoverageAndCurrentFullExecutedPass", AcceptanceCriteria: []string{"AC-002"}, ReviewStatus: "PASS"},
 		},
 	}
-	approveQAMode(t, &state, blackboxQAID)
-	approveQAMode(t, &state, whiteboxQAID)
+	approveQAMode(t, &state, prompts.BlackboxQAID)
+	approveQAMode(t, &state, prompts.WhiteboxQAID)
 	state.QAExecutionByMode = map[string]QAExecutionResult{
-		blackboxQAID: {
+		prompts.BlackboxQAID: {
 			Status:   "PASS",
 			Snapshot: state.CurrentSnapshot,
 			Cases: []QAResultRecord{
 				{CaseID: "CASE-001", Mode: "blackbox", Outcome: "PASS", Procedure: "executed public entry", Observation: "conditions observed", OracleResult: "matched", Origin: "executed"},
 			},
 		},
-		whiteboxQAID: {
+		prompts.WhiteboxQAID: {
 			Status:   "PASS",
 			Snapshot: state.CurrentSnapshot,
 			Cases: []QAResultRecord{
@@ -482,7 +483,7 @@ func TestGuaranteeRouteStateIsExplicitAndArtifactCardinalityBound(t *testing.T) 
 
 	legacy := NewRunState("legacy", formalFlow, "free-form.md", "rev", "git", "base", "current", "prompt", "catalog", true, nil, []RequirementArtifact{{Path: "free-form.md", Revision: "rev"}})
 	legacy.RouteMode = "full"
-	legacy.SelectedGates = []string{blackboxQAID, whiteboxQAID}
+	legacy.SelectedGates = []string{prompts.BlackboxQAID, prompts.WhiteboxQAID}
 	updateGuaranteeForRoute(&legacy)
 	if legacy.RequirementGuarantee != nil {
 		t.Fatal("route/artifact/document shape guessed an activation envelope")
@@ -492,9 +493,9 @@ func TestGuaranteeRouteStateIsExplicitAndArtifactCardinalityBound(t *testing.T) 
 func TestRequirementRevisionChangeInvalidatesAllGuaranteeBindingsButPreservesReviewLedger(t *testing.T) {
 	state := completeGuaranteeState(t)
 	recordReviewCandidate(t, &state, "product-review", "review-before-revision-change", "PASS", nil, "")
-	state.QACasesByMode[whiteboxQAID][0].ApprovedSource = "prior approval"
-	state.QAReviewByMode = map[string]ActionResult{blackboxQAID: {Status: "PASS"}, whiteboxQAID: {Status: "PASS"}}
-	state.PriorQAExecutionByMode = map[string]*QAExecutionResult{whiteboxQAID: {Status: "PASS", Snapshot: "older-snapshot"}}
+	state.QACasesByMode[prompts.WhiteboxQAID][0].ApprovedSource = "prior approval"
+	state.QAReviewByMode = map[string]ActionResult{prompts.BlackboxQAID: {Status: "PASS"}, prompts.WhiteboxQAID: {Status: "PASS"}}
+	state.PriorQAExecutionByMode = map[string]*QAExecutionResult{prompts.WhiteboxQAID: {Status: "PASS", Snapshot: "older-snapshot"}}
 	state.RequirementGuarantee.Waiver = &RequirementGuaranteeWaiver{Origin: "SEAL-USER", Reason: "old waiver", Snapshot: state.CurrentSnapshot, Unresolved: []string{"AC-002"}}
 	seriesBefore := state.PreDevelopmentReviewSeries["product-review"]
 
@@ -642,7 +643,7 @@ func TestManifestProjectsREQACCaseEdgesAndWhiteboxTestReference(t *testing.T) {
 		AdditionalAcceptanceCriteria: []string{"AC-011"},
 		ReviewStatus:                 "PASS",
 	}}
-	manifest, err := localGuaranteeManifest(state, whiteboxQAID, cases)
+	manifest, err := localGuaranteeManifest(state, prompts.WhiteboxQAID, cases)
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
@@ -681,42 +682,42 @@ func TestReviewRequiresExactExplicitSourcePointAndCaseDecisions(t *testing.T) {
 	newFixture := func() (RunState, []QACase, QAReviewRecordOptions) {
 		state := guaranteedRunState(t)
 		cases := []QACase{{ID: "CASE-020", Mode: "whitebox", Description: "description", Procedure: "procedure", Oracle: "oracle", Test: guaranteeBindingTestFile + "::TestReviewRequiresExactExplicitSourcePointAndCaseDecisions", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}
-		return state, cases, passingDecisionOptions(t, state, whiteboxQAID, cases)
+		return state, cases, passingDecisionOptions(t, state, prompts.WhiteboxQAID, cases)
 	}
 
 	state, cases, options := newFixture()
 	options.SourceDecisions = nil
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "missing explicit source decision") {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "missing explicit source decision") {
 		t.Fatalf("missing source error = %v", err)
 	}
 
 	state, cases, options = newFixture()
 	options.PointDecisions = append(options.PointDecisions, "AC-999=PASS")
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "unknown point decision") {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "unknown point decision") {
 		t.Fatalf("unknown point error = %v", err)
 	}
 
 	state, cases, options = newFixture()
 	options.CaseDecisions = []string{"CASE-020=FAIL"}
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "does not match its QA Review outcome") {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, options); err == nil || !strings.Contains(err.Error(), "does not match its QA Review outcome") {
 		t.Fatalf("case-decision mismatch error = %v", err)
 	}
 
 	state, cases, options = newFixture()
 	options.UnboundPoints = []string{"AC-001"}
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, options); err != nil {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, options); err != nil {
 		t.Fatalf("record explicit unbound review: %v", err)
 	}
-	record := state.RequirementGuarantee.ReviewsByMode[whiteboxQAID]
+	record := state.RequirementGuarantee.ReviewsByMode[prompts.WhiteboxQAID]
 	if record.Review.SetStatus == coverage.StatusPass || record.Whitelist != nil {
 		t.Fatalf("unbound review produced approval: %#v", record)
 	}
 
 	state, cases, options = newFixture()
-	if err := recordGuaranteeReview(&state, whiteboxQAID, cases, options); err != nil {
+	if err := recordGuaranteeReview(&state, prompts.WhiteboxQAID, cases, options); err != nil {
 		t.Fatalf("complete explicit PASS review rejected: %v", err)
 	}
-	record = state.RequirementGuarantee.ReviewsByMode[whiteboxQAID]
+	record = state.RequirementGuarantee.ReviewsByMode[prompts.WhiteboxQAID]
 	if record.Review.SetStatus != coverage.StatusPass || record.Review.Scope != coverage.ScopeFull || record.Whitelist == nil {
 		t.Fatalf("complete review did not project a FULL whitelist: %#v", record)
 	}
@@ -726,14 +727,14 @@ func TestIncrementalReviewPromptKeepsAcceptedCaseBindings(t *testing.T) {
 	state := guaranteedRunState(t)
 	acceptedTest := guaranteeBindingTestFile + "::TestIncrementalReviewPromptKeepsAcceptedCaseBindings"
 	state.QACasesByMode = map[string][]QACase{
-		whiteboxQAID: {
+		prompts.WhiteboxQAID: {
 			{ID: "CASE-020", Mode: "whitebox", Description: "accepted structure", Procedure: "run the accepted test", Oracle: "the first and third conditions pass", Test: acceptedTest, AcceptanceCriteria: []string{"AC-001"}, AdditionalAcceptanceCriteria: []string{"AC-011"}, ReviewStatus: "PASS"},
 			{ID: "CASE-021", Mode: "whitebox", Description: "pending structure", Procedure: "run the pending test", Oracle: "the second condition passes", Test: guaranteeBindingTestFile + "::TestPendingStructure", AcceptanceCriteria: []string{"AC-002"}, ReviewStatus: "PENDING"},
 		},
 	}
-	state.QADesignChangesByMode = map[string]QADesignChange{whiteboxQAID: {Added: []string{"CASE-021"}}}
+	state.QADesignChangesByMode = map[string]QADesignChange{prompts.WhiteboxQAID: {Added: []string{"CASE-021"}}}
 
-	detail, err := actionPromptDetail("", state, PromptCatalog{}, "qa-review", whiteboxQAID)
+	detail, err := actionPromptDetail("", state, prompts.PromptCatalog{}, "qa-review", prompts.WhiteboxQAID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,24 +791,24 @@ func TestGuaranteeRejectsMissingCoverageReviewAndNonCurrentOrNonExecutedResults(
 		name   string
 		mutate func(*RunState)
 	}{
-		{name: "missing AC coverage", mutate: func(state *RunState) { delete(state.QACasesByMode, whiteboxQAID) }},
-		{name: "missing explicit review", mutate: func(state *RunState) { delete(state.RequirementGuarantee.ReviewsByMode, whiteboxQAID) }},
+		{name: "missing AC coverage", mutate: func(state *RunState) { delete(state.QACasesByMode, prompts.WhiteboxQAID) }},
+		{name: "missing explicit review", mutate: func(state *RunState) { delete(state.RequirementGuarantee.ReviewsByMode, prompts.WhiteboxQAID) }},
 		{name: "old candidate", mutate: func(state *RunState) {
-			result := state.QAExecutionByMode[whiteboxQAID]
+			result := state.QAExecutionByMode[prompts.WhiteboxQAID]
 			result.Snapshot = "old-snapshot"
-			state.QAExecutionByMode[whiteboxQAID] = result
+			state.QAExecutionByMode[prompts.WhiteboxQAID] = result
 		}},
 		{name: "inherited result", mutate: func(state *RunState) {
-			result := state.QAExecutionByMode[whiteboxQAID]
+			result := state.QAExecutionByMode[prompts.WhiteboxQAID]
 			result.Cases[0].Origin = "inherited"
-			state.QAExecutionByMode[whiteboxQAID] = result
+			state.QAExecutionByMode[prompts.WhiteboxQAID] = result
 		}},
 		{name: "failed result", mutate: func(state *RunState) {
-			result := state.QAExecutionByMode[whiteboxQAID]
+			result := state.QAExecutionByMode[prompts.WhiteboxQAID]
 			result.Cases[0].Outcome = "FAIL"
-			state.QAExecutionByMode[whiteboxQAID] = result
+			state.QAExecutionByMode[prompts.WhiteboxQAID] = result
 		}},
-		{name: "missing result", mutate: func(state *RunState) { delete(state.QAExecutionByMode, whiteboxQAID) }},
+		{name: "missing result", mutate: func(state *RunState) { delete(state.QAExecutionByMode, prompts.WhiteboxQAID) }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -823,15 +824,15 @@ func TestGuaranteeRejectsMissingCoverageReviewAndNonCurrentOrNonExecutedResults(
 
 func TestActiveGuaranteeUsesAffectedScopeAndWaiverAuditsUnresolvedItems(t *testing.T) {
 	state := guaranteedRunState(t)
-	state.QACasesByMode = map[string][]QACase{whiteboxQAID: {{ID: "CASE-030", Mode: "whitebox", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
-	state.QACaseSets = map[string]QACaseSetState{whiteboxQAID: {Mode: whiteboxQAID, Status: caseSetFrozen, Version: "frozen-v1", BoundSnapshot: state.CurrentSnapshot}}
+	state.QACasesByMode = map[string][]QACase{prompts.WhiteboxQAID: {{ID: "CASE-030", Mode: "whitebox", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
+	state.QACaseSets = map[string]QACaseSetState{prompts.WhiteboxQAID: {Mode: prompts.WhiteboxQAID, Status: caseSetFrozen, Version: "frozen-v1", BoundSnapshot: state.CurrentSnapshot}}
 	state.PreRepairSnapshot = "prior"
 	prior := QAExecutionResult{Status: "FAIL", Snapshot: "prior", Cases: []QAResultRecord{{CaseID: "CASE-030", Mode: "whitebox", Outcome: "FAIL"}}}
-	if err := recordExecutionScope(&state, whiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err != nil {
+	if err := recordExecutionScope(&state, prompts.WhiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err != nil {
 		t.Fatalf("AFFECTED scope rejected: %v", err)
 	}
-	if state.ExecutionScopes[whiteboxQAID].Decision != "AFFECTED" || len(state.ExecutionScopes[whiteboxQAID].CaseIDs) != 1 {
-		t.Fatalf("AFFECTED scope record = %#v", state.ExecutionScopes[whiteboxQAID])
+	if state.ExecutionScopes[prompts.WhiteboxQAID].Decision != "AFFECTED" || len(state.ExecutionScopes[prompts.WhiteboxQAID].CaseIDs) != 1 {
+		t.Fatalf("AFFECTED scope record = %#v", state.ExecutionScopes[prompts.WhiteboxQAID])
 	}
 
 	if err := authorizeRequirementGuaranteeWaiver(t.TempDir(), &state, ""); err == nil || !strings.Contains(err.Error(), "requires --guarantee-waiver-reason") {
@@ -923,7 +924,7 @@ func TestRetainedMasterAggregatesQualifiedSliceCasesAndRequiresFinalMergedFullEx
 	master.RunID = "master"
 	master.RetainedOverall = true
 	master.RouteMode = "merge"
-	master.SelectedGates = []string{mergeQAID, mergeGateID}
+	master.SelectedGates = []string{prompts.MergeQAID, prompts.MergeGateID}
 	master.Slicing = &Slicing{Decision: "split", SplitCount: 2, Slices: []string{"slice-a", "slice-b"}, ACResponsibilities: copyStringMap(owners)}
 	masterCase := QACase{ID: "CASE-M", Mode: "blackbox", Description: "cross-slice integration", Procedure: "exercise the merged integration", Oracle: "merge-owned AC passes", AcceptanceCriteria: []string{"AC-011"}, ReviewStatus: "PASS"}
 	master.QACasesByMode = map[string][]QACase{"": {masterCase}}
@@ -945,8 +946,8 @@ func TestRetainedMasterAggregatesQualifiedSliceCasesAndRequiresFinalMergedFullEx
 			t.Fatalf("save %s evidence: %v", runID, err)
 		}
 	}
-	writeSlice("slice-a", blackboxQAID, "CASE-A", "AC-001", "")
-	writeSlice("slice-b", whiteboxQAID, "CASE-B", "AC-002", guaranteeBindingTestFile+"::TestRetainedMasterAggregatesQualifiedSliceCasesAndRequiresFinalMergedFullExecution")
+	writeSlice("slice-a", prompts.BlackboxQAID, "CASE-A", "AC-001", "")
+	writeSlice("slice-b", prompts.WhiteboxQAID, "CASE-B", "AC-002", guaranteeBindingTestFile+"::TestRetainedMasterAggregatesQualifiedSliceCasesAndRequiresFinalMergedFullExecution")
 
 	beforeExecution := deriveRequirementGuarantee(root, master)
 	if beforeExecution.Status == "pass" || !strings.Contains(beforeExecution.Reason, "current") {
@@ -995,8 +996,8 @@ func TestSealedSliceEvidenceIsDigestBoundAndImmutable(t *testing.T) {
 	state.SplitMasterRunID = "master"
 	state.RouteMode = "full"
 	state.Slicing = &Slicing{Decision: "split", MasterRunID: "master", ACResponsibilities: map[string]string{"AC-001": "slice-a", "AC-002": "slice-b", "AC-011": masterMergeOwner}}
-	state.QACasesByMode = map[string][]QACase{whiteboxQAID: {{ID: "CASE-040", Mode: "whitebox", Description: "slice case", Procedure: "run test", Oracle: "pass", Test: guaranteeBindingTestFile + "::TestSealedSliceEvidenceIsDigestBoundAndImmutable", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
-	approveQAMode(t, &state, whiteboxQAID)
+	state.QACasesByMode = map[string][]QACase{prompts.WhiteboxQAID: {{ID: "CASE-040", Mode: "whitebox", Description: "slice case", Procedure: "run test", Oracle: "pass", Test: guaranteeBindingTestFile + "::TestSealedSliceEvidenceIsDigestBoundAndImmutable", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
+	approveQAMode(t, &state, prompts.WhiteboxQAID)
 	if err := saveSliceGuaranteeRecord(root, state); err != nil {
 		t.Fatalf("save slice record: %v", err)
 	}
@@ -1012,12 +1013,12 @@ func TestSealedSliceEvidenceIsDigestBoundAndImmutable(t *testing.T) {
 	if !reflect.DeepEqual(record.CasesByMode, state.QACasesByMode) {
 		t.Fatalf("slice record lost case authority:\nrecord=%#v\nstate=%#v", record.CasesByMode, state.QACasesByMode)
 	}
-	manifest, err := localGuaranteeManifest(state, whiteboxQAID, state.QACasesByMode[whiteboxQAID])
+	manifest, err := localGuaranteeManifest(state, prompts.WhiteboxQAID, state.QACasesByMode[prompts.WhiteboxQAID])
 	if err != nil {
 		t.Fatalf("rebuild slice manifest: %v", err)
 	}
-	review := record.ReviewsByMode[whiteboxQAID]
-	wantReview := state.RequirementGuarantee.ReviewsByMode[whiteboxQAID]
+	review := record.ReviewsByMode[prompts.WhiteboxQAID]
+	wantReview := state.RequirementGuarantee.ReviewsByMode[prompts.WhiteboxQAID]
 	if len(record.ReviewsByMode) != 1 || !reflect.DeepEqual(review.Review.Binding, manifest.Binding) ||
 		review.Review.Scope != wantReview.Review.Scope || !reflect.DeepEqual(review.Review.SourceDecisions, wantReview.Review.SourceDecisions) ||
 		!reflect.DeepEqual(review.Review.PointDecisions, wantReview.Review.PointDecisions) || !reflect.DeepEqual(review.Review.CaseDecisions, wantReview.Review.CaseDecisions) ||
@@ -1037,7 +1038,7 @@ func TestSealedSliceEvidenceIsDigestBoundAndImmutable(t *testing.T) {
 	if err := saveSliceGuaranteeRecord(root, state); err != nil {
 		t.Fatalf("idempotent identical save failed: %v", err)
 	}
-	state.QACasesByMode[whiteboxQAID][0].Oracle = "different"
+	state.QACasesByMode[prompts.WhiteboxQAID][0].Oracle = "different"
 	if err := saveSliceGuaranteeRecord(root, state); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("changed immutable record error = %v", err)
 	}
@@ -1182,14 +1183,14 @@ func TestFindingDismissalAndSupersedingCorrectionReprojectWithoutRewritingRawEvi
 
 	state.Slicing = &Slicing{Decision: "no-split", Note: "before correction"}
 	state.RouteMode = "full"
-	state.SelectedGates = []string{whiteboxQAID, "quality-gate"}
+	state.SelectedGates = []string{prompts.WhiteboxQAID, "quality-gate"}
 	state.Actions["development-worker"] = ActionResult{Status: developmentComplete}
-	state.QACasesByMode = map[string][]QACase{whiteboxQAID: {{ID: "CASE-050", Mode: "whitebox", ReviewStatus: "PASS", ApprovedSource: "stale-review-authority"}}}
-	state.QADesignByMode = map[string]ActionResult{whiteboxQAID: {Status: "PASS"}}
-	state.QADesignChangesByMode = map[string]QADesignChange{whiteboxQAID: {Modified: []string{"CASE-050"}}}
-	state.QAReviewByMode = map[string]ActionResult{whiteboxQAID: {Status: "PASS"}}
-	state.QAExecutionByMode = map[string]QAExecutionResult{whiteboxQAID: {Status: "PASS", Snapshot: state.CurrentSnapshot}}
-	state.RequirementGuarantee.ReviewsByMode = map[string]GuaranteeReviewRecord{whiteboxQAID: {Review: coverage.ReviewResult{SetStatus: coverage.StatusPass}}}
+	state.QACasesByMode = map[string][]QACase{prompts.WhiteboxQAID: {{ID: "CASE-050", Mode: "whitebox", ReviewStatus: "PASS", ApprovedSource: "stale-review-authority"}}}
+	state.QADesignByMode = map[string]ActionResult{prompts.WhiteboxQAID: {Status: "PASS"}}
+	state.QADesignChangesByMode = map[string]QADesignChange{prompts.WhiteboxQAID: {Modified: []string{"CASE-050"}}}
+	state.QAReviewByMode = map[string]ActionResult{prompts.WhiteboxQAID: {Status: "PASS"}}
+	state.QAExecutionByMode = map[string]QAExecutionResult{prompts.WhiteboxQAID: {Status: "PASS", Snapshot: state.CurrentSnapshot}}
+	state.RequirementGuarantee.ReviewsByMode = map[string]GuaranteeReviewRecord{prompts.WhiteboxQAID: {Review: coverage.ReviewResult{SetStatus: coverage.StatusPass}}}
 	state.RequirementGuarantee.Report = RequirementGuaranteeReport{Status: "pass"}
 	state.Gates["quality-gate"] = GateResult{Status: "PASS", Snapshot: state.CurrentSnapshot}
 	latest := latestFindingDecisionID(series, candidate.ResultDigest, blocking.ID)
@@ -1212,7 +1213,7 @@ func TestFindingDismissalAndSupersedingCorrectionReprojectWithoutRewritingRawEvi
 	if len(state.QADesignByMode) != 0 || len(state.QADesignChangesByMode) != 0 || len(state.QAReviewByMode) != 0 || len(state.QAExecutionByMode) != 0 || len(state.RequirementGuarantee.ReviewsByMode) != 0 || state.RequirementGuarantee.Report.Status != "" {
 		t.Fatalf("PASS-to-blocking correction retained stale QA design/review/execution authority: design=%#v changes=%#v review=%#v execution=%#v guarantee=%#v", state.QADesignByMode, state.QADesignChangesByMode, state.QAReviewByMode, state.QAExecutionByMode, state.RequirementGuarantee)
 	}
-	if got := state.QACasesByMode[whiteboxQAID][0]; got.ReviewStatus != "PENDING" || got.ApprovedSource != "" {
+	if got := state.QACasesByMode[prompts.WhiteboxQAID][0]; got.ReviewStatus != "PENDING" || got.ApprovedSource != "" {
 		t.Fatalf("PASS-to-blocking correction retained stale case approval: %#v", got)
 	}
 	if state.NeedsReReview["product-review"] != blocking.Message || !reflect.DeepEqual(series.RawCandidates[0], rawBefore) {

@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +16,7 @@ import (
 // whitebox, and the quality gate. Case IDs: blackbox CASE-001, whitebox CASE-002.
 func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
 	t.Helper()
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, id), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, id), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"})
 	// 黑盒设计/审查需注册 QA 隔离工作区。
 	worktree := createQAWorktree(t, root, state)
 	var err error
@@ -184,7 +185,7 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 // defect).
 func TestBlackboxReviewInFlightDoesNotLockWhiteboxDesign(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-lock"), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-lock"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"})
 	worktree := createQAWorktree(t, root, state)
 	var err error
 	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
@@ -247,7 +248,7 @@ func TestPerModeIndependentBlockerAndSealParsing(t *testing.T) {
 // judged per mode).
 func TestDualModeReviewDesignFullyDecoupled(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "dual-mode-decoupled"), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "dual-mode-decoupled"), "custom", []string{prompts.BlackboxQAID, prompts.WhiteboxQAID, "quality"})
 	worktree := createQAWorktree(t, root, state)
 	var err error
 	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
@@ -321,7 +322,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 	}
 	// 修复快照推进后，两个 mode 的 PASS 都保留在各自 mode 键（Snapshot == PreRepairSnapshot），
 	// 均可被 main-agent Carry 继承（直取该 mode，不要求 current snapshot）。
-	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{blackboxQAID, whiteboxQAID}) {
+	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{prompts.BlackboxQAID, prompts.WhiteboxQAID}) {
 		t.Fatalf("eligible carry results=%v want=[blackbox whitebox]", got)
 	}
 	state, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior")

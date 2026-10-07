@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"formal-gates/internal/prompts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,8 @@ func TestRetainedMasterWaiverDoesNotRequireSliceGuaranteeSidecars(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "waived-master-merge-reviewer")
-	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, gate, "PASS", "", comparedRange(master), nil)
+	gate := prepareAndClaim(t, root, pkg, master.RunID, prompts.MergeGateID, "waived-master-merge-reviewer")
+	master, err = RecordGate(root, pkg, master.RunID, prompts.MergeGateID, gate, "PASS", "", comparedRange(master), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,10 +63,10 @@ func TestRetainedMasterWaiverPreservesAvailableSliceEvidence(t *testing.T) {
 	slice.CurrentSnapshot = "slice-a-sealed-candidate"
 	slice.Slicing = &Slicing{Decision: "split", MasterRunID: master.RunID, ACResponsibilities: copyStringMap(owners)}
 	slice.RequirementGuarantee.ActivationSource = "INHERITED_FROM_MASTER:" + master.RunID
-	testCase := QACase{ID: "CASE-A", Mode: blackboxQAID, Description: "slice A completed behavior", Procedure: "run slice A public command", Oracle: "slice A behavior passes", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}
-	slice.QACasesByMode = map[string][]QACase{blackboxQAID: {testCase}}
-	approveQAMode(t, &slice, blackboxQAID)
-	slice.QAExecutionByMode = map[string]QAExecutionResult{blackboxQAID: {Status: "PASS", Snapshot: slice.CurrentSnapshot, Cases: []QAResultRecord{{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "executed slice A public command", Observation: "captured the documented slice A result", OracleResult: "captured result matched the approved slice A oracle", Origin: "executed"}}}}
+	testCase := QACase{ID: "CASE-A", Mode: prompts.BlackboxQAID, Description: "slice A completed behavior", Procedure: "run slice A public command", Oracle: "slice A behavior passes", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}
+	slice.QACasesByMode = map[string][]QACase{prompts.BlackboxQAID: {testCase}}
+	approveQAMode(t, &slice, prompts.BlackboxQAID)
+	slice.QAExecutionByMode = map[string]QAExecutionResult{prompts.BlackboxQAID: {Status: "PASS", Snapshot: slice.CurrentSnapshot, Cases: []QAResultRecord{{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "executed slice A public command", Observation: "captured the documented slice A result", OracleResult: "captured result matched the approved slice A oracle", Origin: "executed"}}}}
 	if err := saveSliceGuaranteeRecord(root, slice); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestRetainedMasterWaiverPreservesAvailableSliceEvidence(t *testing.T) {
 func TestSealMaterializationFailureKeepsActiveStateAndCanRetry(t *testing.T) {
 	root, pkg, state := readyGuaranteeRoute(t, "materialize-retry", false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
-	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+	state = setRoute(t, root, pkg, state, "custom", []string{prompts.BlackboxQAID})
 	state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "all confirmed behavior", Procedure: "run the documented public command and capture its output", Oracle: "both specified outcomes are visible", AcceptanceCriteria: []string{"AC-001", "AC-009"}}})
 	state = advanceGuaranteeSnapshot(t, root, pkg, state, "materialize-retry-delivery")
 	execution := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
