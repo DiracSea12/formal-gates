@@ -1022,7 +1022,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 	}
 	// Native delivery has one verifier. A child freezes a recoverable checkpoint;
 	// an ordinary regular run seals. An abort consumes its existing decision.
-	if plan != nil && plan.Next.Kind == decision.KindComplete {
+	if plan != nil && plan.Next.Kind == decision.KindComplete && snap.State.Route != "lightweight" {
 		current, loadErr := f.engine.Load()
 		if loadErr != nil {
 			return Run{}, loadErr

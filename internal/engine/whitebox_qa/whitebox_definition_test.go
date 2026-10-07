@@ -14,7 +14,7 @@ import (
 )
 
 // 用例：包内 authoring 定义表编译-编码后与 checked-in definitions/workflow.json
-// 逐字节一致，digest 与 identity_gen.go 的同源常量一致，版本信封为 "8"——
+// 逐字节一致，digest 与 identity_gen.go 的同源常量一致，版本信封来自 authoring——
 // 制品身份的唯一来源是生成动作，不允许人工双写漂移。
 func TestDefinitionArtifactIdentityMatchesCheckedInBytes(t *testing.T) {
 	checkedIn := readCheckedInArtifact(t)
@@ -36,8 +36,11 @@ func TestDefinitionArtifactIdentityMatchesCheckedInBytes(t *testing.T) {
 	if got, want := encoder.Digest(data), definition.WorkflowDefinitionDigest; got != want {
 		t.Fatalf("artifact digest = %s, identity constant = %s", got, want)
 	}
-	if got, want := string(cd.Version), definition.WorkflowDefinitionVersion; got != want || got != "8" {
-		t.Fatalf("definition version = %s, identity constant = %s, want \"8\"", got, want)
+	if got, want := string(cd.Version), string(definition.Version); got != want {
+		t.Fatalf("compiled definition version = %s, authoring version = %s", got, want)
+	}
+	if got, want := definition.WorkflowDefinitionVersion, string(definition.Version); got != want {
+		t.Fatalf("identity constant version = %s, authoring version = %s", got, want)
 	}
 	// checked-in 制品必须可解码（信封常量与物化一致性双向成立）。
 	if _, err := encoder.Decode(checkedIn); err != nil {
