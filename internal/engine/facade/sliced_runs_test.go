@@ -5,6 +5,8 @@ package facade
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -358,16 +360,10 @@ func operatorBoundary(t *testing.T, d *validationDriver) string {
 }
 
 // TestSliceChildBoundaryFollowsRouteSelection：child 的 operator 边界随进度
-// 前进——未选路线时提示选择分片路线，选完路线后指向确认需求文档的提交
-// （验证波次依赖 Validation 冻结）；计划随路线一次确认，边界不另出现开发
-// 计划提示。
+// 前进——未选路线时提示选择分片路线，选完路线后经 adapter 前置进入开发；
+// 文档继承 master 的确认绑定，计划随路线一次确认。
 func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
-	master := splitMaster(t)
-	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-boundary", "lane-core", sliceChildReceipt(master.revision)))
-	if err != nil {
-		t.Fatalf("slice child start: %v", err)
-	}
-	child := &validationDriver{t: t, f: f, run: run, provider: master.host(), git: f.vcs}
+	master, child := controlChildren(t)
 	child.drive()
 	if boundary := operatorBoundary(t, child); !strings.Contains(boundary, "select the slice route") {
 		t.Fatalf("boundary before route selection = %q", boundary)
@@ -377,10 +373,16 @@ func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 	child.confirmSliceRoute(protocol.RouteDecision{
 		Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
 	}, sliceLanePlan())
-	if boundary := operatorBoundary(t, child); !strings.Contains(boundary, "REQUIREMENT document") {
-		t.Fatalf("boundary after route selection = %q, want the confirmed requirement document", boundary)
-	} else if strings.Contains(boundary, "development plan") {
-		t.Fatalf("child boundary carries a development-plan prompt: %q", boundary)
+	child.drive()
+	if child.run.Validation == nil || child.run.Validation.Document.Content != validationDocument || child.run.Validation.RequirementRevision != master.revision {
+		t.Fatal("route selection lost the inherited confirmed requirement binding")
+	}
+	if child.run.Review.RouteMode != "custom" {
+		t.Fatal("child route confirmation was not retained")
+	}
+	_, input := planBatchAction(child, "command")
+	if input.Development == nil || input.Development.Batch.ID != "command" {
+		t.Fatal("confirmed inline plan did not expose its development duty")
 	}
 }
 
@@ -513,12 +515,7 @@ func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 // 换约接纳并切换执行契约（换约后派发批次来自新计划）。开发前的同集同计
 // 划重选照常（用户决定本身即确认）。
 func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
-	master := splitMaster(t)
-	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-plan-swap", "lane-core", sliceChildReceipt(master.revision)))
-	if err != nil {
-		t.Fatalf("slice child start: %v", err)
-	}
-	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: master.host(), git: f.vcs}
+	master, child := controlChildren(t)
 	child.drive()
 	first := sliceLanePlan()
 	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
@@ -559,28 +556,42 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	}
 	// 带齐逐批用户决定（需求变化对换约批次 REDO）：换约接纳并切换执行
 	// 契约。
-	var choices []protocol.RequirementWorkDecision
-	for _, item := range child.run.RequirementWork {
-		disposition := protocol.RequirementWorkCarry
-		if item.ActionID == old {
-			disposition = protocol.RequirementWorkRedo
+	children := requirementChildChoices(t, master)
+	matched := false
+	for i := range children {
+		if children[i].ChildRunID != child.f.runID {
+			continue
 		}
-		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "the swapped slice contract replaces the command dispatch"})
+		for j := range children[i].WorkDecisions {
+			work := &children[i].WorkDecisions[j]
+			if work.Work.ActionID == old {
+				matched = true
+				work.Disposition = protocol.RequirementWorkRedo
+				work.Reason = "the swapped slice contract replaces the command dispatch"
+			}
+		}
+	}
+	if !matched {
+		t.Fatal("issued batch missing from master child work decisions")
 	}
 	document := validationDocument + "\n"
+	if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:slice-plan-swap", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
-	request, err := protocol.NewRequirementRequestEvent(child.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:slice-plan-swap", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"slice command contract"}, TransitiveImpacts: []string{"slice batch replacement"}, CarryReasons: []string{"unchanged sibling obligations"}}}
+	for _, work := range master.run.RequirementWork {
+		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master responsibility"})
+	}
+	request, err := protocol.NewRequirementRequestEvent(master.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm slice plan change"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	child.submit(request)
-	ask := child.run.PendingRequirementAsk
-	child.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "authorize the swapped slice plan"}}})
-	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{
-		Subject:    revision,
-		Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document},
-	}})
+	master.submit(request)
+	ask := master.run.PendingRequirementAsk
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, Reason: "authorize the bound slice plan and work changes"}}})
+	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	child.drive()
 	child.confirmSliceRoute(swapRoute, swapped)
 	if got := child.run.Review.SelectedGates; len(got) != 2 || !strings.Contains(strings.Join(got, ","), "security") {
 		t.Fatalf("swap route binding = %v", got)

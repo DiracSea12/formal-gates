@@ -189,11 +189,18 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 			case "tree":
 				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, strings.Repeat("1", 40), nil, "", emptyFingerprint())
 			case "barrier":
-				request, e := protocol.NewRequestEvent(child.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+				parent, e := Open(child.f.root, state.SliceChild.MasterRunID)
 				if e != nil {
 					t.Fatal(e)
 				}
-				child.submit(request)
+				request, e := protocol.NewRequestEvent("parent-checkpoint-barrier", protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+				if e != nil {
+					t.Fatal(e)
+				}
+				if _, _, e := parent.Submit(request); e != nil {
+					t.Fatal(e)
+				}
+				child.drive()
 				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, state.PromotedDigest, nil, "", emptyFingerprint())
 				child.drive()
 			case "abort":
