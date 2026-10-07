@@ -27,8 +27,10 @@ package harness
 // ./internal/harness`, then run it directly in a PTY with
 // `FORMAL_GATES_ENGINE_CANARY=1 /tmp/formal-gates-canary.test
 // -test.run=^TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair$
-// -test.v -test.timeout=45m`. The operator writes only the displayed approval
-// line after the human approves that call. Approval waiting counts toward the
+// -test.v -test.timeout=45m`. The operator writes the displayed approval
+// line after the human approves that call. Findings outside the automatic
+// fixture decision require a typed ADJUDICATE observation on stdin.
+// Human input waiting counts toward the
 // existing forty-minute pass budget; EOF, denial and timeout fail the pass.
 // `go test` does not forward stdin to its test process, so it cannot approve
 // live calls. Ordinary test runs keep the live canary skipped.
@@ -1529,36 +1531,14 @@ func (c *engineCanary) authorizeCall(request map[string]any, actionID, role stri
 		selection("model"), selection("reasoning_effort"), selection("permission_mode"), textOf(getOf(launch, "executable")), textOf(getOf(launch, "script")), approval); err != nil {
 		return fmt.Errorf("write call authorization request: %w", err)
 	}
-	decision := make(chan struct {
-		line string
-		err  error
-	}, 1)
-	go func() {
-		line, err := c.approvalInput.ReadString('\n')
-		decision <- struct {
-			line string
-			err  error
-		}{line, err}
-	}()
-	// The run deadline remains the only time budget. A timed-out read cannot
-	// start a call, and turnIn stops the pass instead of requesting again.
-	timer := time.NewTimer(time.Until(c.deadline))
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return fmt.Errorf("call authorization exceeded the %s pass budget", canaryRunBudget)
-	case answer := <-decision:
-		if answer.err != nil {
-			return fmt.Errorf("read call authorization: %w", answer.err)
-		}
-		if time.Now().After(c.deadline) {
-			return fmt.Errorf("call authorization exceeded the %s pass budget", canaryRunBudget)
-		}
-		if strings.TrimSpace(answer.line) != approval {
-			return fmt.Errorf("human denied this call")
-		}
-		return nil
+	line, err := c.readHumanDecision("call authorization")
+	if err != nil {
+		return err
 	}
+	if strings.TrimSpace(line) != approval {
+		return fmt.Errorf("human denied this call")
+	}
+	return nil
 }
 
 // plainSchema normalizes one role's schema literal into plain decoded JSON
@@ -1867,6 +1847,7 @@ func (c *engineCanary) confirmRoute() {
 
 // The fixture verifies the issued flag probe and failed case points, then
 // reuses the public problem identity only for the same verified cause.
+// An insufficient automatic decision needs the Operator's own adjudication.
 func (c *engineCanary) adjudicate() {
 	c.t.Helper()
 	wave := c.currentWave()
@@ -1949,7 +1930,8 @@ func (c *engineCanary) adjudicate() {
 		}
 		resolution, err := canaryFlagFindingResolution(workspace, materialDir, target, finding, point, c.run.MasterRunID != "")
 		if err != nil {
-			c.fail("flag fixture cannot adjudicate %s: %v", id, err)
+			c.adjudicateWithOperator(&state, wave, fmt.Sprintf("flag fixture cannot adjudicate %s: %v", id, err))
+			return
 		}
 		if resolution.Decision == "DISMISSED" {
 			if len(finding.History) == 0 {
@@ -1963,7 +1945,8 @@ func (c *engineCanary) adjudicate() {
 			if flagContext == nil {
 				context, err := canaryFlagWaveContext(c.jobs, &state, wave)
 				if err != nil {
-					c.fail("finding %s flag observation: %v", id, err)
+					c.adjudicateWithOperator(&state, wave, fmt.Sprintf("finding %s flag observation: %v", id, err))
+					return
 				}
 				flagContext = &context
 			}
@@ -1978,7 +1961,8 @@ func (c *engineCanary) adjudicate() {
 		}
 	}
 	if len(active) == 0 {
-		c.fail("wave %s has no in-scope raw finding to adjudicate", wave.ID)
+		c.adjudicateWithOperator(&state, wave, fmt.Sprintf("wave %s has no in-scope raw finding to adjudicate", wave.ID))
+		return
 	}
 	for _, id := range ids {
 		finding := c.run.Validation.Findings[id]
@@ -1994,7 +1978,8 @@ func (c *engineCanary) adjudicate() {
 		for _, record := range target.Execution.Records {
 			if record.CaseID == finding.ExecutionFailure.CaseID && record.Result == coverage.ExecutedFail {
 				if record.PointID != point {
-					c.fail("flag fixture has an independent failed acceptance point %s", record.PointID)
+					c.adjudicateWithOperator(&state, wave, fmt.Sprintf("flag fixture has an independent failed acceptance point %s", record.PointID))
+					return
 				}
 				matched = true
 			}
@@ -2005,7 +1990,8 @@ func (c *engineCanary) adjudicate() {
 	}
 	problem, err := canaryFlagProblem(c.run.Validation, active[0])
 	if err != nil {
-		c.fail("flag problem identity: %v", err)
+		c.adjudicateWithOperator(&state, wave, fmt.Sprintf("flag problem identity: %v", err))
+		return
 	}
 	anchor := active[0]
 	if len(c.run.Validation.Findings[anchor.FindingID].History) == 0 {
