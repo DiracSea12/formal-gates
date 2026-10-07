@@ -86,7 +86,7 @@ func (f *Facade) registerIntakeRequirement() error {
 	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
 		return nil
 	}
-	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal {
+	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhasePreparing {
 		return nil
 	}
 	receipt := s.IntakeConfirmationReceipt
