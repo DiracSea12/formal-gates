@@ -1,13 +1,17 @@
 package facade
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 )
 
 // 本文件覆盖 owner 区间协调在同代 engine run 之间的并发与消失交错：并行启动
@@ -146,17 +150,55 @@ func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) 
 	path := filepath.Join(root, "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
 	first := startIntervalRun(t, root, "first", path)
-	receipt := testReceipt()
-	digest, err := IntakeDigest(receipt)
+	originalEngine := first.engine
+	reachedTerminal := false
+	store, err := persistence.NewStore(first.stateDir, persistence.Config{
+		PackageDigest:           first.envelope.PackageDigest,
+		DefinitionSource:        first.envelope.DefinitionSource,
+		InstalledTargetIdentity: first.envelope.InstalledTargetIdentity,
+		AcquireAdmission:        first.admission.acquire,
+		FaultInjector: func(at persistence.FaultPoint) error {
+			if at != persistence.FaultCommitResponseLost {
+				return nil
+			}
+			snap, err := originalEngine.Load()
+			if err != nil {
+				return err
+			}
+			if snap.State.Phase == runtime.PhaseTerminal {
+				reachedTerminal = true
+				return &persistence.InjectedCrashError{Point: at}
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = first.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, emptyFingerprint()); err != nil {
+	engine, err := protocol.New(store, protocol.Config{
+		Definition: first.definition, Registry: definition.Registry(), Capacity: first.capacity,
+		CostSource:    CostSourceBridge(first.root, first.runID),
+		ClaimDispatch: dispatchClaimBridge(first.root, first.runID, first.admission),
+	}, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// 持久终态检查点：CompleteAll 落盘 TERMINAL 后、owner 量取前中断。
-	if _, err = first.engine.CompleteAll(emptyFingerprint()); err != nil {
+	first.store, first.engine = store, engine
+	// 正常 Drive 在持久 TERMINAL 提交响应丢失处中断，owner 尚未量取。
+	if _, err := first.Drive(); !errors.Is(err, persistence.ErrInjectedCrash) || !reachedTerminal {
+		t.Fatalf("terminal commit interruption: %v, reached terminal=%t", err, reachedTerminal)
+	}
+	checkpoint, err := originalEngine.Load()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if checkpoint.State.Phase != runtime.PhaseTerminal || checkpoint.State.Route != "lightweight" || checkpoint.State.IntakeReceipt == nil {
+		t.Fatalf("terminal checkpoint = %+v, want lightweight TERMINAL with intake receipt", checkpoint.State)
+	}
+	for _, name := range []string{"terminal-summary.json", terminalIntentName} {
+		if _, err := os.Stat(filepath.Join(first.stateDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("terminal checkpoint already published %s: %v", name, err)
+		}
 	}
 	peer := startIntervalRun(t, root, "peer", path)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
