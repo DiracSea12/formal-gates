@@ -40,7 +40,7 @@ func canaryReviewPacket(t *testing.T) ([]byte, persistence.Envelope, protocol.St
 }
 
 func canaryReviewRun(state *protocol.State, envelope persistence.Envelope, revision uint64) facade.Run {
-	run := facade.Run{RunID: state.RunID, Revision: revision, Envelope: envelope}
+	run := facade.Run{RunID: state.RunID, Revision: revision, Envelope: envelope, PendingActions: state.PendingActions}
 	for _, series := range []review.Series{state.ReviewSeries.ProductReview, state.ReviewSeries.StartReadiness} {
 		action := facade.ReviewActionFace{Action: string(series.Action), EffectiveStatus: series.Effective.Status, EffectiveSource: series.Effective.Source, EffectiveRevision: series.Effective.Revision}
 		for _, candidate := range series.RawCandidates {
@@ -459,6 +459,162 @@ func TestCanaryReviewContinuesAcrossFindingDecisions(t *testing.T) {
 						t.Fatal("explicit per-finding progress missing")
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestCanaryWholeReviewInvalidationPreservesEvidenceAndRequestsFreshWork(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "pending-reopen"}[pending], func(t *testing.T) {
+			body, envelope, state := canaryReviewPacket(t)
+			project := t.TempDir()
+			dir := filepath.Join(project, filepath.FromSlash(facade.EngineNamespace), state.RunID)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			run := canaryReviewRun(&state, envelope, 0)
+			action := run.Review.Actions[1]
+			candidate := action.Candidates[0]
+			correction := review.CorrectionInput{Action: review.StartReadiness, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "Operator checked that this proposed initial batch contradicts the confirmed scope", ExpectedEffectiveRevision: action.EffectiveRevision}
+			line, err := json.Marshal(correction)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending {
+				engine := canaryOperatorEngine(t, dir, envelope)
+				choice := protocol.AskOptionID("INVALIDATE_RESULT")
+				request, err := protocol.NewRequestEvent("whole-pending", protocol.ControlReviewFindingDecision, protocol.AskOption{ID: choice, Label: string(choice)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				fp, err := engine.ObserveFingerprint()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = engine.Submit(request, fp); err != nil {
+					t.Fatal(err)
+				}
+				reopened := canaryOperatorEngine(t, dir, envelope)
+				snapshot, err := reopened.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				token, err := snapshot.Freshness(protocol.RequestID(request.ID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.PendingAsks = []facade.PendingAskFace{{RequestID: string(request.ID), Control: protocol.ControlReviewFindingDecision, Token: token, Options: request.Request.Options}}
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(t.TempDir(), "submit")
+			quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+			if err = os.WriteFile(binary, []byte("#!/bin/sh\nexec "+quote(executable)+" -test.run=^TestCanaryReviewSubmissionFixture$ -- \"$@\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 3000, deadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(bytes.NewReader(append(line, '\n'))), approvalOutput: &output}
+			if !c.reviewFindingsWithOperator() {
+				t.Fatal("whole-result Operator decision was not consumed")
+			}
+			engine := canaryOperatorEngine(t, dir, envelope)
+			snapshot, err := engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			series := snapshot.State.ReviewSeries.StartReadiness
+			if series.Effective.Status != "PENDING" || !review.ResultExcluded(series, candidate.ResultDigest) || len(series.Corrections) != 1 {
+				t.Fatal("whole result was not excluded by a core receipt")
+			}
+			if !reflect.DeepEqual(state.ReviewSeries.StartReadiness.RawCandidates, series.RawCandidates) || !reflect.DeepEqual(state.Results, snapshot.State.Results) {
+				t.Fatal("invalidation rewrote raw candidate or source result")
+			}
+			found := false
+			for _, decide := range snapshot.State.Decisions {
+				if decide.Review != nil && decide.Review.Correction != nil && decide.Review.Correction.Decision == "INVALIDATE_RESULT" {
+					found = true
+					if decide.Choice != "INVALIDATE_RESULT" || decide.Review.Correction.FindingID != "" || decide.Review.Correction.Supersedes != "" {
+						t.Fatal("consumer changed whole-result decision semantics")
+					}
+				}
+			}
+			if !found || c.reviewFindingsWithOperator() {
+				t.Fatal("whole decision missing or excluded candidate requested again")
+			}
+			fp, err := engine.ObserveFingerprint()
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, _, err := engine.Drive(fp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh := false
+			for id, pending := range snapshot.State.PendingActions {
+				if id != candidate.DispatchID && pending.Step == "review.readiness" && pending.ReviewSeries == review.StartReadiness && pending.Task.Scope != "" {
+					fresh = true
+				}
+			}
+			if !fresh {
+				t.Fatal("whole invalidation did not issue a distinct fresh readiness obligation")
+			}
+			if plan.Next.Kind != decision.KindWait || plan.Next.Wait == nil || plan.Next.Wait.Reason != decision.WaitTasksInFlight {
+				t.Fatalf("issued fresh review must remain in flight: %+v", plan.Next)
+			}
+			if !strings.Contains(output.String(), "INVALIDATE_RESULT requires empty findingId and supersedes") {
+				t.Fatal("whole-result instruction missing")
+			}
+		})
+	}
+}
+
+func TestCanaryWholeReviewInputKeepsBothDecisionBindings(t *testing.T) {
+	_, envelope, state := canaryReviewPacket(t)
+	action := canaryReviewRun(&state, envelope, 0).Review.Actions[1]
+	candidate := action.Candidates[0]
+	finding := candidate.Findings[0]
+	valid := review.CorrectionInput{Action: review.StartReadiness, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, Decision: "INVALIDATE_RESULT", Invalidity: "INVALID", Reason: "explicit Operator reason", ExpectedEffectiveRevision: action.EffectiveRevision}
+	for _, name := range []string{"whole", "wrong-action", "wrong-dispatch", "wrong-result", "wrong-revision", "stale-cas", "whole-finding", "whole-supersedes", "finding-empty", "finding-exact", "finding-wrong"} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			switch name {
+			case "wrong-action":
+				value.Action = review.ProductReview
+			case "wrong-dispatch":
+				value.DispatchID = "different"
+			case "wrong-result":
+				value.ResultDigest = "different"
+			case "wrong-revision":
+				value.RequirementRevision = "different"
+			case "stale-cas":
+				value.ExpectedEffectiveRevision++
+			case "whole-finding":
+				value.FindingID = finding.ID
+			case "whole-supersedes":
+				value.Supersedes = "decision"
+			case "finding-empty":
+				value.Decision = "DISMISS"
+			case "finding-exact":
+				value.Decision = "DISMISS"
+				value.FindingID = finding.ID
+			case "finding-wrong":
+				value.Decision = "DISMISS"
+				value.FindingID = "different"
+			}
+			body, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := &engineCanary{t: t, run: facade.Run{RunID: state.RunID}, deadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(append(body, '\n'))), approvalOutput: io.Discard}
+			_, err = c.readReviewCorrection(action, candidate, finding)
+			if (name == "whole" || name == "finding-exact") != (err == nil) {
+				t.Fatalf("decision %s: %v", name, err)
 			}
 		})
 	}

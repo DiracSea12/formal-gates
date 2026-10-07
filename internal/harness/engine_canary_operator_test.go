@@ -142,7 +142,7 @@ func (c *engineCanary) readReviewCorrection(action facade.ReviewActionFace, cand
 	if err != nil {
 		return review.CorrectionInput{}, err
 	}
-	if _, err := fmt.Fprintf(c.approvalOutput, "canary Operator review finding: run=%q state=%q nativeEvidence=%q binding=%s\nEnter one JSON review.CorrectionInput line for this exact finding; supply your own decision and reason. No finding is automatically dismissed.\n", c.run.RunID, statePath, canaryJobDirectory(c.jobs, c.run.RunID, candidate.DispatchID, ""), packet); err != nil {
+	if _, err := fmt.Fprintf(c.approvalOutput, "canary Operator review finding: run=%q state=%q nativeEvidence=%q binding=%s\nEnter one JSON review.CorrectionInput line for this exact candidate or finding; supply your own decision and reason. INVALIDATE_RESULT requires empty findingId and supersedes plus an explicit invalidity. No finding is automatically dismissed.\n", c.run.RunID, statePath, canaryJobDirectory(c.jobs, c.run.RunID, candidate.DispatchID, ""), packet); err != nil {
 		return review.CorrectionInput{}, err
 	}
 	line, err := c.readHumanDecision("Operator review correction")
@@ -158,7 +158,14 @@ func (c *engineCanary) readReviewCorrection(action facade.ReviewActionFace, cand
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return correction, fmt.Errorf("Operator review correction needs exactly one JSON value")
 	}
-	if string(correction.Action) != action.Action || correction.DispatchID != candidate.DispatchID || correction.ResultDigest != candidate.ResultDigest || correction.RequirementRevision != candidate.RequirementRevision || correction.FindingID != finding.ID || correction.ExpectedEffectiveRevision != action.EffectiveRevision || correction.Supersedes != finding.EffectiveDecisionID {
+	if string(correction.Action) != action.Action || correction.DispatchID != candidate.DispatchID || correction.ResultDigest != candidate.ResultDigest || correction.RequirementRevision != candidate.RequirementRevision || correction.ExpectedEffectiveRevision != action.EffectiveRevision {
+		return correction, fmt.Errorf("Operator review correction differs from the displayed finding binding")
+	}
+	if strings.EqualFold(strings.TrimSpace(correction.Decision), "INVALIDATE_RESULT") {
+		if correction.FindingID != "" || correction.Supersedes != "" {
+			return correction, fmt.Errorf("Operator whole-result invalidation must not carry findingId or supersedes")
+		}
+	} else if correction.FindingID != finding.ID || correction.Supersedes != finding.EffectiveDecisionID {
 		return correction, fmt.Errorf("Operator review correction differs from the displayed finding binding")
 	}
 	return correction, nil
@@ -199,7 +206,10 @@ func (c *engineCanary) reviewFindingsWithOperator() bool {
 				if err != nil {
 					c.fail("Operator review correction: %v", err)
 				}
-				choice := protocol.AskOptionID(correction.Decision + ":" + correction.FindingID)
+				choice := protocol.AskOptionID(correction.Decision)
+				if !strings.EqualFold(strings.TrimSpace(correction.Decision), "INVALIDATE_RESULT") {
+					choice += protocol.AskOptionID(":" + correction.FindingID)
+				}
 				var requestID protocol.RequestID
 				var token string
 				for _, ask := range c.run.PendingAsks {
