@@ -55,7 +55,7 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 			t.Fatalf("promoted artifact %s missing content: %s %v", pair.path, b, err)
 		}
 	}
-	materials, err := filepath.Glob(filepath.Join(project, facade.EngineNamespace, "canary", "materials", "*", "*.json"))
+	materials, err := filepath.Glob(filepath.Join(project, facade.EngineNamespace, "canary", "materials", "*.json"))
 	if err != nil || len(materials) == 0 {
 		t.Fatalf("immutable worker evidence missing: %v", err)
 	}
