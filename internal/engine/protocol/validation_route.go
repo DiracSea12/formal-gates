@@ -39,7 +39,8 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if w == nil || w.Repair == nil {
 		return false
 	}
-	if len(s.repairMembers(w)) == 1 && s.repairMembers(w)[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
+	members := s.repairMembers(w)
+	if len(members) == 1 && members[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
 		return false
 	}
 	if w.Status == "REPAIR" {

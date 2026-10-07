@@ -159,7 +159,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		return true
 	}
 	if _, target := s.repairGateTarget(b.Task); target != nil {
-		_, current := s.repairGateBinding(b.Task)
+		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
 	wave := s.validationWave(b.WaveID)

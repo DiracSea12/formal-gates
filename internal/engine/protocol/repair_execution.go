@@ -43,11 +43,15 @@ func (s *State) repairExecutions(w *ValidationWave) []repairWork {
 		return []repairWork{{wave: w, task: task}}
 	}
 	p := proposal.Validation.GranularityReview
+	contract := ""
+	if len(p.Batches) > 1 || proposal.Validation.Development == nil {
+		contract = strings.TrimPrefix(planContractDigest(p), "sha256:")
+	}
 	var executions []repairWork
 	for i := range p.Batches {
 		key := task
 		if len(p.Batches) > 1 || proposal.Validation.Development == nil {
-			key.Scope += ":" + strings.TrimPrefix(planContractDigest(p), "sha256:") + ":" + p.Batches[i].ID
+			key.Scope += ":" + contract + ":" + p.Batches[i].ID
 		}
 		member := repairWork{wave: w, task: s.replacementFold(key), plan: p, batch: &p.Batches[i], planAction: proposal.ActionID, businessRepairs: s.repairBusinessRounds(w, p.Batches[i].ID)}
 		for {
@@ -485,12 +489,12 @@ func (s *State) ensureRepairGates(cd *compiler.CompiledDefinition) bool {
 	return changed
 }
 
-func (s *State) repairGateBinding(task runtime.TaskKey) (WorkBinding, bool) {
+func (s *State) repairGateBinding(task runtime.TaskKey, works []repairWork) (WorkBinding, bool) {
 	w, target := s.repairGateTarget(task)
 	if target == nil {
 		return WorkBinding{}, false
 	}
-	for _, work := range s.repairWork() {
+	for _, work := range works {
 		if work.wave.ID != w.ID {
 			continue
 		}
@@ -514,13 +518,22 @@ func (s *State) repairGateBinding(task runtime.TaskKey) (WorkBinding, bool) {
 }
 
 func (s *State) projectRepairGates(view *decision.State, cd *compiler.CompiledDefinition) {
+	var work []repairWork
+	loaded := false
 	for i := range s.Validation.Waves {
 		w := &s.Validation.Waves[i]
 		if w.Repair == nil {
 			continue
 		}
 		for _, target := range w.Repair.Targets {
-			if _, current := s.repairGateBinding(target.Task); !current || target.Status != "PENDING" && target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
+			if target.Status != "PENDING" && target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
+				continue
+			}
+			if !loaded {
+				work = s.repairWork()
+				loaded = true
+			}
+			if _, current := s.repairGateBinding(target.Task, work); !current {
 				continue
 			}
 			reason := decision.WaitReason("")

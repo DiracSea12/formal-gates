@@ -5,6 +5,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
 )
 
@@ -20,6 +21,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 	}
 	for pass := 0; pass < len(compiled.Steps); pass++ {
 		progressed := false
+		var view *decision.State
 		completedSet := make(map[authoring.StepID]bool, len(s.Completed))
 		for _, id := range s.Completed {
 			completedSet[id] = true
@@ -29,7 +31,11 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 			if completedSet[step.Header.ID] {
 				continue
 			}
-			if !s.dependenciesSatisfied(step, compiled) {
+			if len(step.Header.Dependencies) != 0 && view == nil {
+				current := s.decisionView(compiled)
+				view = &current
+			}
+			if !dependenciesSatisfied(step, compiled, view) {
 				continue
 			}
 			settle := false
@@ -51,6 +57,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 				binding := bindings[internalStepHandler(*step)]
 				var err error
 				settle, err = binding.Run(s, *step)
+				view = nil
 				if err != nil {
 					return fmt.Errorf("protocol: execute step %s: %w", step.Header.ID, err)
 				}
@@ -71,6 +78,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 			if err := s.CompleteStep(step.Header.ID, compiled); err != nil {
 				return fmt.Errorf("protocol: settle step %s: %w", step.Header.ID, err)
 			}
+			view = nil
 			completedSet[step.Header.ID] = true
 			progressed = true
 		}
@@ -113,12 +121,20 @@ func (s *State) passResultCompletesStep(stepID authoring.StepID, seriesOf func(a
 }
 
 func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authoring.StepID {
+	var view *decision.State
 	for i := range compiled.Steps {
 		step := &compiled.Steps[i]
-		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step, compiled) {
+		if s.stepCompleted(step.Header.ID) {
 			continue
 		}
 		if _, ok := step.Payload.(compiler.CompiledHumanAskStep); !ok || s.askStepBound(step.Header.ID) {
+			continue
+		}
+		if len(step.Header.Dependencies) != 0 && view == nil {
+			current := s.decisionView(compiled)
+			view = &current
+		}
+		if !dependenciesSatisfied(step, compiled, view) {
 			continue
 		}
 		return step.Header.ID
@@ -127,13 +143,21 @@ func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authorin
 }
 
 func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operation authoring.OperationID) authoring.StepID {
+	var view *decision.State
 	for i := range compiled.Steps {
 		step := &compiled.Steps[i]
-		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step, compiled) {
+		if s.stepCompleted(step.Header.ID) {
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
 		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate" && payload.Operation != "op.workspace" && payload.Operation != "op.cleanup") {
+			continue
+		}
+		if len(step.Header.Dependencies) != 0 && view == nil {
+			current := s.decisionView(compiled)
+			view = &current
+		}
+		if !dependenciesSatisfied(step, compiled, view) {
 			continue
 		}
 		return step.Header.ID
@@ -191,8 +215,7 @@ func (s *State) stepCompleted(stepID authoring.StepID) bool {
 	return false
 }
 
-func (s *State) dependenciesSatisfied(step *compiler.CompiledStep, compiled *compiler.CompiledDefinition) bool {
-	view := s.decisionView(compiled)
+func dependenciesSatisfied(step *compiler.CompiledStep, compiled *compiler.CompiledDefinition, view *decision.State) bool {
 	for _, dep := range step.Header.Dependencies {
 		if !view.StepSatisfied(dep, compiled) {
 			return false

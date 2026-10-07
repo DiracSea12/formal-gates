@@ -192,9 +192,11 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		return s.taskResource(set.DesignTask, cd)
 	case "engine.qa.execution", "engine.gate":
-		if binding, ok := s.repairGateBinding(key); ok {
-			source, scope, role = binding.Candidate, key.String(), "gate"
-			break
+		if _, target := s.repairGateTarget(key); target != nil {
+			if binding, ok := s.repairGateBinding(key, s.repairWork()); ok {
+				source, scope, role = binding.Candidate, key.String(), "gate"
+				break
+			}
 		}
 		wave := s.currentValidationWave()
 		if wave == nil {

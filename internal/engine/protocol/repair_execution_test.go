@@ -283,7 +283,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 				if target == nil {
 					t.Fatal("missing member gate")
 				}
-				b, _ := s.repairGateBinding(key)
+				b, _ := s.repairGateBinding(key, s.repairWork())
 				action := key.String() + ":review"
 				s.DispatchBindings[action] = b
 				r := WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: b, Status: "FAIL", Findings: []review.Finding{{Severity: severity, Message: "normal command behavior fails", Requirement: "AC-001", NormalPath: "app normal", ActualError: "wrong normal output", DeferralImpact: "normal command unusable", SeverityRationale: "normal behavior contract", Locations: []string{"parser.go:1"}}}}}

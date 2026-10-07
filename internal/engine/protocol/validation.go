@@ -474,11 +474,13 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		return WorkBinding{Task: key}
 	}
 	b := WorkBinding{RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteScope: s.validationRouteDigest(), Task: key}
-	if gate, ok := s.repairGateBinding(key); ok {
-		if r := s.taskResource(key, cd); r.Status == "READY" {
-			gate.WorkspaceID = r.ID
+	if _, target := s.repairGateTarget(key); target != nil {
+		if gate, ok := s.repairGateBinding(key, s.repairWork()); ok {
+			if r := s.taskResource(key, cd); r.Status == "READY" {
+				gate.WorkspaceID = r.ID
+			}
+			return gate
 		}
-		return gate
 	}
 	role := s.validationRole(key, cd)
 	if role == "engine.merge.resolve" {

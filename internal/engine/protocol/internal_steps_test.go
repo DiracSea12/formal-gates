@@ -218,3 +218,79 @@ func TestInternalStepErrorRollsBackUpstreamTransformation(t *testing.T) {
 		t.Fatal("partial upstream transformation committed")
 	}
 }
+
+func TestInternalDependencyViewRefreshesAfterHandlerAndCompletion(t *testing.T) {
+	for _, waiting := range []bool{false, true} {
+		t.Run(map[bool]string{false: "complete", true: "waiting-state-change"}[waiting], func(t *testing.T) {
+			registry := compiler.NewRegistry()
+			for _, id := range []authoring.CodecID{"codec.message.in", "codec.message.out"} {
+				if err := registry.RegisterCodec(id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var steps []authoring.Step
+			for i, name := range []string{"seed", "available", "consume"} {
+				handler := authoring.HandlerID("engine.message." + name)
+				if err := registry.RegisterHandler(handler, authoring.RunnerEngineLocal); err != nil {
+					t.Fatal(err)
+				}
+				header := authoring.Header{ID: authoring.StepID(name), NodeID: "message", DefinitionVersion: "1"}
+				if i > 0 {
+					header.Dependencies = []authoring.StepID{[]authoring.StepID{"seed", "available"}[i-1]}
+				}
+				input := authoring.IO{InputCodec: "codec.message.in", OutputCodec: "codec.message.out"}
+				if i > 0 {
+					input.Inputs = []authoring.InputBinding{{From: header.Dependencies[0], OutputField: "message", ToField: "message"}}
+				}
+				step, err := authoring.NewLocalStep(header, input, authoring.LocalSpec{Handler: handler})
+				if err != nil {
+					t.Fatal(err)
+				}
+				steps = append(steps, step)
+			}
+			compiled, err := compiler.Compile(&compiler.Definition{Version: "1", EntryNode: "message", Steps: steps}, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view, err := decision.NewState("1", runtime.PhaseIntakeRegistered)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := State{State: *view}
+			bindings := map[authoring.HandlerID]InternalStep{}
+			for _, name := range []string{"seed", "available", "consume"} {
+				name := name
+				bindings[authoring.HandlerID("engine.message."+name)] = InternalStep{Runner: authoring.RunnerEngineLocal, Run: func(s *State, step compiler.CompiledStep) (bool, error) {
+					if name == "consume" && !s.stepCompleted("available") {
+						return false, errors.New("consumer missed the current dependency")
+					}
+					s.RecoveryRecords = append(s.RecoveryRecords, RecoveryRecord{Detail: name})
+					if name == "available" && waiting {
+						if err := s.CompleteStep(step.Header.ID, compiled); err != nil {
+							return false, err
+						}
+						return false, nil
+					}
+					return true, nil
+				}}
+			}
+			if err = s.settleFrontierSteps(compiled, bindings); err != nil {
+				t.Fatal(err)
+			}
+			order := []string{}
+			for _, record := range s.RecoveryRecords {
+				order = append(order, record.Detail)
+			}
+			if !reflect.DeepEqual(s.Completed, []authoring.StepID{"available", "consume", "seed"}) || !reflect.DeepEqual(order, []string{"seed", "available", "consume"}) {
+				t.Fatalf("dependency execution differs from completed set: completed=%v order=%v", s.Completed, order)
+			}
+			before := append([]RecoveryRecord{}, s.RecoveryRecords...)
+			if err = s.settleFrontierSteps(compiled, bindings); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, s.RecoveryRecords) {
+				t.Fatal("repeat settlement reran completed work")
+			}
+		})
+	}
+}
