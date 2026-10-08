@@ -695,12 +695,6 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 	}
 	base := ""
 	for _, work := range s.repairWork() {
-		if work.verification {
-			if work.result == nil {
-				return nil, nil, "", false
-			}
-			continue
-		}
 		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
 			continue
 		}

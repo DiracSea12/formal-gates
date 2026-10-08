@@ -55,7 +55,8 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			base := git(root, "rev-parse", "HEAD")
 			plan := commandPlan()
 			plan.Batches[0].Artifacts = []string{"app.py"}
-			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m unittest discover -v"
+			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m compileall -q ."
+			plan.Batches[0].Checks[1].Command = strconv.Quote(python) + " -m unittest discover -v"
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, plan, "whitebox", "quality")
 			dev, di := d.action("engine.development.batch")
 			if di.Workspace == nil {

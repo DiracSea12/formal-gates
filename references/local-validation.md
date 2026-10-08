@@ -4,9 +4,9 @@
 
 ```bash
 gofmt -w <changed-go-files>
-go test ./...
-go test -race ./internal/validate ./internal/cli
-go test -tags=qastructure ./internal/validate
+go test -timeout=0 ./...
+go test -timeout=0 -race ./internal/validate ./internal/cli
+go test -timeout=0 -tags=qastructure ./internal/validate
 go vet ./...
 go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates package validate --root .

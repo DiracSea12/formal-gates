@@ -79,11 +79,18 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			task := pipelineTask(cd, "engine.repair", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{"original": {ID: "original"}, "source": {ID: "source"}, "later": {ID: "later"}}, Waves: []ValidationWave{{ID: "source-wave", Generation: 1, Status: "REPAIR", Candidate: coverage.ValidationCandidate{Identity: "base"}, Targets: map[string]*ValidationTarget{}, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
 			w := &s.Validation.Waves[0]
-			plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser"}, {ID: "logging"}}}
+			plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser", Checks: []DevelopmentCheck{{ID: "parse", Command: "printf parsed"}}}, {ID: "logging", Checks: []DevelopmentCheck{{ID: "log", Command: "printf logged"}}}}}
 			s.Results["plan"] = WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}
 			members := s.repairMembers(w)
 			complete := func(key runtime.TaskKey, action string) {
-				s.Results[action] = WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: key, Generation: 1, WaveID: w.ID}, Development: &DevelopmentEvidence{Summary: "complete"}}}
+				s.Results[action] = WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: key, Generation: 1, RequirementRevision: "req", WaveID: w.ID, PlanRequest: "plan", BatchID: fixtureRepairBatchID(s, key)}, Status: OutcomePass, Development: &DevelopmentEvidence{Paths: []string{action + ".go"}, Summary: "complete"}}}
+				if work := s.repairMember(key); work != nil && work.batch != nil {
+					r := s.Results[action]
+					r.Validation.Binding.WorkspaceID = action + ":workspace"
+					s.Results[action] = r
+					s.DispatchBindings[action] = r.Validation.Binding
+					recordDevelopmentChecksFixture(t, s, action, *work.batch)
+				}
 			}
 			complete(members[0].task, "parser")
 			complete(members[1].task, "logging")
@@ -97,13 +104,13 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			s.Validation.Findings[f.ID] = f
 			correction := s.repairMembers(w)[0]
 			complete(correction.task, "correction")
-			s.DispatchBindings["correction"] = WorkBinding{Task: correction.task, WaveID: w.ID, Generation: 1}
+			s.DispatchBindings["correction"] = s.Results["correction"].Validation.Binding
 			s.DispatchIssueRevisions["correction"] = 20
 			verification := s.repairVerificationWork(w, compiledCanonicalWorkflow(t))
 			if verification == nil {
 				t.Fatal("missing integrated verification projection")
 			}
-			complete(verification.task, "self-run")
+			s.Results["self-run"] = WorkerResult{ActionID: "self-run", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: verification.task, WaveID: w.ID}, Status: OutcomePass, Development: &DevelopmentEvidence{Summary: "native facts compared"}}}
 			final := ValidationWave{ID: "final", Generation: 1, Status: "COLLECTING", Candidate: coverage.ValidationCandidate{Identity: "final"}, SourceTasks: []runtime.TaskKey{correction.task, members[1].task}, Targets: map[string]*ValidationTarget{"gate": {Task: pipelineTask(cd, "engine.gate", "final:quality"), Kind: "GATE", Gate: "quality", Status: "PASS"}}}
 			switch boundary {
 			case "missing-member":
@@ -209,6 +216,9 @@ func TestSingleRepairPlanCompletionKeepsOriginalTask(t *testing.T) {
 			}
 			if complete {
 				s.Results[r.ActionID] = r
+				r.Validation.Binding.WorkspaceID = "completion-workspace"
+				s.DispatchBindings = map[string]WorkBinding{r.ActionID: r.Validation.Binding}
+				recordDevelopmentChecksFixture(t, s, r.ActionID, batch)
 				members := s.repairMembers(&s.Validation.Waves[0])
 				if len(members) != 1 || members[0].task != task || s.developmentResultRecord(task) == nil {
 					t.Fatal("single-batch completion created another task or lost its result")
@@ -269,7 +279,12 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			s.Results["plan"] = plan
 			complete := func(member repairWork) {
 				r := WorkerResult{ActionID: member.task.String() + ":completed", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: member.task, WaveID: w.ID, Generation: 1, RequirementRevision: "req"}, Status: "PASS", Development: &DevelopmentEvidence{Paths: member.batch.Artifacts, Summary: "completed owned behavior", Completion: &DevelopmentCompletion{DoD: map[string]string{"normal": "normal input verified"}, Handoff: "owned boundary delivered"}}}}
+				r.Validation.Binding.PlanRequest = member.planAction
+				r.Validation.Binding.BatchID = member.batch.ID
+				r.Validation.Binding.WorkspaceID = r.ActionID + ":workspace"
 				s.Results[r.ActionID] = r
+				s.DispatchBindings[r.ActionID] = r.Validation.Binding
+				recordDevelopmentChecksFixture(t, s, r.ActionID, *member.batch)
 			}
 			for _, member := range s.repairMembers(w) {
 				complete(member)
@@ -477,4 +492,11 @@ func (s *State) validateFinalRepairEvidence(work repairWork, e DevelopmentEviden
 		return err
 	}
 	return s.validateRepairEvidence(e, true)
+}
+
+func fixtureRepairBatchID(s *State, key runtime.TaskKey) string {
+	if w := s.repairMember(key); w != nil && w.batch != nil {
+		return w.batch.ID
+	}
+	return ""
 }

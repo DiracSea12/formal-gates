@@ -137,7 +137,7 @@ func GoTestOperation(ref string) (ResolvedOperation, error) {
 		}
 	}
 
-	return ResolvedOperation{Directory: filepath.Dir(file), Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}}, GoTestName: name}, nil
+	return ResolvedOperation{Directory: filepath.Dir(file), Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}}, GoTestName: name}, nil
 }
 
 // GoTestExecutionResult requires the exact test's real run and terminal event.

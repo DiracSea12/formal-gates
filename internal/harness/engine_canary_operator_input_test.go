@@ -27,9 +27,53 @@ import (
 	"formal-gates/internal/engine/review"
 )
 
+// Packet history and its revision remain fixed; Store supplies the current
+// definition envelope and content proof from the packet's actual content.
+func canaryStatePacket(t *testing.T, name string) []byte {
+	t.Helper()
+	body := readTestFileBytes(t, filepath.Join("testdata", name))
+	var packet struct {
+		persistence.Envelope
+		Revision uint64                     `json:"revision"`
+		Content  map[string]json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(body, &packet); err != nil {
+		t.Fatal(err)
+	}
+	version, err := json.Marshal(definition.WorkflowDefinitionVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet.Content["definitionVersion"] = version
+	// Guard is derived by the current protocol transaction, not packet history.
+	delete(packet.Content, "guard")
+	dir := t.TempDir()
+	store, err := persistence.NewStore(dir, persistence.Config{PackageDigest: packet.PackageDigest, DefinitionSource: packet.DefinitionSource, InstalledTargetIdentity: packet.InstalledTargetIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(persistence.Transaction{ExpectedFingerprint: "packet", CollectFingerprint: func() (string, error) { return "packet", nil }, Content: packet.Content}); err != nil {
+		t.Fatal(err)
+	}
+	generated := readTestFileBytes(t, filepath.Join(dir, "state.json"))
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(generated, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["revision"], err = json.Marshal(packet.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func canaryOperatorPacket(t *testing.T) ([]byte, persistence.Envelope, protocol.State) {
 	t.Helper()
-	body := readTestFileBytes(t, filepath.Join("testdata", "operator_adjudication_state.json"))
+	body := canaryStatePacket(t, "operator_adjudication_state.json")
 	var envelope persistence.Envelope
 	var packet struct{ Content protocol.State }
 	if err := json.Unmarshal(body, &envelope); err != nil {

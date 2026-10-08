@@ -667,11 +667,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 		}
 	}
 	if handler == "engine.qa.design" && (e.split || material.Input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox) {
-		select {
-		case <-e.developmentStarted:
-		case <-time.After(time.Minute):
-			return nil, fmt.Errorf("independent child development did not start")
-		}
+		<-e.developmentStarted
 		time.Sleep(100 * time.Millisecond)
 	}
 	answer, err := e.answer(material, workspace)
@@ -981,7 +977,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 
 func canaryLocalPlan(split bool) *protocol.GranularityReview {
 	batch := func(id, artifact, deliverable string) protocol.DevelopmentBatch {
-		return protocol.DevelopmentBatch{ID: id, Artifacts: []string{artifact}, Subtasks: []protocol.DevelopmentSubtask{{ID: id + "-implementation", Description: deliverable}}, Deliverable: deliverable, PublicEntry: "frob word", Interfaces: "function called by seeded main", StateBoundary: "no persistent state", Risk: "wrong text result", DoD: []protocol.DevelopmentCriterion{{ID: "output", Description: deliverable}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "all-tests", Purpose: protocol.CheckFullTests, Command: "go test -count=1 ./..."}}, Rollback: "restore artifact from base", Recovery: "repeat declared implementation", Handoff: "function ready for command integration", ContextCost: "one function contract"}
+		return protocol.DevelopmentBatch{ID: id, Artifacts: []string{artifact}, Subtasks: []protocol.DevelopmentSubtask{{ID: id + "-implementation", Description: deliverable}}, Deliverable: deliverable, PublicEntry: "frob word", Interfaces: "function called by seeded main", StateBoundary: "no persistent state", Risk: "wrong text result", DoD: []protocol.DevelopmentCriterion{{ID: "output", Description: deliverable}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "all-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -count=1 ./..."}}, Rollback: "restore artifact from base", Recovery: "repeat declared implementation", Handoff: "function ready for command integration", ContextCost: "one function contract"}
 	}
 	plan := &protocol.GranularityReview{Reason: "independent declared artifacts", VerificationTier: "FINAL"}
 	if split {

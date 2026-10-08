@@ -533,10 +533,6 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 						b.Candidate = prior.Identity
 					}
 				}
-				if work.verification {
-					_, proof, _ := s.repairFinalSource(work)
-					b.Candidate = proof.Identity
-				}
 				if len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
 					b.Candidate = v.DevelopmentSnapshot
 				}
@@ -642,7 +638,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			continue
 		}
 		work := &member
-		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification
+		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies

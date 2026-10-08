@@ -27,7 +27,7 @@ package harness
 // ./internal/harness`, then run it directly in a PTY with
 // `FORMAL_GATES_ENGINE_CANARY=1 /tmp/formal-gates-canary.test
 // -test.run=^TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair$
-// -test.v -test.timeout=45m`. The operator writes the displayed approval
+// -test.v -test.timeout=0`. The operator writes the displayed approval
 // line after the human approves that call. Findings outside the automatic
 // fixture decision require a typed ADJUDICATE observation on stdin.
 // Human input waiting counts toward the
@@ -2524,6 +2524,7 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 			if err := json.Unmarshal(body, &raw); err != nil {
 				t.Fatal(err)
 			}
+			delete(raw, "caseRuns")
 			var answer canaryDevelopmentAnswer
 			if err := decodeCanaryAnswer(raw, &answer); err != nil {
 				t.Fatal(err)

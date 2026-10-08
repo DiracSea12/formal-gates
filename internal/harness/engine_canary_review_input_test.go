@@ -27,7 +27,7 @@ import (
 // candidate, requirement revision, finding or issued dispatch.
 func canaryReviewPacket(t *testing.T) ([]byte, persistence.Envelope, protocol.State) {
 	t.Helper()
-	body := readTestFileBytes(t, filepath.Join("testdata", "operator_review_state.json"))
+	body := canaryStatePacket(t, "operator_review_state.json")
 	var envelope persistence.Envelope
 	var packet struct{ Content protocol.State }
 	if err := json.Unmarshal(body, &envelope); err != nil {

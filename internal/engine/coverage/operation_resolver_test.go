@@ -36,7 +36,7 @@ func TestResolveGoTestUsesExactFileFunctionAndPackageDirectory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []ResolvedOperation{{Directory: filepath.Join(workspace, "nested"), GoTestName: "TestValue", Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-count=1", "-json", "-run", "^TestValue$", "."}}}}
+			want := []ResolvedOperation{{Directory: filepath.Join(workspace, "nested"), GoTestName: "TestValue", Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^TestValue$", "."}}}}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("invocation = %#v; want %#v", got, want)
 			}

@@ -76,6 +76,14 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "purpose": {
+                      "enum": [
+                        "",
+                        "FULL_BUILD",
+                        "FULL_TESTS"
+                      ],
+                      "type": "string"
                     }
                   },
                   "required": [

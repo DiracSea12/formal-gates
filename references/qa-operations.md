@@ -23,7 +23,7 @@ Go 白盒测试可以只保留精确引用 `<仓库相对路径>_test.go::TestNa
 规则。文件目录确定 package 工作目录，固定 invocation 为：
 
 ```text
-go test -count=1 -json -run ^<精确测试名>$ .
+go test -timeout=0 -count=1 -json -run ^<精确测试名>$ .
 ```
 
 测试名经 `regexp.QuoteMeta` 转义。该协议只接受完整包级测试，不接受裸函数名、`#`

@@ -222,7 +222,7 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 		t.Fatal("dispatch lost original input and raw evidence binding")
 	}
 	got := event.Result.Validation
-	if got.Status != payload.Validation.Status || !reflect.DeepEqual(got.Development, payload.Validation.Development) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
+	if got.Status != payload.Validation.Status || !reflect.DeepEqual(canarySemanticDevelopment(got.Development), payload.Validation.Development) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
 		t.Fatal("dispatch changed semantic author evidence")
 	}
 
@@ -241,4 +241,11 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 	if command("git", "rev-parse", "HEAD") != base || command("git", "diff", "--cached", "--name-only") != "" {
 		t.Fatal("delivery performed VCS writes")
 	}
+}
+
+func canarySemanticDevelopment(e *protocol.DevelopmentEvidence) *worker.Development {
+	if e == nil {
+		return nil
+	}
+	return &worker.Development{Completion: e.Completion, Paths: e.Paths, Summary: e.Summary, AffectedCases: e.AffectedCases}
 }

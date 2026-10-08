@@ -55,13 +55,13 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 	plan.Batches[0].DoD[0].ID = "chosen-in-this-answer"
 	plan.Batches[0].Checks[0].ID = "chosen-check-in-this-answer"
 	batch := protocol.DevelopmentInput{Batch: plan.Batches[0]}
-	completion := map[string]any{"paths": []string{"command.go"}, "summary": "implemented declared behavior", "build": []string{"build exit=0"}, "tests": []string{"check exit=0"}, "dod": map[string]string{"chosen-in-this-answer": "complete"}, "checks": map[string]string{"chosen-check-in-this-answer": "passed"}, "handoff": "ready for native integration"}
-	review := map[string]any{"status": "PASS", "findings": []any{}, "verification": map[string]any{"checks": []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, "evidence": "read exact current materials"}, "plan": plan}
+	completion := map[string]any{"paths": []string{"command.go"}, "summary": "implemented declared behavior", "dod": map[string]string{"chosen-in-this-answer": "complete"}, "handoff": "ready for native integration"}
+	review := map[string]any{"status": "PASS", "findings": []any{}, "verification": map[string]any{"checks": []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, "evidence": "read exact current materials"}, "plan": canarySemanticPlan(plan)}
 	repair := map[string]any{}
 	for key, value := range completion {
 		repair[key] = value
 	}
-	repair["granularityReview"] = plan
+	repair["granularityReview"] = canarySemanticPlan(plan)
 	repairSchema := canaryDevelopmentSchema(nil)
 	repairSchema["required"] = []string{}
 	repairSchema["properties"].(map[string]any)["granularityReview"] = getOf(getOf(canaryReviewSchema(true), "properties"), "plan")
