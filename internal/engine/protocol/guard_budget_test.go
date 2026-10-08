@@ -49,6 +49,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		IntakeDigest: "sha256:intake", Revision: 1,
 	}
 	state.IntakeConfirmationReceipt = &state.IntakeReceipt.Confirmation
+	state.NativeRoot = t.TempDir()
 	state.RequirementRevisions = []ConfirmedRevision{{
 		Revision: "rev-1", Source: RequirementSourceIntake,
 		Classification: RequirementClassificationIntake, StateRevision: 1,
@@ -780,6 +781,8 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		Confirmation: IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "rev-1", SolutionRevision: "solution"},
 		IntakeDigest: "sha256:intake", Revision: 1,
 	}
+	state.IntakeConfirmationReceipt = &state.IntakeReceipt.Confirmation
+	state.NativeRoot = t.TempDir()
 	state.RequirementRevisions = []ConfirmedRevision{{
 		Revision: "rev-1", Source: RequirementSourceIntake,
 		Classification: RequirementClassificationIntake, StateRevision: 1,

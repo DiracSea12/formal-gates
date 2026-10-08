@@ -45,6 +45,8 @@ func canaryStatePacket(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	packet.Content["definitionVersion"] = version
+	// Guard is derived by the current protocol transaction, not packet history.
+	delete(packet.Content, "guard")
 	dir := t.TempDir()
 	store, err := persistence.NewStore(dir, persistence.Config{PackageDigest: packet.PackageDigest, DefinitionSource: packet.DefinitionSource, InstalledTargetIdentity: packet.InstalledTargetIdentity})
 	if err != nil {
