@@ -142,7 +142,7 @@ func Supervise(directory string) int {
 			"stderr.log": proofToMap(stderrProof),
 		},
 	}
-	if request["kind"] == "approved-qa-check" {
+	if supervisedCheck(request) {
 		receipt["tool_identity"], receipt["environment_identity"] = executionFacts["tool"], executionFacts["environment"]
 	}
 	if err := writeAtomicJSON(filepath.Join(dir, "exit.json"), receipt); err != nil {

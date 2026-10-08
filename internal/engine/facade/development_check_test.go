@@ -1,7 +1,10 @@
 package facade
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +110,29 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	}
 	if len(request.Argv) != 3 || request.Argv[2] != command || request.Cwd != s.NativeResources["check"].Path {
 		t.Fatalf("actual command transport %#v", request)
+	}
+	toolBytes, err := os.ReadFile("/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := fmt.Sprintf("/bin/sh sha256:%x", sha256.Sum256(toolBytes))
+	var receipt struct {
+		Tool        string `json:"tool_identity"`
+		Environment string `json:"environment_identity"`
+	}
+	if err := readCheckDocument(filepath.Join(first.Directory, "exit.json"), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := json.Marshal(request.Argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := hex.DecodeString(first.Environment)
+	if err != nil || len(environment) != sha256.Size {
+		t.Fatal("receipt lacks actual environment digest")
+	}
+	if first.Tool != tool || first.Tool != receipt.Tool || first.Environment != receipt.Environment || first.Invocation != string(invocation) || first.WorkingDirectory != request.Cwd {
+		t.Fatalf("actual process identities differ from bound request/receipt: %+v", first)
 	}
 	// A reopened caller observes the same owned receipt, without repeating effects.
 	reopened := *f

@@ -230,22 +230,43 @@ func TestSuperviseStdin(t *testing.T) {
 func TestSuperviseEnvironmentMerge(t *testing.T) {
 	bin := supervisorBinary(t)
 	script := []string{"/bin/sh", "-c", "printf '%s' \"$MYVAR\""}
-	// override existing var
-	t.Run("override", func(t *testing.T) {
-		jobDir, _, env := newJob(t, bin, map[string]any{
-			"kind": "check", "argv": script, "stdin": "",
-			"environment": map[string]any{"MYVAR": "overridden"},
+	// The approved purposes retain the same successful executable and merged environment facts.
+	for _, kind := range []string{"check", "approved-development-check", "approved-qa-check"} {
+		t.Run("override/"+kind, func(t *testing.T) {
+			jobDir, _, env := newJob(t, bin, map[string]any{
+				"kind": kind, "argv": script, "stdin": "",
+				"environment": map[string]any{"MYVAR": "overridden"},
+			})
+			env["MYVAR"] = "base"
+			_ = runSupervisor(t, bin, jobDir, env)
+			rec := readReceipt(t, jobDir)
+			if rec["exit_code"].(float64) != 0 {
+				t.Fatalf("exit_code = %v", rec["exit_code"])
+			}
+			if got := string(readBytes(t, filepath.Join(jobDir, "stdout.log"))); got != "overridden" {
+				t.Fatalf("stdout = %q, want overridden", got)
+			}
+			if kind == "check" {
+				return
+			}
+			tool, refusal := FileProof("/bin/sh")
+			if refusal != "" {
+				t.Fatal(refusal)
+			}
+			environment := map[string]any{}
+			for key, value := range env {
+				environment[key] = value
+			}
+			environment["MYVAR"] = "overridden"
+			digest, err := CanonicalDigest(environment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec["tool_identity"] != "/bin/sh sha256:"+tool.SHA256 || rec["environment_identity"] != digest {
+				t.Fatalf("receipt does not bind actual tool and merged environment: tool=%v environment=%v", rec["tool_identity"], rec["environment_identity"])
+			}
 		})
-		env["MYVAR"] = "base"
-		_ = runSupervisor(t, bin, jobDir, env)
-		rec := readReceipt(t, jobDir)
-		if rec["exit_code"].(float64) != 0 {
-			t.Fatalf("exit_code = %v", rec["exit_code"])
-		}
-		if got := string(readBytes(t, filepath.Join(jobDir, "stdout.log"))); got != "overridden" {
-			t.Fatalf("stdout = %q, want overridden", got)
-		}
-	})
+	}
 	// add new var
 	t.Run("add", func(t *testing.T) {
 		jobDir, _, env := newJob(t, bin, map[string]any{
