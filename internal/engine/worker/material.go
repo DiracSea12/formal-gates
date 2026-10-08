@@ -147,6 +147,12 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		protocol.WorkerInput
 		AvailableRouteCandidates []string `json:"availableRouteCandidates,omitempty"`
 	}{WorkerInput: input}
+	contextValue.RequirementDocument.Content = ""
+	if input.Validation != nil {
+		validation := *input.Validation
+		validation.RequirementDocument.Content = ""
+		contextValue.Validation = &validation
+	}
 	if input.Review != nil && input.Review.Action == review.StartReadiness {
 		contextValue.AvailableRouteCandidates = catalog.RouteCandidates()
 	}
