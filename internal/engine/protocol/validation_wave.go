@@ -473,9 +473,6 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		if err := s.validateFinalCoverage(); err != nil {
 			return validationReject(err)
 		}
-		for _, set := range v.Sets {
-			set.Candidate = evidence.Identity
-		}
 		v.Candidate = &coverage.ValidationCandidate{Identity: evidence.Identity, Digest: evidence.Digest}
 		scope := coverage.ScopeFull
 		if prior := s.currentValidationWave(); prior != nil {

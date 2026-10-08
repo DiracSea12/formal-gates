@@ -170,6 +170,8 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			}
 			var final protocol.CandidateEvidence
 			var finalParams protocol.CandidateParameters
+			var finalIntent protocol.HostActionIntent
+			var finalReceipt protocol.HostActionReceipt
 			snap, err = d.f.engine.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -192,6 +194,8 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 					if err := decodeNativeParams(intent, &finalParams); err != nil {
 						t.Fatal(err)
 					}
+					finalIntent = intent
+					finalReceipt = receipt
 				}
 			}
 			if final.Identity != d.run.Validation.Candidate.Identity || !final.TestOnly || !final.ProductionViewEqual || final.GateView == nil || !slices.Equal(final.GateView.TestOwnedPaths, []string{"test_app.py"}) {
@@ -203,6 +207,35 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			}
 			if git(root, "rev-parse", "HEAD") != base {
 				t.Fatal("final validation promoted mainline")
+			}
+			originalHistory := slices.Clone(snap.State.Validation.Sets[coverage.ReviewWhitebox].ReviewHistory)
+			for _, reopen := range []bool{false, true} {
+				if reopen {
+					d.reopen()
+					snap, err = d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				observed, complete, err := d.f.candidateEvidence(snap.State, finalIntent, false, new(bool))
+				if err != nil || !complete || observed.Candidate == nil || !reflect.DeepEqual(*observed.Candidate, final) {
+					t.Fatalf("final receipt reobservation lost its reviewed artifact: complete=%v err=%v actual=%+v expected=%+v", complete, err, observed.Candidate, final)
+				}
+				set := snap.State.Validation.Sets[coverage.ReviewWhitebox]
+				if set.Candidate != ri.Binding.Candidate || !reflect.DeepEqual(set.ReviewHistory, originalHistory) || snap.State.NativeActionCurrent(finalIntent, d.f.definition) {
+					t.Fatal("final receipt changed or invalidated its original artifact/review source")
+				}
+				_, execution := d.action("engine.qa.execution")
+				if execution.Binding.Candidate != final.Identity || execution.Execution == nil || execution.Execution.Candidate.Identity != final.Identity {
+					t.Fatal("execution responsibility lost the combined final candidate")
+				}
+				replay, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), finalIntent.ActionID, "op.candidate", d.host(), finalIntent.Correlation, finalIntent.PayloadDigest, finalReceipt.Status, "", finalReceipt.AdapterEvidence.Values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if acceptance := d.submit(replay); acceptance.Status != "DUPLICATE" {
+					t.Fatalf("original final receipt repeated its business admission: %+v", acceptance)
+				}
 			}
 			// A changed immutable test entry cannot reuse the accepted judgment.
 			changed := filepath.Join(t.TempDir(), "changed")
@@ -230,6 +263,19 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			currentSet.Manifest.Cases[0].Files = []string{"runtime.json"}
 			if reviewedArtifact(snap.State, finalParams) == nil {
 				t.Fatal("changed material relation reused accepted review")
+			}
+			d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Category: "CASE_EXECUTABILITY", Mode: coverage.ReviewWhitebox, AffectedCases: []string{"valid"}}, "")
+			d.reopen()
+			snap, err = d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			set = snap.State.Validation.Sets[coverage.ReviewWhitebox]
+			if set.Status != "THAWED" || set.Review != nil || set.Candidate != "" || !reflect.DeepEqual(set.ReviewHistory, originalHistory) || snap.State.Validation.Candidate != nil {
+				t.Fatal("thaw did not revoke current approval while retaining original reviewed source")
+			}
+			if observed, complete, err := d.f.candidateEvidence(snap.State, finalIntent, false, new(bool)); err == nil || complete || observed.Candidate != nil {
+				t.Fatalf("thawed artifact retained final ownership authority: complete=%v err=%v actual=%+v", complete, err, observed.Candidate)
 			}
 			t.Logf("existing Python artifact %s independently reviewed; final %s retained %d native changes and excluded only test_app.py", ri.Binding.Candidate, final.Identity, len(actual))
 		})
