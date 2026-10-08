@@ -192,3 +192,92 @@ func TestQACheckPlansNeverReadGoSource(t *testing.T) {
 		t.Fatalf("core read or reconstructed Go source: %+v %v", plans, err)
 	}
 }
+
+func TestQACarriedDutyPreservesNativeRecipesAndReceipts(t *testing.T) {
+	s, cd, target := qaOperationState(t)
+	plans, err := s.qaCheckPlans(target, cd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := plans[0].Binding
+	s.Attempts = map[runtime.TaskKey]Attempt{target.Task: {Work: &binding}}
+	for _, p := range plans {
+		addQAOperationReceipt(t, s, p, "original:"+p.QA.Source, 7)
+	}
+	facts := s.qaExecutionFacts(target, cd)
+	raw, err := json.Marshal(s.currentValidationWave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current ValidationWave
+	if err := json.Unmarshal(raw, &current); err != nil {
+		t.Fatal(err)
+	}
+	s.Validation.Waves[0].Status = "INVALIDATED"
+	current.ID, current.Generation, current.RequirementRevision = "carried-wave", 2, "new-req"
+	s.Validation.Waves = append(s.Validation.Waves, current)
+	s.Validation.Generation, s.Validation.RequirementRevision = 2, "new-req"
+	s.RequirementRevisions = append(s.RequirementRevisions, ConfirmedRevision{Revision: "new-req", StateRevision: 2, WorkDecisions: []RequirementWorkDecision{{Work: RequirementWork{Task: target.Task}, Disposition: RequirementWorkCarry}}})
+	target = s.currentValidationWave().Targets[target.Task.String()]
+	assertCarried := func(state *State) {
+		t.Helper()
+		if !state.validationWorkOwed(binding, cd) {
+			t.Fatal("confirmed carried duty is not owed")
+		}
+		got, err := state.qaCheckPlans(target, cd)
+		if err != nil || !reflect.DeepEqual(got, plans) {
+			t.Fatalf("carried recipes changed: %+v %v", got, err)
+		}
+		if !reflect.DeepEqual(state.qaExecutionFacts(target, cd), facts) {
+			t.Fatal("carried receipts changed")
+		}
+		if _, ready := state.nextQACheckParameters(target.Task, cd); ready {
+			t.Fatal("carried executed operation was reissued")
+		}
+		for _, p := range plans {
+			if !state.qaCheckInputsCurrent(p) {
+				t.Fatal("original native check lost its carried authority")
+			}
+		}
+	}
+	assertCarried(s)
+	raw, err = json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reopened State
+	if err := json.Unmarshal(raw, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	assertCarried(&reopened)
+	for _, change := range []string{"redo", "candidate", "scope", "cases", "ended"} {
+		t.Run(change, func(t *testing.T) {
+			var changed State
+			if err := json.Unmarshal(raw, &changed); err != nil {
+				t.Fatal(err)
+			}
+			wave := changed.currentValidationWave()
+			switch change {
+			case "redo":
+				changed.RequirementRevisions[1].WorkDecisions[0].Disposition = RequirementWorkRedo
+			case "candidate":
+				wave.Candidate.Digest = "different-tree"
+			case "scope":
+				wave.Scope = coverage.ScopeFull
+			case "cases":
+				wave.Versions = map[coverage.ReviewKind]string{coverage.ReviewBlackbox: "different-cases"}
+				wave.Coverage.Manifests[0].Cases[0].Operations[0].Stdin = "different-input"
+			case "ended":
+				wave.Status = "COMPLETE"
+			}
+			if changed.validationWorkOwed(binding, cd) || len(changed.qaExecutionFacts(target, cd)) != 0 {
+				t.Fatal("changed or unconfirmed duty reused native receipts")
+			}
+			for _, p := range plans {
+				if changed.qaCheckInputsCurrent(p) {
+					t.Fatal("original native check remained authorized for changed duty")
+				}
+			}
+		})
+	}
+}
