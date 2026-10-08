@@ -29,9 +29,11 @@ normal) kill "$child"; wait "$child"; exit 0;;
 inherited-pipe) exit 0;;
 cancelled) wait "$child";;
 esac`
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := context.Background()
 			if mode == "cancelled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				defer cancel()
 				go func() { waitForFile(t, pidfile); cancel() }()
 			}
 

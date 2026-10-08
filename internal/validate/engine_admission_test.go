@@ -14,14 +14,7 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	workingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := filepath.Abs(filepath.Join(workingDir, "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	target, packageDigest := installedAdmissionTarget(t)
 	installed, err := PackageReceipt(target)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +27,7 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	siblingOne.ID = global.ID + "-project-one"
 	siblingTwo := admissionRepairRecord(target, launcher, projectTwo)
 	siblingTwo.ID = global.ID + "-project-two"
-	global.PackageDigest = "sha256:package"
+	global.PackageDigest = packageDigest
 	global.InstalledDigest = installed.Digest
 	siblingOne.PackageDigest, siblingOne.InstalledDigest = global.PackageDigest, global.InstalledDigest
 	siblingTwo.PackageDigest, siblingTwo.InstalledDigest = global.PackageDigest, global.InstalledDigest
@@ -89,16 +82,13 @@ func TestEngineAdmissionNormalizesRegisteredHostAliases(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	target, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	target, packageDigest := installedAdmissionTarget(t)
 	installed, err := PackageReceipt(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record := admissionRepairRecord(target, filepath.Join(home, "bin", "formal-gates"), home)
-	record.PackageDigest, record.InstalledDigest = "sha256:package", installed.Digest
+	record.PackageDigest, record.InstalledDigest = packageDigest, installed.Digest
 	path := filepath.Join(home, ".formal-gates", "registry.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -144,4 +134,20 @@ func admissionRepairRecord(target, launcher, project string) RegistryRecord {
 		VCSIdentity: "git:test", Generation: 1, Lease: "lease", Token: "token",
 		CanonicalPaths: map[string]string{"target": canonicalRegistryPath(target), "launcher": canonicalRegistryPath(launcher), "projectRoot": canonicalRegistryPath(project), "stateRoot": canonicalRegistryPath(stateRoot), "resourceRoot": canonicalRegistryPath(resourceRoot), "runtimeSibling": canonicalRegistryPath(filepath.Dir(target))},
 	}
+}
+
+func installedAdmissionTarget(t *testing.T) (string, string) {
+	t.Helper()
+	report, err := Install(InstallOptions{
+		Source: copyPackageFixture(t), Host: "claude", Scope: "project", Project: t.TempDir(),
+		RegistryPath: filepath.Join(t.TempDir(), "registry.json"),
+		BinaryTarget: filepath.Join(t.TempDir(), nativeBinaryName()), SkipHooks: true, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Targets) != 1 || report.PackageDigest == "" {
+		t.Fatalf("installed target receipt: %+v", report)
+	}
+	return report.Targets[0].TargetPath, report.PackageDigest
 }

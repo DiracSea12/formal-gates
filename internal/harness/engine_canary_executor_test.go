@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bufio"
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
@@ -266,7 +267,7 @@ func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 	if provider != "git" {
 		selection = "^TestCanaryInstalledNativeFlows$/^" + provider + "$/^split$"
 	}
-	cmd := exec.Command(os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout=0")
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout=0")
 	cell := "split"
 	if provider != "git" {
 		cell = filepath.Join(provider, cell)
