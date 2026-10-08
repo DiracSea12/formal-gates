@@ -147,6 +147,13 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 			}
 		}
 		evidence := &protocol.CheckEvidence{ParametersDigest: intent.PayloadDigest, SourceActionID: p.SourceActionID, SourceIdentity: p.SourceIdentity, SourceDigest: p.SourceDigest, WorkspaceID: workspace.ID, RequestDigest: digest, Directory: directory, ExitCode: exit, Error: errorText, Stdout: stdout, Stderr: stderr}
+		evidence.Tool, _ = receipt["tool_identity"].(string)
+		evidence.Environment, _ = receipt["environment_identity"].(string)
+		invocation, err := json.Marshal(argv)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		evidence.Invocation, evidence.WorkingDirectory = string(invocation), cwd
 		if p.QA != nil {
 			stdout, err := os.ReadFile(filepath.Join(directory, "stdout.log"))
 			if err != nil {
@@ -157,10 +164,7 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 				return nativeResult{}, false, err
 			}
 			evidence.StdoutText, evidence.StderrText = string(stdout), string(stderr)
-			evidence.Tool, _ = receipt["tool_identity"].(string)
-			evidence.Environment, _ = receipt["environment_identity"].(string)
-			invocation, _ := json.Marshal(argv)
-			evidence.Invocation, evidence.WorkingDirectory, evidence.GoTestName = string(invocation), cwd, testName
+			evidence.GoTestName = testName
 			if testName != "" {
 				evidence.GoResult = coverage.GoTestExecutionResult(stdout, testName)
 			}
