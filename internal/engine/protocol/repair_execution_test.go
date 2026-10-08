@@ -433,7 +433,7 @@ func TestRepairEvidenceUsesSelectedManifests(t *testing.T) {
 func TestFinalRepairEvidenceUsesMemberUnion(t *testing.T) {
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
 	wave := &ValidationWave{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}
-	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first", Checks: []DevelopmentCheck{{ID: "first-check", Command: "printf first"}}}, {ID: "second", Checks: []DevelopmentCheck{{ID: "second-check", Command: "printf second"}}}}}
+	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first", Checks: []DevelopmentCheck{{ID: "first-check", Command: "test -n first"}}}, {ID: "second", Checks: []DevelopmentCheck{{ID: "second-check", Command: "test -n second"}}}}}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "first-case"}, {CaseID: "second-case"}}}
 	s := &State{RunID: "run", SelectedGates: []string{mergeQAGateID}, DispatchBindings: map[string]WorkBinding{}, Validation: &Validation{Generation: 1, RequirementRevision: "req", Waves: []ValidationWave{*wave}, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifest}}}, Results: map[string]WorkerResult{"plan": {ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}}}
 	wave = &s.Validation.Waves[0]
