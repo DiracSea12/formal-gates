@@ -292,7 +292,9 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 	for _, delivery := range []string{"receipt-first", "result-first"} {
 		t.Run(delivery, func(t *testing.T) {
-			d := newValidationDriver(t, "blackbox", "quality")
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 			actions := make(map[string]protocol.ValidationInput)
 			for id, in := range d.run.ValidationInputs {
 				actions[id] = in
@@ -385,7 +387,20 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			evidence := summary.Termination
-			if evidence == nil || evidence.Decisions[string(req.ID)].EventID != string(decision.ID) || len(evidence.HostActionReceipts) != len(actions) || evidence.ObsoleteResults[staged.Result.ActionID][0].PayloadDigest != "delivered-development" {
+			terminations := 0
+			if evidence != nil {
+				for _, receipt := range evidence.HostActionReceipts {
+					if receipt.Operation == protocol.HostActionTerminateAgent {
+						terminations++
+					}
+				}
+			}
+			expected, marshalErr := json.Marshal(d.run.Termination)
+			actual, actualErr := json.Marshal(evidence)
+			if marshalErr != nil || actualErr != nil || string(actual) != string(expected) {
+				t.Fatal("terminal artifact differs from complete returned execution evidence")
+			}
+			if evidence == nil || evidence.Decisions[string(req.ID)].EventID != string(decision.ID) || terminations != len(actions) || evidence.ObsoleteResults[staged.Result.ActionID][0].PayloadDigest != "delivered-development" {
 				t.Fatal("terminal cleanup lost original authority or effect evidence")
 			}
 			d.reopen()
@@ -708,7 +723,9 @@ func TestRuntimeSkipRetainsExactFailedAttemptWithoutGrantingPass(t *testing.T) {
 }
 
 func TestAbortReconcilesUnknownIdentitiesBeforeCleanup(t *testing.T) {
-	d := newValidationDriver(t, "blackbox", "quality")
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	var ids []string
 	for id := range d.run.PendingActions {
 		ids = append(ids, id)
@@ -766,7 +783,9 @@ func TestAbortReconcilesUnknownIdentitiesBeforeCleanup(t *testing.T) {
 func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 	for _, held := range []bool{false, true} {
 		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
-			d := newValidationDriver(t, "blackbox", "quality")
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 			dev, di := d.action("engine.development.batch")
 			design, qi := d.action("engine.qa.design")
 			manifest := simpleManifest(qi)
@@ -777,18 +796,28 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			var intent protocol.HostActionIntent
 			for _, value := range d.run.AdapterIntents {
-				intent = value
+				if value.Adapter != nil && value.Adapter.Operation == "op.candidate" {
+					intent = value
+				}
+			}
+			if intent.Adapter == nil {
+				t.Fatal("development has no original candidate effect")
 			}
 			var params protocol.CandidateParameters
 			bytes, _ := json.Marshal(intent.Adapter.Params)
 			if err := json.Unmarshal(bytes, &params); err != nil {
 				t.Fatal(err)
 			}
-			evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: "native-" + intent.PayloadDigest, Digest: intent.PayloadDigest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
-			evidence.GateView = gateReviewView(params)
-			bytes, _ = json.Marshal(evidence)
-			var values map[string]any
-			_ = json.Unmarshal(bytes, &values)
+			state := driverState(t, d)
+			candidateFacts, complete, err := d.f.nativeEvidence(state, intent, true)
+			if err != nil || !complete || candidateFacts.Candidate == nil {
+				t.Fatalf("actual original candidate execution: %v", err)
+			}
+			evidence := *candidateFacts.Candidate
+			values, err := candidateFacts.fields()
+			if err != nil {
+				t.Fatal(err)
+			}
 			receipt, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
 			if err != nil {
 				t.Fatal(err)
@@ -1231,6 +1260,9 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 		for _, verdict := range []string{"PASS", "FAIL"} {
 			t.Run(extent+"/"+verdict, func(t *testing.T) {
 				d := postwaveRepairOffer(t)
+				if verdict == "FAIL" {
+					d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "malformed command exits successfully on this fresh execution"}}
+				}
 				repeatRepairQA(d)
 				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 				qa, input := d.action("engine.qa.execution")
@@ -1258,7 +1290,6 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 					for i := range report.Records {
 						if report.Records[i].CaseID == "invalid" && report.Records[i].Provenance == coverage.ProvenanceExecuted {
 							report.Records[i].Result = coverage.ExecutedFail
-							report.Records[i].Observation = "malformed command exits successfully on this fresh execution"
 							report.Records[i].Comparison = "specified invalid-input oracle requires rejection"
 							failed = true
 						}
@@ -1267,7 +1298,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 						t.Fatal("fixture must fail a newly executed case, never an inherited row")
 					}
 				}
-				d.business(qa, protocol.ValidationResult{Binding: input.Binding, Status: verdict, Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+				d.business(qa, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: verdict, Execution: &report}))
 				if verdict == "FAIL" {
 					found := false
 					for id, finding := range d.run.Validation.Findings {
@@ -1305,6 +1336,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 				if after.State.Results[qa].Validation.Binding != input.Binding || !reflect.DeepEqual(after.State.Results[qa].Validation.Execution, &report) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], afterWaive.State.Decisions[ask.RequestID]) {
 					t.Fatal("actual fresh result or waiver decision lost its complete content")
 				}
+				d.fixtureQAResults = nil
 				if len(remaining) > 0 {
 					if current.Repair == nil || current.Repair.Task != ask.Validation.Binding.Task || !reflect.DeepEqual(current.Repair.Problems, remaining) || current.Counted {
 						t.Fatal("fresh result lost unique unsigned plan or exact unwaived obligations")
@@ -1320,6 +1352,9 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 					}
 					result := gateRepairResult(repairInput)
 					d.business(repair, result)
+					if result.Binding.PureP2 {
+						d.verifyRepair(result)
+					}
 					d.reopen()
 					d.drive()
 					completed := authorizationSnapshot(d).State.Results[repair]
@@ -1330,7 +1365,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 					if current.Scope == coverage.ScopeFull && current.Status == "COLLECTING" {
 						full, fullInput := d.action("engine.qa.execution")
 						fullReport := executionFor(fullInput)
-						d.business(full, protocol.ValidationResult{Binding: fullInput.Binding, Status: "PASS", Execution: &fullReport, Tool: "app-v1", Environment: "isolated-project"})
+						d.business(full, nativeExecutionResult(fullInput, protocol.ValidationResult{Binding: fullInput.Binding, Status: "PASS", Execution: &fullReport}))
 					}
 					d.reopen()
 					d.drive()
@@ -1357,7 +1392,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.receipt(repair)
 	before := authorizationSnapshot(d)
 	report := executionFor(qaInput)
-	d.business(qa, protocol.ValidationResult{Binding: qaInput.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	d.business(qa, nativeExecutionResult(qaInput, protocol.ValidationResult{Binding: qaInput.Binding, Status: "PASS", Execution: &report}))
 	d.reopen()
 	d.drive()
 	after := authorizationSnapshot(d)
@@ -1367,6 +1402,9 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	}
 	result := gateRepairResult(input)
 	d.business(repair, result)
+	if result.Binding.PureP2 {
+		d.verifyRepair(result)
+	}
 	d.reopen()
 	d.drive()
 	if !reflect.DeepEqual(authorizationSnapshot(d).State.Results[repair].Validation, &result) {
@@ -1378,7 +1416,15 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 	for _, choice := range []string{"decline", "requirement", "abort"} {
 		t.Run(choice, func(t *testing.T) {
-			d := postwaveRepairOffer(t)
+			var d *validationDriver
+			if choice == "abort" {
+				root := t.TempDir()
+				base := snapshotRepoCommits(t, root)[0]
+				prepared := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+				d = postwaveRepairOffer(t, prepared)
+			} else {
+				d = postwaveRepairOffer(t)
+			}
 			repeatRepairQA(d)
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 			qa, _ := d.action("engine.qa.execution")
@@ -1445,7 +1491,11 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 				}
 				d.submit(receipt)
 			}
-			d.drive()
+			run, err := d.f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.run = run
 			if d.run.Status != "ABORTED" {
 				t.Fatal("abort did not complete actual cleanup")
 			}
@@ -1462,7 +1512,10 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 				t.Fatal("terminal artifact lost actual original decision content")
 			}
 			d.reopen()
-			d.drive()
+			d.run, err = d.f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
 			again, err := os.ReadFile(path)
 			if err != nil || !reflect.DeepEqual(raw, again) {
 				t.Fatal("terminal reopen rewrote durable termination evidence")
