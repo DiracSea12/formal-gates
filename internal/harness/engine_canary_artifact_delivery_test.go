@@ -52,11 +52,12 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 			material, payload := canaryArtifactMaterial(t, role, kind)
 			residue, refuse := "notes.txt", false
 			switch name {
-			case "whitebox-reuse", "whitebox-omitted-tests":
+			case "whitebox-reuse":
+				material.Input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "delivered", Files: []string{"delivered_test.go"}}}
+				payload.Validation.Manifest.Cases[0].Files = nil
 				residue = ""
-				if name == "whitebox-omitted-tests" {
-					residue, refuse = "omitted_test.go", true
-				}
+			case "whitebox-omitted-tests":
+				residue, refuse = "omitted_test.go", true
 			case "blackbox":
 				payload.Validation.Development = nil
 			case "execution":
@@ -128,6 +129,9 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 	}
 	write("go.mod", "module frob\n\ngo 1.22\n")
 	write("main.go", "package main\nfunc main() {}\n")
+	for _, path := range material.Input.Validation.Manifest.TestFiles() {
+		write(path, "package main\nimport(\"testing\";\"os/exec\")\nfunc TestDelivered(t *testing.T) { out, err := exec.Command(\"go\", \"run\", \".\").CombinedOutput(); if err != nil || len(out) != 0 { t.Fatalf(\"command: %v %s\", err, out) } }\n")
+	}
 	command("git", "init", "-q")
 	command("git", "add", ".")
 	command("git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Initial command")
@@ -263,6 +267,12 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 	}
 	if command("git", "rev-parse", "HEAD") != base || command("git", "diff", "--cached", "--name-only") != "" {
 		t.Fatal("delivery performed VCS writes")
+	}
+	if len(material.Input.Validation.Manifest.TestFiles()) > 0 {
+		changes, pending, err := c.vcs.ValidateDeclaredChanges(base, got.Development.Paths)
+		if err != nil || len(changes) != 0 || !pending.Clean || command("git", "status", "--porcelain=v1", "--untracked-files=all") != "" || !reflect.DeepEqual(got.Manifest.TestFiles(), material.Input.Validation.Manifest.TestFiles()) {
+			t.Fatalf("reused tracked test material changed or lost its original file relation: changes=%v pending=%+v err=%v", changes, pending, err)
+		}
 	}
 }
 
