@@ -253,7 +253,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	for _, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.qa.execution" || input.Handler == "engine.gate" {
-			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -274,7 +274,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		if input.Handler == "engine.qa.execution" {
 			report := executionFor(input)
 			result.Execution = &report
-			result.Tool, result.Environment = "go test -buildvcs=false ./...", "native isolated candidate"
+			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 		}
 		d.business(id, result)
 		if len(d.run.ValidationInputs) > 0 {
@@ -526,7 +526,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 			d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
@@ -542,7 +542,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 				}
 			}
 			gate, gateInput := d.action("engine.gate")
-			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 			d.business(gate, protocol.ValidationResult{Binding: gateInput.Binding, Status: "PASS"})
@@ -708,7 +708,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(input.Workspace.Path, path), []byte(body), 0644); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 						t.Fatal(err)
 					}
 					child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
@@ -749,7 +749,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					if input.Binding.Candidate != candidate.Identity {
 						t.Fatal("final validation mixed native candidates")
 					}
-					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 						t.Fatal(err)
 					}
 				}

@@ -228,11 +228,15 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 				case "engine.qa.execution":
 					r := executionFor(in)
-					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+					tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
+					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 				case "engine.gate":
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 				}
 				if role == "engine.qa.design" {
+					dev, di := d.action("engine.development.batch")
+					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
+					d.drive()
 					rid, ri := d.action("engine.qa.review.rationale")
 					r := approvedReview(ri.Manifest)
 					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
@@ -246,7 +250,8 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 				if role != "engine.qa.execution" {
 					qa, qi := d.action("engine.qa.execution")
 					r := executionFor(qi)
-					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+					tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 				}
 				if role != "engine.gate" {
 					gate, gi := d.gateAction("quality")
@@ -435,7 +440,8 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 					t.Fatal("repair lost affected then full contract")
 				}
 				r := executionFor(qi)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+				tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 			}
 			d.reopen()
 			d.drive()

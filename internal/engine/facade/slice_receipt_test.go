@@ -507,10 +507,13 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	}
 	resolveGateFinding(child, finding, wave.ID)
 	repair, input := child.action("engine.repair")
-	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // documented output order\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\n// documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering"}})
+	child.drive()
+	compare, ci := repairComparisonAction(t, child, repair)
+	nativeRepairComparison(t, child, compare, ci)
 	child.drive()
 	current := child.run.Validation.Waves[len(child.run.Validation.Waves)-1]
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: "INHERIT", Reason: "The ordering repair leaves the checked security boundaries unchanged"}}})
@@ -518,7 +521,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	receipt := readSliceReceipt(t, child)
 	command := exec.Command("git", "show", receipt.Receipt.Snapshot+":app.go")
 	command.Dir = child.f.vcs.Root()
-	if body, err := command.Output(); err != nil || !bytes.Equal(body, []byte("package main // documented output order\n")) {
+	if body, err := command.Output(); err != nil || !bytes.Equal(body, []byte("package main\nfunc main() {}\n// documented output order\n")) {
 		t.Fatalf("repair checkpoint lost its actual edited blob: %q (%v)", body, err)
 	}
 	for _, result := range receipt.Receipt.Validation.Results {
