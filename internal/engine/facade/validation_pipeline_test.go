@@ -511,14 +511,20 @@ func (d *validationDriver) meteredSpawn(root, id string) {
 
 func (d *validationDriver) action(handler string) (string, protocol.ValidationInput) {
 	d.t.Helper()
-	for id, input := range d.run.ValidationInputs {
-		if input.Handler == handler {
-			return id, input
+	for i := 0; i < 2; i++ {
+		for id, input := range d.run.ValidationInputs {
+			if input.Handler == handler {
+				return id, input
+			}
+		}
+		if i == 0 {
+			d.drive()
 		}
 	}
 	d.t.Fatalf("missing %s; inputs=%+v, next=%+v, validation=%+v", handler, d.run.ValidationInputs, d.run.Next, d.run.Validation)
 	return "", protocol.ValidationInput{}
 }
+
 func (d *validationDriver) materialize() {
 	d.t.Helper()
 	if !d.mockNative {
@@ -615,6 +621,12 @@ func executionFor(input protocol.ValidationInput) coverage.ExecutionReport {
 		}
 	}
 	return r
+}
+
+// Execution metadata is projected from the same original receipts as the rows.
+func nativeExecutionResult(input protocol.ValidationInput, result protocol.ValidationResult) protocol.ValidationResult {
+	result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
+	return result
 }
 
 // Canonical receipt admission is exercised through Facade.Submit. The driver

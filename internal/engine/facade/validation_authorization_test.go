@@ -830,9 +830,14 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 
 func qaModeAction(d *validationDriver, handler string, mode coverage.ReviewKind) (string, protocol.ValidationInput) {
 	d.t.Helper()
-	for id, in := range d.run.ValidationInputs {
-		if in.Handler == handler && in.Manifest.Binding.ReviewKind == mode {
-			return id, in
+	for i := 0; i < 2; i++ {
+		for id, in := range d.run.ValidationInputs {
+			if in.Handler == handler && in.Manifest.Binding.ReviewKind == mode {
+				return id, in
+			}
+		}
+		if i == 0 {
+			d.drive()
 		}
 	}
 	d.t.Fatalf("missing %s for %s", handler, mode)
