@@ -6,7 +6,7 @@ package harness
 // new-session turn through RunNative (the narrow command itself), the probe
 // report, the setMode boundary (declare-once for NEW sessions, never for a
 // resume), read-only tool policy, the account provider delivery, the
-// interaction boundaries, the bounded turn wait and the refusal ladder.
+// interaction boundaries, terminal-event waiting and the refusal ladder.
 // POSIX-only because the peer runs behind a #!/bin/sh wrapper.
 
 import (
@@ -913,69 +913,71 @@ func TestZcodeExecuteRuntimeHeadersCredential(t *testing.T) {
 	}
 }
 
-// TestZcodeExecuteBoundedWait pins the 900-second bound's two ends: a silent
-// host ends the wait through the receive timeout (whose text states the
-// session is not assumed lost), and a host that keeps talking without a
-// terminal event ends it at the deadline itself.
-func TestZcodeExecuteBoundedWait(t *testing.T) {
-	shorten := func(t *testing.T) {
-		t.Helper()
-		saved := zcodeTurnBudget
-		zcodeTurnBudget = 2 * time.Second
-		t.Cleanup(func() { zcodeTurnBudget = saved })
+// Turn completion remains bound to the original input while the native host
+// alternates progress messages and quiet intervals longer than its RPC budget.
+func TestZcodeTurnWaitsForItsTerminalEvent(t *testing.T) {
+	steps := func(inputID string) []peerStep {
+		script := zcodeSuccessSteps(inputID)
+		script[3].SleepSecs = 0.1
+		script[4].SleepSecs = 0.1
+		script[5].SleepSecs = 0.1
+		return script
 	}
-	preamble := func(string) []peerStep {
-		return []peerStep{
-			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
-			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
-			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
-			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
+	scenario := newZcodeScenario(t, steps, nil)
+	req, err := zcodeParseRequest(scenario.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := zcodeOpenSession(req, scenario.directory, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	if err := session.prepareTurn(req); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.sendTurn(scenario.request); err != nil {
+		t.Fatal(err)
+	}
+	// This is the operation ACK budget, not an execution deadline.
+	session.client.client.hooks.defaultTimeout = 10 * time.Millisecond
+	if err := session.awaitTurn(); err != nil {
+		t.Fatal(err)
+	}
+	session.client.client.hooks.defaultTimeout = 60 * time.Second
+	source, err := session.settleTurn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source["identity"] != "s-1" || source["native_turn"] != "t-1" || source["input_id"] != scenario.inputID {
+		t.Fatalf("wrong native responsibility: %v", source)
+	}
+	if !valuesEqual(source["files"], proofsOf(t, scenario.directory, nativeSourceFiles)) || readTestFile(t, filepath.Join(scenario.directory, "answer.raw.txt")) != zcodeTestResponse {
+		t.Fatal("terminal receipt lost its original raw evidence")
+	}
+	observed, err := zcodeMaterializeSource(scenario.directory)
+	if err != nil || !valuesEqual(observed, source) {
+		t.Fatalf("original observation differs: %v %v", observed, err)
+	}
+}
+
+func TestZcodeIncompleteTurnPreservesTransportFailure(t *testing.T) {
+	scenario := newZcodeScenario(t, func(inputID string) []peerStep {
+		steps := zcodeSuccessSteps(inputID)
+		steps[5] = peerStep{On: `"method":"session/send"`, SleepSecs: 0.1, Close: true}
+		return steps
+	}, nil)
+	var errout strings.Builder
+	code := 0
+	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+	if code != 1 || nativeRecordError(t, scenario.directory) != "RuntimeBlocked: ZCODE_TRANSPORT: Native output closed" {
+		t.Fatalf("incomplete native execution: code=%d stderr=%s", code, errout.String())
+	}
+	for _, name := range []string{"source.json", "answer.json"} {
+		if _, err := os.Stat(filepath.Join(scenario.directory, name)); !os.IsNotExist(err) {
+			t.Fatalf("transport closure fabricated %s", name)
 		}
 	}
-
-	t.Run("silent host", func(t *testing.T) {
-		shorten(t)
-		scenario := newZcodeScenario(t, preamble, func(request map[string]any) {
-			request["read_only"] = false
-		})
-		var errout strings.Builder
-		code := 0
-		captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
-		if code != 1 {
-			t.Fatalf("code = %d", code)
-		}
-		if got := nativeRecordError(t, scenario.directory); got !=
-			"RuntimeBlocked: ZCODE_NATIVE_TIMEOUT: no native message; session is not assumed lost" {
-			t.Fatalf("error = %q", got)
-		}
-	})
-
-	t.Run("no terminal event", func(t *testing.T) {
-		shorten(t)
-		steps := func(inputID string) []peerStep {
-			keepAlive := make([]peerStep, 0, 9)
-			for i := 1; i <= 8; i++ {
-				keepAlive = append(keepAlive, peerStep{
-					On: `"method":"session/send"`, SleepSecs: 0.3,
-					Send: zcodeEventLine("s-1", i, "assistant/message", "", `{"inputId": "other-input"}`),
-				})
-			}
-			return append(preamble(inputID), keepAlive...)
-		}
-		scenario := newZcodeScenario(t, steps, func(request map[string]any) {
-			request["read_only"] = false
-		})
-		var errout strings.Builder
-		code := 0
-		captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
-		if code != 1 {
-			t.Fatalf("code = %d", code)
-		}
-		if got := nativeRecordError(t, scenario.directory); got !=
-			"RuntimeBlocked: ZCODE_TIMEOUT: turn incomplete; inspect the original invocation" {
-			t.Fatalf("error = %q", got)
-		}
-	})
 }
 
 // TestZcodeExecuteRefusals pins the remaining refusal ladder of the sequence

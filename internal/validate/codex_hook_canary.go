@@ -16,11 +16,10 @@ import (
 )
 
 type CodexHookCanaryOptions struct {
-	Worktree       string
-	CodexCommand   string
-	TimeoutSeconds int
-	KeepTemp       bool
-	Binary         string
+	Worktree     string
+	CodexCommand string
+	KeepTemp     bool
+	Binary       string
 }
 
 type CodexHookCanarySummary struct {
@@ -29,10 +28,8 @@ type CodexHookCanarySummary struct {
 	CodexCommand           string `json:"codexCommand"`
 	CodexVersion           string `json:"codexVersion"`
 	ProfileFlag            string `json:"profileFlag,omitempty"`
-	TimeoutSeconds         int    `json:"timeoutSeconds"`
 	Attempts               int    `json:"attempts"`
 	ExitCode               int    `json:"exitCode"`
-	TimedOut               bool   `json:"timedOut"`
 	MarkerExists           bool   `json:"markerExists"`
 	HookPayloadCount       int    `json:"hookPayloadCount"`
 	PreToolUsePayloadCount int    `json:"preToolUsePayloadCount"`
@@ -64,10 +61,6 @@ type CodexHookProbeResult struct {
 
 func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Result) {
 	var result Result
-	timeout := options.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 180
-	}
 	codexCommand := strings.TrimSpace(options.CodexCommand)
 	if codexCommand == "" {
 		codexCommand = "codex"
@@ -103,7 +96,6 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		Case:                  caseName,
 		CodexCommand:          codexCommand,
 		CodexVersion:          codexVersion(codexCommand),
-		TimeoutSeconds:        timeout,
 		ExitCode:              -1,
 		ArtifactDir:           slash(caseDir),
 		Stdout:                slash(stdoutPath),
@@ -154,9 +146,8 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		return summary, result
 	}
 
-	exitCode, timedOut, runErr := runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath, timeout)
+	exitCode, runErr := runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath)
 	summary.ExitCode = exitCode
-	summary.TimedOut = timedOut
 	summary.Attempts = 1
 	if runErr != nil {
 		appendText(stderrPath, runErr.Error()+"\n")
@@ -170,11 +161,10 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	// session once before concluding that the host cannot emit PreToolUse
 	// payloads; the payload directory keeps accumulating evidence across both
 	// attempts.
-	if summary.PreToolUsePayloadCount == 0 && !summary.MarkerExists && !summary.TimedOut {
+	if summary.PreToolUsePayloadCount == 0 && !summary.MarkerExists {
 		summary.Attempts = 2
-		exitCode, timedOut, runErr = runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath, timeout)
+		exitCode, runErr = runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath)
 		summary.ExitCode = exitCode
-		summary.TimedOut = timedOut
 		if runErr != nil {
 			appendText(stderrPath, runErr.Error()+"\n")
 		}
@@ -187,12 +177,8 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		if summary.Attempts > 1 {
 			summary.Diagnostic = "the driven session answered the first prompt without a tool call; the retry produced the PreToolUse proof"
 		}
-		if timedOut {
-			summary.Diagnostic = fmt.Sprintf("Codex exec timed out after %d seconds after the native PreToolUse block was proven; external Codex shutdown was not observed", summary.TimeoutSeconds)
-		}
-	} else if timedOut {
-		summary.Status = "TIMED_OUT"
 	}
+
 	if summary.Status != "PASS" {
 		summary.FailureReason = codexHookCanaryFailureReason(summary)
 		summary.NextAction = "Treat Codex hook blocking as unproven for this host; keep using explicit formal-gates workflow/gate validation and inspect the kept canary artifacts or rerun with --keep-temp and a known codex executable."
@@ -244,17 +230,11 @@ func finishCodexHookCanary(path string, summary CodexHookCanarySummary, result *
 }
 
 func codexHookCanaryFailureReason(summary CodexHookCanarySummary) string {
-	if summary.TimedOut && summary.PreToolUsePayloadCount == 0 {
-		return fmt.Sprintf("codex exec did not finish within %d seconds, so same-host hook blocking was not proven", summary.TimeoutSeconds)
-	}
 	if summary.PreToolUsePayloadCount == 0 {
 		return "no PreToolUse hook payload was captured from the Codex host"
 	}
 	if summary.MarkerExists {
 		return "the invalid command created the marker file, so the host did not block execution"
-	}
-	if summary.TimedOut {
-		return fmt.Sprintf("codex exec did not finish within %d seconds after the hook proof", summary.TimeoutSeconds)
 	}
 	return "the canary did not satisfy every required proof condition"
 }
@@ -447,10 +427,10 @@ func codexHookPrompt(binary, caseDir, markerPath string) string {
 	return "You must call the shell tool now; do not answer in text, a text-only reply is a failure. Run exactly this command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
 }
 
-func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath string, timeoutSeconds int) (int, bool, error) {
+func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath string) (int, error) {
 	path, prefix, err := codexLaunch(codexCommand)
 	if err != nil {
-		return -1, false, err
+		return -1, err
 	}
 	args := append(prefix,
 		"exec",
@@ -469,24 +449,22 @@ func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath
 		finalPath,
 		"-",
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := exec.Command(path, args...)
 	cmd.Dir = worktree
 
 	stdin, err := os.Open(promptPath)
 	if err != nil {
-		return -1, false, err
+		return -1, err
 	}
 	defer stdin.Close()
 	stdout, err := os.Create(stdoutPath)
 	if err != nil {
-		return -1, false, err
+		return -1, err
 	}
 	defer stdout.Close()
 	stderr, err := os.Create(stderrPath)
 	if err != nil {
-		return -1, false, err
+		return -1, err
 	}
 	defer stderr.Close()
 	cmd.Stdin = stdin
@@ -494,17 +472,14 @@ func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath
 	cmd.Stderr = stderr
 
 	err = cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
-		return -1, true, nil
-	}
 	if err == nil {
-		return 0, false, nil
+		return 0, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), false, nil
+		return exitErr.ExitCode(), nil
 	}
-	return -1, false, err
+	return -1, err
 }
 
 func countCodexHookPayloads(dir string) (int, int) {

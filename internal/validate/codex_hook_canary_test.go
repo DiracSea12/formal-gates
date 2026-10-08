@@ -8,11 +8,6 @@ import (
 )
 
 func TestCodexHookCanaryFailureReason(t *testing.T) {
-	timedOut := CodexHookCanarySummary{TimedOut: true, TimeoutSeconds: 7}
-	if got := codexHookCanaryFailureReason(timedOut); !strings.Contains(got, "7 seconds") {
-		t.Fatalf("expected timeout reason, got %q", got)
-	}
-
 	noPayload := CodexHookCanarySummary{}
 	if got := codexHookCanaryFailureReason(noPayload); !strings.Contains(got, "no PreToolUse") {
 		t.Fatalf("expected payload reason, got %q", got)

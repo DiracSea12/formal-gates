@@ -776,14 +776,13 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 		fs := newFlagSet("canary codex-hook", streams)
 		worktree := fs.String("worktree", ".", "repository root")
 		command := fs.String("codex-command", "codex", "Codex command")
-		timeout := fs.Int("timeout-seconds", 180, "timeout seconds")
 		keep := fs.Bool("keep-temp", false, "keep temporary files")
 		binary := fs.String("binary", "", "formal-gates binary")
 		format := fs.String("format", "json", "text or json")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		summary, result := validate.CodexHookCanary(validate.CodexHookCanaryOptions{Worktree: *worktree, CodexCommand: *command, TimeoutSeconds: *timeout, KeepTemp: *keep, Binary: *binary})
+		summary, result := validate.CodexHookCanary(validate.CodexHookCanaryOptions{Worktree: *worktree, CodexCommand: *command, KeepTemp: *keep, Binary: *binary})
 		if *format == "json" {
 			printJSON(streams.Stdout, summary)
 		} else {

@@ -90,11 +90,9 @@ a runtime-headers request it receives is always answered "no provisioned
 credential" - the differentially comparable case - while the applied-secret
 half of that interaction is pinned by internal/harness/
 native_zcode_unix_test.go (TestZcodeExecuteRuntimeHeadersCredential) and by
-the Go-side-only scenario below. The same applies to the turn budget: the
-reference's 900-second bound is a hardcoded literal without a patchable
-attribute (the G2b dsh precedent patched Client.default_timeout instead), so
-the reference-side case below pins the per-request timeout text and the Go
-side's two turn-wait ends are pinned by TestZcodeExecuteBoundedWait.
+the Go-side-only scenario below. The reference-side case below pins the
+startup acknowledgement timeout. Unbounded execution waiting is covered by
+TestZcodeTurnWaitsForItsTerminalEvent in native_zcode_unix_test.go.
 """
 import hashlib
 import json
@@ -1074,13 +1072,9 @@ class ZCodeDifferential(unittest.TestCase):
         self.assert_failure(ref_dir, go_dir, 'ZCODE_TRANSPORT: Invalid native protocol output')
 
     def test_reference_timeout_text(self):
-        # Reference side only, the G2b precedent: the short budget is injected
-        # through the patchable per-request default (the reference's 900-second
-        # turn budget is a hardcoded literal without such an attribute). The Go
-        # side's turn-wait ends are pinned by internal/harness/
-        # native_zcode_unix_test.go (TestZcodeExecuteBoundedWait: the receive
-        # timeout text and ZCODE_TIMEOUT at the deadline) and its per-request
-        # timeout text by internal/harness/native_transport_unix_test.go.
+        # This case pins one startup acknowledgement timeout. Native turn
+        # completion waits without a deadline; its terminal and transport
+        # failure boundaries are covered by native_zcode_unix_test.go.
         root, workspace, ref_dir, _go_dir = self.scenario(knobs={'fail_mode': 'silent'})
         _result, error = self.run_reference(ref_dir, timeout=0.2)
         self.assertIsInstance(error, RuntimeBlocked)

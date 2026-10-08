@@ -686,7 +686,7 @@ func TestZcodeReconcileEligibility(t *testing.T) {
 
 	for _, original := range []string{
 		"RuntimeBlocked: ZCODE_TRANSPORT: native ACP process closed its output",
-		"RuntimeBlocked: ZCODE_TIMEOUT: turn incomplete; inspect the original invocation",
+		"RuntimeBlocked: ZCODE_BINDING: event from another session",
 	} {
 		other := t.TempDir()
 		zcodeWriteEvidence(t, other,

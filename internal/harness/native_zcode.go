@@ -32,7 +32,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -122,12 +121,6 @@ const zcodeAccessModeKey = "mode"
 // Result-framing failures only. Runtime and transport failures are never
 // laundered into a successful worker result.
 const zcodeResultFrameError = "RuntimeBlocked: NATIVE_RESULT:"
-
-// zcodeTurnBudget is the reference implementation's total bound on one turn's
-// wait: 900 seconds of host-processing time from the send acknowledgement to
-// the terminal event, paused while a user decision is held. A variable
-// only so the bounded-wait tests can shorten it.
-var zcodeTurnBudget = 900 * time.Second
 
 // zcodeIsRegularFile mirrors Path.is_file(): follows symlinks, refuses
 // directories and anything unreadable.
@@ -559,10 +552,9 @@ func zcodeInteractionObserved(hold *nativePendingHold, message map[string]any) b
 }
 
 // newZcodeClient spawns the app-server with ZCode's transport configuration:
-// argv [node, script, --cwd, workspace, app-server], every request bounded by
-// a 60-second total budget (the turn itself is waited out by execute's receive
-// loop, never by an unbounded request), and the plain {id, method, params}
-// shape with the base framing defaults. The two user-decision interactions are
+// argv [node, script, --cwd, workspace, app-server], 60-second RPC
+// acknowledgements, and the plain {id, method, params} shape. Turn completion
+// waits without a deadline. The two user-decision interactions are
 // held; the machine-answerable ones stay in respond.
 func newZcodeClient(launch map[string]any, workspace, directory string, environment map[string]string) (*zcodeClient, error) {
 	executableValue, err := mustEntry(launch, "executable")
@@ -1800,41 +1792,12 @@ func (s *zcodeSession) sendTurn(request any) error {
 	return nil
 }
 
-// awaitTurn waits the turn out. Events are consumed as they arrive, one
-// receive at a time, and the loop ends only on this input's terminal event or
-// on the deadline. A silent host ends it through the receive timeout, whose
-// text states the session is not assumed lost.
-//
-// While a native interaction is held the budget pauses: the deadline
-// is a remaining-budget, not a wall-clock moment, so the time the user
-// takes to decide does not consume the turn. A silent host during a hold is
-// therefore not a failure either - the loop keeps waiting for the answer.
-// The paused time is folded back in whenever no hold is pending anymore,
-// including in the receive-timeout branch below: a wait that expired after
-// the answer's delivery was derived from the stale deadline and must not
-// be read as the host going silent.
+// awaitTurn consumes events until this input's terminal event or a transport
+// error. A quiet or streaming host retains the same execution responsibility.
 func (s *zcodeSession) awaitTurn() error {
 	position := 0
 	terminal := false
-	deadline := time.Now().Add(zcodeTurnBudget)
-	var pausedSince time.Time
-	// remainingBudget folds the paused hold time back into the deadline (once
-	// no hold is pending anymore) and reports what is left of the turn.
-	remainingBudget := func() time.Duration {
-		if !s.client.client.pendingHeld() && !pausedSince.IsZero() {
-			deadline = deadline.Add(time.Since(pausedSince))
-			pausedSince = time.Time{}
-		}
-		return time.Until(deadline)
-	}
 	for !terminal {
-		if s.client.client.pendingHeld() {
-			if pausedSince.IsZero() {
-				pausedSince = time.Now()
-			}
-		} else if remainingBudget() <= 0 {
-			break
-		}
 		for position < len(s.client.events) {
 			event := s.client.events[position]
 			// The evidence copy in native-events.jsonl is the durable record;
@@ -1866,34 +1829,9 @@ func (s *zcodeSession) awaitTurn() error {
 		// not yet been read.
 		s.client.events = s.client.events[:0]
 		position = 0
-		wait := time.Until(deadline)
-		if wait > 120*time.Second {
-			wait = 120 * time.Second
-		}
-		if wait < time.Second {
-			wait = time.Second
-		}
-		if _, err := s.client.client.receive(&wait); err != nil {
-			if errors.Is(err, errNativeTimedOut) {
-				if s.client.client.pendingHeld() {
-					// The host waits for its user-directed request; so does
-					// this loop, without spending the turn budget.
-					continue
-				}
-				// The expired wait may have spanned the answer's delivery:
-				// recompute the remaining budget before calling the silence
-				// a timeout.
-				if remainingBudget() > 0 {
-					continue
-				}
-				return &blockedError{
-					message: "ZCODE_NATIVE_TIMEOUT: no native message; session is not assumed lost"}
-			}
+		if _, err := s.client.client.receive(nil); err != nil {
 			return err
 		}
-	}
-	if !terminal {
-		return &blockedError{message: "ZCODE_TIMEOUT: turn incomplete; inspect the original invocation"}
 	}
 	return nil
 }

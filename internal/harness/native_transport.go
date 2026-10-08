@@ -1177,19 +1177,6 @@ func (c *nativeClient) holdByIDLocked(requestID string) *nativePendingHold {
 	return nil
 }
 
-// pendingHeld reports whether any held interaction of this connection is still
-// waiting for a user decision (the state a turn budget must pause for).
-func (c *nativeClient) pendingHeld() bool {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	for _, hold := range c.holdings {
-		if hold.status == "pending" {
-			return true
-		}
-	}
-	return false
-}
-
 // pollAnswers polls the answer file until the transport closes. The wait path
 // itself never blocks on the poll: a host that sits silent waiting for its
 // permission reply (DSH's ACP has no re-announce) still gets its answer, because

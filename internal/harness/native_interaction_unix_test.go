@@ -558,21 +558,16 @@ func TestInteractionZcodeDualRequest(t *testing.T) {
 	}
 }
 
-// TestInteractionZcodeBudgetPausesWhileHeld pins the 900s turn budget's
-// remaining-budget semantics: the user's decision time does not consume it.
-// With the budget shortened to 1.5s and the answer held back 3s, an unpaused
-// budget would already have expired; the paused run completes instead.
-func TestInteractionZcodeBudgetPausesWhileHeld(t *testing.T) {
-	saved := zcodeTurnBudget
-	zcodeTurnBudget = 1500 * time.Millisecond
-	t.Cleanup(func() { zcodeTurnBudget = saved })
+// The same native turn waits for its explicit user decision and subsequent
+// terminal event while preserving the interaction and raw answer evidence.
+func TestInteractionZcodeWaitsForUserAndTerminal(t *testing.T) {
 	steps := func(inputID string) []peerStep {
 		return []peerStep{
 			{Send: zcodePermissionFrame("server-7", "req-1", "Bash")},
 			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
 			{On: `"method":"session/subscribe"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1"}}`},
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
-			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
+			{On: `"decision":"allow"`, SleepSecs: 0.1, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
 			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
@@ -584,8 +579,8 @@ func TestInteractionZcodeBudgetPausesWhileHeld(t *testing.T) {
 	go func() {
 		defer close(done)
 		answerWhenPending(t, scenario.directory, "req-1", func(errout *bytes.Buffer) int {
-			// Twice the budget, spent entirely while the request is held.
-			time.Sleep(3 * time.Second)
+			// The host resumes only after this explicit user answer.
+			time.Sleep(100 * time.Millisecond)
 			return NativeRespond([]string{"--job", scenario.directory, "--request", "req-1", "--option", "allow_once"}, errout)
 		})
 	}()
@@ -594,38 +589,7 @@ func TestInteractionZcodeBudgetPausesWhileHeld(t *testing.T) {
 	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
 	<-done
 	if code != 0 {
-		t.Fatalf("the paused budget must survive the held decision: %d %s", code, errout.String())
-	}
-	if body := readTestFile(t, filepath.Join(scenario.directory, "answer.json")); body != `{"status":"PASS","summary":"observed"}` {
-		t.Fatalf("answer.json = %s", body)
-	}
-}
-
-// TestInteractionZcodeBudgetSurvivesLateAnswer pins the receive-timeout side
-// of the pause: the wait that expires after the answer's delivery was derived
-// from the stale deadline, and a host that continues inside its remaining
-// budget must complete the turn instead of being read as silence.
-func TestInteractionZcodeBudgetSurvivesLateAnswer(t *testing.T) {
-	saved := zcodeTurnBudget
-	zcodeTurnBudget = 3 * time.Second
-	t.Cleanup(func() { zcodeTurnBudget = saved })
-	steps := func(inputID string) []peerStep {
-		script := zcodeInteractionSteps(zcodePermissionFrame("server-1", "req-1", "Bash"),
-			`"decision":"allow"`)(inputID)
-		// The host continues 1.2s after the answer, inside its 3s budget.
-		script[4].SleepSecs = 1.2
-		return script
-	}
-	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
-		func(directory string, errout *bytes.Buffer) int {
-			// The user waits far past the raw 3s budget, all of it while the
-			// request is held.
-			time.Sleep(5200 * time.Millisecond)
-			return NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
-		})
-	if code != 0 || errout != "" {
-		t.Fatalf("the user's wait must not shorten the post-answer budget: code = %d stderr = %q",
-			code, errout)
+		t.Fatalf("the original turn must survive the held decision: %d %s", code, errout.String())
 	}
 	if record := pendingStatus(t, scenario.directory, "req-1"); record == nil || textOf(record["status"]) != "observed" {
 		t.Fatalf("pending record = %v", record)

@@ -558,7 +558,7 @@ func TestCodexHookCanaryRetriesTextOnlySession(t *testing.T) {
 			stateFile := filepath.Join(t.TempDir(), "runs")
 			stub := admissionFakeCodex(t, stateFile)
 			summary, result := CodexHookCanary(CodexHookCanaryOptions{
-				Worktree: worktree, CodexCommand: stub, TimeoutSeconds: 60, KeepTemp: true,
+				Worktree: worktree, CodexCommand: stub, KeepTemp: true,
 			})
 			if summary.Status != tc.wantStatus {
 				t.Fatalf("canary status=%q want %q (summary=%+v)", summary.Status, tc.wantStatus, summary)
