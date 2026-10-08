@@ -39,8 +39,13 @@ func (e *Engine) recoveryAttempt(s *State, record RecoveryRecord) (PendingAction
 // same native host effects. Their durable receipts, not a second progress flag,
 // determine whether the original session can resume or be replaced.
 func (e *Engine) advanceRecoveries(s *State, revision uint64) error {
-	for _, record := range s.RecoveryRecords {
+	for index, record := range s.RecoveryRecords {
 		action := record.Action
+		if record.RequestID == "" && action == RecoveryAsk && !s.abortRequested() && s.Phase != runtime.PhaseTerminal {
+			if _, _, current := e.recoveryAttempt(s, record); current && s.registerRecoveryAsk(&record, revision) {
+				s.RecoveryRecords[index].RequestID = record.RequestID
+			}
+		}
 		if record.RequestID == "" || (action != RecoveryAsk && action != RecoveryResumeAttempt && action != RecoveryNewAttempt) {
 			continue
 		}

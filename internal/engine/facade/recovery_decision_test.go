@@ -10,6 +10,15 @@ import (
 )
 
 func TestRecoveryDecisionAppliesOriginalAttemptChoice(t *testing.T) {
+	testOriginalAttemptRecovery(t, false)
+}
+
+func TestWorkerFailureCreatesRecoveryForOriginalAttempt(t *testing.T) {
+	testOriginalAttemptRecovery(t, true)
+}
+
+func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
+	t.Helper()
 	for _, choice := range []string{"fresh", "resume", "abort"} {
 		for _, reopen := range []bool{false, true} {
 			t.Run(choice+map[bool]string{false: "/normal", true: "/reopen"}[reopen], func(t *testing.T) {
@@ -22,12 +31,47 @@ func TestRecoveryDecisionAppliesOriginalAttemptChoice(t *testing.T) {
 					t.Fatal(err)
 				}
 				d.submit(started)
-				plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{}, emptyFingerprint())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if plan.Action != protocol.RecoveryAsk {
-					t.Fatalf("expected actual recovery Ask: %+v", plan)
+				var plan protocol.RecoveryPlan
+				if workerFailure {
+					failure := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "native permanent failure", FailureClass: "USER_ACTION_REQUIRED", InterruptionReason: "native model is unsupported for this account"}}
+					first := d.submit(failure)
+					failedRevision := d.run.Revision
+					if duplicate := d.submit(failure); !reflect.DeepEqual(duplicate, first) || d.run.Revision != failedRevision {
+						t.Fatal("repeated failure changed its acceptance or revision")
+					}
+					d.drive()
+					var request string
+					for _, ask := range d.run.PendingAsks {
+						if ask.Control == protocol.ControlRecovery {
+							if request != "" {
+								t.Fatal("failure opened parallel recovery requests")
+							}
+							request = ask.RequestID
+						}
+					}
+					if request == "" {
+						t.Fatal("normal user-action failure has no recovery Ask")
+					}
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED"}, emptyFingerprint())
+					if err != nil || plan.RequestID != request {
+						t.Fatalf("explicit recovery did not reuse the failure request: %+v %v", plan, err)
+					}
+					snap, err := d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(snap.State.PendingHostActions) != 0 {
+						t.Fatal("failure signed native recovery before a user decision")
+					}
+					failed := snap.State.RecoverableResults[id]
+					if len(failed) != 1 || failed[0].InterruptionReason != failure.Result.InterruptionReason {
+						t.Fatal("failure lost original evidence")
+					}
+				} else {
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{}, emptyFingerprint())
+					if err != nil || plan.Action != protocol.RecoveryAsk {
+						t.Fatalf("expected actual recovery Ask: %+v %v", plan, err)
+					}
 				}
 				if reopen {
 					d.reopen()
@@ -247,74 +291,203 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 }
 
 func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
-	for _, reopen := range []bool{false, true} {
-		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
-			d := newValidationDriver(t, "blackbox", "quality")
-			d.reviewReady()
-			id, in := d.action("engine.qa.execution")
-			full := executionFor(in)
-			tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
-			original := d.run.Attempts[in.Binding.Task]
-			part := full
-			part.Records = append([]coverage.ExecutionRecord(nil), full.Records[:1]...)
-			part.Binding.ActualCaseIDs = []string{part.Records[0].CaseID}
-			d.receipt(id)
-			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
-			d.submit(start)
-			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "first actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &part, Tool: tool, Environment: environment, Checkpoint: true}}})
-			if reopen {
+	for _, interruption := range []string{"direct", "worker-failure"} {
+		for _, reopen := range []bool{false, true} {
+			t.Run(interruption+"/"+map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
+				d := newValidationDriver(t, "blackbox", "quality")
+				d.reviewReady()
+				id, in := d.action("engine.qa.execution")
+				full := executionFor(in)
+				tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
+				original := d.run.Attempts[in.Binding.Task]
+				part := full
+				part.Records = append([]coverage.ExecutionRecord(nil), full.Records[:1]...)
+				part.Binding.ActualCaseIDs = []string{part.Records[0].CaseID}
+				d.receipt(id)
+				start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
+				d.submit(start)
+				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "first actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &part, Tool: tool, Environment: environment, Checkpoint: true}}})
+				if reopen {
+					d.reopen()
+				}
+				var plan protocol.RecoveryPlan
+				if interruption == "worker-failure" {
+					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "native interruption after the completed case", FailureClass: "USER_ACTION_REQUIRED", InterruptionReason: "native configuration needs attention"}})
+					for _, ask := range d.run.PendingAsks {
+						if ask.Control == protocol.ControlRecovery {
+							plan.RequestID = ask.RequestID
+						}
+					}
+					if plan.RequestID == "" {
+						t.Fatal("partial worker failure lost its recovery Ask")
+					}
+					token, err := d.f.Freshness(plan.RequestID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					decision, err := protocol.NewDecideEvent(d.eventID(), protocol.RequestID(plan.RequestID), token, "resume")
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(decision)
+					d.drive()
+				} else {
+					var err error
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				snap, _ := d.f.engine.Load()
+				var intent protocol.HostActionIntent
+				for _, p := range snap.State.PendingHostActions {
+					if p.Correlation == plan.RequestID {
+						intent = p
+					}
+				}
+				if intent.Resume == nil || intent.Resume.Input == nil {
+					t.Fatal("resume lacks original unfinished input")
+				}
+				input := *intent.Resume.Input
+				if input.Binding != in.Binding || !reflect.DeepEqual(input.Completed, part.Records) || len(input.PendingCases) != 1 || input.PendingCases[0] == part.Records[0].CaseID {
+					t.Fatalf("resume changed actual completed/remaining partition: %+v", input)
+				}
+				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(receipt)
+				next := d.run.Attempts[in.Binding.Task]
+				if next.ID != original.ID || next.ActionID != id || next.Attempts != 1 {
+					t.Fatal("resume replaced original checkpoint attempt")
+				}
+				remaining := full
+				remaining.Records = append([]coverage.ExecutionRecord(nil), full.Records[1:]...)
+				remaining.Binding.ActualCaseIDs = nil
+				for _, row := range remaining.Records {
+					if !slices.Contains(remaining.Binding.ActualCaseIDs, row.CaseID) {
+						remaining.Binding.ActualCaseIDs = append(remaining.Binding.ActualCaseIDs, row.CaseID)
+					}
+				}
+				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "remaining actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &remaining, Tool: tool, Environment: environment}}})
+				gate, gi := d.gateAction("quality")
+				d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+				d.drive()
 				d.reopen()
-			}
-			plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
-			if err != nil {
-				t.Fatal(err)
-			}
-			snap, _ := d.f.engine.Load()
-			var intent protocol.HostActionIntent
-			for _, p := range snap.State.PendingHostActions {
-				if p.Correlation == plan.RequestID {
-					intent = p
+				wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				target := wave.Targets[in.Binding.Task.String()]
+				if wave.Status != "COMPLETE" || len(target.Execution.Records) != len(full.Records) {
+					t.Fatal("remaining evidence failed to complete the original wave")
 				}
-			}
-			if intent.Resume == nil || intent.Resume.Input == nil {
-				t.Fatal("resume lacks original unfinished input")
-			}
-			input := *intent.Resume.Input
-			if input.Binding != in.Binding || !reflect.DeepEqual(input.Completed, part.Records) || len(input.PendingCases) != 1 || input.PendingCases[0] == part.Records[0].CaseID {
-				t.Fatalf("resume changed actual completed/remaining partition: %+v", input)
-			}
-			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-			if err != nil {
-				t.Fatal(err)
-			}
-			d.submit(receipt)
-			next := d.run.Attempts[in.Binding.Task]
-			if next.ID != original.ID || next.ActionID != id || next.Attempts != 1 {
-				t.Fatal("resume replaced original checkpoint attempt")
-			}
-			remaining := full
-			remaining.Records = append([]coverage.ExecutionRecord(nil), full.Records[1:]...)
-			remaining.Binding.ActualCaseIDs = nil
-			for _, row := range remaining.Records {
-				if !slices.Contains(remaining.Binding.ActualCaseIDs, row.CaseID) {
-					remaining.Binding.ActualCaseIDs = append(remaining.Binding.ActualCaseIDs, row.CaseID)
+				for _, row := range part.Records {
+					if !slices.ContainsFunc(target.Execution.Records, func(saved coverage.ExecutionRecord) bool { return reflect.DeepEqual(saved, row) }) {
+						t.Fatal("resume rewrote completed case content")
+					}
 				}
-			}
-			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "remaining actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &remaining, Tool: tool, Environment: environment}}})
-			gate, gi := d.gateAction("quality")
-			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
-			d.drive()
-			d.reopen()
-			wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-			target := wave.Targets[in.Binding.Task.String()]
-			if wave.Status != "COMPLETE" || len(target.Execution.Records) != len(full.Records) {
-				t.Fatal("remaining evidence failed to complete the original wave")
-			}
-			for _, row := range part.Records {
-				if !slices.ContainsFunc(target.Execution.Records, func(saved coverage.ExecutionRecord) bool { return reflect.DeepEqual(saved, row) }) {
-					t.Fatal("resume rewrote completed case content")
-				}
-			}
-		})
+			})
+		}
+	}
+}
+
+func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	events := []protocol.Event{}
+	for _, role := range []string{"engine.development.batch", "engine.qa.design"} {
+		id, _ := d.action(role)
+		d.receipt(id)
+		events = append(events, protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native failure:" + id, InterruptionReason: "native configuration requires attention"}})
+	}
+	results := make(chan error, len(events))
+	for _, event := range events {
+		go func(event protocol.Event) { _, _, err := d.f.Submit(event); results <- err }(event)
+	}
+	for range events {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.reopen()
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{}
+	for _, record := range snapshot.State.RecoveryRecords {
+		if record.Action != protocol.RecoveryAsk || record.RequestID == "" {
+			continue
+		}
+		if prior := owners[record.ActionID]; prior != "" && prior != record.RequestID {
+			t.Fatal("concurrent failure split one recovery owner")
+		}
+		owners[record.ActionID] = record.RequestID
+	}
+	if len(owners) != len(events) {
+		t.Fatal("concurrent failures lost independent recovery requests")
+	}
+	requests := map[string]bool{}
+	for _, event := range events {
+		request := owners[event.Result.ActionID]
+		if requests[request] || snapshot.State.PendingAsks[request].Resolved {
+			t.Fatal("concurrent failures shared or resolved another duty's request")
+		}
+		requests[request] = true
+		failed := snapshot.State.RecoverableResults[event.Result.ActionID]
+		if len(failed) != 1 || failed[0].InterruptionReason != event.Result.InterruptionReason {
+			t.Fatal("concurrent failure crossed original evidence owners")
+		}
+	}
+	if len(snapshot.State.PendingHostActions) != 0 {
+		t.Fatal("concurrent failure signed recovery without a decision")
+	}
+}
+
+func TestWorkerRecoveryCarryKeepsOriginalAskAndWork(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	id, in := d.action("engine.development.batch")
+	d.receipt(id)
+	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native unavailable configuration", InterruptionReason: "native configuration requires attention"}})
+	var request string
+	for _, ask := range d.run.PendingAsks {
+		if ask.Control == protocol.ControlRecovery {
+			request = ask.RequestID
+		}
+	}
+	if request == "" {
+		t.Fatal("worker failure has no recovery request")
+	}
+	original := d.run.Attempts[in.Binding.Task]
+	confirmValidationWork(d, "")
+	d.reopen()
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask, exists := snapshot.State.PendingAsks[request]
+	if !exists || ask.Resolved || snapshot.State.DispatchBindings[id] != in.Binding {
+		t.Fatal("CARRY replaced the original recovery request or work")
+	}
+	if got := snapshot.State.Attempts[in.Binding.Task]; got.ID != original.ID || got.MaxAttempts != original.MaxAttempts || got.Attempts != original.Attempts {
+		t.Fatal("CARRY reset original attempt or allowance")
+	}
+	token, err := d.f.Freshness(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := protocol.NewDecideEvent(d.eventID(), protocol.RequestID(request), token, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(decision)
+	d.drive()
+	var resume *protocol.AgentHostAction
+	for _, intent := range d.run.AdapterIntents {
+		if intent.Resume != nil && intent.Correlation == request {
+			resume = intent.Resume
+		}
+	}
+	if resume == nil || resume.Input == nil || resume.Input.Binding != in.Binding || resume.Input.Workspace == nil || resume.Input.Workspace.Path != in.Workspace.Path {
+		t.Fatal("carried recovery lost original work or workspace")
 	}
 }
