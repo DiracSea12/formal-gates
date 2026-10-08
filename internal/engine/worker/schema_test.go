@@ -140,6 +140,39 @@ func TestReviewMaterialCarriesClosedVerificationContract(t *testing.T) {
 	}
 }
 
+func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}, {ID: "qa-design"}, {ID: "qa-execution"}, {ID: "qa-review"}}}
+	for _, role := range []struct {
+		handler string
+		kind    coverage.ReviewKind
+		author  bool
+	}{
+		{"engine.development.batch", "", true},
+		{"engine.repair", "", true},
+		{"engine.merge.resolve", "", true},
+		{"engine.qa.design", coverage.ReviewWhitebox, true},
+		{"engine.qa.design", coverage.ReviewBlackbox, false},
+		{"engine.qa.execution", "", false},
+		{"engine.qa.review.rationale", "", false},
+	} {
+		t.Run(role.handler+string(role.kind), func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: role.handler, Provider: "zcode", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: role.kind}}}}
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, contract := range []string{"Declare only the files actually delivered as artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"} {
+				if strings.Contains(material.Prompt, contract) != role.author {
+					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
+				}
+			}
+			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "normal test runtime outputs may be produced") {
+				t.Fatal("execution runtime contract lost")
+			}
+		})
+	}
+}
+
 func TestQAMaterialCarriesFiniteDomainsAndIssuedBindings(t *testing.T) {
 	catalog := prompts.PromptCatalog{Base: "Independent QA", Actions: []prompts.PromptDefinition{{ID: "qa-design", Content: "Design"}, {ID: "qa-review", Content: "Review"}, {ID: "qa-execution", Content: "Execute"}}}
 	binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}

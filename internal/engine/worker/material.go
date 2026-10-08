@@ -79,6 +79,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
+	if !value.ReadOnly && input.Handler != "engine.qa.execution" {
+		instructions += " Declare only the files actually delivered as artifacts. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
+	}
 	if completionBatch(input) != nil {
 		instructions += " completion.dod and completion.checks must contain exactly the IDs declared in input.validation.development.batch.dod and .checks, each with non-empty evidence; do not omit or add keys. Report additional actual checks in development.tests, development.build or development.summary, never as extra completion IDs."
 	}

@@ -3633,6 +3633,32 @@ func (c *engineCanary) dispatchProduction(id string, material worker.Material) p
 		if err != nil {
 			return err
 		}
+		if event.Result.Outcome == protocol.OutcomePass && event.Result.Validation != nil {
+			result := event.Result.Validation
+			var delivery *canaryDevelopmentAnswer
+			switch input.Handler {
+			case "engine.development.batch", "engine.repair":
+				if result.Development != nil {
+					delivery = &canaryDevelopmentAnswer{Paths: result.Development.Paths, Plan: result.GranularityReview}
+				}
+			case "engine.merge.resolve":
+				if result.Resolution != nil {
+					delivery = &canaryDevelopmentAnswer{Paths: result.Resolution.Paths}
+				}
+			case "engine.qa.design":
+				if !material.ReadOnly {
+					delivery = &canaryDevelopmentAnswer{}
+					if result.Development != nil {
+						delivery.Paths = result.Development.Paths
+					}
+				}
+			}
+			if delivery != nil {
+				if err := c.declaredDevelopmentChanges(*input.Validation, delivery); err != nil {
+					return err
+				}
+			}
+		}
 		payload = *event.Result
 		return nil
 	}
