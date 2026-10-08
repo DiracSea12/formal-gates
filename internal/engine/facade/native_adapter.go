@@ -644,7 +644,9 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, err
 	}
 	workspaceBase := p.Base
-	if native.Name() != "git" && r.Role != "merge" && r.Role != "repair-integration" && p.RepairTask == nil {
+	// A copied source maps to its workspace baseline. An issued editing
+	// prefix already belongs to the native workspace and remains authoritative.
+	if native.Name() != "git" && p.Base == r.Source {
 		workspaceBase = s.ResourceStartIdentity(r)
 	}
 	message := "formal-gates candidate " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
@@ -690,7 +692,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 					return nativeResult{}, false, nil
 				}
 			}
-			return nativeResult{}, false, fmt.Errorf("candidate workspace HEAD %s is not the issued freeze at %s", head, p.Base)
+			return nativeResult{}, false, fmt.Errorf("candidate workspace HEAD %s is not the issued freeze at %s", head, workspaceBase)
 		}
 		if err := native.IsAncestorOrEqual(workspaceBase, head); err != nil {
 			return nativeResult{}, false, err
