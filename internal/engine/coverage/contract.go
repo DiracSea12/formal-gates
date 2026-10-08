@@ -141,21 +141,14 @@ const (
 )
 
 // These finite wire domains are owned by the coverage contract.
-func CaseModes() []string {
-	return []string{string(CaseBlackbox), string(CaseWhitebox), string(CaseMerge)}
-}
 func ReviewKinds() []string {
 	return []string{string(ReviewBlackbox), string(ReviewWhitebox), string(ReviewMerge)}
 }
-func ScopeModes() []string { return []string{string(ScopeFull), string(ScopeAffected)} }
 func DecisionStatuses() []string {
 	return []string{string(StatusPass), string(StatusFail)}
 }
 func ExecutionStatuses() []string {
 	return []string{string(ExecutedPass), string(ExecutedFail), string(ExecutedPending), string(ExecutedUnknown), string(AuthorizedSkip)}
-}
-func Provenances() []string {
-	return []string{string(ProvenanceExecuted), string(ProvenanceInherited), string(ProvenanceNotExecuted)}
 }
 
 // QAResultContract describes the same binding and record-shape requirements

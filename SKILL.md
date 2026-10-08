@@ -86,10 +86,9 @@ lightweight 是正式流程内的路线（非受理阶段选项）。用户明�
 候选和原生身份；不能手造任务、次数、wave 或扩大授权。唯一事件写入口为 submit；drive
 执行程序拥有的机械动作和实际宿主调用。重复结果重放不重复副作用，UNKNOWN 先对账。
 
-任务内声明 QA 操作也经过相同 CAS、intent、guard 和原动作绑定。不得绕过
-formal_gates_operation 使用自由 shell 创建模型或调用 QA 目标。设计冻结用例步骤与判据；未声明 command 时由执行者经 qa.target 提交实际命令，
-已声明的 command 不得替换。共同步骤、依赖和 checkpoint 按公开合同使用；实际工具/环境变化先
-提交精确 invalidated checkpoint，再继续原动作的未完成部分。
+QA 操作在原设计与审查中补齐批准配方并冻结，见 [QA 固定操作契约](references/qa-operations.md)。
+程序按原动作绑定执行已批准 operations 或精确 Go testRef，保留真实收据与未完成责任。
+执行阶段不得临时补造或替换命令；缺少配方须回到原设计与审查补齐。
 
 独立派发按宿主容量并行，仅从已授权 Ready 集合取任务。同功能在途规则保持；依赖等待
 不产生新角色或审查。开发者与审查者相互隔离。黑盒不接收实现及开发验证结论，白盒/门

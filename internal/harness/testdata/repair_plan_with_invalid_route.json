@@ -6,9 +6,6 @@
     "AC-002-MISUSE-02",
     "AC-002-MISUSE-03"
   ],
-  "build": [
-    "go build ./... (workspace, go1.26.4 darwin/arm64) \u2014 exit 0, no output, run repeatedly after the repair; final re-run after removing the incidental ./frob build artifact produced by module-mode build: exit 0 (BUILD_OK)."
-  ],
   "caseRuns": [
     {
       "caseId": "case-ac002-failure-unknown-long-flag",
@@ -204,14 +201,5 @@
   "paths": [
     "frob.go"
   ],
-  "summary": "Repaired the adjudicated AC-002 violation in frob.go: main() previously processed any os.Args[1] unconditionally, so unknown flags (--unknown-flag, --unknown-flag=hello, -x, and an unknown flag ahead of a word) were echoed as 'frob: <flag>' with exit 0. The fix rejects any dash-prefixed word-position argument before any output \u2014 exit 2 with the existing 'usage: frob <word>' hint on stderr and zero bytes on stdout \u2014 since frob defines no flags and therefore every dash-prefixed argument is an unknown flag. Plain-word, empty-word, no-argument and analytics.go paths are unchanged. Baseline defect was independently reproduced (exit 0, 'frob: --unknown-flag' + 'usage: runs=1 words=14' on stdout) before the fix. Verification: go build ./... exits 0; gofmt/go vet clean; full whitebox acceptance suite passes (8/8), including the two previously failing AC-002 tests run individually; fresh-process blackbox probes of the repaired binary pass all five adjudicated failing cases plus the plain-word and AC-001 guards, with od-verified byte-exact stdout for success forms and zero-byte stdout for every refusal form. Only frob.go was modified; the change is left unstaged (no git staging/commit/push), and an incidental ./frob build artifact was removed so the declared change set is exactly frob.go.",
-  "tests": [
-    "Baseline reproduction (before repair): /tmp/frob-repair-verify/frob-baseline --unknown-flag exited 0 and printed 'frob: --unknown-flag\\nusage: runs=1 words=14\\n' \u2014 defect independently confirmed.",
-    "gofmt -l . \u2014 no output (clean); go vet ./... \u2014 exit 0, no findings.",
-    "go test -count=1 . \u2014 ok frob 0.922s: full whitebox acceptance suite, all 8 REQ-001 tests pass (the two AC-002 tests that failed against the candidate now pass; all AC-001 tests stay green); repeat run go test -count=1 ./... \u2014 ok frob 0.308s.",
-    "go test -count=1 -v -run '^TestAC002FailureUnknownLongFlagRejected$' . \u2014 PASS (0.00s).",
-    "go test -count=1 -v -run '^TestAC002MisuseUnknownShortFlagRejected$' . \u2014 PASS (0.01s).",
-    "go test -count=1 -v -run '^TestAC002SuccessPlainWordStillAccepted$' . \u2014 PASS (0.00s).",
-    "Fresh-process blackbox probes of the repaired binary (built to /tmp/frob-repair-verify/frob-repaired): --unknown-flag hello, --unknown-flag, --unknown-flag=hello and -x each exit 2 with 0-byte stdout and stderr 'usage: frob <word>\\n'; hello-world exits 0 with od-verified stdout exactly 'frob: hello-world\\nusage: runs=1 words=11\\n'; hello exactly 'frob: hello\\nusage: runs=1 words=5\\n'; empty argument exactly 'frob: \\nusage: runs=1 words=0\\n'; \u60a8\u597d exactly 'frob: \u60a8\u597d\\nusage: runs=1 words=6\\n' (bytes, not runes); no arguments exits 2 with 0-byte stdout and stderr 'usage: frob <word>\\n'."
-  ]
+  "summary": "Repaired the adjudicated AC-002 violation in frob.go: main() previously processed any os.Args[1] unconditionally, so unknown flags (--unknown-flag, --unknown-flag=hello, -x, and an unknown flag ahead of a word) were echoed as 'frob: <flag>' with exit 0. The fix rejects any dash-prefixed word-position argument before any output \u2014 exit 2 with the existing 'usage: frob <word>' hint on stderr and zero bytes on stdout \u2014 since frob defines no flags and therefore every dash-prefixed argument is an unknown flag. Plain-word, empty-word, no-argument and analytics.go paths are unchanged. Baseline defect was independently reproduced (exit 0, 'frob: --unknown-flag' + 'usage: runs=1 words=14' on stdout) before the fix. Verification: go build ./... exits 0; gofmt/go vet clean; full whitebox acceptance suite passes (8/8), including the two previously failing AC-002 tests run individually; fresh-process blackbox probes of the repaired binary pass all five adjudicated failing cases plus the plain-word and AC-001 guards, with od-verified byte-exact stdout for success forms and zero-byte stdout for every refusal form. Only frob.go was modified; the change is left unstaged (no git staging/commit/push), and an incidental ./frob build artifact was removed so the declared change set is exactly frob.go."
 }
