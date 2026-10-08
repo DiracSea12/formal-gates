@@ -592,12 +592,13 @@ func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest
 }
 func executionFor(input protocol.ValidationInput) coverage.ExecutionReport {
 	r := coverage.ExecutionReport{Binding: *input.Execution}
+	settled := append(slices.Clone(input.Completed), input.Inherited...)
 	for _, edge := range input.Whitelist.Entries {
-		inherited := slices.IndexFunc(input.Inherited, func(row coverage.ExecutionRecord) bool {
+		inherited := slices.IndexFunc(settled, func(row coverage.ExecutionRecord) bool {
 			return row.ReviewKind == edge.ReviewKind && row.SourceID == edge.SourceID && row.PointID == edge.PointID && row.CaseID == edge.CaseID
 		})
 		if inherited >= 0 {
-			r.Records = append(r.Records, input.Inherited[inherited])
+			r.Records = append(r.Records, settled[inherited])
 		} else {
 			index := slices.IndexFunc(input.ExecutionFacts, func(f protocol.ExecutionFact) bool { return f.CaseID == edge.CaseID })
 			if index < 0 {
