@@ -454,6 +454,12 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 		d.drive()
 		if index < 2 {
 			id, in := d.action("engine.repair")
+			if !d.mockNative {
+				body := fmt.Sprintf("package main\nimport \"os\"\nfunc main() { if len(os.Args) < 3 || os.Args[1] != \"run\" || os.Args[2] != \"valid\" { os.Exit(%d) } }\n", index+1)
+				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair command validation", AffectedCases: []string{"invalid"}}})
 			d.materialize()
 			d.materialize()
