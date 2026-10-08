@@ -2,6 +2,7 @@ package facade
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -126,7 +127,11 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Tool != tool || first.Tool != receipt.Tool || first.Environment != receipt.Environment || !strings.HasPrefix(first.Environment, "sha256:") || len(first.Environment) != len("sha256:")+64 || first.Invocation != string(invocation) || first.WorkingDirectory != request.Cwd {
+	environment, err := hex.DecodeString(first.Environment)
+	if err != nil || len(environment) != sha256.Size {
+		t.Fatal("receipt lacks actual environment digest")
+	}
+	if first.Tool != tool || first.Tool != receipt.Tool || first.Environment != receipt.Environment || first.Invocation != string(invocation) || first.WorkingDirectory != request.Cwd {
 		t.Fatalf("actual process identities differ from bound request/receipt: %+v", first)
 	}
 	// A reopened caller observes the same owned receipt, without repeating effects.

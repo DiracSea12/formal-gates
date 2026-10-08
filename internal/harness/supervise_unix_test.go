@@ -249,9 +249,9 @@ func TestSuperviseEnvironmentMerge(t *testing.T) {
 			if kind == "check" {
 				return
 			}
-			tool, err := FileProof("/bin/sh")
-			if err != nil {
-				t.Fatal(err)
+			tool, refusal := FileProof("/bin/sh")
+			if refusal != "" {
+				t.Fatal(refusal)
 			}
 			environment := map[string]any{}
 			for key, value := range env {
