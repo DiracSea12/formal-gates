@@ -11,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
@@ -242,6 +244,13 @@ func (d *validationDriver) drive() {
 		var r Run
 		var err error
 		if d.mockNative {
+			snapshot, loadErr := d.f.engine.Load()
+			if loadErr != nil {
+				d.t.Fatal(loadErr)
+			}
+			if err := d.f.recordIntakeReceipt(snapshot.State); err != nil {
+				d.t.Fatal(err)
+			}
 			_, _, err = d.f.engine.Drive(emptyFingerprint())
 			if err == nil {
 				r, err = d.f.project()
@@ -253,9 +262,29 @@ func (d *validationDriver) drive() {
 			d.t.Fatal(err)
 		}
 		d.run = r
-		if !d.mockNative || !d.observeFixtureAdapter() {
+		if d.mockNative {
+			if d.observeFixtureAdapter() {
+				continue
+			}
 			return
 		}
+		waiting := false
+		if r.Next.Kind == decision.KindHostAction && r.Next.HostAction != nil {
+			for _, intent := range r.AdapterIntents {
+				if intent.Adapter != nil && intent.Adapter.Operation == "op.check" && slices.Contains(r.Next.HostAction.Steps, intent.Step) {
+					waiting = true
+					break
+				}
+			}
+		}
+		if !waiting {
+			return
+		}
+		deadline, bounded := d.t.Deadline()
+		if !bounded || !time.Now().Before(deadline) {
+			d.t.Fatalf("native check did not settle within test deadline: %+v", r.Next)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -353,13 +382,23 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	receipt.Coverage = inventory
 	receipt.RequirementRevision = revision
 	receipt.Artifacts[0].Revision = revision
-	f, r, err := abstractValidationFacade(t, root, provider, runner, base, receipt)
+	_, mocked := runner.(*frozenGitRepo)
+	var f *Facade
+	var r Run
+	var err error
+	if mocked {
+		f, r, err = abstractValidationFacade(t, root, provider, runner, base, receipt)
+	} else {
+		f, r, err = Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner), mockNative: true}
+	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner), mockNative: mocked}
 	d.drive()
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
+	if d.mockNative {
+		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
+	}
 	return d
 }
 func newValidationDriver(t *testing.T, gates ...string) *validationDriver {
@@ -475,6 +514,10 @@ func (d *validationDriver) action(handler string) (string, protocol.ValidationIn
 }
 func (d *validationDriver) materialize() {
 	d.t.Helper()
+	if !d.mockNative {
+		d.drive()
+		return
+	}
 	for id, intent := range d.run.AdapterIntents {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
 			continue
@@ -495,7 +538,7 @@ func (d *validationDriver) materialize() {
 }
 func simpleManifest(input protocol.ValidationInput) coverage.AcceptanceManifest {
 	m := input.Manifest
-	m.Cases = []coverage.AcceptanceCase{{Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"app", "run", "valid"}}}, CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"app", "run", "invalid"}}}, CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
+	m.Cases = []coverage.AcceptanceCase{{Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", "run", "valid"}}}, CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", "run", "invalid"}}}, CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
 	for _, c := range m.Cases {
 		m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 	}
@@ -1121,6 +1164,11 @@ func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActio
 // Typed adapter fixtures observe each original operation and submit its own
 // parameter-bound facts. Physical execution is covered by native workflow tests.
 func (d *validationDriver) observeFixtureAdapter() bool {
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+
 	ids := make([]string, 0, len(d.run.AdapterIntents))
 	for id := range d.run.AdapterIntents {
 		ids = append(ids, id)
@@ -1128,6 +1176,12 @@ func (d *validationDriver) observeFixtureAdapter() bool {
 	slices.Sort(ids)
 	for _, id := range ids {
 		intent := d.run.AdapterIntents[id]
+		if receipt, known := snapshot.State.HostActionReceipts[id]; known && receipt.Status == protocol.HostActionStatusExecuted {
+			continue
+		}
+		if intent.Adapter != nil && !snapshot.State.NativeActionWritable(intent, d.f.definition) {
+			continue
+		}
 		if intent.Adapter == nil {
 			continue
 		}
@@ -1197,7 +1251,7 @@ func (d *validationDriver) observeFixtureAdapter() bool {
 				}
 				evidence.Tool, evidence.Environment = d.fixtureTool, d.fixtureEnvironment
 				if evidence.Tool == "" {
-					if argv[0] == "app" {
+					if argv[0] == "app" || argv[0] == "./app" {
 						evidence.Tool = "app-v1"
 					} else {
 						evidence.Tool = "fixture-executable:" + fixtureDigest(argv[0])

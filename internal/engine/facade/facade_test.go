@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -673,6 +674,12 @@ func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
 
 // testAdmission supplies the same immutable registry/bootstrap contract used by
 // installed runs. Only the installed payload and VCS/host execution are fixtures.
+var admissionRuntime struct {
+	once   sync.Once
+	binary []byte
+	err    error
+}
+
 func testAdmission(t *testing.T, root, recordID, packageDigest, provider string) *Admission {
 	t.Helper()
 	admissionFixtureMutex.Lock()
@@ -706,6 +713,25 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	admissionRuntime.once.Do(func() {
+		binary := filepath.Join(t.TempDir(), "formal-gates")
+		command := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+		command.Dir = source
+		if output, err := command.CombinedOutput(); err != nil {
+			admissionRuntime.err = fmt.Errorf("build fixture runtime: %w: %s", err, output)
+			return
+		}
+		admissionRuntime.binary, admissionRuntime.err = os.ReadFile(binary)
+	})
+	if admissionRuntime.err != nil {
+		t.Fatal(admissionRuntime.err)
+	}
+	if err := os.MkdirAll(filepath.Join(target, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "bin", "formal-gates"), admissionRuntime.binary, 0700); err != nil {
+		t.Fatal(err)
 	}
 	// Unit workflows issue this declared custom gate from their private catalog.
 	quality, err := os.ReadFile(filepath.Join(source, "gates", "implementation-quality-gate.md"))

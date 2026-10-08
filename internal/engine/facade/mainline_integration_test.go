@@ -266,8 +266,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	if input.Handler == "engine.qa.execution" {
 		report := executionFor(input)
 		result.Execution = &report
-		result.Tool = "actual command contract"
-		result.Environment = "native isolated candidate"
+		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 	}
 	master.business(id, result)
 }
@@ -400,7 +399,8 @@ func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
 	if input.Handler == "engine.qa.execution" {
 		report := executionFor(input)
-		result.Execution, result.Tool, result.Environment = &report, "command", "isolated candidate"
+		result.Execution = &report
+		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 	}
 	return result
 }

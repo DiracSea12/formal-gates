@@ -44,6 +44,12 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app"), []byte("#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +186,8 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -305,7 +312,8 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	head, err := vcs.New(root, nil).Resolve()
@@ -349,7 +357,8 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	if wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; wave.Status != "COMPLETE" {
@@ -538,7 +547,8 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	promoted, err := d.f.PrepareCandidate("")
@@ -588,9 +598,12 @@ func completePromotionPipeline(t *testing.T, runner vcs.Runner, root, base strin
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
-	d.drive()
+	if d.mockNative {
+		d.drive()
+	}
 	if wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; wave.Status != "COMPLETE" {
 		t.Fatalf("wave status = %s, want COMPLETE", wave.Status)
 	}
@@ -1519,7 +1532,14 @@ func promotionInputForTest(t *testing.T, d *validationDriver, sourceIdentity, me
 	if source.Identity != sourceIdentity {
 		t.Fatalf("fixture source identity %s != verified %s", sourceIdentity, source.Identity)
 	}
-	return protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: snap.State.BaseSnapshot, TargetStart: observed, Message: message}
+	workspace := ""
+	for _, resource := range snap.State.NativeResources {
+		if resource.Role == "candidate" && resource.Identity == source.Identity && resource.Status == "READY" {
+			workspace = resource.ID
+			break
+		}
+	}
+	return protocol.PromotionParameters{SourceWorkspace: workspace, Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: snap.State.BaseSnapshot, TargetStart: observed, Message: message}
 }
 
 // Signed native debt survives new source qualification until the current

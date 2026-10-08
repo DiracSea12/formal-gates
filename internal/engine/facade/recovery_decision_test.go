@@ -253,6 +253,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 			d.reviewReady()
 			id, in := d.action("engine.qa.execution")
 			full := executionFor(in)
+			tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 			original := d.run.Attempts[in.Binding.Task]
 			part := full
 			part.Records = append([]coverage.ExecutionRecord(nil), full.Records[:1]...)
@@ -260,7 +261,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 			d.receipt(id)
 			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 			d.submit(start)
-			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "first actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &part, Tool: "command", Environment: "clean project", Checkpoint: true}}})
+			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "first actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &part, Tool: tool, Environment: environment, Checkpoint: true}}})
 			if reopen {
 				d.reopen()
 			}
@@ -299,7 +300,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 					remaining.Binding.ActualCaseIDs = append(remaining.Binding.ActualCaseIDs, row.CaseID)
 				}
 			}
-			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "remaining actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &remaining, Tool: "command", Environment: "clean project"}}})
+			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "remaining actual case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &remaining, Tool: tool, Environment: environment}}})
 			gate, gi := d.gateAction("quality")
 			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 			d.drive()

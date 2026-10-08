@@ -44,6 +44,8 @@ func TestGuardAuthorizedSetCountsConfirmedDependentBatchesStably(t *testing.T) {
 	if before.RequestAllowance != 4 {
 		t.Fatalf("authorized set = %d slots, want 3 batches + QA design slot = 4", before.RequestAllowance)
 	}
+	independent, independentInput := planBatchAction(d, "independent")
+	d.business(independent, protocol.ValidationResult{Binding: independentInput.Binding, Development: batchEvidence(independentInput), Status: "PASS"})
 	id, input := planBatchAction(d, "parser")
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"})
 	d.drive()

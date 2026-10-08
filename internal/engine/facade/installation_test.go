@@ -679,14 +679,29 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			source := d.run.Validation.Candidate.Identity
 			if window != "before-intent" {
-				if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, head, "organized delivery"), emptyFingerprint()); err != nil {
+				if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, source, "organized delivery"), emptyFingerprint()); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if window == "before-result" {
-				if err := d.f.admission.write(func() error { return d.f.vcs.SquashToBase(identities[0], "organized delivery") }); err != nil {
+				snapshot, err := d.f.engine.Load()
+				if err != nil {
 					t.Fatal(err)
+				}
+				intent, exists := snapshot.State.PromotionIntent()
+				if !exists {
+					t.Fatal("promotion has no original signed intent")
+				}
+				unlock, err := d.f.acquireNativeWindow()
+				if err != nil {
+					t.Fatal(err)
+				}
+				observed, complete, err := d.f.nativeEvidence(snapshot.State, intent, true)
+				unlock()
+				if err != nil || !complete || observed.Candidate == nil || observed.Candidate.Promotion == nil {
+					t.Fatalf("original promotion effect did not complete: %+v %v", observed, err)
 				}
 			}
 			beforeHead, err := d.f.vcs.Resolve()
@@ -736,7 +751,7 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if pendingPromotionSource(snapshot.State) != head || snapshot.State.PromotedSnapshot != "" {
+				if pendingPromotionSource(snapshot.State) != source || snapshot.State.PromotedSnapshot != "" {
 					t.Fatal("executed fact lost its original unresolved intent")
 				}
 			}
