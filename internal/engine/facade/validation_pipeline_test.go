@@ -193,14 +193,16 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 }
 
 type validationDriver struct {
-	mockNative         bool
-	fixtureTool        string
-	fixtureEnvironment string
-	t                  *testing.T
-	f                  *Facade
-	run                Run
-	seq                int
-	revision           string
+	mockNative               bool
+	fixtureTool              string
+	fixtureEnvironment       string
+	fixtureQAResults         map[string]protocol.CheckEvidence
+	fixtureCandidateObserver func(protocol.HostActionIntent, protocol.CandidateParameters) protocol.Event
+	t                        *testing.T
+	f                        *Facade
+	run                      Run
+	seq                      int
+	revision                 string
 	// provider 是本 driver 的宿主 provider 身份（事件/回执按它提交）；缺省
 	// DefaultProvider，可计量 provider（transcript 计量链）按需覆写。
 	provider string
@@ -1149,6 +1151,10 @@ func (r *frozenGitRepo) RunRaw(dir, command string, input []byte, args ...string
 
 func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) {
 	assertCandidateStep(d.t, d, intent)
+	if d.fixtureCandidateObserver != nil {
+		d.submit(d.fixtureCandidateObserver(intent, p))
+		return
+	}
 	// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
 	// 冻结场景产生候选对象而不改变目标 HEAD；真仓语义夹具
 	// 从场景的 source provider 读取候选身份与其树摘要。
@@ -1296,6 +1302,12 @@ func (d *validationDriver) observeFixtureAdapter() bool {
 					}
 					stdout = string(runEvent) + "\n" + string(terminalEvent) + "\n"
 					evidence.GoTestName, evidence.GoResult = goName, "pass"
+				}
+				if result, configured := d.fixtureQAResults[p.QA.CaseID]; configured {
+					code, stdout, stderr = result.ExitCode, result.StdoutText, result.StderrText
+					if goName != "" {
+						evidence.GoResult = coverage.GoTestExecutionResult([]byte(stdout), goName)
+					}
 				}
 			}
 			evidence.ExitCode = code

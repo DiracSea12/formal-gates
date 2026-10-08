@@ -239,7 +239,7 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution")
 			report := executionFor(qi)
-			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 			gate, gi := d.gateAction("quality")
 			gateEvent := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "original-gate-result", Validation: &protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"}}}
 			if arrival == "staged" {
@@ -398,9 +398,14 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 	}
 }
 
-func postwaveRepairOffer(t *testing.T) *validationDriver {
+func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validationDriver {
 	t.Helper()
-	d := newValidationDriver(t, "blackbox", "quality")
+	var d *validationDriver
+	if len(prepared) == 0 {
+		d = newValidationDriver(t, "blackbox", "quality")
+	} else {
+		d = prepared[0]
+	}
 	d.reviewReady()
 	for index := 0; index < 3; index++ {
 		qa, qi := d.action("engine.qa.execution")
