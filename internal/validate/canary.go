@@ -512,7 +512,8 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			result.Development = &worker.Development{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration"}
+			files := []string{"whitebox_delivered_test.go"}
+			c.Files, missing.Files = &files, &files
 		}
 		manifest := worker.Manifest{Cases: []worker.Case{c, missing}, Coverage: map[string][]string{}}
 		for _, point := range in.Manifest.Points {
