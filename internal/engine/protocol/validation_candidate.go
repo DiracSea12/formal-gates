@@ -47,9 +47,11 @@ func candidateCorrelation(p CandidateParameters) string {
 	case "AUTHORING":
 		key.Base = p.Base
 	case "QA_ARTIFACT":
+		key.TestFiles = p.TestFiles
 		key.Base, key.Paths = p.Base, p.Paths
 		key.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: p.DesignTasks[coverage.ReviewWhitebox]}
 	case "REVIEW_READY":
+		key.TestFiles = p.TestFiles
 		key.ReviewBase = p.ReviewBase
 		key.BlackboxManifest, key.MergeManifest = p.BlackboxManifest, p.MergeManifest
 		key.Base, key.Paths, key.DesignTasks, key.QAArtifacts, key.Finalize = p.Base, p.Paths, p.DesignTasks, p.QAArtifacts, p.Finalize
@@ -308,6 +310,9 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 func (s *State) candidateManifestCurrent(p CandidateParameters, mode coverage.ReviewKind) bool {
 	set := s.Validation.Sets[mode]
 	if set == nil || set.DesignTask != p.DesignTasks[mode] {
+		return false
+	}
+	if mode == coverage.ReviewWhitebox && !slices.Equal(p.TestFiles, set.Manifest.TestFiles()) {
 		return false
 	}
 	if p.Generation == s.Validation.Generation {
@@ -570,6 +575,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	}
 	if params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
 		if set := v.Sets[coverage.ReviewWhitebox]; set != nil {
+			params.TestFiles = set.Manifest.TestFiles()
 			params.ReviewCases = map[string]string{}
 			for _, c := range set.Manifest.Cases {
 				params.ReviewCases[c.CaseID] = c.TestRef

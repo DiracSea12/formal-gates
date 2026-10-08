@@ -2,6 +2,8 @@ package coverage
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -55,4 +57,34 @@ func validateCaseOperations(qaCase AcceptanceCase, path string) error {
 func isGoTestRef(ref string) bool {
 	file, _, found := strings.Cut(ref, "::")
 	return found && strings.HasSuffix(file, "_test.go")
+}
+
+func validateTestFiles(files []string, path string) error {
+	seen := map[string]bool{}
+	for _, file := range files {
+		if file == "." || !filepath.IsLocal(filepath.FromSlash(file)) || file != filepath.ToSlash(filepath.Clean(filepath.FromSlash(file))) || seen[file] {
+			return invalid(CodeInvalidCaseBinding, path, "test files require unique repository-relative file paths")
+		}
+		seen[file] = true
+	}
+	return nil
+}
+
+// TestFiles projects only files associated with cases or their referenced
+// shared steps; a delivery path declaration does not establish this relation.
+func (manifest AcceptanceManifest) TestFiles() []string {
+	files := map[string]struct{}{}
+	for _, c := range manifest.Cases {
+		for _, file := range c.Files {
+			files[file] = struct{}{}
+		}
+		for _, step := range manifest.SharedSteps {
+			if slices.Contains(c.SharedSteps, step.ID) {
+				for _, file := range step.Files {
+					files[file] = struct{}{}
+				}
+			}
+		}
+	}
+	return sortedKeys(files)
 }

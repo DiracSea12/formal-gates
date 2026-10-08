@@ -800,11 +800,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			}
 		}
 		if p.Stage == "QA_ARTIFACT" {
-			owned, err := native.InputOwnership()
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			baseOwned, err := f.ownershipAt(s, p.Base)
+			baseOwned, owned, err := f.testOwnership(s, native, p.Base, p.ReviewCases, p.TestFiles)
 			if err != nil {
 				return nativeResult{}, false, err
 			}
@@ -888,12 +884,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 	}
 	evidence := protocol.CandidateEvidence{Changes: changes, ParametersDigest: intent.PayloadDigest, WorkspaceID: p.WorkspaceID, Identity: head, Digest: digest, Paths: p.Paths}
 	if p.Stage == "QA_ARTIFACT" {
-		owned, err := native.InputOwnership()
-		if err != nil {
-			return nativeResult{}, false, err
-		}
-		// Removed test inputs are proven by their original package graph.
-		baseOwned, err := f.ownershipAt(s, p.Base)
+		baseOwned, owned, err := f.testOwnership(s, native, p.Base, p.ReviewCases, p.TestFiles)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -915,7 +906,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		if err != nil {
 			return nativeResult{}, false, err
 		}
-		owned, err := native.InputOwnership()
+		baseOwned, owned, err := f.testOwnership(s, native, reviewBase, p.ReviewCases, p.TestFiles)
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -924,10 +915,6 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				owned = map[string]bool{}
 			}
 			owned[".gates/results/"+s.RunID+".merge-cases.md"] = true
-		}
-		baseOwned, err := f.ownershipAt(s, reviewBase)
-		if err != nil {
-			return nativeResult{}, false, err
 		}
 		view := &protocol.GateReviewView{TestOwnedPaths: []string{}}
 		for _, change := range changes {
@@ -973,9 +960,10 @@ func testOwnedTransition(path string, baseExists, candidateExists bool, base, ca
 	return (baseExists || candidateExists) && (!baseExists || bok && b) && (!candidateExists || cok && c)
 }
 
-func (f *Facade) ownershipAt(s *protocol.State, identity string) (map[string]bool, error) {
+func (f *Facade) ownershipAt(s *protocol.State, identity string, testReferences ...string) (map[string]bool, error) {
 	// A graph represents an immutable commit only when HEAD and all delivery
 	// bytes match it. Mutable authoring workspaces cannot prove base ownership.
+	var owned map[string]bool
 	providers := []*vcs.Provider{f.vcs}
 	ids := make([]string, 0, len(s.NativeResources))
 	for id := range s.NativeResources {
@@ -1003,25 +991,103 @@ func (f *Facade) ownershipAt(s *protocol.State, identity string) (map[string]boo
 		if status != "" {
 			continue
 		}
-		owned, err := native.InputOwnership()
+		graph, err := native.InputOwnership(testReferences...)
 		if err != nil {
 			return nil, err
 		}
-		for _, receipt := range s.HostActionReceipts {
-			var evidence protocol.CandidateEvidence
-			if decodeReceiptEvidence(receipt, &evidence) != nil || evidence.Identity != identity || evidence.GateView == nil {
-				continue
-			}
-			if owned == nil {
-				owned = map[string]bool{}
-			}
-			for _, path := range evidence.GateView.TestOwnedPaths {
-				if _, known := owned[path]; !known {
-					owned[path] = true
+		if graph != nil {
+			owned = graph
+		}
+		break
+	}
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.candidate" || receipt.Status != protocol.HostActionStatusExecuted && receipt.Status != protocol.HostActionStatusReconciled {
+			continue
+		}
+		var evidence protocol.CandidateEvidence
+		if decodeReceiptEvidence(receipt, &evidence) != nil || evidence.ParametersDigest != receipt.PayloadDigest {
+			continue
+		}
+		paths := []string{}
+		if evidence.GateView != nil {
+			paths = append(paths, evidence.GateView.TestOwnedPaths...)
+		}
+		if evidence.TestOnly && evidence.ProductionViewEqual {
+			for _, change := range evidence.Changes {
+				if change.Mode != "000000" {
+					paths = append(paths, change.Path)
 				}
 			}
 		}
-		return owned, nil
+		for _, path := range paths {
+			if _, known := owned[path]; known {
+				continue
+			}
+			original, err := f.vcs.Entry(evidence.Identity, path)
+			if err != nil {
+				return nil, err
+			}
+			current, err := f.vcs.Entry(identity, path)
+			if err != nil {
+				return nil, err
+			}
+			if original != "" && original == current {
+				if owned == nil {
+					owned = map[string]bool{}
+				}
+				owned[path] = true
+			}
+		}
 	}
-	return nil, nil
+	return owned, nil
+}
+
+// Signed file references supplement native graph proof only for new files or
+// existing endpoints already proved test-owned at the original base.
+func (f *Facade) testOwnership(s *protocol.State, native *vcs.Provider, base string, references map[string]string, files []string) (map[string]bool, map[string]bool, error) {
+	refs := []string{}
+	for _, ref := range references {
+		refs = append(refs, ref)
+	}
+	before, err := f.ownershipAt(s, base, refs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := native.InputOwnership(refs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if after == nil {
+		after = map[string]bool{}
+	}
+	paths := slices.Clone(files)
+	for _, ref := range references {
+		file, symbol, qualified := strings.Cut(ref, "::")
+		if qualified && strings.TrimSpace(symbol) != "" && filepath.IsLocal(filepath.FromSlash(file)) {
+			paths = append(paths, filepath.ToSlash(filepath.Clean(filepath.FromSlash(file))))
+		}
+	}
+	for _, file := range paths {
+		if _, known := after[file]; known {
+			continue
+		}
+		entry, err := native.Entry(base, file)
+		if err != nil {
+			return nil, nil, err
+		}
+		if entry != "" && !before[file] {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(native.Root(), filepath.FromSlash(file)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if info.Mode().IsRegular() {
+			after[file] = true
+		}
+	}
+	return before, after, nil
 }

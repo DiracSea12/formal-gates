@@ -91,3 +91,15 @@ func TestManifestDigestBindsCaseAndSharedOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestTestFilesRequireExactUniqueRelations(t *testing.T) {
+	m := AcceptanceManifest{Cases: []AcceptanceCase{{CaseID: "case", Files: []string{"assertion.bin"}, SharedSteps: []string{"setup"}}}, SharedSteps: []SharedStep{{ID: "setup", Files: []string{"fixture.data"}}, {ID: "orphan", Files: []string{"unrelated.data"}}}}
+	if got := m.TestFiles(); !reflect.DeepEqual(got, []string{"assertion.bin", "fixture.data"}) {
+		t.Fatalf("unrelated file granted test relation: %v", got)
+	}
+	for _, files := range [][]string{{"../app.py"}, {"."}, {"same", "same"}, {"./uncanonical"}} {
+		if err := validateTestFiles(files, "case.files"); err == nil {
+			t.Fatalf("invalid test file relation accepted: %v", files)
+		}
+	}
+}

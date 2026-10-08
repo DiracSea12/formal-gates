@@ -151,3 +151,28 @@ func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
+	input := semanticInput()
+	input.Validation.Manifest.Cases[0].Files = []string{"original.case"}
+	input.Validation.Manifest.SharedSteps[0].Files = []string{"original.shared"}
+	omitted := Result{Outcome: "PASS", Validation: &Validation{Status: "PASS", Manifest: &Manifest{Cases: []Case{{CaseID: "new"}}, SharedSteps: []SharedStep{{ID: "setup", Procedure: "setup"}}}}}
+	inherited := decodeSemantic(t, input, omitted).Validation.Manifest
+	if !reflect.DeepEqual(inherited.Cases[0].Files, []string{"original.case"}) || !reflect.DeepEqual(inherited.SharedSteps[0].Files, []string{"original.shared"}) {
+		t.Fatal("omission lost original issued files")
+	}
+	empty := []string{}
+	omitted.Validation.Manifest.Cases[0].Files = &empty
+	omitted.Validation.Manifest.SharedSteps[0].Files = &empty
+	raw, err := json.Marshal(omitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"files":[]`) {
+		t.Fatal("explicit empty file relation disappeared in model JSON")
+	}
+	cleared := decodeSemantic(t, input, omitted).Validation.Manifest
+	if len(cleared.Cases[0].Files) != 0 || len(cleared.SharedSteps[0].Files) != 0 {
+		t.Fatal("program inherited a deliberately cleared relation")
+	}
+}

@@ -58,3 +58,17 @@ Go 源文件解析由原生 adapter 在实际启动前完成，核心计划只�
 返回每 case 的 result 和 comparison，程序填充 procedure、observation、tool、environment
 并展开批准 edges；core 逐值核原事实、当前候选和批准配方，沿原入口合并 Completed。
 缺少配方的设计允许暂存，冻结前须指出具体 case 并回到原设计/审查补齐。
+
+Case 与 shared-step 的可选 `files` 精确列出该测试材料的仓库相对文件路径；它与正文、
+操作及关联一同参与原 manifest 的审查和摘要。只有 case 自身及其实际引用的 shared-step
+材料进入签发范围，交付 `paths` 不是测试归属证明。`<相对文件>::<不透明测试符号>`
+直接表达单个文件关联；其他不透明引用不猜测文件或测试框架语法。
+
+原生 Go 输入图仅在明确 Go 配置或精确 Go 测试引用时作为可选证明。其他语言的新材料
+须有上述明确关联和原始基线不存在的实际文件事实；既有 UNKNOWN 或生产输入不能因
+`files`、测试引用或 embedding 被升级为测试。已验证的 test-only candidate receipt 可
+保留旧材料归属，须核实际路径在原/目标 identity 中的 mode 与 blob 等价。删除与 rename
+的每个存在端点仍独立核验。文件关联未证明的材料须回到原设计责任，不能统一放行。
+
+设计结果省略既有 case/shared-step 的 `files` 时，程序从原签发材料保留它；明确提交
+`[]` 表示清除这个关联，不能被省略或继承覆盖。

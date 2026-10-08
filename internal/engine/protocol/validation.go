@@ -259,6 +259,7 @@ type CandidateArtifact struct {
 	Paths    []string `json:"paths"`
 }
 type CandidateParameters struct {
+	TestFiles           []string                                  `json:"testFiles,omitempty"`
 	RepairTask          *runtime.TaskKey                          `json:"repairTask,omitempty"`
 	Integration         *IntegrationParameters                    `json:"integration,omitempty"`
 	MergeManifest       *coverage.AcceptanceManifest              `json:"mergeManifest,omitempty"`

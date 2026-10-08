@@ -240,6 +240,9 @@ func TestOwnershipCapabilityAndQueryFailuresRemainDistinct(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module capability\n\ngo 1.22\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			queried := false
 			runner := ownershipRunner(func(dir, command string, args ...string) (string, error) {
 				if dir != root || command != "go" {
@@ -299,6 +302,50 @@ func TestDeclaredDirectoryContainerRequiresExactNativeChange(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			if actual := scenario.change.IsDirectoryContainer(scenario.paths); actual != scenario.allowed {
 				t.Fatalf("directory change allowance=%v want=%v", actual, scenario.allowed)
+			}
+		})
+	}
+}
+
+func TestInputOwnershipWithoutGoConfigurationDoesNotCallGo(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("def valid(value): return bool(value)\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := ownershipRunner(func(dir, command string, args ...string) (string, error) {
+		t.Fatalf("non-Go project invoked %s %v", command, args)
+		return "", nil
+	})
+	owned, err := New(root, runner).InputOwnership()
+	if err != nil || owned != nil {
+		t.Fatalf("non-Go capability became a graph: %v %v", owned, err)
+	}
+}
+
+func TestGoOwnershipUsesAncestorConfigurationAndExplicitReference(t *testing.T) {
+	for _, variant := range []string{"ancestor-module", "explicit-gopath"} {
+		t.Run(variant, func(t *testing.T) {
+			parent := t.TempDir()
+			root := filepath.Join(parent, "package")
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if variant == "ancestor-module" {
+				if err := os.WriteFile(filepath.Join(parent, "go.mod"), []byte("module ancestor\n\ngo 1.22\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("GO111MODULE", "off")
+				t.Setenv("GOWORK", "off")
+			}
+			for file, body := range map[string]string{"app.go": "package app\nfunc Valid()bool{return true}\n", "check_test.go": "package app\nimport \"testing\"\nfunc TestValid(t *testing.T){if !Valid(){t.Fatal(\"invalid\")}}\n"} {
+				if err := os.WriteFile(filepath.Join(root, file), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			owned, err := New(root, nil).InputOwnership("check_test.go::TestValid")
+			if err != nil || !owned["check_test.go"] || owned["app.go"] {
+				t.Fatalf("explicit native Go ownership lost: %v %v", owned, err)
 			}
 		})
 	}

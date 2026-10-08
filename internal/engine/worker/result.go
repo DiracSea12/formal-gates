@@ -76,11 +76,18 @@ type Suggestion struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type Manifest struct {
-	SharedSteps []coverage.SharedStep `json:"sharedSteps,omitempty"`
-	Cases       []Case                `json:"cases"`
-	Coverage    map[string][]string   `json:"coverage"`
+	SharedSteps []SharedStep        `json:"sharedSteps,omitempty"`
+	Cases       []Case              `json:"cases"`
+	Coverage    map[string][]string `json:"coverage"`
+}
+type SharedStep struct {
+	ID         string               `json:"id"`
+	Procedure  string               `json:"procedure"`
+	Operations []coverage.Operation `json:"operations,omitempty"`
+	Files      *[]string            `json:"files,omitempty"`
 }
 type Case struct {
+	Files         *[]string            `json:"files,omitempty"`
 	Operations    []coverage.Operation `json:"operations,omitempty"`
 	Scenario      string               `json:"scenario"`
 	SharedSteps   []string             `json:"sharedSteps,omitempty"`
@@ -161,9 +168,32 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			body.Suggestions = append(body.Suggestions, protocol.QASuggestion{Severity: suggestion.Severity, Message: suggestion.Message, Reason: suggestion.Reason})
 		}
 		if value.Validation.Manifest != nil {
-			manifest := coverage.AcceptanceManifest{SharedSteps: slices.Clone(v.Manifest.SharedSteps)}
+			manifest := coverage.AcceptanceManifest{}
+			for _, item := range v.Manifest.SharedSteps {
+				step := coverage.SharedStep{ID: item.ID, Procedure: item.Procedure, Operations: slices.Clone(item.Operations)}
+				if item.Files != nil {
+					step.Files = slices.Clone(*item.Files)
+				} else {
+					for _, original := range issued.Manifest.SharedSteps {
+						if original.ID == item.ID {
+							step.Files = slices.Clone(original.Files)
+						}
+					}
+				}
+				manifest.SharedSteps = append(manifest.SharedSteps, step)
+			}
 			for _, item := range v.Manifest.Cases {
-				manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestRef: item.TestRef})
+				c := coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestRef: item.TestRef}
+				if item.Files != nil {
+					c.Files = slices.Clone(*item.Files)
+				} else {
+					for _, original := range issued.Manifest.Cases {
+						if original.CaseID == item.CaseID {
+							c.Files = slices.Clone(original.Files)
+						}
+					}
+				}
+				manifest.Cases = append(manifest.Cases, c)
 			}
 			manifest.Binding, manifest.Sources, manifest.Points = issued.Manifest.Binding, slices.Clone(issued.Manifest.Sources), slices.Clone(issued.Manifest.Points)
 			for i := range manifest.Cases {

@@ -160,6 +160,7 @@ func QAResultContract() string {
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {
+	Files         []string    `json:"files,omitempty"`
 	Scenario      string      `json:"scenario,omitempty"`
 	SharedSteps   []string    `json:"sharedSteps,omitempty"`
 	CaseID        string      `json:"caseId"`
@@ -192,6 +193,7 @@ func executionEdgeKey(kind ReviewKind, sourceID, pointID, caseID string) string 
 // independently reviewed and executed.
 // SharedStep holds reusable preparation/operations; cases still own their oracle.
 type SharedStep struct {
+	Files      []string    `json:"files,omitempty"`
 	ID         string      `json:"id"`
 	Procedure  string      `json:"procedure"`
 	Operations []Operation `json:"operations,omitempty"`
@@ -636,6 +638,9 @@ func (c CoverageContract) Validate() error {
 		}
 		sharedIDs := map[string]bool{}
 		for si, step := range manifest.SharedSteps {
+			if err := validateTestFiles(step.Files, fmt.Sprintf("%s.sharedSteps[%d].files", path, si)); err != nil {
+				return err
+			}
 			if err := validateOperations(step.Operations, fmt.Sprintf("%s.sharedSteps[%d].operations", path, si)); err != nil {
 				return err
 			}
@@ -650,6 +655,9 @@ func (c CoverageContract) Validate() error {
 		caseByID := make(map[string]AcceptanceCase, len(manifest.Cases))
 		for ci, qaCase := range manifest.Cases {
 			cpath := fmt.Sprintf("%s.cases[%d]", path, ci)
+			if err := validateTestFiles(qaCase.Files, cpath+".files"); err != nil {
+				return err
+			}
 			if err := validateCaseOperations(qaCase, cpath); err != nil {
 				return err
 			}

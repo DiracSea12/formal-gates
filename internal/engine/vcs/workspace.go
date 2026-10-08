@@ -193,11 +193,32 @@ func (p *Provider) ApplyArtifact(identity string, paths []string) error {
 	return nil
 }
 
-// InputOwnership returns nil,nil when this root has no resolver capability or
+// InputOwnership uses explicitly configured Go module/workspace input graphs.
+// It returns nil,nil when this root has no resolver capability or
 // usable graph; a nonnil map (including an empty map) is a successful graph.
 // Errors report actual query or decoding failures. Test inputs are true,
 // production inputs false, and absent keys UNKNOWN; production takes precedence.
-func (p *Provider) InputOwnership() (map[string]bool, error) {
+func (p *Provider) InputOwnership(testReferences ...string) (map[string]bool, error) {
+	configured := false
+	for directory := canonicalPath(p.root); ; directory = filepath.Dir(directory) {
+		for _, name := range []string{"go.mod", "go.work"} {
+			_, err := os.Stat(filepath.Join(directory, name))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+			configured = configured || err == nil
+		}
+		if configured || filepath.Dir(directory) == directory {
+			break
+		}
+	}
+	for _, reference := range testReferences {
+		file, symbol, qualified := strings.Cut(reference, "::")
+		configured = configured || qualified && symbol != "" && strings.HasSuffix(file, "_test.go")
+	}
+	if !configured {
+		return nil, nil
+	}
 	configuration, err := p.runner.Run(p.root, "go", "env", "-json", "GOMOD", "GOWORK")
 	if errors.Is(err, exec.ErrNotFound) {
 		return nil, nil

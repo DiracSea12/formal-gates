@@ -178,3 +178,23 @@ func TestCandidateReviewViewsRequireSignedTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestCandidateFilesRequireOriginalManifestRelations(t *testing.T) {
+	design := runtime.TaskKey{Node: "validation", Step: "qa.design", Scope: "1:WHITEBOX"}
+	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{{CaseID: "case", TestRef: "test_app.py::valid", Files: []string{"assertion.data"}, SharedSteps: []string{"setup"}}}, SharedSteps: []coverage.SharedStep{{ID: "setup", Files: []string{"shared.data"}}, {ID: "unreferenced", Files: []string{"unrelated.data"}}}}
+	set := &CaseSet{DesignTask: design, Manifest: manifest}
+	s := &State{Validation: &Validation{Generation: 1, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: set}}}
+	p := CandidateParameters{Generation: 1, DesignTasks: map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: design}, CaseVersions: map[coverage.ReviewKind]string{coverage.ReviewWhitebox: digestOfCanonical(manifest)}, TestFiles: []string{"assertion.data", "shared.data"}}
+	if !s.candidateManifestCurrent(p, coverage.ReviewWhitebox) {
+		t.Fatal("exact original file relation rejected")
+	}
+	p.TestFiles = append(p.TestFiles, "unrelated.data")
+	if s.candidateManifestCurrent(p, coverage.ReviewWhitebox) {
+		t.Fatal("unrelated shared material gained signed scope")
+	}
+	p.TestFiles = []string{"assertion.data", "shared.data"}
+	set.Manifest.SharedSteps[0].Files = []string{"changed.data"}
+	if s.candidateManifestCurrent(p, coverage.ReviewWhitebox) {
+		t.Fatal("changed file relation reused original candidate identity")
+	}
+}
