@@ -823,7 +823,25 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 			},
 		}},
 	}
-	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", Generation: 1}
+	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: 1}
+	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
+	w := &state.Validation.Waves[0]
+	w.Coverage.Manifests = []coverage.AcceptanceManifest{manifest}
+	w.Targets[qaTask.String()].RequiredCases = []string{"governed"}
+	state.NativeResources = map[string]NativeResource{}
+	state.PendingHostActions = map[string]HostActionIntent{}
+	state.HostActionReceipts = map[string]HostActionReceipt{}
+	resource := state.taskResource(qaTask, cd)
+	resource.Status = "READY"
+	resource.Identity = w.Candidate.Identity
+	state.NativeResources[resource.ID] = resource
+	plans, err := state.qaCheckPlans(w.Targets[qaTask.String()], cd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range plans {
+		addQAOperationReceipt(t, state, p, "governed", 0)
+	}
 	return engine, state, qaTask
 }
 

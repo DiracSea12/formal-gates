@@ -231,10 +231,10 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		if s.validationDispositionBlocked(work.wave) {
 			return changed, nil
 		}
-		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification {
+		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
 		}
-		if s.repairReady(work) && s.developmentEditResult(work.task) == nil && !work.verification {
+		if s.repairReady(work) && s.developmentEditResult(work.task) == nil {
 			return changed, nil
 		}
 	}

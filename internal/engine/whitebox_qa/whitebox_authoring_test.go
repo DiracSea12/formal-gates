@@ -151,12 +151,12 @@ func TestConstructorsRejectMissingVariantObligations(t *testing.T) {
 			})
 			return err
 		}, "operation id required"},
-		{"host: timeout zero", func() error {
+		{"host: negative timeout", func() error {
 			_, err := authoring.NewHostActionStep(fxHeader("s.x", "n1", "s.parse"), validIO, authoring.HostActionSpec{
-				Handler: "h.s.dispatch", Boundary: authoring.BoundaryUserIOTransport, Operation: "op.x",
+				Handler: "h.s.dispatch", Boundary: authoring.BoundaryUserIOTransport, Operation: "op.x", Timeout: -time.Second,
 			})
 			return err
-		}, "positive timeout required"},
+		}, "timeout must be >= 0"},
 		{"agent: reason missing", func() error {
 			_, err := authoring.NewAgentStep(fxHeader("s.x", "n1", "s.parse"), postIO, authoring.AgentSpec{
 				Handler: "h.s.review", Timeout: time.Minute,
@@ -175,12 +175,12 @@ func TestConstructorsRejectMissingVariantObligations(t *testing.T) {
 			})
 			return err
 		}, "postcondition predicate reference required"},
-		{"agent: timeout zero", func() error {
+		{"agent: negative timeout", func() error {
 			_, err := authoring.NewAgentStep(fxHeader("s.x", "n1", "s.parse"), postIO, authoring.AgentSpec{
-				Handler: "h.s.review", Reason: authoring.ReasonSemanticJudgment,
+				Handler: "h.s.review", Reason: authoring.ReasonSemanticJudgment, Timeout: -time.Second,
 			})
 			return err
-		}, "positive timeout required"},
+		}, "timeout must be >= 0"},
 		{"human: ask kind missing", func() error {
 			_, err := authoring.NewHumanAskStep(fxHeader("s.x", "n1", "s.parse"), authoring.HumanAskSpec{
 				RequestSchema: "s.req", ResponseSchema: "s.resp", FreshnessTTL: time.Minute,

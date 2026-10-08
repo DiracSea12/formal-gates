@@ -167,9 +167,6 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	case "engine.repair":
 		for _, work := range s.repairWork() {
 			if work.task == key {
-				if work.verification {
-					return s.repairAssemblyResource(work.wave)
-				}
 				source = work.wave.Candidate.Identity
 				if work.previous != nil {
 					_, prior, ok := s.repairSource(work.previous.Validation.Binding.Task)

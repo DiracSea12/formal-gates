@@ -220,12 +220,6 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 	paths = append(paths, ".gates/results/"+s.RunID+".merge-cases.md")
 	var tasks []runtime.TaskKey
 	for _, work := range s.repairWork() {
-		if work.verification {
-			if work.result == nil {
-				return nil, nil, "", false
-			}
-			continue
-		}
 		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
 			continue
 		}

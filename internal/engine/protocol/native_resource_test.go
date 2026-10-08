@@ -319,6 +319,9 @@ func recordDevelopmentChecksFixture(t *testing.T, s *State, action string, batch
 	}
 	s.PendingHostActions[sourceID] = intent
 	s.HostActionReceipts[sourceID] = HostActionReceipt{ActionID: sourceID, AdapterOperation: "op.candidate", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+	if s.NativeResources == nil {
+		s.NativeResources = map[string]NativeResource{}
+	}
 	resource := s.checkResource(action, proof)
 	resource.Status, resource.Identity = "READY", proof.Identity
 	s.NativeResources[resource.ID] = resource

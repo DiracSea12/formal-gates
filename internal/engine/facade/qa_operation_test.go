@@ -248,7 +248,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	snapshotRepoCommits(t, root)
 	files := map[string]string{
 		"go.mod":          "module fixture\n\ngo 1.23\n",
-		"app_test.go":     "package main\nimport \"testing\"\nfunc TestFailure(t *testing.T) { t.Fatal(\"observed failure\") }\n",
+		"app_test.go":     "package main\nimport \"testing\"\nfunc TestFailure(t *testing.T) {}\n",
 		"ignored_test.go": "//go:build unavailable\n\npackage main\nimport \"testing\"\nfunc TestIgnored(t *testing.T) {}\n",
 	}
 	for name, body := range files {
@@ -300,12 +300,15 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 		}
 	}
 	design, authored := waitAction("engine.qa.design")
+	if err := os.WriteFile(filepath.Join(authored.Workspace.Path, "app_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFailure(t *testing.T){t.Fatal(\"observed failure\")}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	manifest := authored.Manifest
 	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "failure", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestFailure", Oracle: "test passes"}, {CaseID: "unmatched", Mode: coverage.CaseWhitebox, Scenario: "BOUNDARY", TestRef: "ignored_test.go::TestIgnored", Oracle: "test executes and passes"}}
 	for _, item := range manifest.Cases {
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: item.CaseID})
 	}
-	d.business(design, protocol.ValidationResult{Binding: authored.Binding, Status: "PASS", Manifest: &manifest})
+	d.business(design, protocol.ValidationResult{Binding: authored.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "author the failing acceptance assertion"}})
 	review, reviewed := waitAction("engine.qa.review.rationale")
 	approved := approvedReview(manifest)
 	d.business(review, protocol.ValidationResult{Binding: reviewed.Binding, Status: "PASS", Review: &approved})
