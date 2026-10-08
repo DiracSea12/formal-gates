@@ -135,7 +135,7 @@ func (d *candidateDriver) drive() {
 		if !pending {
 			return
 		}
-		if !bounded || !time.Now().Before(deadline) {
+		if bounded && !time.Now().Before(deadline) {
 			d.t.Fatalf("installed check did not settle within test deadline: %+v", d.run.Next)
 		}
 		time.Sleep(100 * time.Millisecond)
