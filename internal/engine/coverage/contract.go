@@ -657,11 +657,8 @@ func (c CoverageContract) Validate() error {
 		caseByID := make(map[string]AcceptanceCase, len(manifest.Cases))
 		for ci, qaCase := range manifest.Cases {
 			cpath := fmt.Sprintf("%s.cases[%d]", path, ci)
-			if err := validateOperations(qaCase.Operations, cpath+".operations"); err != nil {
+			if err := validateCaseOperations(qaCase, cpath); err != nil {
 				return err
-			}
-			if isGoTestRef(qaCase.TestRef) && len(qaCase.Operations) != 0 {
-				return invalid(CodeInvalidCaseBinding, cpath+".operations", "Go test references derive their operation and cannot also declare operations")
 			}
 			for _, id := range qaCase.SharedSteps {
 				if !sharedIDs[id] {

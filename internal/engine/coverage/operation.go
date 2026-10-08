@@ -42,6 +42,16 @@ func validateOperations(operations []Operation, path string) error {
 	return nil
 }
 
+func validateCaseOperations(qaCase AcceptanceCase, path string) error {
+	if err := validateOperations(qaCase.Operations, path+".operations"); err != nil {
+		return err
+	}
+	if isGoTestRef(qaCase.TestRef) && len(qaCase.Operations) != 0 {
+		return invalid(CodeInvalidCaseBinding, path+".operations", "Go test references derive their operation and cannot also declare operations")
+	}
+	return nil
+}
+
 func isGoTestRef(ref string) bool {
 	file, _, found := strings.Cut(ref, "::")
 	return found && strings.HasSuffix(file, "_test.go")
