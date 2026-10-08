@@ -17,6 +17,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -120,6 +121,29 @@ func (d *candidateDriver) call(input []byte, args ...string) []byte {
 	return output
 }
 func (d *candidateDriver) drive() {
+	d.t.Helper()
+	d.driveOnce()
+	deadline, bounded := d.t.Deadline()
+	for d.run.Next.Kind == decision.KindHostAction && d.run.Next.HostAction != nil {
+		pending := false
+		for _, intent := range d.run.AdapterIntents {
+			if intent.Adapter != nil && intent.Adapter.Operation == "op.check" && slices.Contains(d.run.Next.HostAction.Steps, intent.Step) {
+				pending = true
+				break
+			}
+		}
+		if !pending {
+			return
+		}
+		if !bounded || !time.Now().Before(deadline) {
+			d.t.Fatalf("installed check did not settle within test deadline: %+v", d.run.Next)
+		}
+		time.Sleep(100 * time.Millisecond)
+		d.driveOnce()
+	}
+}
+
+func (d *candidateDriver) driveOnce() {
 	d.t.Helper()
 	args := []string{"workflow", "drive", "--root", d.p.project, "--run-id", "candidate"}
 	cmd := d.p.command(nil, args...)
@@ -330,12 +354,7 @@ func (d *candidateDriver) develop(id string, input protocol.ValidationInput, ext
 		body = "package main\nimport \"os\"\nfunc main() {if len(os.Args)!=2 || !valid(os.Args[1]) {os.Exit(2)}}\nfunc valid(s string) bool {return s!=\"\"}\n"
 	}
 	d.write(input.Workspace.Path, "app.go", body, 0644)
-	cmd := exec.Command("go", "build", "-o", filepath.Join(d.t.TempDir(), "command"), "./...")
-	cmd.Dir = input.Workspace.Path
-	if out, err := cmd.CombinedOutput(); err != nil {
-		d.t.Fatalf("development build: %v %s", err, out)
-	}
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation",   Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"},  Handoff: "Command ready"}}})
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"}, Handoff: "Command ready"}}})
 }
 func (d *candidateDriver) designResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	manifest := input.Manifest
@@ -356,18 +375,20 @@ func (d *candidateDriver) designResult(id string, input protocol.ValidationInput
 		if err := os.Chmod(filepath.Join(d.authoring, "mode_test.go"), 0755); err != nil {
 			d.t.Fatal(err)
 		}
-		result.Development = &protocol.DevelopmentEvidence{Paths: []string{"candidate_test.go", "remove_test.go", "old_test.go", "renamed_test.go", "mode_test.go"}, Summary: "Structural input cases and owned test changes",  }
+		result.Development = &protocol.DevelopmentEvidence{Paths: []string{"candidate_test.go", "remove_test.go", "old_test.go", "renamed_test.go", "mode_test.go"}, Summary: "Structural input cases and owned test changes"}
 	}
 	for i, scenario := range []string{"SUCCESS", "FAILURE"} {
 		item := coverage.AcceptanceCase{CaseID: fmt.Sprintf("%s-%d", mode, i), Scenario: scenario, Oracle: "Input contract holds"}
 		if mode == coverage.ReviewWhitebox {
 			item.Mode = coverage.CaseWhitebox
-			item.TestRef = []string{"TestValid", "TestInvalid"}[i]
+			item.TestRef = "candidate_test.go::" + []string{"TestValid", "TestInvalid"}[i]
 		} else {
 			item.Mode = coverage.CaseBlackbox
 			item.PublicEntry = "app"
 			item.Preconditions = "Command built"
 			item.Steps = "Invoke command with input"
+			item.Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"go", "build", "-o", ".gates-command", "."}}, {Kind: coverage.OperationArgv, Argv: []string{"./.gates-command", []string{"ok", ""}[i]}}}
+			item.Oracle = []string{"Valid input exits zero", "Empty input returns a nonzero exit"}[i]
 		}
 		manifest.Cases = append(manifest.Cases, item)
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: item.CaseID})
@@ -472,41 +493,57 @@ func (d *candidateDriver) executeWorkers() {
 		if input.Binding.Candidate != d.candidate {
 			d.t.Fatal("execution is not bound to exact Qn")
 		}
-		cmd := exec.Command("go", "test", "./...")
-		cmd.Dir = input.Workspace.Path
-		if out, err := cmd.CombinedOutput(); err != nil {
-			d.t.Fatalf("Qn Go checks: %v %s", err, out)
-		}
 		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
 		if input.Handler == "engine.qa.execution" {
-			if input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox {
-				binary := filepath.Join(d.t.TempDir(), "command")
-				build := exec.Command("go", "build", "-o", binary, "./...")
-				build.Dir = input.Workspace.Path
-				if out, err := build.CombinedOutput(); err != nil {
-					d.t.Fatalf("blackbox build: %v %s", err, out)
-				}
-				if out, err := exec.Command(binary, "ok").CombinedOutput(); err != nil {
-					d.t.Fatalf("public valid input: %v %s", err, out)
-				}
-				if out, err := exec.Command(binary, "").CombinedOutput(); err == nil {
-					d.t.Fatalf("public invalid input accepted: %s", out)
-				}
-			}
 			if input.Execution == nil || input.Execution.Candidate.Identity != d.candidate || input.Whitelist == nil {
 				d.t.Fatal("wrong execution method or input identity")
 			}
 			report := coverage.ExecutionReport{Binding: *input.Execution}
-			for _, edge := range input.Whitelist.Entries {
-				if !slices.Contains(report.Binding.ActualCaseIDs, edge.CaseID) {
-					report.Binding.ActualCaseIDs = append(report.Binding.ActualCaseIDs, edge.CaseID)
+			for _, fact := range input.ExecutionFacts {
+				if !slices.Contains(input.PendingCases, fact.CaseID) {
+					continue
 				}
-				report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Procedure: "Execute the approved public command or bound Go test", Observation: "Valid input accepted; invalid input rejected", Comparison: "Matches each approved input oracle", Provenance: coverage.ProvenanceExecuted, Result: coverage.ExecutedPass})
+				item := slices.IndexFunc(input.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == fact.CaseID })
+				if item < 0 || len(fact.Operations) == 0 {
+					d.t.Fatal("native facts have no approved case")
+				}
+				last := fact.Operations[len(fact.Operations)-1]
+				if input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+					if last.Evidence.GoResult != "pass" || last.Evidence.ExitCode != 0 {
+						d.t.Fatalf("Qn precise Go case failed: %+v", last.Evidence)
+					}
+				} else {
+					accepted := last.Evidence.ExitCode == 0
+					if input.Manifest.Cases[item].Scenario == "FAILURE" {
+						accepted = last.Evidence.ExitCode != 0
+					}
+					if len(fact.Operations) != 2 || fact.Operations[0].Evidence.ExitCode != 0 || !accepted {
+						d.t.Fatalf("Qn public input case failed: %+v", fact)
+					}
+				}
+				procedure, observation, err := fact.Render()
+				if err != nil {
+					d.t.Fatal(err)
+				}
+				for _, edge := range input.Whitelist.Entries {
+					if edge.CaseID == fact.CaseID {
+						report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Procedure: procedure, Observation: observation, Comparison: "Actual command exit or exact Go run/pass matches the approved input oracle", Provenance: coverage.ProvenanceExecuted, Result: coverage.ExecutedPass})
+					}
+				}
+				report.Binding.ActualCaseIDs = append(report.Binding.ActualCaseIDs, fact.CaseID)
+			}
+			if len(report.Records) != len(input.Whitelist.Entries) {
+				d.t.Fatal("approved execution edges lack complete native facts")
 			}
 			result.Execution = &report
-			result.Tool = "go test ./..."
-			result.Environment = input.Workspace.Path
-		} else if input.Handler != "engine.gate" {
+			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
+		} else if input.Handler == "engine.gate" {
+			cmd := exec.Command("go", "test", "./...")
+			cmd.Dir = input.Workspace.Path
+			if out, err := cmd.CombinedOutput(); err != nil {
+				d.t.Fatalf("Qn gate Go checks: %v %s", err, out)
+			}
+		} else {
 			d.t.Fatalf("unexpected final worker %s", input.Handler)
 		}
 		d.business(id, result)
