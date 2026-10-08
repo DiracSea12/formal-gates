@@ -1644,7 +1644,10 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 					entry = canaryPublicEntry(designed.Args)
 				}
-				item := worker.Case{Files: &designed.Files, CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps}
+				item := worker.Case{CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps}
+				if designed.Files != nil {
+					item.Files = &designed.Files
+				}
 				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 					item.Operations = canaryCaseOperations(designed.Args)
 				}
@@ -1782,4 +1785,76 @@ func canarySemanticPlan(value *protocol.GranularityReview) *worker.Granularity {
 		result.Batches = append(result.Batches, batch)
 	}
 	return result
+}
+
+// File omission inherits an issued case's material; an explicit empty list
+// clears it. The local peer must preserve that distinction on the native wire.
+func TestCanaryQAFileEvidenceSurvivesCodexRoundTrip(t *testing.T) {
+	for _, sample := range []struct {
+		name    string
+		present bool
+		files   []string
+	}{
+		{name: "omitted"},
+		{name: "empty", present: true, files: []string{}},
+		{name: "declared", present: true, files: []string{"fixture.json"}},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: "engine.qa.design", Provider: "codex", Pending: protocol.PendingAction{ActionID: "design"}, Validation: &protocol.ValidationInput{Handler: "engine.qa.design", Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Points: []coverage.AcceptancePoint{{PointID: "AC-001"}}}}}
+			executor := &canaryLocalExecutor{t: t, canary: &engineCanary{t: t}}
+			design, err := executor.design(*input.Validation, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, raw := range design["cases"].([]any) {
+				if sample.present {
+					raw.(map[string]any)["files"] = sample.files
+				}
+			}
+			domain, err := executor.semanticAnswer(input, t.TempDir(), design)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plainSchema := codexPlain(t, schema)
+			wire := canaryCodexNativeAnswer(plainSchema, domain)
+			body, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain, err := decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projected, err := codexDomainResult(plainSchema, plain)
+			if err != nil || !valuesEqual(projected, domain) {
+				original, _ := json.Marshal(domain)
+				actual, _ := json.Marshal(projected)
+				t.Fatalf("native round trip changed file evidence: %v\noriginal=%s\nprojected=%s", err, original, actual)
+			}
+			manifest := getOf(getOf(projected, "validation"), "manifest")
+			for _, raw := range listOf(getOf(manifest, "cases")) {
+				files, present := objectOrEmpty(raw)["files"]
+				t.Logf("projected case=%s filesPresent=%t files=%v", getOf(raw, "caseId"), present, files)
+				if present != sample.present || present && !valuesEqual(files, codexPlain(t, sample.files)) {
+					t.Fatalf("file evidence changed presence or content: %v", raw)
+				}
+			}
+			// A changed native value must still fail the original equality guard.
+			plain, err = decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cases := listOf(getOf(getOf(getOf(plain, "validation"), "manifest"), "cases"))
+			objectOrEmpty(cases[0])["files"] = []any{"different-fixture.json"}
+			changed, err := codexDomainResult(plainSchema, plain)
+			if err != nil || valuesEqual(changed, domain) {
+				t.Fatalf("changed native file evidence bypassed equality: %v", err)
+			}
+			t.Log("original equality guard rejected different-fixture.json")
+		})
+	}
 }
