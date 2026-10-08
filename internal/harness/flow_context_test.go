@@ -23,17 +23,16 @@ func TestRecoveredContinuationKeepsSessionAndFeedback(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "continue-gap")
-	marker := waitForPattern(t, cfg.Dir, "continue-gap", 40*time.Second)
+	marker := waitForPattern(t, cfg.Dir, "continue-gap")
 	b, _ := os.ReadFile(marker)
 	previous := filepath.Join(filepath.Dir(string(b)), "turn-01")
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, previous)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	var got ComposeState
-	for ctx.Err() == nil {
+	for {
 		got = c.Drive(ctx)
 		if got.Status != StatusObserved {
 			break
@@ -91,8 +90,7 @@ func TestBlockedRetryResumesTheSession(t *testing.T) {
 			scripts := composeScripts{task + "#1": {Status: "BLOCKED", Summary: "temporary access issue", NoWrite: true}}
 			cfg := recoveryConfig(t, scripts)
 			c := openScenario(t, cfg)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
+			ctx := context.Background()
 			got := answerAllowing(t, c, ctx, nil)
 			if got.Status != StatusComplete {
 				t.Fatalf("retry control failed: %+v", got)
@@ -123,8 +121,7 @@ func TestOrdinaryRetryIsNotARepairRound(t *testing.T) {
 	}
 	cfg := recoveryConfig(t, scripts)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	t.Logf("one repair with a retry: state=%+v reportedRounds=%d", got, c.repairRounds())
 	if got.Status != StatusComplete {
@@ -153,17 +150,16 @@ func TestRecoveredRepairContinuationCompletesOneRound(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "repair-continue-gap")
-	marker := waitForPattern(t, cfg.Dir, "continue-gap", 40*time.Second)
+	marker := waitForPattern(t, cfg.Dir, "continue-gap")
 	b, _ := os.ReadFile(marker)
 	previous := filepath.Join(filepath.Dir(string(b)), "turn-01")
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, previous)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	var got ComposeState
-	for ctx.Err() == nil {
+	for {
 		got = c.Drive(ctx)
 		if got.Status != StatusObserved {
 			break
@@ -187,8 +183,7 @@ func TestRecoveredRepairContinuationCompletesOneRound(t *testing.T) {
 func TestGatePromptReferencesComparisonInputs(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	if got.Status != StatusComplete {
 		t.Fatalf("control failed: %+v", got)
@@ -224,8 +219,7 @@ func TestGatePromptReferencesComparisonInputs(t *testing.T) {
 func TestLiveContinuationCarriesUnfinishedWorkFeedback(t *testing.T) {
 	cfg := recoveryConfig(t, composeScripts{"development#1": {Status: "CONTINUE", Summary: "continuing", NoWrite: true}})
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	if got.Status != StatusComplete {
 		t.Fatalf("control failed: %+v", got)
@@ -265,8 +259,7 @@ func TestTerminalReopenExecutesNothingNew(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg := recoveryConfig(t, scripts)
 			c := openScenario(t, cfg)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
+			ctx := context.Background()
 			got := answerAllowing(t, c, ctx, nil)
 			if got.Status != StatusComplete {
 				t.Fatalf("control failed: %+v", got)

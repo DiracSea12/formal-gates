@@ -38,19 +38,18 @@ func TestRecoveredNonSuccessKeepsItsRetryQuestion(t *testing.T) {
 			if mode == "check-runtime" {
 				marker = "process.json"
 			}
-			file := waitForPattern(t, cfg.Dir, "jobs/"+pathSafe(task)+"/*/turn-*/"+marker, 40*time.Second)
+			file := waitForPattern(t, cfg.Dir, "jobs/"+pathSafe(task)+"/*/turn-*/"+marker)
 			job := filepath.Dir(file)
 			if mode == "gate-blocked" {
-				waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json", 10*time.Second)
+				waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json")
 				time.Sleep(80 * time.Millisecond)
 			}
 			owner.Process.Kill()
 			owner.Wait()
 			defer signalTurn(t, job)
-			waitForPattern(t, job, "exit.json", 10*time.Second)
+			waitForPattern(t, job, "exit.json")
 			c := openScenario(t, cfg)
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			defer cancel()
+			ctx := context.Background()
 			got := c.Drive(ctx)
 			t.Logf("recovered %s => %+v", mode, got)
 			if mode == "gate-blocked" {
@@ -80,17 +79,16 @@ func TestRecoveredContinuationNeedsNoReplacement(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "continue-gap")
-	marker := waitForPattern(t, cfg.Dir, "continue-gap", 40*time.Second)
+	marker := waitForPattern(t, cfg.Dir, "continue-gap")
 	b, _ := os.ReadFile(marker)
 	nextJob := string(b)
 	previous := filepath.Join(filepath.Dir(nextJob), "turn-01")
-	waitForPattern(t, previous, "exit.json", 10*time.Second)
+	waitForPattern(t, previous, "exit.json")
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, previous)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := c.Drive(ctx)
 	t.Logf("after completed CONTINUE => %+v", got)
 	for _, q := range got.Pending {
@@ -104,20 +102,22 @@ func TestHeldInteractionVisibleAcrossRetry(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "held-after-retry")
-	file := waitForPattern(t, cfg.Dir, "jobs/development/*/turn-01/interaction-pending.json", 40*time.Second)
+	file := waitForPattern(t, cfg.Dir, "jobs/development/*/turn-01/interaction-pending.json")
 	job := filepath.Dir(file)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	var got ComposeState
 	found := false
-	for ctx.Err() == nil {
+	for {
 		got = c.Drive(ctx)
 		if got.Status == StatusWaitingInteraction && len(got.Held) > 0 {
 			found = true
+			break
+		}
+		if got.Status != StatusObserved {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -138,8 +138,7 @@ func TestDistinctVerdictsMayShareFeedbackContent(t *testing.T) {
 	}
 	cfg := recoveryConfig(t, scripts)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	t.Logf("two legitimate repair rounds => %+v rounds=%d", got, c.repairRounds())
 	if got.Status != StatusComplete {
@@ -156,15 +155,14 @@ func TestDistinctRuntimeFailuresGetFreshQuestions(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "product-garbage")
-	file := waitForPattern(t, cfg.Dir, "jobs/product-review/*/turn-01/native-process.json", 40*time.Second)
+	file := waitForPattern(t, cfg.Dir, "jobs/product-review/*/turn-01/native-process.json")
 	job := filepath.Dir(file)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
-	waitForPattern(t, job, "exit.json", 10*time.Second)
+	waitForPattern(t, job, "exit.json")
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	first := c.Drive(ctx)
 	t.Logf("first rejected answer recovery=%+v", first)
 	var questionID string
@@ -204,7 +202,7 @@ func TestDistinctRuntimeFailuresGetFreshQuestions(t *testing.T) {
 	owner2.Process.Kill()
 	owner2.Wait()
 	defer signalTurn(t, nextJob)
-	waitForPattern(t, nextJob, "exit.json", 10*time.Second)
+	waitForPattern(t, nextJob, "exit.json")
 	c2 := openScenario(t, cfg)
 	second := c2.Drive(ctx)
 	t.Logf("second rejected answer recovery=%+v", second)

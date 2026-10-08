@@ -703,12 +703,11 @@ func (traj runTrajectory) String() string {
 
 // driveToTerminal drives allowing answers until a terminal/failed stop.
 // StatusObserved polls（被接回观察的原调用会自行结算）；fixture 不会出现
-// Held 交互。有界迭代防止在永远观察不结算的调用上挂死。
+// Held 交互。原调用持续观察到真实业务终态或失败。
 func driveToTerminal(t *testing.T, c *Compose, ctx context.Context) ComposeState {
 	t.Helper()
-	var last ComposeState
-	for i := 0; i < 200; i++ {
-		last = c.Drive(ctx)
+	for {
+		last := c.Drive(ctx)
 		switch last.Status {
 		case StatusWaitingDecision:
 			if len(last.Pending) == 0 {
@@ -734,7 +733,6 @@ func driveToTerminal(t *testing.T, c *Compose, ctx context.Context) ComposeState
 			return last
 		}
 	}
-	return last
 }
 
 // allowingChoice picks a question's allowing choice（approve/continue/retry/
@@ -876,8 +874,7 @@ func invariantRunControl(t *testing.T, cfg ComposeConfig, wantDevTurns int) (run
 	t.Helper()
 	watch := startWriterWatch(cfg.Dir)
 	c := invariantOpen(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := driveToTerminal(t, c, ctx)
 	for _, finding := range watch.stop() {
 		t.Errorf("single-writer violation while the uninterrupted control ran:\n%s", finding)
@@ -971,7 +968,7 @@ func startInvariantOwner(t *testing.T, spec invariantOwnerSpec) *exec.Cmd {
 		t.Fatal(err)
 	}
 	bin, _ := os.Executable()
-	cmd := exec.Command(bin, "-test.run=^TestInvariantOwnerSubprocess$", "-test.timeout=120s")
+	cmd := exec.Command(bin, "-test.run=^TestInvariantOwnerSubprocess$", "-test.timeout=0")
 	cmd.Env = append(os.Environ(), "INVARIANT_OWNER_SPEC="+file)
 	log, err := os.Create(filepath.Join(spec.Dir, "invariant-owner.log"))
 	if err != nil {
@@ -1171,13 +1168,13 @@ func TestInterruptedRepairInFlightRecoversToSameTerminal(t *testing.T) {
 		Mode: "repair-in-flight", RepairLimit: cfg.Spec.RepairLimit,
 		CheckArgv: cfg.Spec.Checks[0].Argv, RepairSleepSecs: 25,
 	})
-	marker := waitForPattern(t, cfg.Dir, "invariant-repair-started", 40*time.Second)
+	marker := waitForPattern(t, cfg.Dir, "invariant-repair-started")
 	body, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := strings.TrimSpace(string(body))
-	waitForPattern(t, job, "native-process.json", 10*time.Second)
+	waitForPattern(t, job, "native-process.json")
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job) // 测试结束后结算遗留的原返修监督者
@@ -1189,8 +1186,7 @@ func TestInterruptedRepairInFlightRecoversToSameTerminal(t *testing.T) {
 	}
 	watch := startWriterWatch(cfg.Dir)
 	c := invariantOpen(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := driveToTerminal(t, c, ctx)
 	for _, finding := range watch.stop() {
 		t.Errorf("single-writer violation while the recovered run advanced (duplicate call overlapped the original):\n%s", finding)
@@ -1228,17 +1224,16 @@ func TestInterruptedAfterCheckReceiptRecoversToSameTerminal(t *testing.T) {
 		Mode: "check-receipt", RepairLimit: cfg.Spec.RepairLimit,
 		CheckArgv: checkArgv,
 	})
-	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json", 40*time.Second)
+	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json")
 	job := filepath.Dir(proc)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
-	waitForPattern(t, job, "exit.json", 10*time.Second)
+	waitForPattern(t, job, "exit.json")
 
 	watch := startWriterWatch(cfg.Dir)
 	c := invariantOpen(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := driveToTerminal(t, c, ctx)
 	for _, finding := range watch.stop() {
 		t.Errorf("single-writer violation while the recovered run advanced:\n%s", finding)

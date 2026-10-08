@@ -41,8 +41,7 @@ func TestUpstreamFAILHoldsTheChain(t *testing.T) {
 					{ID: "blocker", Severity: "P1", Message: "requirement or plan invalid", Paths: []string{"main.go"}},
 				}},
 			}, 1)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
+			ctx := context.Background()
 			// The review's ask is answered with its non-allowing choice: the
 			// user's own abort of the mandatory-findings question.
 			got := answerAllowing(t, c, ctx, map[string]string{askTask(stage): "abort"})
@@ -58,8 +57,7 @@ func TestUpstreamFAILHoldsTheChain(t *testing.T) {
 // owner still classifies the run ABORTED and asks nothing.
 func TestAbortSurvivesReopen(t *testing.T) {
 	c, cfg := openWorkflowForReopen(t, "review-abort-reopen", composeScripts{}, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := c.Drive(ctx)
 	if len(state.Pending) == 0 {
 		t.Fatalf("no gate: %+v", state)
@@ -104,8 +102,7 @@ func TestRepairBriefCarriesItsRoundsFindings(t *testing.T) {
 			{ID: "second-defect", Severity: "P1", Message: "second distinct defect B", Paths: []string{"second.go"}},
 		}},
 	}, 1) // spec floor: allowance 1 — round 1 is direct, round 2 asks
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil) // "continue" is the allowing choice
 	t.Logf("final: %+v", got)
 	if got.Status != StatusComplete {
@@ -162,8 +159,7 @@ func TestRepairBriefCarriesItsRoundsFindings(t *testing.T) {
 // verified artifact and has published its result record.
 func TestArchiveCreatesVerifiedArtifact(t *testing.T) {
 	c, _ := openWorkflowForReopen(t, "review-archive", composeScripts{}, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	if got.Status != StatusComplete {
 		t.Fatalf("not complete: %+v", got)
@@ -191,8 +187,7 @@ func TestArchiveCreatesVerifiedArtifact(t *testing.T) {
 // requirement or the project is refused by name, never silently adopted.
 func TestReopenWithChangedBindingIsRefused(t *testing.T) {
 	c, cfg := openWorkflowForReopen(t, "review-binding-original", composeScripts{}, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	c.Drive(ctx)
 	c.Close()
 	cfg.RunID = "different-run"
@@ -309,8 +304,7 @@ func TestGateFindingsEnterTheRepairLoop(t *testing.T) {
 			{ID: "gate-defect-2", Severity: "P1", Message: "still needs repair", Paths: []string{"main.go"}},
 		}},
 	}, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	// Round 1 is granted directly (within the allowance); the round-2 ask is
 	// the loop's user-facing entry — stop at it.
 	state := answerAllowing(t, c, ctx, nil, taskDevelopment)

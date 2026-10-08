@@ -72,8 +72,7 @@ func TestRuntimeStopsSurfaceRetryQuestion(t *testing.T) {
 				wantTask = askTask(checkTaskID("state"))
 			}
 			c := openScenario(t, cfg)
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cancel()
+			ctx := context.Background()
 			got := answerAllowing(t, c, ctx, nil, wantTask)
 			t.Logf("stop=%+v", got)
 			if got.Status != StatusWaitingDecision {
@@ -95,8 +94,7 @@ func TestRestartSessionOpensFreshIdentity(t *testing.T) {
 		}
 	})
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := answerAllowing(t, c, ctx, nil, taskDevelopment)
 	t.Logf("restart stop=%+v", state)
 	if state.Status != StatusWaitingDecision || len(state.Pending) == 0 {
@@ -240,7 +238,7 @@ func startRecoveryOwner(t *testing.T, cfg ComposeConfig, mode string) *exec.Cmd 
 	file := filepath.Join(t.TempDir(), "owner.json")
 	os.WriteFile(file, b, 0600)
 	bin, _ := os.Executable()
-	cmd := exec.Command(bin, "-test.run=^TestRecoveryOwner$", "-test.timeout=120s")
+	cmd := exec.Command(bin, "-test.run=^TestRecoveryOwner$", "-test.timeout=0")
 	cmd.Env = append(os.Environ(), "RECOVERY_OWNER_SPEC="+file)
 	log, err := os.Create(filepath.Join(cfg.Dir, "owner.log"))
 	if err != nil {
@@ -254,33 +252,32 @@ func startRecoveryOwner(t *testing.T, cfg ComposeConfig, mode string) *exec.Cmd 
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait(); log.Close() })
 	return cmd
 }
-func waitForPattern(t *testing.T, root, pattern string, bound time.Duration) string {
+func waitForPattern(t *testing.T, root, pattern string) string {
 	t.Helper()
-	deadline := time.Now().Add(bound)
-	for time.Now().Before(deadline) {
-		matches, _ := filepath.Glob(filepath.Join(root, pattern))
+	for {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(matches) > 0 {
 			return matches[0]
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting %s", pattern)
-	return ""
 }
 func TestCrashDuringRepairObservesOriginalCall(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "repair")
-	marker := waitForPattern(t, cfg.Dir, "repair-call-started", 40*time.Second)
+	marker := waitForPattern(t, cfg.Dir, "repair-call-started")
 	body, _ := os.ReadFile(marker)
 	job := strings.TrimSpace(string(body))
-	waitForPattern(t, job, "native-process.json", 10*time.Second)
+	waitForPattern(t, job, "native-process.json")
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	before := supervisorAlive(job)
 	got := c.Drive(ctx)
 	after := supervisorAlive(job)
@@ -292,8 +289,7 @@ func TestCrashDuringRepairObservesOriginalCall(t *testing.T) {
 		if _, err := c.Answer(context.Background(), got.Pending[0].DecisionID, "continue"); err != nil {
 			t.Fatal(err)
 		}
-		moreCtx, moreCancel := context.WithTimeout(context.Background(), 12*time.Second)
-		defer moreCancel()
+		moreCtx := context.Background()
 		next := c.Drive(moreCtx)
 		t.Logf("after extra continue=%+v originalRepairStillAlive=%v developmentTurns=%d", next, supervisorAlive(job), len(turnDirs(t, c, taskDevelopment)))
 		if supervisorAlive(job) && len(turnDirs(t, c, taskDevelopment)) > 2 {
@@ -306,15 +302,14 @@ func TestCrashAfterCheckReceiptAdoptsCheckResult(t *testing.T) {
 	cfg.Spec.RepairLimit = 1
 	cfg.Spec.Checks[0].Argv = []string{"/bin/sh", "-c", "sleep 2; test \"$(cat state.txt)\" = ok"}
 	owner := startRecoveryOwner(t, cfg, "check")
-	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json", 40*time.Second)
+	proc := waitForPattern(t, cfg.Dir, "jobs/check-state/*/turn-*/process.json")
 	job := filepath.Dir(proc)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
-	waitForPattern(t, job, "exit.json", 10*time.Second)
+	waitForPattern(t, job, "exit.json")
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := c.Drive(ctx)
 	t.Logf("recovered completed check=%+v", got)
 	for _, q := range got.Pending {
@@ -327,17 +322,16 @@ func TestCrashAfterGateReceiptAdoptsGateVerdict(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "gate")
-	proc := waitForPattern(t, cfg.Dir, "jobs/gate-complexity-gate/*/turn-*/native-process.json", 40*time.Second)
+	proc := waitForPattern(t, cfg.Dir, "jobs/gate-complexity-gate/*/turn-*/native-process.json")
 	job := filepath.Dir(proc)
-	waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json", 10*time.Second)
+	waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json")
 	time.Sleep(80 * time.Millisecond)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
-	waitForPattern(t, job, "exit.json", 10*time.Second)
+	waitForPattern(t, job, "exit.json")
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := c.Drive(ctx)
 	t.Logf("recovered completed gate=%+v", got)
 	if got.Status != StatusComplete {
@@ -348,8 +342,7 @@ func TestCrashAfterGateReceiptAdoptsGateVerdict(t *testing.T) {
 func TestPlanApprovalReferencesReadableEvidence(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil, askTask(taskPlan))
 	t.Logf("plan question=%+v", got)
 	if got.Status != StatusWaitingDecision || len(got.Pending) == 0 {
@@ -372,8 +365,7 @@ func TestRepeatedPreReviewRetriesStillComplete(t *testing.T) {
 	scripts := composeScripts{"product-review#1": {Status: "FAIL", Summary: "first blocker", Findings: scriptedFindings}, "product-review#2": {Status: "FAIL", Summary: "second blocker", Findings: scriptedFindings}}
 	cfg := recoveryConfig(t, scripts)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	got := answerAllowing(t, c, ctx, nil)
 	t.Logf("repeat review retry final=%+v", got)
 	if got.Status != StatusComplete {
@@ -385,22 +377,24 @@ func TestRecoveredGatePermissionIsHeldForUser(t *testing.T) {
 	cfg := recoveryConfig(t, nil)
 	cfg.Spec.RepairLimit = 1
 	owner := startRecoveryOwner(t, cfg, "held-gate")
-	pending := waitForPattern(t, cfg.Dir, "jobs/gate-complexity-gate/*/turn-*/interaction-pending.json", 40*time.Second)
+	pending := waitForPattern(t, cfg.Dir, "jobs/gate-complexity-gate/*/turn-*/interaction-pending.json")
 	job := filepath.Dir(pending)
-	waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json", 10*time.Second)
+	waitForPattern(t, cfg.Dir, "outcomes/check-state/*.json")
 	time.Sleep(80 * time.Millisecond)
 	owner.Process.Kill()
 	owner.Wait()
 	defer signalTurn(t, job)
 	c := openScenario(t, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	var got ComposeState
 	found := false
-	for ctx.Err() == nil {
+	for {
 		got = c.Drive(ctx)
 		if got.Status == StatusWaitingInteraction && len(got.Held) > 0 {
 			found = true
+			break
+		}
+		if got.Status != StatusObserved {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)

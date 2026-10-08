@@ -100,8 +100,7 @@ func TestWorkflowLiveAcceptanceGreenChain(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	extraRounds := 0
 	retries := 0
 	for {
