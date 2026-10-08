@@ -162,7 +162,7 @@ func materializeUnchangedCandidate(d *validationDriver, candidate coverage.Valid
 		}
 		// The development tree and approved artifacts were not edited. A native
 		// immutable candidate therefore retains its exact identity and digest.
-		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: candidate.Identity, Digest: candidate.Digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: candidate.Identity, Digest: candidate.Digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
 		evidence.GateView = gateReviewView(params)
 		data, _ = json.Marshal(evidence)
 		var values map[string]any
