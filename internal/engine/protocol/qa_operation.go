@@ -82,13 +82,22 @@ func ExecutionIdentities(facts []ExecutionFact) (tool, environment string) {
 
 func (s *State) qaCheckPlans(target *ValidationTarget, cd *compiler.CompiledDefinition) ([]CheckParameters, error) {
 	binding := s.validationBinding(target.Task, cd)
+	if attempt := s.Attempts[target.Task]; attempt.Work != nil {
+		binding = *attempt.Work
+	} else if attempt := s.EndedAttempts[target.Task]; attempt.Work != nil {
+		binding = *attempt.Work
+	}
 	return s.qaOperationPlans(target, binding)
 }
 
 func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding) ([]CheckParameters, error) {
-	wave := s.validationWaveForTask(target.Task)
-	if wave == nil || wave != s.currentValidationWave() || wave.Status != "COLLECTING" || target.Kind != "QA" || !s.validationRequirementCurrent() || s.requirementChangePending() || wave.RouteDigest != s.validationRouteDigest() {
+	wave := s.validationWave(binding.WaveID)
+	if wave == nil || s.currentValidationWave() == nil || s.currentValidationWave().Status != "COLLECTING" || s.validationTargetCurrent(binding) == nil || target.Kind != "QA" || !s.validationRequirementCurrent() || s.requirementChangePending() || s.currentValidationWave().RouteDigest != s.validationRouteDigest() {
 		return nil, validationError("QA execution needs the current frozen collecting wave")
+	}
+	target = wave.Targets[binding.Task.String()]
+	if target == nil {
+		return nil, validationError("QA execution has no original frozen target")
 	}
 	c, whitelist, err := s.executionContract(target.Mode, wave)
 	if err != nil {
@@ -183,7 +192,7 @@ func (s *State) qaExecutionFacts(target *ValidationTarget, cd *compiler.Compiled
 }
 
 func (s *State) nextQACheckParameters(task runtime.TaskKey, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
-	wave := s.validationWaveForTask(task)
+	wave := s.currentValidationWave()
 	if wave == nil {
 		return CheckParameters{}, false
 	}
@@ -215,7 +224,7 @@ func (s *State) nextQACheckParameters(task runtime.TaskKey, cd *compiler.Compile
 }
 
 func (s *State) qaCheckInputsCurrent(p CheckParameters) bool {
-	wave := s.validationWaveForTask(p.Binding.Task)
+	wave := s.validationWave(p.Binding.WaveID)
 	if wave == nil || p.QA == nil || p.SourceActionID != "" || p.Check.ID != "" || p.Check.Command != "" {
 		return false
 	}

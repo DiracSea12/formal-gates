@@ -215,6 +215,15 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		t.Fatal("development and blackbox design are not concurrent")
 	}
 	manifest := simpleManifest(qi)
+	for i := range manifest.Cases {
+		test := "TestValid"
+		if manifest.Cases[i].CaseID == "invalid" {
+			test = "TestInvalid"
+		}
+		manifest.Cases[i].PublicEntry = "public Valid input function"
+		manifest.Cases[i].Steps = "invoke the reviewed public input contract test " + test
+		manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-buildvcs=false", "-run", "^" + test + "$", "."}}}
+	}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
 	id, in := d.action("engine.qa.review.rationale")
@@ -232,7 +241,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	manifest = in.Manifest
 	for _, row := range []struct{ id, scenario, ref string }{{"white-success", "SUCCESS", "TestValid"}, {"white-misuse", "MISUSE", "TestInvalid"}} {
-		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go#" + row.ref, Oracle: "specified input outcome"})
+		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.ref, Oracle: "specified input outcome"})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: row.id})
 	}
 	body := "package command\nimport \"testing\"\nfunc TestValid(t *testing.T){if !Valid(\"ok\"){t.Fatal(\"valid input\")}}\nfunc TestInvalid(t *testing.T){if Valid(\"\"){t.Fatal(\"invalid input\")}}\n"
@@ -253,7 +262,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	for _, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.qa.execution" || input.Handler == "engine.gate" {
-			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -274,7 +283,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		if input.Handler == "engine.qa.execution" {
 			report := executionFor(input)
 			result.Execution = &report
-			result.Tool, result.Environment = "go test -buildvcs=false ./...", "native isolated candidate"
+			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 		}
 		d.business(id, result)
 		if len(d.run.ValidationInputs) > 0 {
@@ -526,7 +535,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 			d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
@@ -542,7 +551,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 				}
 			}
 			gate, gateInput := d.action("engine.gate")
-			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
 			d.business(gate, protocol.ValidationResult{Binding: gateInput.Binding, Status: "PASS"})
@@ -672,6 +681,14 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				manifest := simpleManifest(input)
 				for i := range manifest.Cases {
 					manifest.Cases[i].Mode = coverage.CaseMerge
+					argument := "valid"
+					if manifest.Cases[i].CaseID == "invalid" {
+						argument = ""
+					}
+					manifest.Cases[i].PublicEntry = "public Valid input function"
+					manifest.Cases[i].Steps = "invoke the public input function through its isolated caller"
+					command := "mkdir -p .gates/input-call; cat > .gates/input-call/main.go <<'GO'\npackage main\nimport(\"command\";\"os\")\nfunc main(){if len(os.Args)!=2 || !command.Valid(os.Args[1]){os.Exit(2)}}\nGO\ngo run -buildvcs=false ./.gates/input-call " + fmt.Sprintf("%q", argument)
+					manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: command}}
 				}
 				master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				master.drive()
@@ -708,7 +725,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(input.Workspace.Path, path), []byte(body), 0644); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 						t.Fatal(err)
 					}
 					child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
@@ -749,7 +766,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					if input.Binding.Candidate != candidate.Identity {
 						t.Fatal("final validation mixed native candidates")
 					}
-					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-buildvcs=false", "./..."); err != nil {
+					if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 						t.Fatal(err)
 					}
 				}

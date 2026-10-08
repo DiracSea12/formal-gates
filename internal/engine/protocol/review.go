@@ -535,7 +535,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		decision := payload.Topology
 		binding, err := state.topologyBinding(decision)
 		if err != nil {
-			return err
+			return reviewReject(err)
 		}
 		if decision.Decision == topologySplit {
 			// 合并路线锁定后不再有常规路线选择：仍有未决 SELECT_ROUTE Ask

@@ -166,8 +166,6 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
-	wave := s.validationWave(b.WaveID)
-	current := s.currentValidationWave()
 	if s.validationRole(b.Task, cd) == "engine.repair" {
 		for _, work := range s.repairWork() {
 			if work.task == b.Task && work.wave.ID == b.WaveID {
@@ -176,20 +174,30 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		}
 		return false
 	}
-	if wave == nil {
-		return false
-	}
-	target := wave.Targets[b.Task.String()]
-	if wave != current || wave.Status != "COLLECTING" {
-		if !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
-			return false
-		}
-		if wave != current {
-			if current == nil || current.Status != "COLLECTING" {
-				return false
-			}
-			target = current.Targets[b.Task.String()]
-		}
-	}
+	target := s.validationTargetCurrent(b)
 	return target != nil && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
+}
+
+// validationTargetCurrent applies the confirmed carry decision to the original
+// signed wave binding. Its current target must retain the same frozen duty.
+func (s *State) validationTargetCurrent(b WorkBinding) *ValidationTarget {
+	if s.Validation == nil {
+		return nil
+	}
+	wave, current := s.validationWave(b.WaveID), s.currentValidationWave()
+	if wave == nil {
+		return nil
+	}
+	if wave != current || wave.Status != "COLLECTING" || b.Generation != s.Validation.Generation {
+		if !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
+			return nil
+		}
+	}
+	if wave != current {
+		if current == nil || current.Status != "COLLECTING" {
+			return nil
+		}
+		return current.Targets[b.Task.String()]
+	}
+	return wave.Targets[b.Task.String()]
 }

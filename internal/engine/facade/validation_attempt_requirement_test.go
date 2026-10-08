@@ -133,12 +133,14 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
+				retainNativeEvidence(t, d.f)
 				if role == "engine.qa.execution" || role == "engine.gate" {
 					d.reviewReady()
 				} else if role == "engine.qa.review.rationale" {
 					id, in := d.action("engine.qa.design")
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
+					d.drive()
 				}
 				id, original := d.action(role)
 				for i := 0; i < 2; i++ {
@@ -209,6 +211,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					m := di.Manifest
 					d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &m})
 				}
+				d.drive()
 				id, in := d.action(role)
 				if !redo && in.Binding != original.Binding || redo && in.Binding.Task == original.Binding.Task {
 					t.Fatal("requirement decision changed the wrong responsibility")
@@ -228,9 +231,17 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 				case "engine.qa.execution":
 					r := executionFor(in)
-					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+					tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
+					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 				case "engine.gate":
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
+				}
+				if candidate.Identity == "" {
+					dev, di := d.action("engine.development.batch")
+					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
+					d.drive()
+					d.materialize()
+					d.drive()
 				}
 				if role == "engine.qa.design" {
 					rid, ri := d.action("engine.qa.review.rationale")
@@ -238,15 +249,15 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 				}
 				if candidate.Identity == "" {
-					dev, di := d.action("engine.development.batch")
-					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
-					d.materialize()
+					d.drive()
 					d.materialize()
 				}
+				d.drive()
 				if role != "engine.qa.execution" {
 					qa, qi := d.action("engine.qa.execution")
 					r := executionFor(qi)
-					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+					tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 				}
 				if role != "engine.gate" {
 					gate, gi := d.gateAction("quality")
@@ -435,7 +446,8 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 					t.Fatal("repair lost affected then full contract")
 				}
 				r := executionFor(qi)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+				tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 			}
 			d.reopen()
 			d.drive()
