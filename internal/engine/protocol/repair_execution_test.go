@@ -432,16 +432,23 @@ func TestRepairEvidenceUsesSelectedManifests(t *testing.T) {
 
 func TestFinalRepairEvidenceUsesMemberUnion(t *testing.T) {
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
-	wave := &ValidationWave{Status: "REPAIR", Repair: &ValidationRepair{Task: task}}
-	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first"}, {ID: "second"}}}
+	wave := &ValidationWave{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}
+	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first", Checks: []DevelopmentCheck{{ID: "first-check", Command: "printf first"}}}, {ID: "second", Checks: []DevelopmentCheck{{ID: "second-check", Command: "printf second"}}}}}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "first-case"}, {CaseID: "second-case"}}}
-	s := &State{SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifest}}}, Results: map[string]WorkerResult{"plan": {Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}}}
+	s := &State{RunID: "run", SelectedGates: []string{mergeQAGateID}, DispatchBindings: map[string]WorkBinding{}, Validation: &Validation{Generation: 1, RequirementRevision: "req", Waves: []ValidationWave{*wave}, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifest}}}, Results: map[string]WorkerResult{"plan": {ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, GranularityReview: plan}}}}
+	wave = &s.Validation.Waves[0]
 	var members []DevelopmentEvidence
 	final := DevelopmentEvidence{}
 	for _, member := range s.repairMembers(wave) {
 		caseID := member.batch.ID + "-case"
 		evidence := DevelopmentEvidence{Paths: []string{member.batch.ID + ".go", "shared.go"}, AffectedCases: []string{caseID}, CaseRuns: []RepairCaseEvidence{{Mode: coverage.ReviewMerge, CaseID: caseID, Result: coverage.ExecutedPass, Procedure: "ran declared member command", Observation: "exit=0 exact output bytes", Comparison: "output matched member contract"}}}
-		s.Results[member.batch.ID] = WorkerResult{Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: member.task}, Development: &evidence}}
+		binding := WorkBinding{Task: member.task, WaveID: wave.ID, Generation: 1, RequirementRevision: "req", PlanRequest: "plan", BatchID: member.batch.ID, WorkspaceID: member.batch.ID + ":workspace"}
+		s.Results[member.batch.ID] = WorkerResult{ActionID: member.batch.ID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: OutcomePass, Development: &evidence}}
+		s.DispatchBindings[member.batch.ID] = binding
+		if s.developmentResultRecord(member.task) != nil {
+			t.Fatal("accepted edit completed the member before native checks")
+		}
+		recordDevelopmentChecksFixture(t, s, member.batch.ID, *member.batch)
 		members = append(members, evidence)
 		final.AffectedCases = append(final.AffectedCases, caseID)
 		final.CaseRuns = append(final.CaseRuns, evidence.CaseRuns...)
