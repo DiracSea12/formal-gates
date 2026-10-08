@@ -144,6 +144,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			items["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
 		}
 		if input.Handler == "engine.qa.execution" {
+			fields["checkpoint"].(map[string]any)["description"] = "True only for a partial report with unfinished required case judgments. When pendingCases is empty and Completed covers requiredCases, report false or omit this field and return execution.records {}. Accepted FAIL records are complete. Status and findings remain honest semantic judgments; the program reuses Completed records."
 			keys := map[string]any{}
 			observation, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 			if err != nil {

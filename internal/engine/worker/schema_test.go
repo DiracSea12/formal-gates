@@ -302,3 +302,52 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 		}
 	})
 }
+
+func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
+	input := semanticInput()
+	input.Handler = "engine.qa.execution"
+	input.RequirementDocument.Content = "confirmed requirement"
+	input.Validation.Execution = &coverage.ExecutionBinding{Candidate: coverage.ValidationCandidate{Identity: "candidate"}}
+	input.Validation.RequiredCases = []string{"new", "prior"}
+	input.Validation.Completed = []coverage.ExecutionRecord{
+		{CaseID: "new", Result: coverage.ExecutedFail},
+		{CaseID: "prior", Result: coverage.ExecutedPass},
+	}
+	input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
+	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "new", Operations: []protocol.ExecutionOperationFact{{Evidence: protocol.CheckEvidence{Tool: "actual-tool", Environment: "actual-environment"}}}}}
+	before, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "qa-execution"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, instruction := range []string{"checkpoint true only for a partial report", "Completed FAIL judgments are complete", "checkpoint false or omitted and execution.records {}", "Report honest status and findings"} {
+		if !strings.Contains(material.Prompt, instruction) {
+			t.Fatalf("final report instruction missing: %s", instruction)
+		}
+	}
+	fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)
+	description := fields["checkpoint"].(map[string]any)["description"].(string)
+	if !strings.Contains(description, "partial report with unfinished required case judgments") || !strings.Contains(description, "false or omit") || !strings.Contains(description, "Accepted FAIL records are complete") {
+		t.Fatal("schema does not distinguish partial judgments from a final failed report")
+	}
+	records := fields["execution"].(map[string]any)["properties"].(map[string]any)["records"].(map[string]any)
+	if len(records["properties"].(map[string]any)) != 0 || records["additionalProperties"] != false || len(material.ResultTemplate.Validation.Execution.Records) != 0 {
+		t.Fatal("completed judgments were requested again")
+	}
+	for _, checkpoint := range []bool{false, true} {
+		body := decodeSemantic(t, input, Result{Outcome: "PASS", Validation: &Validation{Status: "FAIL", Checkpoint: checkpoint, Execution: &Execution{Records: map[string]Observation{}}}}).Validation
+		if body.Status != "FAIL" || body.Checkpoint != checkpoint || len(body.Execution.Records) != 0 || len(body.Execution.NotExecuted) != 0 {
+			t.Fatal("model report was rewritten or completed facts were resubmitted")
+		}
+	}
+	after, err := json.Marshal(material.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("render changed the issued input")
+	}
+}
