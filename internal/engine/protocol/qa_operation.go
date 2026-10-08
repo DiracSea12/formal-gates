@@ -92,7 +92,7 @@ func (s *State) qaCheckPlans(target *ValidationTarget, cd *compiler.CompiledDefi
 
 func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding) ([]CheckParameters, error) {
 	wave := s.validationWave(binding.WaveID)
-	if wave == nil || s.validationTargetCurrent(binding) == nil || target.Kind != "QA" || !s.validationRequirementCurrent() || s.requirementChangePending() || s.currentValidationWave().RouteDigest != s.validationRouteDigest() {
+	if wave == nil || s.currentValidationWave() == nil || s.currentValidationWave().Status != "COLLECTING" || s.validationTargetCurrent(binding) == nil || target.Kind != "QA" || !s.validationRequirementCurrent() || s.requirementChangePending() || s.currentValidationWave().RouteDigest != s.validationRouteDigest() {
 		return nil, validationError("QA execution needs the current frozen collecting wave")
 	}
 	target = wave.Targets[binding.Task.String()]

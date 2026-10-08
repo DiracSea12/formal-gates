@@ -215,9 +215,14 @@ func TestQACarriedDutyPreservesNativeRecipesAndReceipts(t *testing.T) {
 	}
 	s.Validation.Waves[0].Status = "INVALIDATED"
 	current.ID, current.Generation, current.RequirementRevision = "carried-wave", 2, "new-req"
-	s.Validation.Waves = append(s.Validation.Waves, current)
-	s.Validation.Generation, s.Validation.RequirementRevision = 2, "new-req"
+	// Candidate rebuilding suspends execution without discarding the carried
+	// exhausted duty that the next frozen wave must retain.
 	s.RequirementRevisions = append(s.RequirementRevisions, ConfirmedRevision{Revision: "new-req", StateRevision: 2, WorkDecisions: []RequirementWorkDecision{{Work: RequirementWork{Task: target.Task}, Disposition: RequirementWorkCarry}}})
+	s.Validation.Generation, s.Validation.RequirementRevision = 2, "new-req"
+	if !s.validationWorkOwed(binding, cd) || len(s.qaExecutionFacts(target, cd)) != 0 {
+		t.Fatal("candidate rebuilding lost carried duty or allowed premature execution")
+	}
+	s.Validation.Waves = append(s.Validation.Waves, current)
 	target = s.currentValidationWave().Targets[target.Task.String()]
 	assertCarried := func(state *State) {
 		t.Helper()

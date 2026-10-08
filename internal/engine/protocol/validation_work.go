@@ -185,13 +185,19 @@ func (s *State) validationTargetCurrent(b WorkBinding) *ValidationTarget {
 		return nil
 	}
 	wave, current := s.validationWave(b.WaveID), s.currentValidationWave()
-	if wave == nil || current == nil || current.Status != "COLLECTING" {
+	if wave == nil {
 		return nil
 	}
-	if wave != current || b.Generation != s.Validation.Generation {
+	if wave != current || wave.Status != "COLLECTING" || b.Generation != s.Validation.Generation {
 		if !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
 			return nil
 		}
 	}
-	return current.Targets[b.Task.String()]
+	if wave != current {
+		if current == nil || current.Status != "COLLECTING" {
+			return nil
+		}
+		return current.Targets[b.Task.String()]
+	}
+	return wave.Targets[b.Task.String()]
 }
