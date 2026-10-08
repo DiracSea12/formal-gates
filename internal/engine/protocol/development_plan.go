@@ -454,6 +454,9 @@ func (s *State) latestSlicePlanProposal() *GranularityReview {
 	return p
 }
 func (s *State) plannedBatchSource(task runtime.TaskKey, cd *compiler.CompiledDefinition) (DevelopmentBatch, bool) {
+	if s.mergeMaster() {
+		return DevelopmentBatch{}, false
+	}
 	original := s.sourceValidationTask(task)
 	for _, d := range s.Decisions {
 		p := s.decisionPlanProposal(d)
@@ -530,6 +533,9 @@ func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidenc
 	return nil
 }
 func (s *State) developmentBatch(task runtime.TaskKey, cd *compiler.CompiledDefinition) (string, *GranularityReview, DevelopmentBatch, bool) {
+	if s.mergeMaster() {
+		return "", nil, DevelopmentBatch{}, false
+	}
 	request, p, _ := s.confirmedDevelopmentPlan()
 	if p == nil {
 		return "", nil, DevelopmentBatch{}, false
@@ -542,6 +548,9 @@ func (s *State) developmentBatch(task runtime.TaskKey, cd *compiler.CompiledDefi
 	return "", nil, DevelopmentBatch{}, false
 }
 func (s *State) planTasks(cd *compiler.CompiledDefinition) []runtime.TaskKey {
+	if s.mergeMaster() {
+		return nil
+	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	var tasks []runtime.TaskKey
 	if p != nil {
@@ -667,6 +676,9 @@ func sameTaskSet(a, b []runtime.TaskKey) bool {
 	return true
 }
 func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.CompiledDefinition) {
+	if s.mergeMaster() {
+		return
+	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	if p == nil || !s.developmentPlanCurrent(p) {
 		return
