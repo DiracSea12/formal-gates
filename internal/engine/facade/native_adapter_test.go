@@ -388,6 +388,7 @@ func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
 			identities := snapshotRepoCommits(t, root, "implementation", "verified candidate")
 			d := completePromotionPipeline(t, nil, root, identities[0])
 			runner := &nativeFailureObservationRunner{inner: vcs.ExecRunner{}, message: "bound organization", unavailable: unavailable}
+			prepareApprovedPromotionPrefix(t, d, runner.message)
 			d.f.vcsRunner = runner
 			d.f.vcs = vcs.New(root, runner)
 			if _, err := d.f.PrepareCandidate(runner.message); err == nil || !runner.failed || runner.commits != 1 {
@@ -416,7 +417,14 @@ func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
 			if _, err := d.f.PrepareCandidate(runner.message); err == nil {
 				t.Fatal("failed or UNKNOWN reentry executed without authorization")
 			}
-			d.drive()
+			_, driveErr := d.f.Drive()
+			want := "native responsibility has no remaining execution allowance"
+			if unavailable {
+				want = "candidate promotion remains incomplete"
+			}
+			if driveErr == nil || !strings.Contains(driveErr.Error(), want) {
+				t.Fatalf("blocked native drive: %v", driveErr)
+			}
 			after, err := d.f.observePromotion()
 			if err != nil || !reflect.DeepEqual(before, after) || driverState(t, d).DeliveryComplete(d.f.definition) {
 				t.Fatalf("failed reentry changed native bytes or admitted delivery: %+v %v", after, err)

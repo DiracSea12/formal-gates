@@ -15,7 +15,9 @@ import (
 func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 	for _, control := range []protocol.ControlKind{protocol.ControlAbort, protocol.ControlValidation, protocol.ControlRecovery} {
 		t.Run(string(control), func(t *testing.T) {
-			d := newValidationDriver(t, "blackbox", "quality")
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 			type acceptedEvent struct {
 				event   protocol.Event
 				receipt protocol.Acceptance
@@ -29,7 +31,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 			}
 			qa, _ := d.action("engine.qa.design")
 			d.receipt(qa)
-			start, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, qa, protocol.LifecycleStart)
+			start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), qa, protocol.LifecycleStart)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -50,7 +52,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 			} else {
 				id, _ := d.action("engine.development.batch")
 				d.receipt(id)
-				start, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
+				start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -90,14 +92,14 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				if intent.Operation != protocol.HostActionTerminateAgent || intent.Terminate == nil {
 					t.Fatalf("actual abort operation: %+v", intent)
 				}
-				stop, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, intent.Terminate.Identity, protocol.LifecycleStop)
+				stop, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, protocol.LifecycleStop)
 				if err != nil {
 					t.Fatal(err)
 				}
 				submit(stop)
 				// Termination has no issued correlation; the transport binds its
 				// receipt correlation to this exact action ID.
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, DefaultProvider, id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), id, intent.Operation, d.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -127,8 +129,18 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 			if summary.LastEvent == nil || summary.LastEvent.Digest != digest || !reflect.DeepEqual(summary.LastEvent.Acceptance, original) {
 				t.Fatalf("original terminal business receipt replaced: %+v", summary.LastEvent)
 			}
-			if summary.Termination == nil || !reflect.DeepEqual(summary.Termination.Events, snapshot.State.Events) {
-				t.Fatal("later host facts changed or disappeared from the event ledger")
+			if summary.Termination == nil {
+				t.Fatal("terminal summary lost the State event ledger")
+			}
+			for id, original := range snapshot.State.Events {
+				if !reflect.DeepEqual(summary.Termination.Events[id], original) {
+					t.Fatal("later host facts changed or disappeared from the event ledger")
+				}
+			}
+			for id, record := range summary.Termination.Events {
+				if _, existed := snapshot.State.Events[id]; !existed && record.Acceptance.Kind != string(protocol.KindHostActionReceipt) {
+					t.Fatalf("cleanup added an unrelated event: %+v", record)
+				}
 			}
 			before, err := os.ReadFile(terminalSummaryPath(d.f.stateDir))
 			if err != nil {
@@ -154,11 +166,11 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
 	for _, seam := range []string{"before-cleanup", "after-cleanup", "intent-before-cleanup", "cleanup-before-summary", "summary-before-intent-removal"} {
 		t.Run(seam, func(t *testing.T) {
-			d := startValidationDriver(t, nil)
+			d := nativeMasterDriver(t)
 			for id := range d.run.PendingActions {
 				d.receipt(id)
 				for _, kind := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-					event, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, kind)
+					event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, kind)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -176,15 +188,19 @@ func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
 			}
 			final := protocol.Event{ID: d.eventID(), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}}
 			first := d.submit(final)
+			settleAbortForPublication(t, d)
 			if seam == "after-cleanup" {
 				d.drive()
 			} else if seam != "before-cleanup" {
-				run, err := d.f.project()
+				snapshot, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)
 				}
-				summary := summaryForRun(run, ownerInterval{})
-				if err := writeJSONAtomic(terminalIntentPath(d.f.stateDir), summary); err != nil {
+				if err := d.f.freezeCleanupSummary(snapshot.State); err != nil {
+					t.Fatal(err)
+				}
+				summary, err := d.f.readTerminalIntent()
+				if err != nil {
 					t.Fatal(err)
 				}
 				if seam != "intent-before-cleanup" {
@@ -281,7 +297,7 @@ func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
 
 // LastEvent is sufficient for supported terminal payloads without a State ledger.
 func TestTerminalReplaySupportsSummaryWithoutStateLedger(t *testing.T) {
-	d := startValidationDriver(t, nil)
+	d := nativeMasterDriver(t)
 	event, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop"})
 	if err != nil {
 		t.Fatal(err)

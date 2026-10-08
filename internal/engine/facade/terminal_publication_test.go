@@ -3,6 +3,7 @@ package facade
 import (
 	"encoding/json"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,15 +11,15 @@ import (
 
 // Public terminal status waits for the immutable summary committed by Drive.
 func TestAbortPublicationWaitsForCleanup(t *testing.T) {
-	d := startValidationDriver(t, nil)
+	d := nativeMasterDriver(t)
 	for id := range d.run.PendingActions {
 		d.receipt(id)
-		ev, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
+		ev, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
 		if err != nil {
 			t.Fatal(err)
 		}
 		d.submit(ev)
-		ev, err = protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStop)
+		ev, err = protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStop)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,5 +88,31 @@ func TestAbortPublicationWaitsForCleanup(t *testing.T) {
 	}
 	if string(raw) != string(again) {
 		t.Fatal("recovery rewrote immutable terminal evidence")
+	}
+}
+
+// settleAbortForPublication observes original termination and native cleanup
+// facts without publishing the terminal summary, leaving its real crash seam.
+func settleAbortForPublication(t *testing.T, d *validationDriver) {
+	t.Helper()
+	d.completeWorkerTerminations()
+	for {
+		if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.State.Phase == runtime.PhaseTerminal {
+			return
+		}
+		progress, err := d.f.driveNative()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !progress {
+			t.Fatalf("abort did not settle its native responsibilities: phase=%s pending=%+v", snapshot.State.Phase, snapshot.State.PendingHostActions)
+		}
 	}
 }

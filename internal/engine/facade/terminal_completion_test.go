@@ -21,7 +21,9 @@ import (
 // COMPLETE 后晋升收敛，最终 Drive 核验交付到达终态。返回到达终态的驱动。
 func concludePromoted(t *testing.T) *validationDriver {
 	t.Helper()
-	d := newValidationDriver(t, "blackbox", "quality")
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	if _, err := d.f.PrepareCandidate(""); err == nil || !strings.Contains(err.Error(), "final validation wave to be COMPLETE") {
 		t.Fatalf("promotion during collection: %v", err)
@@ -36,7 +38,8 @@ func concludePromoted(t *testing.T) *validationDriver {
 	qa, qi := d.action("engine.qa.execution")
 	gate, gi := d.action("engine.gate")
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	if wave.Status != "COMPLETE" {
@@ -64,12 +67,12 @@ func concludePromoted(t *testing.T) *validationDriver {
 // 擎 phase 进入 TERMINAL。
 func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T) {
 	d := concludePromoted(t)
-	snap, err := d.f.engine.Load()
+	summary, err := d.f.readSummary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.State.Phase != runtime.PhaseTerminal {
-		t.Fatalf("engine phase = %s, want TERMINAL", snap.State.Phase)
+	if summary.Termination == nil || summary.Termination.Phase != runtime.PhaseTerminal {
+		t.Fatalf("engine phase = %s, want TERMINAL", summary.Termination.Phase)
 	}
 }
 
@@ -78,7 +81,9 @@ func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T
 // 错）；wave 完成而未晋升时晋升等待 Operator fact 仍在。
 func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 	t.Run("promotion rejected before wave conclusion", func(t *testing.T) {
-		d := newValidationDriver(t, "blackbox", "quality")
+		root := t.TempDir()
+		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
+		d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 		d.reviewReady()
 		if _, err := d.f.PrepareCandidate(""); err == nil || !strings.Contains(err.Error(), "final validation wave to be COMPLETE") {
 			t.Fatalf("promotion with the wave unresolved: %v", err)
@@ -103,14 +108,21 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 		}
 	})
 	t.Run("wave conclusion without promotion", func(t *testing.T) {
-		d := newValidationDriver(t, "blackbox", "quality")
+		root := t.TempDir()
+		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
+		d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 		d.reviewReady()
 		qa, qi := d.action("engine.qa.execution")
 		gate, gi := d.action("engine.gate")
 		report := executionFor(qi)
-		d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+		tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+		d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 		d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
-		d.drive()
+		shown, err := d.f.Show()
+		d.run = shown
+		if err != nil {
+			t.Fatal(err)
+		}
 		if d.run.Status == "COMPLETE" {
 			t.Fatal("terminal reached without candidate promotion")
 		}
@@ -136,8 +148,8 @@ func TestTerminalDriveReplayIsReadOnly(t *testing.T) {
 	statePath := filepath.Join(d.f.stateDir, "state.json")
 	summaryPath := filepath.Join(d.f.stateDir, "terminal-summary.json")
 	stateBefore, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
+	if !os.IsNotExist(err) {
+		t.Fatalf("terminal active state: %v", err)
 	}
 	summaryBefore, err := os.ReadFile(summaryPath)
 	if err != nil {
@@ -151,8 +163,8 @@ func TestTerminalDriveReplayIsReadOnly(t *testing.T) {
 		t.Fatalf("terminal replay bumped revision %d -> %d", revision, d.run.Revision)
 	}
 	stateAfter, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
+	if !os.IsNotExist(err) {
+		t.Fatalf("replayed active state: %v", err)
 	}
 	if !bytes.Equal(stateBefore, stateAfter) {
 		t.Fatal("terminal replay rewrote the authoritative state bytes")
