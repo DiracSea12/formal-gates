@@ -1,8 +1,7 @@
-// Package coverage contains the pure, in-memory QA coverage contract used by
-// the engine.  It deliberately has no dependency on the workflow state
-// machine, persistence, CLI, or legacy QA case types.  Callers provide the
-// confirmed source list, per-kind manifests, review decisions, and candidate
-// execution report; this package only validates and projects those values.
+// Package coverage owns the QA coverage contract and fixed operation
+// resolution. It has no dependency on the workflow state machine, persistence,
+// CLI, or legacy QA case types. Resolution inspects candidate source files
+// without executing the operations it describes.
 package coverage
 
 import (
@@ -168,15 +167,16 @@ func QAResultContract() string {
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {
-	Scenario      string   `json:"scenario,omitempty"`
-	SharedSteps   []string `json:"sharedSteps,omitempty"`
-	CaseID        string   `json:"caseId"`
-	Mode          CaseMode `json:"mode"`
-	PublicEntry   string   `json:"publicEntry,omitempty"`
-	Preconditions string   `json:"preconditions,omitempty"`
-	Steps         string   `json:"steps,omitempty"`
-	Oracle        string   `json:"oracle"`
-	TestRef       string   `json:"testRef,omitempty"`
+	Scenario      string      `json:"scenario,omitempty"`
+	SharedSteps   []string    `json:"sharedSteps,omitempty"`
+	CaseID        string      `json:"caseId"`
+	Mode          CaseMode    `json:"mode"`
+	PublicEntry   string      `json:"publicEntry,omitempty"`
+	Preconditions string      `json:"preconditions,omitempty"`
+	Steps         string      `json:"steps,omitempty"`
+	Oracle        string      `json:"oracle"`
+	TestRef       string      `json:"testRef,omitempty"`
+	Operations    []Operation `json:"operations,omitempty"`
 }
 
 // CoverageEdge is the single source of truth for source↔point↔case
@@ -199,8 +199,9 @@ func executionEdgeKey(kind ReviewKind, sourceID, pointID, caseID string) string 
 // independently reviewed and executed.
 // SharedStep holds reusable preparation/operations; cases still own their oracle.
 type SharedStep struct {
-	ID        string `json:"id"`
-	Procedure string `json:"procedure"`
+	ID         string      `json:"id"`
+	Procedure  string      `json:"procedure"`
+	Operations []Operation `json:"operations,omitempty"`
 }
 
 type AcceptanceManifest struct {
@@ -641,7 +642,10 @@ func (c CoverageContract) Validate() error {
 			pointByID[point.PointID] = point
 		}
 		sharedIDs := map[string]bool{}
-		for _, step := range manifest.SharedSteps {
+		for si, step := range manifest.SharedSteps {
+			if err := validateOperations(step.Operations, fmt.Sprintf("%s.sharedSteps[%d].operations", path, si)); err != nil {
+				return err
+			}
 			if strings.TrimSpace(step.ID) == "" || strings.TrimSpace(step.Procedure) == "" {
 				return invalid(CodeInvalidCaseBinding, path+".sharedSteps", "shared step id and procedure are required")
 			}
@@ -653,6 +657,12 @@ func (c CoverageContract) Validate() error {
 		caseByID := make(map[string]AcceptanceCase, len(manifest.Cases))
 		for ci, qaCase := range manifest.Cases {
 			cpath := fmt.Sprintf("%s.cases[%d]", path, ci)
+			if err := validateOperations(qaCase.Operations, cpath+".operations"); err != nil {
+				return err
+			}
+			if isGoTestRef(qaCase.TestRef) && len(qaCase.Operations) != 0 {
+				return invalid(CodeInvalidCaseBinding, cpath+".operations", "Go test references derive their operation and cannot also declare operations")
+			}
 			for _, id := range qaCase.SharedSteps {
 				if !sharedIDs[id] {
 					return invalid(CodeUnknownID, cpath+".sharedSteps", "unknown shared step")
