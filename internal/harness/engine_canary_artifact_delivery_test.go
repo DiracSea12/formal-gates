@@ -87,7 +87,7 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 	}
 	payload := material.ResultTemplate
 	payload.Outcome, payload.Validation.Status = protocol.OutcomePass, protocol.OutcomePass
-	payload.Validation.Development = &protocol.DevelopmentEvidence{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
+	payload.Validation.Development = &worker.Development{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
 	if handler == "engine.merge.resolve" {
 		payload.Validation.Development = nil
 		payload.Validation.Resolution = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}
@@ -143,7 +143,7 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 	approvalRead, approvalWrite := io.Pipe()
 	defer approvalRead.Close()
 	defer approvalWrite.Close()
-	c := &engineCanary{t: t, home: home, project: workspace, nativeHost: "zcode", binding: objectOrEmpty(s.request["binding"]), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), run: facade.Run{RunID: material.Input.RunID}, approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}, vcs: vcs.NewNative(workspace, "git", nil)}
+	c := &engineCanary{t: t, home: home, project: workspace, nativeHost: "zcode", binding: objectOrEmpty(s.request["binding"]), jobs: t.TempDir(), worker: true, approvalDeadline: time.Now().Add(time.Minute), run: facade.Run{RunID: material.Input.RunID}, approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}, vcs: vcs.NewNative(workspace, "git", nil)}
 	writeCanaryHostFixture(t, home, "peer-provider")
 	environment := map[string]any{}
 	for key, value := range c.hostEnvironment() {

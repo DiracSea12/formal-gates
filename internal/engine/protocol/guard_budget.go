@@ -284,6 +284,11 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 				return guard.Basis{}, err
 			}
 		}
+		for _, context := range state.repairComparisonContexts(e.cfg.Definition) {
+			if err := declare(context.binding.Task); err != nil {
+				return guard.Basis{}, err
+			}
+		}
 		// 桶 4：预授权 QA 设计/审查槽——镜像 projectValidationTasks 的当前投影
 		//（set 缺失或 DRAFT/THAWED 的设计槽、REVIEW 的审查槽；首个 QA design
 		// 派发先于 case-set 存在，授权来源是路线选择）。
@@ -499,6 +504,25 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			}
 		}
 		return guard.Provenance{}, 0, false
+	case "engine.repair.verify":
+		context, ok := state.repairComparisonContext(task, e.cfg.Definition)
+		if !ok {
+			context, ok = state.repairComparisonContext(source, e.cfg.Definition)
+		}
+		if !ok {
+			for _, binding := range state.DispatchBindings {
+				if binding.Task != task && state.sourceValidationTask(binding.Task) != source {
+					continue
+				}
+				if wave := state.validationWave(binding.WaveID); wave != nil && wave.Repair != nil && binding.VerificationSource != "" {
+					return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: wave.Repair.Task.String(), Revision: wave.ExpectedDigest}}, maxAttempts, true
+				}
+			}
+		}
+		if !ok || context.wave.Repair == nil {
+			return guard.Provenance{}, 0, false
+		}
+		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
 	case "engine.repair":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false

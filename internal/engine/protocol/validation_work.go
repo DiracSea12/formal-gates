@@ -151,6 +151,10 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
 		return false
 	}
+	if s.validationRole(b.Task, cd) == "engine.repair.verify" {
+		context, current := s.repairComparisonContext(b.Task, cd)
+		return current && context.binding == b && s.repairComparisonResult(b.Task) == nil
+	}
 	if s.validationRole(b.Task, cd) == "engine.development.batch" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil

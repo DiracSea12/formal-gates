@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -74,7 +76,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 		Deliverable: "Input boundary conclusion", PublicEntry: "app", Artifacts: []string{"experiment.go"},
 		Interfaces: "Command arguments", StateBoundary: "No persistent state", Risk: "Invalid input",
 		DoD:      []DevelopmentCriterion{{ID: "behavior", Description: "Input contract holds"}},
-		Checks:   []DevelopmentCheck{{ID: "build", Command: "go build ./..."}},
+		Checks:   []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Command: "go build ./..."}, {ID: "tests", Purpose: CheckFullTests, Command: "go test ./..."}},
 		Rollback: "Discard experiment", Recovery: "Run the check again", Handoff: "Input conclusion", ContextCost: "One package",
 	}
 	command := batch
@@ -109,7 +111,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	if got := s.taskResource(spikeTask, cd); got != spike {
 		t.Fatal("repeat selection replaced the registered native fact")
 	}
-	binding := WorkBinding{Task: spikeTask, WorkspaceID: spike.ID, RequirementRevision: "rev-1", Generation: 1}
+	binding := WorkBinding{Task: spikeTask, WorkspaceID: spike.ID, RequirementRevision: "rev-1", Generation: 1, PlanRequest: "route", BatchID: batch.ID}
 	s.DispatchBindings["investigator"] = binding
 	s.Validation.Candidate = &coverage.ValidationCandidate{Identity: "candidate-identity", Digest: "candidate-tree"}
 	if got := s.taskResource(spikeTask, cd); got != spike {
@@ -120,6 +122,8 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 			Paths: []string{"experiment.go"}, Summary: "Input uncertainty resolved",
 			Completion: &DevelopmentCompletion{DoD: map[string]string{"behavior": "Input confirmed"}, Handoff: "Use the input conclusion"},
 		}}}
+	recordDevelopmentChecksFixture(t, s, "investigator", batch)
+
 	carry := ConfirmedRevision{Revision: "rev-2", StateRevision: 9}
 	for _, task := range []runtime.TaskKey{spikeTask, commandTask, extensionTask} {
 		carry.WorkDecisions = append(carry.WorkDecisions, RequirementWorkDecision{Work: RequirementWork{Task: task, RequirementRevision: "rev-1"}, Disposition: RequirementWorkCarry})
@@ -233,7 +237,7 @@ func TestQueuedWorkspaceReplacementRequiresExactAuthorization(t *testing.T) {
 		Deliverable: "Input boundary conclusion", PublicEntry: "app", Artifacts: []string{"experiment.go"},
 		Interfaces: "Command arguments", StateBoundary: "No persistent state", Risk: "Invalid input",
 		DoD:      []DevelopmentCriterion{{ID: "behavior", Description: "Input contract holds"}},
-		Checks:   []DevelopmentCheck{{ID: "build", Command: "go build ./..."}},
+		Checks:   []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Command: "go build ./..."}, {ID: "tests", Purpose: CheckFullTests, Command: "go test ./..."}},
 		Rollback: "Discard experiment", Recovery: "Run the check again", Handoff: "Input conclusion", ContextCost: "One package",
 	}
 	plan := &GranularityReview{Reason: "Resolve uncertainty before implementation", VerificationTier: "FINAL", Batches: []DevelopmentBatch{batch}}
@@ -288,5 +292,50 @@ func TestQueuedWorkspaceReplacementRequiresExactAuthorization(t *testing.T) {
 	s.RequirementRevisions = s.RequirementRevisions[:len(s.RequirementRevisions)-1]
 	if s.nativeReplacementAuthorized(original, replacement, cd) {
 		t.Fatal("replacement was authorized without REDO")
+	}
+}
+
+func recordDevelopmentChecksFixture(t *testing.T, s *State, action string, batch DevelopmentBatch) {
+	t.Helper()
+	raw := s.Results[action]
+	binding := raw.Validation.Binding
+	sourceParams := CandidateParameters{Stage: "CHECK_SOURCE", SourceTasks: []runtime.TaskKey{binding.Task}, WorkspaceID: binding.WorkspaceID, Paths: raw.Validation.Development.Paths, RequirementRevision: binding.RequirementRevision, Generation: binding.Generation}
+	params, err := normalizeHostActionParams(sourceParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := action + ":source"
+	intent := HostActionIntent{ActionID: sourceID, PayloadDigest: digestOfCanonical(params), Adapter: &AdapterHostAction{Operation: "op.candidate", Params: params}}
+	proof := CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: binding.WorkspaceID, Identity: "verified-source:" + action, Digest: "verified-tree:" + action, Paths: raw.Validation.Development.Paths}
+	values, err := normalizeHostActionParams(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.PendingHostActions == nil {
+		s.PendingHostActions = map[string]HostActionIntent{}
+	}
+	if s.HostActionReceipts == nil {
+		s.HostActionReceipts = map[string]HostActionReceipt{}
+	}
+	s.PendingHostActions[sourceID] = intent
+	s.HostActionReceipts[sourceID] = HostActionReceipt{ActionID: sourceID, AdapterOperation: "op.candidate", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+	resource := s.checkResource(action, proof)
+	resource.Status, resource.Identity = "READY", proof.Identity
+	s.NativeResources[resource.ID] = resource
+	for _, check := range batch.Checks {
+		p := CheckParameters{SourceActionID: action, Binding: binding, Check: check, SourceIdentity: proof.Identity, SourceDigest: proof.Digest, WorkspaceID: resource.ID}
+		params, err := normalizeHostActionParams(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := action + ":check:" + check.ID
+		call := HostActionIntent{ActionID: id, PayloadDigest: digestOfCanonical(params), Adapter: &AdapterHostAction{Operation: "op.check", Params: params}}
+		evidence := CheckEvidence{ParametersDigest: call.PayloadDigest, SourceActionID: action, SourceIdentity: proof.Identity, SourceDigest: proof.Digest, WorkspaceID: resource.ID, RequestDigest: digestOfCanonical(p), Directory: resource.Path, Stdout: CheckStreamProof{SHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, Stderr: CheckStreamProof{SHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}}
+		values, err := normalizeHostActionParams(evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.PendingHostActions[id] = call
+		s.HostActionReceipts[id] = HostActionReceipt{ActionID: id, AdapterOperation: "op.check", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
 	}
 }

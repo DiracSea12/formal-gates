@@ -159,18 +159,13 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 	if p.Development == nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil || len(p.Development.Paths) == 0 || strings.TrimSpace(p.Development.Summary) == "" {
 		return validationError("repair completion requires declared paths and summary")
 	}
-	if work.verification {
-		if err := s.validateFinalRepairEvidence(*work, *p.Development); err != nil {
-			return err
-		}
-		return nil
-	}
+
 	if work.batch != nil {
 		if err := validateDevelopmentCompletion(*work.batch, p.Development); err != nil {
 			return err
 		}
 	}
-	if err := s.validateRepairEvidence(*p.Development, work.wave.Repair.PureP2 || work.pureP2); err != nil {
+	if err := s.validateRepairEvidence(*p.Development, false); err != nil {
 		return err
 	}
 	s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""
@@ -394,7 +389,7 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 	return CandidateParameters{}, false
 }
 
-func (s *State) repairCompleted(w *ValidationWave) bool {
+func (s *State) repairCompleted(w *ValidationWave, cd *compiler.CompiledDefinition) bool {
 	for _, member := range s.repairMembers(w) {
 		if s.developmentResultRecord(member.task) == nil {
 			return false
@@ -408,7 +403,7 @@ func (s *State) repairCompleted(w *ValidationWave) bool {
 			return false
 		}
 	}
-	if verification := s.repairVerificationWork(w); verification != nil {
+	if verification := s.repairVerificationWork(w, cd); verification != nil {
 		return verification.result != nil
 	}
 	return true
@@ -430,6 +425,9 @@ func (s *State) repairGateTarget(task runtime.TaskKey) (*ValidationWave, *Valida
 }
 
 func (s *State) repairGatesComplete(work repairWork) bool {
+	if !work.verification && work.result != nil && work.result.Validation.Binding.PureP2 && !s.repairSourceComparisonPassed(work) {
+		return false
+	}
 	for _, gate := range s.repairGates(work) {
 		_, target := s.memberGateTarget(work, gate)
 		if target == nil || target.Status != "PASS" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" && !s.repairGateDismissed(work.wave, target) {
@@ -586,7 +584,7 @@ func (s *State) repairFinalSource(work repairWork) (HostActionIntent, CandidateE
 
 // Pure P2 split repairs self-run the exact integrated content once. This is
 // development verification under the same obligation, not another review wave.
-func (s *State) repairVerificationWork(w *ValidationWave) *repairWork {
+func (s *State) repairVerificationWork(w *ValidationWave, cd *compiler.CompiledDefinition) *repairWork {
 	if !s.repairDutyCurrent(w) {
 		return nil
 	}
@@ -619,26 +617,10 @@ func (s *State) repairVerificationWork(w *ValidationWave) *repairWork {
 		}
 		final.Digest = digestOfCanonical(actions)
 	}
-	task := w.Repair.Task
-	task.Scope += ":verification:" + strings.TrimPrefix(digestOfCanonical(struct{ Identity, Digest string }{final.Identity, final.Digest}), "sha256:")
+	task := pipelineTask(cd, "engine.repair.verify", w.Repair.Task.Scope+":verification:"+strings.TrimPrefix(digestOfCanonical(struct{ Identity, Digest string }{final.Identity, final.Digest}), "sha256:"))
 	work := &repairWork{wave: w, task: s.replacementFold(task), verification: true, plan: members[0].plan, planAction: members[0].planAction}
-	work.result = s.developmentResultRecord(work.task)
+	work.result = s.repairComparisonResult(work.task)
 	return work
-}
-
-func (s *State) validateFinalRepairEvidence(work repairWork, e DevelopmentEvidence) error {
-	var members []DevelopmentEvidence
-	for _, member := range s.repairMembers(work.wave) {
-		r := s.developmentResultRecord(member.task)
-		if r == nil {
-			return validationError("final verification lacks a completed repair member")
-		}
-		members = append(members, *r.Validation.Development)
-	}
-	if err := ValidateFinalRepairEvidence(members, e); err != nil {
-		return err
-	}
-	return s.validateRepairEvidence(e, true)
 }
 
 // ValidateFinalRepairEvidence checks the exact paths and affected-case union

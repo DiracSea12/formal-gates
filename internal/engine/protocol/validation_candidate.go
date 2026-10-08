@@ -161,7 +161,7 @@ func (s *State) candidateFailureRoute(intent HostActionIntent) (FailureRoute, in
 
 func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
 	if intent.Adapter != nil && intent.Adapter.Operation == "op.check" {
-		return s.checkInputsCurrent(intent)
+		return s.checkInputsCurrent(intent, cd)
 	}
 	if intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" {
 		var p WorkspaceParameters
@@ -200,7 +200,7 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 	}
 	switch intent.Adapter.Operation {
 	case "op.check":
-		return s.checkInputsCurrent(intent)
+		return s.checkInputsCurrent(intent, cd)
 	case "op.workspace":
 		var p WorkspaceParameters
 		raw, err := json.Marshal(intent.Adapter.Params)
@@ -466,7 +466,10 @@ func (s *State) ExecutableHostActions() map[string]HostActionIntent {
 }
 
 func (s *State) candidateFailureFact(cd *compiler.CompiledDefinition) *decision.Fact {
-	if failure := s.developmentCheckFailure(); failure != nil {
+	if failure := s.repairVerificationFailure(cd); failure != nil {
+		return failure
+	}
+	if failure := s.developmentCheckFailure(cd); failure != nil {
 		return failure
 	}
 	ids := make([]string, 0, len(s.PendingHostActions))

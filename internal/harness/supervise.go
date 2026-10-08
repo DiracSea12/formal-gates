@@ -89,7 +89,7 @@ func Supervise(directory string) int {
 	// probe (UNKNOWN_START guard, 10s window) can observe it.
 	procStarted := float64(time.Now().UnixNano()) / 1e9
 	process := map[string]any{"pid": os.Getpid(), "started_at": procStarted}
-	if timeout := supervisedTimeout(request); timeout > 0 {
+	if supervisedCheck(request) {
 		pgid, err := nativeProcessGroupID(os.Getpid())
 		if err != nil {
 			return 1
@@ -100,7 +100,6 @@ func Supervise(directory string) int {
 		}
 		process["request_digest"] = digest
 		process["pgid"] = pgid
-		process["deadline_at"] = procStarted + timeout.Seconds()
 	}
 	if err := writeAtomicJSON(filepath.Join(dir, "process.json"), process); err != nil {
 		fmt.Fprintf(os.Stderr, "supervise: cannot write process.json: %v\n", err)
@@ -301,7 +300,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stdout: outF,
 		Stderr: errF,
 	}
-	if supervisedTimeout(request) > 0 {
+	if supervisedCheck(request) {
 		cmd.SysProcAttr = supervisorSysProcAttr()
 	}
 	if startErr := cmd.Start(); startErr != nil {
@@ -313,10 +312,10 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		// EACCES, ENOEXEC, and any other errno: record the first and continue.
 		return 0, mapExecError(startErr, argv[0]), false
 	}
-	if supervisedTimeout(request) > 0 {
+	if supervisedCheck(request) {
 		defer signalSupervisedChild(cmd, true)
 	}
-	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedTimeout(request))
+	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedCheck(request))
 	if cancelled {
 		return 130, "owned job was cancelled", true
 	}
@@ -329,7 +328,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 // same process-group signal also killed the child. If the child dies by a signal
 // and no SIGTERM reached the supervisor within childSignalGrace, the child's own
 // -N is reported unchanged (including -15 with an empty error and -9 for SIGKILL).
-func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int, string, bool) {
+func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, grouped bool) (int, string, bool) {
 	type status struct {
 		signaled bool
 		sig      int
@@ -349,14 +348,8 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int,
 		resCh <- s
 	}()
 
-	var deadline <-chan time.Time
-	if timeout > 0 {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		deadline = timer.C
-	}
 	terminate := func() {
-		if timeout > 0 {
+		if grouped {
 			signalSupervisedChild(cmd, false)
 		} else {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
@@ -364,7 +357,7 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int,
 		select {
 		case <-resCh:
 		case <-time.After(5 * time.Second):
-			if timeout > 0 {
+			if grouped {
 				signalSupervisedChild(cmd, true)
 			} else {
 				_ = cmd.Process.Kill()
@@ -373,9 +366,6 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int,
 		}
 	}
 	select {
-	case <-deadline:
-		terminate()
-		return 124, "owned job exceeded its timeout", false
 	case <-sigCh:
 		// Supervisor cancelled while waiting. Forward SIGTERM to the direct
 		// child (it may already be dead from the group signal) and settle with a
@@ -549,14 +539,7 @@ func ensureEmptyStream(path string) {
 	f.Close()
 }
 
-func supervisedTimeout(request map[string]any) time.Duration {
-	value, ok := request["timeout_nanos"].(json.Number)
-	if !ok {
-		return 0
-	}
-	nanos, err := value.Int64()
-	if err != nil || nanos <= 0 {
-		return 0
-	}
-	return time.Duration(nanos)
+func supervisedCheck(request map[string]any) bool {
+	kind, _ := request["kind"].(string)
+	return kind == "approved-development-check" || kind == "approved-qa-check"
 }

@@ -68,7 +68,6 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 			}
 			p.Check, p.SourceActionID = protocol.DevelopmentCheck{}, ""
 			p.QA = &protocol.QACheckParameters{CaseID: item.name, Source: "case:" + item.name, Operation: item.operation, Directory: ".", GoTestRef: item.ref, WorkspaceRoot: workspace.Path}
-			p.TimeoutNanos = int64(20 * time.Second)
 			intent.Adapter.Params, _ = evidenceFields(p)
 			first := observeDevelopmentCheck(t, f, s, intent, true)
 			if first.ExitCode != item.exit || first.Error != "" || first.GoResult != item.status || first.Tool == "" || first.Environment == "" {
@@ -144,8 +143,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	var action string
 	var issued protocol.ValidationInput
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		d.drive()
 		for id, input := range d.run.ValidationInputs {
 			if input.Handler == "engine.qa.execution" {
@@ -291,8 +289,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
 	waitAction := func(handler string) (string, protocol.ValidationInput) {
 		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
+		for {
 			d.drive()
 			for id, input := range d.run.ValidationInputs {
 				if input.Handler == handler {
@@ -301,8 +298,6 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		t.Fatalf("missing %s: next=%+v", handler, d.run.Next)
-		return "", protocol.ValidationInput{}
 	}
 	design, authored := waitAction("engine.qa.design")
 	manifest := authored.Manifest

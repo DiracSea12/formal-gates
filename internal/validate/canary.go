@@ -332,8 +332,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	topology, routeConfirmed := false, false
 	checked := map[string]bool{}
-	deadline := time.Now().Add(time.Minute)
-	for turns := 0; turns < 100 && time.Now().Before(deadline); turns++ {
+	for turns := 0; turns < 100; turns++ {
 		run, err = f.Drive()
 		if err != nil {
 			return err
@@ -444,7 +443,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 }
 
 func portableDevelopmentPlan() *worker.Granularity {
-	return &worker.Granularity{Reason: "One committed delivery and its direct whitebox declaration form one cohesive fixture.", VerificationTier: "FINAL", Batches: []worker.Batch{{DevelopmentBatch: protocol.DevelopmentBatch{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "marker-content", Command: "cat delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}}
+	return &worker.Granularity{Reason: "One data-artifact fixture: the complete build copies the authored marker to its validation output, and the complete test checks every output byte against the declared marker. No compiler or project language is inferred.", VerificationTier: "FINAL", Batches: []worker.Batch{{DevelopmentBatch: protocol.DevelopmentBatch{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "artifact-build", Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {ID: "artifact-tests", Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}}
 }
 
 func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (worker.Result, error) {
@@ -484,7 +483,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		result.Development = &protocol.DevelopmentEvidence{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
+		result.Development = &worker.Development{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
 	case "engine.qa.design":
 		mode := in.Manifest.Binding.ReviewKind
@@ -502,7 +501,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			result.Development = &protocol.DevelopmentEvidence{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration"}
+			result.Development = &worker.Development{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration"}
 		}
 		manifest := worker.Manifest{Cases: []worker.Case{c, missing}, Coverage: map[string][]string{}}
 		for _, point := range in.Manifest.Points {

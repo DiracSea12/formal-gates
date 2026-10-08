@@ -51,8 +51,11 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.development.batch":
 			instructions = "Implement only input.validation.development.batch. Report declared changed paths, summary, DoD evidence and handoff. The program freezes your delivered source and executes the approved batch commands."
 			value.ReadOnly = false
+		case "engine.repair.verify":
+			instructions = "Compare each issued affected case oracle against its exact native execution facts. Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL. The program supplies commands, paths, affected-case union, procedure, stdout/stderr, exit, identities and bindings. Do not execute commands or edit files."
+			value.ReadOnly = true
 		case "engine.repair":
-			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member or finalCandidate is supplied, complete that exact duty. Preserve approved cases and report actual self-run evidence."
+			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member is supplied, implement only that member. Preserve approved cases and report changed paths, impact selection and semantic implementation evidence. The program freezes your source and runs the approved complete project checks and affected-case recipes; do not execute or report command facts."
 			value.ReadOnly = false
 		case "engine.merge.resolve":
 			instructions = "Resolve only the issued conflict in the registered workspace, preserving the frozen child inputs and dependencies. Report resolution evidence and exact changed paths."
@@ -93,8 +96,8 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	value.ResultSchema = schema
 	if input.Validation != nil {
-		status := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
-		if values, present := status["enum"]; present {
+		status, present := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+		if values, enumerated := status["enum"]; present && enumerated {
 			literals, err := json.Marshal(values)
 			if err != nil {
 				return Material{}, err
@@ -108,7 +111,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "product-review"
 	case "engine.readiness.plan":
 		actionID = "start-readiness"
-	case "engine.development.batch", "engine.repair", "engine.merge.resolve":
+	case "engine.development.batch", "engine.repair", "engine.repair.verify", "engine.merge.resolve":
 		actionID = "development-worker"
 	case "engine.qa.design":
 		actionID = "qa-design"

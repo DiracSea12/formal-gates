@@ -162,7 +162,7 @@ func TestCanaryReviewCorrectionPreservesRawAndContinues(t *testing.T) {
 				t.Fatal(err)
 			}
 			var output bytes.Buffer
-			c := &engineCanary{t: t, binary: binary, project: project, home: t.TempDir(), jobs: t.TempDir(), run: run, deadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(bytes.NewReader(append(line, '\n'))), approvalOutput: &output, seq: 1000}
+			c := &engineCanary{t: t, binary: binary, project: project, home: t.TempDir(), jobs: t.TempDir(), run: run, approvalDeadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(bytes.NewReader(append(line, '\n'))), approvalOutput: &output, seq: 1000}
 			if !c.reviewFindingsWithOperator() {
 				t.Fatal("undecided review was not handed to Operator")
 			}
@@ -236,7 +236,7 @@ func TestCanaryReviewInputKeepsBindingAndDeadline(t *testing.T) {
 			if name == "deadline" {
 				deadline = time.Now().Add(-time.Second)
 			}
-			c := &engineCanary{t: t, project: t.TempDir(), jobs: t.TempDir(), run: facade.Run{RunID: state.RunID}, deadline: deadline, approvalInput: bufio.NewReader(strings.NewReader(line)), approvalOutput: io.Discard}
+			c := &engineCanary{t: t, project: t.TempDir(), jobs: t.TempDir(), run: facade.Run{RunID: state.RunID}, approvalDeadline: deadline, approvalInput: bufio.NewReader(strings.NewReader(line)), approvalOutput: io.Discard}
 			_, err := c.readReviewCorrection(action, candidate, finding)
 			if (name == "valid") != (err == nil) {
 				t.Fatalf("input %s: %v", name, err)
@@ -319,7 +319,7 @@ func TestCanaryReviewPassAdvisoryDoesNotReadOperator(t *testing.T) {
 	state := protocol.State{ReviewSeries: review.Set{ProductReview: series}}
 	run := canaryReviewRun(&state, persistence.Envelope{}, 0)
 	var output bytes.Buffer
-	c := &engineCanary{t: t, run: run, deadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(nil)), approvalOutput: &output}
+	c := &engineCanary{t: t, run: run, approvalDeadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(nil)), approvalOutput: &output}
 	if c.reviewFindingsWithOperator() || output.Len() != 0 {
 		t.Fatal("PASS advisory created a mandatory Operator handoff")
 	}
@@ -408,7 +408,7 @@ func TestCanaryReviewContinuesAcrossFindingDecisions(t *testing.T) {
 						t.Fatal(err)
 					}
 					var output bytes.Buffer
-					c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 2000, deadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(&lines), approvalOutput: &output}
+					c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 2000, approvalDeadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(&lines), approvalOutput: &output}
 					for i := 0; i < count; i++ {
 						if pending && i == 1 {
 							var next review.CorrectionInput
@@ -519,7 +519,7 @@ func TestCanaryWholeReviewInvalidationPreservesEvidenceAndRequestsFreshWork(t *t
 				t.Fatal(err)
 			}
 			var output bytes.Buffer
-			c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 3000, deadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(bytes.NewReader(append(line, '\n'))), approvalOutput: &output}
+			c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: t.TempDir(), run: run, seq: 3000, approvalDeadline: time.Now().Add(10 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(bytes.NewReader(append(line, '\n'))), approvalOutput: &output}
 			if !c.reviewFindingsWithOperator() {
 				t.Fatal("whole-result Operator decision was not consumed")
 			}
@@ -611,7 +611,7 @@ func TestCanaryWholeReviewInputKeepsBothDecisionBindings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := &engineCanary{t: t, run: facade.Run{RunID: state.RunID}, deadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(append(body, '\n'))), approvalOutput: io.Discard}
+			c := &engineCanary{t: t, run: facade.Run{RunID: state.RunID}, approvalDeadline: time.Now().Add(time.Second), approvalInput: bufio.NewReader(bytes.NewReader(append(body, '\n'))), approvalOutput: io.Discard}
 			_, err = c.readReviewCorrection(action, candidate, finding)
 			if (name == "whole" || name == "finding-exact") != (err == nil) {
 				t.Fatalf("decision %s: %v", name, err)

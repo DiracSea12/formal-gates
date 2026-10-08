@@ -61,7 +61,7 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 			return nativeResult{}, false, fmt.Errorf("QA operation has no approved invocation")
 		}
 	}
-	request := map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "timeout_nanos": p.TimeoutNanos, "parameters_digest": intent.PayloadDigest}
+	request := map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "parameters_digest": intent.PayloadDigest}
 
 	digest, err := f.checkRequestDigest(request)
 	if err != nil {

@@ -159,6 +159,11 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			}
 		}
 		return NativeResource{}
+	case "engine.repair.verify":
+		if context, ok := s.repairComparisonContext(key, cd); ok {
+			return context.resource
+		}
+		return NativeResource{}
 	case "engine.repair":
 		for _, work := range s.repairWork() {
 			if work.task == key {
@@ -565,6 +570,14 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 			return false
 		}
 	} else if p.Manifest != nil {
+		return false
+	}
+	if p.Resource.Role == "repair-verification" {
+		for _, context := range s.repairComparisonContexts(cd) {
+			if context.resource.ID == p.Resource.ID && p.Task != nil && *p.Task == context.binding.Task {
+				return true
+			}
+		}
 		return false
 	}
 	if p.Resource.Role == "check" {

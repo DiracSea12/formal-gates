@@ -114,7 +114,7 @@ func TestCanaryCaseProducerAndReviewKeepBehaviorFailures(t *testing.T) {
 	approvalRead, approvalWrite := io.Pipe()
 	defer approvalRead.Close()
 	defer approvalWrite.Close()
-	c := &engineCanary{t: t, home: home, project: workspace, jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+	c := &engineCanary{t: t, home: home, project: workspace, jobs: t.TempDir(), worker: true, approvalDeadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
 	doc, err := requirement.ParseRequirementProjection("requirements.md", []byte(canaryRequirementDocument))
 	if err != nil {
 		t.Fatal(err)

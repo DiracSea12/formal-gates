@@ -35,7 +35,7 @@ func (s *State) addChildValidationTargets(w *ValidationWave, cd *compiler.Compil
 				target.Reuse = &ValidationReuse{ChildReceiptDigest: receipt.Digest, SourceCandidate: gateView.SourceCandidate, SourceAction: gateView.SourceAction, ViewDigest: digestOfCanonical(gateView)}
 			}
 			if prior := s.currentValidationWave(); prior != nil && target.Status == "PENDING" {
-				s.carryGateResult(target, prior, w)
+				s.carryGateResult(target, prior, w, cd)
 			}
 
 			w.Targets[target.Task.String()] = target

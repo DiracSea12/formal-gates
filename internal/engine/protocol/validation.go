@@ -101,6 +101,8 @@ type ValidationResult struct {
 // WorkBinding accompanies every issued business task and its result. Revision
 // is the confirmed content identity; Generation distinguishes its occurrence.
 type WorkBinding struct {
+	PureP2              bool            `json:"pureP2,omitempty"`
+	VerificationSource  string          `json:"verificationSource,omitempty"`
 	WorkspaceID         string          `json:"workspaceId,omitempty"`
 	PlanRequest         string          `json:"planRequest,omitempty"`
 	BatchID             string          `json:"batchId,omitempty"`
@@ -345,7 +347,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair":
+	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair", "engine.repair.verify":
 		return string(p.Handler)
 	}
 	return ""
@@ -485,6 +487,11 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	role := s.validationRole(key, cd)
+	if role == "engine.repair.verify" {
+		if context, ok := s.repairComparisonContext(key, cd); ok {
+			return context.binding
+		}
+	}
 	if role == "engine.merge.resolve" {
 		if params, ready := s.nextIntegrationParameters(cd); ready && params.Integration != nil {
 			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
@@ -518,6 +525,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if role == "engine.repair" {
 		for _, work := range s.repairWork() {
 			if work.task == key {
+				b.PureP2 = work.wave.Repair.PureP2 || work.pureP2
 				b.WaveID, b.Candidate = work.wave.ID, work.wave.Candidate.Identity
 				if work.previous != nil {
 					_, prior, ok := s.repairSource(work.previous.Validation.Binding.Task)
@@ -592,6 +600,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 	}
 	s.projectDevelopmentTasks(view, cd)
 	s.projectRepairGates(view, cd)
+	s.projectRepairComparisons(view, cd)
 	if p, ready := s.nextIntegrationParameters(cd); ready && p.Integration.StartAction != "" && len(s.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 && s.integrationResolution(p.Integration.StartAction) == nil {
 		add("engine.merge.resolve", p.Integration.StartAction, false)
 	}

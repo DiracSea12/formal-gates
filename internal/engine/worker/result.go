@@ -58,17 +58,32 @@ type Finding struct {
 	Message           string                     `json:"message"`
 	Locations         []string                   `json:"locations,omitempty"`
 }
+type Development struct {
+	Completion    *protocol.DevelopmentCompletion `json:"completion,omitempty"`
+	Paths         []string                        `json:"paths"`
+	Summary       string                          `json:"summary"`
+	AffectedCases []string                        `json:"affectedCases,omitempty"`
+}
+
+func development(value *Development) *protocol.DevelopmentEvidence {
+	if value == nil {
+		return nil
+	}
+	return &protocol.DevelopmentEvidence{Completion: value.Completion, Paths: value.Paths, Summary: value.Summary, AffectedCases: value.AffectedCases}
+}
+
 type Validation struct {
-	Status            string                        `json:"status"`
-	GranularityReview *Granularity                  `json:"granularityReview,omitempty"`
-	Resolution        *protocol.ConflictResolution  `json:"resolution,omitempty"`
-	Development       *protocol.DevelopmentEvidence `json:"development,omitempty"`
-	Manifest          *Manifest                     `json:"manifest,omitempty"`
-	Review            *CaseReview                   `json:"review,omitempty"`
-	Suggestions       []Suggestion                  `json:"suggestions,omitempty"`
-	Execution         *Execution                    `json:"execution,omitempty"`
-	Checkpoint        bool                          `json:"checkpoint,omitempty"`
-	Findings          []Finding                     `json:"findings,omitempty"`
+	RepairVerification *Execution                   `json:"repairVerification,omitempty"`
+	Status             string                       `json:"status,omitempty"`
+	GranularityReview  *Granularity                 `json:"granularityReview,omitempty"`
+	Resolution         *protocol.ConflictResolution `json:"resolution,omitempty"`
+	Development        *Development                 `json:"development,omitempty"`
+	Manifest           *Manifest                    `json:"manifest,omitempty"`
+	Review             *CaseReview                  `json:"review,omitempty"`
+	Suggestions        []Suggestion                 `json:"suggestions,omitempty"`
+	Execution          *Execution                   `json:"execution,omitempty"`
+	Checkpoint         bool                         `json:"checkpoint,omitempty"`
+	Findings           []Finding                    `json:"findings,omitempty"`
 }
 type Suggestion struct {
 	Severity string `json:"severity"`
@@ -127,6 +142,9 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return protocol.Event{}, fmt.Errorf("worker result must contain one JSON object")
 	}
+	if input.Handler == "engine.repair.verify" && value.Validation != nil && value.Validation.Status != "" {
+		return protocol.Event{}, fmt.Errorf("repair comparison status is derived from case judgments")
+	}
 	if originalDigest == "" {
 		return protocol.Event{}, fmt.Errorf("verified native original output digest is required")
 	}
@@ -162,7 +180,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
-		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: v.Development, Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
+		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
 		for _, suggestion := range v.Suggestions {
 			body.Suggestions = append(body.Suggestions, protocol.QASuggestion{Severity: suggestion.Severity, Message: suggestion.Message, Reason: suggestion.Reason})
@@ -264,6 +282,47 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			}
 			body.Review = &result
 		}
+		if v.RepairVerification != nil {
+			if input.Handler != "engine.repair.verify" || issued.Repair == nil || issued.Repair.FinalCandidate == nil {
+				return protocol.Event{}, fmt.Errorf("repair comparison lacks its issued native responsibility")
+			}
+			if len(v.RepairVerification.Records) != len(issued.Repair.VerificationCases) {
+				return protocol.Event{}, fmt.Errorf("repair comparison must cover exactly its issued affected cases")
+			}
+			d := protocol.DevelopmentEvidence{Paths: slices.Clone(issued.Repair.VerificationPaths), AffectedCases: slices.Clone(issued.Repair.VerificationCases), Summary: "Compared the approved affected cases against native execution evidence"}
+			body.Status = protocol.OutcomePass
+			for _, caseID := range issued.Repair.VerificationCases {
+				index := slices.IndexFunc(issued.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == caseID })
+				if index < 0 {
+					return protocol.Event{}, fmt.Errorf("repair case has no complete issued native facts: %s", caseID)
+				}
+				comparison, present := v.RepairVerification.Records[caseID]
+				if !present || strings.TrimSpace(comparison.Comparison) == "" {
+					return protocol.Event{}, fmt.Errorf("repair case lacks an oracle comparison: %s", caseID)
+				}
+				procedure, observation, err := issued.ExecutionFacts[index].Render()
+				if err != nil {
+					return protocol.Event{}, err
+				}
+				for _, operation := range issued.ExecutionFacts[index].Operations {
+					if operation.Parameters.QA.GoTestRef != "" && operation.Evidence.GoResult != "pass" && comparison.Result == coverage.ExecutedPass {
+						return protocol.Event{}, fmt.Errorf("repair Go test did not actually pass: %s", caseID)
+					}
+				}
+				var mode coverage.ReviewKind
+				for _, manifest := range issued.Contract.Manifests {
+					if slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == caseID }) {
+						mode = manifest.Binding.ReviewKind
+					}
+				}
+				d.CaseRuns = append(d.CaseRuns, protocol.RepairCaseEvidence{Mode: mode, CaseID: caseID, Procedure: procedure, Observation: observation, Comparison: comparison.Comparison, Result: comparison.Result})
+				if comparison.Result != coverage.ExecutedPass {
+					body.Status = protocol.OutcomeFail
+				}
+			}
+			body.Development = &d
+		}
+
 		if value.Validation.Execution != nil {
 			if issued.Execution == nil || issued.Whitelist == nil {
 				return protocol.Event{}, fmt.Errorf("execution lacks issued whitelist and binding")

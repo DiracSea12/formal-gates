@@ -153,7 +153,7 @@ func TestCanaryTurnRequestsNativeHeadlessMode(t *testing.T) {
 			binding := map[string]any{"provider": tc.provider, "launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}
 			schema := map[string]any{"type": "object"}
 			var report bytes.Buffer
-			c := &engineCanary{t: t, nativeHost: tc.provider, home: home, jobs: jobs, binding: binding, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(strings.NewReader(approval)), approvalOutput: &report}
+			c := &engineCanary{t: t, nativeHost: tc.provider, home: home, jobs: jobs, binding: binding, approvalDeadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(strings.NewReader(approval)), approvalOutput: &report}
 			calls := 0
 			c.execute = func(value any, dir string, probe bool) (map[string]any, error) {
 				calls++
@@ -201,7 +201,7 @@ func TestCanaryEngineAttemptsKeepIndependentEvidence(t *testing.T) {
 	var retained map[string][]byte = map[string][]byte{}
 	for _, attempt := range []string{"att:gate:31", "att:gate:32"} {
 		pending := protocol.PendingAction{ActionID: action, AttemptID: attempt, ReviewSeries: review.ProductReview}
-		c := &engineCanary{t: t, worker: true, home: home, project: workspace, jobs: jobs, run: facade.Run{RunID: "bound-run", PendingActions: map[string]protocol.PendingAction{action: pending}}, deadline: time.Now().Add(time.Minute), binding: map[string]any{"launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}}
+		c := &engineCanary{t: t, worker: true, home: home, project: workspace, jobs: jobs, run: facade.Run{RunID: "bound-run", PendingActions: map[string]protocol.PendingAction{action: pending}}, approvalDeadline: time.Now().Add(time.Minute), binding: map[string]any{"launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}}
 		bindCanaryReviewMaterial(t, c, pending, []byte(canaryRequirementDocument))
 		base := filepath.Join(jobs, "bound-run", action, canaryName(attempt))
 		material := canaryMaterials{Role: "product review", RunID: c.run.RunID, ActionID: action, Pending: &pending, RequirementPath: "bound-requirement", RequirementRevision: "bound-revision"}
@@ -278,12 +278,12 @@ func TestCanaryTurnAuthorizationFixture(t *testing.T) {
 	readOnly := !strings.Contains(scenario, "execute")
 	binding := map[string]any{"provider": canaryProvider, "launch": map[string]any{"executable": "fixture-node", "script": "fixture-host"}}
 	schema := map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string"}}}
-	c := &engineCanary{t: t, home: home, project: project, jobs: jobs, binding: binding, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout}
+	c := &engineCanary{t: t, home: home, project: project, jobs: jobs, binding: binding, approvalDeadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout}
 	if scenario == "read-error" {
 		c.approvalInput = bufio.NewReader(canaryApprovalReadError{})
 	}
 	if scenario == "deadline" {
-		c.deadline = time.Now().Add(50 * time.Millisecond)
+		c.approvalDeadline = time.Now().Add(50 * time.Millisecond)
 	}
 	calls := 0
 	var refusal error
@@ -364,7 +364,7 @@ func TestCanaryCallAuthorizationShowsOnlyAvailableRequestSelection(t *testing.T)
 	prompt := "do the issued work"
 	sum := sha256.Sum256([]byte(prompt))
 	var output bytes.Buffer
-	c := &engineCanary{deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(strings.NewReader(fmt.Sprintf("approve issued-action 2 %x\n", sum))), approvalOutput: &output}
+	c := &engineCanary{approvalDeadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(strings.NewReader(fmt.Sprintf("approve issued-action 2 %x\n", sum))), approvalOutput: &output}
 	request := map[string]any{"provider": "zcode", "workspace": "issued-workspace", "read_only": true, "prompt": prompt, "model": "fixture/provider-model", "reasoning_effort": "high", "permission_mode": "fixture-mode", "binding": map[string]any{"environment": map[string]any{"secret": "fixture-secret-must-not-display"}}}
 	if err := c.authorizeCall(request, "issued-action", "issued role", 2); err != nil {
 		t.Fatal(err)

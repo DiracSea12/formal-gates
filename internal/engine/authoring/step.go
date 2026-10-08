@@ -120,7 +120,7 @@ type HostActionStep struct {
 	Boundary  HostBoundaryReason
 	Operation OperationID
 	Schema    SchemaID
-	Timeout   time.Duration // 必填 > 0
+	Timeout   time.Duration // 0 表示不设超时，负值非法
 }
 
 // AgentStep 是不可程序化语义工作步骤（§5.4）。派生 AGENT/AGENT_WORKER；
@@ -133,7 +133,7 @@ type AgentStep struct {
 	Handler      HandlerID
 	Reason       NonProgrammableReason
 	ReviewSeries ReviewSeriesAction // INDEPENDENT_REVIEW 步必填：审查系列归属标记
-	Timeout      time.Duration      // 必填 > 0
+	Timeout      time.Duration      // 0 表示不设超时，负值非法
 	Retry        *RetryPolicy       // 可选
 }
 

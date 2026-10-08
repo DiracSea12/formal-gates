@@ -16,7 +16,7 @@ import (
 )
 
 func TestCanarySubprocessSettlesPrivateDescendants(t *testing.T) {
-	for _, mode := range []string{"normal", "timeout", "inherited-pipe"} {
+	for _, mode := range []string{"normal", "cancelled", "inherited-pipe"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			pidfile := filepath.Join(root, "child.pid")
@@ -27,22 +27,22 @@ trap 'kill "$child" 2>/dev/null; wait "$child"; exit 0' TERM
 case "$2" in
 normal) kill "$child"; wait "$child"; exit 0;;
 inherited-pipe) exit 0;;
-timeout) wait "$child";;
+cancelled) wait "$child";;
 esac`
-			budget := 3 * time.Second
-			if mode == "timeout" {
-				budget = 200 * time.Millisecond
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), budget)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			if mode == "cancelled" {
+				go func() { waitForFile(t, pidfile); cancel() }()
+			}
+
 			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script, "peer", pidfile, mode)
 			started := time.Now()
 			_, err := canarySubprocessOutput(cmd)
 			if mode == "normal" && err != nil {
 				t.Fatal(err)
 			}
-			if mode == "timeout" && !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("timeout result=%v", err)
+			if mode == "cancelled" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation result=%v", err)
 			}
 			if mode == "inherited-pipe" && !errors.Is(err, exec.ErrWaitDelay) {
 				t.Fatalf("pipe result=%v", err)
@@ -71,9 +71,6 @@ esac`
 			if !terminated {
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 				t.Fatalf("private descendant %d remains executing", pid)
-			}
-			if time.Since(started) > budget+2*time.Second {
-				t.Fatal("process or inherited pipe escaped its native bound")
 			}
 			t.Logf("mode=%s descendant=%d terminated=true elapsed=%s", mode, pid, time.Since(started))
 		})

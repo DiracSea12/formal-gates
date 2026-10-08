@@ -81,8 +81,8 @@ func validateStepIR(cs CompiledStep) error {
 		if p.Operation == "" {
 			return invariantError(`host action step %q: registered operation id required`, h.ID)
 		}
-		if p.Timeout <= 0 {
-			return invariantError(`host action step %q: positive timeout required`, h.ID)
+		if p.Timeout < 0 {
+			return invariantError(`host action step %q: timeout must be >= 0`, h.ID)
 		}
 		if p.Schema == "" {
 			return invariantError(`host action step %q: operation schema id required`, h.ID)
@@ -102,8 +102,8 @@ func validateStepIR(cs CompiledStep) error {
 			return invariantError(`agent step %q: review series %q invalid (closed set: %s, %s, %s)`,
 				h.ID, p.ReviewSeries, authoring.ReviewSeriesProductReview, authoring.ReviewSeriesStartReadiness, authoring.ReviewSeriesUnaffiliated)
 		}
-		if p.Timeout <= 0 {
-			return invariantError(`agent step %q: positive timeout required`, h.ID)
+		if p.Timeout < 0 {
+			return invariantError(`agent step %q: timeout must be >= 0`, h.ID)
 		}
 		if err := checkRetryPtr(p.Retry); err != nil {
 			return err

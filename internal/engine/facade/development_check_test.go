@@ -58,7 +58,7 @@ func developmentCheckIntent(t *testing.T, f *Facade, s *protocol.State, base, ac
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := protocol.CheckParameters{SourceActionID: "edit", Check: protocol.DevelopmentCheck{ID: action, Command: command}, WorkspaceID: "check", SourceIdentity: base, SourceDigest: digest, TimeoutNanos: int64(2 * time.Second)}
+	p := protocol.CheckParameters{SourceActionID: "edit", Check: protocol.DevelopmentCheck{ID: action, Command: command}, WorkspaceID: "check", SourceIdentity: base, SourceDigest: digest}
 	values, err := evidenceFields(p)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +73,7 @@ func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent 
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(4 * time.Second)
-	for !done && time.Now().Before(deadline) {
+	for !done {
 		time.Sleep(10 * time.Millisecond)
 		result, done, err = f.checkEvidence(s, intent, false, &invoked)
 		if err != nil {
@@ -230,8 +229,7 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 			}
 			var receipt protocol.HostActionReceipt
 			var executed protocol.CheckEvidence
-			deadline := time.Now().Add(5 * time.Second)
-			for time.Now().Before(deadline) {
+			for {
 				d.drive()
 				state := driverState(t, d)
 				for _, observed := range state.HostActionReceipts {

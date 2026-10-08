@@ -18,14 +18,19 @@ import (
 // CheckParameters selects an approved development check or frozen QA operation.
 // Its binding and registered workspace identify the immutable input.
 type CheckParameters struct {
-	QA             *QACheckParameters `json:"qa,omitempty"`
-	SourceActionID string             `json:"sourceActionId"`
-	Binding        WorkBinding        `json:"binding"`
-	Check          DevelopmentCheck   `json:"check"`
-	SourceIdentity string             `json:"sourceIdentity"`
-	SourceDigest   string             `json:"sourceDigest"`
-	WorkspaceID    string             `json:"workspaceId"`
-	TimeoutNanos   int64              `json:"timeoutNanos"`
+	Repair         *RepairCheckParameters `json:"repair,omitempty"`
+	QA             *QACheckParameters     `json:"qa,omitempty"`
+	SourceActionID string                 `json:"sourceActionId"`
+	Binding        WorkBinding            `json:"binding"`
+	Check          DevelopmentCheck       `json:"check"`
+	SourceIdentity string                 `json:"sourceIdentity"`
+	SourceDigest   string                 `json:"sourceDigest"`
+	WorkspaceID    string                 `json:"workspaceId"`
+}
+
+type RepairCheckParameters struct {
+	Task          runtime.TaskKey `json:"task"`
+	SourceActions []string        `json:"sourceActions"`
 }
 
 type CheckStreamProof struct {
@@ -65,7 +70,7 @@ func checkParameters(intent HostActionIntent) (CheckParameters, error) {
 }
 
 func (s *State) editResultCurrent(r WorkerResult) bool {
-	if r.Validation == nil || r.Validation.Development == nil || r.Outcome != OutcomePass {
+	if r.Validation == nil || r.Validation.Development == nil || r.Outcome != OutcomePass || r.Validation.Binding.VerificationSource != "" {
 		return false
 	}
 	if _, obsolete := s.ObsoleteActions[r.ActionID]; obsolete {
@@ -159,7 +164,7 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 		if !s.editResultCurrent(r) {
 			continue
 		}
-		if _, approved := s.editBatch(r); !approved {
+		if len(s.editChecks(r)) == 0 {
 			continue
 		}
 		if _, frozen := s.editSourceProof(id); frozen {
@@ -280,17 +285,15 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 }
 
 func (s *State) developmentChecksPassed(r WorkerResult) bool {
-	batch, ok := s.editBatch(r)
-	if !ok {
-		b := r.Validation.Binding
-		wave := s.validationWave(b.WaveID)
-		return b.Task.Step == "development.repair" && b.BatchID == "" && wave != nil && wave.Repair != nil
+	checks := s.editChecks(r)
+	if len(checks) == 0 {
+		return false
 	}
 	source, frozen := s.editSourceProof(r.ActionID)
 	if !frozen {
 		return false
 	}
-	for _, check := range batch.Checks {
+	for _, check := range checks {
 		e, done := s.checkReceipt(r.ActionID, check.ID)
 		if !done || e.ExitCode != 0 || e.Error != "" || e.SourceIdentity != source.Identity || e.SourceDigest != source.Digest {
 			return false
@@ -304,37 +307,34 @@ func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefiniti
 	if !ok || !s.editResultCurrent(r) {
 		return CheckParameters{}, false
 	}
-	batch, approved := s.editBatch(r)
+	checks := s.editChecks(r)
 	source, frozen := s.editSourceProof(action)
-	if !approved || !frozen {
+	if len(checks) == 0 || !frozen {
 		return CheckParameters{}, false
 	}
 	workspace := s.checkResource(action, source)
 	if workspace.Status != "READY" || !s.resourceUsable(workspace.ID) {
 		return CheckParameters{}, false
 	}
-	for _, check := range batch.Checks {
+	for _, check := range checks {
 		if e, done := s.checkReceipt(action, check.ID); done {
 			if e.ExitCode != 0 || e.Error != "" {
 				return CheckParameters{}, false
 			}
 			continue
 		}
-		var timeout int64
-		for _, step := range cd.Steps {
-			if step.Header.ID == "check.execute" {
-				timeout = int64(step.Payload.(compiler.CompiledHostActionStep).Timeout)
-			}
-		}
-		return CheckParameters{SourceActionID: action, Binding: r.Validation.Binding, Check: check, SourceIdentity: source.Identity, SourceDigest: source.Digest, WorkspaceID: workspace.ID, TimeoutNanos: timeout}, true
+		return CheckParameters{SourceActionID: action, Binding: r.Validation.Binding, Check: check, SourceIdentity: source.Identity, SourceDigest: source.Digest, WorkspaceID: workspace.ID}, true
 	}
 	return CheckParameters{}, false
 }
 
-func (s *State) checkInputsCurrent(intent HostActionIntent) bool {
+func (s *State) checkInputsCurrent(intent HostActionIntent, definitions ...*compiler.CompiledDefinition) bool {
 	p, err := checkParameters(intent)
 	if err != nil {
 		return false
+	}
+	if p.Repair != nil {
+		return len(definitions) > 0 && s.repairCheckInputsCurrent(p, definitions[0])
 	}
 	if p.QA != nil {
 		return s.qaCheckInputsCurrent(p)
@@ -343,17 +343,17 @@ func (s *State) checkInputsCurrent(intent HostActionIntent) bool {
 	if !ok || !s.editResultCurrent(r) || p.Binding != r.Validation.Binding {
 		return false
 	}
-	batch, ok := s.editBatch(r)
-	if !ok {
+	checks := s.editChecks(r)
+	if len(checks) == 0 {
 		return false
 	}
 	source, ok := s.editSourceProof(p.SourceActionID)
 	if !ok || source.Identity != p.SourceIdentity || source.Digest != p.SourceDigest || s.checkResource(p.SourceActionID, source).ID != p.WorkspaceID {
 		return false
 	}
-	for _, check := range batch.Checks {
+	for _, check := range checks {
 		if check.ID == p.Check.ID {
-			return check == p.Check && p.TimeoutNanos > 0
+			return check == p.Check
 		}
 	}
 	return false
@@ -370,7 +370,7 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if !s.editResultCurrent(r) {
 			continue
 		}
-		if _, ok := s.editBatch(r); !ok {
+		if len(s.editChecks(r)) == 0 {
 			continue
 		}
 		source, frozen := s.editSourceProof(action)
@@ -399,17 +399,17 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 	return false, nil
 }
 
-func (s *State) developmentCheckFailure() *decision.Fact {
+func (s *State) developmentCheckFailure(definitions ...*compiler.CompiledDefinition) *decision.Fact {
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok || !s.checkInputsCurrent(intent) {
+		if !ok || !s.checkInputsCurrent(intent, definitions...) {
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || p.QA != nil {
+		if err != nil || p.QA != nil || p.Repair != nil {
 			continue
 		}
 		var e CheckEvidence
@@ -423,4 +423,21 @@ func (s *State) developmentCheckFailure() *decision.Fact {
 func checkTextProof(text string, proof CheckStreamProof) bool {
 	sum := sha256.Sum256([]byte(text))
 	return proof.Size == len(text) && proof.SHA256 == hex.EncodeToString(sum[:])
+}
+
+func (s *State) editChecks(r WorkerResult) []DevelopmentCheck {
+	var checks []DevelopmentCheck
+	if batch, ok := s.editBatch(r); ok {
+		checks = slices.Clone(batch.Checks)
+	}
+	if r.Validation.Binding.Task.Step == "development.repair" {
+		for _, check := range s.fullProjectChecks() {
+			if !slices.ContainsFunc(checks, func(existing DevelopmentCheck) bool {
+				return existing.Purpose == check.Purpose && existing.Command == check.Command
+			}) {
+				checks = append(checks, check)
+			}
+		}
+	}
+	return checks
 }

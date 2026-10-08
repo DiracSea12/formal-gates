@@ -67,7 +67,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	r, w := io.Pipe()
 	defer r.Close()
 	defer w.Close()
-	c := &engineCanary{t: t, nativeHost: "codex", localPeer: true, home: home, project: workspace, jobs: t.TempDir(), worker: true, binding: objectOrEmpty(s.request["binding"]), deadline: time.Now().Add(time.Minute), run: facade.Run{RunID: input.RunID, PendingActions: map[string]protocol.PendingAction{input.Pending.ActionID: input.Pending}, WorkerMaterials: map[string]facade.WorkerMaterial{input.Pending.ActionID: ref}}, approvalInput: bufio.NewReader(r), approvalOutput: canaryLocalApproval{w}}
+	c := &engineCanary{t: t, nativeHost: "codex", localPeer: true, home: home, project: workspace, jobs: t.TempDir(), worker: true, binding: objectOrEmpty(s.request["binding"]), approvalDeadline: time.Now().Add(time.Minute), run: facade.Run{RunID: input.RunID, PendingActions: map[string]protocol.PendingAction{input.Pending.ActionID: input.Pending}, WorkerMaterials: map[string]facade.WorkerMaterial{input.Pending.ActionID: ref}}, approvalInput: bufio.NewReader(r), approvalOutput: canaryLocalApproval{w}}
 	payload := material.ResultTemplate
 	payload.Outcome = protocol.OutcomePass
 	payload.Review.Status = "PASS"
@@ -332,7 +332,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 					}
 				}
 			}
-			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}}}
+			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &worker.Development{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}}}
 			body, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)

@@ -47,7 +47,16 @@ type DevelopmentCriterion struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
 }
+
+const (
+	CheckFullBuild = "FULL_BUILD"
+	CheckFullTests = "FULL_TESTS"
+)
+
+func DevelopmentCheckPurposes() []string { return []string{"", CheckFullBuild, CheckFullTests} }
+
 type DevelopmentCheck struct {
+	Purpose string `json:"purpose,omitempty"`
 	ID      string `json:"id"`
 	Command string `json:"command"`
 }
@@ -106,7 +115,7 @@ func GranularityVerificationTiers() []string { return []string{"", "FINAL", "CHE
 
 // GranularityResultContract describes the existing proposal admission rules.
 func GranularityResultContract() string {
-	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
+	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. Check purpose is empty, FULL_BUILD or FULL_TESTS. The confirmed project plan requires at least one FULL_BUILD and one FULL_TESTS command covering the complete project; purpose is an explicit approved meaning, never inferred from command text. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
 }
 
 // ValidateGranularity checks the shared development-plan contract for readiness
@@ -151,7 +160,7 @@ func ValidateGranularity(p *GranularityReview) error {
 		}
 		checks := map[string]bool{}
 		for _, c := range b.Checks {
-			if c.ID == "" || c.Command == "" || checks[c.ID] {
+			if c.ID == "" || c.Command == "" || checks[c.ID] || !slices.Contains(DevelopmentCheckPurposes(), c.Purpose) {
 				return validationError("verification IDs and commands must be unique and complete")
 			}
 			checks[c.ID] = true
@@ -278,6 +287,9 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 		id, p = "", route.DevelopmentPlan.Proposal
 	}
 	if err := ValidateGranularity(p); err != nil {
+		return nil, err
+	}
+	if err := ValidateProjectChecks(p); err != nil {
 		return nil, err
 	}
 	preview := &DevelopmentPlanPreview{Proposal: *p}
@@ -707,6 +719,12 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 		sources = append(sources, work.task)
 		paths = append(paths, work.result.Validation.Development.Paths...)
 	}
+	for i := range s.Validation.Waves {
+		if work := s.repairVerificationWork(&s.Validation.Waves[i], cd); work != nil && work.result == nil {
+			return nil, nil, "", false
+		}
+	}
+
 	slices.Sort(paths)
 	paths = slices.Compact(paths)
 	slices.SortFunc(sources, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
@@ -732,4 +750,44 @@ func (s *State) developmentPlanCurrent(p *GranularityReview) bool {
 		proposed = s.latestSlicePlanProposal()
 	}
 	return proposed != nil && planContractDigest(proposed) == planContractDigest(p)
+}
+
+func ValidateProjectChecks(p *GranularityReview) error {
+	purposes := map[string]bool{}
+	if p != nil {
+		for _, batch := range p.Batches {
+			for _, check := range batch.Checks {
+				purposes[check.Purpose] = true
+			}
+		}
+	}
+	for _, purpose := range []string{CheckFullBuild, CheckFullTests} {
+		if !purposes[purpose] {
+			return validationError("project verification contract is missing " + purpose)
+		}
+	}
+	return nil
+}
+
+func (s *State) fullProjectChecks() []DevelopmentCheck {
+	_, p, _ := s.confirmedDevelopmentPlan()
+	if p == nil {
+		return nil
+	}
+	var checks []DevelopmentCheck
+	for _, batch := range p.Batches {
+		for _, check := range batch.Checks {
+			if check.Purpose != CheckFullBuild && check.Purpose != CheckFullTests {
+				continue
+			}
+			if slices.ContainsFunc(checks, func(existing DevelopmentCheck) bool {
+				return existing.Purpose == check.Purpose && existing.Command == check.Command
+			}) {
+				continue
+			}
+			check.ID = "project:" + strings.TrimPrefix(digestOfCanonical(struct{ Batch, Check string }{batch.ID, check.ID}), "sha256:")
+			checks = append(checks, check)
+		}
+	}
+	return checks
 }

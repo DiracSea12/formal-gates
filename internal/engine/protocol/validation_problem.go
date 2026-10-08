@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"slices"
@@ -65,7 +66,7 @@ func (s *State) validationFindingResponsibility(w *ValidationWave, f *Validation
 
 // resolveValidationProblems records completion on the problem itself. The
 // referenced wave owns the actual candidate and immutable source/result facts.
-func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
+func (s *State) resolveValidationProblems(wave *ValidationWave, cd *compiler.CompiledDefinition) bool {
 	if wave == nil || wave.Status == "INVALIDATED" {
 		return false
 	}
@@ -78,7 +79,7 @@ func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
 	}
 	work := s.repairWork()
 	for _, repair := range work {
-		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 && s.repairSourcesComplete(wave, repair.wave) {
+		if repair.result != nil && slices.Contains(wave.SourceTasks, repair.task) && repair.wave.Repair.PureP2 && s.repairSourcesComplete(wave, repair.wave, cd) {
 			for _, id := range s.repairCompletedProblems(repair) {
 				if s.repairProblemValidationComplete(wave, repair, id, true) {
 					complete(id)
@@ -112,7 +113,7 @@ func (s *State) resolveValidationProblems(wave *ValidationWave) bool {
 		}
 	}
 	for _, repair := range work {
-		if repair.result == nil || !slices.Contains(wave.SourceTasks, repair.task) || !s.repairSourcesComplete(wave, repair.wave) {
+		if repair.result == nil || !slices.Contains(wave.SourceTasks, repair.task) || !s.repairSourcesComplete(wave, repair.wave, cd) {
 			continue
 		}
 		for _, id := range s.repairCompletedProblems(repair) {
@@ -180,8 +181,8 @@ func (s *State) validationObligationDetails(w *ValidationWave) []validationOblig
 	return obligations
 }
 
-func (s *State) repairSourcesComplete(wave, original *ValidationWave) bool {
-	if !s.repairCompleted(original) {
+func (s *State) repairSourcesComplete(wave, original *ValidationWave, cd *compiler.CompiledDefinition) bool {
+	if !s.repairCompleted(original, cd) {
 		return false
 	}
 	for _, member := range s.repairMembers(original) {

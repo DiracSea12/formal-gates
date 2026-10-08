@@ -79,7 +79,7 @@ func TestCanaryWritableCompletionUsesWorkspaceDeclarationScope(t *testing.T) {
 			approvalRead, approvalWrite := io.Pipe()
 			defer approvalRead.Close()
 			defer approvalWrite.Close()
-			c := &engineCanary{t: t, home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+			c := &engineCanary{t: t, home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, approvalDeadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
 			calls := 0
 			c.execute = func(value any, directory string, writeSource bool) (map[string]any, error) {
 				request := value.(map[string]any)
@@ -260,7 +260,7 @@ func TestCanaryDevelopmentBatchesShareUnfrozenWorkspace(t *testing.T) {
 	approvalRead, approvalWrite := io.Pipe()
 	defer approvalRead.Close()
 	defer approvalWrite.Close()
-	c := &engineCanary{t: t, home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+	c := &engineCanary{t: t, home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, approvalDeadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
 	resource := &protocol.NativeResource{ID: "shared-development", Path: workspace, Source: base, Identity: base, Status: "READY"}
 	for _, batch := range []string{"parse", "format"} {
 		input := protocol.ValidationInput{Workspace: resource, Binding: protocol.WorkBinding{WorkspaceID: resource.ID, BatchID: batch, Candidate: base}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: batch, Artifacts: []string{batch + ".go"}}}}

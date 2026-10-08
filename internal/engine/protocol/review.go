@@ -379,6 +379,9 @@ func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidenc
 		if err := ValidateGranularity(evidence.GranularityReview); err != nil {
 			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
+		if err := ValidateProjectChecks(evidence.GranularityReview); err != nil {
+			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+		}
 	}
 	return updated, nil
 }

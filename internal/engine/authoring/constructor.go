@@ -17,8 +17,8 @@ import (
 //   - 可执行变体（local/durable/host/agent）：typed input/output codec 必填
 //     （"无类型 I/O"的第一拦截层）；predicate 引用非空；
 //   - DurableStep：幂等策略枚举 + ReconcileID + retry/timeout 必填；
-//   - HostActionStep：三值封闭边界枚举 + operation 引用 + timeout 必填；
-//   - AgentStep：三值封闭理由枚举 + postcondition predicate 引用 + timeout 必填；
+//   - HostActionStep：三值封闭边界枚举 + operation 引用；timeout 0 表示无截止；
+//   - AgentStep：三值封闭理由枚举 + postcondition predicate 引用；timeout 0 表示无截止；
 //   - HumanAskStep：ask 类型 + request/response schema + freshness TTL 必填；
 //   - ParallelStep：join/failure 策略 + >= 2 个 children 必填。
 
@@ -197,7 +197,7 @@ type HostActionSpec struct {
 	Boundary  HostBoundaryReason
 	Operation OperationID
 	Schema    SchemaID
-	Timeout   time.Duration // 必填 > 0
+	Timeout   time.Duration // 0 表示不设超时，负值非法
 }
 
 // NewHostActionStep 构造宿主 adapter 动作步骤（派生 ENGINE/HOST_ADAPTER）。
@@ -218,8 +218,8 @@ func NewHostActionStep(h Header, io IO, spec HostActionSpec) (HostActionStep, er
 	if spec.Operation == "" {
 		return HostActionStep{}, fmt.Errorf("host action step %q: registered operation id required", h.ID)
 	}
-	if spec.Timeout <= 0 {
-		return HostActionStep{}, fmt.Errorf("host action step %q: positive timeout required", h.ID)
+	if spec.Timeout < 0 {
+		return HostActionStep{}, fmt.Errorf("host action step %q: timeout must be >= 0", h.ID)
 	}
 	if spec.Schema == "" {
 		return HostActionStep{}, fmt.Errorf("host action step %q: operation schema id required", h.ID)
@@ -242,7 +242,7 @@ type AgentSpec struct {
 	Handler      HandlerID
 	Reason       NonProgrammableReason
 	ReviewSeries ReviewSeriesAction // INDEPENDENT_REVIEW 步必填：审查系列归属标记
-	Timeout      time.Duration      // 必填 > 0
+	Timeout      time.Duration      // 0 表示不设超时，负值非法
 	Retry        *RetryPolicy       // 可选
 }
 
@@ -279,8 +279,8 @@ func NewAgentStep(h Header, io IO, spec AgentSpec) (AgentStep, error) {
 	if err := checkOptionalRetry(h.ID, spec.Retry); err != nil {
 		return AgentStep{}, err
 	}
-	if spec.Timeout <= 0 {
-		return AgentStep{}, fmt.Errorf("agent step %q: positive timeout required", h.ID)
+	if spec.Timeout < 0 {
+		return AgentStep{}, fmt.Errorf("agent step %q: timeout must be >= 0", h.ID)
 	}
 	deps, err := normalizeIDs(h.ID, "dependency", h.Dependencies)
 	if err != nil {

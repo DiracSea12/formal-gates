@@ -118,10 +118,10 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
 			Timeout: time.Second}},
 			"nonProgrammableReason required"},
-		{"agent zero timeout", []authoring.Step{authoring.AgentStep{
+		{"agent negative timeout", []authoring.Step{authoring.AgentStep{
 			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
-			Reason: authoring.ReasonSemanticJudgment}},
-			"positive timeout required"},
+			Reason: authoring.ReasonSemanticJudgment, Timeout: -time.Second}},
+			"timeout must be >= 0"},
 		// worker result 合同的二次防线：绕过 constructor 的原始结构体缺
 		// postconditions 必拒（constructor 主拦项复核，封板后补漏）。
 		{"agent without postconditions", []authoring.Step{authoring.AgentStep{

@@ -58,11 +58,7 @@ func (s *State) repairWork() []repairWork {
 			}
 		}
 	}
-	for i := range s.Validation.Waves {
-		if verification := s.repairVerificationWork(&s.Validation.Waves[i]); verification != nil {
-			work = append(work, *verification)
-		}
-	}
+
 	return work
 }
 
@@ -135,6 +131,8 @@ func (s *State) repairReady(w *repairWork) bool {
 
 // RepairInput carries the original problem evidence, not only lookup IDs.
 type RepairInput struct {
+	VerificationPaths []string                      `json:"verificationPaths,omitempty"`
+	VerificationCases []string                      `json:"verificationCases,omitempty"`
 	OriginTask        runtime.TaskKey               `json:"originTask"`
 	FinalCandidate    *coverage.ValidationCandidate `json:"finalCandidate,omitempty"`
 	MemberResults     []WorkerResult                `json:"memberResults,omitempty"`
@@ -185,15 +183,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 			continue
 		}
 		input := &RepairInput{OriginTask: w.wave.Repair.Task, Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2 || w.pureP2}}
-		if w.verification {
-			_, proof, _ := s.repairFinalSource(w)
-			input.FinalCandidate = &coverage.ValidationCandidate{Identity: proof.Identity, Digest: proof.Digest}
-			for _, member := range s.repairMembers(w.wave) {
-				if r := s.developmentResultRecord(member.task); r != nil {
-					input.MemberResults = append(input.MemberResults, *r)
-				}
-			}
-		}
+
 		_, cutoff := s.repairIssue(w.wave.Repair.Task)
 		if w.previous != nil {
 			_, cutoff = s.repairIssue(task)

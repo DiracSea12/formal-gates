@@ -147,6 +147,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	if made, err := e.advanceQAOperations(s, nextRevision); err != nil || made {
 		return changed || made, err
 	}
+	if made, err := e.advanceRepairComparisons(s, nextRevision); err != nil || made {
+		return changed || made, err
+	}
 	if made, err := e.advanceDevelopmentChecks(s, nextRevision); err != nil || made {
 		return changed || made, err
 	}
@@ -182,7 +185,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		}
 	}
 	w := s.currentValidationWave()
-	changed = s.resolveValidationProblems(w) || changed
+	changed = s.resolveValidationProblems(w, e.cfg.Definition) || changed
 	if w != nil && w.Status == "COLLECTING" {
 		changed = s.carryRequirementTargets(w) || changed
 		complete := true
@@ -204,26 +207,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		changed = settled || changed
 	}
 	changed = s.ensureRepairGates(e.cfg.Definition) || changed
-	if s.validationRepairPending(w) && s.repairCompleted(w) {
+	if s.validationRepairPending(w) && s.repairCompleted(w, e.cfg.Definition) {
 		w.Status = "REPAIRED"
 		changed = true
-	}
-	if _, ready := s.repairCandidateParameters(e.cfg.Definition); ready {
-		return e.advanceIntegration(s, nextRevision)
-	}
-	if work := s.nextRepairWork(); work != nil {
-		if s.validationDispositionBlocked(work.wave) {
-			return changed, nil
-		}
-		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification {
-			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
-		}
-		if s.repairReady(work) {
-			return changed, nil
-		}
-	}
-	if w != nil && w.Status == "COMPLETE" && w.Scope == coverage.ScopeAffected && v.Candidate != nil && s.nextRepairWork() == nil {
-		return e.freezeValidationWave(s, coverage.ScopeFull, "", w.SourceTasks) || changed, nil
 	}
 	if p, ready := s.nextEditSource(e.cfg.Definition); ready {
 		for _, intent := range s.PendingHostActions {
@@ -238,6 +224,24 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		s.PendingHostActions[intent.ActionID] = intent
 		return true, nil
 	}
+	if _, ready := s.repairCandidateParameters(e.cfg.Definition); ready {
+		return e.advanceIntegration(s, nextRevision)
+	}
+	if work := s.nextRepairWork(); work != nil {
+		if s.validationDispositionBlocked(work.wave) {
+			return changed, nil
+		}
+		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 && !work.verification {
+			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
+		}
+		if s.repairReady(work) && s.developmentEditResult(work.task) == nil && !work.verification {
+			return changed, nil
+		}
+	}
+	if w != nil && w.Status == "COMPLETE" && w.Scope == coverage.ScopeAffected && v.Candidate != nil && s.nextRepairWork() == nil {
+		return e.freezeValidationWave(s, coverage.ScopeFull, "", w.SourceTasks) || changed, nil
+	}
+
 	if _, _, _, complete := s.developmentSources(e.cfg.Definition); !complete {
 		if _, integration := s.integrationParameters(e.cfg.Definition); integration {
 			return e.advanceIntegration(s, nextRevision)
@@ -557,7 +561,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 				s.carryRouteTarget(target, prior, &w)
 			}
 			if mode == "" && target.Status == "PENDING" {
-				s.carryGateResult(target, prior, &w)
+				s.carryGateResult(target, prior, &w, e.cfg.Definition)
 			}
 		}
 		if prior != nil && authorization == "" {
@@ -598,7 +602,7 @@ func validationExpectedDigest(w *ValidationWave) string {
 
 // A disposition applies to its candidate. P2 completion can carry only genuine
 // passes or failures whose verified problems were covered by that repair.
-func (s *State) carryGateResult(target *ValidationTarget, prior, current *ValidationWave) {
+func (s *State) carryGateResult(target *ValidationTarget, prior, current *ValidationWave, cd *compiler.CompiledDefinition) {
 	if slices.Contains(s.requiredWorkTasks(), target.Task) {
 		return
 	}
@@ -619,7 +623,7 @@ func (s *State) carryGateResult(target *ValidationTarget, prior, current *Valida
 			return
 		}
 		for _, repair := range repairs {
-			if !repair.wave.Repair.PureP2 || !s.repairCompleted(repair.wave) {
+			if !repair.wave.Repair.PureP2 || !s.repairCompleted(repair.wave, cd) {
 				return
 			}
 		}
@@ -743,7 +747,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 	// Settlement belongs to the current adjudicating projection or an unfinished
 	// original repair. Replacement tasks retain their source wave as evidence.
 	currentProjection := w == s.currentValidationWave() && w.Generation == s.Validation.Generation && w.RequirementRevision == s.Validation.RequirementRevision && (w.Status == "ADJUDICATING" || w.Status == "REPAIR" || w.Status == "COMPLETE")
-	pending := s.validationRepairPending(w) && !s.repairCompleted(w)
+	pending := s.validationRepairPending(w) && !s.repairCompleted(w, e.cfg.Definition)
 	if !currentProjection && !pending || !s.validationFindingsAdjudicated(w) {
 		return false, nil
 	}

@@ -2802,7 +2802,9 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 				return HostActionIntent{}, err
 			}
 			expected, ready := state.nextCheckParameters(p.SourceActionID, e.cfg.Definition)
-			if p.QA != nil {
+			if p.Repair != nil {
+				expected, ready = state.nextRepairCheckParameters(p.Repair.Task, e.cfg.Definition)
+			} else if p.QA != nil {
 				expected, ready = state.nextQACheckParameters(p.Binding.Task, e.cfg.Definition)
 			}
 			if !ready || digestOfCanonical(expected) != digestOfCanonical(p) {

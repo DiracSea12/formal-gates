@@ -99,7 +99,7 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			complete(correction.task, "correction")
 			s.DispatchBindings["correction"] = WorkBinding{Task: correction.task, WaveID: w.ID, Generation: 1}
 			s.DispatchIssueRevisions["correction"] = 20
-			verification := s.repairVerificationWork(w)
+			verification := s.repairVerificationWork(w, compiledCanonicalWorkflow(t))
 			if verification == nil {
 				t.Fatal("missing integrated verification projection")
 			}
@@ -129,7 +129,7 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			if boundary == "complete" {
 				s.Validation.Findings[later.ID] = later
 			}
-			s.resolveValidationProblems(&final)
+			s.resolveValidationProblems(&final, compiledCanonicalWorkflow(t))
 			if (s.Validation.Problems["source"].ResolvedWave != "") != (boundary == "complete") {
 				t.Fatalf("source completion boundary %s: %+v", boundary, s.Validation.Problems["source"])
 			}
@@ -462,4 +462,19 @@ func TestFinalRepairEvidenceUsesMemberUnion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *State) validateFinalRepairEvidence(work repairWork, e DevelopmentEvidence) error {
+	var members []DevelopmentEvidence
+	for _, member := range s.repairMembers(work.wave) {
+		r := s.developmentResultRecord(member.task)
+		if r == nil {
+			return validationError("final verification lacks a completed repair member")
+		}
+		members = append(members, *r.Validation.Development)
+	}
+	if err := ValidateFinalRepairEvidence(members, e); err != nil {
+		return err
+	}
+	return s.validateRepairEvidence(e, true)
 }

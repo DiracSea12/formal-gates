@@ -326,6 +326,8 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		if len(expected) == 0 || !slices.Equal(actual, expected) {
 			return validationError("resolution manifest must cover exactly the original conflict paths")
 		}
+	case "engine.repair.verify":
+		return s.acceptRepairComparison(record, e.cfg.Definition)
 	case "engine.repair":
 		return s.acceptRepairResult(record)
 	case "engine.development.batch":

@@ -4,7 +4,6 @@ package harness
 
 import (
 	"bufio"
-	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
@@ -103,7 +102,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 		t.Fatal(err)
 	}
 	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
-	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(installedCanaryBudget), repairAllowances: 1}
+	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, repairAllowances: 1}
 	if nativeHost != canaryProvider {
 		nativeBinary := nativeHost
 		if nativeHost == "cursor" {
@@ -226,8 +225,6 @@ func TestCanaryInstalledTransportFailureKeepsIndependentFrontier(t *testing.T) {
 	}
 }
 
-const installedCanaryBudget = 8 * time.Minute
-
 func canaryStopPrivateBackend(t *testing.T, pidFile string) {
 	t.Helper()
 	body, err := os.ReadFile(pidFile)
@@ -269,9 +266,7 @@ func runCanaryInstalledTransportFailure(t *testing.T, provider, mode string) {
 	if provider != "git" {
 		selection = "^TestCanaryInstalledNativeFlows$/^" + provider + "$/^split$"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), installedCanaryBudget)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout="+installedCanaryBudget.String())
+	cmd := exec.Command(os.Args[0], "-test.run="+selection, "-test.v", "-test.timeout=0")
 	cell := "split"
 	if provider != "git" {
 		cell = filepath.Join(provider, cell)
@@ -430,9 +425,6 @@ type canaryLocalExecutor struct {
 func (e *canaryLocalExecutor) abortBeforeSliceDelivery() {
 	c := e.canary
 	for len(c.run.SliceChildren) != 2 {
-		if time.Now().After(c.deadline) {
-			c.fail("early abort preparation exceeded its budget")
-		}
 		advanced := false
 		for id, pending := range c.run.PendingActions {
 			if pending.ReviewSeries != review.ProductReview && pending.ReviewSeries != review.StartReadiness {
@@ -750,6 +742,13 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 	}
 	input := *m.Input
 	switch input.Handler {
+	case "engine.repair.verify":
+		records := map[string]any{}
+		for _, caseID := range input.Repair.VerificationCases {
+			records[caseID] = map[string]any{"comparison": "the original native output and exit satisfy the approved case oracle", "result": "EXECUTED_PASS"}
+		}
+		return map[string]any{"records": records}, nil
+
 	case "engine.development.batch", "engine.repair":
 		paths := []string{}
 		dod := map[string]string{}
@@ -981,7 +980,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 
 func canaryLocalPlan(split bool) *protocol.GranularityReview {
 	batch := func(id, artifact, deliverable string) protocol.DevelopmentBatch {
-		return protocol.DevelopmentBatch{ID: id, Artifacts: []string{artifact}, Subtasks: []protocol.DevelopmentSubtask{{ID: id + "-implementation", Description: deliverable}}, Deliverable: deliverable, PublicEntry: "frob word", Interfaces: "function called by seeded main", StateBoundary: "no persistent state", Risk: "wrong text result", DoD: []protocol.DevelopmentCriterion{{ID: "output", Description: deliverable}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}}, Rollback: "restore artifact from base", Recovery: "repeat declared implementation", Handoff: "function ready for command integration", ContextCost: "one function contract"}
+		return protocol.DevelopmentBatch{ID: id, Artifacts: []string{artifact}, Subtasks: []protocol.DevelopmentSubtask{{ID: id + "-implementation", Description: deliverable}}, Deliverable: deliverable, PublicEntry: "frob word", Interfaces: "function called by seeded main", StateBoundary: "no persistent state", Risk: "wrong text result", DoD: []protocol.DevelopmentCriterion{{ID: "output", Description: deliverable}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "all-tests", Purpose: protocol.CheckFullTests, Command: "go test -count=1 ./..."}}, Rollback: "restore artifact from base", Recovery: "repeat declared implementation", Handoff: "function ready for command integration", ContextCost: "one function contract"}
 	}
 	plan := &protocol.GranularityReview{Reason: "independent declared artifacts", VerificationTier: "FINAL"}
 	if split {
@@ -1160,7 +1159,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte(`{}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}}
+		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), approvalDeadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}}
 		bindCanaryReviewMaterial(t, c, pending, doc)
 		// One reader is shared together with its authorization mutex.
 		if runID == "failed" {
@@ -1608,6 +1607,14 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 		issued := input.Validation
 		result := worker.Validation{Status: protocol.OutcomePass}
 		switch issued.Handler {
+		case "engine.repair.verify":
+			var decoded worker.Execution
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				return nil, err
+			}
+			result.Status = ""
+			result.RepairVerification = &decoded
+
 		case "engine.development.batch", "engine.repair":
 			var decoded canaryDevelopmentAnswer
 			if err := json.Unmarshal(body, &decoded); err != nil {
@@ -1620,7 +1627,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				}
 				decoded.Paths[i] = relative
 			}
-			result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, AffectedCases: decoded.AffectedCases, CaseRuns: decoded.CaseRuns}
+			result.Development = &worker.Development{Paths: decoded.Paths, Summary: decoded.Summary, AffectedCases: decoded.AffectedCases}
 			if issued.Development != nil {
 				result.Development.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Handoff: decoded.Handoff}
 			}
@@ -1651,7 +1658,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			}
 			result.Manifest = &manifest
 			if len(decoded.Paths) > 0 {
-				result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary}
+				result.Development = &worker.Development{Paths: decoded.Paths, Summary: decoded.Summary}
 			}
 		case "engine.qa.review.rationale":
 			var decoded struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }

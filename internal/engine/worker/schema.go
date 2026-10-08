@@ -46,6 +46,10 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		case "engine.development.batch":
 			allowed["Development"] = true
 			statuses = []string{protocol.OutcomePass}
+		case "engine.repair.verify":
+			delete(allowed, "Status")
+			body["required"] = []any{"repairVerification"}
+			allowed["RepairVerification"] = true
 		case "engine.repair":
 			allowed["Development"], allowed["GranularityReview"] = true, true
 			statuses = []string{protocol.OutcomePass}
@@ -96,6 +100,18 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			completion["dod"] = map[string]any{"type": "object", "additionalProperties": false, "properties": dod, "required": dodIDs}
 		} else if development, present := fields["development"].(map[string]any); present && !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 			delete(development["properties"].(map[string]any), "completion")
+		}
+
+		if input.Handler == "engine.repair.verify" {
+			records := map[string]any{}
+			for _, fact := range input.Validation.ExecutionFacts {
+				item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+				if err != nil {
+					return nil, err
+				}
+				records[fact.CaseID] = item
+			}
+			fields["repairVerification"].(map[string]any)["properties"].(map[string]any)["records"] = fixedObject(records, input.Validation.Repair.VerificationCases)
 		}
 
 		if input.Handler == "engine.qa.design" {
@@ -201,6 +217,9 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 				continue
 			}
 			child, err := resultTypeSchema(field.Type)
+			if value == reflect.TypeOf(protocol.DevelopmentCheck{}) && field.Name == "Purpose" {
+				child = map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
+			}
 			if err != nil {
 				return nil, err
 			}

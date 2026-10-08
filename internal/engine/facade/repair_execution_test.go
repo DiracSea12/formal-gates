@@ -2,10 +2,11 @@ package facade
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,7 +27,7 @@ func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
 	logging, li := planBatchAction(d, "logging")
 	nativeMemberCompletion(t, d, parser, pi)
 	nativeMemberCompletion(t, d, logging, li)
-	verify, old := d.action("engine.repair")
+	verify, old := repairComparisonAction(t, d, "")
 	if old.Repair.FinalCandidate == nil {
 		t.Fatal("initial closure lacks final verification")
 	}
@@ -85,10 +86,7 @@ func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
 			t.Fatal("final closure omitted a current member")
 		}
 	}
-	final := gateRepairResult(input).Development
-	final.Paths = []string{"parser.go", "logging.go"}
-	final.CaseRuns = nativeRepairSelfRun(t, input.Workspace.Path)
-	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: final})
+	nativeRepairComparison(t, d, action, input)
 	d.reopen()
 	d.drive()
 	for _, pending := range d.run.ValidationInputs {
@@ -136,6 +134,13 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.drive()
 	id, in := d.action("engine.qa.design")
 	manifest := simpleManifest(in)
+	for i := range manifest.Cases {
+		argument := "valid"
+		if manifest.Cases[i].CaseID == "invalid" {
+			argument = "invalid"
+		}
+		manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "go build -o tested-app . && ./tested-app " + argument}}
+	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
 	id, in = d.action("engine.qa.review.rationale")
@@ -143,7 +148,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.drive()
 	id, in = d.action("engine.development.batch")
-	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package main\nfunc main() {}\n"} {
+	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"} {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, path), []byte(body), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -154,7 +159,8 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.drive()
 	id, in = d.action("engine.qa.execution")
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "fixture command", Environment: "native workspace"})
+	tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: severity, Message: "command must compose its documented parser and logging behavior", SeverityRationale: "documented command cannot compose required output", Requirement: "AC-001", NormalPath: "app run valid-input", ActualError: "composition absent", DeferralImpact: "documented output unavailable", Locations: []string{"app.go:1"}}}})
 	d.drive()
@@ -188,12 +194,18 @@ func nativeMemberCompletion(t *testing.T, d *validationDriver, id string, in pro
 	if err := os.WriteFile(filepath.Join(in.Workspace.Path, batch+".go"), []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cases := nativeRepairSelfRun(t, in.Workspace.Path)
 	e := batchEvidence(in)
 	e.AffectedCases = []string{"normal"}
-	e.CaseRuns = cases
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: e})
 	d.drive()
+	if in.Binding.PureP2 {
+		action, comparison := repairComparisonAction(t, d, id)
+		if comparison.Binding.VerificationSource != id {
+			t.Fatal("member comparison lost original edit")
+		}
+		nativeRepairComparison(t, d, action, comparison)
+		d.drive()
+	}
 }
 
 func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
@@ -258,7 +270,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 				d.reopen()
 				d.drive()
 				if severity == "P2" {
-					verify, vi := d.action("engine.repair")
+					verify, vi := repairComparisonAction(t, d, "")
 					if vi.Repair.FinalCandidate == nil || vi.Binding.Candidate != vi.Repair.FinalCandidate.Identity || len(vi.Repair.MemberResults) != 3 {
 						t.Fatalf("final integrated self-run binding: %+v", vi)
 					}
@@ -267,11 +279,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					cases := nativeRepairSelfRun(t, vi.Workspace.Path)
-					e := gateRepairResult(vi).Development
-					e.Paths = []string{"parser.go", "logging.go", "command.go"}
-					e.CaseRuns = cases
-					d.business(verify, protocol.ValidationResult{Binding: vi.Binding, Status: "PASS", Development: e})
+					nativeRepairComparison(t, d, verify, vi)
 					d.drive()
 				}
 				if d.run.Validation.Sets[coverage.ReviewBlackbox].Version != frozen {
@@ -364,11 +372,15 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ci.Workspace.Path, "logging.go"), []byte(changed), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cases := nativeRepairSelfRun(t, ci.Workspace.Path)
 	e := batchEvidence(ci)
 	e.AffectedCases = []string{"normal"}
-	e.CaseRuns = cases
 	d.business(correction, protocol.ValidationResult{Binding: ci.Binding, Status: "PASS", Development: e})
+	d.drive()
+	comparison, compared := repairComparisonAction(t, d, correction)
+	if compared.Binding.VerificationSource != correction {
+		t.Fatal("correction comparison lost source edit")
+	}
+	nativeRepairComparison(t, d, comparison, compared)
 	d.drive()
 	d.reopen()
 	d.drive()
@@ -377,7 +389,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 			t.Fatal("P2 member correction repeated gate review")
 		}
 	}
-	verify, vi := d.action("engine.repair")
+	verify, vi := repairComparisonAction(t, d, "")
 	if vi.Repair.FinalCandidate == nil || len(vi.Repair.MemberResults) != 2 {
 		t.Fatal("P2 member correction omitted final integrated self-run")
 	}
@@ -385,10 +397,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	if err != nil || string(actual) != changed {
 		t.Fatalf("integrated corrected source differs: %q %v", actual, err)
 	}
-	final := gateRepairResult(vi).Development
-	final.Paths = []string{"parser.go", "logging.go"}
-	final.CaseRuns = nativeRepairSelfRun(t, vi.Workspace.Path)
-	d.business(verify, protocol.ValidationResult{Binding: vi.Binding, Status: "PASS", Development: final})
+	nativeRepairComparison(t, d, verify, vi)
 	d.drive()
 	state := driverState(t, d)
 	if state.Results[failed].Validation.Status != "FAIL" || state.Results[failed].Validation.Findings[0].Message != "normal output log text differs from the documented text" {
@@ -411,8 +420,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		if input.Handler == "engine.qa.execution" {
 			report := executionFor(input)
 			result.Execution = &report
-			result.Tool = "built command"
-			result.Environment = "bound native workspace"
+			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 		}
 		d.business(action, result)
 		d.drive()
@@ -438,20 +446,59 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	}
 }
 
-func nativeRepairSelfRun(t *testing.T, workspace string) []protocol.RepairCaseEvidence {
+func nativeRepairComparison(t *testing.T, d *validationDriver, action string, input protocol.ValidationInput) {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "command")
-	for _, args := range [][]string{{"build", "-o", binary, "./..."}, {"test", "./..."}} {
-		cmd := exec.Command("go", args...)
-		cmd.Dir = workspace
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("self-run %v: %s %v", args, output, err)
+	if input.Handler != "engine.repair.verify" || len(input.ExecutionFacts) != len(input.Repair.VerificationCases) {
+		t.Fatal("comparison lacks complete native case facts")
+	}
+	records := map[string]worker.Observation{}
+	for _, fact := range input.ExecutionFacts {
+		if fact.CaseID != "normal" || len(fact.Operations) == 0 {
+			t.Fatal("comparison omitted the frozen normal invocation")
+		}
+		last := fact.Operations[len(fact.Operations)-1]
+		if last.Evidence.ExitCode != 0 || last.Evidence.StdoutText != "" || last.Evidence.StderrText != "" {
+			t.Fatalf("normal public invocation actual facts: %+v", last.Evidence)
+		}
+		records[fact.CaseID] = worker.Observation{Comparison: "actual command exit and output match the frozen oracle", Result: coverage.ExecutedPass}
+	}
+	raw, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{RepairVerification: &worker.Execution{Records: records}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResult(snapshot.State.WorkerInputs(d.f.definition)[action], d.eventID(), raw, "sha256:semantic-comparison")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.receipt(action)
+	d.submit(event)
+	stored := driverState(t, d).Results[action].Validation.Development
+	if stored == nil || !slices.Equal(stored.Paths, input.Repair.VerificationPaths) || !slices.Equal(stored.AffectedCases, input.Repair.VerificationCases) {
+		t.Fatal("native comparison did not preserve program-derived union")
+	}
+	for _, fact := range input.ExecutionFacts {
+		procedure, observation, err := fact.Render()
+		if err != nil {
+			t.Fatal(err)
+		}
+		index := slices.IndexFunc(stored.CaseRuns, func(row protocol.RepairCaseEvidence) bool { return row.CaseID == fact.CaseID })
+		if index < 0 || stored.CaseRuns[index].Procedure != procedure || stored.CaseRuns[index].Observation != observation {
+			t.Fatal("comparison changed native facts")
 		}
 	}
-	cmd := exec.Command(binary, "run", "valid-input")
-	cmd.Dir = workspace
-	if output, err := cmd.CombinedOutput(); err != nil || len(output) != 0 {
-		t.Fatalf("normal public invocation: %s %v", output, err)
+}
+
+func repairComparisonAction(t *testing.T, d *validationDriver, sourceAction string) (string, protocol.ValidationInput) {
+	t.Helper()
+	for action, input := range d.run.ValidationInputs {
+		if input.Handler == "engine.repair.verify" && (sourceAction != "" && input.Binding.VerificationSource == sourceAction || sourceAction == "" && input.Repair != nil && len(input.Repair.MemberResults) > 1) {
+			return action, input
+		}
 	}
-	return []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "execute the built command with run valid-input in the bound workspace", Observation: "exit zero with empty output", Comparison: "matches the approved normal-case exits-zero oracle"}}
+	t.Fatalf("missing comparison for exact edit %q; current inputs=%+v next=%+v", sourceAction, d.run.ValidationInputs, d.run.Next)
+	return "", protocol.ValidationInput{}
 }

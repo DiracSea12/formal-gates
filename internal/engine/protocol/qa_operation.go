@@ -82,16 +82,10 @@ func ExecutionIdentities(facts []ExecutionFact) (tool, environment string) {
 
 func (s *State) qaCheckPlans(target *ValidationTarget, cd *compiler.CompiledDefinition) ([]CheckParameters, error) {
 	binding := s.validationBinding(target.Task, cd)
-	var timeout int64
-	for _, step := range cd.Steps {
-		if step.Header.ID == "check.execute" {
-			timeout = int64(step.Payload.(compiler.CompiledHostActionStep).Timeout)
-		}
-	}
-	return s.qaOperationPlans(target, binding, timeout)
+	return s.qaOperationPlans(target, binding)
 }
 
-func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding, timeout int64) ([]CheckParameters, error) {
+func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding) ([]CheckParameters, error) {
 	wave := s.validationWaveForTask(target.Task)
 	if wave == nil || wave != s.currentValidationWave() || wave.Status != "COLLECTING" || target.Kind != "QA" || !s.validationRequirementCurrent() || s.requirementChangePending() || wave.RouteDigest != s.validationRouteDigest() {
 		return nil, validationError("QA execution needs the current frozen collecting wave")
@@ -120,28 +114,13 @@ func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding, 
 			return nil, validationError("approved QA case is missing: " + id)
 		}
 		item := manifest.Cases[index]
-		var operations []QACheckParameters
-		for _, sharedID := range item.SharedSteps {
-			index := slices.IndexFunc(manifest.SharedSteps, func(step coverage.SharedStep) bool { return step.ID == sharedID })
-			if index < 0 {
-				return nil, validationError("approved QA shared step is missing: " + sharedID)
-			}
-			for _, op := range manifest.SharedSteps[index].Operations {
-				operations = append(operations, QACheckParameters{Source: "shared:" + sharedID, Operation: op, Directory: "."})
-			}
-		}
-		if len(item.Operations) > 0 {
-			for _, operation := range item.Operations {
-				operations = append(operations, QACheckParameters{Source: "case:" + id, Operation: operation, Directory: "."})
-			}
-		} else if goOperation, err := coverage.GoTestOperation(item.TestRef); err == nil {
-			operations = append(operations, QACheckParameters{Source: "case:" + id, GoTestRef: item.TestRef, Directory: goOperation.Directory})
-		} else {
-			return nil, fmt.Errorf("case %s lacks approved operations or an exact Go test reference; revise its design and review before freezing", id)
+		operations, err := caseOperationPlans(manifest, item)
+		if err != nil {
+			return nil, err
 		}
 		for ordinal, op := range operations {
 			op.Execution, op.CaseID, op.Ordinal, op.WorkspaceRoot = execution, id, ordinal, workspace.Path
-			plans = append(plans, CheckParameters{QA: &op, Binding: binding, SourceIdentity: wave.Candidate.Identity, SourceDigest: wave.Candidate.Digest, WorkspaceID: workspace.ID, TimeoutNanos: timeout})
+			plans = append(plans, CheckParameters{QA: &op, Binding: binding, SourceIdentity: wave.Candidate.Identity, SourceDigest: wave.Candidate.Digest, WorkspaceID: workspace.ID})
 		}
 	}
 	return plans, nil
@@ -244,10 +223,10 @@ func (s *State) qaCheckInputsCurrent(p CheckParameters) bool {
 	if target == nil {
 		return false
 	}
-	if p.Binding.WaveID != wave.ID || p.Binding.Candidate != wave.Candidate.Identity || p.Binding.Generation != wave.Generation || p.Binding.RequirementRevision != wave.RequirementRevision || p.TimeoutNanos <= 0 {
+	if p.Binding.WaveID != wave.ID || p.Binding.Candidate != wave.Candidate.Identity || p.Binding.Generation != wave.Generation || p.Binding.RequirementRevision != wave.RequirementRevision {
 		return false
 	}
-	plans, err := s.qaOperationPlans(target, p.Binding, p.TimeoutNanos)
+	plans, err := s.qaOperationPlans(target, p.Binding)
 	if err != nil {
 		return false
 	}
@@ -338,4 +317,27 @@ func (s *State) qaOperationPending(cd *compiler.CompiledDefinition) string {
 		}
 	}
 	return ""
+}
+
+func caseOperationPlans(manifest coverage.AcceptanceManifest, item coverage.AcceptanceCase) ([]QACheckParameters, error) {
+	var operations []QACheckParameters
+	for _, sharedID := range item.SharedSteps {
+		index := slices.IndexFunc(manifest.SharedSteps, func(step coverage.SharedStep) bool { return step.ID == sharedID })
+		if index < 0 {
+			return nil, validationError("approved shared step is missing: " + sharedID)
+		}
+		for _, op := range manifest.SharedSteps[index].Operations {
+			operations = append(operations, QACheckParameters{Source: "shared:" + sharedID, Operation: op, Directory: "."})
+		}
+	}
+	if len(item.Operations) > 0 {
+		for _, operation := range item.Operations {
+			operations = append(operations, QACheckParameters{Source: "case:" + item.CaseID, Operation: operation, Directory: "."})
+		}
+	} else if goOperation, err := coverage.GoTestOperation(item.TestRef); err == nil {
+		operations = append(operations, QACheckParameters{Source: "case:" + item.CaseID, GoTestRef: item.TestRef, Directory: goOperation.Directory})
+	} else {
+		return nil, fmt.Errorf("case %s lacks approved operations or an exact Go test reference", item.CaseID)
+	}
+	return operations, nil
 }

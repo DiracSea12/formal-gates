@@ -233,7 +233,7 @@ func TestNewHostActionStep(t *testing.T) {
 		// 不得混入 hostBoundaryReason。
 		{"diagnostic marker as boundary", HostActionSpec{Handler: "h", Boundary: "MISSING_ENGINE_ADAPTER"}, "hostBoundaryReason required"},
 		{"empty operation", HostActionSpec{Handler: "h", Boundary: BoundaryExternalCapability}, "registered operation id required"},
-		{"zero timeout", HostActionSpec{Handler: "h", Boundary: BoundaryAgentDispatchAPI, Operation: "op"}, "positive timeout required"},
+		{"negative timeout", HostActionSpec{Handler: "h", Boundary: BoundaryAgentDispatchAPI, Operation: "op", Timeout: -time.Second}, "timeout must be >= 0"},
 	}
 	for _, row := range rejects {
 		_, err := NewHostActionStep(validHeader(), validIO(), row.spec)
@@ -283,7 +283,7 @@ func TestNewAgentStep(t *testing.T) {
 		{"bogus reason", validHeader(), validIO(), AgentSpec{Handler: "engine.node.review", Reason: "实现麻烦"}, "nonProgrammableReason required"},
 		{"no postcondition", validHeader(), noPost, spec, "postcondition predicate reference required"},
 		{"retry maxAttempts < 1", validHeader(), validIO(), AgentSpec{Handler: "engine.node.review", Reason: ReasonSemanticJudgment, Retry: &RetryPolicy{}}, "retry maxAttempts must be >= 1"},
-		{"zero timeout", validHeader(), validIO(), AgentSpec{Handler: "engine.node.review", Reason: ReasonSemanticJudgment}, "positive timeout required"},
+		{"negative timeout", validHeader(), validIO(), AgentSpec{Handler: "engine.node.review", Reason: ReasonSemanticJudgment, Timeout: -time.Second}, "timeout must be >= 0"},
 	}
 	for _, row := range rejects {
 		_, err := NewAgentStep(row.h, row.io, row.spec)

@@ -167,7 +167,7 @@ func TestCanaryOperatorHandoffPreservesOriginalFinding(t *testing.T) {
 	defer inputW.Close()
 	defer outputR.Close()
 	defer outputW.Close()
-	c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: jobs, deadline: time.Now().Add(15 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(inputR), approvalOutput: outputW, run: facade.Run{RunID: state.RunID, Envelope: envelope, Validation: state.Validation}}
+	c := &engineCanary{t: t, binary: binary, home: t.TempDir(), project: project, jobs: jobs, approvalDeadline: time.Now().Add(15 * time.Second), approvalMu: &sync.Mutex{}, approvalInput: bufio.NewReader(inputR), approvalOutput: outputW, run: facade.Run{RunID: state.RunID, Envelope: envelope, Validation: state.Validation}}
 	// The copied packet already owns its recorded event IDs.
 	for id := range state.Events {
 		var sequence int
@@ -371,7 +371,7 @@ func TestCanaryOperatorInputUsesExistingDeadline(t *testing.T) {
 				reader = strings.NewReader(line)
 			}
 			var output bytes.Buffer
-			c := &engineCanary{deadline: deadline, project: t.TempDir(), jobs: t.TempDir(), run: facade.Run{RunID: state.RunID, Envelope: envelope, Validation: state.Validation}, approvalInput: bufio.NewReader(reader), approvalOutput: &output}
+			c := &engineCanary{approvalDeadline: deadline, project: t.TempDir(), jobs: t.TempDir(), run: facade.Run{RunID: state.RunID, Envelope: envelope, Validation: state.Validation}, approvalInput: bufio.NewReader(reader), approvalOutput: &output}
 			got, err := c.readAdjudication(&state, wave, "source evidence needs Operator interpretation")
 			if scenario == "valid" {
 				if err != nil || !reflect.DeepEqual(got, observation) {
@@ -380,8 +380,8 @@ func TestCanaryOperatorInputUsesExistingDeadline(t *testing.T) {
 			} else if err == nil {
 				t.Fatal("invalid or late input accepted")
 			}
-			if c.deadline != deadline {
-				t.Fatal("Operator input reset pass deadline")
+			if c.approvalDeadline != deadline {
+				t.Fatal("Operator input reset its approval deadline")
 			}
 		})
 	}

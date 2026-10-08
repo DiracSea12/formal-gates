@@ -15,10 +15,11 @@ import (
 	"formal-gates/internal/engine/review"
 )
 
-// Callers serialize human input with approvalMu; the pass owns its deadline.
+// Callers serialize human input with approvalMu. An explicitly supplied
+// deadline bounds only this human response operation, not worker execution.
 func (c *engineCanary) readHumanDecision(purpose string) (string, error) {
-	if !time.Now().Before(c.deadline) {
-		return "", fmt.Errorf("%s exceeded the %s pass budget", purpose, canaryRunBudget)
+	if !c.approvalDeadline.IsZero() && !time.Now().Before(c.approvalDeadline) {
+		return "", fmt.Errorf("%s exceeded its approval response window", purpose)
 	}
 	decision := make(chan struct {
 		line string
@@ -31,17 +32,21 @@ func (c *engineCanary) readHumanDecision(purpose string) (string, error) {
 			err  error
 		}{line, err}
 	}()
-	timer := time.NewTimer(time.Until(c.deadline))
-	defer timer.Stop()
+	var expired <-chan time.Time
+	if !c.approvalDeadline.IsZero() {
+		timer := time.NewTimer(time.Until(c.approvalDeadline))
+		defer timer.Stop()
+		expired = timer.C
+	}
 	select {
-	case <-timer.C:
-		return "", fmt.Errorf("%s exceeded the %s pass budget", purpose, canaryRunBudget)
+	case <-expired:
+		return "", fmt.Errorf("%s exceeded its approval response window", purpose)
 	case answer := <-decision:
 		if answer.err != nil {
 			return "", fmt.Errorf("read %s: %w", purpose, answer.err)
 		}
-		if !time.Now().Before(c.deadline) {
-			return "", fmt.Errorf("%s exceeded the %s pass budget", purpose, canaryRunBudget)
+		if !c.approvalDeadline.IsZero() && !time.Now().Before(c.approvalDeadline) {
+			return "", fmt.Errorf("%s exceeded its approval response window", purpose)
 		}
 		return answer.line, nil
 	}

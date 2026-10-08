@@ -70,7 +70,7 @@ func TestCanaryWhiteboxAuthorCleansUndeclaredBuildOutputs(t *testing.T) {
 			approvalRead, approvalWrite := io.Pipe()
 			defer approvalRead.Close()
 			defer approvalWrite.Close()
-			c := &engineCanary{t: t, nativeHost: canaryProvider, binding: objectOrEmpty(scenario.request["binding"]), home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+			c := &engineCanary{t: t, nativeHost: canaryProvider, binding: objectOrEmpty(scenario.request["binding"]), home: home, project: t.TempDir(), jobs: t.TempDir(), worker: true, approvalDeadline: time.Now().Add(time.Minute), vcs: vcs.New(workspace, nil), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
 			environment := map[string]any{}
 			for key, value := range c.hostEnvironment() {
 				environment[key] = value

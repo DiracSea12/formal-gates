@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/prompts"
 )
@@ -133,4 +135,28 @@ func portablePackageFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return source
+}
+
+func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
+	plan := portableDevelopmentPlan()
+	command := ""
+	for _, check := range plan.Batches[0].Checks {
+		if check.Purpose == protocol.CheckFullTests {
+			command = check.Command
+		}
+	}
+	for _, contents := range []string{"delivery\n", "delivery", "delivery\n\n"} {
+		t.Run(fmt.Sprintf("bytes-%d", len(contents)), func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "built-delivery.txt"), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("/bin/sh", "-c", command)
+			cmd.Dir = root
+			output, err := cmd.CombinedOutput()
+			if (err == nil) != (contents == canaryDeliveryContents) {
+				t.Fatalf("complete tests for %q output=%q err=%v", contents, output, err)
+			}
+		})
+	}
 }

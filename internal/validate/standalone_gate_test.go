@@ -95,8 +95,8 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 	}
 }
 
-// Typed worker material carries the shared contract for review duties and
-// omits it for implementation, execution and whitebox authors.
+// Typed worker material carries the shared contract for readonly judgments;
+// implementation and whitebox authors receive their scoped author contract.
 func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "checks"})
 	catalog, err := prompts.LoadPromptCatalog(root)
@@ -108,7 +108,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker", review.ProductReview, true}, {"engine.readiness.plan", review.StartReadiness, true}, {"engine.qa.review.rationale", "", true}, {"engine.development.batch", "", false}, {"engine.qa.execution", "", true}, {"engine.qa.design", "", false},
+		{"engine.review.worker", review.ProductReview, true}, {"engine.readiness.plan", review.StartReadiness, true}, {"engine.qa.review.rationale", "", true}, {"engine.development.batch", "", false}, {"engine.qa.execution", "", true}, {"engine.repair.verify", "", true}, {"engine.qa.design", "", false},
 	}
 	for _, role := range roles {
 		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
@@ -118,6 +118,9 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		} else {
 			input.Validation = &protocol.ValidationInput{Handler: role.handler}
 			input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
+			if role.handler == "engine.repair.verify" {
+				input.Validation.Repair = &protocol.RepairInput{}
+			}
 		}
 		material, err := worker.Render(input, catalog)
 		if err != nil {

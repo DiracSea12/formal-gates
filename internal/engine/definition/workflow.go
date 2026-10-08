@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "12"
+const Version authoring.DefinitionVersion = "14"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -47,6 +47,7 @@ var (
 		{"engine.qa.execution", authoring.RunnerAgentWorker},
 		{"engine.gate", authoring.RunnerAgentWorker},
 		{"engine.repair", authoring.RunnerAgentWorker},
+		{"engine.repair.verify", authoring.RunnerAgentWorker},
 		{"engine.merge.resolve", authoring.RunnerAgentWorker},
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
 		{"engine.workspace", authoring.RunnerHostAdapter},
@@ -105,14 +106,14 @@ func Workflow() *compiler.Definition {
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIOWith("entry.persist"), authoring.AgentSpec{
 			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
-			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
+			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: 0,
 		})
 	must("review.worker", err)
 	// Readiness includes the structured granularity proposal for route confirmation.
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
 		reviewIOWith("review.worker"), authoring.AgentSpec{
 			Handler: "engine.readiness.plan", Reason: authoring.ReasonIndependentReview,
-			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
+			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: 0,
 		})
 	must("review.readiness", err)
 	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "review.readiness"), ioWith("review.readiness"), authoring.LocalSpec{Handler: "engine.children.prepare"})
@@ -132,9 +133,10 @@ func Workflow() *compiler.Definition {
 		{"qa.execution", "engine.qa.execution", authoring.ReasonSemanticJudgment},
 		{"validation.gate", "engine.gate", authoring.ReasonIndependentReview},
 		{"development.repair", "engine.repair", authoring.ReasonCreativeImplementation},
+		{"repair.verification", "engine.repair.verify", authoring.ReasonSemanticJudgment},
 		{"merge.resolve", "engine.merge.resolve", authoring.ReasonCreativeImplementation},
 	} {
-		payload := authoring.AgentSpec{Handler: authoring.HandlerID(spec.handler), Reason: spec.reason, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
+		payload := authoring.AgentSpec{Handler: authoring.HandlerID(spec.handler), Reason: spec.reason, Timeout: 0, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
 		if spec.reason == authoring.ReasonIndependentReview {
 			payload.ReviewSeries = authoring.ReviewSeriesUnaffiliated
 		}
@@ -150,7 +152,7 @@ func Workflow() *compiler.Definition {
 		must(name, err)
 		steps = append(steps, step)
 	}
-	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 10 * time.Minute})
+	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 0})
 	must("check.execute", err)
 	steps = append(steps, check)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}

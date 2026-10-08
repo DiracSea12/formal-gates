@@ -106,6 +106,12 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		contract := modeCoverageContract(c, mode)
 		contract.Candidate = nil
 		input.Contract = &contract
+	case "engine.repair.verify":
+		input.Contract = &c
+		if context, ok := s.repairComparisonContext(pending.Task, cd); ok {
+			input.Repair = s.repairComparisonInput(context)
+			input.ExecutionFacts = s.repairComparisonFacts(context, cd)
+		}
 	case "engine.repair":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)

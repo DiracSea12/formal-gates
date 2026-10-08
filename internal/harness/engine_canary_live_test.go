@@ -137,9 +137,6 @@ const canaryProvider = "zcode"
 // canaryTurnBudget bounds one dispatch's model turns (shape retries included).
 const canaryTurnBudget = 3
 
-// canaryRunBudget bounds the whole pass.
-const canaryRunBudget = 40 * time.Minute
-
 // canaryLoopLimit bounds drive iterations; a pass that needs more is stuck.
 const canaryLoopLimit = 300
 
@@ -171,32 +168,32 @@ type canaryMaterials struct {
 
 // engineCanary is the host execution bridge and user stand-in for one pass.
 type engineCanary struct {
-	t              *testing.T
-	binary, home   string
-	nativeHost     string
-	localPeer      bool
-	run            facade.Run
-	project        string
-	vcs            *vcs.Provider
-	promotion      *canaryPromotionRecovery
-	jobs           string
-	binding        map[string]any
-	installed      validate.InstallReport
-	separateRoots  map[string]string
-	sourceBuildEnv []string
-	deadline       time.Time
-	seq            int
-	approvalInput  *bufio.Reader
-	approvalOutput io.Writer
-	execute        func(any, string, bool) (map[string]any, error)
-	approvalMu     *sync.Mutex
-	callContext    context.Context
-	stopCalls      context.CancelFunc
-	worker         bool
-	transcript     string
-	split          bool
-	masterPlan     *protocol.GranularityReview
-	slice          string
+	t                *testing.T
+	binary, home     string
+	nativeHost       string
+	localPeer        bool
+	run              facade.Run
+	project          string
+	vcs              *vcs.Provider
+	promotion        *canaryPromotionRecovery
+	jobs             string
+	binding          map[string]any
+	installed        validate.InstallReport
+	separateRoots    map[string]string
+	sourceBuildEnv   []string
+	approvalDeadline time.Time
+	seq              int
+	approvalInput    *bufio.Reader
+	approvalOutput   io.Writer
+	execute          func(any, string, bool) (map[string]any, error)
+	approvalMu       *sync.Mutex
+	callContext      context.Context
+	stopCalls        context.CancelFunc
+	worker           bool
+	transcript       string
+	split            bool
+	masterPlan       *protocol.GranularityReview
+	slice            string
 
 	revision string // confirmed requirement revision (bare hex)
 	doc      []byte
@@ -257,13 +254,12 @@ func canaryReviewShape(answer *canaryReviewAnswer, withPlan bool) error {
 
 // canaryDevelopmentAnswer is the writable-turn answer (batch or repair).
 type canaryDevelopmentAnswer struct {
-	Plan          *protocol.GranularityReview   `json:"granularityReview"`
-	CaseRuns      []protocol.RepairCaseEvidence `json:"caseRuns"`
-	Paths         []string                      `json:"paths"`
-	Summary       string                        `json:"summary"`
-	AffectedCases []string                      `json:"affectedCases"`
-	DoD           map[string]string             `json:"dod"`
-	Handoff       string                        `json:"handoff"`
+	Plan          *protocol.GranularityReview `json:"granularityReview"`
+	Paths         []string                    `json:"paths"`
+	Summary       string                      `json:"summary"`
+	AffectedCases []string                    `json:"affectedCases"`
+	DoD           map[string]string           `json:"dod"`
+	Handoff       string                      `json:"handoff"`
 }
 
 func TestEngineGitNoSplitRegularCanarySurvivesFailureAndRepair(t *testing.T) {
@@ -283,7 +279,7 @@ func runEngineNoSplitCanary(t *testing.T, name, nativeHost string) {
 	}
 	_, file, _, _ := runtime.Caller(0)
 	c := &engineCanary{
-		t: t, nativeHost: nativeHost, deadline: time.Now().Add(canaryRunBudget),
+		t: t, nativeHost: nativeHost,
 		repairAllowances: 1,
 		approvalInput:    bufio.NewReader(os.Stdin), approvalOutput: os.Stdout,
 	}
@@ -489,14 +485,7 @@ func (c *engineCanary) loop() {
 				runs[masterID] = c.run
 				continue
 			}
-			timer := time.NewTimer(time.Until(c.deadline))
-			select {
-			case done := <-completed:
-				timer.Stop()
-				accept(done)
-			case <-timer.C:
-				c.fail("canary exceeded its %s budget", canaryRunBudget)
-			}
+			accept(<-completed)
 		}
 	}
 	c.run = runs[masterID]
@@ -535,9 +524,6 @@ func (c *engineCanary) submit(event protocol.Event) protocol.Acceptance {
 
 func (c *engineCanary) drive() {
 	c.t.Helper()
-	if time.Now().After(c.deadline) {
-		c.fail("canary exceeded its %s budget", canaryRunBudget)
-	}
 	c.run = c.readRun("drive")
 }
 
@@ -666,7 +652,7 @@ func (c *engineCanary) dispatchReview(id string, series review.Action) protocol.
 		instructions = "Judge the confirmed requirement document for implementability and verifiability as a delivery contract. Report PASS unless you find a real defect in the document itself. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	} else {
 		role = "start readiness"
-		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
+		instructions = "Propose the development plan for the confirmed requirement as one or more development batches. Explicitly mark approved complete-project build and complete test-suite commands with purpose FULL_BUILD and FULL_TESTS; other commands have empty purpose. Select real project-specific commands from the confirmed project contract, never infer a default language. Scope each batch exactly as the requirement scopes this run's development; obligations the requirement assigns to validation are not development work. verificationTier must be FINAL for a single-deliverable project. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. A known baseline gap the requirement document explicitly declares, with its closure already assigned to this run's authorized validation-and-repair loop, is contract content and not a finding; findings report defects of the document or plan itself. verification.checks must list exactly these eight review dimensions by name — binding, completeness, evidence, locations, normal-entry, requirement-match, scope, severity — and each dimension must be genuinely performed against the bound requirement document; verification.evidence must be non-empty and cite what you actually verified."
 	}
 	materials := canaryMaterials{
 		Role: role, ActionID: id, RunID: c.currentRunID(), ReviewAction: string(series), Pending: canaryPending(c.run, id),
@@ -715,6 +701,8 @@ func (c *engineCanary) dispatchPipeline(id string, input protocol.ValidationInpu
 		result = c.developmentResult(id, input)
 	case "engine.merge.resolve":
 		result = c.conflictResult(id, input)
+	case "engine.repair.verify":
+		result = c.repairComparisonResult(id, input)
 	case "engine.repair":
 		result = c.repairResult(id, input)
 	default:
@@ -1179,7 +1167,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, implement only that frozen batch and report every DoD and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement its scope and report paths, summary and the affected-case impact selection. The program runs the approved full-project checks and affected-case operations; a separate readonly role compares their real facts. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, implement only that frozen batch and report every DoD and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. Do not execute, predict or return caseRuns; native facts and known case identities are assembled by the program for the readonly comparison role. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1189,9 +1177,6 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 			return err
 		}
 		return c.declaredDevelopmentChanges(input, &answer)
-	}
-	if input.Repair != nil && input.Repair.FinalCandidate != nil {
-		instructions = "Self-run input.repair.finalCandidate without editing files. Compare the actual affected-case evidence for the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns. This is final development verification under the existing repair obligation; no review or new repair plan."
 	}
 	schema := canaryDevelopmentSchema(input.Development)
 	if input.Development == nil {
@@ -1225,19 +1210,8 @@ func canaryRepairShape(answer *canaryDevelopmentAnswer, input protocol.Validatio
 	if err := canaryDevelopmentShape(answer, batch || answer.Plan != nil); err != nil {
 		return err
 	}
-	evidence := protocol.DevelopmentEvidence{Paths: answer.Paths, AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns}
-	requireRuns := input.Repair != nil && input.Repair.Obligation.PureP2
-	if input.Repair != nil && input.Repair.FinalCandidate != nil {
-		var members []protocol.DevelopmentEvidence
-		for _, result := range input.Repair.MemberResults {
-			members = append(members, *result.Validation.Development)
-		}
-		if err := protocol.ValidateFinalRepairEvidence(members, evidence); err != nil {
-			return err
-		}
-		requireRuns = true
-	}
-	return protocol.ValidateRepairEvidence(input.Contract.Manifests, evidence, requireRuns)
+	evidence := protocol.DevelopmentEvidence{Paths: answer.Paths, AffectedCases: answer.AffectedCases}
+	return protocol.ValidateRepairEvidence(input.Contract.Manifests, evidence, false)
 }
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
@@ -1282,7 +1256,7 @@ func (c *engineCanary) developmentEvidence(id string, input protocol.ValidationI
 	}
 	evidence := protocol.DevelopmentEvidence{
 		Paths: paths, Summary: answer.Summary,
-		AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns,
+		AffectedCases: answer.AffectedCases,
 	}
 	if batch {
 		evidence.Completion = &protocol.DevelopmentCompletion{DoD: answer.DoD, Handoff: answer.Handoff}
@@ -1354,12 +1328,9 @@ func (c *engineCanary) turn(actionID, role, prompt string, schema map[string]any
 }
 
 // turnIn uses the exact issued workspace. Approval serializes only the human
-// decision; approved calls execute independently under the shared pass deadline.
+// decision; approved calls execute independently until their terminal.
 func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema map[string]any, readOnly bool, shape func(map[string]any) error) canaryTurnResult {
 	c.t.Helper()
-	if time.Now().After(c.deadline) {
-		c.failWithClass(authoring.FailureUserActionRequired, "canary exceeded its %s budget", canaryRunBudget)
-	}
 	if !canaryPathWithin(filepath.Join(c.home, ".formal-gates-resources"), workspace) {
 		c.fail("issued workspace is outside candidate resources: %s", workspace)
 	}
@@ -2778,7 +2749,7 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 				"id": canaryStr(), "description": canaryStr(),
 			})),
 			"checks": canaryArr(canarySchema([]string{"id", "command"}, map[string]any{
-				"id": canaryStr(), "command": canaryStr(),
+				"id": canaryStr(), "command": canaryStr(), "purpose": canaryEnum(protocol.DevelopmentCheckPurposes()...),
 			})),
 			"rollback":    canaryStr(),
 			"recovery":    canaryStr(),
@@ -2854,7 +2825,6 @@ func canaryGateSchema() map[string]any {
 func canaryDevelopmentSchema(development *protocol.DevelopmentInput) map[string]any {
 	properties := map[string]any{
 		"affectedCases": canaryArr(canaryStr()),
-		"caseRuns":      canaryArr(canarySchema([]string{"mode", "caseId", "procedure", "observation", "comparison", "result"}, map[string]any{"mode": canaryEnum("BLACKBOX", "WHITEBOX", "MERGE"), "caseId": canaryStr(), "procedure": canaryStr(), "observation": canaryStr(), "comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS")})),
 		"paths":         map[string]any{"type": "array", "items": canaryStr(), "description": "Declared changed file paths in input.workspace: repository-relative paths or absolute paths inside that exact issued workspace, including deleted artifacts."},
 		"summary":       canaryStr(),
 	}
@@ -3385,14 +3355,14 @@ func TestCanaryRepairEvidenceUsesCoreApprovedSet(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	var answer canaryDevelopmentAnswer
+	var answer canaryRepairEvidenceAnswer
 	if err := decodeCanaryAnswer(value, &answer); err != nil {
 		t.Fatal(err)
 	}
 	input := protocol.ValidationInput{Contract: &sample.Contract, Repair: &protocol.RepairInput{}}
 	before, _ := json.Marshal(answer)
 	core := protocol.ValidateRepairEvidence(sample.Contract.Manifests, sample.Development, false)
-	actual := canaryRepairShape(&answer, input)
+	actual := canaryRepairEvidenceShape(&answer, input)
 	if len(answer.AffectedCases) != 2 || len(answer.CaseRuns) != 13 || core == nil || actual == nil || actual.Error() != core.Error() || actual.Error() != "VALIDATION_EVIDENCE_REJECTED: repair execution must uniquely match each affected mode/case and pass" {
 		t.Fatalf("original repair boundary: consumer=%v core=%v", actual, core)
 	}
@@ -3402,7 +3372,7 @@ func TestCanaryRepairEvidenceUsesCoreApprovedSet(t *testing.T) {
 	}
 	for _, scenario := range []string{"subset", "all", "extra", "duplicate", "wrong-mode", "bad-status", "empty-procedure", "empty-observation", "empty-comparison", "missing-ordinary", "missing-pureP2", "final", "missing-final", "final-union", "member", "member-plan"} {
 		t.Run(scenario, func(t *testing.T) {
-			var current canaryDevelopmentAnswer
+			var current canaryRepairEvidenceAnswer
 			if err := decodeCanaryAnswer(value, &current); err != nil {
 				t.Fatal(err)
 			}
@@ -3474,7 +3444,7 @@ func TestCanaryRepairEvidenceUsesCoreApprovedSet(t *testing.T) {
 				}
 			}
 			original, _ := json.Marshal(current)
-			err := canaryRepairShape(&current, issued)
+			err := canaryRepairEvidenceShape(&current, issued)
 			if (err == nil) != valid {
 				t.Fatalf("%s validity differs: %v", scenario, err)
 			}
@@ -3493,7 +3463,7 @@ func TestCanaryRepairCompletionKeepsOriginalRunRows(t *testing.T) {
 	if err := json.Unmarshal(readTestFileBytes(t, filepath.Join("testdata", "repair_plan_with_invalid_route.json")), &raw); err != nil {
 		t.Fatal(err)
 	}
-	var answer canaryDevelopmentAnswer
+	var answer canaryRepairEvidenceAnswer
 	if err := decodeCanaryAnswer(raw, &answer); err != nil {
 		t.Fatal(err)
 	}
@@ -3506,7 +3476,7 @@ func TestCanaryRepairCompletionKeepsOriginalRunRows(t *testing.T) {
 	before, _ := json.Marshal(answer)
 	evidence := protocol.DevelopmentEvidence{AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns}
 	core := protocol.ValidateRepairEvidence(manifests, evidence, false)
-	actual := canaryRepairShape(&answer, protocol.ValidationInput{Contract: &coverage.CoverageContract{Manifests: manifests}})
+	actual := canaryRepairEvidenceShape(&answer, protocol.ValidationInput{Contract: &coverage.CoverageContract{Manifests: manifests}})
 	if len(answer.AffectedCases) != 5 || len(answer.CaseRuns) != 11 || core == nil || actual == nil || core.Error() != actual.Error() || !strings.Contains(actual.Error(), "repair execution must uniquely match each affected mode/case and pass") {
 		t.Fatalf("raw completion rejected inconsistently: native=%v core=%v", actual, core)
 	}
@@ -3621,4 +3591,51 @@ func (c *engineCanary) dispatchProduction(id string, material worker.Material) p
 		}
 	}
 	return protocol.Event{Kind: protocol.KindWorkerResult, Result: &payload}
+}
+
+func (c *engineCanary) repairComparisonResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
+	c.t.Helper()
+	properties := map[string]any{}
+	for _, caseID := range input.Repair.VerificationCases {
+		properties[caseID] = canarySchema([]string{"comparison", "result"}, map[string]any{"comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS", "EXECUTED_FAIL")})
+	}
+	schema := canarySchema([]string{"records"}, map[string]any{"records": canarySchema(input.Repair.VerificationCases, properties)})
+	var answer worker.Execution
+	materials := canaryMaterials{Role: "repair comparison", ActionID: id, RequirementRevision: input.Binding.RequirementRevision, Input: &input}
+	turn := c.turnIn(c.workspace(input), id, "repair comparison", c.prompt("repair comparison", materials, "Compare every approved affected-case oracle against the supplied native execution facts. Return only comparison and honest result by fixed case key. Do not run commands, edit files or repeat paths, identities, procedure, observation or union fields.", true), schema, true, func(raw map[string]any) error { return decodeCanaryAnswer(raw, &answer) })
+	raw, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{RepairVerification: &answer}})
+	if err != nil {
+		c.fail("repair comparison encoding: %v", err)
+	}
+	event, err := worker.DecodeResult(protocol.WorkerInput{Provider: c.provider(), Handler: "engine.repair.verify", Pending: protocol.PendingAction{ActionID: id}, Validation: &input}, "repair-comparison", raw, turn.digest)
+	if err != nil {
+		c.fail("repair comparison decoding: %v", err)
+	}
+	return *event.Result.Validation
+}
+
+// Complete native repair evidence is a core protocol payload, independent of
+// the writable worker's semantic result contract.
+type canaryRepairEvidenceAnswer struct {
+	canaryDevelopmentAnswer
+	CaseRuns []protocol.RepairCaseEvidence `json:"caseRuns"`
+}
+
+func canaryRepairEvidenceShape(answer *canaryRepairEvidenceAnswer, input protocol.ValidationInput) error {
+	if err := canaryRepairShape(&answer.canaryDevelopmentAnswer, input); err != nil {
+		return err
+	}
+	evidence := protocol.DevelopmentEvidence{Paths: answer.Paths, AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns}
+	requireRuns := input.Repair != nil && input.Repair.Obligation.PureP2
+	if input.Repair != nil && input.Repair.FinalCandidate != nil {
+		var members []protocol.DevelopmentEvidence
+		for _, result := range input.Repair.MemberResults {
+			members = append(members, *result.Validation.Development)
+		}
+		if err := protocol.ValidateFinalRepairEvidence(members, evidence); err != nil {
+			return err
+		}
+		requireRuns = true
+	}
+	return protocol.ValidateRepairEvidence(input.Contract.Manifests, evidence, requireRuns)
 }
