@@ -824,7 +824,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		}},
 	}
 	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: 1}
-	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
+	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
 	w := &state.Validation.Waves[0]
 	w.Coverage.Manifests = []coverage.AcceptanceManifest{manifest}
 	w.Targets[qaTask.String()].RequiredCases = []string{"governed"}

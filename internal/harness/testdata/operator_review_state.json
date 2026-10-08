@@ -1,7 +1,7 @@
 {
   "writer": "engine",
   "stateSchemaVersion": "2",
-  "workflowDefinitionVersion": "11",
+  "workflowDefinitionVersion": "14",
   "definitionSource": "definitions/workflow.json",
   "definitionDigest": "sha256:bfd8dac2596dda58b80af8b05d0c9bf27123ccd3a91bed7633a79598d5273aa0",
   "packageDigest": "993d6c47fe0beb48be762e9f80ea2f1932f552df62cfc7ae9bf66286caab711a",
@@ -24,17 +24,17 @@
       "document": {
         "path": "requirements.md",
         "contentDigest": "43e51d17c4ae0a77d175577e61ea202905110daee393dfb382c2a99da0719537",
-        "content": "# 交付\n\n## 需求点\n\n### REQ-001：usage 统计与公开 flag 契约\n\n#### 要求\nfrob 是一个单命令工具。新增 usage 统计功能：在正常 frob 输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。保持其他已存在的公开行为：首个词参数是本次所处理的词，额外普通参数不改变处理结果；空字符串是一个有效词参数；未提供词参数时以 2 退出，标准错误输出 usage: frob \u003cword\u003e，不产生 frob 输出或 usage 统计输出。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。最终交付必须满足该条款，不得放宽其拒绝和输出要求。\n#### 验收条件\n- AC-001：运行 frob word 后，精确输出 frob: word 行，随后是精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数；空字符串参数为有效词，N 为 0。额外普通参数不改变首个词的结果。未提供词参数时保持退出码 2 和标准错误 usage: frob \u003cword\u003e，不产生 frob 输出或 usage 统计输出。\n- AC-002：传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。\n#### 来源\n用户要求。\n\n## 方案\n使用现有 frob.go 命令入口。本次开发批次只交付 usage 统计功能：统计实现放在新文件 analytics.go，只计算输入词的 UTF-8 字节数并输出 usage 统计，由 frob.go 在正常 frob 行之后调用；空词仍作为一个参数处理。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为。开发验证命令为 go build ./...。本开发批次不实现、修复或放宽 AC-002 的未知 flag 条款；其满足经本 run 的验证与返修闭环完成：验证判定其不满足时，修复 frob.go 的 flag 处理属本 run 已授权的返修范围。实现位置、调用接线及开发/返修改动边界由技术审、diff/代码审查与质量门核验，不要求黑盒 QA 检查源码；公开统计、参数和 flag 行为仍由 QA 验证。\n",
+        "content": "# 交付\n\n## 需求点\n\n### REQ-001：usage 统计与公开 flag 契约\n\n#### 要求\nfrob 是一个单命令工具。新增 usage 统计功能：在正常 frob 输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。保持其他已存在的公开行为：首个词参数是本次所处理的词，额外普通参数不改变处理结果；空字符串是一个有效词参数；未提供词参数时以 2 退出，标准错误输出 usage: frob <word>，不产生 frob 输出或 usage 统计输出。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。最终交付必须满足该条款，不得放宽其拒绝和输出要求。\n#### 验收条件\n- AC-001：运行 frob word 后，精确输出 frob: word 行，随后是精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数；空字符串参数为有效词，N 为 0。额外普通参数不改变首个词的结果。未提供词参数时保持退出码 2 和标准错误 usage: frob <word>，不产生 frob 输出或 usage 统计输出。\n- AC-002：传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。\n#### 来源\n用户要求。\n\n## 方案\n使用现有 frob.go 命令入口。本次开发批次只交付 usage 统计功能：统计实现放在新文件 analytics.go，只计算输入词的 UTF-8 字节数并输出 usage 统计，由 frob.go 在正常 frob 行之后调用；空词仍作为一个参数处理。除 analytics.go 及其在 frob.go 中的调用接线外，本批次不改动其他行为。开发验证命令为 go build ./...。本开发批次不实现、修复或放宽 AC-002 的未知 flag 条款；其满足经本 run 的验证与返修闭环完成：验证判定其不满足时，修复 frob.go 的 flag 处理属本 run 已授权的返修范围。实现位置、调用接线及开发/返修改动边界由技术审、diff/代码审查与质量门核验，不要求黑盒 QA 检查源码；公开统计、参数和 flag 行为仍由 QA 验证。\n",
         "requirements": [
           {
             "id": "REQ-001",
             "title": "usage 统计与公开 flag 契约",
-            "requirement": "frob 是一个单命令工具。新增 usage 统计功能：在正常 frob 输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。保持其他已存在的公开行为：首个词参数是本次所处理的词，额外普通参数不改变处理结果；空字符串是一个有效词参数；未提供词参数时以 2 退出，标准错误输出 usage: frob \u003cword\u003e，不产生 frob 输出或 usage 统计输出。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。最终交付必须满足该条款，不得放宽其拒绝和输出要求。",
+            "requirement": "frob 是一个单命令工具。新增 usage 统计功能：在正常 frob 输出之后附加一行统计输出，格式精确为 usage: runs=1 words=N，其中 N 是本次所处理词的 UTF-8 字节数（空词为 0）。保持其他已存在的公开行为：首个词参数是本次所处理的词，额外普通参数不改变处理结果；空字符串是一个有效词参数；未提供词参数时以 2 退出，标准错误输出 usage: frob <word>，不产生 frob 输出或 usage 统计输出。公开 flag 契约（AC-002）属于本工具的需求边界：当前基线尚未满足该条款——frob 现接受任意首参数（含未知 flag）并以 0 退出，这是已知的既有缺口，不是已交付行为。最终交付必须满足该条款，不得放宽其拒绝和输出要求。",
             "source": "用户要求。",
             "acceptanceConditions": [
               {
                 "id": "AC-001",
-                "text": "运行 frob word 后，精确输出 frob: word 行，随后是精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数；空字符串参数为有效词，N 为 0。额外普通参数不改变首个词的结果。未提供词参数时保持退出码 2 和标准错误 usage: frob \u003cword\u003e，不产生 frob 输出或 usage 统计输出。",
+                "text": "运行 frob word 后，精确输出 frob: word 行，随后是精确的 usage: runs=1 words=N 行，N 为该词的 UTF-8 字节数；空字符串参数为有效词，N 为 0。额外普通参数不改变首个词的结果。未提供词参数时保持退出码 2 和标准错误 usage: frob <word>，不产生 frob 输出或 usage 统计输出。",
                 "line": 10
               },
               {
@@ -53,7 +53,7 @@
       "findings": {},
       "problems": {}
     },
-    "definitionVersion": "11",
+    "definitionVersion": "14",
     "phase": "TECHNICAL_REVIEW",
     "completed": [
       "entry.parse",
@@ -214,7 +214,7 @@
                   }
                 ],
                 "deliverable": "一次性交付满足 REQ-001 全部公开行为的 frob：正常输出后追加 UTF-8 字节统计，并拒绝未知 flag。",
-                "publicEntry": "构建并运行 `frob \u003cword\u003e [extra ordinary args...]`、`frob` 或 `frob --unknown-flag`。",
+                "publicEntry": "构建并运行 `frob <word> [extra ordinary args...]`、`frob` 或 `frob --unknown-flag`。",
                 "artifacts": [
                   "frob.go",
                   "analytics.go"
@@ -229,7 +229,7 @@
                   },
                   {
                     "id": "B1-D2",
-                    "description": "无词参数时退出码为 2，stderr 精确为 `usage: frob \u003cword\u003e`，stdout 不含 frob 或 usage 统计输出。"
+                    "description": "无词参数时退出码为 2，stderr 精确为 `usage: frob <word>`，stdout 不含 frob 或 usage 统计输出。"
                   },
                   {
                     "id": "B1-D3",
@@ -247,15 +247,15 @@
                   },
                   {
                     "id": "B1-C2",
-                    "command": "tmpdir=$(mktemp -d) \u0026\u0026 go build -o \"$tmpdir/frob\" . \u0026\u0026 test \"$(\"$tmpdir/frob\" word)\" = \"$(printf 'frob: word\\nusage: runs=1 words=4')\" \u0026\u0026 test \"$(\"$tmpdir/frob\" 词 extra)\" = \"$(printf 'frob: 词\\nusage: runs=1 words=3')\" \u0026\u0026 test \"$(\"$tmpdir/frob\" '' extra)\" = \"$(printf 'frob: \\nusage: runs=1 words=0')\""
+                    "command": "tmpdir=$(mktemp -d) && go build -o \"$tmpdir/frob\" . && test \"$(\"$tmpdir/frob\" word)\" = \"$(printf 'frob: word\\nusage: runs=1 words=4')\" && test \"$(\"$tmpdir/frob\" 词 extra)\" = \"$(printf 'frob: 词\\nusage: runs=1 words=3')\" && test \"$(\"$tmpdir/frob\" '' extra)\" = \"$(printf 'frob: \\nusage: runs=1 words=0')\""
                   },
                   {
                     "id": "B1-C3",
-                    "command": "tmpdir=$(mktemp -d) \u0026\u0026 go build -o \"$tmpdir/frob\" . \u0026\u0026 out=\"$tmpdir/out\" \u0026\u0026 err=\"$tmpdir/err\" \u0026\u0026 set +e; \"$tmpdir/frob\" \u003e\"$out\" 2\u003e\"$err\"; status=$?; set -e; test \"$status\" -eq 2 \u0026\u0026 test ! -s \"$out\" \u0026\u0026 test \"$(cat \"$err\")\" = 'usage: frob \u003cword\u003e'"
+                    "command": "tmpdir=$(mktemp -d) && go build -o \"$tmpdir/frob\" . && out=\"$tmpdir/out\" && err=\"$tmpdir/err\" && set +e; \"$tmpdir/frob\" >\"$out\" 2>\"$err\"; status=$?; set -e; test \"$status\" -eq 2 && test ! -s \"$out\" && test \"$(cat \"$err\")\" = 'usage: frob <word>'"
                   },
                   {
                     "id": "B1-C4",
-                    "command": "tmpdir=$(mktemp -d) \u0026\u0026 go build -o \"$tmpdir/frob\" . \u0026\u0026 out=\"$tmpdir/out\" \u0026\u0026 err=\"$tmpdir/err\" \u0026\u0026 set +e; \"$tmpdir/frob\" --unknown-flag \u003e\"$out\" 2\u003e\"$err\"; status=$?; set -e; test \"$status\" -ne 0 \u0026\u0026 ! grep -q '^frob:' \"$out\""
+                    "command": "tmpdir=$(mktemp -d) && go build -o \"$tmpdir/frob\" . && out=\"$tmpdir/out\" && err=\"$tmpdir/err\" && set +e; \"$tmpdir/frob\" --unknown-flag >\"$out\" 2>\"$err\"; status=$?; set -e; test \"$status\" -ne 0 && ! grep -q '^frob:' \"$out\""
                   }
                 ],
                 "rollback": "frob.go 的入口改动与 analytics.go 作为一个原子交付共同回滚，以避免只保留统计调用或只保留部分参数契约造成不可验收的中间状态。",

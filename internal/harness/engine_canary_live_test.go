@@ -2524,6 +2524,7 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 			if err := json.Unmarshal(body, &raw); err != nil {
 				t.Fatal(err)
 			}
+			delete(raw, "caseRuns")
 			var answer canaryDevelopmentAnswer
 			if err := decodeCanaryAnswer(raw, &answer); err != nil {
 				t.Fatal(err)

@@ -1,7 +1,7 @@
 {
   "writer": "engine",
   "stateSchemaVersion": "2",
-  "workflowDefinitionVersion": "11",
+  "workflowDefinitionVersion": "14",
   "definitionSource": "definitions/workflow.json",
   "definitionDigest": "sha256:bfd8dac2596dda58b80af8b05d0c9bf27123ccd3a91bed7633a79598d5273aa0",
   "packageDigest": "7808d54940549cc05cc149acf1dfda016a23a84e05c4340d5ae9be62e12caf0a",
@@ -247,7 +247,7 @@
                 "publicEntry": "frob ",
                 "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                 "steps": "在仓库根目录执行 ./frob（frob 之后无任何参数）；捕获 stdout、stderr 与退出码。",
-                "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
+                "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
               },
               {
                 "scenario": "MISUSE",
@@ -327,14 +327,14 @@
             "scope": "FULL",
             "sourceDecisions": [
               {
-                "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob \u003cword\u003e', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
+                "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob <word>', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
                 "id": "REQ-001",
                 "status": "PASS"
               }
             ],
             "pointDecisions": [
               {
-                "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob \u003cword\u003e' on stderr, empty stdout).",
+                "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob <word>' on stderr, empty stdout).",
                 "id": "AC-001",
                 "status": "PASS"
               },
@@ -361,7 +361,7 @@
                 "status": "PASS"
               },
               {
-                "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob \u003cword\u003e' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
+                "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob <word>' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
                 "id": "AC001-C4",
                 "status": "PASS"
               },
@@ -447,7 +447,7 @@
                     "publicEntry": "frob ",
                     "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                     "steps": "在仓库根目录执行 ./frob（frob 之后无任何参数）；捕获 stdout、stderr 与退出码。",
-                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
+                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
                   },
                   {
                     "scenario": "MISUSE",
@@ -527,14 +527,14 @@
                 "scope": "FULL",
                 "sourceDecisions": [
                   {
-                    "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob \u003cword\u003e', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
+                    "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob <word>', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
                     "id": "REQ-001",
                     "status": "PASS"
                   }
                 ],
                 "pointDecisions": [
                   {
-                    "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob \u003cword\u003e' on stderr, empty stdout).",
+                    "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob <word>' on stderr, empty stdout).",
                     "id": "AC-001",
                     "status": "PASS"
                   },
@@ -561,7 +561,7 @@
                     "status": "PASS"
                   },
                   {
-                    "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob \u003cword\u003e' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
+                    "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob <word>' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
                     "id": "AC001-C4",
                     "status": "PASS"
                   },
@@ -751,7 +751,7 @@
                 "status": "PASS"
               },
               {
-                "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)\u003c2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
+                "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)<2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
                 "id": "QA-AC001-04",
                 "status": "PASS"
               },
@@ -937,7 +937,7 @@
                     "status": "PASS"
                   },
                   {
-                    "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)\u003c2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
+                    "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)<2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
                     "id": "QA-AC001-04",
                     "status": "PASS"
                   },
@@ -1043,7 +1043,7 @@
                     "publicEntry": "frob ",
                     "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                     "steps": "在仓库根目录执行 ./frob（frob 之后无任何参数）；捕获 stdout、stderr 与退出码。",
-                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
+                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
                   },
                   {
                     "scenario": "MISUSE",
@@ -1243,14 +1243,14 @@
               "scope": "FULL",
               "sourceDecisions": [
                 {
-                  "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob \u003cword\u003e', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
+                  "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob <word>', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
                   "id": "REQ-001",
                   "status": "PASS"
                 }
               ],
               "pointDecisions": [
                 {
-                  "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob \u003cword\u003e' on stderr, empty stdout).",
+                  "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob <word>' on stderr, empty stdout).",
                   "id": "AC-001",
                   "status": "PASS"
                 },
@@ -1277,7 +1277,7 @@
                   "status": "PASS"
                 },
                 {
-                  "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob \u003cword\u003e' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
+                  "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob <word>' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
                   "id": "AC001-C4",
                   "status": "PASS"
                 },
@@ -1344,7 +1344,7 @@
                   "status": "PASS"
                 },
                 {
-                  "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)\u003c2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
+                  "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)<2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
                   "id": "QA-AC001-04",
                   "status": "PASS"
                 },
@@ -1451,9 +1451,9 @@
                     "provenance": "EXECUTED"
                   },
                   {
-                    "procedure": "审查主机执行记录：不带任何参数（argv 为空）运行 frob-candidate，捕获退出码与输出。由于捕获记录只有单一 output 字段，我另读取 QA 工作区候选源码 frob.go 确认该 usage 消息的输出流归属：无参数分支经 fmt.Fprintln(os.Stderr, \"usage: frob \u003cword\u003e\") 打印并 os.Exit(2)，即该消息在 stderr 上。",
-                    "observation": "捕获退出码为 2；捕获到的输出仅一行 \"usage: frob \u003cword\u003e\"，无任何以 \"frob:\" 开头的行，也无 \"usage: runs=\" 统计行；结合源码可确认该 usage 消息走 stderr，stdout 为空。",
-                    "comparison": "与 oracle 一致：退出码非 0 且恰为未改动的基线值 2；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——未出现 frob: 行，也未出现 usage: runs= 统计行（本场景未处理任何词）。判定满足。",
+                    "procedure": "审查主机执行记录：不带任何参数（argv 为空）运行 frob-candidate，捕获退出码与输出。由于捕获记录只有单一 output 字段，我另读取 QA 工作区候选源码 frob.go 确认该 usage 消息的输出流归属：无参数分支经 fmt.Fprintln(os.Stderr, \"usage: frob <word>\") 打印并 os.Exit(2)，即该消息在 stderr 上。",
+                    "observation": "捕获退出码为 2；捕获到的输出仅一行 \"usage: frob <word>\"，无任何以 \"frob:\" 开头的行，也无 \"usage: runs=\" 统计行；结合源码可确认该 usage 消息走 stderr，stdout 为空。",
+                    "comparison": "与 oracle 一致：退出码非 0 且恰为未改动的基线值 2；stderr 含 \"usage: frob <word>\"；stdout 为空——未出现 frob: 行，也未出现 usage: runs= 统计行（本场景未处理任何词）。判定满足。",
                     "reviewKind": "BLACKBOX",
                     "sourceId": "REQ-001",
                     "pointId": "AC-001",
@@ -1559,7 +1559,7 @@
                     "provenance": "EXECUTED"
                   },
                   {
-                    "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Boundary_EmptyWordReportsZeroBytes$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child process with the empty string as its single argument and requires exit code 0 plus stdout exactly \"frob: \\nusage: runs=1 words=0\\n\"; frob.go confirms the empty word still satisfies len(os.Args) \u003e= 2 and is processed as a normal argument, with len(\"\") == 0.",
+                    "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Boundary_EmptyWordReportsZeroBytes$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child process with the empty string as its single argument and requires exit code 0 plus stdout exactly \"frob: \\nusage: runs=1 words=0\\n\"; frob.go confirms the empty word still satisfies len(os.Args) >= 2 and is processed as a normal argument, with len(\"\") == 0.",
                     "observation": "The captured run exited 0 with output \"ok  \\tfrob\\t0.225s\" — the boundary test passed with no failures.",
                     "comparison": "The pass shows the empty word was treated as one processed argument: exit 0 and the exact two-line output with words=0, matching the oracle's boundary expectation for the empty word. EXECUTED_PASS.",
                     "reviewKind": "WHITEBOX",
@@ -1570,7 +1570,7 @@
                     "provenance": "EXECUTED"
                   },
                   {
-                    "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Misuse_NoArgumentsNoUsageStatsLine$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child with no arguments and asserts three things: a non-zero exit code, stdout containing no \"frob: \" line, and stdout containing no \"usage: runs=\" line; frob.go confirms that with len(os.Args) \u003c 2 it writes a usage message to stderr and exits 2 before producing any stdout.",
+                    "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Misuse_NoArgumentsNoUsageStatsLine$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child with no arguments and asserts three things: a non-zero exit code, stdout containing no \"frob: \" line, and stdout containing no \"usage: runs=\" line; frob.go confirms that with len(os.Args) < 2 it writes a usage message to stderr and exits 2 before producing any stdout.",
                     "observation": "The captured run exited 0 with output \"ok  \\tfrob\\t0.236s\" — the misuse test passed.",
                     "comparison": "The pass means frob without arguments exited non-zero (source path exits 2) and emitted neither a frob: line nor a usage stats line on stdout, which is exactly the oracle's requirement that a run with no processed word must not output statistics. EXECUTED_PASS.",
                     "reviewKind": "WHITEBOX",
@@ -1656,7 +1656,7 @@
             "severityRationale": "AC-002 is a binding acceptance condition of the bound requirement REQ-001 (the public flag contract is explicitly inside the tool's requirement boundary) and is entirely unsatisfied in the candidate: frob.go contains no flag validation at all, so every first argument, including unknown flags, takes the normal success path. The requirement document designates exactly this gap for the run's validation/rework closure, so this violation blocks acceptance of the candidate until frob.go's argument rejection handling is reworked.",
             "requirement": "AC-002 (REQ-001): 传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。",
             "normalPath": "frob --unknown-flag canary → frob refuses to execute: nonzero exit code, no 'frob: ' line on stdout (and, per the bound test oracle in ac002_flag_test.go, no 'usage: runs=' stats line for the rejected run); only the no-argument and plain-word paths produce frob: output.",
-            "actualError": "Host probe 'frob-candidate --unknown-flag canary' exited 0 with stdout 'frob: --unknown-flag\nusage: runs=1 words=14'. Independently verified by static inspection of the candidate source: main() in frob.go performs no flag parsing — any first argument is printed as 'frob: \u003carg\u003e' (frob.go:13) and passed to reportUsage (frob.go:14), which emits 'usage: runs=1 words=14' for the 14-byte string '--unknown-flag' (analytics.go:6), then the process exits 0.",
+            "actualError": "Host probe 'frob-candidate --unknown-flag canary' exited 0 with stdout 'frob: --unknown-flag\nusage: runs=1 words=14'. Independently verified by static inspection of the candidate source: main() in frob.go performs no flag parsing — any first argument is printed as 'frob: <arg>' (frob.go:13) and passed to reportUsage (frob.go:14), which emits 'usage: runs=1 words=14' for the 14-byte string '--unknown-flag' (analytics.go:6), then the process exits 0.",
             "deferralImpact": "If left unfixed, unknown flags are silently executed as ordinary words with a success exit code: scripts and users mistyping or probing options receive exit 0 plus frob:/usage output, so the public flag contract remains violated, AC-002 stays unmet, and the run's declared validation/rework closure for the known baseline gap cannot complete.",
             "verification": {},
             "message": "Candidate violates the AC-002 regression contract: an unknown flag is accepted and processed as an ordinary word — frob exits 0 and prints a 'frob: --unknown-flag' line (plus a usage stats line) instead of rejecting execution with a nonzero exit code and no frob: output.",
@@ -2443,11 +2443,11 @@
                   },
                   {
                     "id": "dev-1.s2",
-                    "description": "Wire the helper call into frob.go on the normal success path only, immediately after the `frob: \u003cword\u003e` Printf; leave the no-arg stderr/exit-2 path and all first-argument handling (including unknown-flag acceptance) byte-for-byte unchanged."
+                    "description": "Wire the helper call into frob.go on the normal success path only, immediately after the `frob: <word>` Printf; leave the no-arg stderr/exit-2 path and all first-argument handling (including unknown-flag acceptance) byte-for-byte unchanged."
                   }
                 ],
                 "deliverable": "Usage statistics: new analytics.go computing the processed word's UTF-8 byte count and printing `usage: runs=1 words=N`, appended after frob's normal output via a single call site in frob.go, verified by `go build ./...`. AC-002 (unknown-flag rejection) is deliberately not implemented here — it is the declared baseline gap whose closure this run's validation-and-repair loop owns.",
-                "publicEntry": "CLI `frob \u003cword\u003e` (package main, repository root). A normal run prints `frob: word` then `usage: runs=1 words=N` on stdout; `frob \"\"` prints `frob: ` then `usage: runs=1 words=0`; no-arg behavior is unchanged (stderr `usage: frob \u003cword\u003e`, exit 2).",
+                "publicEntry": "CLI `frob <word>` (package main, repository root). A normal run prints `frob: word` then `usage: runs=1 words=N` on stdout; `frob \"\"` prints `frob: ` then `usage: runs=1 words=0`; no-arg behavior is unchanged (stderr `usage: frob <word>`, exit 2).",
                 "artifacts": [
                   "analytics.go",
                   "frob.go"
@@ -2462,7 +2462,7 @@
                   },
                   {
                     "id": "dev-1.dod2",
-                    "description": "frob.go invokes the helper once, on the normal success path, immediately after the `frob: \u003cword\u003e` line, so AC-001 ordering holds for `frob word` and `frob \"\"`."
+                    "description": "frob.go invokes the helper once, on the normal success path, immediately after the `frob: <word>` line, so AC-001 ordering holds for `frob word` and `frob \"\"`."
                   },
                   {
                     "id": "dev-1.dod3",
@@ -2503,7 +2503,7 @@
               "scope",
               "severity"
             ],
-            "evidence": "binding: materials.json names runId engine-canary, attempt att:review/review.readiness:7, requirementPath exactly matching the requirements.md read here (declared revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a), and REQ-001 binds development to this frob repository. evidence: I read frob.go (14 lines) and confirmed the document's baseline description — any first argument, including unknown flags, is echoed as `frob: \u003carg\u003e` with exit 0; no-arg path prints `usage: frob \u003cword\u003e` to stderr and exits 2 — so the declared AC-002 gap is real and pre-existing. completeness: the development scope is fully enumerated (new analytics.go, exact line `usage: runs=1 words=N`, N = UTF-8 byte count of the processed word, empty word = 0, wiring in frob.go after normal output only, no other behavior changes, pinned verification command `go build ./...`). locations: artifacts resolve unambiguously in the flat single-package repo at its root — frob.go exists and analytics.go is to be created there per the requirement. normal-entry: normal entry `frob word` produces `frob: word` then `usage: runs=1 words=N`; `frob \"\"` produces `frob: ` then `usage: runs=1 words=0`; the no-arg error path stays unchanged. requirement-match: the single batch delivers exactly the statistics-plus-wiring deliverable and uses the requirement-pinned check; AC-002 implementation is excluded because the document itself assigns its closure to this run's authorized validation-and-repair loop. scope: one deliverable → one batch, FINAL tier, no checkpoint groups; no validation obligations absorbed into development. severity: no defects of the document or plan found; the only nonconformity (AC-002) is explicitly declared with closure assigned, hence not a finding."
+            "evidence": "binding: materials.json names runId engine-canary, attempt att:review/review.readiness:7, requirementPath exactly matching the requirements.md read here (declared revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a), and REQ-001 binds development to this frob repository. evidence: I read frob.go (14 lines) and confirmed the document's baseline description — any first argument, including unknown flags, is echoed as `frob: <arg>` with exit 0; no-arg path prints `usage: frob <word>` to stderr and exits 2 — so the declared AC-002 gap is real and pre-existing. completeness: the development scope is fully enumerated (new analytics.go, exact line `usage: runs=1 words=N`, N = UTF-8 byte count of the processed word, empty word = 0, wiring in frob.go after normal output only, no other behavior changes, pinned verification command `go build ./...`). locations: artifacts resolve unambiguously in the flat single-package repo at its root — frob.go exists and analytics.go is to be created there per the requirement. normal-entry: normal entry `frob word` produces `frob: word` then `usage: runs=1 words=N`; `frob \"\"` produces `frob: ` then `usage: runs=1 words=0`; the no-arg error path stays unchanged. requirement-match: the single batch delivers exactly the statistics-plus-wiring deliverable and uses the requirement-pinned check; AC-002 implementation is excluded because the document itself assigns its closure to this run's authorized validation-and-repair loop. scope: one deliverable → one batch, FINAL tier, no checkpoint groups; no validation obligations absorbed into development. severity: no defects of the document or plan found; the only nonconformity (AC-002) is explicitly declared with closure assigned, hence not a finding."
           }
         },
         "digest": "sha256:0e88eade461e59e49d4f9fa52ed0dc254857aa24fef55bae542b6ea5a7c7362e"
@@ -2530,7 +2530,7 @@
               "scope",
               "severity"
             ],
-            "evidence": "binding: read materials.json (runId engine-canary, action act:review/review.worker, attempt att:review/review.worker:5) and confirmed the bound file exists at the exact requirementPath /private/tmp/root-repair-development/zcode-p4-authored-home-0ov7rq8q/.formal-gates-resources/engine-canary-1361765301/requirements.md bound to revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a; read that file in full. completeness: the document contains REQ-001 with a full requirement statement, two acceptance criteria (AC-001, AC-002), source (user request), and a plan section — all contract components present with no dangling references. evidence: verification means are concrete and executable — go build ./... is valid in this repo (verified go.mod exists at repo root: module frob, go 1.22); AC-001 is checkable by running frob word and comparing exact output lines; AC-002 is checkable by running frob --unknown-flag and inspecting exit code and absence of the frob: line. locations: verified against the repo — frob.go exists at the workspace root as the named command entry, analytics.go does not yet exist (consistent with 'new file analytics.go'), and the change surface is explicitly bounded to analytics.go plus its call wiring in frob.go. normal-entry: AC-001 precisely defines the normal entry (frob word prints frob: word then exactly 'usage: runs=1 words=N', N = UTF-8 byte count of the word, empty word = 0, still treated as one argument); this matches the actual frob.go code path where os.Args[1] is the processed word. requirement-match: the plan section restates the requirement consistently — analytics.go computes only the byte count, output appended after the frob line, dev batch limited to statistics plus wiring, unknown-flag gap discovered by independent validation and fixed in frob.go argument handling without changing the statistics or normal/empty-word output contract; no contradiction between sections. scope: the dev batch scope is explicitly bounded and the AC-002 baseline gap is accurately declared (verified in frob.go: it prints frob: \u003cos.Args[1]\u003e for any first argument including unknown flags and exits 0) with closure assigned to this run's authorized validation-and-repair loop, which per this dispatch is contract content and not a finding; the build-only dev verification is likewise declared and paired with run-level AC validation. severity: no document defects identified, so no severity assignments required; both candidate concerns examined (unsatisfied AC-002 at baseline, build-only dev check) are explicitly declared contract content rather than defects of the document or plan."
+            "evidence": "binding: read materials.json (runId engine-canary, action act:review/review.worker, attempt att:review/review.worker:5) and confirmed the bound file exists at the exact requirementPath /private/tmp/root-repair-development/zcode-p4-authored-home-0ov7rq8q/.formal-gates-resources/engine-canary-1361765301/requirements.md bound to revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a; read that file in full. completeness: the document contains REQ-001 with a full requirement statement, two acceptance criteria (AC-001, AC-002), source (user request), and a plan section — all contract components present with no dangling references. evidence: verification means are concrete and executable — go build ./... is valid in this repo (verified go.mod exists at repo root: module frob, go 1.22); AC-001 is checkable by running frob word and comparing exact output lines; AC-002 is checkable by running frob --unknown-flag and inspecting exit code and absence of the frob: line. locations: verified against the repo — frob.go exists at the workspace root as the named command entry, analytics.go does not yet exist (consistent with 'new file analytics.go'), and the change surface is explicitly bounded to analytics.go plus its call wiring in frob.go. normal-entry: AC-001 precisely defines the normal entry (frob word prints frob: word then exactly 'usage: runs=1 words=N', N = UTF-8 byte count of the word, empty word = 0, still treated as one argument); this matches the actual frob.go code path where os.Args[1] is the processed word. requirement-match: the plan section restates the requirement consistently — analytics.go computes only the byte count, output appended after the frob line, dev batch limited to statistics plus wiring, unknown-flag gap discovered by independent validation and fixed in frob.go argument handling without changing the statistics or normal/empty-word output contract; no contradiction between sections. scope: the dev batch scope is explicitly bounded and the AC-002 baseline gap is accurately declared (verified in frob.go: it prints frob: <os.Args[1]> for any first argument including unknown flags and exits 0) with closure assigned to this run's authorized validation-and-repair loop, which per this dispatch is contract content and not a finding; the build-only dev verification is likewise declared and paired with run-level AC validation. severity: no document defects identified, so no severity assignments required; both candidate concerns examined (unsatisfied AC-002 at baseline, build-only dev check) are explicitly declared contract content rather than defects of the document or plan."
           }
         },
         "digest": "sha256:2e8fb4955465fd63f806b8af25272c0641a1e84174a67b44f18c8e82098651df"
@@ -2551,21 +2551,21 @@
             "completion": {
               "dod": {
                 "dev-1.dod1": "COMPLETE: analytics.go created at the repository root in package main, stdlib-only (imports fmt alone). Its helper reportUsage(word string) prints exactly one stdout line `usage: runs=1 words=N` with N = len(word) (UTF-8 byte count); verified byte-exact against the executed binary: words=4 for \"word\", words=0 for \"\", words=6 for \"héllo\", words=14 for \"--unknown-flag\".",
-                "dev-1.dod2": "COMPLETE: frob.go calls reportUsage(os.Args[1]) exactly once, immediately after the `frob: %s` Printf on the normal success path only. Executed ordering verified: `frob word` emits `frob: word` then `usage: runs=1 words=4`; `frob \"\"` emits `frob: ` then `usage: runs=1 words=0`; the no-arg path emits no usage line (stderr `usage: frob \u003cword\u003e`, exit 2).",
+                "dev-1.dod2": "COMPLETE: frob.go calls reportUsage(os.Args[1]) exactly once, immediately after the `frob: %s` Printf on the normal success path only. Executed ordering verified: `frob word` emits `frob: word` then `usage: runs=1 words=4`; `frob \"\"` emits `frob: ` then `usage: runs=1 words=0`; the no-arg path emits no usage line (stderr `usage: frob <word>`, exit 2).",
                 "dev-1.dod3": "COMPLETE: `go build ./...` run from the repository root exits 0 (go1.26.4 darwin/arm64); re-confirmed on the final workspace state.",
-                "dev-1.dod4": "COMPLETE: diffed frob.go against the recorded baseline (captured before editing); the diff is exactly one added line `reportUsage(os.Args[1])`. No other file changed; the only new file is analytics.go. Baseline behaviors re-executed and unchanged: no-arg path returns stderr `usage: frob \u003cword\u003e` with exit 2, and any-first-arg acceptance is byte-for-byte at baseline (`frob --unknown-flag` still exits 0 and prints `frob: --unknown-flag`)."
+                "dev-1.dod4": "COMPLETE: diffed frob.go against the recorded baseline (captured before editing); the diff is exactly one added line `reportUsage(os.Args[1])`. No other file changed; the only new file is analytics.go. Baseline behaviors re-executed and unchanged: no-arg path returns stderr `usage: frob <word>` with exit 2, and any-first-arg acceptance is byte-for-byte at baseline (`frob --unknown-flag` still exits 0 and prints `frob: --unknown-flag`)."
               },
               "checks": {
                 "dev-1.check1": "go build ./... from the repository root: PASS (exit 0, go1.26.4 darwin/arm64); confirmed twice, including once on the final cleaned state."
               },
-              "handoff": "dev-1 delivered: `frob word` now emits the AC-001 pair (`frob: word` then `usage: runs=1 words=N`, N = UTF-8 byte count, empty word -\u003e 0) and `go build ./...` passes. Unknown-flag behavior is intentionally still at baseline: `frob --unknown-flag` is accepted as the word, exits 0, and currently also prints the usage line with N=14. Validation is therefore expected to FAIL AC-002 (must be: non-zero exit, no `frob:` line) and trigger the authorized repair loop. That repair must fix frob.go argument rejection while preserving the usage-line contract for normal and empty words and the no-arg stderr/exit-2 path. Workspace is clean of build artifacts; nothing staged, committed or pushed."
+              "handoff": "dev-1 delivered: `frob word` now emits the AC-001 pair (`frob: word` then `usage: runs=1 words=N`, N = UTF-8 byte count, empty word -> 0) and `go build ./...` passes. Unknown-flag behavior is intentionally still at baseline: `frob --unknown-flag` is accepted as the word, exits 0, and currently also prints the usage line with N=14. Validation is therefore expected to FAIL AC-002 (must be: non-zero exit, no `frob:` line) and trigger the authorized repair loop. That repair must fix frob.go argument rejection while preserving the usage-line contract for normal and empty words and the no-arg stderr/exit-2 path. Workspace is clean of build artifacts; nothing staged, committed or pushed."
             },
             "caseRuns": [
               {
                 "mode": "BLACKBOX",
                 "caseId": "AC-001",
                 "procedure": "Compiled the package (go build), ran the binary from the repository root for: `frob word`, `frob \"\"`, `frob héllo` (UTF-8 multibyte), and the no-arg case; captured stdout/stderr byte streams with od -c and exit codes.",
-                "observation": "frob word -\u003e stdout exactly \"frob: word\\nusage: runs=1 words=4\\n\", exit 0. frob \"\" -\u003e stdout exactly \"frob: \\nusage: runs=1 words=0\\n\", exit 0. frob héllo -\u003e stdout exactly \"frob: héllo\\nusage: runs=1 words=6\\n\", exit 0 (é is 2 UTF-8 bytes; byte count, not rune count, which would be 5). frob with no args -\u003e empty stdout, stderr \"usage: frob \u003cword\u003e\\n\", exit 2 (no usage line on the error path). All outputs captured with od -c for byte-exact verification.",
+                "observation": "frob word -> stdout exactly \"frob: word\\nusage: runs=1 words=4\\n\", exit 0. frob \"\" -> stdout exactly \"frob: \\nusage: runs=1 words=0\\n\", exit 0. frob héllo -> stdout exactly \"frob: héllo\\nusage: runs=1 words=6\\n\", exit 0 (é is 2 UTF-8 bytes; byte count, not rune count, which would be 5). frob with no args -> empty stdout, stderr \"usage: frob <word>\\n\", exit 2 (no usage line on the error path). All outputs captured with od -c for byte-exact verification.",
                 "comparison": "AC-001 oracle: output contains the exact line `usage: runs=1 words=N` after the `frob: word` line, N = the word's UTF-8 byte count. Observed byte streams match the oracle exactly for a normal word (4), the empty word (0) and a multibyte word (6); the multibyte case also rules out rune-count semantics (would be 5). Exit 0 with usage line present on the success path only.",
                 "result": "EXECUTED_PASS"
               }
@@ -2580,11 +2580,11 @@
               "go build ./... re-run on the final workspace state after temporary-output cleanup: exit 0. Each invocation produced a transient frob binary in the workspace (single main package); it was removed after each run, leaving the workspace free of build outputs."
             ],
             "tests": [
-              "frob word -\u003e stdout exactly \"frob: word\\nusage: runs=1 words=4\\n\", exit 0 (AC-001, N=4 bytes).",
-              "frob \"\" -\u003e stdout exactly \"frob: \\nusage: runs=1 words=0\\n\", exit 0 (empty word -\u003e N=0, still processed as one argument).",
-              "frob héllo -\u003e stdout exactly \"frob: héllo\\nusage: runs=1 words=6\\n\", exit 0 (N=6 confirms UTF-8 byte count, not rune count which would be 5).",
-              "frob --unknown-flag -\u003e stdout \"frob: --unknown-flag\\nusage: runs=1 words=14\\n\", exit 0: baseline acceptance intentionally unchanged in this batch (AC-002 owned by the repair loop).",
-              "frob (no args) -\u003e empty stdout, stderr exactly \"usage: frob \u003cword\u003e\\n\", exit 2: no-arg path unchanged and no usage line emitted on the error path.",
+              "frob word -> stdout exactly \"frob: word\\nusage: runs=1 words=4\\n\", exit 0 (AC-001, N=4 bytes).",
+              "frob \"\" -> stdout exactly \"frob: \\nusage: runs=1 words=0\\n\", exit 0 (empty word -> N=0, still processed as one argument).",
+              "frob héllo -> stdout exactly \"frob: héllo\\nusage: runs=1 words=6\\n\", exit 0 (N=6 confirms UTF-8 byte count, not rune count which would be 5).",
+              "frob --unknown-flag -> stdout \"frob: --unknown-flag\\nusage: runs=1 words=14\\n\", exit 0: baseline acceptance intentionally unchanged in this batch (AC-002 owned by the repair loop).",
+              "frob (no args) -> empty stdout, stderr exactly \"usage: frob <word>\\n\", exit 2: no-arg path unchanged and no usage line emitted on the error path.",
               "All outputs captured byte-exact with od -c; helper /tmp files and the transient frob build binary removed afterwards."
             ],
             "affectedCases": [
@@ -2668,7 +2668,7 @@
                 "publicEntry": "frob ",
                 "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                 "steps": "在仓库根目录执行 ./frob（frob 之后无任何参数）；捕获 stdout、stderr 与退出码。",
-                "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
+                "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。"
               },
               {
                 "scenario": "MISUSE",
@@ -2971,9 +2971,9 @@
                 "provenance": "EXECUTED"
               },
               {
-                "procedure": "审查主机执行记录：不带任何参数（argv 为空）运行 frob-candidate，捕获退出码与输出。由于捕获记录只有单一 output 字段，我另读取 QA 工作区候选源码 frob.go 确认该 usage 消息的输出流归属：无参数分支经 fmt.Fprintln(os.Stderr, \"usage: frob \u003cword\u003e\") 打印并 os.Exit(2)，即该消息在 stderr 上。",
-                "observation": "捕获退出码为 2；捕获到的输出仅一行 \"usage: frob \u003cword\u003e\"，无任何以 \"frob:\" 开头的行，也无 \"usage: runs=\" 统计行；结合源码可确认该 usage 消息走 stderr，stdout 为空。",
-                "comparison": "与 oracle 一致：退出码非 0 且恰为未改动的基线值 2；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——未出现 frob: 行，也未出现 usage: runs= 统计行（本场景未处理任何词）。判定满足。",
+                "procedure": "审查主机执行记录：不带任何参数（argv 为空）运行 frob-candidate，捕获退出码与输出。由于捕获记录只有单一 output 字段，我另读取 QA 工作区候选源码 frob.go 确认该 usage 消息的输出流归属：无参数分支经 fmt.Fprintln(os.Stderr, \"usage: frob <word>\") 打印并 os.Exit(2)，即该消息在 stderr 上。",
+                "observation": "捕获退出码为 2；捕获到的输出仅一行 \"usage: frob <word>\"，无任何以 \"frob:\" 开头的行，也无 \"usage: runs=\" 统计行；结合源码可确认该 usage 消息走 stderr，stdout 为空。",
+                "comparison": "与 oracle 一致：退出码非 0 且恰为未改动的基线值 2；stderr 含 \"usage: frob <word>\"；stdout 为空——未出现 frob: 行，也未出现 usage: runs= 统计行（本场景未处理任何词）。判定满足。",
                 "reviewKind": "BLACKBOX",
                 "sourceId": "REQ-001",
                 "pointId": "AC-001",
@@ -3092,7 +3092,7 @@
                 "provenance": "EXECUTED"
               },
               {
-                "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Boundary_EmptyWordReportsZeroBytes$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child process with the empty string as its single argument and requires exit code 0 plus stdout exactly \"frob: \\nusage: runs=1 words=0\\n\"; frob.go confirms the empty word still satisfies len(os.Args) \u003e= 2 and is processed as a normal argument, with len(\"\") == 0.",
+                "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Boundary_EmptyWordReportsZeroBytes$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child process with the empty string as its single argument and requires exit code 0 plus stdout exactly \"frob: \\nusage: runs=1 words=0\\n\"; frob.go confirms the empty word still satisfies len(os.Args) >= 2 and is processed as a normal argument, with len(\"\") == 0.",
                 "observation": "The captured run exited 0 with output \"ok  \\tfrob\\t0.225s\" — the boundary test passed with no failures.",
                 "comparison": "The pass shows the empty word was treated as one processed argument: exit 0 and the exact two-line output with words=0, matching the oracle's boundary expectation for the empty word. EXECUTED_PASS.",
                 "reviewKind": "WHITEBOX",
@@ -3103,7 +3103,7 @@
                 "provenance": "EXECUTED"
               },
               {
-                "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Misuse_NoArgumentsNoUsageStatsLine$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child with no arguments and asserts three things: a non-zero exit code, stdout containing no \"frob: \" line, and stdout containing no \"usage: runs=\" line; frob.go confirms that with len(os.Args) \u003c 2 it writes a usage message to stderr and exits 2 before producing any stdout.",
+                "procedure": "Judged the captured host run: `go test -count=1 -run ^TestAC001_Misuse_NoArgumentsNoUsageStatsLine$ .` in the isolation workspace. I verified in ac001_usage_test.go that the test runs the frob child with no arguments and asserts three things: a non-zero exit code, stdout containing no \"frob: \" line, and stdout containing no \"usage: runs=\" line; frob.go confirms that with len(os.Args) < 2 it writes a usage message to stderr and exits 2 before producing any stdout.",
                 "observation": "The captured run exited 0 with output \"ok  \\tfrob\\t0.236s\" — the misuse test passed.",
                 "comparison": "The pass means frob without arguments exited non-zero (source path exits 2) and emitted neither a frob: line nor a usage stats line on stdout, which is exactly the oracle's requirement that a run with no processed word must not output statistics. EXECUTED_PASS.",
                 "reviewKind": "WHITEBOX",
@@ -3181,14 +3181,14 @@
             "scope": "FULL",
             "sourceDecisions": [
               {
-                "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob \u003cword\u003e', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
+                "reason": "REQ-001's testable obligations are carried by the case set. (1) The exact stats-line contract 'usage: runs=1 words=N' appended after the normal frob line is verified by AC001-C1/C2/C3 with exact two-line stdout oracles and fixed ordering. (2) N as UTF-8 byte count is discriminated by AC001-C1 (ASCII, 5) and AC001-C3 (multibyte, 6 bytes vs 5 runes — an implementation counting runes instead of bytes fails). (3) The explicit empty-word-0 clause has dedicated coverage in AC001-C2. (4) The declared no-other-behavior-change boundary is anchored by AC001-C4 (no-arg rejection preserved: non-zero exit, stderr 'usage: frob <word>', no stats line) and by C1–C3 which require the unchanged 'frob: word' first line. (5) The go build ./... dev verification command is embedded as a build precondition in every case. (6) The AC-002 flag-rejection gap, which the requirement declares unsatisfied at baseline and routes through this run's validation+rework loop, is covered by AC002-C1/C2/C3. The only obligation not case-verifiable is the internal file-placement constraint (analytics.go), which is an implementation-structure detail outside BLACKBOX scope and not part of either acceptance condition; both acceptance conditions are fully carried.",
                 "id": "REQ-001",
                 "status": "PASS"
               }
             ],
             "pointDecisions": [
               {
-                "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob \u003cword\u003e' on stderr, empty stdout).",
+                "reason": "AC-001 has executable and discriminating case coverage. AC001-C1 covers the canonical 'frob word' path with a deterministic oracle (exit 0, stdout exactly 'frob: hello' then 'usage: runs=1 words=5', stderr empty), which alone verifies the point end-to-end. AC001-C2 pins the empty-word N=0 boundary and AC001-C3 pins byte-vs-rune semantics, so an implementation cannot pass by counting characters or by mishandling the empty argument. AC001-C4 adds the negative side of the point's semantics — the stats line appears only after normal frob output, so with no processed word there must be no 'usage: runs=' line — verified against the preserved no-arg rejection baseline, which I confirmed matches the actual baseline frob.go (exit 2, 'usage: frob <word>' on stderr, empty stdout).",
                 "id": "AC-001",
                 "status": "PASS"
               },
@@ -3215,7 +3215,7 @@
                 "status": "PASS"
               },
               {
-                "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob \u003cword\u003e' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
+                "reason": "Steps and preconditions unambiguously define a no-argument invocation (argv empty), again despite the loose 'frob ' publicEntry string. The oracle is consistent with the actual baseline frob.go I read in the QA workspace: no args → 'usage: frob <word>' on stderr, exit 2, empty stdout; the case accepts any non-zero exit with 2 noted as the unchanged baseline value, which is appropriately strict on the invariant (rejection) without over-constraining the code. As a MISUSE case bound to AC-001 it genuinely verifies the point's attach-after-normal-output semantics: with no word processed there must be no 'frob:' line and no 'usage: runs=' statistics line, and it simultaneously anchors REQ-001's no-other-behavior-change boundary.",
                 "id": "AC001-C4",
                 "status": "PASS"
               },
@@ -3301,7 +3301,7 @@
                 "status": "PASS"
               },
               {
-                "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)\u003c2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
+                "reason": "testRef 真实存在于 ac001_usage_test.go:47，runFrob(t) 使子进程 os.Args 仅有程序名，main 走 len(os.Args)<2 分支 os.Exit(2)；测试断言退出码非 0 且 stdout 不含 \"frob: \" 与 \"usage: runs=\"，与 oracle（含『退出码 2、stdout 为空』的基线实测描述）一致，harness 经真实子进程可观测该 os.Exit 路径。",
                 "id": "QA-AC001-04",
                 "status": "PASS"
               },
@@ -3349,7 +3349,7 @@
               "severityRationale": "AC-002 is a binding acceptance condition of the bound requirement REQ-001 (the public flag contract is explicitly inside the tool's requirement boundary) and is entirely unsatisfied in the candidate: frob.go contains no flag validation at all, so every first argument, including unknown flags, takes the normal success path. The requirement document designates exactly this gap for the run's validation/rework closure, so this violation blocks acceptance of the candidate until frob.go's argument rejection handling is reworked.",
               "requirement": "AC-002 (REQ-001): 传入未知 flag（例如 --unknown-flag）时 frob 拒绝执行：以非零退出码退出，且不输出 frob: 行。",
               "normalPath": "frob --unknown-flag canary → frob refuses to execute: nonzero exit code, no 'frob: ' line on stdout (and, per the bound test oracle in ac002_flag_test.go, no 'usage: runs=' stats line for the rejected run); only the no-argument and plain-word paths produce frob: output.",
-              "actualError": "Host probe 'frob-candidate --unknown-flag canary' exited 0 with stdout 'frob: --unknown-flag\nusage: runs=1 words=14'. Independently verified by static inspection of the candidate source: main() in frob.go performs no flag parsing — any first argument is printed as 'frob: \u003carg\u003e' (frob.go:13) and passed to reportUsage (frob.go:14), which emits 'usage: runs=1 words=14' for the 14-byte string '--unknown-flag' (analytics.go:6), then the process exits 0.",
+              "actualError": "Host probe 'frob-candidate --unknown-flag canary' exited 0 with stdout 'frob: --unknown-flag\nusage: runs=1 words=14'. Independently verified by static inspection of the candidate source: main() in frob.go performs no flag parsing — any first argument is printed as 'frob: <arg>' (frob.go:13) and passed to reportUsage (frob.go:14), which emits 'usage: runs=1 words=14' for the 14-byte string '--unknown-flag' (analytics.go:6), then the process exits 0.",
               "deferralImpact": "If left unfixed, unknown flags are silently executed as ordinary words with a success exit code: scripts and users mistyping or probing options receive exit 0 plus frob:/usage output, so the public flag contract remains violated, AC-002 stays unmet, and the run's declared validation/rework closure for the known baseline gap cannot complete.",
               "verification": {},
               "message": "Candidate violates the AC-002 regression contract: an unknown flag is accepted and processed as an ordinary word — frob exits 0 and prints a 'frob: --unknown-flag' line (plus a usage stats line) instead of rejecting execution with a nonzero exit code and no frob: output.",
@@ -4252,7 +4252,7 @@
                   {
                     "caseId": "AC001-C4",
                     "mode": "BLACKBOX",
-                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。",
+                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。",
                     "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                     "publicEntry": "frob ",
                     "scenario": "MISUSE",
@@ -4552,7 +4552,7 @@
                   {
                     "caseId": "AC001-C4",
                     "mode": "BLACKBOX",
-                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob \u003cword\u003e\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。",
+                    "oracle": "未传任何词时工具按既有行为拒绝运行且不产出统计：退出码非 0（未改动行为的基线退出码为 2）；stderr 含 \"usage: frob <word>\"；stdout 为空——不得出现任何以 \"frob:\" 开头的行，也不得出现 \"usage: runs=\" 统计行（统计行只应在正常 frob 输出之后附加，本场景没有处理任何词）。",
                     "preconditions": "同 AC001-C1 的构建前置；本用例不带任何参数调用（区别于空字符串参数），argv 为空。",
                     "publicEntry": "frob ",
                     "scenario": "MISUSE",
@@ -4855,7 +4855,7 @@
                 "scope",
                 "severity"
               ],
-              "evidence": "binding: read materials.json (runId engine-canary, action act:review/review.worker, attempt att:review/review.worker:5) and confirmed the bound file exists at the exact requirementPath /private/tmp/root-repair-development/zcode-p4-authored-home-0ov7rq8q/.formal-gates-resources/engine-canary-1361765301/requirements.md bound to revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a; read that file in full. completeness: the document contains REQ-001 with a full requirement statement, two acceptance criteria (AC-001, AC-002), source (user request), and a plan section — all contract components present with no dangling references. evidence: verification means are concrete and executable — go build ./... is valid in this repo (verified go.mod exists at repo root: module frob, go 1.22); AC-001 is checkable by running frob word and comparing exact output lines; AC-002 is checkable by running frob --unknown-flag and inspecting exit code and absence of the frob: line. locations: verified against the repo — frob.go exists at the workspace root as the named command entry, analytics.go does not yet exist (consistent with 'new file analytics.go'), and the change surface is explicitly bounded to analytics.go plus its call wiring in frob.go. normal-entry: AC-001 precisely defines the normal entry (frob word prints frob: word then exactly 'usage: runs=1 words=N', N = UTF-8 byte count of the word, empty word = 0, still treated as one argument); this matches the actual frob.go code path where os.Args[1] is the processed word. requirement-match: the plan section restates the requirement consistently — analytics.go computes only the byte count, output appended after the frob line, dev batch limited to statistics plus wiring, unknown-flag gap discovered by independent validation and fixed in frob.go argument handling without changing the statistics or normal/empty-word output contract; no contradiction between sections. scope: the dev batch scope is explicitly bounded and the AC-002 baseline gap is accurately declared (verified in frob.go: it prints frob: \u003cos.Args[1]\u003e for any first argument including unknown flags and exits 0) with closure assigned to this run's authorized validation-and-repair loop, which per this dispatch is contract content and not a finding; the build-only dev verification is likewise declared and paired with run-level AC validation. severity: no document defects identified, so no severity assignments required; both candidate concerns examined (unsatisfied AC-002 at baseline, build-only dev check) are explicitly declared contract content rather than defects of the document or plan."
+              "evidence": "binding: read materials.json (runId engine-canary, action act:review/review.worker, attempt att:review/review.worker:5) and confirmed the bound file exists at the exact requirementPath /private/tmp/root-repair-development/zcode-p4-authored-home-0ov7rq8q/.formal-gates-resources/engine-canary-1361765301/requirements.md bound to revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a; read that file in full. completeness: the document contains REQ-001 with a full requirement statement, two acceptance criteria (AC-001, AC-002), source (user request), and a plan section — all contract components present with no dangling references. evidence: verification means are concrete and executable — go build ./... is valid in this repo (verified go.mod exists at repo root: module frob, go 1.22); AC-001 is checkable by running frob word and comparing exact output lines; AC-002 is checkable by running frob --unknown-flag and inspecting exit code and absence of the frob: line. locations: verified against the repo — frob.go exists at the workspace root as the named command entry, analytics.go does not yet exist (consistent with 'new file analytics.go'), and the change surface is explicitly bounded to analytics.go plus its call wiring in frob.go. normal-entry: AC-001 precisely defines the normal entry (frob word prints frob: word then exactly 'usage: runs=1 words=N', N = UTF-8 byte count of the word, empty word = 0, still treated as one argument); this matches the actual frob.go code path where os.Args[1] is the processed word. requirement-match: the plan section restates the requirement consistently — analytics.go computes only the byte count, output appended after the frob line, dev batch limited to statistics plus wiring, unknown-flag gap discovered by independent validation and fixed in frob.go argument handling without changing the statistics or normal/empty-word output contract; no contradiction between sections. scope: the dev batch scope is explicitly bounded and the AC-002 baseline gap is accurately declared (verified in frob.go: it prints frob: <os.Args[1]> for any first argument including unknown flags and exits 0) with closure assigned to this run's authorized validation-and-repair loop, which per this dispatch is contract content and not a finding; the build-only dev verification is likewise declared and paired with run-level AC validation. severity: no document defects identified, so no severity assignments required; both candidate concerns examined (unsatisfied AC-002 at baseline, build-only dev check) are explicitly declared contract content rather than defects of the document or plan."
             }
           }
         ],
@@ -4909,7 +4909,7 @@
                 "scope",
                 "severity"
               ],
-              "evidence": "binding: materials.json names runId engine-canary, attempt att:review/review.readiness:7, requirementPath exactly matching the requirements.md read here (declared revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a), and REQ-001 binds development to this frob repository. evidence: I read frob.go (14 lines) and confirmed the document's baseline description — any first argument, including unknown flags, is echoed as `frob: \u003carg\u003e` with exit 0; no-arg path prints `usage: frob \u003cword\u003e` to stderr and exits 2 — so the declared AC-002 gap is real and pre-existing. completeness: the development scope is fully enumerated (new analytics.go, exact line `usage: runs=1 words=N`, N = UTF-8 byte count of the processed word, empty word = 0, wiring in frob.go after normal output only, no other behavior changes, pinned verification command `go build ./...`). locations: artifacts resolve unambiguously in the flat single-package repo at its root — frob.go exists and analytics.go is to be created there per the requirement. normal-entry: normal entry `frob word` produces `frob: word` then `usage: runs=1 words=N`; `frob \"\"` produces `frob: ` then `usage: runs=1 words=0`; the no-arg error path stays unchanged. requirement-match: the single batch delivers exactly the statistics-plus-wiring deliverable and uses the requirement-pinned check; AC-002 implementation is excluded because the document itself assigns its closure to this run's authorized validation-and-repair loop. scope: one deliverable → one batch, FINAL tier, no checkpoint groups; no validation obligations absorbed into development. severity: no defects of the document or plan found; the only nonconformity (AC-002) is explicitly declared with closure assigned, hence not a finding."
+              "evidence": "binding: materials.json names runId engine-canary, attempt att:review/review.readiness:7, requirementPath exactly matching the requirements.md read here (declared revision 4a126234e673298d09542932bb0982d25d6bded24537db7681ed85749168152a), and REQ-001 binds development to this frob repository. evidence: I read frob.go (14 lines) and confirmed the document's baseline description — any first argument, including unknown flags, is echoed as `frob: <arg>` with exit 0; no-arg path prints `usage: frob <word>` to stderr and exits 2 — so the declared AC-002 gap is real and pre-existing. completeness: the development scope is fully enumerated (new analytics.go, exact line `usage: runs=1 words=N`, N = UTF-8 byte count of the processed word, empty word = 0, wiring in frob.go after normal output only, no other behavior changes, pinned verification command `go build ./...`). locations: artifacts resolve unambiguously in the flat single-package repo at its root — frob.go exists and analytics.go is to be created there per the requirement. normal-entry: normal entry `frob word` produces `frob: word` then `usage: runs=1 words=N`; `frob \"\"` produces `frob: ` then `usage: runs=1 words=0`; the no-arg error path stays unchanged. requirement-match: the single batch delivers exactly the statistics-plus-wiring deliverable and uses the requirement-pinned check; AC-002 implementation is excluded because the document itself assigns its closure to this run's authorized validation-and-repair loop. scope: one deliverable → one batch, FINAL tier, no checkpoint groups; no validation obligations absorbed into development. severity: no defects of the document or plan found; the only nonconformity (AC-002) is explicitly declared with closure assigned, hence not a finding."
             }
           }
         ],

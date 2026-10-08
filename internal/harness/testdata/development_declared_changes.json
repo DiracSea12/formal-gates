@@ -5,32 +5,6 @@
       "QA-AC004-02",
       "QA-AC004-03"
     ],
-    "caseRuns": [
-      {
-        "caseId": "QA-AC004-01",
-        "comparison": "Oracle requires a nonzero exit code, no stdout line starting with 'frob:', and explicitly forbids the baseline-gap behavior 'frob: --UNKNOWN-FLAG bytes=14 with exit 0'. The observed run satisfies every clause; the previously EXECUTED_FAIL case now passes.",
-        "mode": "MERGE",
-        "observation": "Exit code 2; stdout empty; stderr 'usage: frob <word>'. No line starting with 'frob:' was printed. Before the fix this same invocation exited 0 and printed 'frob: --UNKNOWN-FLAG bytes=14'.",
-        "procedure": "In the repair workspace ran 'go build ./...' and 'go vet ./...' (both pass), built with 'go build -o frob .', then ran './frob --unknown-flag hello' and captured stdout, stderr and exit code.",
-        "result": "EXECUTED_PASS"
-      },
-      {
-        "caseId": "QA-AC004-03",
-        "comparison": "Oracle requires a nonzero exit code and no 'frob:'-prefixed stdout line, explicitly forbidding 'frob: --NOPE bytes=6 with exit 0'. The observed run satisfies every clause; the previously EXECUTED_FAIL case now passes.",
-        "mode": "MERGE",
-        "observation": "Exit code 2; stdout empty; stderr 'usage: frob <word>'. Rejection is generic (strings.HasPrefix(word, \"-\")), not a literal match on --unknown-flag. Before the fix: exit 0 printing 'frob: --NOPE bytes=6'.",
-        "procedure": "Ran './frob --nope hi' (differently-spelled unknown flag, guarding against an implementation that only rejects the literal --unknown-flag) against the repaired build, capturing stdout, stderr and exit code.",
-        "result": "EXECUTED_PASS"
-      },
-      {
-        "caseId": "QA-AC004-02",
-        "comparison": "Oracle requires exit 0 with stdout exactly 'frob: HELLO bytes=5' and empty stderr to prove the flag-rejection rework did not over-reject normal word input. Observed exactly; passes.",
-        "mode": "MERGE",
-        "observation": "Exit code 0; stdout exactly one line 'frob: HELLO bytes=5'; stderr empty. Normal word processing is unharmed by the new flag check.",
-        "procedure": "Ran './frob hello' as the paired control case against the repaired build, capturing stdout, stderr and exit code.",
-        "result": "EXECUTED_PASS"
-      }
-    ],
     "dod": {
       "affected-cases-green": "QA-AC004-01, QA-AC004-02, QA-AC004-03 all executed against the repaired build and pass, reported in caseRuns",
       "build-green": "go build ./... and go vet ./... pass on the repaired tree",
