@@ -18,6 +18,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/requirement"
 )
 
@@ -226,5 +227,40 @@ func TestCanaryApprovedBlackboxOperationsPreserveProcessOutcome(t *testing.T) {
 		if len(args) == 0 && gotCode != 2 {
 			t.Fatalf("missing argument no longer exits 2: %d", gotCode)
 		}
+	}
+}
+
+func TestCanaryFailureEvidenceKeepsIndependentGateVerdicts(t *testing.T) {
+	for _, scenario := range []string{"qa-only", "gate-and-qa", "all-pass", "no-executed-fail", "no-raw-finding", "no-execution-finding", "foreign-wave"} {
+		t.Run(scenario, func(t *testing.T) {
+			qa := &protocol.ValidationTarget{Kind: "QA", Status: protocol.OutcomeFail, Execution: &coverage.ExecutionReport{Records: []coverage.ExecutionRecord{{CaseID: "flag", Result: coverage.ExecutedFail}}}}
+			gate := &protocol.ValidationTarget{Kind: "GATE", Status: protocol.OutcomePass}
+			wave := &protocol.ValidationWave{ID: "wave", Targets: map[string]*protocol.ValidationTarget{"qa": qa, "gate": gate}}
+			findings := map[string]*protocol.ValidationFinding{
+				"raw":       {WaveID: wave.ID, Target: "qa", Raw: &review.Finding{Requirement: "AC-002", ActualError: "unknown flag exited 0"}},
+				"execution": {WaveID: wave.ID, Target: "qa", ExecutionFailure: &protocol.ExecutionFailure{ResultAction: "qa-result", CaseID: "flag"}},
+			}
+			switch scenario {
+			case "gate-and-qa":
+				gate.Status = protocol.OutcomeFail
+			case "all-pass":
+				qa.Status = protocol.OutcomePass
+				qa.Execution.Records[0].Result = coverage.ExecutedPass
+			case "no-executed-fail":
+				qa.Execution.Records[0].Result = coverage.ExecutedPass
+			case "no-raw-finding":
+				delete(findings, "raw")
+			case "no-execution-finding":
+				delete(findings, "execution")
+			case "foreign-wave":
+				findings["raw"].WaveID = "other"
+				findings["execution"].WaveID = "other"
+			}
+			err := canaryFailureEvidence(wave, findings)
+			want := scenario == "qa-only" || scenario == "gate-and-qa"
+			if (err == nil) != want {
+				t.Fatalf("observed failure accepted=%t, want %t: %v", err == nil, want, err)
+			}
+		})
 	}
 }

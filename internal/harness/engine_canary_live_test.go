@@ -1824,6 +1824,37 @@ func (c *engineCanary) confirmRoute() {
 	c.submit(event)
 }
 
+// canaryFailureEvidence requires a real failed QA case and its collected
+// findings; an independent gate verdict does not prescribe the QA outcome.
+func canaryFailureEvidence(wave *protocol.ValidationWave, findings map[string]*protocol.ValidationFinding) error {
+	qaFailed := false
+	for _, target := range wave.Targets {
+		if target.Kind == "QA" && target.Status == protocol.OutcomeFail && target.Execution != nil {
+			for _, record := range target.Execution.Records {
+				if record.Result == coverage.ExecutedFail {
+					qaFailed = true
+				}
+			}
+		}
+	}
+	var rawFindings, executionFailures int
+	for _, finding := range findings {
+		if finding.WaveID != wave.ID {
+			continue
+		}
+		if finding.Raw != nil {
+			rawFindings++
+		}
+		if finding.ExecutionFailure != nil {
+			executionFailures++
+		}
+	}
+	if !qaFailed || rawFindings == 0 || executionFailures == 0 {
+		return fmt.Errorf("first wave did not really fail: qaFailed=%t rawFindings=%d executionFailures=%d", qaFailed, rawFindings, executionFailures)
+	}
+	return nil
+}
+
 // The fixture verifies the issued flag probe and failed case points, then
 // reuses the public problem identity only for the same verified cause.
 // An insufficient automatic decision needs the Operator's own adjudication.
@@ -1847,33 +1878,8 @@ func (c *engineCanary) adjudicate() {
 	}
 	if !c.sawWaveFailure {
 		c.sawWaveFailure = true
-		var gateFailed, qaFailed bool
-		for _, target := range wave.Targets {
-			if target.Kind == "GATE" && target.Status == protocol.OutcomeFail {
-				gateFailed = true
-			}
-			if target.Kind == "QA" && target.Status == protocol.OutcomeFail && target.Execution != nil {
-				for _, record := range target.Execution.Records {
-					if record.Result == coverage.ExecutedFail {
-						qaFailed = true
-					}
-				}
-			}
-		}
-		var rawFindings, executionFailures int
-		for _, finding := range c.run.Validation.Findings {
-			if finding.WaveID != wave.ID {
-				continue
-			}
-			if finding.Raw != nil {
-				rawFindings++
-			}
-			if finding.ExecutionFailure != nil {
-				executionFailures++
-			}
-		}
-		if !gateFailed || !qaFailed || rawFindings == 0 || executionFailures == 0 {
-			c.fail("first wave did not really fail: gateFailed=%t qaFailed=%t rawFindings=%d executionFailures=%d", gateFailed, qaFailed, rawFindings, executionFailures)
+		if err := canaryFailureEvidence(wave, c.run.Validation.Findings); err != nil {
+			c.fail("%v", err)
 		}
 	}
 	point := "AC-002"
