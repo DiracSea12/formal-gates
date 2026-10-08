@@ -178,8 +178,8 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 	return target != nil && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 }
 
-// validationTargetCurrent applies the confirmed carry decision to the original
-// signed wave binding. Its current target must retain the same frozen duty.
+// A projected target retains its exact signed task and frozen duty. Reuse across
+// requirement revisions or generations additionally needs confirmed carry.
 func (s *State) validationTargetCurrent(b WorkBinding) *ValidationTarget {
 	if s.Validation == nil {
 		return nil
@@ -188,8 +188,9 @@ func (s *State) validationTargetCurrent(b WorkBinding) *ValidationTarget {
 	if wave == nil {
 		return nil
 	}
-	if wave != current || wave.Status != "COLLECTING" || b.Generation != s.Validation.Generation {
-		if !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
+	if wave != current || wave.Status != "COLLECTING" || b.Generation != s.Validation.Generation || b.RequirementRevision != s.Validation.RequirementRevision {
+		unchanged := b.RequirementRevision == s.Validation.RequirementRevision && b.Generation == s.Validation.Generation
+		if !unchanged && !s.validationWorkCarryAuthorized("", b.Task) || !s.sameValidationDuty(b, current) {
 			return nil
 		}
 	}
