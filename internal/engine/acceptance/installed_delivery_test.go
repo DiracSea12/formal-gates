@@ -137,7 +137,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 						t.Fatal(err)
 					}
 					if evidence.Resource.ID == spikeInput.Workspace.ID {
-						found = receipt.ActionID == id && receipt.Status == protocol.HostActionStatusExecuted && evidence.Resource == state.NativeResources[spikeInput.Workspace.ID] && evidence.ParametersDigest == receipt.PayloadDigest
+						found = receipt.ActionID == id && receipt.Status == protocol.HostActionStatusExecuted && evidence.Resource == *spikeInput.Workspace && evidence.ParametersDigest == receipt.PayloadDigest
 					}
 				}
 				if !found {
