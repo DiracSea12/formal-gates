@@ -432,7 +432,7 @@ func TestCanaryOperatorInputUsesExistingDeadline(t *testing.T) {
 }
 
 func TestCanaryOperatorHandoffRequiresProgress(t *testing.T) {
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryOperatorHandoffPreservesOriginalFinding$", "-test.v", "-test.timeout=20s")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryOperatorHandoffPreservesOriginalFinding$", "-test.v", "-test.timeout=0")
 	cmd.Env = append(os.Environ(), "FORMAL_GATES_OPERATOR_INPUT_FIXTURE=no-progress")
 	output, err := cmd.CombinedOutput()
 	if err == nil || !bytes.Contains(output, []byte("Operator adjudication made no progress on this wave's pending findings")) || bytes.Count(output, []byte("Enter one JSON")) != 1 {

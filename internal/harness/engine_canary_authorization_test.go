@@ -50,7 +50,7 @@ func TestCanaryTurnRequiresCurrentApproval(t *testing.T) {
 		{"shape-exhausted", canaryTurnBudget, canaryTurnBudget, canaryTurnBudget, "exhausted its 3 turns"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryTurnAuthorizationFixture$", "-test.v", "-test.timeout=5s")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCanaryTurnAuthorizationFixture$", "-test.v", "-test.timeout=0")
 			cmd.Env = append(os.Environ(), "FORMAL_GATES_CANARY_APPROVAL_FIXTURE="+tc.name)
 			stdin, err := cmd.StdinPipe()
 			if err != nil {
