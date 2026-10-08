@@ -97,11 +97,11 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		body := []byte("package main\n// " + sliceID + "\n")
 		if identical {
 			path = "app.go"
-			body = []byte("package main\n// shared command behavior\n")
+			body = []byte("package main\n// shared command behavior\nfunc main() {}\n")
 		}
 		if conflict != "" && index < 2 {
 			path = "app.go"
-			body = []byte("package main\n// " + sliceID + " chooses command behavior\n")
+			body = []byte("package main\n// " + sliceID + " chooses command behavior\nfunc main() {}\n")
 		}
 		if conflict == "markdown" && index < 2 {
 			path, body = "README.md", []byte("Heading\n=======\n\n"+sliceID+" choice\n")
@@ -119,7 +119,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		if !identical {
 			module := []byte("package main\n")
 			if conflict == "delete" && index == 0 {
-				module = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\n")
+				module = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\nfunc main() {}\n")
 			}
 			if err := os.WriteFile(filepath.Join(in.Workspace.Path, sliceID+".go"), module, 0644); err != nil {
 				t.Fatal(err)
@@ -356,7 +356,7 @@ func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "app.go" {
 		t.Fatal("conflict did not carry exact native stages")
 	}
-	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// integrated command behavior\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// integrated command behavior\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Resolution: &protocol.ConflictResolution{Paths: []string{"app.go"}, Summary: "choose the unified command behavior"}})
@@ -621,7 +621,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 			}
 			original := []byte("package main\n")
 			if kind == "delete" {
-				original = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\n")
+				original = []byte("package main // parser implementation\n\nfunc parseCommand(value string) string { return value }\nfunc main() {}\n")
 			}
 			if err := os.WriteFile(outside, original, 0644); err != nil {
 				t.Fatal(err)
@@ -690,7 +690,7 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 				id, in := master.action("engine.merge.resolve")
 				master.receipt(id)
 				workerWorkspace = in.Workspace.Path
-				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\n// resolution in flight\n"), 0644); err != nil {
+				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\n// resolution in flight\nfunc main() {}\n"), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}

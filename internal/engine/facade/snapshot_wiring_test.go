@@ -58,7 +58,7 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	identities := make([]string, 0, len(messages))
 	for i, message := range messages {
 		if i > 0 {
-			if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // "+message+"\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // "+message+"\nfunc main() {}\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			run("add", "--all")
@@ -77,7 +77,7 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 func snapshotCommitOne(t *testing.T, root, message string) string {
 	t.Helper()
 	runner := vcs.ExecRunner{}
-	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // "+message+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main // "+message+"\nfunc main() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runner.Run(root, "git", "add", "--all"); err != nil {
@@ -533,7 +533,13 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app"), []byte("#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	run("add", "--all")

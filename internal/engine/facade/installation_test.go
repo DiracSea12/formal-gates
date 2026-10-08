@@ -879,6 +879,19 @@ func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "application", "reviewed changes")
 	d := completePromotionPipeline(t, nil, root, identities[0])
+	candidate := d.run.Validation.Candidate
+	promotion := promotionInputForTest(t, d, candidate.Identity, "admitted native delivery")
+	if err := d.f.engine.OpenPromotion(promotion, emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.f.admission.write(func() error { return d.f.vcs.FastForward(candidate.Identity) }); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := d.f.vcs.TreeDigest("HEAD")
+	if err != nil || tree != candidate.Digest {
+		t.Fatalf("prepared target tree=%s want approved=%s err=%v", tree, candidate.Digest, err)
+	}
+	t.Logf("approved source=%s digest=%s targetStart=%s preparedTarget=%s", candidate.Identity, candidate.Digest, promotion.TargetStart.Head, candidate.Identity)
 	observer := &admittedGitRunner{inner: vcs.ExecRunner{}, registry: d.f.admission.RegistryPath}
 	d.f.vcs = vcs.New(root, observer)
 	if _, err := d.f.PrepareCandidate("admitted native delivery"); err != nil {

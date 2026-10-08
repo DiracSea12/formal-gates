@@ -377,7 +377,8 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 			if slices.Contains(gates, "blackbox") {
 				id, input := d.action("engine.qa.execution")
 				report := executionFor(input)
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "command", Environment: "native isolated project"})
+				tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 			}
 			for _, target := range fresh.Validation.Waves[0].Targets {
 				if target.Kind == "GATE" {
