@@ -91,11 +91,6 @@ func validateReviewDecisionPayload(payload *ReviewDecisionPayload) error {
 	return nil
 }
 
-// validateTopologyDecision 校验拓扑决定的形状：no-split 必带理由 note 且
-// 不携带拆分参数；split 必有 SplitCount≥2、等长的 Slices 与并行度，分片名
-// 须是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child
-// 认领键都以它进行）。Slices 逐项唯一与 AC 责任映射对确认需求的校验在绑
-// 定点（slice.go splitACOwners）。
 func (s *State) topologyBinding(decision *TopologyDecision) (*TopologyBinding, error) {
 	if err := validateTopologyDecision(decision); err != nil {
 		return nil, err
@@ -111,6 +106,11 @@ func (s *State) topologyBinding(decision *TopologyDecision) (*TopologyBinding, e
 	return binding, nil
 }
 
+// validateTopologyDecision 校验拓扑决定的形状：no-split 必带理由 note 且
+// 不携带拆分参数；split 必有 SplitCount≥2、等长的 Slices 与并行度，分片名
+// 须是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child
+// 认领键都以它进行）。Slices 逐项唯一与 AC 责任映射对确认需求的校验在绑
+// 定点（slice.go splitACOwners）。
 func validateTopologyDecision(topology *TopologyDecision) error {
 	switch topology.Decision {
 	case topologyNoSplit:

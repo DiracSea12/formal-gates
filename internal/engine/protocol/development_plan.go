@@ -408,8 +408,6 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 	return request, p, s.requirementRevisionAt(latest)
 }
 
-// decisionPlanProposal 返回一条 SELECT_ROUTE 决定携带的计划提案来源：
-// child 读内联提案，普通 run 经 ReviewActionID 引用 readiness 结果。
 func decisionPlanConfirmation(d RecordedDecision) *DevelopmentPlanConfirmation {
 	if d.Review == nil {
 		return nil
@@ -423,6 +421,7 @@ func decisionPlanConfirmation(d RecordedDecision) *DevelopmentPlanConfirmation {
 	return nil
 }
 
+// decisionPlanProposal reads the plan source from its explicit topology or route confirmation.
 func (s *State) decisionPlanProposal(d RecordedDecision) *GranularityReview {
 	confirmation := decisionPlanConfirmation(d)
 	if confirmation == nil {
@@ -626,6 +625,9 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 
 // planCheckpoint selects the first uncleared group using the original waves.
 func (s *State) planCheckpoint(cd *compiler.CompiledDefinition, p *GranularityReview) ([]runtime.TaskKey, bool) {
+	if s.mergeMaster() {
+		return nil, false
+	}
 	if p.VerificationTier != "CHECKPOINT" {
 		return s.planTasks(cd), false
 	}
