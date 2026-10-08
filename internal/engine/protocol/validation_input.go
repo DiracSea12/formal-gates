@@ -11,7 +11,8 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
-	ReviewScope coverage.ScopeMode `json:"reviewScope,omitempty"`
+	ExecutionFacts []ExecutionFact    `json:"executionFacts,omitempty"`
+	ReviewScope    coverage.ScopeMode `json:"reviewScope,omitempty"`
 	// RequirementDocument supplies the current confirmed context alongside
 	// the original issued work binding, including explicitly carried work.
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
@@ -138,6 +139,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Execution.ExpectedCaseIDs = executionCaseIDs(whitelist)
 			if target := wave.Targets[pending.Task.String()]; target != nil {
 				input.RequiredCases = slices.Clone(requiredExecutionCases(wave, target, whitelist))
+				input.ExecutionFacts = s.qaExecutionFacts(target, cd)
 				input.Inherited, _ = s.executionInheritance(wave, mode, whitelist, input.RequiredCases, target.ScopeReason)
 				if target.Execution != nil {
 					input.Completed = target.Execution.Records

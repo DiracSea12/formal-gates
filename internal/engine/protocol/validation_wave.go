@@ -99,6 +99,8 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 			message = err.Error()
 		} else if waiting := s.executionScopePending(); waiting != "" {
 			message = waiting
+		} else if waiting := s.qaOperationPending(cd); waiting != "" {
+			message = waiting
 		} else if waiting := s.gateImpactPending(); waiting != "" {
 			message = waiting
 		}
@@ -141,6 +143,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		if !ask.Resolved && ask.Validation != nil && ask.Validation.Kind == "VALIDATION_DETAIL_DISPOSITION" {
 			changed = s.ensureValidationAsk(*ask.Validation, nextRevision) || changed
 		}
+	}
+	if made, err := e.advanceQAOperations(s, nextRevision); err != nil || made {
+		return changed || made, err
 	}
 	if made, err := e.advanceDevelopmentChecks(s, nextRevision); err != nil || made {
 		return changed || made, err
@@ -289,6 +294,12 @@ func (s *State) validateFinalCoverage() error {
 		set := s.Validation.Sets[mode]
 		if set == nil || set.Review == nil {
 			return fmt.Errorf("QA %s has no complete review", mode)
+		}
+		for _, item := range set.Manifest.Cases {
+			_, referenceErr := coverage.GoTestOperation(item.TestRef)
+			if len(item.Operations) == 0 && referenceErr != nil {
+				return fmt.Errorf("QA %s case %s lacks approved operations or an exact Go test reference; revise its design and review before freezing", mode, item.CaseID)
+			}
 		}
 		c := modeCoverageContract(s.coverageContract(s.Validation.Candidate), mode)
 		if _, err := c.ValidateReviews([]coverage.ReviewResult{*set.Review}); err != nil {

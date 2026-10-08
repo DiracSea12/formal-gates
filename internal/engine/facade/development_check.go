@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -32,11 +33,36 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 		return nativeResult{}, false, err
 	}
 	workspace := s.NativeResources[p.WorkspaceID]
-	if workspace.Status != "READY" || workspace.Owner != s.RunID {
+	if workspace.Status != "READY" || workspace.Owner != s.RunID || p.QA != nil && p.QA.WorkspaceRoot != workspace.Path {
 		return nativeResult{}, false, fmt.Errorf("check has no registered ready workspace")
 	}
 	directory := filepath.Join(f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
-	request := map[string]any{"kind": "approved-development-check", "argv": []any{"/bin/sh", "-c", p.Check.Command}, "cwd": workspace.Path, "stdin": "", "environment": map[string]any{}, "timeout_nanos": p.TimeoutNanos, "parameters_digest": intent.PayloadDigest}
+	argv := []string{"/bin/sh", "-c", p.Check.Command}
+	cwd, stdin, testName := workspace.Path, "", ""
+	kind := "approved-development-check"
+	if p.QA != nil {
+		kind = "approved-qa-check"
+		operation := p.QA.Operation
+		if p.QA.GoTestRef != "" {
+			resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			operation, cwd, testName = resolved.Operation, filepath.Join(workspace.Path, resolved.Directory), resolved.GoTestName
+		} else {
+			cwd = filepath.Join(workspace.Path, p.QA.Directory)
+		}
+		stdin = operation.Stdin
+		if operation.Kind == coverage.OperationArgv {
+			argv = operation.Argv
+		} else if operation.Kind == coverage.OperationShell {
+			argv = []string{"/bin/sh", "-c", operation.Command}
+		} else {
+			return nativeResult{}, false, fmt.Errorf("QA operation has no approved invocation")
+		}
+	}
+	request := map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "timeout_nanos": p.TimeoutNanos, "parameters_digest": intent.PayloadDigest}
+
 	digest, err := f.checkRequestDigest(request)
 	if err != nil {
 		return nativeResult{}, false, err
@@ -120,7 +146,26 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 				break
 			}
 		}
-		return nativeResult{Check: &protocol.CheckEvidence{ParametersDigest: intent.PayloadDigest, SourceActionID: p.SourceActionID, SourceIdentity: p.SourceIdentity, SourceDigest: p.SourceDigest, WorkspaceID: workspace.ID, RequestDigest: digest, Directory: directory, ExitCode: exit, Error: errorText, Stdout: stdout, Stderr: stderr}}, true, nil
+		evidence := &protocol.CheckEvidence{ParametersDigest: intent.PayloadDigest, SourceActionID: p.SourceActionID, SourceIdentity: p.SourceIdentity, SourceDigest: p.SourceDigest, WorkspaceID: workspace.ID, RequestDigest: digest, Directory: directory, ExitCode: exit, Error: errorText, Stdout: stdout, Stderr: stderr}
+		if p.QA != nil {
+			stdout, err := os.ReadFile(filepath.Join(directory, "stdout.log"))
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			stderr, err := os.ReadFile(filepath.Join(directory, "stderr.log"))
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			evidence.StdoutText, evidence.StderrText = string(stdout), string(stderr)
+			evidence.Tool, _ = receipt["tool_identity"].(string)
+			evidence.Environment, _ = receipt["environment_identity"].(string)
+			invocation, _ := json.Marshal(argv)
+			evidence.Invocation, evidence.WorkingDirectory, evidence.GoTestName = string(invocation), cwd, testName
+			if testName != "" {
+				evidence.GoResult = coverage.GoTestExecutionResult(stdout, testName)
+			}
+		}
+		return nativeResult{Check: evidence}, true, nil
 	}
 	if !os.IsNotExist(receiptErr) {
 		return nativeResult{}, false, receiptErr
@@ -157,6 +202,12 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 	}
 	if !mayWrite {
 		return nativeResult{}, false, nil
+	}
+	if p.QA != nil && p.QA.GoTestRef != "" {
+		if _, err := coverage.ResolveCaseOperations(workspace.Path, coverage.AcceptanceCase{CaseID: p.QA.CaseID, TestRef: p.QA.GoTestRef}); err != nil {
+			*invoked = true
+			return nativeResult{}, false, err
+		}
 	}
 	err = f.admission.write(func() error {
 		*invoked = true

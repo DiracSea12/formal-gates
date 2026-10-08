@@ -60,7 +60,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		case "engine.qa.review.rationale":
 			allowed["Review"], allowed["Suggestions"] = true, true
 		case "engine.qa.execution":
-			for _, name := range []string{"Execution", "Tool", "Environment", "Checkpoint", "Findings"} {
+			for _, name := range []string{"Execution", "Checkpoint", "Findings"} {
 				allowed[name] = true
 			}
 		case "engine.gate":
@@ -133,9 +133,9 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			if err != nil {
 				return nil, err
 			}
-			for _, id := range input.Validation.PendingCases {
-				if slices.Contains(input.Validation.RequiredCases, id) {
-					keys[id] = observation
+			for _, fact := range input.Validation.ExecutionFacts {
+				if slices.Contains(input.Validation.RequiredCases, fact.CaseID) && slices.Contains(input.Validation.PendingCases, fact.CaseID) {
+					keys[fact.CaseID] = observation
 				}
 			}
 			fields["execution"].(map[string]any)["properties"].(map[string]any)["records"] = fixedObject(keys, nil)

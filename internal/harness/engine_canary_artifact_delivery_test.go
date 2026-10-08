@@ -143,7 +143,7 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 	approvalRead, approvalWrite := io.Pipe()
 	defer approvalRead.Close()
 	defer approvalWrite.Close()
-	c := &engineCanary{t: t, home: home, project: workspace, nativeHost: "zcode", binding: objectOrEmpty(s.request["binding"]), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), run: facade.Run{RunID: material.Input.RunID}, caseTests: map[string]string{}, approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}, vcs: vcs.NewNative(workspace, "git", nil)}
+	c := &engineCanary{t: t, home: home, project: workspace, nativeHost: "zcode", binding: objectOrEmpty(s.request["binding"]), jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), run: facade.Run{RunID: material.Input.RunID}, approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}, vcs: vcs.NewNative(workspace, "git", nil)}
 	writeCanaryHostFixture(t, home, "peer-provider")
 	environment := map[string]any{}
 	for key, value := range c.hostEnvironment() {

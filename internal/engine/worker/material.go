@@ -59,17 +59,17 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			value.ReadOnly = false
 		case "engine.qa.design":
 			value.ResultTemplate.Validation.Manifest = &Manifest{Coverage: map[string][]string{}}
-			instructions = "Design executable coverage for every required source and acceptance point. Select point-to-case coverage using the fixed coverage keys. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and reports their artifact paths. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
+			instructions = "Design executable coverage for every required source and acceptance point. Put every mechanically specified setup/action in reviewed operations, or use an exact <path>_test.go::TestName reference; natural-language steps never supply runtime commands. Select point-to-case coverage using the fixed coverage keys. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and reports their artifact paths. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale":
 			value.ResultTemplate.Validation.Review = &CaseReview{}
-			instructions = "Independently judge every required source, point and case, and every inherited/shared item supplied. Report each real rationale and honest PASS/FAIL. Missing or unmapped behavior coverage is FAIL; BLACKBOX must not inspect source to satisfy pure implementation constraints. Do not change manifests, bindings or approve user/Operator choices."
+			instructions = "Independently judge every required source, point and case, and every inherited/shared item supplied. Verify that approved operations or exact Go references fully specify each mechanical setup/action before the case is frozen. Report each real rationale and honest PASS/FAIL. Missing or unmapped behavior coverage is FAIL; BLACKBOX must not inspect source to satisfy pure implementation constraints. Do not change manifests, bindings or approve user/Operator choices."
 		case "engine.qa.execution":
 			if input.Validation.Execution != nil {
 				value.ResultTemplate.Validation.Execution = &Execution{Records: map[string]Observation{}}
 			}
-			instructions = "Execute exactly the approved pending cases in the registered execution workspace. Preserve source and approved tests; normal test runtime outputs may be produced. Report each real procedure, observation and oracle comparison once per pending required case. Completed evidence is context and inherited evidence is assembled by the program; do not invent a PASS or run unapproved cases."
-			value.ReadOnly = false
+			instructions = "Compare the issued complete native execution facts with each approved case oracle. Report only each honest result and semantic comparison. The program owns approved commands, procedures, actual output, exit codes, tool and environment identities. Completed evidence is context and inherited evidence is assembled by the program; do not run commands, copy native facts into results, or judge cases without complete issued facts. If pending cases have no complete facts, save only complete case judgments with checkpoint and leave the unfinished cases pending."
+			value.ReadOnly = true
 		case "engine.gate":
 			instructions = "Perform the issued independent gate against its bound candidate, requirements, solution and comparison. Report concrete findings with actual normal-use reproduction, evidence, locations and severity rationale. Respect the issued scope; preferences and unsupported adversarial cases cannot become blockers."
 		default:

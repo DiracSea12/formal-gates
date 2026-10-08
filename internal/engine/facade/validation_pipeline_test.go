@@ -190,11 +190,14 @@ func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error)
 }
 
 type validationDriver struct {
-	t        *testing.T
-	f        *Facade
-	run      Run
-	seq      int
-	revision string
+	mockNative         bool
+	fixtureTool        string
+	fixtureEnvironment string
+	t                  *testing.T
+	f                  *Facade
+	run                Run
+	seq                int
+	revision           string
 	// provider 是本 driver 的宿主 provider 身份（事件/回执按它提交）；缺省
 	// DefaultProvider，可计量 provider（transcript 计量链）按需覆写。
 	provider string
@@ -235,12 +238,27 @@ func (d *validationDriver) submit(e protocol.Event) protocol.Acceptance {
 }
 func (d *validationDriver) drive() {
 	d.t.Helper()
-	r, err := d.f.Drive()
-	if err != nil {
-		d.t.Fatal(err)
+	for {
+		var r Run
+		var err error
+		if d.mockNative {
+			_, _, err = d.f.engine.Drive(emptyFingerprint())
+			if err == nil {
+				r, err = d.f.project()
+			}
+		} else {
+			r, err = d.f.Drive()
+		}
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		d.run = r
+		if !d.mockNative || !d.observeFixtureAdapter() {
+			return
+		}
 	}
-	d.run = r
 }
+
 func (d *validationDriver) receipt(id string) {
 	d.t.Helper()
 	e, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, d.host(), id, protocol.SpawnStatusSpawned)
@@ -281,8 +299,12 @@ func (d *validationDriver) completeWorkerTerminations() {
 }
 func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 	d.t.Helper()
+
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &p}})
+	if d.mockNative && p.Development != nil {
+		d.drive()
+	}
 }
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
@@ -335,7 +357,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner)}
+	d := &validationDriver{t: t, f: f, run: r, revision: revision, provider: provider, git: vcs.New(root, runner), mockNative: true}
 	d.drive()
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: validationDocument}}})
 	return d
@@ -465,48 +487,15 @@ func (d *validationDriver) materialize() {
 		if p.Stage == "PROMOTION" {
 			continue
 		}
-		assertCandidateStep(d.t, d, intent)
-		// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
-		// 冻结场景产生候选对象而不改变目标 HEAD；真仓语义夹具
-		// 从场景的 source provider 读取候选身份与其树摘要。
-		identity, err := d.git.Resolve()
-		if err != nil {
-			d.t.Fatal(err)
-		}
-		if d.frozen != nil {
-			target := d.frozen.head
-			identity = d.frozen.advance()
-			d.frozen.head = target
-		}
-		digest, err := d.git.TreeDigest(identity)
-		if err != nil {
-			d.t.Fatal(err)
-		}
-		evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
-		evidence.GateView = gateReviewView(p)
-		data, _ = json.Marshal(evidence)
-		fields := map[string]any{}
-		_ = json.Unmarshal(data, &fields)
-		e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
-		if err != nil {
-			d.t.Fatal(err)
-		}
-		d.submit(e)
+		d.fixtureCandidate(id, intent, p)
 		d.drive()
-		snapshot, err := d.f.engine.Load()
-		if err != nil {
-			d.t.Fatal(err)
-		}
-		if snapshot.State.HostActionReceipts[id].Step != intent.Step {
-			d.t.Fatal("candidate completion lost its original compiled step")
-		}
 		return
 	}
 	d.t.Fatalf("missing candidate intent: %+v", d.run)
 }
 func simpleManifest(input protocol.ValidationInput) coverage.AcceptanceManifest {
 	m := input.Manifest
-	m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
+	m.Cases = []coverage.AcceptanceCase{{Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"app", "run", "valid"}}}, CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"app", "run", "invalid"}}}, CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
 	for _, c := range m.Cases {
 		m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 	}
@@ -560,7 +549,15 @@ func executionFor(input protocol.ValidationInput) coverage.ExecutionReport {
 		if inherited >= 0 {
 			r.Records = append(r.Records, input.Inherited[inherited])
 		} else {
-			r.Records = append(r.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "executed app run with the case input", Observation: "recorded exit status and command output", Comparison: "exit status and output match the specified oracle"})
+			index := slices.IndexFunc(input.ExecutionFacts, func(f protocol.ExecutionFact) bool { return f.CaseID == edge.CaseID })
+			if index < 0 {
+				panic("execution fixture has no native facts for " + edge.CaseID)
+			}
+			procedure, observation, err := input.ExecutionFacts[index].Render()
+			if err != nil {
+				panic(err)
+			}
+			r.Records = append(r.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: procedure, Observation: observation, Comparison: "exit status and output match the specified oracle"})
 		}
 		if !slices.Contains(r.Binding.ActualCaseIDs, edge.CaseID) {
 			r.Binding.ActualCaseIDs = append(r.Binding.ActualCaseIDs, edge.CaseID)
@@ -568,7 +565,11 @@ func executionFor(input protocol.ValidationInput) coverage.ExecutionReport {
 	}
 	return r
 }
-func TestValidationPipelineUsesCanonicalPublicSurface(t *testing.T) {
+
+// Canonical receipt admission is exercised through Facade.Submit. The driver
+// supplies typed native facts; physical Facade.Drive is covered by the native
+// public-workflow checks.
+func TestValidationPipelineAdmitsCanonicalReceiptFacts(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution")
@@ -577,7 +578,8 @@ func TestValidationPipelineUsesCanonicalPublicSurface(t *testing.T) {
 		t.Fatal("QA and gates were not issued together")
 	}
 	report := executionFor(qi)
-	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 	d.drive()
 	if d.run.Validation.Waves[0].Status != "COLLECTING" {
 		t.Fatal("wave closed before gate arrived")
@@ -1051,7 +1053,7 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err := os.WriteFile(filepath.Join(root, req.IntakeConfirmationReceipt.RequirementSource), []byte(validationDocument), 0600); err != nil {
 		return nil, Run{}, err
 	}
-	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted)}, nil)
+	engine, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted)}, nil)
 	if err != nil {
 		return nil, Run{}, err
 	}
@@ -1077,4 +1079,178 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 func (r *frozenGitRepo) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
 	out, err := r.Run(dir, command, args...)
 	return []byte(out), err
+}
+
+func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) {
+	assertCandidateStep(d.t, d, intent)
+	// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
+	// 冻结场景产生候选对象而不改变目标 HEAD；真仓语义夹具
+	// 从场景的 source provider 读取候选身份与其树摘要。
+	identity, err := d.git.Resolve()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if d.frozen != nil {
+		target := d.frozen.head
+		identity = d.frozen.advance()
+		d.frozen.head = target
+	}
+	digest, err := d.git.TreeDigest(identity)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, Paths: p.Paths, WorkspaceID: p.WorkspaceID, TestOnly: true, ProductionViewEqual: true}
+	evidence.GateView = gateReviewView(p)
+	data, _ := json.Marshal(evidence)
+	fields := map[string]any{}
+	_ = json.Unmarshal(data, &fields)
+	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(e)
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if snapshot.State.HostActionReceipts[id].Step != intent.Step {
+		d.t.Fatal("candidate completion lost its original compiled step")
+	}
+}
+
+// Typed adapter fixtures observe each original operation and submit its own
+// parameter-bound facts. Physical execution is covered by native workflow tests.
+func (d *validationDriver) observeFixtureAdapter() bool {
+	ids := make([]string, 0, len(d.run.AdapterIntents))
+	for id := range d.run.AdapterIntents {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		intent := d.run.AdapterIntents[id]
+		if intent.Adapter == nil {
+			continue
+		}
+		raw, err := json.Marshal(intent.Adapter.Params)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		var value any
+		switch intent.Adapter.Operation {
+		case "op.workspace":
+			var p protocol.WorkspaceParameters
+			if err := json.Unmarshal(raw, &p); err != nil {
+				d.t.Fatal(err)
+			}
+			r := p.Resource
+			r.Identity, r.Status = r.Source, "READY"
+			if p.Manifest != nil {
+				r.MirrorDigest = protocol.BlackboxCasesDigest(r.Owner, *p.Manifest)
+			}
+			digest, err := d.git.TreeDigest(r.Source)
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			value = protocol.WorkspaceEvidence{ParametersDigest: intent.PayloadDigest, Resource: r, Digest: digest, SourceDigest: digest}
+		case "op.candidate":
+			var p protocol.CandidateParameters
+			if err := json.Unmarshal(raw, &p); err != nil {
+				d.t.Fatal(err)
+			}
+			if p.Stage != "CHECK_SOURCE" {
+				continue
+			}
+			d.fixtureCandidate(id, intent, p)
+			return true
+		case "op.check":
+			var p protocol.CheckParameters
+			if err := json.Unmarshal(raw, &p); err != nil {
+				d.t.Fatal(err)
+			}
+			stdout, stderr, code := "completed approved command: "+p.Check.Command, "", 0
+			if p.Check.Command == "false" {
+				code = 1
+			}
+			evidence := protocol.CheckEvidence{ParametersDigest: intent.PayloadDigest, SourceActionID: p.SourceActionID, SourceIdentity: p.SourceIdentity, SourceDigest: p.SourceDigest, WorkspaceID: p.WorkspaceID, Directory: filepath.Join(d.f.stateDir, "fixture-checks", id), RequestDigest: fixtureDigest(intent.Adapter.Params), ExitCode: code}
+			if p.QA != nil {
+				operation := p.QA.Operation
+				goName := ""
+				if p.QA.GoTestRef != "" {
+					resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
+					if err != nil {
+						d.t.Fatal(err)
+					}
+					operation, goName = resolved.Operation, resolved.GoTestName
+				}
+				argv := operation.Argv
+				if operation.Kind == coverage.OperationShell {
+					argv = []string{"/bin/sh", "-c", operation.Command}
+				}
+				invocation, err := json.Marshal(argv)
+				if err != nil {
+					d.t.Fatal(err)
+				}
+				stdout = "completed approved operation: " + string(invocation)
+				if slices.Contains(argv, "invalid") {
+					code = 2
+					stdout = "rejected invalid input"
+				}
+				evidence.Tool, evidence.Environment = d.fixtureTool, d.fixtureEnvironment
+				if evidence.Tool == "" {
+					if argv[0] == "app" {
+						evidence.Tool = "app-v1"
+					} else {
+						evidence.Tool = "fixture-executable:" + fixtureDigest(argv[0])
+					}
+				}
+				if evidence.Environment == "" {
+					evidence.Environment = "isolated-project"
+				}
+
+				evidence.Invocation, evidence.WorkingDirectory = string(invocation), filepath.Join(p.QA.WorkspaceRoot, p.QA.Directory)
+				if goName != "" {
+					runEvent, err := json.Marshal(map[string]string{"Action": "run", "Test": goName})
+					if err != nil {
+						d.t.Fatal(err)
+					}
+					terminalEvent, err := json.Marshal(map[string]string{"Action": "pass", "Test": goName})
+					if err != nil {
+						d.t.Fatal(err)
+					}
+					stdout = string(runEvent) + "\n" + string(terminalEvent) + "\n"
+					evidence.GoTestName, evidence.GoResult = goName, "pass"
+				}
+			}
+			evidence.ExitCode = code
+			evidence.StdoutText, evidence.StderrText = stdout, stderr
+			evidence.Stdout = fixtureStreamProof(stdout)
+			evidence.Stderr = fixtureStreamProof(stderr)
+			value = evidence
+		default:
+			continue
+		}
+		values, err := evidenceFields(value)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, intent.Adapter.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		d.submit(event)
+		return true
+	}
+	return false
+}
+func fixtureDigest(value any) string {
+	body, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("sha256:%x", sum)
+}
+func fixtureStreamProof(value string) protocol.CheckStreamProof {
+	sum := sha256.Sum256([]byte(value))
+	return protocol.CheckStreamProof{SHA256: fmt.Sprintf("%x", sum), Size: len(value)}
 }

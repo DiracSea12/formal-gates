@@ -40,3 +40,21 @@ go test -count=1 -json -run ^<精确测试名>$ .
 `GoTestName` 对应的实际 run 和 pass/fail 事件；无匹配或 skip 不能当作执行 PASS。
 普通操作的非零 exit 可以是失败用例的预期观察，零 exit 也不能代替 oracle 比较。
 resolver 不负责调度、实际执行、receipt 接纳或语义比较。
+
+程序执行沿原 `op.check`、HostActionIntent/Receipt、supervisor 与统一观察/接纳入口。
+QA 参数只绑定当前冻结 ExecutionBinding、case、操作序号、来源、原批准操作或 Go
+引用，以及 registered workspace；共享操作按 case 引用顺序形成前缀，同一个 case
+的多个 source/point 关系只运行一遍。只执行 Required 与 Pending 的交集，Completed
+和 Inherited 不重新运行。已完结的原始 receipt 只观察和接纳，不重跑命令到 PASS。
+
+Go 源文件解析由原生 adapter 在实际启动前完成，核心计划只处理批准载荷。原始请求、
+退出码和 stdout/stderr 证明留在原 check 证据目录，实际 executable 内容身份及实际
+继承环境摘要由 supervisor 记录；目录路径不能充当环境身份。终态保留这些不可变证据，
+进程结束与工作区清理由原 HostAction/资源入口处理。
+
+`ValidationInput.executionFacts` 是原 receipts 的只读投影，并随原 worker material
+冻结。只有全部动作完整执行的 case 可以签发语义比较；Go 的无匹配/skip、进程中断或
+未完成动作保留具体原始事实与未完成责任，不能产生 EXECUTED_PASS/FAIL 行。模型只
+返回每 case 的 result 和 comparison，程序填充 procedure、observation、tool、environment
+并展开批准 edges；core 逐值核原事实、当前候选和批准配方，沿原入口合并 Completed。
+缺少配方的设计允许暂存，冻结前须指出具体 case 并回到原设计/审查补齐。

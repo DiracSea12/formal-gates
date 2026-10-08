@@ -103,7 +103,7 @@ func runCanaryInstalledFlow(t *testing.T, provider string, split bool, nativeHos
 		t.Fatal(err)
 	}
 	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
-	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(installedCanaryBudget), repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+	c := &engineCanary{t: t, nativeHost: nativeHost, localPeer: true, split: split, deadline: time.Now().Add(installedCanaryBudget), repairAllowances: 1}
 	if nativeHost != canaryProvider {
 		nativeBinary := nativeHost
 		if nativeHost == "cursor" {
@@ -655,7 +655,7 @@ func (e *canaryLocalExecutor) execute(value any, dir string, probe bool) (source
 		if input.Workspace == nil || input.Workspace.Status != "READY" || input.Binding.WorkspaceID != input.Workspace.ID || workspace != input.Workspace.Path || material.RequirementRevision != input.Binding.RequirementRevision || !canaryValuesEqual(production.RequirementDocument, input.RequirementDocument) {
 			return nil, fmt.Errorf("local dispatch lost issued run/workspace/requirement identity")
 		}
-		readOnly = handler != "engine.development.batch" && handler != "engine.repair" && handler != "engine.merge.resolve" && handler != "engine.qa.execution" && !(handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox)
+		readOnly = handler != "engine.development.batch" && handler != "engine.repair" && handler != "engine.merge.resolve" && !(handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox)
 	}
 	if err := e.observeProduction(&material); err != nil {
 		return nil, err
@@ -752,7 +752,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 	switch input.Handler {
 	case "engine.development.batch", "engine.repair":
 		paths := []string{}
-		dod, checks := map[string]string{}, map[string]string{}
+		dod := map[string]string{}
 		if input.Development != nil {
 			for _, path := range input.Development.Batch.Artifacts {
 				content := ""
@@ -782,13 +782,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 			for _, criterion := range input.Development.Batch.DoD {
 				dod[criterion.ID] = "Implemented " + criterion.Description
 			}
-			for _, check := range input.Development.Batch.Checks {
-				observation := canaryLocalObserve(workspace, strings.Fields(check.Command))
-				if observation.ExitCode != 0 {
-					return nil, fmt.Errorf("development check failed: %+v", observation)
-				}
-				checks[check.ID] = observation.Output + " exit=0"
-			}
+
 		} else {
 			path := filepath.Join(workspace, "frob.go")
 			body, err := os.ReadFile(path)
@@ -804,17 +798,12 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 			}
 			paths = []string{"frob.go"}
 		}
-		build := canaryLocalObserve(workspace, []string{"go", "build", "./..."})
-		if build.ExitCode != 0 {
-			return nil, fmt.Errorf("local build failed: %+v", build)
-		}
-		tests := canaryLocalObserve(workspace, []string{"go", "test", "./..."})
 		for i, path := range paths {
 			paths[i] = filepath.Join(workspace, path)
 		}
-		answer := map[string]any{"paths": paths, "summary": "implemented declared artifact contract", "build": []string{fmt.Sprintf("go build ./... exit=%d %s", build.ExitCode, build.Output)}, "tests": []string{fmt.Sprintf("go test ./... exit=%d %s", tests.ExitCode, tests.Output)}}
+		answer := map[string]any{"paths": paths, "summary": "implemented declared artifact contract"}
 		if input.Development != nil {
-			answer["dod"], answer["checks"], answer["handoff"] = dod, checks, "declared artifacts ready"
+			answer["dod"], answer["handoff"] = dod, "declared artifacts ready"
 		} else {
 			answer["affectedCases"] = []string{}
 		}
@@ -902,7 +891,7 @@ func (e *canaryLocalExecutor) answer(m canaryMaterials, workspace string) (map[s
 			if passed {
 				result = "EXECUTED_PASS"
 			}
-			records = append(records, map[string]any{"caseId": caseID, "result": result, "procedure": strings.Join(observation.Command, " "), "observation": fmt.Sprintf("exit=%d output=%s", observation.ExitCode, observation.Output), "comparison": "compared exact output and exit against the bound point oracle"})
+			records = append(records, map[string]any{"caseId": caseID, "result": result, "comparison": "compared exact output and exit against the bound point oracle"})
 		}
 		return map[string]any{"records": records}, nil
 	case "engine.gate":
@@ -1041,7 +1030,7 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 					assertion = "if err==nil||strings.Contains(string(out),\"frob:\"){t.Fatalf(\"flag contract: %v %s\",err,out)}"
 				}
 				fmt.Fprintf(&tests, "func %s(t *testing.T){out,err:=exec.Command(\"go\",%s).CombinedOutput();%s}\n", ref, strings.Join(quoted, ","), assertion)
-				designed["testRef"] = ref
+				designed["testRef"] = "frob_contract_test.go::" + ref
 			} else {
 				designed["args"], designed["preconditions"], designed["steps"] = args, "compiled candidate in issued workspace", "run frob with exact argv"
 			}
@@ -1054,8 +1043,7 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 		if err := os.WriteFile(filepath.Join(workspace, path), []byte(tests.String()), 0600); err != nil {
 			return nil, err
 		}
-		build, run := canaryLocalObserve(workspace, []string{"go", "build", "./..."}), canaryLocalObserve(workspace, []string{"go", "test", "./..."})
-		answer["paths"], answer["summary"], answer["build"], answer["tests"] = []string{path}, "authored bound command contract cases", []string{fmt.Sprintf("exit=%d %s", build.ExitCode, build.Output)}, []string{fmt.Sprintf("exit=%d %s", run.ExitCode, run.Output)}
+		answer["paths"], answer["summary"] = []string{path}, "authored bound command contract cases"
 	}
 	return answer, nil
 }
@@ -1172,7 +1160,7 @@ func TestCanaryWorkerCompletionKeepsRunIdentity(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte(`{}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}, caseArgs: map[string][]string{}, caseTests: map[string]string{}}
+		c := &engineCanary{t: t, nativeHost: "claude", localPeer: true, binding: map[string]any{"environment": map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config}}, worker: true, home: home, project: project, jobs: jobs, run: facade.Run{RunID: runID, PendingActions: map[string]protocol.PendingAction{"same-action": pending}}, revision: canaryBytesRevision(doc), deadline: time.Now().Add(time.Minute), approvalMu: shared, approvalInput: reader, approvalOutput: canaryLocalApproval{approval}}
 		bindCanaryReviewMaterial(t, c, pending, doc)
 		// One reader is shared together with its authorization mutex.
 		if runID == "failed" {
@@ -1583,30 +1571,8 @@ func (e *canaryLocalExecutor) observeProduction(m *canaryMaterials) error {
 			m.HostObservations = append(m.HostObservations, local.observe("public flag-contract probe", workspace, append([]string{binary}, canaryGateArgs...)))
 		}
 	case "engine.qa.execution":
-		binary := ""
-		if input.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
-			binary = local.buildCandidate(workspace, m.ActionID)
-		}
-		for _, id := range input.RequiredCases {
-			for _, designed := range input.Manifest.Cases {
-				if designed.CaseID != id {
-					continue
-				}
-				var command []string
-				if designed.TestRef != "" {
-					command = []string{"go", "test", "-count=1", "-run", "^" + designed.TestRef + "$", "."}
-				} else {
-					// Fixture public entries use the exact POSIX literals emitted by canaryPublicEntry.
-					script := "set -- " + designed.PublicEntry + "; shift; printf '%s\\0' \"$@\""
-					args, err := exec.Command("sh", "-c", script).Output()
-					if err != nil {
-						return err
-					}
-					command = append([]string{binary}, strings.Split(strings.TrimSuffix(string(args), "\x00"), "\x00")...)
-				}
-				m.HostObservations = append(m.HostObservations, local.observe("case "+id, workspace, command))
-			}
-		}
+		m.HostObservations = append(m.HostObservations, canaryExecutionObservations(input)...)
+
 	}
 	local.prompt(input.Handler, *m, "", false)
 	m.RequirementPath = filepath.Join(local.jobDirectory(m.ActionID), "requirements.md")
@@ -1664,9 +1630,8 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 					CaseID, PointID, Scenario, Oracle, TestRef, Preconditions, Steps string
 					Args                                                             []string
 				}
-				Paths        []string
-				Summary      string
-				Build, Tests []string
+				Paths   []string
+				Summary string
 			}
 			if err := json.Unmarshal(body, &decoded); err != nil {
 				return nil, err
@@ -1677,7 +1642,11 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 					entry = canaryPublicEntry(designed.Args)
 				}
-				manifest.Cases = append(manifest.Cases, worker.Case{CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps})
+				item := worker.Case{CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps}
+				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
+					item.Operations = canaryCaseOperations(designed.Args)
+				}
+				manifest.Cases = append(manifest.Cases, item)
 				manifest.Coverage[designed.PointID] = append(manifest.Coverage[designed.PointID], designed.CaseID)
 			}
 			result.Manifest = &manifest
@@ -1709,19 +1678,19 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			}
 		case "engine.qa.execution":
 			var decoded struct {
-				Records []struct{ CaseID, Result, Procedure, Observation, Comparison string }
+				Records []struct{ CaseID, Result, Comparison string }
 			}
 			if err := json.Unmarshal(body, &decoded); err != nil {
 				return nil, err
 			}
 			report := worker.Execution{Records: map[string]worker.Observation{}}
 			for _, row := range decoded.Records {
-				report.Records[row.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(row.Result), Procedure: row.Procedure, Observation: row.Observation, Comparison: row.Comparison}
+				report.Records[row.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(row.Result), Comparison: row.Comparison}
 				if row.Result != string(coverage.ExecutedPass) {
 					result.Status = "FAIL"
 				}
 			}
-			result.Execution, result.Tool, result.Environment = &report, "local-native-fixture", workspace
+			result.Execution = &report
 		case "engine.gate":
 			var decoded struct {
 				Status   string

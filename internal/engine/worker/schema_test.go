@@ -15,7 +15,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"status", "development"}, "engine.repair": {"status", "development", "granularityReview"}, "engine.merge.resolve": {"status", "resolution"}, "engine.qa.design": {"status", "manifest", "development", "checkpoint"}, "engine.qa.review.rationale": {"status", "review", "suggestions"}, "engine.qa.execution": {"status", "execution", "tool", "environment", "checkpoint", "findings"}, "engine.gate": {"status", "findings"},
+		"engine.development.batch": {"status", "development"}, "engine.repair": {"status", "development", "granularityReview"}, "engine.merge.resolve": {"status", "resolution"}, "engine.qa.design": {"status", "manifest", "development", "checkpoint"}, "engine.qa.review.rationale": {"status", "review", "suggestions"}, "engine.qa.execution": {"status", "execution", "checkpoint", "findings"}, "engine.gate": {"status", "findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -117,7 +117,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
 				}
 			}
-			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "normal test runtime outputs may be produced") {
+			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
 				t.Fatal("execution runtime contract lost")
 			}
 		})
@@ -127,6 +127,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
 		input := protocol.WorkerInput{Handler: handler, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}, PendingCases: []string{"case"}, RequiredCases: []string{"case"}}}
+		input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case"}}
 		schema, err := ResultSchema(input)
 		if err != nil {
 			t.Fatal(err)
@@ -158,7 +159,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 				t.Fatal("model owns execution facts")
 			}
 			r := e["records"].(map[string]any)["properties"].(map[string]any)["case"].(map[string]any)["properties"].(map[string]any)
-			for _, key := range []string{"caseId", "reviewKind", "sourceId", "pointId", "provenance", "reuseEvidence", "inheritedFromCandidate"} {
+			for _, key := range []string{"caseId", "reviewKind", "sourceId", "pointId", "provenance", "reuseEvidence", "inheritedFromCandidate", "procedure", "observation", "tool", "environment"} {
 				if r[key] != nil {
 					t.Fatalf("model owns %s", key)
 				}

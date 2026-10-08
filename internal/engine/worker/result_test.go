@@ -90,7 +90,8 @@ func TestExecutionUsesPendingObservationsAndOriginalInheritance(t *testing.T) {
 	completed := coverage.ExecutionRecord{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "done", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted}
 	input.Validation.Inherited = []coverage.ExecutionRecord{inherited}
 	input.Validation.Completed = []coverage.ExecutionRecord{completed}
-	value := Result{Outcome: "PASS", Validation: &Validation{Status: "FAIL", Checkpoint: true, Tool: "real-tool", Environment: "real-environment", Execution: &Execution{Records: map[string]Observation{"new": {Result: coverage.ExecutedFail, Procedure: "ran current case", Observation: "observed mismatch", Comparison: "compared against expected result"}}}}}
+	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "new", Operations: []protocol.ExecutionOperationFact{{ActionID: "actual-op", Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Source: "case:new", Operation: coverage.Operation{Kind: coverage.OperationShell, Command: "./app --negative"}, Directory: "."}}, Evidence: protocol.CheckEvidence{ExitCode: 2, StdoutText: "rejected", Tool: "real-tool", Environment: "real-environment"}}}}}
+	value := Result{Outcome: "PASS", Validation: &Validation{Status: "FAIL", Checkpoint: true, Execution: &Execution{Records: map[string]Observation{"new": {Result: coverage.ExecutedFail, Comparison: "compared against expected result"}}}}}
 	result := decodeSemantic(t, input, value).Validation
 	if result.Tool != "real-tool" || result.Environment != "real-environment" || !result.Checkpoint || len(result.Execution.Records) != 3 || !reflect.DeepEqual(result.Execution.Records[2], inherited) || !reflect.DeepEqual(result.Execution.Binding.ActualCaseIDs, []string{"new", "prior"}) || len(result.Execution.NotExecuted) != 1 || result.Execution.NotExecuted[0].CaseID != "remaining" {
 		t.Fatalf("execution partition changed: %+v", result.Execution)
@@ -110,6 +111,21 @@ func TestExecutionUsesPendingObservationsAndOriginalInheritance(t *testing.T) {
 		t.Fatal("model granted inherited execution")
 	}
 }
+func TestExecutionCheckpointDoesNotResubmitCompletedCaseEdges(t *testing.T) {
+	input := semanticInput()
+	input.Handler = "engine.qa.execution"
+	input.Validation.Execution = &coverage.ExecutionBinding{Candidate: coverage.ValidationCandidate{Identity: "candidate"}}
+	input.Validation.PendingCases, input.Validation.RequiredCases = []string{"new"}, []string{"new"}
+	input.Validation.Whitelist = &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "new"}, {ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "one", CaseID: "new"}}}
+	input.Validation.Completed = []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "new", Result: coverage.ExecutedFail}}
+	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "new", Operations: []protocol.ExecutionOperationFact{{ActionID: "operation", Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Source: "case:new"}}, Evidence: protocol.CheckEvidence{Tool: "actual-tool", Environment: "actual-environment"}}}}}
+	result := Result{Outcome: "PASS", Validation: &Validation{Status: "FAIL", Execution: &Execution{Records: map[string]Observation{"new": {Result: coverage.ExecutedFail, Comparison: "actual mismatch"}}}}}
+	body := decodeSemantic(t, input, result).Validation
+	if len(body.Execution.Records) != 1 || body.Execution.Records[0].SourceID != "beta" || body.Execution.Records[0].Result != coverage.ExecutedFail {
+		t.Fatal("partial case comparison resubmitted its completed edge")
+	}
+}
+
 func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 	input := semanticInput()
 	for _, raw := range []string{

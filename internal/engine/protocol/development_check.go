@@ -1,7 +1,11 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"formal-gates/internal/engine/coverage"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -11,16 +15,17 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// CheckParameters is an execution of one command from the confirmed batch.
-// Binding and source receipts carry its original edit, plan and immutable input.
+// CheckParameters selects an approved development check or frozen QA operation.
+// Its binding and registered workspace identify the immutable input.
 type CheckParameters struct {
-	SourceActionID string           `json:"sourceActionId"`
-	Binding        WorkBinding      `json:"binding"`
-	Check          DevelopmentCheck `json:"check"`
-	SourceIdentity string           `json:"sourceIdentity"`
-	SourceDigest   string           `json:"sourceDigest"`
-	WorkspaceID    string           `json:"workspaceId"`
-	TimeoutNanos   int64            `json:"timeoutNanos"`
+	QA             *QACheckParameters `json:"qa,omitempty"`
+	SourceActionID string             `json:"sourceActionId"`
+	Binding        WorkBinding        `json:"binding"`
+	Check          DevelopmentCheck   `json:"check"`
+	SourceIdentity string             `json:"sourceIdentity"`
+	SourceDigest   string             `json:"sourceDigest"`
+	WorkspaceID    string             `json:"workspaceId"`
+	TimeoutNanos   int64              `json:"timeoutNanos"`
 }
 
 type CheckStreamProof struct {
@@ -40,6 +45,14 @@ type CheckEvidence struct {
 	Error            string           `json:"error"`
 	Stdout           CheckStreamProof `json:"stdout"`
 	Stderr           CheckStreamProof `json:"stderr"`
+	StdoutText       string           `json:"stdoutText,omitempty"`
+	StderrText       string           `json:"stderrText,omitempty"`
+	Tool             string           `json:"tool,omitempty"`
+	Environment      string           `json:"environment,omitempty"`
+	Invocation       string           `json:"invocation,omitempty"`
+	WorkingDirectory string           `json:"workingDirectory,omitempty"`
+	GoTestName       string           `json:"goTestName,omitempty"`
+	GoResult         string           `json:"goResult,omitempty"`
 }
 
 func checkParameters(intent HostActionIntent) (CheckParameters, error) {
@@ -216,6 +229,30 @@ func validateCheckReceipt(intent HostActionIntent, receipt HostActionReceipt) er
 	if err := decodeAdapterValues(receipt, &e); err != nil {
 		return err
 	}
+	if p.QA != nil {
+		operation, goName := p.QA.Operation, ""
+		if p.QA.GoTestRef != "" {
+			resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
+			if err != nil {
+				return err
+			}
+			operation, goName = resolved.Operation, resolved.GoTestName
+		}
+		argv := operation.Argv
+		if operation.Kind == coverage.OperationShell {
+			argv = []string{"/bin/sh", "-c", operation.Command}
+		}
+		invocation, err := json.Marshal(argv)
+		if err != nil {
+			return err
+		}
+		if e.Invocation != string(invocation) || e.WorkingDirectory != filepath.Join(p.QA.WorkspaceRoot, p.QA.Directory) || e.GoTestName != goName || (goName != "" && e.GoResult != coverage.GoTestExecutionResult([]byte(e.StdoutText), goName)) {
+			return validationError("QA receipt invocation or exact Go events differ from approved inputs")
+		}
+		if e.Error == "" && (e.Tool == "" || e.Environment == "") || !checkTextProof(e.StdoutText, e.Stdout) || !checkTextProof(e.StderrText, e.Stderr) {
+			return validationError("QA receipt lacks authentic tool, environment and stream facts")
+		}
+	}
 	if e.ParametersDigest != intent.PayloadDigest || e.SourceActionID != p.SourceActionID || e.SourceIdentity != p.SourceIdentity || e.SourceDigest != p.SourceDigest || e.WorkspaceID != p.WorkspaceID || e.RequestDigest == "" || e.Directory == "" || e.Stdout.SHA256 == "" || e.Stderr.SHA256 == "" {
 		return validationError("check receipt lacks its exact source, request and stream evidence")
 	}
@@ -299,6 +336,9 @@ func (s *State) checkInputsCurrent(intent HostActionIntent) bool {
 	if err != nil {
 		return false
 	}
+	if p.QA != nil {
+		return s.qaCheckInputsCurrent(p)
+	}
 	r, ok := s.Results[p.SourceActionID]
 	if !ok || !s.editResultCurrent(r) || p.Binding != r.Validation.Binding {
 		return false
@@ -368,10 +408,19 @@ func (s *State) developmentCheckFailure() *decision.Fact {
 		if !ok || !s.checkInputsCurrent(intent) {
 			continue
 		}
+		p, err := checkParameters(intent)
+		if err != nil || p.QA != nil {
+			continue
+		}
 		var e CheckEvidence
 		if decodeAdapterValues(receipt, &e) == nil && (e.ExitCode != 0 || e.Error != "") {
 			return &decision.Fact{Source: decision.SourceReceipt, Key: receipt.ActionID, Value: "approved development check failed: " + strings.TrimSpace(e.Error)}
 		}
 	}
 	return nil
+}
+
+func checkTextProof(text string, proof CheckStreamProof) bool {
+	sum := sha256.Sum256([]byte(text))
+	return proof.Size == len(text) && proof.SHA256 == hex.EncodeToString(sum[:])
 }

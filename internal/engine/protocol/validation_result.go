@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/requirement"
@@ -427,7 +428,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 			if count != 1 || p.Execution == nil {
 				return validationError("QA execution requires per-case records")
 			}
-			if err := s.acceptExecution(target, *p.Execution, p.Tool, p.Environment, p.Checkpoint); err != nil {
+			if err := s.acceptExecution(target, *p.Execution, p.Tool, p.Environment, p.Checkpoint, e.cfg.Definition); err != nil {
 				return err
 			}
 			if p.Checkpoint {
@@ -522,7 +523,7 @@ func (s *State) executionContract(mode coverage.ReviewKind, wave *ValidationWave
 	w, err := c.ValidateReviews([]coverage.ReviewResult{approved})
 	return c, w, err
 }
-func (s *State) acceptExecution(target *ValidationTarget, report coverage.ExecutionReport, tool, environment string, checkpoint bool) error {
+func (s *State) acceptExecution(target *ValidationTarget, report coverage.ExecutionReport, tool, environment string, checkpoint bool, cd *compiler.CompiledDefinition) error {
 	if tool == "" || environment == "" {
 		return validationError("execution requires tool and environment identities")
 	}
@@ -567,6 +568,11 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 		return validationError("submitted actual case IDs do not match submitted execution records")
 	}
 
+	nativeFacts := s.qaExecutionFacts(target, cd)
+	expectedTool, expectedEnvironment := ExecutionIdentities(nativeFacts)
+	if tool != expectedTool || environment != expectedEnvironment {
+		return validationError("execution tool/environment differ from native receipts")
+	}
 	rows := map[string]coverage.ExecutionRecord{}
 	key := func(r coverage.ExecutionRecord) string {
 		return string(r.ReviewKind) + "/" + r.SourceID + "/" + r.PointID + "/" + r.CaseID
@@ -596,6 +602,23 @@ func (s *State) acceptExecution(target *ValidationTarget, report coverage.Execut
 		if r.Provenance == coverage.ProvenanceExecuted {
 			if !slices.Contains(required, r.CaseID) {
 				return validationError("executed case is outside the fixed host scope: " + r.CaseID)
+			}
+			index := slices.IndexFunc(nativeFacts, func(fact ExecutionFact) bool { return fact.CaseID == r.CaseID })
+			if index < 0 {
+				return validationError("execution case has no complete native receipts: " + r.CaseID)
+			}
+			fact := nativeFacts[index]
+			procedure, actual, err := fact.Render()
+			if err != nil {
+				return err
+			}
+			if r.Procedure != procedure || r.Observation != actual {
+				return validationError("execution facts differ from original receipts: " + r.CaseID)
+			}
+			for _, operation := range fact.Operations {
+				if operation.Parameters.QA.GoTestRef != "" && operation.Evidence.GoResult != "pass" && r.Result == coverage.ExecutedPass {
+					return validationError("Go test did not actually pass: " + r.CaseID)
+				}
 			}
 			if err := coverage.ValidateEvidence(r.CaseID, r.Procedure, r.Observation, r.Comparison); err != nil {
 				return validationReject(err)

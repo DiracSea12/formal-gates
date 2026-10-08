@@ -13,7 +13,7 @@ package harness
 // semantic decision previews. Workers
 // edit only their issued workspace and report semantic results. The engine
 // owns native workspace creation, candidate freezing, promotion and cleanup.
-// Behavior commands and Go tests are captured here for the judging turns.
+// Native check receipts supply approved QA command and Go test observations.
 //
 // Bounded spend: each dispatch gets at most three turns (answer-shape
 // refusals consume another turn), the repair loop is authorized at most once,
@@ -198,10 +198,8 @@ type engineCanary struct {
 	masterPlan     *protocol.GranularityReview
 	slice          string
 
-	revision  string // confirmed requirement revision (bare hex)
-	doc       []byte
-	caseArgs  map[string][]string // designed blackbox case argv, recorded at design time
-	caseTests map[string]string   // designed whitebox case test refs, recorded at design time
+	revision string // confirmed requirement revision (bare hex)
+	doc      []byte
 
 	repairAllowances int
 	dispatched       []string
@@ -286,8 +284,8 @@ func runEngineNoSplitCanary(t *testing.T, name, nativeHost string) {
 	_, file, _, _ := runtime.Caller(0)
 	c := &engineCanary{
 		t: t, nativeHost: nativeHost, deadline: time.Now().Add(canaryRunBudget),
-		repairAllowances: 1, caseArgs: map[string][]string{}, caseTests: map[string]string{},
-		approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout,
+		repairAllowances: 1,
+		approvalInput:    bufio.NewReader(os.Stdin), approvalOutput: os.Stdout,
 	}
 
 	c.execute = c.executeNative
@@ -370,8 +368,6 @@ func (c *engineCanary) loop() {
 		if done.transcript != "" {
 			c.captureDispatchLifecycle(done.actionID, done.transcript)
 		}
-		maps.Copy(c.caseArgs, done.caseArgs)
-		maps.Copy(c.caseTests, done.caseTests)
 		if done.event.Result != nil && done.event.Result.Review != nil && done.event.Result.Review.GranularityReview != nil {
 			c.masterPlan = done.event.Result.Review.GranularityReview
 		}
@@ -571,8 +567,6 @@ func (c *engineCanary) failWithClass(class authoring.FailureClass, format string
 type canaryCompletion struct {
 	runID, actionID, transcript string
 	event                       protocol.Event
-	caseArgs                    map[string][]string
-	caseTests                   map[string]string
 }
 
 func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- canaryCompletion) bool {
@@ -603,7 +597,6 @@ func (c *engineCanary) dispatchPending(active map[string]bool, completed chan<- 
 		worker := *c
 		worker.run.WorkerMaterials = materialRefs
 		worker.worker = true
-		worker.caseArgs, worker.caseTests = maps.Clone(c.caseArgs), maps.Clone(c.caseTests)
 		if input.Handler == "engine.repair" {
 			c.sawRepair = true
 		}
@@ -634,7 +627,7 @@ func canaryDispatchable(run facade.Run, pending protocol.PendingAction) bool {
 func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input protocol.ValidationInput) (done canaryCompletion) {
 	done.runID, done.actionID = c.currentRunID(), id
 	defer func() {
-		done.transcript, done.caseArgs, done.caseTests = c.transcript, c.caseArgs, c.caseTests
+		done.transcript = c.transcript
 		if failure := recover(); failure != nil {
 			interruption := canaryWorkerFailure{Class: authoring.FailureBlockedBug, InterruptionReason: fmt.Sprint(failure)}
 			if source, ok := failure.(canaryWorkerFailure); ok {
@@ -792,17 +785,23 @@ func (c *engineCanary) designResult(id string, input protocol.ValidationInput) p
 	for _, designed := range answer.Cases {
 		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
 			CaseID: designed.CaseID, Mode: canaryCaseMode(input), Scenario: designed.Scenario,
+			Operations:    canaryCaseOperations(designed.Args),
 			PublicEntry:   canaryPublicEntry(designed.Args),
 			Preconditions: designed.Preconditions, Steps: designed.Steps, Oracle: designed.Oracle,
 		})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
-		c.caseArgs[c.caseKey(designed.CaseID)] = designed.Args
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest}
 }
 
-// canaryPublicEntry renders argv as POSIX shell literals; caseArgs remains the
-// execution authority. Empty strings and embedded spaces retain their identity.
+// Empty strings and embedded spaces retain their identity.
+func canaryCaseOperations(args []string) []coverage.Operation {
+	return []coverage.Operation{
+		{Kind: coverage.OperationShell, Command: "test -x ./frob-candidate || go build -o ./frob-candidate ."},
+		{Kind: coverage.OperationArgv, Argv: append([]string{"./frob-candidate"}, args...)},
+	}
+}
+
 func canaryPublicEntry(args []string) string {
 	words := []string{"frob"}
 	for _, arg := range args {
@@ -814,14 +813,14 @@ func canaryPublicEntry(args []string) string {
 // whiteboxDesignResult runs the writable whitebox design turn in the
 // registered authoring workspace: the model authors the acceptance tests as
 // real Go test files (*_test.go) there, then designs cases that reference
-// the exact test functions. The authored paths ride along as development
+// the exact <path>_test.go::TestName references. The authored paths ride along as development
 // evidence — they become the immutable QA artifact the case review freezes.
 func (c *engineCanary) whiteboxDesignResult(id string, input protocol.ValidationInput, materials canaryMaterials, manifest coverage.AcceptanceManifest, pointKnown func(string) bool, sourceFor func(string) string) protocol.ValidationResult {
 	c.t.Helper()
 	if input.Workspace == nil {
 		c.fail("whitebox design %s has no registered authoring workspace", id)
 	}
-	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Report the authored paths and a summary. The program executes approved frozen commands and tests; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
+	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact <path>_test.go::TestName reference that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Report the authored paths and a summary. The program executes approved frozen commands and tests; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
 	var answer struct {
 		Cases []struct {
 			CaseID   string `json:"caseId"`
@@ -868,7 +867,6 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 			TestRef: designed.TestRef, Oracle: designed.Oracle,
 		})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
-		c.caseTests[c.caseKey(designed.CaseID)] = designed.TestRef
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest,
 		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary}}
@@ -1016,51 +1014,14 @@ func (c *engineCanary) modelReviewDecisions(layer string, decisions []canaryRevi
 	return rows
 }
 
-// executionResult consumes the engine's exact registered Qn workspace, runs
-// each approved command or Go test, and records the captured per-case verdict.
+// executionResult compares the issued native facts without executing commands.
 func (c *engineCanary) executionResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
-	if input.Execution == nil || input.Whitelist == nil {
-		c.fail("execution dispatch %s carries no frozen execution contract", id)
-	}
-	whitebox := input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
-	dir := c.workspace(input)
-	runFace := "the captured command run"
-	if whitebox {
-		runFace = "the captured go test run"
-	}
-
-	var binary string
-	if !whitebox {
-		binary = c.buildCandidate(dir, id)
-	}
 	materials := c.materials(id, "QA case execution", input)
-	for _, caseID := range input.RequiredCases {
-		if whitebox {
-			testRef, ok := c.caseTests[c.caseKey(caseID)]
-			if !ok {
-				c.fail("required case %s has no designed test reference on record", caseID)
-			}
-			materials.HostObservations = append(materials.HostObservations,
-				c.observe(fmt.Sprintf("case %s", caseID), dir, []string{"go", "test", "-count=1", "-run", "^" + testRef + "$", "."}))
-			continue
-		}
-		args, ok := c.caseArgs[c.caseKey(caseID)]
-		if !ok {
-			c.fail("required case %s has no designed argv on record", caseID)
-		}
-		materials.HostObservations = append(materials.HostObservations,
-			c.observe(fmt.Sprintf("case %s", caseID), dir, append([]string{binary}, args...)))
-	}
-	instructions := fmt.Sprintf("For each host-executed case in the materials, judge result EXECUTED_PASS or EXECUTED_FAIL by comparing %s — its output and exit code — against that case's oracle in input.manifest.cases, and record the procedure, observation and comparison in your own words. Every record needs all three fields with real content.", runFace)
+	materials.HostObservations = append(materials.HostObservations, canaryExecutionObservations(input)...)
+	instructions := "For each case with complete issued executionFacts, compare the actual native output/exit against its approved oracle. Report only its honest result and specific comparison; do not run commands or copy procedures, output or tool/environment identities into the answer."
 	var answer struct {
-		Records []struct {
-			CaseID      string `json:"caseId"`
-			Result      string `json:"result"`
-			Procedure   string `json:"procedure"`
-			Observation string `json:"observation"`
-			Comparison  string `json:"comparison"`
-		} `json:"records"`
+		Records []struct{ CaseID, Result, Comparison string }
 	}
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1070,37 +1031,47 @@ func (c *engineCanary) executionResult(id string, input protocol.ValidationInput
 		for _, record := range answer.Records {
 			seen[record.CaseID] = true
 		}
-		for _, edge := range input.Whitelist.Entries {
-			if !seen[edge.CaseID] {
-				return fmt.Errorf("execution answer omitted case %s", edge.CaseID)
+		for _, fact := range input.ExecutionFacts {
+			if slices.Contains(input.PendingCases, fact.CaseID) && !seen[fact.CaseID] {
+				return fmt.Errorf("comparison omitted case %s", fact.CaseID)
 			}
 		}
 		return nil
 	}
-	c.turnIn(dir, id, "QA case execution", c.prompt("QA case execution", materials, instructions, true), canaryExecutionSchema(), true, shape)
-	byCase := map[string]int{}
-	for index, record := range answer.Records {
-		byCase[record.CaseID] = index
-	}
-	report := coverage.ExecutionReport{Binding: *input.Execution}
-	status := protocol.OutcomePass
-	for _, edge := range input.Whitelist.Entries {
-		record := answer.Records[byCase[edge.CaseID]]
-		result := coverage.ExecutedPass
+	c.turnIn(c.workspace(input), id, "QA case execution", c.prompt("QA case execution", materials, instructions, true), canaryExecutionSchema(), true, shape)
+	result := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: protocol.OutcomePass, Execution: &worker.Execution{Records: map[string]worker.Observation{}}}}
+	for _, record := range answer.Records {
+		result.Validation.Execution.Records[record.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(record.Result), Comparison: record.Comparison}
 		if record.Result != string(coverage.ExecutedPass) {
-			result = coverage.ExecutedFail
-			status = protocol.OutcomeFail
-		}
-		report.Records = append(report.Records, coverage.ExecutionRecord{
-			ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID,
-			Result: result, Provenance: coverage.ProvenanceExecuted,
-			Procedure: record.Procedure, Observation: record.Observation, Comparison: record.Comparison,
-		})
-		if !slices.Contains(report.Binding.ActualCaseIDs, edge.CaseID) {
-			report.Binding.ActualCaseIDs = append(report.Binding.ActualCaseIDs, edge.CaseID)
+			result.Validation.Status = protocol.OutcomeFail
 		}
 	}
-	return protocol.ValidationResult{Binding: input.Binding, Status: status, Execution: &report, Tool: "frob-host-execution-bridge", Environment: dir}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		c.fail("encode comparison: %v", err)
+	}
+	issued := protocol.WorkerInput{Pending: c.run.PendingActions[id], Provider: c.provider(), Handler: "engine.qa.execution", Validation: &input}
+	event, err := worker.DecodeResult(issued, protocol.EventID("comparison:"+id), raw, "semantic-comparison:"+id)
+	if err != nil {
+		c.fail("decode comparison: %v", err)
+	}
+	return *event.Result.Validation
+}
+
+func canaryExecutionObservations(input protocol.ValidationInput) []canaryObservation {
+	var observations []canaryObservation
+	for _, fact := range input.ExecutionFacts {
+		if !slices.Contains(input.PendingCases, fact.CaseID) || len(fact.Operations) == 0 {
+			continue
+		}
+		operation := fact.Operations[len(fact.Operations)-1]
+		var command []string
+		if err := json.Unmarshal([]byte(operation.Evidence.Invocation), &command); err != nil {
+			continue
+		}
+		observations = append(observations, canaryObservation{Label: "case " + fact.CaseID, Directory: operation.Evidence.WorkingDirectory, Command: command, ExitCode: operation.Evidence.ExitCode, Output: strings.TrimSpace(operation.Evidence.StdoutText + operation.Evidence.StderrText)})
+	}
+	return observations
 }
 
 // gateResult builds the candidate binary at the gate's native range head and
@@ -2866,11 +2837,9 @@ func canaryCaseReviewSchema() map[string]any {
 
 func canaryExecutionSchema() map[string]any {
 	return canarySchema([]string{"records"}, map[string]any{
-		"records": canaryArr(canarySchema([]string{"caseId", "result", "procedure", "observation", "comparison"}, map[string]any{
+		"records": canaryArr(canarySchema([]string{"caseId", "result", "comparison"}, map[string]any{
 			"caseId": canaryStr(), "result": canaryEnum("EXECUTED_PASS", "EXECUTED_FAIL"),
-			"procedure":   canaryStr(),
-			"observation": canaryStr(),
-			"comparison":  canaryStr(),
+			"comparison": canaryStr(),
 		})),
 	})
 }
@@ -3649,15 +3618,6 @@ func (c *engineCanary) dispatchProduction(id string, material worker.Material) p
 	if payload.Review != nil {
 		if payload.Review.Action == review.StartReadiness {
 			c.masterPlan = payload.Review.GranularityReview
-		}
-	} else if payload.Validation != nil {
-		result := payload.Validation
-		if result.Manifest != nil {
-			for _, designed := range result.Manifest.Cases {
-				if designed.TestRef != "" {
-					c.caseTests[c.caseKey(designed.CaseID)] = designed.TestRef
-				}
-			}
 		}
 	}
 	return protocol.Event{Kind: protocol.KindWorkerResult, Result: &payload}

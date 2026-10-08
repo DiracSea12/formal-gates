@@ -617,3 +617,28 @@ func TestCleanupTerminalRetainsIssuedMaterialEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupTerminalRetainsNativeCheckEvidence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "checks", "original-operation", "exit.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	expected := []byte(`{"exit_code":7,"request_digest":"original","streams":{"stdout.log":{"sha256":"proof","size":8}}}`)
+	if err := os.WriteFile(path, expected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := store.CleanupTerminal(); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := os.ReadFile(path)
+		if err != nil || string(actual) != string(expected) {
+			t.Fatalf("native evidence changed: %s %v", actual, err)
+		}
+	}
+}

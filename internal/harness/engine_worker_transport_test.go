@@ -235,6 +235,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
 			execution := coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}}
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: manifest, ReviewScope: coverage.ScopeFull, SourcePoints: []protocol.SourcePoint{{SourceID: "REQ", PointID: "AC"}}, Execution: &execution, Whitelist: &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}, RequiredCases: []string{"case"}, PendingCases: []string{"case"}}}
+			input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case", Operations: []protocol.ExecutionOperationFact{{ActionID: "original-op", Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Source: "case:case", Operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"app", ""}}, Directory: "."}}, Evidence: protocol.CheckEvidence{StdoutText: "empty", Tool: "app", Environment: "issued environment"}}}}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -246,8 +247,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			case "engine.qa.review.rationale":
 				result.Review = &worker.CaseReview{SourceDecisions: map[string]worker.Decision{"REQ": {Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: map[string]worker.Decision{"AC": {Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: map[string]worker.Decision{"case": {Status: coverage.StatusPass, Reason: "oracle valid"}}}
 			case "engine.qa.execution":
-				result.Execution = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
-				result.Tool, result.Environment = "app", "issued workspace"
+				result.Execution = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Comparison: "matches"}}}
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
@@ -258,7 +258,12 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			case "engine.qa.execution":
 				expected.Execution = &coverage.ExecutionReport{Binding: execution, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
 				expected.Execution.Binding.ActualCaseIDs = []string{"case"}
-				expected.Tool, expected.Environment = "app", "issued workspace"
+				expected.Tool, expected.Environment = "app", "issued environment"
+				var renderErr error
+				expected.Execution.Records[0].Procedure, expected.Execution.Records[0].Observation, renderErr = input.Validation.ExecutionFacts[0].Render()
+				if renderErr != nil {
+					t.Fatal(renderErr)
+				}
 			}
 			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &result}
 			body, _ := json.Marshal(payload)

@@ -72,8 +72,7 @@ func canaryJobDirectory(jobs, runID, actionID, attemptID string) string {
 	}
 	return dir
 }
-func (c *engineCanary) caseKey(id string) string { return c.dispatchKey(id) }
-func (c *engineCanary) childSlice() string       { return c.slice }
+func (c *engineCanary) childSlice() string { return c.slice }
 func canaryPending(run facade.Run, id string) *protocol.PendingAction {
 	pending := run.PendingActions[id]
 	return &pending
@@ -158,7 +157,7 @@ func runEngineSplitCanary(t *testing.T, name string) {
 	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
 		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
 	}
-	c := &engineCanary{t: t, nativeHost: canaryProvider, split: true, deadline: time.Now().Add(canaryRunBudget), caseArgs: map[string][]string{}, caseTests: map[string]string{}, approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: nil}
+	c := &engineCanary{t: t, nativeHost: canaryProvider, split: true, deadline: time.Now().Add(canaryRunBudget), approvalInput: bufio.NewReader(os.Stdin), approvalOutput: os.Stdout, execute: nil}
 	c.execute = c.executeNative
 	_, file, _, _ := runtime.Caller(0)
 	stable, err := os.UserHomeDir()

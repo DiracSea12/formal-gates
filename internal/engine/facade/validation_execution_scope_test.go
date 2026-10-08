@@ -8,6 +8,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -17,6 +18,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 			name := map[bool]string{false: "normal", true: "reopened"}[reopen] + "-" + map[bool]string{false: "complete", true: "checkpoint"}[checkpoint]
 			t.Run(name, func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
+				d.fixtureTool, d.fixtureEnvironment = "tool-v1", "environment-v1"
 				d.reviewReady()
 				qa, qi := d.action("engine.qa.execution")
 				prior := qi.Binding.Candidate
@@ -34,6 +36,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				d.drive()
 				repair, ri := d.action("engine.repair")
 				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}})
+				d.fixtureTool, d.fixtureEnvironment = "tool-v2", "environment-v2"
 				d.materialize()
 				d.materialize()
 				if reopen {
@@ -158,13 +161,25 @@ func scopedExecutionReport(in protocol.ValidationInput, prior string, inherit bo
 	seen := map[string]bool{}
 	for _, edge := range in.Whitelist.Entries {
 		row := coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app with approved input", Observation: "captured command output and status", Comparison: "output agrees with approved oracle"}
+		if index := slices.IndexFunc(in.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == edge.CaseID }); index >= 0 {
+			var err error
+			row.Procedure, row.Observation, err = in.ExecutionFacts[index].Render()
+			if err != nil {
+				panic(err)
+			}
+		}
 		if inherit && row.CaseID == "normal" {
-			row.Provenance = coverage.ProvenanceInherited
-			row.InheritedFromCandidate = prior
-			row.ReuseEvidence = "original normal input PASS outside host selected diagnostic repair scope"
-			row.Procedure = ""
-			row.Observation = ""
-			row.Comparison = ""
+			index := slices.IndexFunc(in.Inherited, func(record coverage.ExecutionRecord) bool {
+				return record.ReviewKind == edge.ReviewKind && record.SourceID == edge.SourceID && record.PointID == edge.PointID && record.CaseID == edge.CaseID
+			})
+			if index >= 0 {
+				row = in.Inherited[index]
+			} else {
+				row.Provenance = coverage.ProvenanceInherited
+				row.InheritedFromCandidate = prior
+				row.ReuseEvidence = "original normal input PASS outside host selected diagnostic repair scope"
+				row.Procedure, row.Observation, row.Comparison = "", "", ""
+			}
 		}
 		r.Records = append(r.Records, row)
 		if !seen[row.CaseID] {

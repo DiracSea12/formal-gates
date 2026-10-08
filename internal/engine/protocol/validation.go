@@ -620,7 +620,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 				if target.Kind == "QA" {
 					handler = "engine.qa.execution"
 				}
-				add(handler, target.Task.Scope, (target.Kind == "QA" && wave.Scope == coverage.ScopeAffected && len(target.RequiredCases) == 0) || target.GateImpact != nil && target.GateImpact.Decision == "")
+				add(handler, target.Task.Scope, (target.Kind == "QA" && !s.qaComparisonReady(target, cd)) || (target.Kind == "QA" && wave.Scope == coverage.ScopeAffected && len(target.RequiredCases) == 0) || target.GateImpact != nil && target.GateImpact.Decision == "")
 			}
 		}
 	}

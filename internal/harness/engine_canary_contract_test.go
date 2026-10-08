@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -113,7 +114,7 @@ func TestCanaryCaseProducerAndReviewKeepBehaviorFailures(t *testing.T) {
 	approvalRead, approvalWrite := io.Pipe()
 	defer approvalRead.Close()
 	defer approvalWrite.Close()
-	c := &engineCanary{t: t, home: home, project: workspace, jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), caseArgs: map[string][]string{}, approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
+	c := &engineCanary{t: t, home: home, project: workspace, jobs: t.TempDir(), worker: true, deadline: time.Now().Add(time.Minute), approvalInput: bufio.NewReader(approvalRead), approvalOutput: canaryLocalApproval{approvalWrite}}
 	doc, err := requirement.ParseRequirementProjection("requirements.md", []byte(canaryRequirementDocument))
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +166,7 @@ func TestCanaryCaseProducerAndReviewKeepBehaviorFailures(t *testing.T) {
 	}
 	for i, row := range designed.Manifest.Cases {
 		expected := getOf(cases[i], "args").([]string)
-		if !reflect.DeepEqual(c.caseArgs[row.CaseID], expected) || row.PublicEntry != canaryPublicEntry(expected) {
+		if !reflect.DeepEqual(row.Operations, canaryCaseOperations(expected)) || row.PublicEntry != canaryPublicEntry(expected) {
 			t.Fatalf("producer rewrote exact args for %s", row.CaseID)
 		}
 	}
@@ -174,5 +175,56 @@ func TestCanaryCaseProducerAndReviewKeepBehaviorFailures(t *testing.T) {
 	reviewed := c.caseReviewResult("review", input)
 	if calls != 2 || reviewed.Status != protocol.OutcomeFail || reviewed.Review == nil || reviewed.Review.SourceDecisions[0].Reason != failReason || reviewed.Review.SourceDecisions[0].Status != coverage.StatusFail {
 		t.Fatalf("missing behavior FAIL was rewritten: %+v", reviewed)
+	}
+}
+
+func TestCanaryApprovedBlackboxOperationsPreserveProcessOutcome(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "frob.go"), []byte(canaryFrobSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	direct := filepath.Join(t.TempDir(), "frob")
+	build := exec.Command("go", "build", "-o", direct, ".")
+	build.Dir = workspace
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build direct entry: %v %s", err, out)
+	}
+	run := func(argv []string) (int, string, string) {
+		t.Helper()
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Dir = workspace
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		code := 0
+		if err != nil {
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) {
+				t.Fatal(err)
+			}
+			code = exit.ExitCode()
+		}
+		return code, stdout.String(), stderr.String()
+	}
+	for _, args := range [][]string{nil, {""}, {"two words"}, {"--unknown-flag"}} {
+		operations := canaryCaseOperations(args)
+		if len(operations) != 2 || operations[0].Kind != coverage.OperationShell || !reflect.DeepEqual(operations[1].Argv, append([]string{"./frob-candidate"}, args...)) {
+			t.Fatalf("approved recipe lost argv: %+v", operations)
+		}
+		code, out, errOut := run([]string{"/bin/sh", "-c", operations[0].Command})
+		if code != 0 {
+			t.Fatalf("approved build operation failed: %d %s %s", code, out, errOut)
+		}
+		wantCode, wantOut, wantErr := run(append([]string{direct}, args...))
+		gotCode, gotOut, gotErr := run(operations[1].Argv)
+		if gotCode != wantCode || gotOut != wantOut || gotErr != wantErr {
+			t.Fatalf("case %q wrapper changed values: got %d %q %q want %d %q %q", args, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+		}
+		if len(args) == 0 && gotCode != 2 {
+			t.Fatalf("missing argument no longer exits 2: %d", gotCode)
+		}
 	}
 }

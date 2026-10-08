@@ -115,13 +115,14 @@ func Supervise(directory string) int {
 	cwd := toString(request["cwd"])
 	stdin := toStringDefault(request["stdin"], "")
 
+	executionFacts := map[string]string{}
 	spawnErrMsg, candidates := resolveSpawn(argv, cwd, request)
 	if spawnErrMsg != "" {
 		errorMsg = spawnErrMsg
 		ensureEmptyStream(filepath.Join(dir, "stdout.log"))
 		ensureEmptyStream(filepath.Join(dir, "stderr.log"))
 	} else {
-		code, errorMsg = runChild(dir, candidates, argv, cwd, stdin, request)
+		code, errorMsg = runChild(dir, candidates, argv, cwd, stdin, request, executionFacts)
 	}
 
 	digest, err := CanonicalDigest(request)
@@ -141,6 +142,9 @@ func Supervise(directory string) int {
 			"stdout.log": proofToMap(stdoutProof),
 			"stderr.log": proofToMap(stderrProof),
 		},
+	}
+	if request["kind"] == "approved-qa-check" {
+		receipt["tool_identity"], receipt["environment_identity"] = executionFacts["tool"], executionFacts["environment"]
 	}
 	if err := writeAtomicJSON(filepath.Join(dir, "exit.json"), receipt); err != nil {
 		fmt.Fprintf(os.Stderr, "supervise: cannot write exit.json: %v\n", err)
@@ -223,7 +227,7 @@ const childSignalGrace = 250 * time.Millisecond
 // candidate records the first such error and is skipped; the first candidate that
 // actually executes wins. The child's merged environment is the parent environment
 // updated with the request's environment.
-func runChild(dir string, candidates []string, argv []string, cwd, stdin string, request map[string]any) (int, string) {
+func runChild(dir string, candidates []string, argv []string, cwd, stdin string, request map[string]any, facts map[string]string) (int, string) {
 	outF, err := os.OpenFile(filepath.Join(dir, "stdout.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return 127, spawnErr("OSError", 0, argv[0])
@@ -251,8 +255,25 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 
 	var firstErr string
 	for _, candidate := range candidates {
+		toolPath := candidate
+		if !filepath.IsAbs(toolPath) {
+			toolPath = filepath.Join(cwd, toolPath)
+		}
+		toolProof, _ := FileProof(toolPath)
 		code, errorMsg, ran := tryExec(candidate, argv, cwd, stdin, request, outF, errF, sigCh)
 		if ran {
+			if facts != nil {
+				facts["tool"] = toolPath + " sha256:" + toolProof.SHA256
+				environment := map[string]any{}
+				for key, value := range mergedEnvMap(request) {
+					environment[key] = value
+				}
+				var err error
+				facts["environment"], err = CanonicalDigest(environment)
+				if err != nil {
+					return 127, err.Error()
+				}
+			}
 			return code, errorMsg
 		}
 		// Not ran: either ENOENT (continue, not recorded) or a recorded error.

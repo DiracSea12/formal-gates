@@ -10,7 +10,6 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
-	"formal-gates/internal/engine/vcs"
 )
 
 func (d *validationDriver) reopen() {
@@ -19,11 +18,9 @@ func (d *validationDriver) reopen() {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	// Abstract protocol fixtures deliberately omit NativeRoot. Their native
-	// target is supplied by the driver, including after a semantic reopen.
-	state, err := reopened.engine.Load()
-	if err == nil && state.State.NativeRoot == "" && d.f.vcs != nil {
-		reopened.vcs = vcs.New(d.f.vcs.Root(), nil)
+	// The driver retains its observed source provider across protocol reopen.
+	if d.mockNative && d.git != nil {
+		reopened.vcs = d.git
 	}
 	d.f = reopened
 	d.run, err = d.f.Show()

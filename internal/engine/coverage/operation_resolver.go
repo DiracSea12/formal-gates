@@ -1,10 +1,13 @@
 package coverage
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,16 +56,11 @@ func ResolveCaseOperations(workspace string, qaCase AcceptanceCase) ([]ResolvedO
 }
 
 func resolveGoTest(workspace, ref string) (ResolvedOperation, error) {
+	operation, err := GoTestOperation(ref)
+	if err != nil {
+		return ResolvedOperation{}, err
+	}
 	file, name, _ := strings.Cut(ref, "::")
-	if !filepath.IsLocal(file) || !token.IsIdentifier(name) || !strings.HasPrefix(name, "Test") {
-		return ResolvedOperation{}, fmt.Errorf("Go test reference must be relative <path>_test.go::TestName: %s", ref)
-	}
-	if suffix := strings.TrimPrefix(name, "Test"); suffix != "" {
-		first, _ := utf8.DecodeRuneInString(suffix)
-		if unicode.IsLower(first) {
-			return ResolvedOperation{}, fmt.Errorf("Go test function %s is not a Go test name", name)
-		}
-	}
 	filename := filepath.Join(workspace, file)
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -86,11 +84,8 @@ func resolveGoTest(workspace, ref string) (ResolvedOperation, error) {
 	if test == nil || !goTestSignature(source, test) {
 		return ResolvedOperation{}, fmt.Errorf("Go test reference %s needs an exact function with signature func(*testing.T)", ref)
 	}
-	return ResolvedOperation{
-		Directory:  filepath.Dir(filename),
-		Operation:  Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}},
-		GoTestName: name,
-	}, nil
+	operation.Directory = filepath.Dir(filename)
+	return operation, nil
 }
 
 func goTestSignature(source *ast.File, fn *ast.FuncDecl) bool {
@@ -126,4 +121,53 @@ func goTestSignature(source *ast.File, fn *ast.FuncDecl) bool {
 		return ok && alias != "_" && packageName.Name == alias
 	}
 	return false
+}
+
+// GoTestOperation derives the fixed invocation without reading source files.
+// ResolveCaseOperations additionally verifies the referenced frozen declaration.
+func GoTestOperation(ref string) (ResolvedOperation, error) {
+	file, name, exact := strings.Cut(ref, "::")
+	if !exact || !strings.HasSuffix(file, "_test.go") || !filepath.IsLocal(file) || !token.IsIdentifier(name) || !strings.HasPrefix(name, "Test") {
+		return ResolvedOperation{}, fmt.Errorf("Go test reference must be relative <path>_test.go::TestName: %s", ref)
+	}
+	if suffix := strings.TrimPrefix(name, "Test"); suffix != "" {
+		first, _ := utf8.DecodeRuneInString(suffix)
+		if unicode.IsLower(first) {
+			return ResolvedOperation{}, fmt.Errorf("Go test function %s is not a Go test name", name)
+		}
+	}
+
+	return ResolvedOperation{Directory: filepath.Dir(file), Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}}, GoTestName: name}, nil
+}
+
+// GoTestExecutionResult requires the exact test's real run and terminal event.
+func GoTestExecutionResult(stdout []byte, test string) string {
+	decoder := json.NewDecoder(bytes.NewReader(stdout))
+	ran, result := false, "not-executed"
+	for {
+		var event struct {
+			Action string
+			Test   string
+		}
+		if err := decoder.Decode(&event); err != nil {
+			if err != io.EOF {
+				return "not-executed"
+			}
+			break
+		}
+		if event.Test != test {
+			continue
+		}
+		switch event.Action {
+		case "run":
+			ran = true
+		case "pass", "fail":
+			if ran {
+				result = event.Action
+			}
+		case "skip":
+			result = "not-executed"
+		}
+	}
+	return result
 }

@@ -67,8 +67,6 @@ type Validation struct {
 	Review            *CaseReview                   `json:"review,omitempty"`
 	Suggestions       []Suggestion                  `json:"suggestions,omitempty"`
 	Execution         *Execution                    `json:"execution,omitempty"`
-	Tool              string                        `json:"tool,omitempty"`
-	Environment       string                        `json:"environment,omitempty"`
 	Checkpoint        bool                          `json:"checkpoint,omitempty"`
 	Findings          []Finding                     `json:"findings,omitempty"`
 }
@@ -107,10 +105,8 @@ type Execution struct {
 	Records map[string]Observation `json:"records"`
 }
 type Observation struct {
-	Procedure   string                   `json:"procedure"`
-	Observation string                   `json:"observation"`
-	Comparison  string                   `json:"comparison"`
-	Result      coverage.ExecutionStatus `json:"result"`
+	Comparison string                   `json:"comparison"`
+	Result     coverage.ExecutionStatus `json:"result"`
 }
 
 func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string) (protocol.Event, error) {
@@ -159,7 +155,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
-		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: v.Development, Tool: v.Tool, Environment: v.Environment, Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
+		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: v.Development, Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
 		for _, suggestion := range v.Suggestions {
 			body.Suggestions = append(body.Suggestions, protocol.QASuggestion{Severity: suggestion.Severity, Message: suggestion.Message, Reason: suggestion.Reason})
@@ -248,10 +244,27 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 				if !slices.Contains(issued.PendingCases, caseID) || !slices.Contains(issued.RequiredCases, caseID) {
 					return protocol.Event{}, fmt.Errorf("execution selects a case outside pending scope: %s", caseID)
 				}
+				index := slices.IndexFunc(issued.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == caseID })
+				if index < 0 {
+					return protocol.Event{}, fmt.Errorf("execution case has no issued complete native facts: %s", caseID)
+				}
+				fact := issued.ExecutionFacts[index]
+				procedure, actual, err := fact.Render()
+				if err != nil {
+					return protocol.Event{}, err
+				}
 				observation := value.Validation.Execution.Records[caseID]
+				for _, op := range fact.Operations {
+					if op.Parameters.QA.GoTestRef != "" && op.Evidence.GoResult != "pass" && observation.Result == coverage.ExecutedPass {
+						return protocol.Event{}, fmt.Errorf("Go test did not actually pass: %s", caseID)
+					}
+				}
 				for _, edge := range issued.Whitelist.Entries {
-					if edge.CaseID == caseID {
-						report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: caseID, Procedure: observation.Procedure, Observation: observation.Observation, Comparison: observation.Comparison, Result: observation.Result, Provenance: coverage.ProvenanceExecuted})
+					complete := slices.ContainsFunc(issued.Completed, func(row coverage.ExecutionRecord) bool {
+						return row.ReviewKind == edge.ReviewKind && row.SourceID == edge.SourceID && row.PointID == edge.PointID && row.CaseID == edge.CaseID
+					})
+					if edge.CaseID == caseID && !complete {
+						report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: caseID, Procedure: procedure, Observation: actual, Comparison: observation.Comparison, Result: observation.Result, Provenance: coverage.ProvenanceExecuted})
 					}
 				}
 			}
@@ -276,6 +289,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 					report.NotExecuted = append(report.NotExecuted, coverage.CoverageEdge{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID})
 				}
 			}
+			body.Tool, body.Environment = protocol.ExecutionIdentities(issued.ExecutionFacts)
 			body.Execution = &report
 		}
 		payload.Validation = &body
