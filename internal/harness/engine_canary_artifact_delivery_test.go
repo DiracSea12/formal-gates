@@ -29,7 +29,7 @@ import (
 // own validation residue before the production dispatch accepts delivery.
 func TestCanaryProductionArtifactDelivery(t *testing.T) {
 	for _, role := range []string{"engine.development.batch", "engine.repair", "engine.merge.resolve", "engine.qa.design"} {
-		for _, residue := range []string{"", "notes.txt", "frob", "validation-command"} {
+		for _, residue := range []string{"", "notes.txt", "production.go", "frob", "validation-command"} {
 			t.Run(role+"/"+firstNonEmpty(residue, "clean"), func(t *testing.T) {
 				material, payload := canaryArtifactMaterial(t, role, coverage.ReviewWhitebox)
 				runCanaryArtifactDelivery(t, material, payload, residue, residue != "")
@@ -53,7 +53,6 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 			residue, refuse := "notes.txt", false
 			switch name {
 			case "whitebox-reuse", "whitebox-omitted-tests":
-				payload.Validation.Development = nil
 				residue = ""
 				if name == "whitebox-omitted-tests" {
 					residue, refuse = "omitted_test.go", true
@@ -88,6 +87,14 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 	payload := material.ResultTemplate
 	payload.Outcome, payload.Validation.Status = protocol.OutcomePass, protocol.OutcomePass
 	payload.Validation.Development = &worker.Development{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
+	if handler == "engine.qa.design" && kind == coverage.ReviewWhitebox {
+		payload.Validation.Development = nil
+		files := []string{"delivered_test.go"}
+		payload.Validation.Manifest = &worker.Manifest{Cases: []worker.Case{{CaseID: "delivered", Scenario: "SUCCESS", TestRef: "delivered_test.go::TestDelivered", Oracle: "running the public main entry exits zero with empty output", Files: &files}}, Coverage: map[string][]string{}}
+	}
+	if handler == "engine.qa.design" && kind != coverage.ReviewWhitebox {
+		payload.Validation.Development = nil
+	}
 	if handler == "engine.merge.resolve" {
 		payload.Validation.Development = nil
 		payload.Validation.Resolution = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}
@@ -160,6 +167,15 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 			t.Fatal("dispatch changed issued method/workspace/schema")
 		}
 		if calls == 1 {
+			if material.Input.Handler == "engine.qa.design" && !material.ReadOnly {
+				for _, designed := range payload.Validation.Manifest.Cases {
+					if designed.Files != nil {
+						for _, path := range *designed.Files {
+							write(path, "package main\nimport(\"testing\";\"os/exec\")\nfunc TestDelivered(t *testing.T) { out, err := exec.Command(\"go\", \"run\", \".\").CombinedOutput(); if err != nil || len(out) != 0 { t.Fatalf(\"command: %v %s\", err, out) } }\n")
+						}
+					}
+				}
+			}
 			if request["prompt"] != material.Prompt {
 				t.Fatal("dispatch changed production material")
 			}
@@ -179,6 +195,9 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 				command("go", "build", "-o", residue, "./...")
 			} else if residue != "" {
 				body := "temporary author output\n"
+				if residue == "production.go" {
+					body = "package main\nfunc ProductionValue() int { return 1 }\n"
+				}
 				if strings.HasSuffix(residue, "_test.go") {
 					body = "package main\n"
 				}
@@ -222,7 +241,11 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 		t.Fatal("dispatch lost original input and raw evidence binding")
 	}
 	got := event.Result.Validation
-	if got.Status != payload.Validation.Status || !reflect.DeepEqual(canarySemanticDevelopment(got.Development), payload.Validation.Development) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
+	expectedDevelopment := payload.Validation.Development
+	if material.Input.Handler == "engine.qa.design" && !material.ReadOnly {
+		expectedDevelopment = &worker.Development{Paths: []string{"delivered_test.go"}}
+	}
+	if got.Status != payload.Validation.Status || !reflect.DeepEqual(canarySemanticDevelopment(got.Development), expectedDevelopment) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
 		t.Fatal("dispatch changed semantic author evidence")
 	}
 

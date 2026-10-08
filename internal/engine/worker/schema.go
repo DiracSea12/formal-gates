@@ -58,7 +58,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			statuses = []string{protocol.OutcomePass}
 		case "engine.qa.design":
 			statuses = []string{protocol.OutcomePass}
-			for _, name := range []string{"Manifest", "Development", "Checkpoint"} {
+			for _, name := range []string{"Manifest", "Checkpoint"} {
 				allowed[name] = true
 			}
 		case "engine.qa.review.rationale":

@@ -177,6 +177,9 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		issued := input.Validation
 		v := value.Validation
+		if input.Handler == "engine.qa.design" && v.Development != nil {
+			return protocol.Event{}, fmt.Errorf("QA design delivery paths come from manifest file relations")
+		}
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
@@ -234,6 +237,11 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 				}
 			}
 			body.Manifest = &manifest
+			if input.Handler == "engine.qa.design" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+				if paths := manifest.TestFiles(); len(paths) > 0 {
+					body.Development = &protocol.DevelopmentEvidence{Paths: paths}
+				}
+			}
 		}
 		if value.Validation.Review != nil {
 			if issued.ReviewScope == "" {

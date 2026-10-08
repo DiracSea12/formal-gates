@@ -62,7 +62,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			value.ReadOnly = false
 		case "engine.qa.design":
 			value.ResultTemplate.Validation.Manifest = &Manifest{Coverage: map[string][]string{}}
-			instructions = "Design executable coverage for every required source and acceptance point. Put every mechanically specified setup/action in reviewed operations, or use an exact <path>_test.go::TestName reference; natural-language steps never supply runtime commands. Select point-to-case coverage using the fixed coverage keys. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and reports their artifact paths. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
+			instructions = "Design executable coverage for every required source and acceptance point. Put every mechanically specified setup/action in reviewed operations, or use an exact <path>_test.go::TestName reference; natural-language steps never supply runtime commands. Select point-to-case coverage using the fixed coverage keys. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and associates their test material using case files or referenced shared-step files. The program derives delivery paths from those relations. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale":
 			value.ResultTemplate.Validation.Review = &CaseReview{}
@@ -81,8 +81,11 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
-	if !value.ReadOnly && input.Handler != "engine.qa.execution" {
+	if !value.ReadOnly && input.Handler != "engine.qa.execution" && input.Handler != "engine.qa.design" {
 		instructions += " Declare only the files actually delivered as artifacts. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
+	}
+	if input.Handler == "engine.qa.design" && !value.ReadOnly {
+		instructions += " Associate only actual test material files with cases or their referenced shared steps. Remove temporary build and test outputs from the workspace before reporting completion, or produce them outside the workspace. Do not return a separate development path declaration."
 	}
 	if completionBatch(input) != nil {
 		instructions += " completion.dod must contain exactly the IDs declared in input.validation.development.batch.dod, each with non-empty semantic evidence; do not omit or add keys. Approved command execution and its evidence belong to the program."

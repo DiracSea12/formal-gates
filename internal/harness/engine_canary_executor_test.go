@@ -1027,6 +1027,7 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 				}
 				fmt.Fprintf(&tests, "func %s(t *testing.T){out,err:=exec.Command(\"go\",%s).CombinedOutput();%s}\n", ref, strings.Join(quoted, ","), assertion)
 				designed["testRef"] = "frob_contract_test.go::" + ref
+				designed["files"] = []string{"frob_contract_test.go"}
 			} else {
 				designed["args"], designed["preconditions"], designed["steps"] = args, "compiled candidate in issued workspace", "run frob with exact argv"
 			}
@@ -1039,7 +1040,6 @@ func (e *canaryLocalExecutor) design(input protocol.ValidationInput, workspace s
 		if err := os.WriteFile(filepath.Join(workspace, path), []byte(tests.String()), 0600); err != nil {
 			return nil, err
 		}
-		answer["paths"], answer["summary"] = []string{path}, "authored bound command contract cases"
 	}
 	return answer, nil
 }
@@ -1632,10 +1632,8 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			var decoded struct {
 				Cases []struct {
 					CaseID, PointID, Scenario, Oracle, TestRef, Preconditions, Steps string
-					Args                                                             []string
+					Args, Files                                                      []string
 				}
-				Paths   []string
-				Summary string
 			}
 			if err := json.Unmarshal(body, &decoded); err != nil {
 				return nil, err
@@ -1646,7 +1644,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 					entry = canaryPublicEntry(designed.Args)
 				}
-				item := worker.Case{CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps}
+				item := worker.Case{Files: &designed.Files, CaseID: designed.CaseID, Scenario: designed.Scenario, Oracle: designed.Oracle, TestRef: designed.TestRef, PublicEntry: entry, Preconditions: designed.Preconditions, Steps: designed.Steps}
 				if issued.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 					item.Operations = canaryCaseOperations(designed.Args)
 				}
@@ -1654,9 +1652,6 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				manifest.Coverage[designed.PointID] = append(manifest.Coverage[designed.PointID], designed.CaseID)
 			}
 			result.Manifest = &manifest
-			if len(decoded.Paths) > 0 {
-				result.Development = &worker.Development{Paths: decoded.Paths, Summary: decoded.Summary}
-			}
 		case "engine.qa.review.rationale":
 			var decoded struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }
 			if err := json.Unmarshal(body, &decoded); err != nil {

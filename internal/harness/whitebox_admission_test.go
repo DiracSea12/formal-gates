@@ -82,7 +82,7 @@ func TestCanaryWhiteboxAuthorCleansUndeclaredBuildOutputs(t *testing.T) {
 			if boundary == "named-output" {
 				outputName = "command-output"
 			}
-			answer := map[string]any{"paths": []string{filepath.Join(workspace, "command_test.go")}, "summary": "Authored command acceptance test", "cases": []any{map[string]any{"caseId": "empty-command", "pointId": "command", "scenario": "BOUNDARY", "testRef": "TestCommand", "oracle": "The command returns normally."}}}
+			answer := map[string]any{"cases": []any{map[string]any{"caseId": "empty-command", "pointId": "command", "scenario": "BOUNDARY", "testRef": "command_test.go::TestCommand", "files": []string{"command_test.go"}, "oracle": "The command returns normally."}}}
 			body, err := json.Marshal(answer)
 			if err != nil {
 				t.Fatal(err)
@@ -158,7 +158,7 @@ func TestCanaryWhiteboxAuthorCleansUndeclaredBuildOutputs(t *testing.T) {
 			if boundary == "authored-only" {
 				wantCalls = 1
 			}
-			if calls != wantCalls || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{"command_test.go"}) || result.Development.Summary != answer["summary"] || len(result.Manifest.Cases) != 1 || result.Manifest.Cases[0].TestRef != "TestCommand" {
+			if calls != wantCalls || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{"command_test.go"}) || result.Development.Summary != "" || len(result.Manifest.Cases) != 1 || result.Manifest.Cases[0].TestRef != "command_test.go::TestCommand" {
 				t.Fatalf("author evidence changed or bypassed correction: calls=%d result=%+v", calls, result)
 			}
 			for attempt := 1; attempt <= calls; attempt++ {

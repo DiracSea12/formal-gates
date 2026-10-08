@@ -15,7 +15,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"status", "development"}, "engine.repair": {"status", "development", "granularityReview"}, "engine.merge.resolve": {"status", "resolution"}, "engine.qa.design": {"status", "manifest", "development", "checkpoint"}, "engine.qa.review.rationale": {"status", "review", "suggestions"}, "engine.qa.execution": {"status", "execution", "checkpoint", "findings"}, "engine.gate": {"status", "findings"},
+		"engine.development.batch": {"status", "development"}, "engine.repair": {"status", "development", "granularityReview"}, "engine.merge.resolve": {"status", "resolution"}, "engine.qa.design": {"status", "manifest", "checkpoint"}, "engine.qa.review.rationale": {"status", "review", "suggestions"}, "engine.qa.execution": {"status", "execution", "checkpoint", "findings"}, "engine.gate": {"status", "findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -112,10 +112,21 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, contract := range []string{"Declare only the files actually delivered as artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"} {
+			contracts := []string{"Declare only the files actually delivered as artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"}
+			if role.handler == "engine.qa.design" && role.author {
+				contracts = []string{"Associate only actual test material files", "Remove temporary build and test outputs", "produce them outside the workspace", "Do not return a separate development path declaration"}
+			}
+			for _, contract := range contracts {
 				if strings.Contains(material.Prompt, contract) != role.author {
 					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
 				}
+			}
+			if role.handler == "engine.qa.design" && role.author {
+				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") || material.ResultTemplate.Validation.Development != nil {
+					t.Fatal("QA author material retained a duplicate path-reporting contract")
+				}
+			} else if role.author && !strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
+				t.Fatal("development author lost its artifact declaration")
 			}
 			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
 				t.Fatal("execution runtime contract lost")
@@ -220,6 +231,12 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 			schema, err := ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if name == "other-role" {
+				if schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"] != nil {
+					t.Fatal("QA role exposed a duplicate development declaration")
+				}
+				return
 			}
 			development := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
 			if name == "unfrozen-repair" {

@@ -176,3 +176,27 @@ func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
 		t.Fatal("program inherited a deliberately cleared relation")
 	}
 }
+
+func TestWhiteboxDesignDerivesDeliveryFromMaterialRelations(t *testing.T) {
+	input := semanticInput()
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
+	files := []string{"analytics_test.go", "frob_test.go"}
+	sharedFiles := []string{"fixture.data"}
+	unused := []string{"unrelated.go"}
+	value := Result{Outcome: "PASS", Validation: &Validation{Status: "PASS", Manifest: &Manifest{Cases: []Case{{CaseID: "new", Scenario: "SUCCESS", TestRef: "analytics_test.go::TestUsage", Oracle: "exact output", Files: &files, SharedSteps: []string{"setup"}}}, SharedSteps: []SharedStep{{ID: "setup", Procedure: "prepare test material", Files: &sharedFiles}, {ID: "unused", Procedure: "not referenced", Files: &unused}}, Coverage: map[string][]string{"one": {"new"}}}}}
+	result := decodeSemantic(t, input, value).Validation
+	if result.Development == nil || !reflect.DeepEqual(result.Development.Paths, []string{"analytics_test.go", "fixture.data", "frob_test.go"}) || result.Development.Summary != "" {
+		t.Fatalf("manifest-only delivery paths lost: %+v", result.Development)
+	}
+	if !reflect.DeepEqual(result.Manifest.Cases[0].Files, files) || result.Binding != input.Validation.Binding {
+		t.Fatal("file semantics or original binding changed")
+	}
+	value.Validation.Development = &Development{Paths: files, Summary: "duplicate path declaration"}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = DecodeResult(input, "result", raw, "original-raw-digest"); err == nil {
+		t.Fatal("QA model supplied duplicate development fields")
+	}
+}

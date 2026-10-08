@@ -790,45 +790,29 @@ func canaryPublicEntry(args []string) string {
 	return strings.Join(words, " ")
 }
 
-// whiteboxDesignResult runs the writable whitebox design turn in the
-// registered authoring workspace: the model authors the acceptance tests as
-// real Go test files (*_test.go) there, then designs cases that reference
-// the exact <path>_test.go::TestName references. The authored paths ride along as development
-// evidence — they become the immutable QA artifact the case review freezes.
+// whiteboxDesignResult authors case-associated test material in the registered
+// workspace; the manifest's file relations supply the native freeze paths.
 func (c *engineCanary) whiteboxDesignResult(id string, input protocol.ValidationInput, materials canaryMaterials, manifest coverage.AcceptanceManifest, pointKnown func(string) bool, sourceFor func(string) string) protocol.ValidationResult {
 	c.t.Helper()
 	if input.Workspace == nil {
 		c.fail("whitebox design %s has no registered authoring workspace", id)
 	}
-	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact <path>_test.go::TestName reference that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Report the authored paths and a summary. The program executes approved frozen commands and tests; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
+	instructions := "Author whitebox acceptance tests for every acceptance point as real Go test files in the workspace. Each case identifies its pointId, exact <path>_test.go::TestName, scenario and precise oracle, and associates its actual repository-relative test material in files. Every point needs a non-SUCCESS case. The program derives delivery paths from those case relations and runs approved frozen commands and tests. A test exposing a declared baseline gap fails honestly. Remove temporary build and test outputs before reporting completion."
 	var answer struct {
 		Cases []struct {
-			CaseID   string `json:"caseId"`
-			PointID  string `json:"pointId"`
-			Scenario string `json:"scenario"`
-			TestRef  string `json:"testRef"`
-			Oracle   string `json:"oracle"`
+			CaseID   string   `json:"caseId"`
+			PointID  string   `json:"pointId"`
+			Scenario string   `json:"scenario"`
+			TestRef  string   `json:"testRef"`
+			Oracle   string   `json:"oracle"`
+			Files    []string `json:"files"`
 		} `json:"cases"`
-		Paths   []string `json:"paths"`
-		Summary string   `json:"summary"`
 	}
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		if len(answer.Paths) == 0 || answer.Summary == "" {
-			return fmt.Errorf("whitebox design lacks authored paths or summary")
-		}
-		for index, path := range answer.Paths {
-			relative, err := canaryWorkspacePath(c.workspace(input), path)
-			if err != nil {
-				return err
-			}
-			if _, err := os.Stat(filepath.Join(c.workspace(input), relative)); err != nil {
-				return fmt.Errorf("authored file %q is missing: %w", relative, err)
-			}
-			answer.Paths[index] = relative
-		}
+		manifest.Cases, manifest.Edges = nil, nil
 		for _, designed := range answer.Cases {
 			if !pointKnown(designed.PointID) {
 				return fmt.Errorf("case %s names unknown point %s", designed.CaseID, designed.PointID)
@@ -836,20 +820,27 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 			if strings.TrimSpace(designed.TestRef) == "" {
 				return fmt.Errorf("case %s carries no test reference", designed.CaseID)
 			}
+			manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: designed.CaseID, Mode: coverage.CaseWhitebox, Scenario: designed.Scenario, TestRef: designed.TestRef, Oracle: designed.Oracle, Files: designed.Files})
+			manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
 		}
-		_, _, err := c.vcs.At(c.workspace(input), input.Workspace.Handle).ValidateDeclaredChanges(input.Workspace.Identity, answer.Paths)
+		paths := manifest.TestFiles()
+		for _, path := range paths {
+			relative, err := canaryWorkspacePath(c.workspace(input), path)
+			if err != nil {
+				return err
+			}
+			if relative != path {
+				return fmt.Errorf("test material path must be repository-relative: %s", path)
+			}
+			if _, err := os.Stat(filepath.Join(c.workspace(input), path)); err != nil {
+				return fmt.Errorf("authored file %q is missing: %w", path, err)
+			}
+		}
+		_, _, err := c.vcs.At(c.workspace(input), input.Workspace.Handle).ValidateDeclaredChanges(input.Workspace.Identity, paths)
 		return err
 	}
 	c.turnIn(c.workspace(input), id, "QA case design", c.prompt("QA case design", materials, instructions, false), canaryDesignSchema(true), false, shape)
-	for _, designed := range answer.Cases {
-		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{
-			CaseID: designed.CaseID, Mode: coverage.CaseWhitebox, Scenario: designed.Scenario,
-			TestRef: designed.TestRef, Oracle: designed.Oracle,
-		})
-		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: sourceFor(designed.PointID), PointID: designed.PointID, CaseID: designed.CaseID})
-	}
-	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest,
-		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary}}
+	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: manifest.TestFiles()}}
 }
 
 // canaryWorkspacePath normalizes one authored-artifact path to the
@@ -2808,16 +2799,15 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 
 func canaryDesignSchema(whitebox bool) map[string]any {
 	if whitebox {
-		return canarySchema([]string{"cases", "paths", "summary"}, map[string]any{
-			"cases": canaryArr(canarySchema([]string{"caseId", "pointId", "scenario", "testRef", "oracle"}, map[string]any{
+		return canarySchema([]string{"cases"}, map[string]any{
+			"cases": canaryArr(canarySchema([]string{"caseId", "pointId", "scenario", "testRef", "oracle", "files"}, map[string]any{
 				"caseId":   canaryStr(),
 				"pointId":  canaryStr(),
 				"scenario": canaryEnum("SUCCESS", "FAILURE", "MISUSE", "BOUNDARY"),
 				"testRef":  canaryStr(),
 				"oracle":   canaryStr(),
+				"files":    canaryArr(canaryStr()),
 			})),
-			"paths":   canaryArr(canaryStr()),
-			"summary": canaryStr(),
 		})
 	}
 	return canarySchema([]string{"cases"}, map[string]any{
