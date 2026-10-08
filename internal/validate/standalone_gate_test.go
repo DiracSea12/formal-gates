@@ -108,7 +108,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker", review.ProductReview, true}, {"engine.readiness.plan", review.StartReadiness, true}, {"engine.qa.review.rationale", "", true}, {"engine.development.batch", "", false}, {"engine.qa.execution", "", false}, {"engine.qa.design", "", false},
+		{"engine.review.worker", review.ProductReview, true}, {"engine.readiness.plan", review.StartReadiness, true}, {"engine.qa.review.rationale", "", true}, {"engine.development.batch", "", false}, {"engine.qa.execution", "", true}, {"engine.qa.design", "", false},
 	}
 	for _, role := range roles {
 		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
