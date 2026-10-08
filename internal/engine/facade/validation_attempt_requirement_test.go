@@ -233,19 +233,17 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 				case "engine.gate":
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 				}
-				if role == "engine.qa.design" {
-					dev, di := d.action("engine.development.batch")
-					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
-					d.drive()
-					rid, ri := d.action("engine.qa.review.rationale")
-					r := approvedReview(ri.Manifest)
-					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
-				}
 				if candidate.Identity == "" {
 					dev, di := d.action("engine.development.batch")
 					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
+					d.drive()
 					d.materialize()
-					d.materialize()
+					d.drive()
+				}
+				if role == "engine.qa.design" {
+					rid, ri := d.action("engine.qa.review.rationale")
+					r := approvedReview(ri.Manifest)
+					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 				}
 				if role != "engine.qa.execution" {
 					qa, qi := d.action("engine.qa.execution")

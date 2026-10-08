@@ -215,6 +215,15 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		t.Fatal("development and blackbox design are not concurrent")
 	}
 	manifest := simpleManifest(qi)
+	for i := range manifest.Cases {
+		test := "TestValid"
+		if manifest.Cases[i].CaseID == "invalid" {
+			test = "TestInvalid"
+		}
+		manifest.Cases[i].PublicEntry = "public Valid input function"
+		manifest.Cases[i].Steps = "invoke the reviewed public input contract test " + test
+		manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-buildvcs=false", "-run", "^" + test + "$", "."}}}
+	}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
 	id, in := d.action("engine.qa.review.rationale")
@@ -232,7 +241,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	manifest = in.Manifest
 	for _, row := range []struct{ id, scenario, ref string }{{"white-success", "SUCCESS", "TestValid"}, {"white-misuse", "MISUSE", "TestInvalid"}} {
-		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go#" + row.ref, Oracle: "specified input outcome"})
+		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.ref, Oracle: "specified input outcome"})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: row.id})
 	}
 	body := "package command\nimport \"testing\"\nfunc TestValid(t *testing.T){if !Valid(\"ok\"){t.Fatal(\"valid input\")}}\nfunc TestInvalid(t *testing.T){if Valid(\"\"){t.Fatal(\"invalid input\")}}\n"
