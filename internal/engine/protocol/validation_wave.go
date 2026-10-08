@@ -369,10 +369,12 @@ func validateCandidateReceipt(provider string, intent HostActionIntent, receipt 
 		}
 	case "DEVELOPMENT", "AUTHORING", "CHECK_SOURCE":
 	case "QA_ARTIFACT":
-		if !evidence.TestOnly || !evidence.ProductionViewEqual {
-			return params, CandidateEvidence{}, validationError("whitebox changes must be proved test-owned and production-equivalent; submit production edits through development/repair")
-		}
+		// The isolated immutable artifact supplies the original independent
+		// review. Test-only judgment is admitted when that review is accepted.
 	case "REVIEW_READY":
+		if len(params.QAArtifacts) > 0 && (!evidence.TestOnly || !evidence.ProductionViewEqual) {
+			return params, CandidateEvidence{}, validationError("final QA artifact requires bound independent review and exact production comparison")
+		}
 		if strings.TrimSpace(params.ReviewBase) == "" || evidence.GateView == nil {
 			return params, CandidateEvidence{}, validationError("final candidate requires its native review base and complete gate ownership view")
 		}

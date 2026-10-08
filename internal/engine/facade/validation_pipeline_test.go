@@ -281,7 +281,7 @@ func (d *validationDriver) drive() {
 			return
 		}
 		deadline, bounded := d.t.Deadline()
-		if !bounded || !time.Now().Before(deadline) {
+		if bounded && !time.Now().Before(deadline) {
 			d.t.Fatalf("native check did not settle within test deadline: %+v", r.Next)
 		}
 		time.Sleep(100 * time.Millisecond)

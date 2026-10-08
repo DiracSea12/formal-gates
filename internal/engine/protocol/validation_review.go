@@ -64,11 +64,14 @@ func (s *State) inheritableReviews(set *CaseSet) []coverage.ReviewDecision {
 	}
 	return decisions
 }
-func inheritableSharedReviews(set *CaseSet) []coverage.ReviewDecision {
+func (s *State) inheritableSharedReviews(set *CaseSet) []coverage.ReviewDecision {
 	if len(set.ReviewHistory) == 0 {
 		return nil
 	}
 	prior := set.ReviewHistory[len(set.ReviewHistory)-1]
+	if set.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && !s.sameCandidateContent(prior.Candidate, set.Candidate) {
+		return nil
+	}
 	var decisions []coverage.ReviewDecision
 	for _, d := range prior.Review.SharedStepDecisions {
 		if d.Status != coverage.StatusPass {
@@ -111,7 +114,7 @@ func (s *State) validateReviewPolicy(set *CaseSet, result coverage.ReviewResult)
 			return validationError("inherited approval requires unchanged responsibility and its original rationale: " + d.ID)
 		}
 	}
-	shared := inheritableSharedReviews(set)
+	shared := s.inheritableSharedReviews(set)
 	for _, d := range result.SharedStepDecisions {
 		if d.Inherited && !slices.ContainsFunc(shared, func(prior coverage.ReviewDecision) bool {
 			return prior.ID == d.ID && d.Status == coverage.StatusPass && d.Reason == prior.Reason

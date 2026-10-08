@@ -66,11 +66,22 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				if err != nil {
 					t.Fatal(err)
 				}
+				evidence.GateView = &protocol.GateReviewView{TestOwnedPaths: []string{"test_app.py"}}
+				values, err = evidenceFields(evidence)
+				if err != nil {
+					t.Fatal(err)
+				}
 				status := protocol.HostActionStatusExecuted
 				if variant == "unknown-receipt" {
 					status = protocol.HostActionStatusUnknown
 				}
 				s.HostActionReceipts["initial"] = protocol.HostActionReceipt{ActionID: "initial", AdapterOperation: "op.candidate", PayloadDigest: "sha256:initial", Status: status, AdapterEvidence: &protocol.AdapterEvidence{Values: values}}
+				if variant == "unknown-receipt" {
+					owned, err := f.ownershipAt(s, evidence.Identity)
+					if err != nil || owned["test_app.py"] {
+						t.Fatalf("UNKNOWN receipt supplied ownership: %v %v", owned, err)
+					}
+				}
 				p.Base = evidence.Identity
 				r.Source, r.Identity = evidence.Identity, evidence.Identity
 				s.NativeResources[r.ID] = r
@@ -113,7 +124,7 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 			}
 			before := git(path, "write-tree") + git(path, "rev-parse", "HEAD") + git(root, "show-ref", r.Ref)
 			proof, complete, err := freeze("artifact")
-			rejected := variant == "production" || variant == "unknown" || variant == "unassociated" || variant == "unknown-receipt"
+			rejected := variant == "unassociated"
 			if rejected {
 				if err == nil || complete || proof.Candidate != nil {
 					t.Fatalf("unproved endpoint gained ownership: complete=%v err=%v", complete, err)
@@ -123,7 +134,7 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				}
 				return
 			}
-			if err != nil || !complete || proof.Candidate == nil || !proof.Candidate.TestOnly || !proof.Candidate.ProductionViewEqual {
+			if err != nil || !complete || proof.Candidate == nil || proof.Candidate.TestOnly || proof.Candidate.ProductionViewEqual || proof.Candidate.GateView != nil {
 				t.Fatalf("approved external test transition rejected: complete=%v err=%v", complete, err)
 			}
 			actual, err := f.vcs.At(path).Changes(p.Base, proof.Candidate.Identity)
@@ -135,7 +146,7 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				t.Fatal(err)
 			}
 			production, err := f.vcs.Entry(proof.Candidate.Identity, "app.py")
-			if err != nil || production != original {
+			if err != nil || variant != "production" && production != original || variant == "production" && production == original {
 				t.Fatal("production mode/blob changed", err)
 			}
 		})

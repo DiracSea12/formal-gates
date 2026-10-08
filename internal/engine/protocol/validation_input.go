@@ -11,6 +11,8 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
+	ReviewBase     string             `json:"reviewBase,omitempty"`
+	ReviewArtifact *CandidateEvidence `json:"reviewArtifact,omitempty"`
 	ExecutionFacts []ExecutionFact    `json:"executionFacts,omitempty"`
 	ReviewScope    coverage.ScopeMode `json:"reviewScope,omitempty"`
 	// RequirementDocument supplies the current confirmed context alongside
@@ -69,6 +71,26 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			break
 		}
 	}
+	if role == "engine.qa.review.rationale" && mode == coverage.ReviewWhitebox {
+		input.ReviewBase = s.Validation.DevelopmentSnapshot
+		if set := s.Validation.Sets[mode]; set != nil && set.Candidate != "" {
+			for _, receipt := range s.HostActionReceipts {
+				if receipt.AdapterOperation != "op.candidate" || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+					continue
+				}
+				intent, known := s.hostIntent(receipt.ActionID)
+				if !known {
+					continue
+				}
+				params, proof, err := validateCandidateReceipt(s.NativeVCS(), intent, receipt)
+				if err == nil && params.Stage == "QA_ARTIFACT" && proof.Identity == set.Candidate && s.candidateManifestCurrent(params, mode) {
+					input.ReviewBase = params.Base
+					input.ReviewArtifact = &proof
+					break
+				}
+			}
+		}
+	}
 	if role == "engine.merge.resolve" {
 		input.Conflict = s.conflictInput(pending.Task.Scope)
 	}
@@ -111,7 +133,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			}
 		}
 		input.InheritableReviews = s.inheritableReviews(set)
-		input.InheritableSharedReviews = inheritableSharedReviews(set)
+		input.InheritableSharedReviews = s.inheritableSharedReviews(set)
 	}
 	if role == "engine.qa.design" || role == "engine.qa.review.rationale" {
 		input.Manifest.Binding.RequirementRevision = binding.RequirementRevision

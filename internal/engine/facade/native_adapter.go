@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -744,6 +745,11 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		completed = true
 	}
 	paths := slices.Clone(p.Paths)
+	if p.Stage == "REVIEW_READY" {
+		if err := reviewedArtifact(s, p); err != nil {
+			return nativeResult{}, false, err
+		}
+	}
 	if !completed {
 		changes, pending, err := native.ValidateDeclaredChanges(p.Base, paths)
 		if err != nil {
@@ -816,7 +822,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
 					return nativeResult{}, false, statErr
 				}
-				if !testOwnedTransition(path, entry != "", statErr == nil, baseOwned, owned) {
+				if !testOwnedTransition(path, entry != "", statErr == nil, baseOwned, owned) && !reviewableArtifactPath(path, p.ReviewCases, p.TestFiles, baseOwned, owned) {
 					return nativeResult{}, false, fmt.Errorf("whitebox change is not test-owned: %s", path)
 				}
 			}
@@ -889,13 +895,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			return nativeResult{}, false, err
 		}
 		for _, change := range changes {
-			path := change.Path
-			if !testOwnedChange(change, changes, baseOwned, owned) {
-				return nativeResult{}, false, fmt.Errorf("whitebox change is not test-owned: %s", path)
+			if !testOwnedChange(change, changes, baseOwned, owned) && !reviewableArtifactPath(change.Path, p.ReviewCases, p.TestFiles, baseOwned, owned) {
+				return nativeResult{}, false, fmt.Errorf("whitebox change is not declared test material: %s", change.Path)
 			}
 		}
-		evidence.TestOnly = true
-		evidence.ProductionViewEqual = true
+		// This isolated snapshot is review input; semantic test-only approval
+		// belongs to the accepted independent case-set review.
 	}
 	if p.Stage == "REVIEW_READY" || p.RepairTask != nil {
 		reviewBase := p.ReviewBase
@@ -909,6 +914,13 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		baseOwned, owned, err := f.testOwnership(s, native, reviewBase, p.ReviewCases, p.TestFiles)
 		if err != nil {
 			return nativeResult{}, false, err
+		}
+		if p.Stage == "REVIEW_READY" {
+			if err := f.reviewedArtifactOwnership(s, p, head, baseOwned, owned); err != nil {
+				return nativeResult{}, false, err
+			}
+			evidence.TestOnly = true
+			evidence.ProductionViewEqual = true
 		}
 		if p.MergeManifest != nil {
 			if owned == nil {
@@ -1012,13 +1024,6 @@ func (f *Facade) ownershipAt(s *protocol.State, identity string, testReferences 
 		if evidence.GateView != nil {
 			paths = append(paths, evidence.GateView.TestOwnedPaths...)
 		}
-		if evidence.TestOnly && evidence.ProductionViewEqual {
-			for _, change := range evidence.Changes {
-				if change.Mode != "000000" {
-					paths = append(paths, change.Path)
-				}
-			}
-		}
 		for _, path := range paths {
 			if _, known := owned[path]; known {
 				continue
@@ -1050,6 +1055,9 @@ func (f *Facade) testOwnership(s *protocol.State, native *vcs.Provider, base str
 		refs = append(refs, ref)
 	}
 	before, err := f.ownershipAt(s, base, refs...)
+	if before == nil {
+		before = map[string]bool{}
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1060,13 +1068,7 @@ func (f *Facade) testOwnership(s *protocol.State, native *vcs.Provider, base str
 	if after == nil {
 		after = map[string]bool{}
 	}
-	paths := slices.Clone(files)
-	for _, ref := range references {
-		file, symbol, qualified := strings.Cut(ref, "::")
-		if qualified && strings.TrimSpace(symbol) != "" && filepath.IsLocal(filepath.FromSlash(file)) {
-			paths = append(paths, filepath.ToSlash(filepath.Clean(filepath.FromSlash(file))))
-		}
-	}
+	paths := artifactReferences(references, files)
 	for _, file := range paths {
 		if _, known := after[file]; known {
 			continue
@@ -1090,4 +1092,98 @@ func (f *Facade) testOwnership(s *protocol.State, native *vcs.Provider, base str
 		}
 	}
 	return before, after, nil
+}
+
+func artifactReferences(references map[string]string, files []string) []string {
+	paths := slices.Clone(files)
+	for _, ref := range references {
+		file, symbol, qualified := strings.Cut(ref, "::")
+		if qualified && strings.TrimSpace(symbol) != "" && filepath.IsLocal(filepath.FromSlash(file)) {
+			paths = append(paths, filepath.ToSlash(filepath.Clean(filepath.FromSlash(file))))
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+func reviewableArtifactPath(path string, references map[string]string, files []string, before, after map[string]bool) bool {
+	if value, known := before[path]; known && !value {
+		return false
+	}
+	if value, known := after[path]; known && !value {
+		return false
+	}
+	return slices.Contains(artifactReferences(references, files), path)
+}
+
+// The original QA review owns semantic file classification. Native identities
+// and exact artifact transitions are still verified by the candidate adapter.
+func reviewedArtifact(s *protocol.State, p protocol.CandidateParameters) error {
+	set := s.Validation.Sets[coverage.ReviewWhitebox]
+	if set == nil || len(set.Paths) == 0 {
+		return nil
+	}
+	artifact, issued := p.QAArtifacts[coverage.ReviewWhitebox]
+	if !issued || artifact.Identity != set.Candidate || !slices.Equal(artifact.Paths, set.Paths) || set.Status != "FROZEN" || set.Review == nil || set.Review.Verdict() != coverage.StatusPass {
+		return fmt.Errorf("test artifact has no accepted independent review for its exact candidate")
+	}
+	if !slices.ContainsFunc(set.ReviewHistory, func(prior protocol.CaseReviewEvidence) bool {
+		return prior.Candidate == artifact.Identity && reflect.DeepEqual(prior.Review, *set.Review) && reflect.DeepEqual(prior.Manifest, set.Manifest)
+	}) {
+		return fmt.Errorf("test artifact review does not bind its actual source and material relations")
+	}
+	return nil
+}
+
+func (f *Facade) reviewedArtifactOwnership(s *protocol.State, p protocol.CandidateParameters, identity string, before, after map[string]bool) error {
+	paths := []string{}
+	for _, artifact := range p.QAArtifacts {
+		paths = append(paths, artifact.Paths...)
+	}
+	if p.BlackboxManifest != nil {
+		paths = append(paths, ".gates/results/"+s.RunID+".blackbox-cases.md")
+	}
+	if p.MergeManifest != nil {
+		paths = append(paths, ".gates/results/"+s.RunID+".merge-cases.md")
+	}
+	changes, err := f.vcs.Changes(p.Base, identity)
+	if err != nil {
+		return err
+	}
+	for _, change := range changes {
+		if !slices.Contains(paths, change.Path) && !change.IsDirectoryContainer(paths) {
+			return fmt.Errorf("final candidate changed production outside its reviewed artifacts: %s", change.Path)
+		}
+	}
+	artifact, issued := p.QAArtifacts[coverage.ReviewWhitebox]
+	if !issued {
+		return nil
+	}
+	for _, path := range artifact.Paths {
+		reviewed, err := f.vcs.Entry(artifact.Identity, path)
+		if err != nil {
+			return err
+		}
+		current, err := f.vcs.Entry(identity, path)
+		if err != nil {
+			return err
+		}
+		if reviewed != current {
+			return fmt.Errorf("reviewed test artifact entry changed: %s", path)
+		}
+		base, err := f.vcs.Entry(p.ReviewBase, path)
+		if err != nil {
+			return err
+		}
+		if !reviewableArtifactPath(path, p.ReviewCases, p.TestFiles, before, after) && !testOwnedTransition(path, base != "", current != "", before, after) {
+			return fmt.Errorf("reviewed artifact is not test material or is a known production input: %s", path)
+		}
+		if base != "" {
+			before[path] = true
+		}
+		if current != "" {
+			after[path] = true
+		}
+	}
+	return nil
 }

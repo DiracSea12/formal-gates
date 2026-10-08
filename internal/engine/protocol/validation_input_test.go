@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
@@ -31,14 +32,55 @@ func TestSharedReviewInheritanceIncludesApprovedOperations(t *testing.T) {
 	step := coverage.SharedStep{ID: "setup", Procedure: "prepare documented public state", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "./app prepare", Stdin: "original input"}}}
 	set := &CaseSet{Manifest: coverage.AcceptanceManifest{SharedSteps: []coverage.SharedStep{step}, Cases: []coverage.AcceptanceCase{{CaseID: "case", SharedSteps: []string{"setup"}}}}}
 	set.ReviewHistory = []CaseReviewEvidence{{Manifest: set.Manifest, Review: coverage.ReviewResult{SharedStepDecisions: []coverage.ReviewDecision{{ID: "setup", Status: coverage.StatusPass, Reason: "approved shared operation and oracle context"}}}}}
-	if len(inheritableSharedReviews(set)) != 1 {
+	state := &State{}
+	if len(state.inheritableSharedReviews(set)) != 1 {
 		t.Fatal("identical approved shared operations lost inheritance")
 	}
 	before := caseReviewIdentity(set.Manifest, "case")
 	changed := step
 	changed.Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "./app prepare-other", Stdin: "original input"}}
 	set.Manifest.SharedSteps = []coverage.SharedStep{changed}
-	if len(inheritableSharedReviews(set)) != 0 || caseReviewIdentity(set.Manifest, "case") == before {
+	if len(state.inheritableSharedReviews(set)) != 0 || caseReviewIdentity(set.Manifest, "case") == before {
 		t.Fatal("changed approved operations inherited old review identity")
+	}
+}
+
+func TestSharedTestMaterialInheritanceRequiresCandidateContent(t *testing.T) {
+	for _, variant := range []string{"same", "equivalent", "changed", "unavailable"} {
+		t.Run(variant, func(t *testing.T) {
+			decision := coverage.ReviewDecision{ID: "setup", Status: coverage.StatusPass, Reason: "Read the associated fixture and independently classified it as test material"}
+			manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, SharedSteps: []coverage.SharedStep{{ID: "setup", Files: []string{"fixture.data"}, Procedure: "prepare the test input"}}}
+			set := &CaseSet{Candidate: "after", Manifest: manifest, ReviewHistory: []CaseReviewEvidence{{Candidate: "before", Manifest: manifest, Review: coverage.ReviewResult{Scope: coverage.ScopeFull, SharedStepDecisions: []coverage.ReviewDecision{decision}}}}}
+			state := &State{HostActionReceipts: map[string]HostActionReceipt{}}
+			if variant == "same" {
+				set.Candidate = "before"
+			}
+			if variant == "equivalent" || variant == "changed" {
+				for _, identity := range []string{"before", "after"} {
+					digest := "sha256:original-tree"
+					if variant == "changed" && identity == "after" {
+						digest = "sha256:changed-fixture"
+					}
+					raw, err := json.Marshal(CandidateEvidence{Identity: identity, Digest: digest})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var values map[string]any
+					if err := json.Unmarshal(raw, &values); err != nil {
+						t.Fatal(err)
+					}
+					state.HostActionReceipts[identity] = HostActionReceipt{AdapterOperation: "op.candidate", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+				}
+			}
+			allowed := variant == "same" || variant == "equivalent"
+			if got := state.inheritableSharedReviews(set); (len(got) == 1) != allowed {
+				t.Fatalf("shared material inheritance=%v, expected approval=%v", got, allowed)
+			}
+			inherited := decision
+			inherited.Inherited = true
+			if err := state.validateReviewPolicy(set, coverage.ReviewResult{Scope: coverage.ScopeAffected, SharedStepDecisions: []coverage.ReviewDecision{inherited}}); (err == nil) != allowed {
+				t.Fatalf("shared approval admission=%v, expected approval=%v", err, allowed)
+			}
+		})
 	}
 }

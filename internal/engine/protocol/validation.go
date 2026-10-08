@@ -292,27 +292,30 @@ type CaseReviewView struct {
 }
 
 // GateReviewView is the trusted adapter's ownership evidence for the entire
-// issued ReviewBase-to-candidate range. Only proved test-owned paths appear;
-// UNKNOWN ownership remains visible. A nil view means evidence is unavailable,
+// issued ReviewBase-to-candidate range. Test ownership uses available native
+// facts and accepted independent review bound to the exact QA artifact.
+// Unjudged ownership remains visible. A nil view means evidence is unavailable,
 // while an empty list confirms that the complete range has no exclusions.
 type GateReviewView struct {
 	TestOwnedPaths []string `json:"testOwnedPaths"`
 }
 
 type CandidateEvidence struct {
-	Integration         *IntegrationEvidence           `json:"integration,omitempty"`
-	ChildViews          map[string]ChildValidationView `json:"childViews,omitempty"`
-	Promotion           *CandidatePromotionReceipt     `json:"promotion,omitempty"`
-	Changes             []vcs.Change                   `json:"changes,omitempty"`
-	WorkspaceID         string                         `json:"workspaceId,omitempty"`
-	GateView            *GateReviewView                `json:"gateView,omitempty"`
-	ReviewViews         map[string]CaseReviewView      `json:"reviewViews,omitempty"`
-	ParametersDigest    string                         `json:"parametersDigest"`
-	Identity            string                         `json:"identity"`
-	Digest              string                         `json:"digest"`
-	Paths               []string                       `json:"paths"`
-	TestOnly            bool                           `json:"testOnly"`
-	ProductionViewEqual bool                           `json:"productionViewEqual"`
+	Integration      *IntegrationEvidence           `json:"integration,omitempty"`
+	ChildViews       map[string]ChildValidationView `json:"childViews,omitempty"`
+	Promotion        *CandidatePromotionReceipt     `json:"promotion,omitempty"`
+	Changes          []vcs.Change                   `json:"changes,omitempty"`
+	WorkspaceID      string                         `json:"workspaceId,omitempty"`
+	GateView         *GateReviewView                `json:"gateView,omitempty"`
+	ReviewViews      map[string]CaseReviewView      `json:"reviewViews,omitempty"`
+	ParametersDigest string                         `json:"parametersDigest"`
+	Identity         string                         `json:"identity"`
+	Digest           string                         `json:"digest"`
+	Paths            []string                       `json:"paths"`
+	// These flags cover the assembled QA artifacts, using their accepted
+	// independent judgment and exact native entries, not the development range.
+	TestOnly            bool `json:"testOnly"`
+	ProductionViewEqual bool `json:"productionViewEqual"`
 }
 
 type ValidationRequest struct {

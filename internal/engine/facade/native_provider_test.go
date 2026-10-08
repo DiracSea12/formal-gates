@@ -474,8 +474,8 @@ func TestSVNCandidateDirectoryPermissions(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(want, result.Candidate.Changes) {
 				t.Fatalf("directory evidence omitted native values: %+v %v", result.Candidate, err)
 			}
-			if scenario == "test-package" && (!result.Candidate.TestOnly || !result.Candidate.ProductionViewEqual) {
-				t.Fatal("test directory containers lost test-only proof")
+			if scenario == "test-package" && (result.Candidate.TestOnly || result.Candidate.ProductionViewEqual || result.Candidate.GateView != nil) {
+				t.Fatal("unreviewed test directory asserted ownership approval")
 			}
 			recovered, observed, err := f.candidateEvidence(s, intent, false, new(bool))
 			if err != nil || !observed || !reflect.DeepEqual(recovered, result) {

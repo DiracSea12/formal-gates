@@ -249,7 +249,7 @@ func TestNativeUnchangedFreezeObservedWithoutWrites(t *testing.T) {
 // Native existence and ownership are independent: embedding an existing
 // runtime input in a test cannot authorize changing it as a QA artifact.
 func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
-	for _, scenario := range []string{"runtime-input", "new-fixture", "removed-fixture", "test-mode"} {
+	for _, scenario := range []string{"runtime-input", "production-input", "new-fixture", "removed-fixture", "test-mode"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(dir string, args ...string) string {
@@ -283,11 +283,16 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "authoring")
 			git(root, "worktree", "add", "--detach", path, base)
 			paths := []string{}
+			files := []string{}
 			switch scenario {
 			case "runtime-input":
 				write(path, "config.json", "disabled")
 				write(path, "config_fixture_test.go", "package app\nimport (_ \"embed\";\"testing\")\n//go:embed config.json\nvar data string\nfunc TestConfiguration(t *testing.T) { if data==\"\" {t.Fatal(data)} }\n")
 				paths = []string{"config.json", "config_fixture_test.go"}
+			case "production-input":
+				write(path, "app.go", "package app\nfunc Enabled() bool { return false }\n")
+				paths = []string{"app.go"}
+				files = []string{"app.go"}
 			case "new-fixture":
 				write(path, "new.fixture", "new input")
 				write(path, "new_fixture_test.go", "package app\nimport (_ \"embed\";\"testing\")\n//go:embed new.fixture\nvar data string\nfunc TestNewInput(t *testing.T) { if data==\"\" {t.Fatal(data)} }\n")
@@ -308,7 +313,7 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 			r := protocol.NativeResource{ID: "authoring", Owner: "ownership", Role: "whitebox-authoring", Path: path, Ref: "refs/formal-gates/ownership/authoring", Source: base, Identity: base, Status: "READY"}
 			git(root, "update-ref", r.Ref, base)
 			s := &protocol.State{RunID: "ownership", NativeResources: map[string]protocol.NativeResource{r.ID: r}}
-			params, err := evidenceFields(protocol.CandidateParameters{Stage: "QA_ARTIFACT", WorkspaceID: r.ID, Base: base, Paths: paths})
+			params, err := evidenceFields(protocol.CandidateParameters{Stage: "QA_ARTIFACT", WorkspaceID: r.ID, Base: base, Paths: paths, TestFiles: files})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -316,19 +321,19 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 			f := &Facade{root: root, vcs: vcs.New(root, nil), admission: *testAdmission(t, root, "ownership", "sha256:package", DefaultProvider)}
 			before := git(path, "write-tree") + git(path, "rev-parse", "HEAD") + git(root, "show-ref", r.Ref)
 			result, complete, err := f.candidateEvidence(s, intent, true, new(bool))
-			if scenario == "runtime-input" {
+			if scenario == "runtime-input" || scenario == "production-input" {
 				if err == nil || complete || result.Candidate != nil {
 					t.Fatalf("existing UNKNOWN input gained ownership: %+v complete=%v err=%v", result, complete, err)
 				}
 				if after := git(path, "write-tree") + git(path, "rev-parse", "HEAD") + git(root, "show-ref", r.Ref); after != before {
 					t.Fatal("ownership rejection staged or committed an input")
 				}
-				if body, err := os.ReadFile(filepath.Join(path, "config.json")); err != nil || string(body) != "disabled" {
+				if body, err := os.ReadFile(filepath.Join(path, "config.json")); err != nil || scenario == "runtime-input" && string(body) != "disabled" {
 					t.Fatal("rejection changed authoring bytes")
 				}
 				return
 			}
-			if err != nil || !complete || result.Candidate == nil || !result.Candidate.TestOnly || !result.Candidate.ProductionViewEqual {
+			if err != nil || !complete || result.Candidate == nil || result.Candidate.TestOnly || result.Candidate.ProductionViewEqual || result.Candidate.GateView != nil {
 				t.Fatalf("native test transition lost proof: %+v complete=%v err=%v", result, complete, err)
 			}
 			want, err := f.vcs.At(path).Changes(base, result.Candidate.Identity)
