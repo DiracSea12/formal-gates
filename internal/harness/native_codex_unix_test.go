@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,13 +82,13 @@ func TestCodexRPCPeer(t *testing.T) {
 	defer log.Close()
 	emit := func(frame any) { line, _ := json.Marshal(frame); os.Stdout.Write(append(line, '\n')) }
 	reply := func(frame any, result any) { emit(map[string]any{"id": getOf(frame, "id"), "result": result}) }
-	scanner := bufio.NewScanner(os.Stdin)
+	reader := bufio.NewReader(os.Stdin)
 	read := func() any {
-		if !scanner.Scan() {
-			panic("unexpected input EOF")
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			panic(err)
 		}
-		line := scanner.Bytes()
-		log.Write(append(append([]byte{}, line...), '\n'))
+		log.Write(line)
 		value, err := decodeNativeJSON(line)
 		if err != nil {
 			panic(err)
@@ -106,8 +107,12 @@ func TestCodexRPCPeer(t *testing.T) {
 	frame = read()
 	check(frame, map[string]any{"method": "initialized", "params": map[string]any{}})
 	if peer.Mode == "probe" {
-		if scanner.Scan() {
+		line, err := reader.ReadBytes('\n')
+		if len(line) != 0 {
 			panic("probe started native work")
+		}
+		if err != io.EOF {
+			panic(err)
 		}
 		os.Exit(0)
 	}
@@ -153,7 +158,8 @@ func TestCodexRPCPeer(t *testing.T) {
 	configuration["cwd"] = cwd
 	reply(frame, configuration)
 	if peer.Mode == "resume_identity" || peer.Mode == "selection" || peer.Mode == "writable_review" {
-		for scanner.Scan() {
+		if _, err := io.Copy(io.Discard, reader); err != nil {
+			panic(err)
 		}
 		os.Exit(0)
 	}
@@ -237,8 +243,12 @@ func TestCodexRPCPeer(t *testing.T) {
 	check(getOf(frame, "method"), "thread/unsubscribe")
 	check(getOf(frame, "params"), map[string]any{"threadId": thread})
 	reply(frame, map[string]any{})
-	if scanner.Scan() {
+	line, err := reader.ReadBytes('\n')
+	if len(line) != 0 {
 		panic("unexpected work after unsubscribe")
+	}
+	if err != io.EOF {
+		panic(err)
 	}
 	if peer.Mode == "nonzero" {
 		os.Exit(3)
@@ -344,6 +354,67 @@ func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 	t.Helper()
 	s.save(t)
 	return codexExecute(s.request, s.directory, s.peer.Mode == "probe")
+}
+
+func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
+	s := newCodexScenario(t)
+	s.request["prompt"] = "Read the complete native execution evidence:\n" + strings.Repeat("command output: \"value\" ✓\n", 4096)
+	s.request["schema"] = WorkerSchema()
+	s.request["read_only"] = true
+	s.peer.StrictSchema = true
+	s.peer.Answer = map[string]any{"status": "PASS", "summary": "compared complete native evidence", "findings": []any{}, "check_reviews": map[string]any{}}
+	source, err := s.execute(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codexVerifySource(s.directory, source); err != nil {
+		t.Fatal(err)
+	}
+	rpc, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turnFrame []byte
+	for _, line := range bytes.Split(bytes.TrimSpace(rpc), []byte{'\n'}) {
+		frame, err := decodeNativeJSON(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if getOf(frame, "method") != "turn/start" {
+			continue
+		}
+		if turnFrame != nil {
+			t.Fatal("native work was duplicated")
+		}
+		turnFrame = line
+		params, err := codexTurnParameters(s.request, textOf(source["identity"]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := json.Marshal(map[string]any{"id": getOf(frame, "id"), "method": "turn/start", "params": params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(line, expected) {
+			t.Fatal("large native frame lost exact prompt, schema or original thread binding")
+		}
+	}
+	if len(turnFrame) <= bufio.MaxScanTokenSize {
+		t.Fatalf("fixture frame is not large: %d", len(turnFrame))
+	}
+	answer, err := readJSONFile(filepath.Join(s.directory, "answer.json"))
+	if err != nil || !valuesEqual(answer, s.peer.Answer) {
+		t.Fatalf("large input changed semantic answer: %v %v", answer, err)
+	}
+	observed, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
+	if err != nil || !valuesEqual(source, observed) {
+		t.Fatalf("large input recovery lost original source: %v %v", observed, err)
+	}
+	repeated, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if err != nil || !bytes.Equal(rpc, repeated) {
+		t.Fatal("large frame recovery issued new native work")
+	}
+	t.Logf("complete native turn/start frame=%d bytes", len(turnFrame))
 }
 
 func TestCodexNativeContinuationAndRecovery(t *testing.T) {
