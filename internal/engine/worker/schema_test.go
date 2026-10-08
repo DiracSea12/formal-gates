@@ -240,6 +240,8 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 			}
 			development := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
 			if name == "unfrozen-repair" {
+				input.RunID, input.Pending.AttemptID = "run", "attempt"
+				input.RequirementDocument = requirement.FrozenRequirementProjection{Content: "confirmed requirement"}
 				material, err := Render(input, catalog)
 				if err != nil {
 					t.Fatal(err)
