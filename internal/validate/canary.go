@@ -417,7 +417,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			if err != nil {
 				return err
 			}
-			lifecyclePayload, err := json.Marshal(map[string]string{"agent_id": id, "parentConversationId": run.RunID, "generationId": id, "subagentType": material.Input.Handler, "task": id, "cwd": root})
+			lifecyclePayload, err := portableLifecyclePayload(root, material.Input)
 			if err != nil {
 				return err
 			}
@@ -440,6 +440,17 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 		}
 	}
 	return fmt.Errorf("portable workflow exceeded its bounded drive fixture")
+}
+
+// portableLifecyclePayload binds the local canary's host events to one issued
+// action. ZCode Agent hooks identify that action by the native tool-call field.
+func portableLifecyclePayload(root string, input protocol.WorkerInput) ([]byte, error) {
+	id := input.Pending.ActionID
+	payload := map[string]string{"agent_id": id, "parentConversationId": input.RunID, "generationId": id, "subagentType": input.Handler, "task": id, "cwd": root}
+	if input.Provider == host.ZCode {
+		payload["tool_name"], payload["tool_use_id"] = "Agent", id
+	}
+	return json.Marshal(payload)
 }
 
 func portableDevelopmentPlan() *worker.Granularity {
