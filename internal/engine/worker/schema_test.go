@@ -240,6 +240,15 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 			}
 			development := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
 			if name == "unfrozen-repair" {
+				material, err := Render(input, catalog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, rule := range []string{"issued development batch or a proposed single batch", "Without either, omit completion", "development.paths, summary and affectedCases"} {
+					if !strings.Contains(material.Prompt, rule) {
+						t.Fatalf("repair output instruction missing %q", rule)
+					}
+				}
 				completion := development["completion"].(map[string]any)["properties"].(map[string]any)
 				if _, ok := completion["dod"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
 					t.Fatal("single proposed repair batch cannot supply authored DoD evidence")
