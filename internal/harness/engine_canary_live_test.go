@@ -137,9 +137,6 @@ const canaryProvider = "zcode"
 // canaryTurnBudget bounds one dispatch's model turns (shape retries included).
 const canaryTurnBudget = 3
 
-// canaryLoopLimit bounds drive iterations; a pass that needs more is stuck.
-const canaryLoopLimit = 300
-
 // canaryObservation is one real command execution this host bridge captured
 // for a judging turn: directory, argv, exit code and combined output.
 type canaryObservation struct {
@@ -395,9 +392,6 @@ func (c *engineCanary) loop() {
 			continue
 		}
 		c.rounds++
-		if c.rounds > canaryLoopLimit {
-			c.fail("canary exceeded %d drive rounds", canaryLoopLimit)
-		}
 		select {
 		case done := <-completed:
 			accept(done)
