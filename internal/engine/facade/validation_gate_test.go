@@ -46,7 +46,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				d.reviewReady()
 				id, input := d.action("engine.qa.execution")
 				executed := executionFor(input)
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed, Tool: "app-v1", Environment: "isolated-project"})
+				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				id, input = d.gateAction("quality")
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: verdict, Findings: []review.Finding{{Severity: "P2", Message: "Output ordering differs from required ordering"}}})
 				if original == "PASS" {
@@ -70,7 +70,9 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				d.drive()
 				id, input = d.action("engine.repair")
 				repairAction := id
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}})
+				repairResult := protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}}
+				d.business(id, repairResult)
+				d.verifyRepair(repairResult)
 				d.materialize()
 				d.materialize()
 				if original == "PASS" {
@@ -102,7 +104,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				}
 				id, input = d.action("engine.qa.execution")
 				executed = executionFor(input)
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed, Tool: "app-v1", Environment: "isolated-project"})
+				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				d.drive()
 				full := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 				if full.Scope != coverage.ScopeFull || full.Candidate != wave.Candidate {
@@ -120,7 +122,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				}
 				id, input = d.action("engine.qa.execution")
 				executed = executionFor(input)
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed, Tool: "app-v1", Environment: "isolated-project"})
+				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				d.reopen()
 				d.drive()
 				completed := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
