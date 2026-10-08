@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
@@ -700,9 +701,7 @@ func TestTerminalRunRejectsPromotionWithoutTouchingHistory(t *testing.T) {
 	if err != nil || run.Status != "COMPLETE" || run.PromotedSnapshot != promoted {
 		t.Fatalf("terminal drive = %s promoted = %s, want COMPLETE %s (%v)", run.Status, run.PromotedSnapshot, promoted, err)
 	}
-	// 终态后内容保持型新增提交（空提交）再误调晋升：内容前置门放行（树＝
-	// 已验证候选），意图准入处以活动期要求拒绝且 HEAD 不动；内容改写型漂移
-	// 由前置门先行拒绝（TestPrepareCandidateChainPassesWithoutGitignore）。
+	// 公开终态清理移除活动投影；内容保持型提交后的晋升误调用仍被拒绝。
 	runner := vcs.ExecRunner{}
 	if _, err := runner.Run(root, "git", "commit", "-q", "--allow-empty", "-m", "late work"); err != nil {
 		t.Fatal(err)
@@ -711,7 +710,8 @@ func TestTerminalRunRejectsPromotionWithoutTouchingHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.f.PrepareCandidate("reorganized after terminal"); err == nil || !strings.Contains(err.Error(), "requires an active run") {
+	var rejected *protocol.RejectedError
+	if _, err := d.f.PrepareCandidate("reorganized after terminal"); !errors.As(err, &rejected) || rejected.Code != protocol.CodeNotInitialized {
 		t.Fatalf("terminal promotion: %v", err)
 	}
 	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != late {
@@ -1207,15 +1207,15 @@ func TestAbortDecisionAdmissionWaitsForThePromotionWindow(t *testing.T) {
 }
 
 // TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched：abort 决定先于晋升
-// 窗口落账（REQUEST＋DECIDE 都在 PrepareCandidate 之前完成；决定的提交收尾
-// 随即把 run 推进 TERMINAL）——晋升在意图准入处拒绝（活动期要求）：零 Git
-// 写、多提交区间原样、拒绝可辨识。
+// 窗口落账，真实终止与清理完成后晋升在意图准入处拒绝：零 Git 写、
+// 多提交区间原样、拒绝可辨识。
 func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
 	observer := &promotionWindowObserver{inner: vcs.ExecRunner{}, windowOpened: make(chan struct{}), admitted: make(chan struct{})}
-	d := completePromotionPipeline(t, observer, root, base)
+	d := completePromotionPipeline(t, nil, root, base)
+	d.f.vcs = vcs.New(root, observer)
 	head, err := vcs.New(root, nil).Resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -1232,6 +1232,11 @@ func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
 		}
 	}
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}})
+	d.completeWorkerTerminations()
+	if err := d.f.engine.BeginCleanup(emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	settleAbortForPublication(t, d)
 	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -1339,7 +1344,9 @@ func TestPromotionResumeAfterCommitFailureBindsOrganizedHead(t *testing.T) {
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
 	crashed := &commitFailureRunner{inner: vcs.ExecRunner{}, message: "interrupted organization"}
-	d := completePromotionPipeline(t, crashed, root, base)
+	d := completePromotionPipeline(t, nil, root, base)
+	prepareApprovedPromotionPrefix(t, d, crashed.message)
+	d.f.vcs = vcs.New(root, crashed)
 	if _, err := d.f.PrepareCandidate("interrupted organization"); err == nil || !strings.Contains(err.Error(), "cannot squash") {
 		t.Fatalf("injected commit failure did not interrupt the window: %v", err)
 	}
@@ -1411,9 +1418,7 @@ func TestPromotionRejectsUserWorkspaceChangesUntilCleaned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	prepareApprovedPromotionPrefix(t, d, "organized final candidate")
 	if _, err := runner.Run(root, "git", "reset", "-q", "--soft", base); err != nil {
 		t.Fatal(err)
 	}
@@ -1543,10 +1548,7 @@ func TestPromotionContentDriftWithLiveIntentRejectsBeforeGitWrites(t *testing.T)
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
 	d := completePromotionPipeline(t, nil, root, base)
-	head, err := vcs.New(root, nil).Resolve()
-	if err != nil {
-		t.Fatal(err)
-	}
+	source := d.run.Validation.Candidate.Identity
 	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
 		t.Fatal(err)
 	}
@@ -1563,8 +1565,8 @@ func TestPromotionContentDriftWithLiveIntentRejectsBeforeGitWrites(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pendingPromotionSource(snap.State) != head {
-		t.Fatalf("rejected re-entry reopened the intent: %q, want the original target %q", pendingPromotionSource(snap.State), head)
+	if pendingPromotionSource(snap.State) != source {
+		t.Fatalf("rejected re-entry reopened the intent: %q, want the original source %q", pendingPromotionSource(snap.State), source)
 	}
 }
 
@@ -1610,15 +1612,9 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 	identities := snapshotRepoCommits(t, root, "development", "review")
 	base := identities[0]
 	runner := &commitFailureRunner{inner: vcs.ExecRunner{}, message: "delivery one"}
-	d := completePromotionPipeline(t, runner, root, base)
-	author := filepath.Join(t.TempDir(), "author")
-	if err := vcs.New(root, nil).AddWorktree(author, identities[len(identities)-1]); err != nil {
-		t.Fatal(err)
-	}
-	d.git = vcs.New(author, nil)
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "delivery one"), emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	d := completePromotionPipeline(t, nil, root, base)
+	prepareApprovedPromotionPrefix(t, d, runner.message)
+	d.f.vcs = vcs.New(root, runner)
 	if _, err := (vcs.ExecRunner{}).Run(root, "git", "reset", "--soft", base); err != nil {
 		t.Fatal(err)
 	}
@@ -1660,7 +1656,7 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 		t.Fatalf("observe completed original delivery: %t %v", complete, err)
 	}
 	originalProof := *firstResult.Candidate.Promotion
-	requalifyPromotionSource(t, d, author, "replacement", 2)
+	requalifyPromotionSource(t, d, "replacement", 2)
 	secondParams := promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "delivery two")
 	secondParams.SupersedesActionID = first.ActionID
 	if err := d.f.engine.OpenPromotion(secondParams, emptyFingerprint()); err != nil {
@@ -1687,7 +1683,7 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 		t.Fatalf("observe completed middle delivery: %t %v", complete, err)
 	}
 	middleProof := *secondResult.Candidate.Promotion
-	requalifyPromotionSource(t, d, author, "current", 3)
+	requalifyPromotionSource(t, d, "current", 3)
 	thirdParams := promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "delivery three")
 	thirdParams.SupersedesActionID = second.ActionID
 	if err := d.f.engine.OpenPromotion(thirdParams, emptyFingerprint()); err != nil {
@@ -1701,7 +1697,11 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 	if !ok {
 		t.Fatal("current delivery has no signed writer")
 	}
-	if err := vcs.New(root, nil).ApplyArtifact(thirdParams.Source, []string{"app.go"}); err != nil {
+	paths, err := vcs.New(root, nil).DiffNames("HEAD", thirdParams.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.New(root, nil).ApplyArtifact(thirdParams.Source, paths); err != nil {
 		t.Fatal(err)
 	}
 	before, err := d.f.observePromotion()
@@ -1784,9 +1784,69 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 	}
 }
 
-func requalifyPromotionSource(t *testing.T, d *validationDriver, author, message string, revision int) {
+func requalifyPromotionSource(t *testing.T, d *validationDriver, message string, revision int) {
 	t.Helper()
-	d.run, _ = d.f.Show()
+	// Hold the original promotion response while qualification consumes its
+	// actual source/check responsibilities through the original receipt owner.
+	advance := func() {
+		unlock, err := d.f.acquireNativeWindow()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unlock()
+		for {
+			if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress, checking := false, false
+			for _, execute := range []bool{false, true} {
+				for _, intent := range snapshot.State.PendingHostActions {
+					if intent.Adapter == nil {
+						continue
+					}
+					if intent.Adapter.Operation == "op.candidate" {
+						var params protocol.CandidateParameters
+						if err := decodeNativeParams(intent, &params); err != nil {
+							t.Fatal(err)
+						}
+						if params.Stage == "PROMOTION" {
+							continue
+						}
+					}
+					checking = checking || intent.Adapter.Operation == "op.check" && snapshot.State.NativeActionWritable(intent, d.f.definition)
+					progress, err = d.f.completeNativeIntent(snapshot.State, intent, execute)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if progress {
+						break
+					}
+				}
+				if progress {
+					break
+				}
+			}
+			if !progress && !checking {
+				d.run, err = d.f.Show()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !progress {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+	var err error
+	d.run, err = d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var development string
 	for _, work := range d.run.RequirementWork {
 		for _, result := range d.run.Validation.Waves {
@@ -1801,29 +1861,41 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, author, message
 		t.Fatal("confirmed plan omitted the original development duty")
 	}
 	confirmValidationDocument(d, development, nil, validationDocument+strings.Repeat("\n", revision))
-	d.drive()
+	advance()
 	id, input := d.action("engine.development.batch")
-	snapshotCommitOne(t, author, message)
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := snapshot.State.NativeResources[input.Binding.WorkspaceID]
+	if workspace.Role != "development" || workspace.Status != "READY" {
+		t.Fatalf("development source is not ready: %+v", workspace)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Path, "app.go"), []byte("package main // "+message+"\nfunc main() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "updated input behavior"}})
-	d.drive()
-	d.materialize()
-	d.materialize()
+	advance()
 	for id, input := range d.run.ValidationInputs {
 		switch input.Handler {
 		case "engine.qa.execution":
 			report := executionFor(input)
-			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: "app", Environment: "isolated-project"})
+			tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
 		case "engine.gate":
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		}
 	}
-	d.drive()
+	d.run, err = d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
 	state, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !state.State.FinalValidationComplete(d.f.definition) {
-		t.Fatal("new current source did not complete FULL qualification")
+		t.Fatalf("new current source did not complete FULL qualification: next=%+v", d.run.Next)
 	}
 }
 
@@ -1833,9 +1905,7 @@ func TestUnknownPromotionPartialPrefixDoesNotExecuteOnReentry(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "development", "validated output")
 	d := completePromotionPipeline(t, nil, root, identities[0])
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "lost delivery"), emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	prepareApprovedPromotionPrefix(t, d, "lost delivery")
 	if _, err := (vcs.ExecRunner{}).Run(root, "git", "reset", "--soft", identities[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -1871,8 +1941,8 @@ func TestUnknownPromotionPartialPrefixDoesNotExecuteOnReentry(t *testing.T) {
 			t.Fatal("partial UNKNOWN was executed on public promotion reentry")
 		}
 	}
-	if _, err := d.f.Drive(); err != nil {
-		t.Fatal(err)
+	if _, err := d.f.Drive(); err == nil || !strings.Contains(err.Error(), "candidate promotion remains incomplete") {
+		t.Fatalf("UNKNOWN native responsibility was not blocked: %v", err)
 	}
 	after, err := d.f.observePromotion()
 	if err != nil {
