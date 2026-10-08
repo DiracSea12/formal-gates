@@ -19,6 +19,10 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
+			d.fixtureQAResults = map[string]protocol.CheckEvidence{
+				"normal":  {ExitCode: 1, StdoutText: "unexpected valid-input error"},
+				"invalid": {ExitCode: 0, StdoutText: "QA harness overwrote the rejecting exit"},
+			}
 			d.reviewReady()
 			id, in := d.action("engine.qa.execution")
 			report := executionFor(in)
@@ -26,16 +30,12 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 				row := &report.Records[i]
 				row.Result = coverage.ExecutedFail
 				if row.CaseID == "normal" {
-					row.Procedure = "app run with documented valid input"
-					row.Observation = "exit one"
 					row.Comparison = "valid input must exit zero"
 				} else {
-					row.Procedure = "invoke app through the QA harness with invalid input"
-					row.Observation = "harness reports exit zero"
 					row.Comparison = "invalid input requires a rejecting exit status"
 				}
 			}
-			result := protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+			result := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report})
 			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "two-distinct-case-failures", Validation: &result}}
 			if !held {
 				d.receipt(id)
@@ -134,7 +134,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution")
 			initial := executionFor(qi)
-			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &initial, Tool: "app-v1", Environment: "isolated"})
+			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &initial}))
 			gate, gi := d.gateAction("quality")
 			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "a valid input variant is rejected by the optional whitespace parser"}}})
 			d.drive()
@@ -147,6 +147,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			repair, ri := d.action("engine.repair")
 			completion := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct whitespace validation", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app with the representative valid input", Observation: "exit zero", Comparison: "normal input succeeds as required"}}}}
 			d.business(repair, completion)
+			d.verifyRepair(completion)
 			d.materialize()
 			d.materialize()
 			var original string
@@ -159,7 +160,8 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			affected, ai := d.action("engine.qa.execution")
 			affectedReport := executionFor(ai)
-			d.business(affected, protocol.ValidationResult{Binding: ai.Binding, Status: "PASS", Execution: &affectedReport, Tool: "app-v1", Environment: "isolated"})
+			d.business(affected, nativeExecutionResult(ai, protocol.ValidationResult{Binding: ai.Binding, Status: "PASS", Execution: &affectedReport}))
+			d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 1, StdoutText: "unexpected whitespace validation error"}}
 			d.drive()
 			id, in := d.action("engine.qa.execution")
 			if in.Execution.Scope != coverage.ScopeFull {
@@ -169,12 +171,10 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			for i := range report.Records {
 				if report.Records[i].CaseID == "normal" {
 					report.Records[i].Result = coverage.ExecutedFail
-					report.Records[i].Procedure = "execute app run valid-input-with-trailing-space on the repaired candidate"
-					report.Records[i].Observation = "process exits one"
 					report.Records[i].Comparison = "documented valid input must exit zero"
 				}
 			}
-			result := protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+			result := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report})
 			if rawOpen {
 				result.Findings = []review.Finding{{Severity: "P1", Message: "normal commands corrupt the active configuration", SeverityRationale: "Normal invocation corrupts required persistent state", Requirement: "AC-001", NormalPath: "app run valid input", ActualError: "configuration becomes empty", DeferralImpact: "subsequent normal invocations cannot run", Locations: []string{"app.go:1"}}}
 			}

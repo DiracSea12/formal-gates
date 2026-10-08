@@ -15,6 +15,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
+			d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 			d.reviewReady()
 			id, input := d.action("engine.qa.execution")
 			original := d.run.Attempts[input.Binding.Task]
@@ -23,7 +24,6 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 			partial.Records = append([]coverage.ExecutionRecord(nil), full.Records[:1]...)
 			partial.Binding.ActualCaseIDs = []string{partial.Records[0].CaseID}
 			partial.Records[0].Result = coverage.ExecutedFail
-			partial.Records[0].Observation = "command returned an unexpected exit code"
 			partial.Records[0].Comparison = "approved oracle requires rejection with documented output"
 			cause := "工具退出 137\nwhile opening the next case fixture  "
 			if held {
@@ -31,7 +31,8 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 			} else {
 				d.receipt(id)
 			}
-			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "interrupted-with-complete-case", InterruptionReason: cause, Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Execution: &partial, Checkpoint: true, Tool: "command", Environment: "clean-project"}}}
+			interrupted := nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Execution: &partial, Checkpoint: true})
+			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "interrupted-with-complete-case", InterruptionReason: cause, Validation: &interrupted}}
 			d.submit(event)
 			if held {
 				d.reopen()
@@ -72,7 +73,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 			remaining := full
 			remaining.Records = full.Records[1:]
 			remaining.Binding.ActualCaseIDs = []string{remaining.Records[0].CaseID}
-			d.business(retry, protocol.ValidationResult{Binding: next.Binding, Status: "PASS", Execution: &remaining, Tool: "command", Environment: "clean-project"})
+			d.business(retry, nativeExecutionResult(next, protocol.ValidationResult{Binding: next.Binding, Status: "PASS", Execution: &remaining}))
 			d.reopen()
 			d.drive()
 			target := d.run.Validation.Waves[0].Targets[input.Binding.Task.String()]

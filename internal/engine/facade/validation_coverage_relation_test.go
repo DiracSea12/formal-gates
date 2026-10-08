@@ -63,7 +63,7 @@ func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
 					t.Fatal("complete relation lost from approved whitelist")
 				}
 				report := executionFor(in)
-				d.business(qa, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "clean project"})
+				d.business(qa, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 				d.drive()
 				waves := d.run.Validation.Waves
 				if waves[len(waves)-1].Status != "COMPLETE" {
@@ -98,7 +98,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 			qa, qi := d.action("engine.qa.execution")
 			report := executionFor(qi)
 			if phase == "completed" {
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 			}
 			inventory.Links = append(inventory.Links, protocol.SourcePoint{SourceID: "SOL-002", PointID: "SP-001"})
 			confirmValidationCoverage(d, "", inventory)
@@ -108,7 +108,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 				t.Fatalf("new confirmed relation was not exposed: %+v", d.run.Next)
 			}
 			if phase == "in-flight" {
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 				d.reopen()
 				d.drive()
 			}
@@ -133,7 +133,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 			d.materialize()
 			id, in = d.action("engine.qa.execution")
 			report = executionFor(in)
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 				t.Fatal("repaired coverage did not complete")

@@ -110,7 +110,9 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 	d.reopen()
 	d.drive()
 	corrected := d.run.Validation.Findings[finding].History[1].ProblemID
-	d.business(id, gateRepairResult(input))
+	repairResult := gateRepairResult(input)
+	d.business(id, repairResult)
+	d.verifyRepair(repairResult)
 	d.materialize()
 	d.materialize()
 	wave = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -147,7 +149,7 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 				advanced = true
 			case "engine.qa.execution":
 				report := executionFor(current)
-				d.business(action, protocol.ValidationResult{Binding: current.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+				d.business(action, nativeExecutionResult(current, protocol.ValidationResult{Binding: current.Binding, Status: "PASS", Execution: &report}))
 				advanced = true
 			}
 			if advanced {
@@ -210,7 +212,7 @@ func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
 				d.drive()
 				id, in := d.action("engine.qa.execution")
 				report := executionFor(in)
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			case "requirement-carry":
 				for _, work := range d.run.RequirementWork {
 					if work.Task == input.Binding.Task {

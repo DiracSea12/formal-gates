@@ -524,8 +524,6 @@ func (d *validationDriver) action(handler string) (string, protocol.ValidationIn
 			d.drive()
 		}
 	}
-	frontier, _ := json.Marshal(d.run.AdapterIntents)
-	d.t.Logf("native frontier at missing %s: %s", handler, frontier)
 	d.t.Fatalf("missing %s; inputs=%+v, next=%+v, validation=%+v", handler, d.run.ValidationInputs, d.run.Next, d.run.Validation)
 	return "", protocol.ValidationInput{}
 }
@@ -1149,11 +1147,10 @@ func (r *frozenGitRepo) RunRaw(dir, command string, input []byte, args ...string
 	return []byte(out), err
 }
 
-func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) {
+func (d *validationDriver) candidateReceipt(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 	assertCandidateStep(d.t, d, intent)
 	if d.fixtureCandidateObserver != nil {
-		d.submit(d.fixtureCandidateObserver(intent, p))
-		return
+		return d.fixtureCandidateObserver(intent, p)
 	}
 	// 候选回执用当前原生身份与树摘要作证据（与晋升的内容绑定同源）。
 	// 冻结场景产生候选对象而不改变目标 HEAD；真仓语义夹具
@@ -1180,7 +1177,11 @@ func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActio
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	d.submit(e)
+	return e
+}
+
+func (d *validationDriver) fixtureCandidate(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) {
+	d.submit(d.candidateReceipt(id, intent, p))
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		d.t.Fatal(err)

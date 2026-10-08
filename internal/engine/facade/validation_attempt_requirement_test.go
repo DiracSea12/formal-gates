@@ -424,11 +424,13 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 			if in.Binding != original.Binding || d.run.Attempts[in.Binding.Task].Attempts != 2 || d.run.Attempts[in.Binding.Task].MaxAttempts != 3 {
 				t.Fatal("carried repair changed signed duty or allowance")
 			}
-			d.business(id, gateRepairResult(in))
+			repairResult := gateRepairResult(in)
+			d.business(id, repairResult)
+			d.verifyRepair(repairResult)
+			d.materialize()
 			if d.run.Validation.Waves[0].Status != "REPAIRED" {
 				t.Fatal("accepted repair did not settle original duty")
 			}
-			d.materialize()
 			d.materialize()
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 			gate, gi := d.gateAction("quality")

@@ -899,7 +899,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	}
 	id, in := qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)
 	manifest := in.Manifest
-	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestInvalid", Oracle: "invalid input is rejected"}}
+	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.materialize()
@@ -914,7 +914,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 		}
 	}
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "go-test", Environment: "isolated-project"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
@@ -1584,7 +1584,7 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Review: &blackReview})
 	white, whiteInput := qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)
 	whiteManifest := whiteInput.Manifest
-	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestInvalid", Oracle: "invalid input is rejected"}}
+	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	whiteManifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
 	d.business(white, protocol.ValidationResult{Binding: whiteInput.Binding, Status: "PASS", Manifest: &whiteManifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.materialize()
@@ -1616,7 +1616,7 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 		input  protocol.ValidationInput
 	}{{fresh, freshInput}, {white, whiteInput}} {
 		report := executionFor(item.input)
-		result := protocol.ValidationResult{Binding: item.input.Binding, Status: "PASS", Execution: &report, Tool: "case-runner", Environment: "isolated-project"}
+		result := nativeExecutionResult(item.input, protocol.ValidationResult{Binding: item.input.Binding, Status: "PASS", Execution: &report})
 		d.business(item.action, result)
 		if !reflect.DeepEqual(authorizationSnapshot(d).State.Results[item.action].Validation, &result) {
 			t.Fatal("QA result lost its actual frozen input and report")

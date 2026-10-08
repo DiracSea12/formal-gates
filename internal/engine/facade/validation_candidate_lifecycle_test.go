@@ -44,15 +44,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 				if err := json.Unmarshal(data, &params); err != nil {
 					t.Fatal(err)
 				}
-				evidence := protocol.CandidateEvidence{ParametersDigest: old.PayloadDigest, Identity: "native-stale-final", Digest: "sha256:stale-final", Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
-				evidence.GateView = gateReviewView(params)
-				data, _ = json.Marshal(evidence)
-				var values map[string]any
-				_ = json.Unmarshal(data, &values)
-				delivered, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), old.ActionID, "op.candidate", DefaultProvider, old.Correlation, old.PayloadDigest, "EXECUTED", "", values)
-				if err != nil {
-					t.Fatal(err)
-				}
+				delivered := d.candidateReceipt(old.ActionID, old, params)
 				if held {
 					request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
 					if err != nil {
@@ -78,7 +70,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 					t.Fatal(err)
 				}
 				recorded, ok := snapshot.State.HostActionReceipts[old.ActionID]
-				if !ok || recorded.AdapterEvidence == nil || recorded.AdapterEvidence.Values["identity"] != "native-stale-final" || recorded.PayloadDigest != old.PayloadDigest {
+				if !ok || recorded.AdapterEvidence == nil || recorded.AdapterEvidence.Values["identity"] != delivered.HostAction.AdapterEvidence.Values["identity"] || recorded.PayloadDigest != old.PayloadDigest {
 					t.Fatal("old external completion facts lost")
 				}
 				if _, ok := d.run.AdapterIntents[old.ActionID]; ok {
@@ -94,7 +86,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 				d.reopen()
 				d.materialize()
 				d.drive()
-				if d.run.Validation.Candidate == nil || d.run.Validation.Candidate.Identity == "native-stale-final" {
+				if d.run.Validation.Candidate == nil || d.run.Validation.Candidate.Identity == delivered.HostAction.AdapterEvidence.Values["identity"] {
 					t.Fatal("new candidate not materialized independently")
 				}
 				wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -103,7 +95,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 				}
 				id, in = d.action("engine.qa.execution")
 				execution := executionFor(in)
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution, Tool: "app-v1", Environment: "clean"})
+				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution}))
 				id, in = d.gateAction("quality")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 				d.reopen()

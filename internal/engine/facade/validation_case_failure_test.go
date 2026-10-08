@@ -18,15 +18,18 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 	for _, delivery := range []string{"normal", "held", "checkpoint", "native-resume"} {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
+			d.fixtureQAResults = map[string]protocol.CheckEvidence{
+				"normal":  {ExitCode: 1, StdoutText: "unexpected valid-input error"},
+				"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"},
+			}
 			d.reviewReady()
 			id, in := d.action("engine.qa.execution")
 			report := executionFor(in)
 			for i := range report.Records {
 				report.Records[i].Result = coverage.ExecutedFail
-				report.Records[i].Observation = "exit status and output violate " + report.Records[i].CaseID
 				report.Records[i].Comparison = "expected outcome differs from the recorded observation"
 			}
-			result := protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+			result := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report})
 			if delivery == "checkpoint" || delivery == "native-resume" {
 				d.receipt(id)
 				partial := report
@@ -148,6 +151,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 			repaired := gateRepairResult(ri)
 			repaired.Development.AffectedCases = []string{"normal", "invalid"}
 			repaired.Development.CaseRuns = append(repaired.Development.CaseRuns, protocol.RepairCaseEvidence{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "run invalid input", Observation: "input rejected", Comparison: "matches input rejection oracle"})
+			d.fixtureQAResults = nil
 			d.business(repair, repaired)
 			d.materialize()
 			d.materialize()
@@ -161,7 +165,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 					switch input.Handler {
 					case "engine.qa.execution":
 						r := executionFor(input)
-						d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+						d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &r}))
 					case "engine.gate":
 						d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 					}
@@ -184,14 +188,16 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	resolveGateFinding(d, finding, origin)
 	action, input := d.action("engine.repair")
 	originalTask := input.Binding.Task
-	d.business(action, gateRepairResult(input))
+	repairResult := gateRepairResult(input)
+	d.business(action, repairResult)
+	d.verifyRepair(repairResult)
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 	for i := 0; i < 2; i++ {
 		action, input = d.action("engine.qa.execution")
 		execution := executionFor(input)
-		d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution, Tool: "app-v1", Environment: "clean"})
+		d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution}))
 		d.drive()
 	}
 	completed := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -246,7 +252,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	id, in = d.action("engine.qa.design")
 	m = in.Manifest
 	for _, item := range []struct{ id, scenario string }{{"normal", "SUCCESS"}, {"invalid", "MISUSE"}} {
-		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: "white-" + item.id, Scenario: item.scenario, Mode: coverage.CaseWhitebox, TestRef: "app_test.go#" + item.id, Oracle: "specified input outcome"})
+		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: "white-" + item.id, Scenario: item.scenario, Mode: coverage.CaseWhitebox, TestRef: "app_test.go::Test" + map[string]string{"normal": "Normal", "invalid": "Invalid"}[item.id], Oracle: "specified input outcome"})
 		m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-" + item.id})
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
@@ -254,6 +260,11 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	id, in = d.action("engine.qa.review.rationale")
 	r = approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
+	d.drive()
+	d.fixtureQAResults = map[string]protocol.CheckEvidence{
+		"normal":       {ExitCode: 1, StdoutText: "unexpected valid-input error"},
+		"white-normal": {ExitCode: 1, StdoutText: "{\"Action\":\"run\",\"Test\":\"TestNormal\"}\n{\"Action\":\"fail\",\"Test\":\"TestNormal\"}\n"},
+	}
 	d.materialize()
 	actions := map[coverage.ReviewKind]string{}
 	for action, input := range d.run.ValidationInputs {
@@ -264,12 +275,11 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 		for i := range report.Records {
 			if report.Records[i].CaseID == "normal" || report.Records[i].CaseID == "white-normal" {
 				report.Records[i].Result = coverage.ExecutedFail
-				report.Records[i].Observation = "nonzero exit for valid input"
 				report.Records[i].Comparison = "expected success"
 			}
 		}
 		actions[input.Manifest.Binding.ReviewKind] = action
-		d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Execution: &report, Tool: "app", Environment: "isolated"})
+		d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Execution: &report}))
 	}
 	gate, gi := d.gateAction("quality")
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
@@ -301,14 +311,14 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 
 func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
+	d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution")
 	report := executionFor(in)
 	report.Records[0].Result = coverage.ExecutedFail
-	report.Records[0].Observation = "exit status differs from the approved input oracle"
 	report.Records[0].Comparison = "actual input outcome violates requirement"
 	raw := []review.Finding{{Severity: "P2", Message: "optional output formatting improvement"}, {Severity: "P3", Message: "optional internal naming cleanup"}}
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report, Tool: "command", Environment: "clean", Findings: raw})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Execution: &report, Findings: raw}))
 	d.drive()
 	wave := d.run.Validation.Waves[0]
 	var caseID string
