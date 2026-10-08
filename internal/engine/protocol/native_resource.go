@@ -32,6 +32,7 @@ type NativeResource struct {
 	MirrorDigest string              `json:"mirrorDigest,omitempty"`
 }
 type WorkspaceParameters struct {
+	Task                *runtime.TaskKey             `json:"task,omitempty"`
 	RequirementRevision string                       `json:"requirementRevision"`
 	Generation          uint64                       `json:"generation"`
 	RouteScope          string                       `json:"routeScope"`
@@ -290,11 +291,15 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 	}
 	return NativeResource{}
 }
-func (e *Engine) ensureWorkspace(s *State, r NativeResource, nextRevision uint64) (bool, error) {
+func (e *Engine) ensureWorkspace(s *State, r NativeResource, nextRevision uint64, tasks ...runtime.TaskKey) (bool, error) {
 	if r.ID == "" || s.NativeResources[r.ID].Status == "CLEANED" || s.ResourceCleanupPending(r.ID) {
 		return false, nil
 	}
 	params := WorkspaceParameters{Resource: r, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}
+	if len(tasks) != 0 {
+		task := tasks[0]
+		params.Task = &task
+	}
 	if r.Role == "blackbox-design" && s.Validation != nil {
 		if set := s.Validation.Sets[coverage.ReviewBlackbox]; set != nil {
 			manifest := set.Manifest
@@ -345,7 +350,7 @@ func (e *Engine) advanceWorkspaces(s *State, nextRevision uint64) (bool, error) 
 		}
 		r := s.taskResource(key, e.cfg.Definition)
 		if r.ID != "" && !s.workspaceReady(key, e.cfg.Definition) {
-			return e.ensureWorkspace(s, r, nextRevision)
+			return e.ensureWorkspace(s, r, nextRevision, key)
 		}
 	}
 	return false, nil
@@ -538,7 +543,20 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	if p.Resource.Role == "child-target" {
 		return s.creationWorkspaceCurrent(p)
 	}
-	if s.Validation == nil || s.abortRequested() || p.RequirementRevision != s.Validation.RequirementRevision || p.Generation != s.Validation.Generation || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || s.NativeResources[p.Resource.ID] != p.Resource {
+	registered := s.NativeResources[p.Resource.ID]
+	resourceMatches := registered == p.Resource
+	if p.Task != nil {
+		resourceMatches = (registered.Status == "PLANNED" || registered.Status == "READY") && sameWorkspaceInput(registered, p.Resource)
+	}
+	if s.Validation == nil || s.abortRequested() || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || !resourceMatches {
+		return false
+	}
+	current := p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation
+	carried := p.Task != nil && s.validationWorkCarryAuthorized("", *p.Task)
+	if !current && !carried {
+		return false
+	}
+	if p.Task != nil && (s.requirementChangePending() || s.resetPending()) {
 		return false
 	}
 	if p.Resource.Role == "blackbox-design" {
@@ -561,21 +579,31 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	s.projectValidationTasks(&view, cd)
 	for _, tasks := range view.RequiredTasks {
 		for _, task := range tasks {
-			if s.taskResource(task.Task, cd).ID == p.Resource.ID {
+			if sameWorkspaceInput(s.taskResource(task.Task, cd), p.Resource) && (p.Task == nil && current || p.Task != nil && task.Task == *p.Task) {
 				return true
 			}
 		}
 	}
-	current, ready, _ := s.currentCandidateParameters(cd)
+	if p.Task != nil || !current {
+		return false
+	}
+	candidate, ready, _ := s.currentCandidateParameters(cd)
 	if ready {
-		if s.candidateResource(current, cd).ID == p.Resource.ID {
+		if s.candidateResource(candidate, cd).ID == p.Resource.ID {
 			return true
 		}
-		if current.Stage == "QA_ARTIFACT" {
-			return s.resource("candidate", current.Base, "ownership:"+candidateCorrelation(current)+":"+strconv.FormatUint(s.Validation.Generation, 10)).ID == p.Resource.ID
+		if candidate.Stage == "QA_ARTIFACT" {
+			return s.resource("candidate", candidate.Base, "ownership:"+candidateCorrelation(candidate)+":"+strconv.FormatUint(s.Validation.Generation, 10)).ID == p.Resource.ID
 		}
 	}
 	return false
+}
+
+// Workspace input identity excludes creation facts owned by resource receipts.
+// Manifest equality is checked by workspaceParametersCurrent, not MirrorDigest.
+func sameWorkspaceInput(actual, issued NativeResource) bool {
+	actual.Status, actual.Identity, actual.MirrorDigest = issued.Status, issued.Identity, issued.MirrorDigest
+	return actual == issued
 }
 
 func (s *State) cleanupParametersCurrent(p CleanupParameters) bool {

@@ -144,6 +144,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	if s.NativeResources[spike.ID] != spike || s.NativeResources[delivery.ID] != delivery {
 		t.Fatal("requirement decisions discarded outstanding native resources")
 	}
+
 }
 
 // Topology replacement retires only the previous membership's removed targets.
@@ -216,5 +217,76 @@ func TestTopologyCleanupFollowsRetiredResources(t *testing.T) {
 	delete(s.PendingHostActions, intent.ActionID)
 	if len(s.replacedTargetResources()) != 0 || s.cleanupParametersCurrent(p) || s.NativeResources[carried.ID] != carried || s.NativeResources[current.ID] != current || s.NativeResources[design.ID] != design {
 		t.Fatal("cleanup replay renewed debt or changed current resources")
+	}
+}
+
+// Queued workspace replacement uses the confirmed task and original resource
+// inputs even when no worker dispatch has supplied a workspace binding.
+func TestQueuedWorkspaceReplacementRequiresExactAuthorization(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := DevelopmentBatch{
+		ID: "investigate", Spike: true,
+		Subtasks:    []DevelopmentSubtask{{ID: "input", Description: "Check the input boundary"}},
+		Deliverable: "Input boundary conclusion", PublicEntry: "app", Artifacts: []string{"experiment.go"},
+		Interfaces: "Command arguments", StateBoundary: "No persistent state", Risk: "Invalid input",
+		DoD:      []DevelopmentCriterion{{ID: "behavior", Description: "Input contract holds"}},
+		Checks:   []DevelopmentCheck{{ID: "build", Command: "go build ./..."}},
+		Rollback: "Discard experiment", Recovery: "Run the check again", Handoff: "Input conclusion", ContextCost: "One package",
+	}
+	plan := &GranularityReview{Reason: "Resolve uncertainty before implementation", VerificationTier: "FINAL", Batches: []DevelopmentBatch{batch}}
+	if err := ValidateGranularity(plan); err != nil {
+		t.Fatal(err)
+	}
+	s := &State{
+		RunID: "delivery", NativeRoot: t.TempDir(), BaseSnapshot: "base-identity", InitialSnapshot: "initial-identity",
+		Validation:      &Validation{RequirementRevision: "rev-1", Generation: 1},
+		NativeResources: map[string]NativeResource{},
+		Decisions: map[string]RecordedDecision{"route": {Control: ControlSelectRoute, Revision: 5,
+			Review: &ReviewDecisionPayload{Route: &RouteDecision{DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "readiness", Digest: planContractDigest(plan)}}}}},
+		Results: map[string]WorkerResult{"readiness": {ActionID: "readiness", Outcome: OutcomePass,
+			Review: &ReviewResultEvidence{Action: review.StartReadiness, RequirementRevision: "rev-1", GranularityReview: plan}}},
+	}
+	spikeTask := planTask(cd, plan, batch.ID)
+	spike := s.taskResource(spikeTask, cd)
+	s.NativeResources[spike.ID] = spike
+	s.Validation.Candidate = &coverage.ValidationCandidate{Identity: "candidate-identity", Digest: "candidate-tree"}
+	s.RequirementRevisions = []ConfirmedRevision{{Revision: "rev-2", StateRevision: 12, WorkDecisions: []RequirementWorkDecision{{
+		Work: RequirementWork{Task: spikeTask, RequirementRevision: "rev-1"}, Disposition: RequirementWorkRedo,
+	}}}}
+	s.Validation.RequirementRevision, s.Validation.Generation = "rev-2", 2
+	newSpikeTask := s.currentPlanTask(cd, plan, batch.ID)
+	newSpike := s.taskResource(newSpikeTask, cd)
+
+	intentFor := func(id string, revision uint64, task runtime.TaskKey, resource NativeResource) HostActionIntent {
+		values, err := normalizeHostActionParams(WorkspaceParameters{Task: &task, Resource: resource})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return HostActionIntent{ActionID: id, Revision: revision, Correlation: resource.ID, PayloadDigest: digestOfCanonical(values), Adapter: &AdapterHostAction{Operation: "op.workspace", Params: values}}
+	}
+	original := intentFor("original", 8, spikeTask, spike)
+	replacement := intentFor("replacement", 13, newSpikeTask, newSpike)
+	if !s.nativeReplacementAuthorized(original, replacement, cd) {
+		t.Fatal("confirmed queued REDO cannot settle the original responsibility")
+	}
+	otherTask := newSpikeTask
+	otherTask.Scope += ":other"
+	if s.nativeReplacementAuthorized(original, intentFor("other", 13, otherTask, newSpike), cd) {
+		t.Fatal("the same resource authorized a different task")
+	}
+	changedSource := newSpike
+	changedSource.Source = "different-source"
+	if s.nativeReplacementAuthorized(original, intentFor("different-source", 13, newSpikeTask, changedSource), cd) {
+		t.Fatal("replacement accepted a different source")
+	}
+	if s.nativeReplacementAuthorized(original, intentFor("earlier", 8, newSpikeTask, newSpike), cd) {
+		t.Fatal("replacement ignored original revision chronology")
+	}
+	s.RequirementRevisions = s.RequirementRevisions[:len(s.RequirementRevisions)-1]
+	if s.nativeReplacementAuthorized(original, replacement, cd) {
+		t.Fatal("replacement was authorized without REDO")
 	}
 }

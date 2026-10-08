@@ -458,6 +458,12 @@ func (s *State) nativeReplacementAuthorized(old, current HostActionIntent, cd *c
 		if json.Unmarshal(a, &before) != nil || json.Unmarshal(b, &after) != nil {
 			return false
 		}
+		if before.Task != nil && after.Task != nil {
+			replacement, authorized := s.requirementWorkReplacement(*before.Task)
+			if authorized && replacement != *before.Task && replacement == *after.Task && sameWorkspaceInput(s.NativeResources[before.Resource.ID], before.Resource) && sameWorkspaceInput(s.taskResource(replacement, cd), after.Resource) {
+				return true
+			}
+		}
 		for _, binding := range s.DispatchBindings {
 			if binding.WorkspaceID != before.Resource.ID {
 				continue
