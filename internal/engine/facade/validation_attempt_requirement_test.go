@@ -139,6 +139,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					id, in := d.action("engine.qa.design")
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
+					d.drive()
 				}
 				id, original := d.action(role)
 				for i := 0; i < 2; i++ {
@@ -209,6 +210,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					m := di.Manifest
 					d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &m})
 				}
+				d.drive()
 				id, in := d.action(role)
 				if !redo && in.Binding != original.Binding || redo && in.Binding.Task == original.Binding.Task {
 					t.Fatal("requirement decision changed the wrong responsibility")
@@ -245,6 +247,11 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					r := approvedReview(ri.Manifest)
 					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 				}
+				if candidate.Identity == "" {
+					d.drive()
+					d.materialize()
+				}
+				d.drive()
 				if role != "engine.qa.execution" {
 					qa, qi := d.action("engine.qa.execution")
 					r := executionFor(qi)
