@@ -16,23 +16,30 @@ import (
 func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 	for _, variant := range []string{"unchanged", "held", "missing-proof", "baseline-missing", "shared-input-changed", "config-changed", "different-test-ref"} {
 		t.Run(variant, func(t *testing.T) {
-			d := newValidationDriver(t, "whitebox")
+			d := candidateSourceDriver(t, "whitebox")
 			trees := map[string]map[string]string{}
 			changed := false
 			negativeRef := "negative_test.go::TestNegative"
-			materialize := func() {
-				var intent protocol.HostActionIntent
-				for _, v := range d.run.AdapterIntents {
-					intent = v
-				}
+			observe := func(intent protocol.HostActionIntent) protocol.Event {
+				t.Helper()
 				raw, _ := json.Marshal(intent.Adapter.Params)
 				var params protocol.CandidateParameters
 				json.Unmarshal(raw, &params)
 				tree := map[string]string{}
+				if trees[params.Base] == nil {
+					trees[params.Base] = candidateSourceTree(t, d, params.Base)
+				}
 				for p, b := range trees[params.Base] {
 					tree[p] = b
 				}
-				switch params.Stage {
+				stage := params.Stage
+				if stage == "CHECK_SOURCE" {
+					stage = "QA_ARTIFACT"
+					if len(params.Paths) == 1 && params.Paths[0] == "app.go" {
+						stage = "DEVELOPMENT"
+					}
+				}
+				switch stage {
 				case "DEVELOPMENT":
 					tree["app.go"] = "package app\nfunc Positive() bool { return true }; func Negative() bool { return false }\n"
 				case "AUTHORING":
@@ -55,7 +62,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				default:
 					t.Fatalf("unexpected candidate stage %s", params.Stage)
 				}
-				if params.Stage == "QA_ARTIFACT" {
+				if stage == "QA_ARTIFACT" {
 					tree["fixture_test.go"] = "package app\nfunc FixtureReady() bool { return true }\n"
 					if changed && variant == "shared-input-changed" {
 						tree["fixture_test.go"] = "package app\nfunc FixtureReady() bool { ready := true; return ready }\n"
@@ -65,16 +72,15 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				if changed && variant == "config-changed" {
 					tree["go.mod"] = "module app\ngo 1.25\n"
 				}
-				raw, _ = json.Marshal(tree)
-				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(raw))
-				trees[digest] = tree
+				identity, digest := freezeCandidateSource(t, d, params, tree)
+				trees[identity] = tree
 				folder := t.TempDir()
 				os.MkdirAll(folder, 0700)
 				os.WriteFile(filepath.Join(folder, "go.mod"), []byte("module app\ngo 1.24\n"), 0600)
 				for p, b := range tree {
 					os.WriteFile(filepath.Join(folder, p), []byte(b), 0600)
 				}
-				proof := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: digest, Digest: digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+				proof := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, WorkspaceID: params.WorkspaceID, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
 				proof.GateView = gateReviewView(params)
 				raw, _ = json.Marshal(proof)
 				var values map[string]any
@@ -114,13 +120,26 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				}
 
 				if params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
-					cmd := exec.Command("go", "test", "-count=1", "./...")
+					cmd := exec.Command("go", "test", "-timeout=0", "-count=1", "./...")
 					cmd.Dir = folder
 					output, err := cmd.CombinedOutput()
 					if err != nil {
 						t.Fatalf("native candidate tests: %v\n%s", err, output)
 					}
 				}
+				return ev
+			}
+			d.fixtureCandidateObserver = func(intent protocol.HostActionIntent, _ protocol.CandidateParameters) protocol.Event {
+				return observe(intent)
+			}
+			materialize := func() {
+				d.drive()
+				intent := protocol.HostActionIntent{}
+				for _, candidate := range d.run.AdapterIntents {
+					intent = candidate
+				}
+				ev := observe(intent)
+				values := ev.HostAction.AdapterEvidence.Values
 				var request protocol.Event
 				if variant == "held" {
 					request = holdRequirement(t, d)
@@ -130,6 +149,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 					d.reopen()
 					releaseRequirement(t, d, request)
 				}
+				d.drive()
 				before := d.run.Revision
 				d.submit(ev)
 				d.reopen()
@@ -272,7 +292,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 			materialize()
 			qa, qi := d.action("engine.qa.execution")
 			execution := executionFor(qi)
-			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution, Tool: "go-test", Environment: "isolated"})
+			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution}))
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 				t.Fatal("approved candidate did not complete full validation")
 			}

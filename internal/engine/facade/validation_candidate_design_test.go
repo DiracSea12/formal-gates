@@ -1,16 +1,87 @@
 package facade
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 )
+
+// Byte-sensitive candidate fixtures retain real source snapshots while the
+// semantic driver supplies the independently signed operation observations.
+func candidateSourceDriver(t *testing.T, gates ...string) *validationDriver {
+	t.Helper()
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), gates...)
+	d.mockNative = true
+	return d
+}
+
+func candidateSourceTree(t *testing.T, d *validationDriver, base string) map[string]string {
+	t.Helper()
+	entries, err := d.git.TreeEntries(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := map[string]string{}
+	for path := range entries {
+		body, err := (vcs.ExecRunner{}).RunRaw(d.f.root, "git", nil, "show", base+":"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree[path] = string(body)
+	}
+	return tree
+}
+
+func freezeCandidateSource(t *testing.T, d *validationDriver, p protocol.CandidateParameters, tree map[string]string) (string, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "candidate")
+	if err := d.git.CreateWorkspace(dir, p.Base, "candidate fixture source", vcs.WorkspaceHandle{}); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range tree {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	native := vcs.New(dir, nil)
+	paths, err := native.ChangedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := native.Track(paths); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) > 0 {
+		if err := native.Commit("candidate fixture source"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identity, err := native.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := native.TreeDigest(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(candidateSourceTree(t, d, identity), tree) {
+		t.Fatal("immutable candidate differs from its declared source bytes")
+	}
+	return identity, digest
+}
 
 // Identical manifests can name different test implementations. A completed
 // candidate belongs to the accepted design that supplied its actual test bytes.
@@ -18,7 +89,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", stage, held), func(t *testing.T) {
-				d := newValidationDriver(t, "whitebox", "quality")
+				d := candidateSourceDriver(t, "whitebox", "quality")
 				trees := map[string]map[string]string{}
 				testBytes := "func fixture() string { return uninitializedInput }"
 				sideEffects := 0
@@ -43,13 +114,20 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 						t.Fatal(err)
 					}
 					tree := map[string]string{}
-					if params.Base != "" && trees[params.Base] == nil {
-						t.Fatal("unknown immutable base")
+					if trees[params.Base] == nil {
+						trees[params.Base] = candidateSourceTree(t, d, params.Base)
 					}
 					for p, b := range trees[params.Base] {
 						tree[p] = b
 					}
-					switch params.Stage {
+					stage := params.Stage
+					if stage == "CHECK_SOURCE" {
+						stage = "QA_ARTIFACT"
+						if reflect.DeepEqual(params.Paths, []string{"app.go"}) {
+							stage = "DEVELOPMENT"
+						}
+					}
+					switch stage {
 					case "DEVELOPMENT":
 						tree["app.go"] = "func valid(input string) bool { return input != \"\" }"
 					case "AUTHORING":
@@ -85,11 +163,12 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 							t.Fatal("test materialization changed production content")
 						}
 					}
-					bytes, _ := json.Marshal(tree)
-					digest := fmt.Sprintf("sha256:%x", sha256.Sum256(bytes))
-					trees[digest] = tree
-					sideEffects++
-					evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: digest, Digest: digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+					identity, digest := freezeCandidateSource(t, d, params, tree)
+					trees[identity] = tree
+					if params.Stage != "CHECK_SOURCE" {
+						sideEffects++
+					}
+					evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, WorkspaceID: params.WorkspaceID, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
 					evidence.GateView = gateReviewView(params)
 					raw, _ = json.Marshal(evidence)
 					var values map[string]any
@@ -100,6 +179,9 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 					}
 					return ev
 				}
+				d.fixtureCandidateObserver = func(intent protocol.HostActionIntent, _ protocol.CandidateParameters) protocol.Event {
+					return observe(intent)
+				}
 				materialize := func() { t.Helper(); d.submit(observe(currentIntent())); d.drive() }
 				id, in := d.action("engine.development.batch")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
@@ -107,7 +189,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				materialize()
 				id, in = d.action("engine.qa.design")
 				manifest := in.Manifest
-				manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestNormal", Oracle: "accept valid input"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestInvalid", Oracle: "reject invalid input"}}
+				manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "accept valid input"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "reject invalid input"}}
 				for _, c := range manifest.Cases {
 					manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 				}
@@ -118,6 +200,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 					id, in = d.action("engine.qa.review.rationale")
 					r := approvedReview(in.Manifest)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
+					d.drive()
 				}
 				old := currentIntent()
 				if old.Adapter.Params["stage"] != stage {
@@ -142,14 +225,14 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				}
 				if stage == "QA_ARTIFACT" {
 					badValues := maps.Clone(oldReceipt.HostAction.AdapterEvidence.Values)
-					badValues["testOnly"] = false
+					badValues["workspaceId"] = "different-workspace"
 					bad, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), old.ActionID, "op.candidate", DefaultProvider, old.Correlation, old.PayloadDigest, "EXECUTED", "", badValues)
 					if err != nil {
 						t.Fatal(err)
 					}
 					revision := d.run.Revision
 					if _, _, err := d.f.Submit(bad); err == nil {
-						t.Fatal("receipt without original test-only evidence was accepted")
+						t.Fatal("receipt for a different workspace was accepted")
 					}
 					d.reopen()
 					if d.run.Revision != revision {
@@ -198,6 +281,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				}
 				r := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
+				d.drive()
 				materialize()
 				d.reopen()
 				candidate := d.run.Validation.Candidate
@@ -206,7 +290,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				}
 				id, in = d.action("engine.qa.execution")
 				execution := executionFor(in)
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution, Tool: "app-v1", Environment: "isolated"})
+				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution}))
 				id, in = d.gateAction("quality")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 				d.reopen()
