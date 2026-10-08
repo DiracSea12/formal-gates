@@ -45,7 +45,7 @@ func (s *State) repairWork() []repairWork {
 				current.result = nil
 			}
 			owed := slices.Contains(required, task) || s.validationRepairPending(w)
-			if current.result == nil && s.repairTaskFinished(task) {
+			if current.result == nil && s.developmentEditResult(task) == nil && s.repairTaskFinished(task) {
 				owed = false
 			}
 			if current.result == nil && !owed {

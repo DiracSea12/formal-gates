@@ -14,7 +14,7 @@ import (
 )
 
 func nativeOperation(operation authoring.OperationID) bool {
-	return operation == "op.candidate" || operation == "op.workspace" || operation == "op.cleanup"
+	return operation == "op.candidate" || operation == "op.workspace" || operation == "op.cleanup" || operation == "op.check"
 }
 
 func candidateParameters(intent HostActionIntent) (CandidateParameters, error) {
@@ -158,6 +158,9 @@ func (s *State) candidateFailureRoute(intent HostActionIntent) (FailureRoute, in
 }
 
 func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if intent.Adapter != nil && intent.Adapter.Operation == "op.check" {
+		return s.checkInputsCurrent(intent)
+	}
 	if intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" {
 		var p WorkspaceParameters
 		raw, _ := json.Marshal(intent.Adapter.Params)
@@ -194,6 +197,8 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 		return false
 	}
 	switch intent.Adapter.Operation {
+	case "op.check":
+		return s.checkInputsCurrent(intent)
 	case "op.workspace":
 		var p WorkspaceParameters
 		raw, err := json.Marshal(intent.Adapter.Params)
@@ -219,6 +224,9 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 
 func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.CompiledDefinition) bool {
 	v := s.Validation
+	if p.Stage == "CHECK_SOURCE" {
+		return s.editSourceCurrent(p)
+	}
 	if s.abortRequested() || !s.candidateContextCurrent(p) || p.WorkspaceID != "" && !s.resourceUsable(p.WorkspaceID) {
 		return false
 	}
@@ -453,6 +461,9 @@ func (s *State) ExecutableHostActions() map[string]HostActionIntent {
 }
 
 func (s *State) candidateFailureFact(cd *compiler.CompiledDefinition) *decision.Fact {
+	if failure := s.developmentCheckFailure(); failure != nil {
+		return failure
+	}
 	ids := make([]string, 0, len(s.PendingHostActions))
 	for id := range s.PendingHostActions {
 		ids = append(ids, id)
@@ -480,6 +491,9 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	v := s.Validation
 	if v == nil || s.abortRequested() {
 		return CandidateParameters{}, false, nil
+	}
+	if p, ready := s.nextEditSource(cd); ready {
+		return p, true, nil
 	}
 	if integration, ready := s.nextIntegrationParameters(cd); ready {
 		if integration.Stage == "MERGE_FINISH" {

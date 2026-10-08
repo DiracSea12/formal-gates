@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "11"
+const Version authoring.DefinitionVersion = "12"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -51,12 +51,13 @@ var (
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
 		{"engine.workspace", authoring.RunnerHostAdapter},
 		{"engine.cleanup", authoring.RunnerHostAdapter},
+		{"engine.check", authoring.RunnerHostAdapter},
 	}
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range", "schema.workspace", "schema.cleanup"}
-	workflowOperations = []authoring.OperationID{"op.candidate", "op.workspace", "op.cleanup"}
+	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range", "schema.workspace", "schema.cleanup", "schema.check"}
+	workflowOperations = []authoring.OperationID{"op.candidate", "op.workspace", "op.cleanup", "op.check"}
 	workflowAskKinds   = []authoring.AskKindID{}
 )
 
@@ -149,6 +150,9 @@ func Workflow() *compiler.Definition {
 		must(name, err)
 		steps = append(steps, step)
 	}
+	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 10 * time.Minute})
+	must("check.execute", err)
+	steps = append(steps, check)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}
 }
 

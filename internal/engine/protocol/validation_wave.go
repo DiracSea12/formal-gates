@@ -142,6 +142,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			changed = s.ensureValidationAsk(*ask.Validation, nextRevision) || changed
 		}
 	}
+	if made, err := e.advanceDevelopmentChecks(s, nextRevision); err != nil || made {
+		return changed || made, err
+	}
 	if made, err := e.advanceWorkspaces(s, nextRevision); err != nil || made {
 		return changed || made, err
 	}
@@ -216,6 +219,19 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	}
 	if w != nil && w.Status == "COMPLETE" && w.Scope == coverage.ScopeAffected && v.Candidate != nil && s.nextRepairWork() == nil {
 		return e.freezeValidationWave(s, coverage.ScopeFull, "", w.SourceTasks) || changed, nil
+	}
+	if p, ready := s.nextEditSource(e.cfg.Definition); ready {
+		for _, intent := range s.PendingHostActions {
+			if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" && intent.Correlation == candidateCorrelation(p) {
+				return changed, nil
+			}
+		}
+		intent, err := e.prepareAdapterIntent(s, nextRevision, "op.candidate", p, "")
+		if err != nil {
+			return changed, err
+		}
+		s.PendingHostActions[intent.ActionID] = intent
+		return true, nil
 	}
 	if _, _, _, complete := s.developmentSources(e.cfg.Definition); !complete {
 		if _, integration := s.integrationParameters(e.cfg.Definition); integration {
@@ -340,7 +356,7 @@ func validateCandidateReceipt(provider string, intent HostActionIntent, receipt 
 		if err := sValidateIntegrationReceipt(params, evidence); err != nil {
 			return params, CandidateEvidence{}, err
 		}
-	case "DEVELOPMENT", "AUTHORING":
+	case "DEVELOPMENT", "AUTHORING", "CHECK_SOURCE":
 	case "QA_ARTIFACT":
 		if !evidence.TestOnly || !evidence.ProductionViewEqual {
 			return params, CandidateEvidence{}, validationError("whitebox changes must be proved test-owned and production-equivalent; submit production edits through development/repair")
@@ -392,6 +408,11 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 			r.Identity = evidence.Identity
 			s.NativeResources[r.ID] = r
 		}
+		return nil
+	case "CHECK_SOURCE":
+		r := s.NativeResources[params.WorkspaceID]
+		r.Identity = evidence.Identity
+		s.NativeResources[r.ID] = r
 		return nil
 	case "DEVELOPMENT":
 		if params.RepairTask != nil {

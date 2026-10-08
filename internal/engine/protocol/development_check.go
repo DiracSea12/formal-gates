@@ -1,0 +1,377 @@
+package protocol
+
+import (
+	"encoding/json"
+	"slices"
+	"strings"
+
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/runtime"
+)
+
+// CheckParameters is an execution of one command from the confirmed batch.
+// Binding and source receipts carry its original edit, plan and immutable input.
+type CheckParameters struct {
+	SourceActionID string           `json:"sourceActionId"`
+	Binding        WorkBinding      `json:"binding"`
+	Check          DevelopmentCheck `json:"check"`
+	SourceIdentity string           `json:"sourceIdentity"`
+	SourceDigest   string           `json:"sourceDigest"`
+	WorkspaceID    string           `json:"workspaceId"`
+	TimeoutNanos   int64            `json:"timeoutNanos"`
+}
+
+type CheckStreamProof struct {
+	SHA256 string `json:"sha256"`
+	Size   int    `json:"size"`
+}
+
+type CheckEvidence struct {
+	ParametersDigest string           `json:"parametersDigest"`
+	SourceActionID   string           `json:"sourceActionId"`
+	SourceIdentity   string           `json:"sourceIdentity"`
+	SourceDigest     string           `json:"sourceDigest"`
+	WorkspaceID      string           `json:"workspaceId"`
+	RequestDigest    string           `json:"requestDigest"`
+	Directory        string           `json:"directory"`
+	ExitCode         int              `json:"exitCode"`
+	Error            string           `json:"error"`
+	Stdout           CheckStreamProof `json:"stdout"`
+	Stderr           CheckStreamProof `json:"stderr"`
+}
+
+func checkParameters(intent HostActionIntent) (CheckParameters, error) {
+	var p CheckParameters
+	raw, err := json.Marshal(intent.Adapter.Params)
+	if err == nil {
+		err = json.Unmarshal(raw, &p)
+	}
+	return p, err
+}
+
+func (s *State) editResultCurrent(r WorkerResult) bool {
+	if r.Validation == nil || r.Validation.Development == nil || r.Outcome != OutcomePass {
+		return false
+	}
+	if _, obsolete := s.ObsoleteActions[r.ActionID]; obsolete {
+		return false
+	}
+	b, ok := s.DispatchBindings[r.ActionID]
+	if !ok || b != r.Validation.Binding {
+		return false
+	}
+	current, _ := s.requirementWorkReplacement(b.Task)
+	return current == b.Task && (s.Validation != nil && b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.validationWorkCarryAuthorized(r.ActionID, b.Task))
+}
+
+func (s *State) editBatch(r WorkerResult) (DevelopmentBatch, bool) {
+	b := r.Validation.Binding
+	if p := r.Validation.GranularityReview; p != nil && len(p.Batches) == 1 {
+		return p.Batches[0], true
+	}
+	// Plans remain in their confirmed decision or original repair proposal.
+	for request, d := range s.Decisions {
+		if p := s.decisionPlanProposal(d); p != nil {
+			if b.PlanRequest != "" && b.PlanRequest != request {
+				continue
+			}
+			for _, batch := range p.Batches {
+				if batch.ID == b.BatchID {
+					return batch, true
+				}
+			}
+		}
+	}
+	if proposal, ok := s.Results[b.PlanRequest]; ok && proposal.Validation != nil && proposal.Validation.GranularityReview != nil {
+		for _, batch := range proposal.Validation.GranularityReview.Batches {
+			if batch.ID == b.BatchID {
+				return batch, true
+			}
+		}
+	}
+	return DevelopmentBatch{}, false
+}
+
+func (s *State) editSourceProof(action string) (CandidateEvidence, bool) {
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.Status != HostActionStatusExecuted || receipt.AdapterOperation != "op.candidate" {
+			continue
+		}
+		intent, ok := s.hostIntent(receipt.ActionID)
+		if !ok {
+			continue
+		}
+		p, err := candidateParameters(intent)
+		r, exists := s.Results[action]
+		if err != nil || !exists || r.Validation == nil || p.Stage != "CHECK_SOURCE" || !slices.Contains(p.SourceTasks, r.Validation.Binding.Task) {
+			continue
+		}
+		_, proof, err := validateCandidateReceipt(s.NativeVCS(), intent, receipt)
+		if err == nil {
+			return proof, true
+		}
+	}
+	return CandidateEvidence{}, false
+}
+
+func (s *State) editSourceCurrent(p CandidateParameters) bool {
+	if p.Stage != "CHECK_SOURCE" || !s.candidateContextCurrent(p) || !s.resourceUsable(p.WorkspaceID) {
+		return false
+	}
+	var paths []string
+	for _, task := range p.SourceTasks {
+		r := s.developmentEditResult(task)
+		if r == nil || !s.editResultCurrent(*r) || r.Validation.Binding.WorkspaceID != p.WorkspaceID {
+			return false
+		}
+		paths = append(paths, r.Validation.Development.Paths...)
+	}
+	slices.Sort(paths)
+	paths = slices.Compact(paths)
+	return len(p.SourceTasks) > 0 && slices.Equal(paths, p.Paths)
+}
+
+// A shared editing frontier freezes only after every writer has settled.
+// Each completed edit keeps its own checks against that immutable source.
+func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParameters, bool) {
+	ids := make([]string, 0, len(s.Results))
+	for id := range s.Results {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		r := s.Results[id]
+		if !s.editResultCurrent(r) {
+			continue
+		}
+		if _, approved := s.editBatch(r); !approved {
+			continue
+		}
+		if _, frozen := s.editSourceProof(id); frozen {
+			continue
+		}
+		workspace := s.NativeResources[r.Validation.Binding.WorkspaceID]
+		if workspace.Status != "READY" || !s.resourceUsable(workspace.ID) || !s.editWorkspaceQuiescent(workspace.ID, cd) {
+			continue
+		}
+		p := CandidateParameters{Stage: "CHECK_SOURCE", Base: workspace.Identity, WorkspaceID: workspace.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}
+		for _, sourceID := range ids {
+			source := s.Results[sourceID]
+			if !s.editResultCurrent(source) || source.Validation.Binding.WorkspaceID != workspace.ID {
+				continue
+			}
+			if _, frozen := s.editSourceProof(sourceID); frozen {
+				continue
+			}
+			p.SourceTasks = append(p.SourceTasks, source.Validation.Binding.Task)
+			p.Paths = append(p.Paths, source.Validation.Development.Paths...)
+		}
+		slices.Sort(p.Paths)
+		p.Paths = slices.Compact(p.Paths)
+		slices.SortFunc(p.SourceTasks, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
+		return p, true
+	}
+	return CandidateParameters{}, false
+}
+
+func (s *State) editWorkspaceQuiescent(workspace string, cd *compiler.CompiledDefinition) bool {
+	for action := range s.PendingActions {
+		if s.DispatchBindings[action].WorkspaceID == workspace {
+			return false
+		}
+	}
+	for _, attempt := range s.EndedAttempts {
+		if attempt.AwaitingResult && attempt.Work != nil && attempt.Work.WorkspaceID == workspace {
+			return false
+		}
+	}
+	view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
+	s.projectDevelopmentTasks(&view, cd)
+	for _, tasks := range view.RequiredTasks {
+		for _, required := range tasks {
+			if required.BlockedBy == "" && s.taskResource(required.Task, cd).ID == workspace && s.developmentEditResult(required.Task) == nil && s.TaskStatusOf(required.Task) != runtime.TaskTerminal {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *State) checkResource(action string, source CandidateEvidence) NativeResource {
+	r := s.resource("check", source.Identity, action)
+	if existing, ok := s.NativeResources[r.ID]; ok {
+		return existing
+	}
+	return r
+}
+
+func validateCheckReceipt(intent HostActionIntent, receipt HostActionReceipt) error {
+	p, err := checkParameters(intent)
+	if err != nil {
+		return err
+	}
+	var e CheckEvidence
+	if err := decodeAdapterValues(receipt, &e); err != nil {
+		return err
+	}
+	if e.ParametersDigest != intent.PayloadDigest || e.SourceActionID != p.SourceActionID || e.SourceIdentity != p.SourceIdentity || e.SourceDigest != p.SourceDigest || e.WorkspaceID != p.WorkspaceID || e.RequestDigest == "" || e.Directory == "" || e.Stdout.SHA256 == "" || e.Stderr.SHA256 == "" {
+		return validationError("check receipt lacks its exact source, request and stream evidence")
+	}
+	return nil
+}
+
+func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
+			continue
+		}
+		intent, ok := s.hostIntent(receipt.ActionID)
+		if !ok {
+			continue
+		}
+		p, err := checkParameters(intent)
+		if err != nil || p.SourceActionID != action || p.Check.ID != check || validateCheckReceipt(intent, receipt) != nil {
+			continue
+		}
+		var evidence CheckEvidence
+		_ = decodeAdapterValues(receipt, &evidence)
+		return &evidence, true
+	}
+	return nil, false
+}
+
+func (s *State) developmentChecksPassed(r WorkerResult) bool {
+	batch, ok := s.editBatch(r)
+	if !ok {
+		b := r.Validation.Binding
+		wave := s.validationWave(b.WaveID)
+		return b.Task.Step == "development.repair" && b.BatchID == "" && wave != nil && wave.Repair != nil
+	}
+	source, frozen := s.editSourceProof(r.ActionID)
+	if !frozen {
+		return false
+	}
+	for _, check := range batch.Checks {
+		e, done := s.checkReceipt(r.ActionID, check.ID)
+		if !done || e.ExitCode != 0 || e.Error != "" || e.SourceIdentity != source.Identity || e.SourceDigest != source.Digest {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
+	r, ok := s.Results[action]
+	if !ok || !s.editResultCurrent(r) {
+		return CheckParameters{}, false
+	}
+	batch, approved := s.editBatch(r)
+	source, frozen := s.editSourceProof(action)
+	if !approved || !frozen {
+		return CheckParameters{}, false
+	}
+	workspace := s.checkResource(action, source)
+	if workspace.Status != "READY" || !s.resourceUsable(workspace.ID) {
+		return CheckParameters{}, false
+	}
+	for _, check := range batch.Checks {
+		if e, done := s.checkReceipt(action, check.ID); done {
+			if e.ExitCode != 0 || e.Error != "" {
+				return CheckParameters{}, false
+			}
+			continue
+		}
+		var timeout int64
+		for _, step := range cd.Steps {
+			if step.Header.ID == "check.execute" {
+				timeout = int64(step.Payload.(compiler.CompiledHostActionStep).Timeout)
+			}
+		}
+		return CheckParameters{SourceActionID: action, Binding: r.Validation.Binding, Check: check, SourceIdentity: source.Identity, SourceDigest: source.Digest, WorkspaceID: workspace.ID, TimeoutNanos: timeout}, true
+	}
+	return CheckParameters{}, false
+}
+
+func (s *State) checkInputsCurrent(intent HostActionIntent) bool {
+	p, err := checkParameters(intent)
+	if err != nil {
+		return false
+	}
+	r, ok := s.Results[p.SourceActionID]
+	if !ok || !s.editResultCurrent(r) || p.Binding != r.Validation.Binding {
+		return false
+	}
+	batch, ok := s.editBatch(r)
+	if !ok {
+		return false
+	}
+	source, ok := s.editSourceProof(p.SourceActionID)
+	if !ok || source.Identity != p.SourceIdentity || source.Digest != p.SourceDigest || s.checkResource(p.SourceActionID, source).ID != p.WorkspaceID {
+		return false
+	}
+	for _, check := range batch.Checks {
+		if check.ID == p.Check.ID {
+			return check == p.Check && p.TimeoutNanos > 0
+		}
+	}
+	return false
+}
+
+func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, error) {
+	ids := make([]string, 0, len(s.Results))
+	for id := range s.Results {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, action := range ids {
+		r := s.Results[action]
+		if !s.editResultCurrent(r) {
+			continue
+		}
+		if _, ok := s.editBatch(r); !ok {
+			continue
+		}
+		source, frozen := s.editSourceProof(action)
+		if !frozen {
+			continue
+		}
+		workspace := s.checkResource(action, source)
+		if workspace.Status != "READY" {
+			return e.ensureWorkspace(s, workspace, revision)
+		}
+		p, ready := s.nextCheckParameters(action, e.cfg.Definition)
+		if !ready {
+			continue
+		}
+		correlation := "check:" + digestOfCanonical(p)
+		if s.latestNativeIntent(correlation).ActionID != "" {
+			continue
+		}
+		intent, err := e.prepareAdapterIntent(s, revision, "op.check", p, "")
+		if err != nil {
+			return false, err
+		}
+		s.PendingHostActions[intent.ActionID] = intent
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *State) developmentCheckFailure() *decision.Fact {
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
+			continue
+		}
+		intent, ok := s.hostIntent(receipt.ActionID)
+		if !ok || !s.checkInputsCurrent(intent) {
+			continue
+		}
+		var e CheckEvidence
+		if decodeAdapterValues(receipt, &e) == nil && (e.ExitCode != 0 || e.Error != "") {
+			return &decision.Fact{Source: decision.SourceReceipt, Key: receipt.ActionID, Value: "approved development check failed: " + strings.TrimSpace(e.Error)}
+		}
+	}
+	return nil
+}

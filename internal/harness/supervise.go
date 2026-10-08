@@ -88,10 +88,21 @@ func Supervise(directory string) int {
 	// Process identity is written BEFORE the child starts so Store.job's liveness
 	// probe (UNKNOWN_START guard, 10s window) can observe it.
 	procStarted := float64(time.Now().UnixNano()) / 1e9
-	if err := writeAtomicJSON(filepath.Join(dir, "process.json"), map[string]any{
-		"pid":        os.Getpid(),
-		"started_at": procStarted,
-	}); err != nil {
+	process := map[string]any{"pid": os.Getpid(), "started_at": procStarted}
+	if timeout := supervisedTimeout(request); timeout > 0 {
+		pgid, err := syscall.Getpgid(os.Getpid())
+		if err != nil {
+			return 1
+		}
+		digest, err := CanonicalDigest(request)
+		if err != nil {
+			return 1
+		}
+		process["request_digest"] = digest
+		process["pgid"] = pgid
+		process["deadline_at"] = procStarted + timeout.Seconds()
+	}
+	if err := writeAtomicJSON(filepath.Join(dir, "process.json"), process); err != nil {
 		fmt.Fprintf(os.Stderr, "supervise: cannot write process.json: %v\n", err)
 		return 1
 	}
@@ -269,6 +280,9 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stdout: outF,
 		Stderr: errF,
 	}
+	if supervisedTimeout(request) > 0 {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if startErr := cmd.Start(); startErr != nil {
 		var errno syscall.Errno
 		if errors.As(startErr, &errno) && errno == syscall.ENOENT {
@@ -278,7 +292,10 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		// EACCES, ENOEXEC, and any other errno: record the first and continue.
 		return 0, mapExecError(startErr, argv[0]), false
 	}
-	code, errorMsg, cancelled := waitChild(cmd, sigCh)
+	if supervisedTimeout(request) > 0 {
+		defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedTimeout(request))
 	if cancelled {
 		return 130, "owned job was cancelled", true
 	}
@@ -291,7 +308,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 // same process-group signal also killed the child. If the child dies by a signal
 // and no SIGTERM reached the supervisor within childSignalGrace, the child's own
 // -N is reported unchanged (including -15 with an empty error and -9 for SIGKILL).
-func waitChild(cmd *exec.Cmd, sigCh chan os.Signal) (int, string, bool) {
+func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int, string, bool) {
 	type status struct {
 		signaled bool
 		sig      int
@@ -311,22 +328,38 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal) (int, string, bool) {
 		resCh <- s
 	}()
 
-	select {
-	case <-sigCh:
-		// Supervisor cancelled while waiting. Forward SIGTERM to the direct
-		// child (it may already be dead from the group signal) and settle with a
-		// 5s kill timeout, exactly as the reference's terminate handler does.
-		if cmd.Process != nil {
-			cmd.Process.Signal(syscall.SIGTERM)
+	var deadline <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+	terminate := func() {
+		if timeout > 0 {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		} else {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
 		select {
 		case <-resCh:
 		case <-time.After(5 * time.Second):
-			if cmd.Process != nil {
-				cmd.Process.Kill()
+			if timeout > 0 {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			} else {
+				_ = cmd.Process.Kill()
 			}
 			<-resCh
 		}
+	}
+	select {
+	case <-deadline:
+		terminate()
+		return 124, "owned job exceeded its timeout", false
+	case <-sigCh:
+		// Supervisor cancelled while waiting. Forward SIGTERM to the direct
+		// child (it may already be dead from the group signal) and settle with a
+		// 5s kill timeout, exactly as the reference's terminate handler does.
+		terminate()
 		return 130, "owned job was cancelled", true
 	case s := <-resCh:
 		if s.signaled {
@@ -493,4 +526,16 @@ func ensureEmptyStream(path string) {
 	}
 	f.Sync()
 	f.Close()
+}
+
+func supervisedTimeout(request map[string]any) time.Duration {
+	value, ok := request["timeout_nanos"].(json.Number)
+	if !ok {
+		return 0
+	}
+	nanos, err := value.Int64()
+	if err != nil || nanos <= 0 {
+		return 0
+	}
+	return time.Duration(nanos)
 }

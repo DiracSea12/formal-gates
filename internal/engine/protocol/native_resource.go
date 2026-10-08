@@ -84,6 +84,11 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 		if json.Unmarshal(raw, &p) != nil || p.Resource != o.Resource {
 			return validationError("workspace withdrawal differs from original inputs")
 		}
+	case "op.check":
+		p, err := checkParameters(intent)
+		if err != nil || p.WorkspaceID != o.Resource.ID {
+			return validationError("check withdrawal differs from its original resource")
+		}
 	case "op.candidate":
 		p, err := candidateParameters(intent)
 		if err != nil || p.Promotion != nil || p.WorkspaceID != o.Resource.ID {
@@ -229,6 +234,9 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 	return s.resourceUsable(r.ID) && r.Status == "READY" && (s.validationRole(key, cd) != "engine.qa.review.rationale" || s.validationMode(key) != coverage.ReviewBlackbox || r.MirrorDigest == BlackboxCasesDigest(s.RunID, s.Validation.Sets[coverage.ReviewBlackbox].Manifest))
 }
 func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) NativeResource {
+	if p.Stage == "CHECK_SOURCE" {
+		return s.NativeResources[p.WorkspaceID]
+	}
 	switch p.Stage {
 	case "MERGE_START", "MERGE_FINISH":
 		if p.Integration.RepairTask != nil {
@@ -541,6 +549,14 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	} else if p.Manifest != nil {
 		return false
 	}
+	if p.Resource.Role == "check" {
+		for _, result := range s.Results {
+			if proof, ok := s.editSourceProof(result.ActionID); ok && s.editResultCurrent(result) && s.checkResource(result.ActionID, proof).ID == p.Resource.ID {
+				return true
+			}
+		}
+		return false
+	}
 	view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
 	s.projectValidationTasks(&view, cd)
 	for _, tasks := range view.RequiredTasks {
@@ -629,6 +645,11 @@ func (s *State) cleanupResourcesQuiescent(resources []NativeResource) bool {
 			if json.Unmarshal(raw, &p) != nil || uses(p.Resource.ID, p.Resource.Path) {
 				return false
 			}
+		case "op.check":
+			p, err := checkParameters(intent)
+			if err != nil || uses(p.WorkspaceID, "") {
+				return false
+			}
 		case "op.candidate":
 			p, err := candidateParameters(intent)
 			if err != nil || uses(p.WorkspaceID, "") || p.Promotion != nil && uses(p.Promotion.SourceWorkspace, p.Promotion.TargetRoot) {
@@ -640,6 +661,11 @@ func (s *State) cleanupResourcesQuiescent(resources []NativeResource) bool {
 }
 
 func (s *State) cleanupQuiescent() bool {
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.check" {
+			return false
+		}
+	}
 	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
 	}
@@ -741,7 +767,7 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) err
 func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition) {
 	for _, step := range cd.Steps {
 		p, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || (p.Operation != "op.workspace" && p.Operation != "op.cleanup") {
+		if !ok || (p.Operation != "op.workspace" && p.Operation != "op.cleanup" && p.Operation != "op.check") {
 			continue
 		}
 		view.RequiredTasks[step.Header.ID] = nil
@@ -771,6 +797,9 @@ func qaCasesMarkdown(runID, kind string, m coverage.AcceptanceManifest) string {
 func (e *Engine) applyNativeReceipt(s *State, intent HostActionIntent, receipt HostActionReceipt) error {
 	if intent.Adapter == nil {
 		return nil
+	}
+	if intent.Adapter.Operation == "op.check" {
+		return validateCheckReceipt(intent, receipt)
 	}
 	if intent.Adapter.Operation == "op.workspace" || intent.Adapter.Operation == "op.cleanup" {
 		return e.applyResourceReceipt(s, intent, receipt)

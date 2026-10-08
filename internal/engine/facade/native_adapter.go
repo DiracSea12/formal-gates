@@ -49,7 +49,7 @@ func (f *Facade) driveNative() (bool, error) {
 				continue
 			}
 			operation := intent.Adapter.Operation
-			if operation != "op.workspace" && operation != "op.candidate" && operation != "op.cleanup" {
+			if operation != "op.workspace" && operation != "op.candidate" && operation != "op.cleanup" && operation != "op.check" {
 				continue
 			}
 			var progressed bool
@@ -88,10 +88,23 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 	}
 	evidence, complete, err := f.nativeEvidence(state, intent, execute)
 	if err != nil {
+		if operation == "op.check" {
+			directory := filepath.Join(f.stateDir, "checks", strings.ReplaceAll(id, ":", "-"))
+			if _, owned := os.Stat(filepath.Join(directory, "owner")); owned == nil {
+				event, eventErr := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:UNKNOWN:"+id), id, operation, state.RunProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
+				if eventErr == nil {
+					_, eventErr = f.engine.Submit(event, emptyFingerprint())
+				}
+				return false, errors.Join(err, eventErr)
+			}
+		}
 		return false, err
 	}
 	if !complete {
 		_, aborted := state.AbortDecision()
+		if operation == "op.check" && evidence.observedEffect {
+			return false, nil
+		}
 		if (aborted || state.ResetPending()) && operation != "op.cleanup" {
 			var observed protocol.HostActionObservation
 			if params.Promotion != nil {
@@ -129,7 +142,13 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 	var allowed []string
 	var integration *protocol.IntegrationParameters
 	var integrationBase string
-	if intent.Adapter.Operation == "op.workspace" {
+	if intent.Adapter.Operation == "op.check" {
+		var p protocol.CheckParameters
+		if err := decodeNativeParams(intent, &p); err != nil {
+			return protocol.ResourceObservation{}, err
+		}
+		resource = s.NativeResources[p.WorkspaceID]
+	} else if intent.Adapter.Operation == "op.workspace" {
 		var p protocol.WorkspaceParameters
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return protocol.ResourceObservation{}, err
@@ -224,10 +243,13 @@ type nativeResult struct {
 	Workspace      *protocol.WorkspaceEvidence
 	Candidate      *protocol.CandidateEvidence
 	Cleanup        *protocol.WorkspaceCleanupReceipt
+	Check          *protocol.CheckEvidence
 }
 
 func (r nativeResult) fields() (map[string]any, error) {
 	switch {
+	case r.Check != nil:
+		return evidenceFields(r.Check)
 	case r.Workspace != nil:
 		return evidenceFields(r.Workspace)
 	case r.Candidate != nil:
@@ -289,6 +311,8 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 	}()
 	mayWrite = mayWrite && s.NativeActionWritable(intent, f.definition)
 	switch intent.Adapter.Operation {
+	case "op.check":
+		return f.checkEvidence(s, intent, mayWrite, &invoked)
 	case "op.workspace":
 		var p protocol.WorkspaceParameters
 		if err := decodeNativeParams(intent, &p); err != nil {

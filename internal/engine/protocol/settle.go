@@ -45,12 +45,12 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 			case compiler.CompiledHostActionStep:
 				if step.Header.ID == "children.workspace" {
 					settle = s.creationStepSettled(step.Header.ID)
-				} else if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" {
+				} else if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" || payload.Operation == "op.check" {
 					settle = s.validationConcluded(compiled) && (payload.Operation != "op.cleanup" || s.SliceChild != nil || s.ResourcesCleaned())
 				} else if payload.Operation == "op.candidate" {
 					continue
 				}
-				if payload.Operation != "op.workspace" && payload.Operation != "op.cleanup" {
+				if !nativeOperation(payload.Operation) {
 					settle = s.hasSettledHostActionForStep(step.Header.ID)
 				}
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep:
@@ -150,7 +150,7 @@ func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operat
 			continue
 		}
 		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
-		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate" && payload.Operation != "op.workspace" && payload.Operation != "op.cleanup") {
+		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID, payload.Operation != "op.candidate" && !nativeOperation(payload.Operation)) {
 			continue
 		}
 		if len(step.Header.Dependencies) != 0 && view == nil {

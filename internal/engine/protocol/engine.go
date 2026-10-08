@@ -2598,6 +2598,12 @@ func validateAdapterPayload(schema authoring.SchemaID, label string, value map[s
 		} else {
 			decodeErr = decode(&WorkspaceEvidence{})
 		}
+	case authoring.SchemaID("schema.check"):
+		if label == "adapter parameters" {
+			decodeErr = decode(&CheckParameters{})
+		} else {
+			decodeErr = decode(&CheckEvidence{})
+		}
 	case authoring.SchemaID("schema.cleanup"):
 		if label == "adapter parameters" {
 			decodeErr = decode(&CleanupParameters{})
@@ -2789,6 +2795,17 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 			return HostActionIntent{}, validationError("native signing is frozen by requirement control")
 		}
 		switch operation {
+		case "op.check":
+			var p CheckParameters
+			raw, _ := json.Marshal(normalized)
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return HostActionIntent{}, err
+			}
+			expected, ready := state.nextCheckParameters(p.SourceActionID, e.cfg.Definition)
+			if !ready || digestOfCanonical(expected) != digestOfCanonical(p) {
+				return HostActionIntent{}, validationError("check parameters differ from approved execution inputs")
+			}
+			correlation = "check:" + digestOfCanonical(p)
 		case "op.candidate":
 			var p CandidateParameters
 			raw, _ := json.Marshal(normalized)

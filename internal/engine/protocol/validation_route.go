@@ -40,7 +40,7 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 		return false
 	}
 	members := s.repairMembers(w)
-	if len(members) == 1 && members[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentResultRecord(w.Repair.Task) == nil {
+	if len(members) == 1 && members[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentEditResult(w.Repair.Task) == nil {
 		return false
 	}
 	if w.Status == "REPAIR" {
@@ -60,7 +60,7 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 		return true
 	}
 	for _, member := range s.repairMembers(w) {
-		if s.repairTaskFinished(member.task) && s.developmentResultRecord(member.task) == nil {
+		if s.repairTaskFinished(member.task) && s.developmentEditResult(member.task) == nil {
 			return false
 		}
 		if !s.validationWorkCarryAuthorized("", member.task) && s.requirementRevisionForTask(member.task) != s.Validation.RequirementRevision {

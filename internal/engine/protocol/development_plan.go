@@ -443,7 +443,7 @@ func (s *State) currentPlanTask(cd *compiler.CompiledDefinition, p *GranularityR
 	}
 	return task
 }
-func (s *State) developmentResultRecord(task runtime.TaskKey) *WorkerResult {
+func (s *State) developmentEditResult(task runtime.TaskKey) *WorkerResult {
 	for action, r := range s.Results {
 		if _, obsolete := s.ObsoleteActions[action]; obsolete {
 			continue
@@ -453,6 +453,13 @@ func (s *State) developmentResultRecord(task runtime.TaskKey) *WorkerResult {
 		}
 	}
 	return nil
+}
+func (s *State) developmentResultRecord(task runtime.TaskKey) *WorkerResult {
+	record := s.developmentEditResult(task)
+	if record == nil || !s.developmentChecksPassed(*record) {
+		return nil
+	}
+	return record
 }
 func (s *State) developmentResult(task runtime.TaskKey) *DevelopmentEvidence {
 	record := s.developmentResultRecord(task)
@@ -625,7 +632,7 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 	allowed, _ := s.planCheckpoint(cd, p)
 	for _, b := range p.Batches {
 		key := s.currentPlanTask(cd, p, b.ID)
-		if s.developmentResult(key) != nil {
+		if s.developmentEditResult(key) != nil {
 			continue
 		}
 		blocked := !slices.Contains(allowed, key) || !s.workspaceReady(key, cd)
