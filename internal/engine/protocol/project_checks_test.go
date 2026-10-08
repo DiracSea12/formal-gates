@@ -76,6 +76,8 @@ func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
 	first := p.Batches[0]
 	second := first
 	second.ID, second.Artifacts = "second", []string{"second.go"}
+	second.Subtasks = []DevelopmentSubtask{{ID: "second-body", Description: "Implement the second function contract"}}
+	second.DoD = []DevelopmentCriterion{{ID: "second-outcome", Description: "Second function matches its contract"}}
 	p.Batches = []DevelopmentBatch{first, second}
 	p.VerificationTier = "CHECKPOINT"
 	p.CheckpointGroups = [][]string{{first.ID}, {second.ID}}
