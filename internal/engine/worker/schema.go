@@ -3,16 +3,16 @@ package worker
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
-	"formal-gates/internal/engine/runtime"
 )
 
-// ResultSchema renders the finite core result types; it does not validate
+// ResultSchema renders the finite semantic result types; it does not validate
 // business values or interpret arbitrary schemas. Core Submit owns admission.
 func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 	failures := []any{}
@@ -20,24 +20,27 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		failures = append(failures, string(class))
 	}
 	properties := map[string]any{
-		"actionId":     map[string]any{"type": "string", "enum": []any{input.Pending.ActionID}},
-		"provider":     map[string]any{"type": "string", "enum": []any{input.Provider}},
 		"outcome":      map[string]any{"type": "string", "enum": []any{protocol.OutcomePass, protocol.OutcomeFail, protocol.OutcomeRuntimeError}},
 		"failureClass": map[string]any{"type": "string", "enum": failures}, "interruptionReason": map[string]any{"type": "string"},
 	}
 	if input.Review != nil {
-		body, err := resultTypeSchema(reflect.TypeOf(protocol.ReviewResultEvidence{}))
+		body, err := resultTypeSchema(reflect.TypeOf(Review{}))
 		if err != nil {
 			return nil, err
 		}
 		if input.Review.Action != review.StartReadiness {
 			delete(body["properties"].(map[string]any), "granularityReview")
 		}
+		verification := map[string]any{}
+		for _, key := range review.RequiredVerificationChecks() {
+			verification[key] = map[string]any{"type": "string", "minLength": 1}
+		}
+		body["properties"].(map[string]any)["verification"] = fixedObject(verification, review.RequiredVerificationChecks())
 		properties["review"] = body
 	} else if input.Validation != nil {
-		body := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}, "required": []any{"binding", "status"}}
+		body := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}, "required": []any{"status"}}
 		fields := body["properties"].(map[string]any)
-		allowed := map[string]bool{"Binding": true, "Status": true}
+		allowed := map[string]bool{"Status": true}
 		var statuses []string
 		switch input.Handler {
 		case "engine.development.batch":
@@ -66,7 +69,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		default:
 			return nil, fmt.Errorf("worker validation schema has no role %s", input.Handler)
 		}
-		typ := reflect.TypeOf(protocol.ValidationResult{})
+		typ := reflect.TypeOf(Validation{})
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
 			if !allowed[field.Name] {
@@ -97,50 +100,70 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			completion["dod"] = map[string]any{"type": "object", "additionalProperties": false, "properties": dod, "required": dodIDs}
 			completion["checks"] = map[string]any{"type": "object", "additionalProperties": false, "properties": checks, "required": checkIDs}
 		}
-		if input.Handler == "engine.qa.design" && input.Validation.Manifest.Binding.ReviewKind != "" {
-			caseFields := fields["manifest"].(map[string]any)["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
-			caseFields["mode"] = map[string]any{"type": "string", "enum": []string{string(input.Validation.Manifest.Binding.ReviewKind)}}
+		if input.Handler == "engine.qa.design" {
+			coverageKeys := map[string]any{}
+			for _, point := range input.Validation.Manifest.Points {
+				coverageKeys[point.PointID] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+			}
+			fields["manifest"].(map[string]any)["properties"].(map[string]any)["coverage"] = fixedObject(coverageKeys, nil)
+		}
+		if input.Handler == "engine.qa.review.rationale" {
+			items := fields["review"].(map[string]any)["properties"].(map[string]any)
+			sources, points, cases, shared := []string{}, []string{}, []string{}, []string{}
+			sources = append(sources, input.Validation.Manifest.Sources...)
+			for _, item := range input.Validation.Manifest.Points {
+				points = append(points, item.PointID)
+			}
+			for _, item := range input.Validation.Manifest.Cases {
+				cases = append(cases, item.CaseID)
+			}
+			for _, item := range input.Validation.Manifest.SharedSteps {
+				shared = append(shared, item.ID)
+			}
+			decision, err := resultTypeSchema(reflect.TypeOf(Decision{}))
+			if err != nil {
+				return nil, err
+			}
+			items["sourceDecisions"] = decisionSchema(sources, nil, decision)
+			items["pointDecisions"] = decisionSchema(points, nil, decision)
+			items["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
+			items["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
+		}
+		if input.Handler == "engine.qa.execution" {
+			keys := map[string]any{}
+			observation, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range input.Validation.PendingCases {
+				if slices.Contains(input.Validation.RequiredCases, id) {
+					keys[id] = observation
+				}
+			}
+			fields["execution"].(map[string]any)["properties"].(map[string]any)["records"] = fixedObject(keys, nil)
 		}
 		properties["validation"] = body
 	} else {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
-	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": []any{"actionId", "provider", "outcome"}}
+	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": []any{"outcome"}}
 	return schema, nil
 }
 
 func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 	var literals []string
 	switch value {
-	case reflect.TypeOf(coverage.CaseMode("")):
-		literals = coverage.CaseModes()
+	case reflect.TypeOf(coverage.OperationKind("")):
+		literals = coverage.OperationKinds()
 	case reflect.TypeOf(coverage.ReviewKind("")):
 		literals = coverage.ReviewKinds()
-	case reflect.TypeOf(coverage.ScopeMode("")):
-		literals = coverage.ScopeModes()
 	case reflect.TypeOf(coverage.DecisionStatus("")):
 		literals = coverage.DecisionStatuses()
 	case reflect.TypeOf(coverage.ExecutionStatus("")):
 		literals = coverage.ExecutionStatuses()
-	case reflect.TypeOf(coverage.Provenance("")):
-		literals = coverage.Provenances()
 	}
 	if literals != nil {
 		return map[string]any{"type": "string", "enum": literals}, nil
-	}
-	if value == reflect.TypeOf(review.OperatorVerification{}) {
-		checks := []any{}
-		for _, id := range review.RequiredVerificationChecks() {
-			checks = append(checks, id)
-		}
-		return map[string]any{"type": "object", "additionalProperties": false, "required": []any{"checks", "evidence"}, "properties": map[string]any{
-			"checks":   map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": checks}},
-			"evidence": map[string]any{"type": "string"},
-		}}, nil
-	}
-	// TaskKey's actual encoding is its text identity, not its Go fields.
-	if value == reflect.TypeOf(runtime.TaskKey{}) {
-		return map[string]any{"type": "string"}, nil
 	}
 	if value.Kind() == reflect.Pointer {
 		return resultTypeSchema(value.Elem())
@@ -168,9 +191,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 		required := []any{}
 		for i := 0; i < value.NumField(); i++ {
 			field := value.Field(i)
-			// A worker's batch route is the full/custom proposal. The nested user
-			// DevelopmentPlan confirmation belongs to SELECT_ROUTE, not worker output.
-			if value == reflect.TypeOf(protocol.RouteDecision{}) && field.Name == "DevelopmentPlan" {
+			if value == reflect.TypeOf(protocol.DevelopmentBatch{}) && field.Name == "Route" {
 				continue
 			}
 			if field.PkgPath != "" {
@@ -195,21 +216,18 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			if name == "" {
 				name = field.Name
 			}
-			if value == reflect.TypeOf(coverage.AcceptanceCase{}) && field.Name == "Scenario" {
+			if value == reflect.TypeOf(Case{}) && field.Name == "Scenario" {
 				child["enum"] = coverage.Scenarios()
 			}
-			if value == reflect.TypeOf(protocol.QASuggestion{}) && field.Name == "Severity" {
+			if value == reflect.TypeOf(Suggestion{}) && field.Name == "Severity" {
 				child["enum"] = []string{"P2", "P3"}
-			}
-			if value == reflect.TypeOf(protocol.QASuggestion{}) && field.Name == "Decision" {
-				child["enum"] = []string{""}
 			}
 			properties[name] = child
 			if !strings.Contains(options, "omitempty") {
 				required = append(required, name)
 			}
 		}
-		if value == reflect.TypeOf(protocol.GranularityReview{}) {
+		if value == reflect.TypeOf(Granularity{}) {
 			tiers := []any{}
 			for _, tier := range protocol.GranularityVerificationTiers() {
 				tiers = append(tiers, tier)
@@ -233,4 +251,22 @@ func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
 		return nil
 	}
 	return &input.Validation.Development.Batch
+}
+
+func fixedObject(properties map[string]any, required []string) map[string]any {
+	if required == nil {
+		required = []string{}
+	}
+	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
+}
+func decisionSchema(ids []string, inherited []coverage.ReviewDecision, decision map[string]any) map[string]any {
+	properties := map[string]any{}
+	required := []string{}
+	for _, id := range ids {
+		properties[id] = decision
+		if !slices.ContainsFunc(inherited, func(item coverage.ReviewDecision) bool { return item.ID == id }) {
+			required = append(required, id)
+		}
+	}
+	return fixedObject(properties, required)
 }

@@ -262,9 +262,52 @@ func StrictDecode(b []byte, dst any) error {
 	}
 	return nil
 }
-func WorkerSchema() map[string]any {
+
+// WorkerJudgment carries authored role evidence; approved check identity is
+// supplied by the task and assembled before ValidateWorker.
+type WorkerJudgment struct {
+	Status       string            `json:"status"`
+	Summary      string            `json:"summary"`
+	Findings     []Finding         `json:"findings"`
+	CheckReviews map[string]string `json:"check_reviews"`
+}
+
+func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) (WorkerResult, error) {
+	if strings.TrimSpace(judgment.Summary) == "" {
+		return WorkerResult{}, fmt.Errorf("worker result needs a summary")
+	}
+	if judgment.CheckReviews == nil {
+		return WorkerResult{}, fmt.Errorf("check_reviews must be an explicit object")
+	}
+	result := WorkerResult{Status: judgment.Status, Summary: judgment.Summary, Findings: judgment.Findings, CheckIDs: []string{}}
+	known := map[string]bool{}
+	for _, check := range checks {
+		known[check.ID] = true
+		if evidence, exists := judgment.CheckReviews[check.ID]; exists {
+			if strings.TrimSpace(evidence) == "" {
+				return WorkerResult{}, fmt.Errorf("check review evidence is empty: %s", check.ID)
+			}
+			result.CheckIDs = append(result.CheckIDs, check.ID)
+			result.Summary += "\nCheck " + check.ID + ": " + evidence
+		}
+	}
+	for id := range judgment.CheckReviews {
+		if !known[id] {
+			return WorkerResult{}, fmt.Errorf("unknown check review: %s", id)
+		}
+	}
+	if err := ValidateWorker(role, result, checks); err != nil {
+		return WorkerResult{}, err
+	}
+	return result, nil
+}
+func WorkerSchema(checks ...Check) map[string]any {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	arr := func(item any) map[string]any { return map[string]any{"type": "array", "items": item} }
 	finding := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"id", "severity", "message", "paths"}, "properties": map[string]any{"id": str(), "severity": map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}, "message": str(), "paths": arr(str())}}
-	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "summary", "findings", "check_ids"}, "properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "BLOCKED", "CONTINUE"}}, "summary": str(), "findings": arr(finding), "check_ids": arr(str())}}
+	reviews := map[string]any{}
+	for _, check := range checks {
+		reviews[check.ID] = map[string]any{"type": "string", "minLength": 1}
+	}
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "summary", "findings", "check_reviews"}, "properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "BLOCKED", "CONTINUE"}}, "summary": str(), "findings": arr(finding), "check_reviews": map[string]any{"type": "object", "additionalProperties": false, "properties": reviews, "required": []string{}}}}
 }

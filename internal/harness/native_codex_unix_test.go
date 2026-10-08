@@ -201,7 +201,7 @@ func TestCodexRPCPeer(t *testing.T) {
 	if peer.Mode == "failed" || peer.Mode == "interrupted" {
 		status = peer.Mode
 	}
-	answer := map[string]any{"status": "PASS", "summary": strings.Join(history, " / "), "findings": []any{}, "check_ids": []any{}}
+	answer := map[string]any{"status": "PASS", "summary": strings.Join(history, " / "), "findings": []any{}, "check_reviews": map[string]any{}}
 	if peer.Answer != nil {
 		answer = peer.Answer
 	}

@@ -73,7 +73,7 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 		{"readiness", codexReadinessSchema(t), review},
 		{"confirmed-batch", canaryDevelopmentSchema(&batch), completion},
 		{"autonomous-repair", repairSchema, repair},
-		{"all-required-worker", WorkerSchema(), map[string]any{"status": "PASS", "summary": "ready", "findings": []any{}, "check_ids": []any{}}},
+		{"all-required-worker", WorkerSchema(), map[string]any{"status": "PASS", "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			s := newCodexScenario(t)

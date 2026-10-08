@@ -43,9 +43,8 @@ type scriptedAnswer struct {
 	Garbage bool `json:"garbage,omitempty"`
 	// Writes are absolute-path files the peer drops when its turn fires.
 	Writes []peerFile `json:"writes,omitempty"`
-	// CheckIDs overrides the answer's check ids (QA roles must return
-	// every authorized id).
-	CheckIDs []string `json:"check_ids,omitempty"`
+	// CheckReviews supplies each approved check's semantic coverage evidence.
+	CheckReviews map[string]string `json:"check_reviews,omitempty"`
 	// NoWrite suppresses the development fixture's implementation write —
 	// the "declared PASS but wrote nothing" scenario.
 	NoWrite bool `json:"no_write,omitempty"`
@@ -81,17 +80,17 @@ func (s composeScripts) forCall(call NativeCall, ordinal int) scriptedAnswer {
 // sequence, the adapter tests' shape. Identity empty is a new session; a
 // continuation resumes it.
 func dshScriptSteps(jobDir string, answer scriptedAnswer) []peerStep {
-	worker := WorkerResult{
-		Status:   answer.Status,
-		Summary:  answer.Summary,
-		Findings: answer.Findings,
-		CheckIDs: answer.CheckIDs,
+	worker := WorkerJudgment{
+		Status:       answer.Status,
+		Summary:      answer.Summary,
+		Findings:     answer.Findings,
+		CheckReviews: answer.CheckReviews,
 	}
 	if worker.Findings == nil {
 		worker.Findings = []Finding{}
 	}
-	if worker.CheckIDs == nil {
-		worker.CheckIDs = []string{}
+	if worker.CheckReviews == nil {
+		worker.CheckReviews = map[string]string{}
 	}
 	answerJSON, _ := json.Marshal(worker)
 	if answer.Garbage {
@@ -256,8 +255,8 @@ func openWorkflow(t *testing.T, runID string, scripts composeScripts, repairLimi
 			calls[call.TaskID]++
 			answer := scripts.forCall(call, calls[call.TaskID])
 			// The QA roles must account for every authorized check id.
-			if answer.CheckIDs == nil && (call.Role == "qa-design" || call.Role == "qa-review") {
-				answer.CheckIDs = []string{"state"}
+			if answer.CheckReviews == nil && (call.Role == "qa-design" || call.Role == "qa-review") {
+				answer.CheckReviews = map[string]string{"state": "The state check exercises the approved state transition with a concrete expected result."}
 			}
 			// The development fixture's implementation lands in its
 			// workspace; a repair round's fix lands the same way.

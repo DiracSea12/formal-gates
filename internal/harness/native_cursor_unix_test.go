@@ -229,7 +229,7 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 	}
 	nativeConfig := map[string]any{"model": map[string]any{"modelId": model, "displayModelId": model, "displayName": display, "aliases": []any{"model-alias"}}, "selectedModel": map[string]any{"modelId": model, "parameters": parameters}, "apiKey": "secret-not-evidence"}
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": uuid, "cwd": workspace, "model": display, "permissionMode": "default"}
-	answer := map[string]any{"status": "PASS", "summary": "native " + uuid + " " + model, "findings": []any{}, "check_ids": []any{}}
+	answer := map[string]any{"status": "PASS", "summary": "native " + uuid + " " + model, "findings": []any{}, "check_reviews": map[string]any{}}
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": uuid, "request_id": "request-" + uuid, "result": mustCanonical(t, answer), "usage": map[string]any{"inputTokens": len(uuid), "outputTokens": len(model)}}
 	sum := md5.Sum([]byte(workspace))
 	store := filepath.Join(config, "chats", hex.EncodeToString(sum[:]), uuid, "store.db")
@@ -619,7 +619,7 @@ func TestCursorResultLineEndings(t *testing.T) {
 		t.Run(newline.name, func(t *testing.T) {
 			s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
 			terminal := objectOrEmpty(s.peer.Events[1])
-			answer := "{\n\"status\":\"PASS\",\n\"summary\":\"native " + s.peer.UUID + "\",\n\"findings\":[],\n\"check_ids\":[]\n}"
+			answer := "{\n\"status\":\"PASS\",\n\"summary\":\"native " + s.peer.UUID + "\",\n\"findings\":[],\n\"check_reviews\":{}\n}"
 			terminal["result"] = strings.ReplaceAll(answer, "\n", newline.text)
 			s.save(t)
 			source, err := runNativeJob(s.directory)
@@ -808,7 +808,7 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				s.peer.ExpectedContext = s.peer.UUID + ":initialized"
 				s.peer.Wait = false
 				s.peer.BeforeInit = ""
-				s.peer.Events = append(s.peer.Events, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.peer.UUID, "request_id": "reopened", "result": `{"status":"PASS","summary":"reopened","findings":[],"check_ids":[]}`})
+				s.peer.Events = append(s.peer.Events, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.peer.UUID, "request_id": "reopened", "result": `{"status":"PASS","summary":"reopened","findings":[],"check_reviews":{}}`})
 				s.directory = filepath.Join(filepath.Dir(s.directory), "reopened")
 				os.MkdirAll(s.directory, 0o755)
 				s.save(t)

@@ -64,7 +64,7 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 				payload.Validation.Development = nil
 			case "repair-plan":
 				payload.Validation.Development = nil
-				payload.Validation.GranularityReview = &protocol.GranularityReview{}
+				payload.Validation.GranularityReview = &worker.Granularity{}
 			case "repair-self-run":
 				material.Input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{}}
 			}
@@ -73,11 +73,12 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 	}
 }
 
-func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKind) (worker.Material, protocol.WorkerResultPayload) {
+func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKind) (worker.Material, worker.Result) {
 	t.Helper()
 	input := protocol.WorkerInput{RunID: "delivery", Handler: handler, Provider: "zcode", VCS: "git", Pending: protocol.PendingAction{ActionID: "author", AttemptID: "issued-attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Deliver the authorized artifact only."}, Validation: &protocol.ValidationInput{Handler: handler, Binding: protocol.WorkBinding{WorkspaceID: "author-workspace"}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
 	if handler == "engine.qa.execution" {
 		input.Validation.Execution = &coverage.ExecutionBinding{}
+		input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 	}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}, {ID: "qa-design"}, {ID: "qa-execution"}}}
 	material, err := worker.Render(input, catalog)
@@ -94,7 +95,7 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 	return material, payload
 }
 
-func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload protocol.WorkerResultPayload, residue string, refuse bool) {
+func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload worker.Result, residue string, refuse bool) {
 	t.Helper()
 	s := newZcodeScenario(t, zcodeSuccessSteps, nil)
 	home := resolveNativePath(t.TempDir())
@@ -215,16 +216,19 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload p
 	if calls != wantCalls || calls > canaryTurnBudget {
 		t.Fatalf("delivery calls=%d want=%d", calls, wantCalls)
 	}
-	want := payload
 	raw := readTestFileBytes(t, filepath.Join(c.transcript, "answer.raw.txt"))
 	sum := sha256.Sum256(raw)
-	want.PayloadDigest = fmt.Sprintf("sha256:%x", sum)
-	if !reflect.DeepEqual(*event.Result, want) {
-		t.Fatalf("dispatch changed core author result: got=%+v want=%+v", event.Result, want)
+	if event.Result.ActionID != material.Input.Pending.ActionID || event.Result.Provider != material.Input.Provider || event.Result.PayloadDigest != fmt.Sprintf("sha256:%x", sum) || event.Result.Validation.Binding != material.Input.Validation.Binding {
+		t.Fatal("dispatch lost original input and raw evidence binding")
 	}
+	got := event.Result.Validation
+	if got.Status != payload.Validation.Status || !reflect.DeepEqual(got.Development, payload.Validation.Development) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
+		t.Fatal("dispatch changed semantic author evidence")
+	}
+
 	for i := 1; i <= calls; i++ {
 		dir := filepath.Join(c.jobDirectory(material.Input.Pending.ActionID), fmt.Sprintf("attempt-%d", i))
-		var observed protocol.WorkerResultPayload
+		var observed worker.Result
 		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(dir, "answer.json")), &observed); err != nil || !reflect.DeepEqual(observed, payload) {
 			t.Fatalf("native author answer changed: %v", err)
 		}

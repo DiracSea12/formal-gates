@@ -131,8 +131,8 @@ var roleInstructions = map[string]string{
 	"technical-review":            "Review feasibility and the smallest implementation plan. State the plan in summary. Do not implement.",
 	"development":                 "Implement only the approved requirement in this workspace. Do not git commit. Use CONTINUE only for genuinely unfinished work.",
 	"repair":                      "Repair only the supplied mandatory findings and failed checks. Preserve unrelated working code. Do not git commit.",
-	"qa-design":                   "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in summary, and return every check id. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
-	"qa-review":                   "Independently review the supplied QA design for coverage and feasibility. Account for every authorized check id. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
+	"qa-design":                   "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in its fixed check_reviews key. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
+	"qa-review":                   "Independently review the supplied QA design for coverage and feasibility. Assess every authorized check using its fixed check_reviews key. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
 	"complexity-gate":             "Review the full base-to-candidate change for unnecessary complexity and changes unrelated to the approved requirement. Do not implement.",
 	"implementation-quality-gate": "Review the full base-to-candidate change for correctness and maintainability. Inspect actual code and assertions. Do not implement.",
 }

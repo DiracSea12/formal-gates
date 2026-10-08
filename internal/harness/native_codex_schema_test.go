@@ -128,10 +128,10 @@ func TestCodexDomainProjectionPreservesValidationInputs(t *testing.T) {
 		t.Fatalf("projection rewrote validation inputs: %v", result)
 	}
 	for name, answer := range map[string]map[string]any{
-		"missing-findings": {"status": "PASS", "summary": "ready", "check_ids": []any{}},
-		"null-status":      {"status": nil, "summary": "ready", "findings": []any{}, "check_ids": []any{}},
-		"wrong-type":       {"status": 7, "summary": "ready", "findings": []any{}, "check_ids": []any{}},
-		"unknown-field":    {"status": "PASS", "summary": "ready", "findings": []any{}, "check_ids": []any{}, "extra": "reject"},
+		"missing-findings": {"status": "PASS", "summary": "ready", "check_reviews": map[string]any{}},
+		"null-status":      {"status": nil, "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}},
+		"wrong-type":       {"status": 7, "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}},
+		"unknown-field":    {"status": "PASS", "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}, "extra": "reject"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			projected, err := codexDomainResult(codexPlain(t, WorkerSchema()), answer)
@@ -139,10 +139,10 @@ func TestCodexDomainProjectionPreservesValidationInputs(t *testing.T) {
 				t.Fatal(err)
 			}
 			body, _ := json.Marshal(projected)
-			var worker WorkerResult
+			var worker WorkerJudgment
 			err = StrictDecode(body, &worker)
 			if err == nil {
-				err = ValidateWorker("development", worker, nil)
+				_, err = workerJudgmentResult("development", worker, nil)
 			}
 			if err == nil {
 				t.Fatal("existing worker validator accepted invalid domain result")

@@ -188,8 +188,10 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			payload := material.ResultTemplate
 			payload.Outcome = protocol.OutcomePass
 			payload.Review.Status = "PASS"
-			payload.Review.Findings = []review.Finding{}
-			payload.Review.Verification = review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "verified full current requirement"}
+			payload.Review.Findings = []worker.Finding{}
+			for _, key := range review.RequiredVerificationChecks() {
+				payload.Review.Verification[key] = "verified full current requirement: " + key
+			}
 			parsed, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)

@@ -12,6 +12,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +24,6 @@ import (
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/requirement"
-	"reflect"
 )
 
 func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
@@ -70,8 +71,10 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	payload := material.ResultTemplate
 	payload.Outcome = protocol.OutcomePass
 	payload.Review.Status = "PASS"
-	payload.Review.Findings = []review.Finding{}
-	payload.Review.Verification = review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "read complete confirmed delivery document"}
+	payload.Review.Findings = []worker.Finding{}
+	for _, key := range review.RequiredVerificationChecks() {
+		payload.Review.Verification[key] = "read complete confirmed delivery document: " + key
+	}
 	answer, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +102,11 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if event.Result.PayloadDigest != "sha256:"+hex.EncodeToString(rawHash[:]) {
 		t.Fatal("final event used a shape/decoded digest instead of original native bytes")
 	}
-	if event.Result.Review.Verification.Evidence != payload.Review.Verification.Evidence {
+	expectedEvidence := []string{}
+	for _, key := range review.RequiredVerificationChecks() {
+		expectedEvidence = append(expectedEvidence, key+": "+payload.Review.Verification[key])
+	}
+	if event.Result.Review.Verification.Evidence != strings.Join(expectedEvidence, "\n") || !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) {
 		t.Fatal("native core evidence was rewritten")
 	}
 }
@@ -188,7 +195,10 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 				plan.CheckpointReason = "independent batches preserve frozen interfaces"
 				plan.CheckpointGroups = [][]string{{plan.Batches[0].ID}, {second.ID}}
 			}
-			payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, Outcome: protocol.OutcomePass, Review: &protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: input.Pending.ActionID, RequirementRevision: "confirmed", Status: "PASS", GranularityReview: plan, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "checked current signed inputs"}}}
+			payload := worker.Result{Outcome: protocol.OutcomePass, Review: &worker.Review{Status: "PASS", GranularityReview: canarySemanticPlan(plan), Findings: []worker.Finding{}, Verification: map[string]string{}}}
+			for _, key := range review.RequiredVerificationChecks() {
+				payload.Review.Verification[key] = "checked current signed input: " + key
+			}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
 			if err != nil {
@@ -222,23 +232,35 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
 		t.Run(handler, func(t *testing.T) {
 			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
-			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: coverage.AcceptanceManifest{Binding: binding}}}
+			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
+			execution := coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}}
+			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: manifest, ReviewScope: coverage.ScopeFull, SourcePoints: []protocol.SourcePoint{{SourceID: "REQ", PointID: "AC"}}, Execution: &execution, Whitelist: &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}, RequiredCases: []string{"case"}, PendingCases: []string{"case"}}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
+			result := worker.Validation{Status: "PASS"}
 			switch handler {
 			case "engine.qa.design":
-				result.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: []coverage.CoverageEdge{{SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
+				result.Manifest = &worker.Manifest{Cases: []worker.Case{{CaseID: "case", Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: map[string][]string{"AC": {"case"}}}
 			case "engine.qa.review.rationale":
-				result.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}}
+				result.Review = &worker.CaseReview{SourceDecisions: map[string]worker.Decision{"REQ": {Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: map[string]worker.Decision{"AC": {Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: map[string]worker.Decision{"case": {Status: coverage.StatusPass, Reason: "oracle valid"}}}
 			case "engine.qa.execution":
-				result.Execution = &coverage.ExecutionReport{Binding: coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}, ActualCaseIDs: []string{"case"}}, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
-				result.Tool = "app"
-				result.Environment = "issued workspace"
+				result.Execution = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
+				result.Tool, result.Environment = "app", "issued workspace"
 			}
-			payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &result}
+			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
+			switch handler {
+			case "engine.qa.design":
+				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
+			case "engine.qa.review.rationale":
+				expected.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}, SharedStepDecisions: []coverage.ReviewDecision{}, SetStatus: coverage.StatusPass}
+			case "engine.qa.execution":
+				expected.Execution = &coverage.ExecutionReport{Binding: execution, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
+				expected.Execution.Binding.ActualCaseIDs = []string{"case"}
+				expected.Tool, expected.Environment = "app", "issued workspace"
+			}
+			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &result}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
 			if err != nil {
@@ -258,7 +280,11 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			actual, _ := json.Marshal(projected)
 			event, err := worker.DecodeResult(input, "result", actual, "sha256:original")
-			if err != nil || !reflect.DeepEqual(event.Result.Validation, &result) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(event.Result.Validation, &expected) {
+				t.Fatalf("typed role evidence lost: got=%+v expected=%+v", event.Result.Validation, expected)
 				t.Fatal("typed role/issued binding lost", err)
 			}
 		})

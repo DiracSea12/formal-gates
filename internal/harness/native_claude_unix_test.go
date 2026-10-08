@@ -144,7 +144,7 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 		"identity": "", "model": "claude-fixture-model", "reasoning_effort": "high", "prompt": prompt, "schema": plainWorkerSchema()}
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace,
 		"model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity}
-	answer := map[string]any{"status": "PASS", "summary": "native answer " + identity, "findings": []any{}, "check_ids": []any{}}
+	answer := map[string]any{"status": "PASS", "summary": "native answer " + identity, "findings": []any{}, "check_reviews": map[string]any{}}
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity,
 		"uuid": "result-" + identity, "num_turns": 3, "result": "ignored when structured output is available", "structured_output": answer,
 		"usage": map[string]any{"input_tokens": 12, "output_tokens": 3}, "modelUsage": map[string]any{"claude-fixture-model": map[string]any{"inputTokens": 12}}}
@@ -409,9 +409,9 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 		delete(terminal, "structured_output")
 		delete(terminal, "usage")
 		delete(terminal, "modelUsage")
-		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"status": "PASS", "summary": "text result", "findings": []any{}, "check_ids": []any{}}) + "\n```"
+		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"status": "PASS", "summary": "text result", "findings": []any{}, "check_reviews": map[string]any{}}) + "\n```"
 		if invalidRole {
-			terminal["result"] = `{"status":"unexpected","summary":"invalid role result","findings":[],"check_ids":[]}`
+			terminal["result"] = `{"status":"unexpected","summary":"invalid role result","findings":[],"check_reviews":{}}`
 		}
 		s.save(t)
 		source, err := runNativeJob(s.directory)

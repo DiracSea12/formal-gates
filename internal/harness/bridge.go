@@ -295,11 +295,13 @@ func dispatch(e envelope) (any, error) {
 		}
 		return host.All(), nil
 	case "schema":
-		var q struct{}
+		var q struct {
+			Checks []Check `json:"checks,omitempty"`
+		}
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		return WorkerSchema(), nil
+		return WorkerSchema(q.Checks...), nil
 	case "validate-spec":
 		var q Spec
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -316,17 +318,18 @@ func dispatch(e envelope) (any, error) {
 		return map[string]any{"spec": q, "revision": Digest(q)}, nil
 	case "validate-worker":
 		var q struct {
-			Role   string       `json:"role"`
-			Result WorkerResult `json:"result"`
-			Checks []Check      `json:"checks"`
+			Role   string         `json:"role"`
+			Result WorkerJudgment `json:"result"`
+			Checks []Check        `json:"checks"`
 		}
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		if err := ValidateWorker(q.Role, q.Result, q.Checks); err != nil {
+		result, err := workerJudgmentResult(q.Role, q.Result, q.Checks)
+		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"result": q.Result, "needs_repair": NeedsRepair(q.Result)}, nil
+		return map[string]any{"result": result, "needs_repair": NeedsRepair(result)}, nil
 	case "resolve-snapshot", "snapshot", "clean":
 		var q workspaceInput
 		if err := StrictDecode(e.Payload, &q); err != nil {

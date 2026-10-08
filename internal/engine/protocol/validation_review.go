@@ -3,6 +3,7 @@ package protocol
 import (
 	"formal-gates/internal/engine/coverage"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -74,7 +75,7 @@ func inheritableSharedReviews(set *CaseSet) []coverage.ReviewDecision {
 			continue
 		}
 		for _, current := range set.Manifest.SharedSteps {
-			if current.ID == d.ID && slices.Contains(prior.Manifest.SharedSteps, current) {
+			if current.ID == d.ID && slices.ContainsFunc(prior.Manifest.SharedSteps, func(step coverage.SharedStep) bool { return reflect.DeepEqual(step, current) }) {
 				decisions = append(decisions, d)
 			}
 		}

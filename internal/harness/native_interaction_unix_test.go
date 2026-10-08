@@ -149,7 +149,7 @@ func TestInteractionDSHAnswerContinuesSameTurn(t *testing.T) {
 	if record == nil || textOf(record["status"]) != "observed" {
 		t.Fatalf("pending record = %v", record)
 	}
-	if body := readTestFile(t, filepath.Join(directory, "answer.json")); body != `{"check_ids":[],"findings":[],"status":"PASS","summary":"observed"}` {
+	if body := readTestFile(t, filepath.Join(directory, "answer.json")); body != `{"check_reviews":{},"findings":[],"status":"PASS","summary":"observed"}` {
 		t.Fatalf("answer.json = %s", body)
 	}
 	status := readTestFile(t, filepath.Join(directory, "interaction-status.json"))

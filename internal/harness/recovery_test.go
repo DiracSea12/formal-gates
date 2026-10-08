@@ -41,8 +41,8 @@ func scriptedBinding(t testReporter, cfg ComposeConfig, scripts composeScripts, 
 			observed(call)
 		}
 		answer := scripts.forCall(call, ordinal)
-		if answer.CheckIDs == nil && (call.Role == "qa-design" || call.Role == "qa-review") {
-			answer.CheckIDs = []string{"state"}
+		if answer.CheckReviews == nil && (call.Role == "qa-design" || call.Role == "qa-review") {
+			answer.CheckReviews = map[string]string{"state": "The state check exercises the approved state transition with a concrete expected result."}
 		}
 		if (call.Role == "development" || call.Role == "repair") && !answer.NoWrite && !answer.Garbage {
 			answer.Writes = append(answer.Writes, peerFile{Path: filepath.Join(cfg.Dir, "workspaces", "development", "state.txt"), Body: "ok\n"})

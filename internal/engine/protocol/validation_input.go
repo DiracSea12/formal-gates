@@ -11,6 +11,7 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
+	ReviewScope coverage.ScopeMode `json:"reviewScope,omitempty"`
 	// RequirementDocument supplies the current confirmed context alongside
 	// the original issued work binding, including explicitly carried work.
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
@@ -99,6 +100,15 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	input.Manifest.Points, _ = s.coveragePoints()
 	if set := s.Validation.Sets[mode]; set != nil {
 		input.Manifest = set.Manifest
+		if role == "engine.qa.review.rationale" {
+			input.ReviewScope = coverage.ScopeFull
+			for _, prior := range set.ReviewHistory {
+				if prior.Review.Scope == coverage.ScopeFull && prior.Manifest.Binding.ReviewKind == mode {
+					input.ReviewScope = coverage.ScopeAffected
+					break
+				}
+			}
+		}
 		input.InheritableReviews = s.inheritableReviews(set)
 		input.InheritableSharedReviews = inheritableSharedReviews(set)
 	}

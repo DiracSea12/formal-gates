@@ -16,7 +16,7 @@ from formal_gates_harness.cli import adopt_transport, status_projection
 
 PACKAGE = Path(__file__).resolve().parents[3]
 BINARY = PACKAGE / '.harness/bin/formal-gates'
-ANSWER = {'status':'PASS','summary':'Implemented approved change.','findings':[],'check_ids':[]}
+ANSWER = {'status':'PASS','summary':'Implemented approved change.','findings':[],'check_reviews':{}}
 
 class OutputRecovery(unittest.TestCase):
     def test_plain_and_fenced_result(self):

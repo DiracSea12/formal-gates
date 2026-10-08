@@ -14,8 +14,8 @@ ROLES = {
     "technical-review": "Review feasibility and the smallest implementation plan. State the plan in summary. Do not implement.",
     "development": "Implement only the approved requirement in this workspace. Do not git commit. Use CONTINUE only for genuinely unfinished work.",
     "repair": "Repair only the supplied mandatory findings and failed checks. Preserve unrelated working code. Do not git commit.",
-    "qa-design": "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in summary, and return every check id. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
-    "qa-review": "Independently review the supplied QA design for coverage and feasibility. Account for every authorized check id. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
+    "qa-design": "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in its fixed check_reviews key. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
+    "qa-review": "Independently review the supplied QA design for coverage and feasibility. Assess every authorized check using its fixed check_reviews key. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
     "complexity-gate": "Review the full base-to-candidate change for unnecessary complexity and changes unrelated to the approved requirement. Do not implement.",
     "implementation-quality-gate": "Review the full base-to-candidate change for correctness and maintainability. Inspect actual code and assertions. Do not implement.",
 }
@@ -24,7 +24,6 @@ class Workers:
     def __init__(self, store: Store, package: Path):
         self.store, self.package = store, package
         self.spec = store.manifest['spec']
-        self.schema = store.bridge.call('schema', {})
     def run(self, role: str, workspace: Path, key_data: dict,
             feedback: dict | None = None, session: str = '', attempt: int = 0, restart_session: bool = False, native_store: str = '') -> dict:
         if role not in ROLES: raise HarnessError('unknown role')
@@ -98,7 +97,7 @@ class Workers:
                 +'Use the actual current workspace, not another project or a historical worktree. '
                 +'When task.json contains comparison, read its comparison.json, full.diff and baseline/candidate blob materials. '
                 +BOUNDARY+'\n'
-                +'The only allowed check_ids are: '+json.dumps([c['id'] for c in self.spec['checks']])+'. Never invent IDs.')
+                +'For QA design/review, assess every approved check with non-empty coverage/oracle evidence in its fixed check_reviews key. Other roles may return an empty object. Do not return check IDs or fabricate approval.')
             if handover:
                 prompt += ('\nAn operator explicitly authorized a NEW session for the SAME interrupted role task. '
                            'The previous executor is stopped. Read '+str(materials/'handover.json')+
@@ -108,7 +107,7 @@ class Workers:
                            'side effects, or treat missing evidence as PASS. No prior chat is assumed.')
             directory=self.store.directory/'jobs'/key;directory.mkdir(parents=True,exist_ok=True)
             native={'provider':adapter.name, 'binding':binding, 'workspace':str(workspace),'read_only':role not in ('development','repair'),
-                'identity':session,'model':self.spec['model'],'reasoning_effort':self.spec['reasoning_effort'],'prompt':prompt,'schema':self.schema}
+                'identity':session,'model':self.spec['model'],'reasoning_effort':self.spec['reasoning_effort'],'prompt':prompt,'schema':self.store.bridge.call('schema', {'checks':self.spec['checks']})}
             if adapter.name == 'cursor' and session: native['native_store'] = native_store
             path=directory/'native-request.json'
             if path.exists():
@@ -155,9 +154,9 @@ class Workers:
         return output
     def fixture(self,role: str,workspace: Path) -> dict:
         if not self.store.manifest.get('fixture'): raise HarnessError('Fixture workers are restricted to the explicitly labelled demo')
-        checks=[c['id'] for c in self.spec['checks']]
+        checks={c['id']: 'Deterministic coverage/oracle fixture; NOT an independent review.' for c in self.spec['checks']}
         if role=='development':
             time.sleep(.15);(workspace/'calculator.py').write_text('def add(a, b):\n    return a - b  # intentional demo defect\n')
         if role=='repair':(workspace/'calculator.py').write_text('def add(a, b):\n    return a + b\n')
         return {'status':'PASS','summary':f'Deterministic {role} fixture; NOT an independent model review.',
-                'findings':[],'check_ids':checks if role in ('qa-design','qa-review') else []}
+                'findings':[],'check_reviews':checks if role in ('qa-design','qa-review') else {}}
