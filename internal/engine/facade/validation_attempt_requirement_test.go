@@ -133,6 +133,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
+				retainNativeEvidence(t, d.f)
 				if role == "engine.qa.execution" || role == "engine.gate" {
 					d.reviewReady()
 				} else if role == "engine.qa.review.rationale" {

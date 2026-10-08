@@ -681,6 +681,14 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				manifest := simpleManifest(input)
 				for i := range manifest.Cases {
 					manifest.Cases[i].Mode = coverage.CaseMerge
+					argument := "valid"
+					if manifest.Cases[i].CaseID == "invalid" {
+						argument = ""
+					}
+					manifest.Cases[i].PublicEntry = "public Valid input function"
+					manifest.Cases[i].Steps = "invoke the public input function through its isolated caller"
+					command := "mkdir -p .gates/input-call; cat > .gates/input-call/main.go <<'GO'\npackage main\nimport(\"command\";\"os\")\nfunc main(){if len(os.Args)!=2 || !command.Valid(os.Args[1]){os.Exit(2)}}\nGO\ngo run -buildvcs=false ./.gates/input-call " + fmt.Sprintf("%q", argument)
+					manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: command}}
 				}
 				master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				master.drive()
