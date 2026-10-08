@@ -45,9 +45,10 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	state.RunID = "guard-run"
 	state.RunProvider = testProvider
 	state.IntakeReceipt = &IntakeReceipt{
-		Confirmation: IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "rev-1"},
+		Confirmation: IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "rev-1", SolutionRevision: "solution"},
 		IntakeDigest: "sha256:intake", Revision: 1,
 	}
+	state.IntakeConfirmationReceipt = &state.IntakeReceipt.Confirmation
 	state.RequirementRevisions = []ConfirmedRevision{{
 		Revision: "rev-1", Source: RequirementSourceIntake,
 		Classification: RequirementClassificationIntake, StateRevision: 1,
@@ -776,7 +777,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	state.RunID = "guard-run"
 	state.RunProvider = testProvider
 	state.IntakeReceipt = &IntakeReceipt{
-		Confirmation: IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "rev-1"},
+		Confirmation: IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "rev-1", SolutionRevision: "solution"},
 		IntakeDigest: "sha256:intake", Revision: 1,
 	}
 	state.RequirementRevisions = []ConfirmedRevision{{
@@ -826,7 +827,16 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: 1}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
 	w := &state.Validation.Waves[0]
+	w.Coverage = state.coverageContract(&w.Candidate)
+	w.Coverage.RequiredSources.Sources = []coverage.RequiredSource{{SourceID: "source", Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability}}
+	manifest.Binding = coverage.ManifestBinding{SourceBinding: w.Coverage.RequiredSources.Binding, ReviewKind: coverage.ReviewBlackbox, RouteScope: state.validationRouteDigest(), TopologyScope: digestOfCanonical(state.Topology)}
+	manifest.Sources = []string{"source"}
+	manifest.Points = []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "emit governed", Oracle: "governed"}}
+	manifest.Cases[0].Scenario, manifest.Cases[0].PublicEntry, manifest.Cases[0].Preconditions, manifest.Cases[0].Steps, manifest.Cases[0].Oracle = "NORMAL", "printf governed", "isolated candidate", "run approved command", "governed"
+	manifest.Edges[0].ReviewKind = coverage.ReviewBlackbox
+	state.Validation.Sets[coverage.ReviewBlackbox].Manifest = manifest
 	w.Coverage.Manifests = []coverage.AcceptanceManifest{manifest}
+	w.Reviews = []coverage.ReviewResult{{Binding: manifest.Binding, Scope: coverage.ScopeFull, SetStatus: coverage.StatusPass, SourceDecisions: []coverage.ReviewDecision{{ID: "source", Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: "point", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: "governed", Status: coverage.StatusPass}}}}
 	w.Targets[qaTask.String()].RequiredCases = []string{"governed"}
 	state.NativeResources = map[string]NativeResource{}
 	state.PendingHostActions = map[string]HostActionIntent{}
