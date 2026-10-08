@@ -59,6 +59,7 @@ func codexPlain(t *testing.T, value any) any {
 	return plain
 }
 
+// The readiness fixture is generated from canaryReviewSchema(true).
 func codexReadinessSchema(t *testing.T) map[string]any {
 	t.Helper()
 	body, err := os.ReadFile("testdata/readiness-schema.json")
