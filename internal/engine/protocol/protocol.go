@@ -316,7 +316,7 @@ type ObsoleteAction struct {
 
 // RecoveryRecord retains the recovery route and its original interruption evidence.
 // It does not establish completion of a host effect or user authorization.
-// RequestID binds a RecoverAttempt duty; failure-admission records have no request.
+// RequestID binds the original attempt to its actionable recovery request.
 type RecoveryRecord struct {
 	// InterruptionReason is the host/worker's exact cause evidence; Detail is
 	// the engine's routing explanation. An empty cause remains unknown.

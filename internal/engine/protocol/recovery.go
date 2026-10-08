@@ -274,40 +274,65 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 		Task: pending.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider,
 	}
 	plan := decideRecovery(interruption, !attempt.Bindings.Equal(currentBindings))
-	for _, record := range state.RecoveryRecords {
-		if record.ActionID != actionID || record.AttemptID != attempt.ID || record.RequestID == "" {
-			continue
-		}
-		if record.Action == RecoveryAsk && !state.PendingAsks[record.RequestID].Resolved {
-			return RecoveryPlan{Action: RecoveryAsk, RequestID: record.RequestID, Options: recoveryAskOptions(), Detail: record.Detail}, revision, nil
-		}
-		completed := false
-		for _, receipt := range state.HostActionReceipts {
-			if receipt.Correlation == record.RequestID && receipt.Status == HostActionStatusExecuted {
-				completed = true
-			}
-		}
-		if !completed && (record.Action == RecoveryAsk || record.Action == RecoveryResumeAttempt || record.Action == RecoveryNewAttempt) {
-			return RecoveryPlan{Action: RecoveryWait, RequestID: record.RequestID, Detail: "original recovery awaits its native effect receipt"}, revision, nil
-		}
+	if pending, exists := state.pendingAttemptRecovery(actionID, attempt.ID); exists {
+		return pending, revision, nil
 	}
 	nextRevision := revision + 1
 	plan.RequestID = "recover:" + actionID + ":" + strconv.FormatUint(nextRevision, 10)
+	record := RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: plan.Class, Action: plan.Action, RequestID: plan.RequestID, Detail: plan.Detail, InterruptionReason: interruption.InterruptionReason, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision}
 	if plan.Action == RecoveryAsk {
-		plan.Options = recoveryAskOptions()
-		state.PendingAsks[plan.RequestID] = PendingAsk{RequestID: plan.RequestID, Control: ControlRecovery, Options: append([]AskOption(nil), plan.Options...)}
+		state.registerRecoveryAsk(&record, nextRevision)
+		plan.RequestID, plan.Options = record.RequestID, recoveryAskOptions()
 	}
 	if plan.Action == RecoveryFail {
 		if err := state.terminalizeTask(pending.Task); err != nil {
 			return RecoveryPlan{}, 0, err
 		}
 	}
-	state.appendRecovery(RecoveryRecord{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Class: plan.Class, Action: plan.Action, RequestID: plan.RequestID, Detail: plan.Detail, InterruptionReason: interruption.InterruptionReason, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision})
+	state.appendRecovery(record)
 	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
 	return plan, commitRevision, nil
+}
+
+func (s *State) pendingAttemptRecovery(actionID, attemptID string) (RecoveryPlan, bool) {
+	for _, record := range s.RecoveryRecords {
+		if record.ActionID != actionID || record.AttemptID != attemptID || record.RequestID == "" {
+			continue
+		}
+		if record.Action == RecoveryAsk && !s.PendingAsks[record.RequestID].Resolved {
+			return RecoveryPlan{Action: RecoveryAsk, RequestID: record.RequestID, Options: recoveryAskOptions(), Detail: record.Detail}, true
+		}
+		completed := false
+		for _, receipt := range s.HostActionReceipts {
+			if receipt.Correlation == record.RequestID && receipt.Status == HostActionStatusExecuted {
+				completed = true
+			}
+		}
+		if !completed && (record.Action == RecoveryAsk || record.Action == RecoveryResumeAttempt || record.Action == RecoveryNewAttempt) {
+			return RecoveryPlan{Action: RecoveryWait, RequestID: record.RequestID, Detail: "original recovery awaits its native effect receipt"}, true
+		}
+	}
+	return RecoveryPlan{}, false
+}
+
+// registerRecoveryAsk binds the current execution to its existing recovery
+// request. An unfinished native recovery effect settles before another request.
+func (s *State) registerRecoveryAsk(record *RecoveryRecord, revision uint64) bool {
+	if pending, exists := s.pendingAttemptRecovery(record.ActionID, record.AttemptID); exists {
+		if pending.Action != RecoveryAsk {
+			return false
+		}
+		record.RequestID = pending.RequestID
+		return true
+	}
+	if record.RequestID == "" {
+		record.RequestID = "recover:" + record.ActionID + ":" + strconv.FormatUint(revision, 10)
+	}
+	s.PendingAsks[record.RequestID] = PendingAsk{RequestID: record.RequestID, Control: ControlRecovery, Options: recoveryAskOptions()}
+	return true
 }
 
 // ReconcileUnknownReceipt resolves a SpawnReceipt whose status is UNKNOWN.
