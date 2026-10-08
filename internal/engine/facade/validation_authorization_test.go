@@ -1028,7 +1028,17 @@ func assertAuthorizationReplay(d *validationDriver, event protocol.Event) {
 		if err != nil {
 			d.t.Fatal(err)
 		}
-		go func() { _, err := reader.Drive(); results <- outcome{err} }()
+		go func() {
+			if d.mockNative {
+				copy := *d
+				copy.f = reader
+				copy.drive()
+				results <- outcome{}
+				return
+			}
+			_, err := reader.Drive()
+			results <- outcome{err}
+		}()
 	}
 	for i := 0; i < 2; i++ {
 		if result := <-results; result.err != nil {

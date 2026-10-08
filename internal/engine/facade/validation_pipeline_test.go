@@ -21,6 +21,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -521,6 +522,8 @@ func (d *validationDriver) action(handler string) (string, protocol.ValidationIn
 			d.drive()
 		}
 	}
+	frontier, _ := json.Marshal(d.run.AdapterIntents)
+	d.t.Logf("native frontier at missing %s: %s", handler, frontier)
 	d.t.Fatalf("missing %s; inputs=%+v, next=%+v, validation=%+v", handler, d.run.ValidationInputs, d.run.Next, d.run.Validation)
 	return "", protocol.ValidationInput{}
 }
@@ -1327,4 +1330,34 @@ func fixtureDigest(value any) string {
 func fixtureStreamProof(value string) protocol.CheckStreamProof {
 	sum := sha256.Sum256([]byte(value))
 	return protocol.CheckStreamProof{SHA256: fmt.Sprintf("%x", sum), Size: len(value)}
+}
+
+// Repair comparison uses its own issued role and the retained native facts.
+func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
+	d.t.Helper()
+	id, _ := d.action("engine.repair.verify")
+	observations := map[string]worker.Observation{}
+	for _, row := range edit.Development.CaseRuns {
+		observations[row.CaseID] = worker.Observation{Result: row.Result, Comparison: row.Comparison}
+	}
+	raw, err := json.Marshal(worker.Result{Outcome: edit.Status, Validation: &worker.Validation{RepairVerification: &worker.Execution{Records: observations}}})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	input := snapshot.State.WorkerInputs(d.f.definition)[id]
+	sum := sha256.Sum256(raw)
+	event, err := worker.DecodeResult(input, d.eventID(), raw, fmt.Sprintf("sha256:%x", sum))
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.receipt(id)
+	accepted := d.submit(event)
+	if accepted.Status != "ACCEPTED" {
+		d.t.Fatalf("repair comparison refused: %+v", accepted)
+	}
+	d.drive()
 }
