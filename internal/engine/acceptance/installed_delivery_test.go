@@ -73,8 +73,8 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			}
 			conclusion := protocol.ValidationResult{Binding: spikeInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{
 				Paths: []string{"probe.go"}, Summary: "Nonempty command input is accepted; empty input is rejected",
-				Build: []string{"go build ./... passed"}, Tests: []string{"Input boundary inspected"},
-				Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input boundary established"}, Checks: map[string]string{"build": "go build ./... passed"}, Handoff: spike.Handoff},
+
+				Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input boundary established"}, Handoff: spike.Handoff},
 			}}
 			d.business(spikeAction, conclusion)
 			if scenario.abort {

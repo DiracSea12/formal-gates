@@ -64,7 +64,7 @@ func (d *validationDriver) chooseValidation(req protocol.ValidationRequest, reme
 func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 	d := newValidationDriver(t, "whitebox", "quality")
 	dev, input := d.action("engine.development.batch")
-	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input rejection", Build: []string{"build succeeded"}, Tests: []string{"input rejection succeeded"}}})
+	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input rejection"}})
 	d.materialize()
 	d.materialize()
 	var priorManifest, priorCandidate string

@@ -198,9 +198,9 @@ func TestSingleRepairPlanCompletionKeepsOriginalTask(t *testing.T) {
 		t.Run(fmt.Sprintf("completion=%t", complete), func(t *testing.T) {
 			s := &State{Results: map[string]WorkerResult{}, Validation: &Validation{Generation: 1, RequirementRevision: "req", Waves: []ValidationWave{{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}}}
 			binding := WorkBinding{Task: task, WaveID: "wave", Generation: 1, RequirementRevision: "req"}
-			evidence := &DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "command completed", Build: []string{"build passed"}, Tests: []string{"test passed"}}
+			evidence := &DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "command completed"}
 			if complete {
-				evidence.Completion = &DevelopmentCompletion{DoD: map[string]string{"normal": "verified"}, Checks: map[string]string{"build": "passed"}, Handoff: "command ready"}
+				evidence.Completion = &DevelopmentCompletion{DoD: map[string]string{"normal": "verified"}, Handoff: "command ready"}
 			}
 			r := WorkerResult{ActionID: "completion", Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: "PASS", GranularityReview: plan, Development: evidence}}
 			err := s.acceptRepairResult(r)
@@ -268,7 +268,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			}
 			s.Results["plan"] = plan
 			complete := func(member repairWork) {
-				r := WorkerResult{ActionID: member.task.String() + ":completed", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: member.task, WaveID: w.ID, Generation: 1, RequirementRevision: "req"}, Status: "PASS", Development: &DevelopmentEvidence{Paths: member.batch.Artifacts, Summary: "completed owned behavior", Build: []string{"complete build"}, Tests: []string{"complete test suite"}, Completion: &DevelopmentCompletion{DoD: map[string]string{"normal": "normal input verified"}, Checks: map[string]string{"build": "build passed"}, Handoff: "owned boundary delivered"}}}}
+				r := WorkerResult{ActionID: member.task.String() + ":completed", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: member.task, WaveID: w.ID, Generation: 1, RequirementRevision: "req"}, Status: "PASS", Development: &DevelopmentEvidence{Paths: member.batch.Artifacts, Summary: "completed owned behavior", Completion: &DevelopmentCompletion{DoD: map[string]string{"normal": "normal input verified"}, Handoff: "owned boundary delivered"}}}}
 				s.Results[r.ActionID] = r
 			}
 			for _, member := range s.repairMembers(w) {

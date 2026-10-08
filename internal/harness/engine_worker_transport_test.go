@@ -315,7 +315,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			fields := objectOrEmpty(getOf(nativeCompletion, "properties"))
-			for name, ids := range map[string][]string{"dod": {"behavior"}, "checks": {"build", "behavior-test"}} {
+			for name, ids := range map[string][]string{"dod": {"behavior"}} {
 				field := objectOrEmpty(fields[name])
 				properties := objectOrEmpty(field["properties"])
 				if field["type"] != "object" || field["additionalProperties"] != false || len(properties) != len(ids) || len(listOf(field["required"])) != len(ids) {
@@ -327,7 +327,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 					}
 				}
 			}
-			payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"command.go"}, Summary: "completed owned duty", Build: []string{"build passed"}, Tests: []string{"additional real check recorded here"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Checks: map[string]string{"build": "passed", "behavior-test": "passed"}, Handoff: "ready"}}}}
+			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}}}
 			body, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)
@@ -391,7 +391,7 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 				values = []string{"COMPLETED"}
 			}
 			for _, literal := range values {
-				payload := protocol.WorkerResultPayload{ActionID: "issued", Provider: "codex", Outcome: protocol.OutcomePass, Validation: &protocol.ValidationResult{Binding: input.Validation.Binding, Status: literal}}
+				payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: literal}}
 				body, err := json.Marshal(payload)
 				if err != nil {
 					t.Fatal(err)

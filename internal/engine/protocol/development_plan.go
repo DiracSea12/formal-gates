@@ -53,7 +53,6 @@ type DevelopmentCheck struct {
 }
 type DevelopmentCompletion struct {
 	DoD     map[string]string `json:"dod"`
-	Checks  map[string]string `json:"checks"`
 	Handoff string            `json:"handoff"`
 }
 
@@ -470,19 +469,14 @@ func (s *State) developmentResult(task runtime.TaskKey) *DevelopmentEvidence {
 }
 func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidence) error {
 	if e.Completion == nil || strings.TrimSpace(e.Completion.Handoff) == "" {
-		return validationError("batch completion requires DoD, verification and handoff evidence")
+		return validationError("batch completion requires DoD and handoff evidence")
 	}
-	if len(e.Completion.DoD) != len(batch.DoD) || len(e.Completion.Checks) != len(batch.Checks) {
-		return validationError("batch completion must cover exactly its confirmed DoD and checks")
+	if len(e.Completion.DoD) != len(batch.DoD) {
+		return validationError("batch completion must cover exactly its confirmed DoD")
 	}
 	for _, d := range batch.DoD {
 		if strings.TrimSpace(e.Completion.DoD[d.ID]) == "" {
 			return validationError("missing batch DoD evidence: " + d.ID)
-		}
-	}
-	for _, c := range batch.Checks {
-		if strings.TrimSpace(e.Completion.Checks[c.ID]) == "" {
-			return validationError("missing batch verification evidence: " + c.ID)
 		}
 	}
 	return nil

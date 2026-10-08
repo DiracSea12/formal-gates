@@ -263,11 +263,8 @@ type canaryDevelopmentAnswer struct {
 	CaseRuns      []protocol.RepairCaseEvidence `json:"caseRuns"`
 	Paths         []string                      `json:"paths"`
 	Summary       string                        `json:"summary"`
-	Build         []string                      `json:"build"`
-	Tests         []string                      `json:"tests"`
 	AffectedCases []string                      `json:"affectedCases"`
 	DoD           map[string]string             `json:"dod"`
-	Checks        map[string]string             `json:"checks"`
 	Handoff       string                        `json:"handoff"`
 }
 
@@ -824,7 +821,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 	if input.Workspace == nil {
 		c.fail("whitebox design %s has no registered authoring workspace", id)
 	}
-	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Run go build ./... and go test ./... for real and report the authored paths, a summary, and the build and test evidence; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
+	instructions := "Author the whitebox acceptance tests for every acceptance point in input.manifest.points as real Go test files (*_test.go) in the workspace: you may read the implementation's internals and target its structure. Then design the cases: each names its pointId exactly, carries a testRef — the exact Go test function name that verifies the point — a scenario (SUCCESS, FAILURE, MISUSE or BOUNDARY) and a precise oracle. Every point needs at least one non-SUCCESS case. Report the authored paths and a summary. The program executes approved frozen commands and tests; a test that exposes the document's declared baseline gap fails honestly. Build and test outputs are not part of the artifact — report only the authored *_test.go files as paths. Remove temporary build and test outputs from the workspace before reporting completion."
 	var answer struct {
 		Cases []struct {
 			CaseID   string `json:"caseId"`
@@ -835,15 +832,13 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 		} `json:"cases"`
 		Paths   []string `json:"paths"`
 		Summary string   `json:"summary"`
-		Build   []string `json:"build"`
-		Tests   []string `json:"tests"`
 	}
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		if len(answer.Paths) == 0 || answer.Summary == "" || len(answer.Build) == 0 || len(answer.Tests) == 0 {
-			return fmt.Errorf("whitebox design lacks authored paths, summary, build or test evidence")
+		if len(answer.Paths) == 0 || answer.Summary == "" {
+			return fmt.Errorf("whitebox design lacks authored paths or summary")
 		}
 		for index, path := range answer.Paths {
 			relative, err := canaryWorkspacePath(c.workspace(input), path)
@@ -876,7 +871,7 @@ func (c *engineCanary) whiteboxDesignResult(id string, input protocol.Validation
 		c.caseTests[c.caseKey(designed.CaseID)] = designed.TestRef
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Manifest: &manifest,
-		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests}}
+		Development: &protocol.DevelopmentEvidence{Paths: answer.Paths, Summary: answer.Summary}}
 }
 
 // canaryWorkspacePath normalizes one authored-artifact path to the
@@ -1197,7 +1192,7 @@ func (c *engineCanary) gateResult(id string, input protocol.ValidationInput) pro
 func (c *engineCanary) developmentResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "development batch", input)
-	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts, run the batch check commands for real, and report paths, summary, build and test evidence, a completion entry for every DoD criterion and every check, and the batch handoff note. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
+	instructions := "Implement the development batch in input.development.batch in the current workspace exactly as scoped: create or edit the batch artifacts and report paths, summary, semantic evidence for every DoD criterion and the batch handoff note. The program freezes delivered source and executes the exact approved batch commands. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1213,7 +1208,7 @@ func (c *engineCanary) developmentResult(id string, input protocol.ValidationInp
 func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	c.t.Helper()
 	materials := c.materials(id, "repair", input)
-	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, real build/test evidence, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD/check and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, execute only that frozen batch and report every DoD/check and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required; report other actual regression runs in tests. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
+	instructions := "Repair the adjudicated problems in input.repair. You own the decision whether and how to split the repair. For a small repair, implement and verify it in this turn and report paths, summary, affectedCases and caseRuns. For isolated batches, return granularityReview with complete batch contracts, dependencies and optional full/custom ordinary-gate routes; a pure planning turn does not edit production content. A single-batch plan may accompany completed work only with paths and real completion entries for every planned DoD and its handoff; a multi-batch plan precedes its isolated member completions. For a full route, list ordinary gate IDs in gates and omit selected or leave it empty. For custom, selected must be a non-empty subset of those ordinary gate IDs, never QA case IDs. Repair slice routes do not select blackbox/whitebox QA or reserved merge gates. No user plan confirmation is required. When input.development is present, implement only that frozen batch and report every DoD and its handoff. For FINAL, omit checkpointGroups and checkpointReason or set them to [] and an empty string. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups that cover every batch exactly once; dependencies cannot point to a later group. artifacts must contain only actual repository-relative paths; put descriptions in deliverable or DoD. CHECKPOINT groups preserve the frozen QA set; no ordinary QA executes per slice. caseRuns must contain only the declared affectedCases, with exactly one EXECUTED_PASS row in its approved mode per case whenever self-runs are required. PureP2 requires actual self-runs for every affected approved case. Do not stage, commit, submit or push through the VCS — the engine freezes declared changes. Remove temporary build outputs from the workspace before reporting completion."
 	var answer canaryDevelopmentAnswer
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
@@ -1225,7 +1220,7 @@ func (c *engineCanary) repairResult(id string, input protocol.ValidationInput) p
 		return c.declaredDevelopmentChanges(input, &answer)
 	}
 	if input.Repair != nil && input.Repair.FinalCandidate != nil {
-		instructions = "Self-run input.repair.finalCandidate without editing files. Run the full build and full test suite on this integrated candidate, then execute every affected case in the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns plus real build and test evidence. This is final development verification under the existing repair obligation; no review or new repair plan."
+		instructions = "Self-run input.repair.finalCandidate without editing files. Compare the actual affected-case evidence for the union of input.repair.memberResults. Report that exact union of paths, affectedCases and caseRuns. This is final development verification under the existing repair obligation; no review or new repair plan."
 	}
 	schema := canaryDevelopmentSchema(input.Development)
 	if input.Development == nil {
@@ -1276,11 +1271,11 @@ func canaryRepairShape(answer *canaryDevelopmentAnswer, input protocol.Validatio
 
 // canaryDevelopmentShape checks the writable-turn answer's required evidence.
 func canaryDevelopmentShape(answer *canaryDevelopmentAnswer, batch bool) error {
-	if len(answer.Paths) == 0 || answer.Summary == "" || len(answer.Build) == 0 || len(answer.Tests) == 0 {
-		return fmt.Errorf("answer lacks paths, summary, build or test evidence")
+	if len(answer.Paths) == 0 || answer.Summary == "" {
+		return fmt.Errorf("answer lacks paths or summary")
 	}
-	if batch && (len(answer.DoD) == 0 || len(answer.Checks) == 0 || answer.Handoff == "") {
-		return fmt.Errorf("batch answer lacks DoD, check or handoff completion")
+	if batch && (len(answer.DoD) == 0 || answer.Handoff == "") {
+		return fmt.Errorf("batch answer lacks DoD or handoff completion")
 	}
 	return nil
 }
@@ -1315,11 +1310,11 @@ func (c *engineCanary) developmentEvidence(id string, input protocol.ValidationI
 		paths[i] = relative
 	}
 	evidence := protocol.DevelopmentEvidence{
-		Paths: paths, Summary: answer.Summary, Build: answer.Build, Tests: answer.Tests,
+		Paths: paths, Summary: answer.Summary,
 		AffectedCases: answer.AffectedCases, CaseRuns: answer.CaseRuns,
 	}
 	if batch {
-		evidence.Completion = &protocol.DevelopmentCompletion{DoD: answer.DoD, Checks: answer.Checks, Handoff: answer.Handoff}
+		evidence.Completion = &protocol.DevelopmentCompletion{DoD: answer.DoD, Handoff: answer.Handoff}
 	}
 	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Development: &evidence}
 }
@@ -2532,7 +2527,7 @@ func TestCanaryDevelopmentPathsUseIssuedWorkspace(t *testing.T) {
 						paths[i] = filepath.Join(prefix, path)
 					}
 				}
-				raw := map[string]any{"paths": paths, "summary": "authored exact command artifacts", "build": []string{"go build exit=0"}, "tests": []string{"command behavior verified"}, "dod": map[string]string{"command": "complete"}, "checks": map[string]string{"build": "pass"}, "handoff": "artifacts ready"}
+				raw := map[string]any{"paths": paths, "summary": "authored exact command artifacts", "dod": map[string]string{"command": "complete"}, "handoff": "artifacts ready"}
 				var answer canaryDevelopmentAnswer
 				if err := decodeCanaryAnswer(raw, &answer); err != nil {
 					t.Fatal(err)
@@ -2540,7 +2535,7 @@ func TestCanaryDevelopmentPathsUseIssuedWorkspace(t *testing.T) {
 				before, _ := json.Marshal(answer)
 				result := c.developmentEvidence("completion", input, &answer, "answer-digest", batch)
 				after, _ := json.Marshal(answer)
-				if !bytes.Equal(before, after) || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{"analytics.go", "frob.go"}) || result.Development.Summary != answer.Summary || !slices.Equal(result.Development.Build, answer.Build) || !slices.Equal(result.Development.Tests, answer.Tests) {
+				if !bytes.Equal(before, after) || result.Binding != input.Binding || !slices.Equal(result.Development.Paths, []string{"analytics.go", "frob.go"}) || result.Development.Summary != answer.Summary {
 					t.Fatal("completion changed the answer evidence or lost issued identity")
 				}
 				for _, path := range result.Development.Paths {
@@ -2593,14 +2588,11 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 			}
 			plan := answer.Plan
 			if boundary != "invalid-full" {
-				answer = canaryDevelopmentAnswer{Plan: plan, Paths: []string{"frob.go"}, Summary: "completed the declared command change", Build: []string{"go build ./... exit=0"}, Tests: []string{"command contract verification completed"}}
+				answer = canaryDevelopmentAnswer{Plan: plan, Paths: []string{"frob.go"}, Summary: "completed the declared command change"}
 				plan.Batches[0].Route.Selected = nil
-				answer.DoD, answer.Checks = map[string]string{}, map[string]string{}
+				answer.DoD = map[string]string{}
 				for _, criterion := range plan.Batches[0].DoD {
 					answer.DoD[criterion.ID] = "criterion completed"
-				}
-				for _, check := range plan.Batches[0].Checks {
-					answer.Checks[check.ID] = "check performed"
 				}
 				answer.Handoff = "completed batch artifacts"
 			}
@@ -2631,7 +2623,7 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 				plan.Batches[0].Route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{}
 			case "small-repair":
 				answer.Plan = nil
-				answer.DoD, answer.Checks, answer.Handoff = nil, nil, ""
+				answer.DoD, answer.Handoff = nil, ""
 			}
 			before, _ := json.Marshal(answer)
 			var coreErr error
@@ -2669,7 +2661,7 @@ func TestCanaryRepairPlansUseCoreResultContract(t *testing.T) {
 				if result.GranularityReview != answer.Plan || result.Binding != input.Binding || (result.Development.Completion != nil) != (answer.Plan != nil) {
 					t.Fatal("repair result lost its plan, binding or completion")
 				}
-				if completion := result.Development.Completion; completion != nil && (!maps.Equal(completion.DoD, answer.DoD) || !maps.Equal(completion.Checks, answer.Checks) || completion.Handoff != answer.Handoff) {
+				if completion := result.Development.Completion; completion != nil && (!maps.Equal(completion.DoD, answer.DoD) || completion.Handoff != answer.Handoff) {
 					t.Fatal("repair result altered batch completion evidence")
 				}
 			}
@@ -2836,7 +2828,7 @@ func canaryReviewSchema(withPlan bool) map[string]any {
 
 func canaryDesignSchema(whitebox bool) map[string]any {
 	if whitebox {
-		return canarySchema([]string{"cases", "paths", "summary", "build", "tests"}, map[string]any{
+		return canarySchema([]string{"cases", "paths", "summary"}, map[string]any{
 			"cases": canaryArr(canarySchema([]string{"caseId", "pointId", "scenario", "testRef", "oracle"}, map[string]any{
 				"caseId":   canaryStr(),
 				"pointId":  canaryStr(),
@@ -2846,8 +2838,6 @@ func canaryDesignSchema(whitebox bool) map[string]any {
 			})),
 			"paths":   canaryArr(canaryStr()),
 			"summary": canaryStr(),
-			"build":   canaryArr(canaryStr()),
-			"tests":   canaryArr(canaryStr()),
 		})
 	}
 	return canarySchema([]string{"cases"}, map[string]any{
@@ -2898,27 +2888,19 @@ func canaryDevelopmentSchema(development *protocol.DevelopmentInput) map[string]
 		"caseRuns":      canaryArr(canarySchema([]string{"mode", "caseId", "procedure", "observation", "comparison", "result"}, map[string]any{"mode": canaryEnum("BLACKBOX", "WHITEBOX", "MERGE"), "caseId": canaryStr(), "procedure": canaryStr(), "observation": canaryStr(), "comparison": canaryStr(), "result": canaryEnum("EXECUTED_PASS")})),
 		"paths":         map[string]any{"type": "array", "items": canaryStr(), "description": "Declared changed file paths in input.workspace: repository-relative paths or absolute paths inside that exact issued workspace, including deleted artifacts."},
 		"summary":       canaryStr(),
-		"build":         canaryArr(canaryStr()),
-		"tests":         canaryArr(canaryStr()),
 	}
-	required := []string{"paths", "summary", "build", "tests"}
+	required := []string{"paths", "summary"}
 	properties["dod"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
-	properties["checks"] = map[string]any{"type": "object", "additionalProperties": canaryStr()}
 	properties["handoff"] = canaryStr()
 	if development != nil {
-		dod, checks := map[string]any{}, map[string]any{}
-		dodIDs, checkIDs := []string{}, []string{}
+		dod := map[string]any{}
+		dodIDs := []string{}
 		for _, criterion := range development.Batch.DoD {
 			dod[criterion.ID] = canaryStr()
 			dodIDs = append(dodIDs, criterion.ID)
 		}
-		for _, check := range development.Batch.Checks {
-			checks[check.ID] = canaryStr()
-			checkIDs = append(checkIDs, check.ID)
-		}
 		properties["dod"] = canarySchema(dodIDs, dod)
-		properties["checks"] = canarySchema(checkIDs, checks)
-		required = append(required, "dod", "checks", "handoff")
+		required = append(required, "dod", "handoff")
 	}
 	return canarySchema(required, properties)
 }
@@ -3515,7 +3497,7 @@ func TestCanaryRepairEvidenceUsesCoreApprovedSet(t *testing.T) {
 			case "member", "member-plan":
 				issued.Development = &protocol.DevelopmentInput{}
 				current.DoD = map[string]string{"behavior": "declared behavior completed"}
-				current.Checks = map[string]string{"build": "actual build completed"}
+
 				current.Handoff = "owned changes ready"
 				if scenario == "member-plan" {
 					current.Plan = &protocol.GranularityReview{}

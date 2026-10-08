@@ -21,7 +21,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 				review := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &review})
 				id, in = d.action("engine.development.batch")
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input contract", Build: []string{"build succeeded"}, Tests: []string{"normal and invalid inputs checked"}}})
+				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input contract"}})
 				d.materialize()
 				var old protocol.HostActionIntent
 				for _, v := range d.run.AdapterIntents {

@@ -156,6 +156,9 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		issued := input.Validation
 		v := value.Validation
+		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
+			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
+		}
 		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: v.Development, Tool: v.Tool, Environment: v.Environment, Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
 		for _, suggestion := range v.Suggestions {

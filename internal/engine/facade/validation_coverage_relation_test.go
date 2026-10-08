@@ -31,7 +31,7 @@ func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
 				r := approvedReview(m)
 				d.business(reviewID, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 				d.drive()
-				d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement public behavior", Build: []string{"full build succeeds"}, Tests: []string{"public input tests succeed"}}})
+				d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement public behavior"}})
 				d.drive()
 				d.materialize()
 				if reopen {
@@ -158,7 +158,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	id, in = qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewBlackbox)
 	approved := approvedReview(black)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement inputs and records", Build: []string{"full build succeeds"}, Tests: []string{"full tests succeed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement inputs and records"}})
 	d.materialize()
 	d.materialize()
 	id, in = qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)

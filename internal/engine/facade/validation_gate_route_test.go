@@ -38,7 +38,7 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 			}
 			d.git = vcs.New(author, nil)
 			snapshotCommitOne(t, author, "implement public command")
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement command", Build: []string{"go build passed"}, Tests: []string{"input validation tests passed"}}})
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement command"}})
 			d.materialize()
 			d.materialize()
 			d.reopen()

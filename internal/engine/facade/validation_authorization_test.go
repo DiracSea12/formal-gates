@@ -195,7 +195,7 @@ func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 			t.Fatalf("unapproved work after third failure: %s", in.Handler)
 		}
 	}
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command", Build: []string{"build passed"}, Tests: []string{"input checks passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	ask = d.validationAsk("QA_REVIEW")
 	setBefore := d.run.Validation.Sets[coverage.ReviewBlackbox]
@@ -303,7 +303,7 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 					d.receipt(id)
 				}
 				if in.Handler == "engine.development.batch" {
-					staged = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "delivered-development", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "completed development", Build: []string{"build passed"}, Tests: []string{"tests passed"}}}}}
+					staged = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "delivered-development", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "completed development"}}}}
 				}
 			}
 			req, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
@@ -434,7 +434,7 @@ func postwaveRepairOffer(t *testing.T) *validationDriver {
 		d.drive()
 		if index < 2 {
 			id, in := d.action("engine.repair")
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair command validation", Build: []string{"full build executed"}, Tests: []string{"full unit suite executed"}, AffectedCases: []string{"invalid"}}})
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair command validation", AffectedCases: []string{"invalid"}}})
 			d.materialize()
 			d.materialize()
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
@@ -531,7 +531,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			dev, di := d.action("engine.development.batch")
-			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks", Build: []string{"build passed"}, Tests: []string{"tests passed"}}})
+			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			d.materialize()
 			id, in := d.action("engine.qa.design")
 			manifest := simpleManifest(in)
@@ -769,7 +769,7 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			id, ri := d.action("engine.qa.review.rationale")
 			approved := approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &approved})
-			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks", Build: []string{"build passed"}, Tests: []string{"tests passed"}}})
+			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			var intent protocol.HostActionIntent
 			for _, value := range d.run.AdapterIntents {
 				intent = value
@@ -842,7 +842,7 @@ func qaModeAction(d *validationDriver, handler string, mode coverage.ReviewKind)
 func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, di := d.action("engine.development.batch")
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command", Build: []string{"build passed"}, Tests: []string{"tests passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
 	failCaseReviews(d, 3)
@@ -946,7 +946,7 @@ func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
 	if in.Binding.WaveID != issuedWave || in.Repair == nil || !reflect.DeepEqual(in.Repair.Obligation.Problems, []string{second}) {
 		t.Fatalf("newly issued repair changed its current obligation: binding=%+v intendedWave=%s input=%+v", in.Binding, issuedWave, in.Repair)
 	}
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair input validation", Build: []string{"build passed"}, Tests: []string{"input checks passed"}, AffectedCases: []string{"invalid"}}})
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "repair input validation", AffectedCases: []string{"invalid"}}})
 	d.reopen()
 	d.drive()
 	snapshot, err := d.f.engine.Load()
@@ -1494,7 +1494,7 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, devInput := d.action("engine.development.batch")
-	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command", Build: []string{"build passed"}, Tests: []string{"input tests passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
 	black, blackInput := qaModeAction(d, "engine.qa.design", coverage.ReviewBlackbox)

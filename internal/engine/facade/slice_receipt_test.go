@@ -510,7 +510,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"build passed"}, Tests: []string{"command regression passed"}}})
+	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering"}})
 	child.drive()
 	current := child.run.Validation.Waves[len(child.run.Validation.Waves)-1]
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: "INHERIT", Reason: "The ordering repair leaves the checked security boundaries unchanged"}}})

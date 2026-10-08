@@ -87,7 +87,7 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 	}
 	payload := material.ResultTemplate
 	payload.Outcome, payload.Validation.Status = protocol.OutcomePass, protocol.OutcomePass
-	payload.Validation.Development = &protocol.DevelopmentEvidence{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact", Build: []string{"build observed"}, Tests: []string{"actual check evidence"}}
+	payload.Validation.Development = &protocol.DevelopmentEvidence{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
 	if handler == "engine.merge.resolve" {
 		payload.Validation.Development = nil
 		payload.Validation.Resolution = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}

@@ -465,7 +465,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		result.Development = &protocol.DevelopmentEvidence{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Checks: map[string]string{"marker-content": "Read delivery.txt and compared exact bytes"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture", Build: []string{"No build required for the text marker"}, Tests: []string{"Exact fixture bytes checked"}}
+		result.Development = &protocol.DevelopmentEvidence{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"},  Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture",  }
 		checked[in.Handler] = true
 	case "engine.qa.design":
 		manifest := in.Manifest
@@ -479,7 +479,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			result.Development = &protocol.DevelopmentEvidence{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration", Build: []string{"Fixture declaration uses testing"}, Tests: []string{"Declaration bytes recorded"}}
+			result.Development = &protocol.DevelopmentEvidence{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration",  }
 		}
 		missing := coverage.AcceptanceCase{CaseID: "missing-" + strings.ToLower(string(mode)), Mode: c.Mode, Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact"}
 		if mode == coverage.ReviewWhitebox {

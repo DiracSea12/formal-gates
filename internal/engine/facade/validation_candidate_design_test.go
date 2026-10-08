@@ -102,7 +102,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				}
 				materialize := func() { t.Helper(); d.submit(observe(currentIntent())); d.drive() }
 				id, in := d.action("engine.development.batch")
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract", Build: []string{"build succeeded"}, Tests: []string{"normal and invalid checked"}}})
+				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
 				materialize()
 				materialize()
 				id, in = d.action("engine.qa.design")

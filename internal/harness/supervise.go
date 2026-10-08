@@ -90,7 +90,7 @@ func Supervise(directory string) int {
 	procStarted := float64(time.Now().UnixNano()) / 1e9
 	process := map[string]any{"pid": os.Getpid(), "started_at": procStarted}
 	if timeout := supervisedTimeout(request); timeout > 0 {
-		pgid, err := syscall.Getpgid(os.Getpid())
+		pgid, err := nativeProcessGroupID(os.Getpid())
 		if err != nil {
 			return 1
 		}
@@ -281,7 +281,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stderr: errF,
 	}
 	if supervisedTimeout(request) > 0 {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.SysProcAttr = supervisorSysProcAttr()
 	}
 	if startErr := cmd.Start(); startErr != nil {
 		var errno syscall.Errno
@@ -293,7 +293,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		return 0, mapExecError(startErr, argv[0]), false
 	}
 	if supervisedTimeout(request) > 0 {
-		defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		defer signalSupervisedChild(cmd, true)
 	}
 	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedTimeout(request))
 	if cancelled {
@@ -336,7 +336,7 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int,
 	}
 	terminate := func() {
 		if timeout > 0 {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			signalSupervisedChild(cmd, false)
 		} else {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -344,7 +344,7 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, timeout time.Duration) (int,
 		case <-resCh:
 		case <-time.After(5 * time.Second):
 			if timeout > 0 {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				signalSupervisedChild(cmd, true)
 			} else {
 				_ = cmd.Process.Kill()
 			}

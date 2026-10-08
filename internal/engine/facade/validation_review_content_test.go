@@ -95,7 +95,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 				d.drive()
 			}
 			id, input := d.action("engine.development.batch")
-			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation", Build: []string{"go build passed"}, Tests: []string{"input rejection passed"}}})
+			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 			materialize()
 			materialize()
 			id, input = d.action("engine.qa.design")

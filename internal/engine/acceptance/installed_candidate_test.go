@@ -335,7 +335,7 @@ func (d *candidateDriver) develop(id string, input protocol.ValidationInput, ext
 	if out, err := cmd.CombinedOutput(); err != nil {
 		d.t.Fatalf("development build: %v %s", err, out)
 	}
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation", Build: []string{"go build ./... passed"}, Tests: []string{"Input contract checked"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"}, Checks: map[string]string{"build": "go build ./... passed"}, Handoff: "Command ready"}}})
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation",   Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"},  Handoff: "Command ready"}}})
 }
 func (d *candidateDriver) designResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
 	manifest := input.Manifest
@@ -356,7 +356,7 @@ func (d *candidateDriver) designResult(id string, input protocol.ValidationInput
 		if err := os.Chmod(filepath.Join(d.authoring, "mode_test.go"), 0755); err != nil {
 			d.t.Fatal(err)
 		}
-		result.Development = &protocol.DevelopmentEvidence{Paths: []string{"candidate_test.go", "remove_test.go", "old_test.go", "renamed_test.go", "mode_test.go"}, Summary: "Structural input cases and owned test changes", Build: []string{"Go package ownership"}, Tests: []string{"Runnable TestValid and TestInvalid"}}
+		result.Development = &protocol.DevelopmentEvidence{Paths: []string{"candidate_test.go", "remove_test.go", "old_test.go", "renamed_test.go", "mode_test.go"}, Summary: "Structural input cases and owned test changes",  }
 	}
 	for i, scenario := range []string{"SUCCESS", "FAILURE"} {
 		item := coverage.AcceptanceCase{CaseID: fmt.Sprintf("%s-%d", mode, i), Scenario: scenario, Oracle: "Input contract holds"}

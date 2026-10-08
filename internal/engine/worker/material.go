@@ -49,7 +49,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		value.ResultTemplate.Validation = &Validation{}
 		switch input.Handler {
 		case "engine.development.batch":
-			instructions = "Implement only input.validation.development.batch. Run its real build/check commands. Report declared changed paths, summary, build/test evidence, exact DoD/check completion and handoff."
+			instructions = "Implement only input.validation.development.batch. Report declared changed paths, summary, DoD evidence and handoff. The program freezes your delivered source and executes the approved batch commands."
 			value.ReadOnly = false
 		case "engine.repair":
 			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member or finalCandidate is supplied, complete that exact duty. Preserve approved cases and report actual self-run evidence."
@@ -82,7 +82,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		instructions += " Declare only the files actually delivered as artifacts. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
 	}
 	if completionBatch(input) != nil {
-		instructions += " completion.dod and completion.checks must contain exactly the IDs declared in input.validation.development.batch.dod and .checks, each with non-empty evidence; do not omit or add keys. Report additional actual checks in development.tests, development.build or development.summary, never as extra completion IDs."
+		instructions += " completion.dod must contain exactly the IDs declared in input.validation.development.batch.dod, each with non-empty semantic evidence; do not omit or add keys. Approved command execution and its evidence belong to the program."
 	}
 	if input.Handler == "engine.qa.design" || input.Handler == "engine.qa.review.rationale" || input.Handler == "engine.qa.execution" {
 		instructions += " " + coverage.QAResultContract()

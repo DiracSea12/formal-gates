@@ -3,15 +3,19 @@
 package harness
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestSuperviseDeadlineOwnsExecution(t *testing.T) {
 	dir := t.TempDir()
-	writeRequest(t, dir, map[string]any{"argv": []string{"/bin/sh", "-c", "printf 'before timeout'; sleep 10"}, "cwd": dir, "timeout_nanos": int64(120 * time.Millisecond)})
+	command := "printf 'before timeout'; sleep 10 & child=$!; printf '%s' \"$child\" > child.pid; wait \"$child\""
+	writeRequest(t, dir, map[string]any{"argv": []string{"/bin/sh", "-c", command}, "cwd": dir, "timeout_nanos": int64(120 * time.Millisecond)})
 	cmd := exec.Command(supervisorBinary(t), "harness", "supervise", dir)
 	cmd.SysProcAttr = supervisorSysProcAttr()
 	started := time.Now()
@@ -31,8 +35,21 @@ func TestSuperviseDeadlineOwnsExecution(t *testing.T) {
 	if process["pgid"] == nil || process["deadline_at"] == nil {
 		t.Fatalf("timeout process identity: %#v", process)
 	}
+	pidBytes, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(pidBytes))
+	if err != nil || pid <= 0 {
+		t.Fatalf("actual descendant pid %q: %v", pidBytes, err)
+	}
+	status, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+	if state := strings.TrimSpace(string(status)); state != "" && !strings.HasPrefix(state, "Z") {
+		t.Fatalf("deadline left descendant %d executing: %s", pid, state)
+	}
+	t.Logf("actual_descendant_pid=%d after_timeout_state=%q", pid, strings.TrimSpace(string(status)))
 	streams := receipt["streams"].(map[string]any)
-	kind, refusal := VerifyProcess(dir, receipt, receipt, map[string]any{"argv": []any{"/bin/sh", "-c", "printf 'before timeout'; sleep 10"}, "cwd": dir, "timeout_nanos": int64(120 * time.Millisecond)}, []Proof{{Name: "stdout.log", Expected: streams["stdout.log"].(map[string]any)}, {Name: "stderr.log", Expected: streams["stderr.log"].(map[string]any)}})
+	kind, refusal := VerifyProcess(dir, receipt, receipt, map[string]any{"argv": []any{"/bin/sh", "-c", command}, "cwd": dir, "timeout_nanos": int64(120 * time.Millisecond)}, []Proof{{Name: "stdout.log", Expected: streams["stdout.log"].(map[string]any)}, {Name: "stderr.log", Expected: streams["stderr.log"].(map[string]any)}})
 	if refusal != "" {
 		t.Fatalf("timeout proof %s: %s", kind, refusal)
 	}

@@ -240,7 +240,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 	id, in = d.action("engine.development.batch")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation", Build: []string{"full build passed"}, Tests: []string{"full suite passed"}}})
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	d.materialize()
 	d.materialize()
 	id, in = d.action("engine.qa.design")

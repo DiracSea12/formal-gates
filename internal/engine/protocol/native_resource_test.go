@@ -117,8 +117,8 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 	}
 	s.Results["investigator"] = WorkerResult{ActionID: "investigator", Outcome: OutcomePass,
 		Validation: &ValidationResult{Binding: binding, Status: "PASS", Development: &DevelopmentEvidence{
-			Paths: []string{"experiment.go"}, Summary: "Input uncertainty resolved", Build: []string{"build passed"}, Tests: []string{"input checked"},
-			Completion: &DevelopmentCompletion{DoD: map[string]string{"behavior": "Input confirmed"}, Checks: map[string]string{"build": "Build passed"}, Handoff: "Use the input conclusion"},
+			Paths: []string{"experiment.go"}, Summary: "Input uncertainty resolved",
+			Completion: &DevelopmentCompletion{DoD: map[string]string{"behavior": "Input confirmed"}, Handoff: "Use the input conclusion"},
 		}}}
 	carry := ConfirmedRevision{Revision: "rev-2", StateRevision: 9}
 	for _, task := range []runtime.TaskKey{spikeTask, commandTask, extensionTask} {

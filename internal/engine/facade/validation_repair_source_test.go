@@ -30,7 +30,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
 	repair, ri := d.action("engine.repair")
-	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct dispatch", Build: []string{"full build passed"}, Tests: []string{"full regression passed"}}})
+	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct dispatch"}})
 	d.materialize()
 	d.materialize()
 	gate, gi = d.gateAction("quality")
@@ -83,7 +83,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	if nextInput.Binding.Task == ri.Binding.Task {
 		t.Fatal("replacement reused retired repair task")
 	}
-	d.business(next, protocol.ValidationResult{Binding: nextInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Reimplement confirmed repair responsibility", Build: []string{"full build passed"}, Tests: []string{"full regression passed"}}})
+	d.business(next, protocol.ValidationResult{Binding: nextInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Reimplement confirmed repair responsibility"}})
 	seen := false
 	for _, intent := range d.run.AdapterIntents {
 		data, _ := json.Marshal(intent.Adapter.Params)
@@ -169,7 +169,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				if n == 1 && inflight {
 					break
 				}
-				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply exact output correction", Build: []string{"full build passed"}, Tests: []string{"full regression passed"}}})
+				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply exact output correction"}})
 				d.materialize()
 				d.materialize()
 				// Pure P2's successful carry may complete without a new gate. Requesting a
@@ -218,7 +218,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				if in.Binding != oldInputs[1].Binding {
 					t.Fatal("pending carried repair lost signed input")
 				}
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "finish carried correction", Build: []string{"full build passed"}, Tests: []string{"full regression passed"}}})
+				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "finish carried correction"}})
 			}
 			d.materialize()
 			var replacements []protocol.WorkBinding
@@ -244,7 +244,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 					t.Fatal("multiple same-workspace repairs dispatched")
 				}
 				replacements = append(replacements, ri.Binding)
-				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "redo original correction on actual current production base", Build: []string{"full build passed"}, Tests: []string{"full regression passed"}}})
+				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "redo original correction on actual current production base"}})
 				if reopen {
 					d.reopen()
 				}

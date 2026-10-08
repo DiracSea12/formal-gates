@@ -15,7 +15,7 @@ func commandPlan() *protocol.GranularityReview {
 	return &protocol.GranularityReview{Reason: "The command has one cohesive input-validation contract and no independent deliverables.", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "validate-input", Description: "Implement the public command input contract"}}, Deliverable: "Command accepts valid input and rejects invalid input", PublicEntry: "app run", Artifacts: []string{"app.go"}, Interfaces: "Existing command-line parameters", StateBoundary: "No persistent command state", Risk: "Invalid input must not be accepted", DoD: []protocol.DevelopmentCriterion{{ID: "input-contract", Description: "Valid and invalid inputs satisfy their specified outcomes"}}, Checks: []protocol.DevelopmentCheck{{ID: "command-regression", Command: "go test ./..."}}, Rollback: "Revert the command implementation", Recovery: "Re-run the command from a clean project", Handoff: "Record the implementation paths, build and regression outcomes", ContextCost: "One command and its public contract fit the worker context"}}}
 }
 func commandCompletion() *protocol.DevelopmentCompletion {
-	return &protocol.DevelopmentCompletion{DoD: map[string]string{"input-contract": "Implemented valid and invalid public command outcomes"}, Checks: map[string]string{"command-regression": "go test ./... completed successfully"}, Handoff: "Implementation paths and build/test evidence are attached in this result"}
+	return &protocol.DevelopmentCompletion{DoD: map[string]string{"input-contract": "Implemented valid and invalid public command outcomes"}, Handoff: "Implementation paths and build/test evidence are attached in this result"}
 }
 func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 	d.t.Helper()
@@ -29,14 +29,11 @@ func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 
 func batchEvidence(input protocol.ValidationInput) *protocol.DevelopmentEvidence {
 	b := input.Development.Batch
-	c := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Checks: map[string]string{}, Handoff: b.ID + ": completed implementation and verification, ready for its dependent batches"}
+	c := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Handoff: b.ID + ": completed implementation and verification, ready for its dependent batches"}
 	for _, d := range b.DoD {
 		c.DoD[d.ID] = b.ID + ": " + d.Description + " verified"
 	}
-	for _, check := range b.Checks {
-		c.Checks[check.ID] = check.Command + " passed for " + b.ID
-	}
-	return &protocol.DevelopmentEvidence{Completion: c, Paths: b.Artifacts, Summary: "implemented " + b.Deliverable, Build: []string{"go build passed for " + b.ID}, Tests: []string{"regression passed for " + b.ID}}
+	return &protocol.DevelopmentEvidence{Completion: c, Paths: b.Artifacts, Summary: "implemented " + b.Deliverable}
 }
 func planBatchAction(d *validationDriver, batch string) (string, protocol.ValidationInput) {
 	d.t.Helper()
@@ -292,7 +289,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 			break
 		}
 		repair, ri := d.action("engine.repair")
-		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch", Build: []string{"full build passed"}, Tests: []string{"full command regression executed"}}})
+		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
 		d.reopen()
@@ -311,7 +308,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	d.reopen()
 	d.drive()
 	repair, ri := d.action("engine.repair")
-	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection", Build: []string{"full build passed"}, Tests: []string{"full command regression executed"}}})
+	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()
 	gate, gi := d.gateAction("quality")

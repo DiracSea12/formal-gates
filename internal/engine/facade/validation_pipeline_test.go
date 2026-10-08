@@ -546,7 +546,7 @@ func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest
 	if _, ok := d.run.ValidationInputs[dev]; !ok {
 		d.t.Fatal("QA review disturbed development")
 	}
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks", Build: []string{"go build succeeded"}, Tests: []string{"input rejection test succeeded"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 	d.drive()
 	d.materialize()
 	d.materialize()
@@ -668,7 +668,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	id, ri := d.action("engine.qa.review.rationale")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented records", Build: []string{"build succeeded"}, Tests: []string{"record test passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented records"}})
 	d.materialize()
 	d.materialize()
 	_, input := d.action("engine.qa.execution")
@@ -742,7 +742,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
 	id, input = d.action("engine.development.batch")
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests", Build: []string{"build passed"}, Tests: []string{"baseline passed"}}})
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
 	trees := map[string]map[string]string{}
 	materialize := func() (string, protocol.CandidateParameters) {
 		t.Helper()

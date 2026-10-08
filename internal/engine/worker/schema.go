@@ -87,19 +87,17 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		if batch := completionBatch(input); batch != nil {
 			completion := fields["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
-			dod, checks := map[string]any{}, map[string]any{}
-			dodIDs, checkIDs := []string{}, []string{}
+			dod := map[string]any{}
+			dodIDs := []string{}
 			for _, criterion := range batch.DoD {
 				dod[criterion.ID] = map[string]any{"type": "string", "minLength": 1}
 				dodIDs = append(dodIDs, criterion.ID)
 			}
-			for _, check := range batch.Checks {
-				checks[check.ID] = map[string]any{"type": "string", "minLength": 1}
-				checkIDs = append(checkIDs, check.ID)
-			}
 			completion["dod"] = map[string]any{"type": "object", "additionalProperties": false, "properties": dod, "required": dodIDs}
-			completion["checks"] = map[string]any{"type": "object", "additionalProperties": false, "properties": checks, "required": checkIDs}
+		} else if development, present := fields["development"].(map[string]any); present && !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+			delete(development["properties"].(map[string]any), "completion")
 		}
+
 		if input.Handler == "engine.qa.design" {
 			coverageKeys := map[string]any{}
 			for _, point := range input.Validation.Manifest.Points {

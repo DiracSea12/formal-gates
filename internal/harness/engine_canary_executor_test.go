@@ -1654,9 +1654,9 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				}
 				decoded.Paths[i] = relative
 			}
-			result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, Build: decoded.Build, Tests: decoded.Tests, AffectedCases: decoded.AffectedCases, CaseRuns: decoded.CaseRuns}
+			result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, AffectedCases: decoded.AffectedCases, CaseRuns: decoded.CaseRuns}
 			if issued.Development != nil {
-				result.Development.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Checks: decoded.Checks, Handoff: decoded.Handoff}
+				result.Development.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Handoff: decoded.Handoff}
 			}
 		case "engine.qa.design":
 			var decoded struct {
@@ -1682,7 +1682,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			}
 			result.Manifest = &manifest
 			if len(decoded.Paths) > 0 {
-				result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary, Build: decoded.Build, Tests: decoded.Tests}
+				result.Development = &protocol.DevelopmentEvidence{Paths: decoded.Paths, Summary: decoded.Summary}
 			}
 		case "engine.qa.review.rationale":
 			var decoded struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }

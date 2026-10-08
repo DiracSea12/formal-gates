@@ -70,7 +70,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				d.drive()
 				id, input = d.action("engine.repair")
 				repairAction := id
-				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", Build: []string{"full build passed"}, Tests: []string{"full tests passed"}, AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}})
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}})
 				d.materialize()
 				d.materialize()
 				if original == "PASS" {

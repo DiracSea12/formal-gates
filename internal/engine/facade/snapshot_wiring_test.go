@@ -1723,7 +1723,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, author, message
 	d.drive()
 	id, input := d.action("engine.development.batch")
 	snapshotCommitOne(t, author, message)
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "updated input behavior", Build: []string{"build succeeded"}, Tests: []string{"changed input checked"}}})
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "updated input behavior"}})
 	d.drive()
 	d.materialize()
 	d.materialize()

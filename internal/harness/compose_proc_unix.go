@@ -63,3 +63,11 @@ func processCreationTime(pid int) (time.Time, bool) {
 	}
 	return created, true
 }
+
+func signalSupervisedChild(cmd *exec.Cmd, kill bool) {
+	signal := syscall.SIGTERM
+	if kill {
+		signal = syscall.SIGKILL
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, signal)
+}

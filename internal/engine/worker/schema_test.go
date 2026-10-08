@@ -179,7 +179,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
-			for name, ids := range map[string][]string{"dod": {"behavior", "interface"}, "checks": {"build", "behavior-test"}} {
+			for name, ids := range map[string][]string{"dod": {"behavior", "interface"}} {
 				schema := fields[name].(map[string]any)
 				properties := schema["properties"].(map[string]any)
 				if schema["additionalProperties"] != false || !reflect.DeepEqual(schema["required"], ids) || len(properties) != len(ids) {
@@ -192,7 +192,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 					}
 				}
 			}
-			if !strings.Contains(material.Prompt, "do not omit or add keys") || !strings.Contains(material.Prompt, "development.tests, development.build or development.summary") {
+			if !strings.Contains(material.Prompt, "do not omit or add keys") || !strings.Contains(material.Prompt, "Approved command execution and its evidence belong to the program") {
 				t.Fatal("additional evidence destination missing")
 			}
 			after, _ := json.Marshal(input)
@@ -220,9 +220,14 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			completion := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
-			if _, ok := completion["checks"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
-				t.Fatal("unissued or non-batch duty was restricted to another batch")
+			development := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
+			if name == "unfrozen-repair" {
+				completion := development["completion"].(map[string]any)["properties"].(map[string]any)
+				if _, ok := completion["dod"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
+					t.Fatal("single proposed repair batch cannot supply authored DoD evidence")
+				}
+			} else if development["completion"] != nil {
+				t.Fatal("non-batch duty exposed unused completion claims")
 			}
 		})
 	}

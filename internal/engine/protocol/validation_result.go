@@ -328,8 +328,8 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 	case "engine.repair":
 		return s.acceptRepairResult(record)
 	case "engine.development.batch":
-		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" || len(p.Development.Build) == 0 || len(p.Development.Tests) == 0 {
-			return validationError("development requires declared paths, summary, build and test evidence")
+		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" {
+			return validationError("development requires declared paths and summary")
 		}
 		if role == "engine.development.batch" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)

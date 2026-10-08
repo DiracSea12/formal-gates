@@ -87,7 +87,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 					t.Fatal("waived implementation repair remains executable")
 				}
 			}
-			late := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: repairAction, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "late completed waived repair", Validation: &protocol.ValidationResult{Binding: repairInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "late repair completion", Build: []string{"build completed"}, Tests: []string{"tests completed"}, AffectedCases: []string{"normal"}}}}}
+			late := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: repairAction, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "late completed waived repair", Validation: &protocol.ValidationResult{Binding: repairInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "late repair completion", AffectedCases: []string{"normal"}}}}}
 			if got := d.submit(late); got.Status != "OBSOLETE_RESULT" {
 				t.Fatalf("late retired repair was not audited: %+v", got)
 			}
@@ -145,7 +145,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			}
 			d.drive()
 			repair, ri := d.action("engine.repair")
-			completion := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct whitespace validation", Build: []string{"full build passed"}, Tests: []string{"full suite passed"}, AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app with the representative valid input", Observation: "exit zero", Comparison: "normal input succeeds as required"}}}}
+			completion := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct whitespace validation", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app with the representative valid input", Observation: "exit zero", Comparison: "normal input succeeds as required"}}}}
 			d.business(repair, completion)
 			d.materialize()
 			d.materialize()

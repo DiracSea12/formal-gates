@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"formal-gates/internal/engine/protocol"
 )
@@ -129,36 +127,30 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 	}
 	if _, err := os.Stat(filepath.Join(directory, "owner")); err == nil {
 		var process struct {
-			PID           int     `json:"pid"`
-			Started       float64 `json:"started_at"`
-			PGID          int     `json:"pgid"`
-			RequestDigest string  `json:"request_digest"`
+			Alive bool `json:"alive"`
 		}
-		if err := readCheckDocument(filepath.Join(directory, "process.json"), &process); err != nil {
-			return nativeResult{observedEffect: true}, false, fmt.Errorf("owned check has no process or completion evidence: %w", err)
+		_, aborted := s.AbortDecision()
+		observe := func() error {
+			return f.checkBridge("supervisor-process", map[string]any{"directory": directory, "requestDigest": digest, "cancel": aborted || s.ResetPending()}, &process)
 		}
-		if process.RequestDigest != digest {
-			return nativeResult{observedEffect: true}, false, fmt.Errorf("owned check process differs from the approved request")
+		var err error
+		if aborted || s.ResetPending() {
+			err = f.admission.write(observe)
+		} else {
+			err = observe()
 		}
-		out, err := exec.Command("ps", "-p", strconv.Itoa(process.PID), "-o", "lstart=").Output()
-		created, parseErr := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.TrimSpace(string(out)), time.Local)
-		if err != nil || parseErr != nil || created.Unix() < int64(process.Started)-1 || created.Unix() > int64(process.Started) {
-			return nativeResult{observedEffect: true}, false, fmt.Errorf("owned check process is unknown without an exit receipt")
+		if err != nil {
+			return nativeResult{observedEffect: true}, false, err
 		}
-		if _, aborted := s.AbortDecision(); aborted || s.ResetPending() {
-			if process.PGID <= 0 {
-				return nativeResult{}, false, fmt.Errorf("owned check has no process group evidence")
-			}
-			if err := f.admission.write(func() error {
-				err := syscall.Kill(-process.PGID, syscall.SIGTERM)
-				if err == syscall.ESRCH {
-					return nil
-				}
-				return err
-			}); err != nil {
+		if !process.Alive {
+			if _, err := os.Stat(filepath.Join(directory, "exit.json")); err == nil {
+				return f.checkEvidence(s, intent, false, invoked)
+			} else if !os.IsNotExist(err) {
 				return nativeResult{}, false, err
 			}
+			return nativeResult{observedEffect: true}, false, fmt.Errorf("owned check process is unknown without an exit receipt")
 		}
+
 		return nativeResult{observedEffect: true}, false, nil
 	} else if !os.IsNotExist(err) {
 		return nativeResult{}, false, err
@@ -180,7 +172,7 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 		}
 		binary := filepath.Join(f.admission.Target, "bin", "formal-gates")
 		cmd := exec.Command(binary, "harness", "supervise", directory)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.SysProcAttr = checkSupervisorAttributes()
 		if err := cmd.Start(); err != nil {
 			return err
 		}

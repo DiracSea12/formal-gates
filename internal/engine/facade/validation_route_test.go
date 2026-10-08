@@ -41,7 +41,7 @@ func resolveGateFinding(d *validationDriver, finding, subject string) {
 	d.drive()
 }
 func gateRepairResult(in protocol.ValidationInput) protocol.ValidationResult {
-	return protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply documented ordering", Build: []string{"full build passed"}, Tests: []string{"full suite passed"}, AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app valid-input", Observation: "ordered output", Comparison: "matches documented order"}}}}
+	return protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply documented ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app valid-input", Observation: "ordered output", Comparison: "matches documented order"}}}}
 }
 func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
@@ -146,7 +146,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 		t.Fatalf("ordinary gate addition rejected unchanged in-flight QA review: %s", a.Status)
 	}
 	id, in = d.action("engine.development.batch")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate inputs", Build: []string{"build complete"}, Tests: []string{"valid and invalid input checks complete"}}})
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate inputs"}})
 	d.materialize()
 	d.materialize()
 	d.drive()
@@ -342,7 +342,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			d := newValidationDriver(t, "whitebox", "quality")
 			id, in := d.action("engine.development.batch")
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input", Build: []string{"full build passed"}, Tests: []string{"input tests passed"}}})
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input"}})
 			d.materialize()
 			d.materialize()
 			id, in = d.action("engine.qa.design")

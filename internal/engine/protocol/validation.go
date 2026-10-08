@@ -77,8 +77,6 @@ type DevelopmentEvidence struct {
 	CaseRuns      []RepairCaseEvidence   `json:"caseRuns,omitempty"`
 	Paths         []string               `json:"paths"`
 	Summary       string                 `json:"summary"`
-	Build         []string               `json:"build"`
-	Tests         []string               `json:"tests"`
 	AffectedCases []string               `json:"affectedCases,omitempty"`
 }
 

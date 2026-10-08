@@ -45,13 +45,13 @@
 不请求新的计划确认。小修可直接提交原 `DevelopmentEvidence`；需要分块、依赖或隔离
 分片时，在原 `engine.repair` 结果的 `validation.granularityReview` 提交完整
 `GranularityReview`，该规划结果不包含修改完成证据。后续成员的 `input.development`
-携带批次合同及依赖结果；完成证据逐项覆盖 DoD、checks 和 handoff。
+携带批次合同及依赖结果；完成语义证据逐项覆盖 DoD 和 handoff；程序冻结精确来源并执行原批次批准的 checks。
 
 每个隔离批次可在 `route` 选择 `full` 或 `custom` 普通门，候选 `gates` 和子集
 `selected` 使用既有路线契约。不携带普通黑盒/白盒 QA 或保留合并门；省略 route 时
 继承本 run 的普通门。原 run 的 QA、最终合并门及合并 QA 责任保留。CHECKPOINT
 分组只控制开发前沿，不改变冻结用例或原返修业务轮归属。纯 P2 保留不复审和 carry
-例外，报告真实完整构建、全量测试、affectedCases 及逐项 caseRuns。
+例外，保留 affectedCases 及逐项 caseRuns 的真实证据；批准命令由程序执行并记录实际结果。
 
 开发者只在输入绑定的 workspace 内修改；依赖来源由 engine 以精确原生快照先集成，
 不能自行选择另一片的可变工作区。返修任务、尝试、重试和业务返修轮分别由原归属记账。

@@ -284,7 +284,7 @@ func TestCanaryDevelopmentBatchesShareUnfrozenWorkspace(t *testing.T) {
 					t.Fatalf("peer changes were not present in shared workspace: %v %v", changed, err)
 				}
 			}
-			answer := canaryDevelopmentAnswer{Paths: []string{batch + ".go"}, Summary: batch + " complete", Build: []string{batch + " build evidence"}, Tests: []string{batch + " test evidence"}, DoD: map[string]string{batch: "complete"}, Checks: map[string]string{batch: "pass"}, Handoff: batch + " ready"}
+			answer := canaryDevelopmentAnswer{Paths: []string{batch + ".go"}, Summary: batch + " complete", DoD: map[string]string{batch: "complete"}, Handoff: batch + " ready"}
 			body, err := json.Marshal(answer)
 			if err != nil {
 				t.Fatal(err)

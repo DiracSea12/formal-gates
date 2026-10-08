@@ -98,7 +98,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 				if disposition == "REDO" && in.Binding.Task == task {
 					t.Fatal("REDO did not replace responsibility")
 				}
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract", Build: []string{"build succeeds"}, Tests: []string{"command input tests succeed"}}})
+				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
 				d.materialize()
 				d.materialize()
 				gate, gi := d.action("engine.gate")
@@ -239,7 +239,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 				}
 				if candidate.Identity == "" {
 					dev, di := d.action("engine.development.batch")
-					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior", Build: []string{"build succeeds"}, Tests: []string{"input tests succeed"}}})
+					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
 					d.materialize()
 					d.materialize()
 				}
@@ -534,7 +534,7 @@ func TestRequirementBarrierSettlesFailedAttemptByItsDecision(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("duplicate held result consumed another attempt")
 			}
-			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior", Build: []string{"build succeeds"}, Tests: []string{"input tests succeed"}}})
+			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
 			d.materialize()
 			d.materialize()
 			gate, gi := d.gateAction("quality")

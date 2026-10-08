@@ -38,3 +38,5 @@ func terminateJob(job *liveJob) {
 func processCreationTime(pid int) (time.Time, bool) {
 	return time.Time{}, false
 }
+
+func signalSupervisedChild(cmd *exec.Cmd, _ bool) { _ = cmd.Process.Kill() }

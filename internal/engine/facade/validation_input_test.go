@@ -19,7 +19,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 	id, in = d.action("engine.development.batch")
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input validation", Build: []string{"build succeeds"}, Tests: []string{"input tests succeed"}}})
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input validation"}})
 	d.materialize()
 	d.materialize()
 	assertValidationInputModes(t, d)

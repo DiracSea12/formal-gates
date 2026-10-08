@@ -149,7 +149,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 
 			}
 			id, in := d.action("engine.development.batch")
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "two independent predicates", Build: []string{"go build"}, Tests: []string{"predicate checks"}}})
+			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "two independent predicates"}})
 			materialize()
 			materialize()
 			id, in = d.action("engine.qa.design")

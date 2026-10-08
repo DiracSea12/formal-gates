@@ -16,7 +16,7 @@ func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.H
 	t.Helper()
 	d := newValidationDriver(t, "whitebox", "quality")
 	dev, di := d.action("engine.development.batch")
-	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation", Build: []string{"build passed"}, Tests: []string{"input tests passed"}}})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	if stage != "DEVELOPMENT" {
 		d.materialize()
 	}

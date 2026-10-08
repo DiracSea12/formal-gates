@@ -483,7 +483,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, path), []byte("package main\nimport \"testing\"\nfunc TestCombinedCommand(t *testing.T) {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	master.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{path}, Summary: "verified integrated command output", Build: []string{"candidate builds"}, Tests: []string{"combined command succeeds"}, AffectedCases: []string{failedCase}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewMerge, CaseID: failedCase, Result: coverage.ExecutedPass, Procedure: "invoke the combined command", Observation: "specified output returned", Comparison: "exact match to approved oracle"}}}})
+	master.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{path}, Summary: "verified integrated command output", AffectedCases: []string{failedCase}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewMerge, CaseID: failedCase, Result: coverage.ExecutedPass, Procedure: "invoke the combined command", Observation: "specified output returned", Comparison: "exact match to approved oracle"}}}})
 	master.drive()
 	state := driverState(t, master)
 	current := state.Validation.Waves[len(state.Validation.Waves)-1]

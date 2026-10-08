@@ -156,8 +156,8 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		}
 		work.batch = &p.GranularityReview.Batches[0]
 	}
-	if p.Development == nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil || len(p.Development.Paths) == 0 || strings.TrimSpace(p.Development.Summary) == "" || len(p.Development.Build) == 0 || len(p.Development.Tests) == 0 {
-		return validationError("repair completion requires declared paths, summary, build and tests")
+	if p.Development == nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil || len(p.Development.Paths) == 0 || strings.TrimSpace(p.Development.Summary) == "" {
+		return validationError("repair completion requires declared paths and summary")
 	}
 	if work.verification {
 		if err := s.validateFinalRepairEvidence(*work, *p.Development); err != nil {

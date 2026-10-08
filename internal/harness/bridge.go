@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -365,6 +366,36 @@ func dispatch(e envelope) (any, error) {
 		}
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
+	case "supervisor-process":
+		var q struct {
+			Directory     string `json:"directory"`
+			RequestDigest string `json:"requestDigest"`
+			Cancel        bool   `json:"cancel"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		value, err := readJSONFile(filepath.Join(q.Directory, "process.json"))
+		if err != nil {
+			return nil, err
+		}
+		if textOf(getOf(value, "request_digest")) != q.RequestDigest {
+			return nil, fmt.Errorf("supervisor process differs from its request")
+		}
+		alive := supervisorAlive(q.Directory)
+		if alive && q.Cancel {
+			pid, pgid := intOf(getOf(value, "pid")), intOf(getOf(value, "pgid"))
+			actual, err := nativeProcessGroupID(pid)
+			if err != nil || pgid <= 0 || actual != pgid {
+				return nil, fmt.Errorf("supervisor has no matching process group")
+			}
+			process, err := os.FindProcess(pid)
+			if err != nil {
+				return nil, err
+			}
+			terminateJob(&liveJob{pgid: pgid, cmd: &exec.Cmd{Process: process}})
+		}
+		return map[string]any{"alive": alive}, nil
 	case "verify-process":
 		// The caller reads the two JSON documents; the verification rules live
 		// here. A refusal carries its family so the wrapper can raise the same
