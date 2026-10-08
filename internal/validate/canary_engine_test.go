@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
-	source := copyPackageFixture(t)
+	source := portablePackageFixture(t)
 	project := t.TempDir()
 	options := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: project, RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "bin", nativeBinaryName()), Force: true, SkipHooks: true}
 	report, err := Install(options)
@@ -71,6 +72,20 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 		if material.Input.RunID != "canary" || material.Input.Provider != "codex" || material.Input.Pending.ActionID == "" || !strings.Contains(material.Prompt, "The installed workflow must complete its verified route.") || len(material.ResultSchema) == 0 {
 			t.Fatalf("worker material lost complete production context: %s", path)
 		}
+		if material.Input.Handler == "engine.qa.execution" {
+			in := material.Input.Validation
+			if len(in.ExecutionFacts) != 2 {
+				t.Fatalf("execution omitted real native case facts: %+v", in)
+			}
+			for _, fact := range in.ExecutionFacts {
+				if len(fact.Operations) != 1 || fact.Operations[0].Evidence.Tool == "" || fact.Operations[0].Evidence.Environment == "" || fact.Operations[0].ActionID == "" {
+					t.Fatalf("native receipt binding missing: %+v", fact)
+				}
+				if fact.Operations[0].Parameters.QA.GoTestRef != "" && fact.Operations[0].Evidence.GoResult != "pass" {
+					t.Fatalf("whitebox case did not really execute and pass: %+v", fact)
+				}
+			}
+		}
 	}
 	if _, err = os.Stat(filepath.Join(project, ".gates", "tmp", "canary", "state.json")); !os.IsNotExist(err) {
 		t.Fatalf("legacy authority remains: %v", err)
@@ -99,4 +114,23 @@ func TestPortableWriteBlockUsesCurrentEngineEnvelope(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(root, ".gates", "tmp", "write-block-canary", "state.json")); !os.IsNotExist(err) {
 		t.Fatalf("legacy write-wall state remains: %v", err)
 	}
+}
+
+func portablePackageFixture(t *testing.T) string {
+	t.Helper()
+	source := copyPackageFixture(t)
+	binary := filepath.Join(t.TempDir(), nativeBinaryName())
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = repoRootValidateTest(t)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build current portable CLI: %v\n%s", err, output)
+	}
+	body, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "bin", nativeBinaryName()), body, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return source
 }

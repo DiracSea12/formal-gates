@@ -1,6 +1,9 @@
 package validate
 
 import (
+	"fmt"
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,64 +98,44 @@ func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 	}
 }
 
-func TestCanaryExecutionResultExecutesCommittedChecks(t *testing.T) {
-	root := t.TempDir()
-	if err := initializeCanaryGit(root); err != nil {
-		t.Fatal(err)
+func TestPortableComparisonUsesIssuedNativeCaseEvidence(t *testing.T) {
+	cases := []struct {
+		item       coverage.AcceptanceCase
+		evidence   protocol.CheckEvidence
+		comparison string
+	}{
+		{coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: canaryDeliveryContents}, fmt.Sprintf("expected stdout=%q and exit=0; actual stdout=%q exit=0; equal=true", canaryDeliveryContents, canaryDeliveryContents)},
+		{coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{ExitCode: 128, StderrText: "fatal: path 'absent-marker.txt' does not exist in 'HEAD'"}, "expected Git to reject absent-marker.txt with no stdout; actual exit=128 stdout=\"\" stderr=\"fatal: path 'absent-marker.txt' does not exist in 'HEAD'\""},
+		{coverage.AcceptanceCase{CaseID: "delivery-whitebox", Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoTestName: "TestWhiteboxDirectBehavior", GoResult: "pass"}, "expected exact Go test TestWhiteboxDirectBehavior to pass; actual test=TestWhiteboxDirectBehavior result=pass exit=0"},
 	}
-	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte(canaryDeliveryContents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := commitCanaryGit(root, "candidate fixtures"); err != nil {
-		t.Fatal(err)
-	}
-
-	blackbox, err := canaryExecutionResult(root, QACase{ID: "CASE-BLACKBOX", Mode: "blackbox", Procedure: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if blackbox.Observation != `git show HEAD:delivery.txt stdout="delivery"` || blackbox.OracleResult != `expected stdout="delivery"; actual stdout="delivery"; equal=true` {
-		t.Fatalf("blackbox result did not record the actual git output and comparison: %#v", blackbox)
-	}
-
-	whitebox, err := canaryExecutionResult(root, QACase{ID: "CASE-WHITEBOX", Mode: "whitebox", Procedure: canaryWhiteboxProcedure, Oracle: canaryWhiteboxOracle})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(whitebox.Observation, canaryWhiteboxMarker) || whitebox.OracleResult != `expected stdout to contain "func TestWhiteboxDirectBehavior(t *testing.T) {}"; contains=true` {
-		t.Fatalf("whitebox result did not record the actual git output and comparison: %#v", whitebox)
+	for _, item := range cases {
+		value, err := portableComparison(item.item, protocol.ExecutionFact{CaseID: item.item.CaseID, Operations: []protocol.ExecutionOperationFact{{Evidence: item.evidence}}})
+		if err != nil || value.Result != coverage.ExecutedPass || value.Comparison != item.comparison {
+			t.Fatalf("lost actual native comparison: %+v %v", value, err)
+		}
 	}
 }
 
-func TestCanaryExecutionResultRejectsCommandAndOutputFailures(t *testing.T) {
-	missing := t.TempDir()
-	if err := initializeCanaryGit(missing); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := canaryExecutionResult(missing, QACase{ID: "CASE-MISSING", Mode: "blackbox", Procedure: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle}); err == nil {
-		t.Fatal("missing committed delivery file was accepted")
-	}
-
-	mismatched := t.TempDir()
-	if err := initializeCanaryGit(mismatched); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mismatched, "delivery.txt"), []byte("unexpected delivery\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mismatched, "whitebox_delivered_test.go"), []byte("package whiteboxfixture\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := commitCanaryGit(mismatched, "mismatched fixtures"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := canaryExecutionResult(mismatched, QACase{ID: "CASE-BLACKBOX", Mode: "blackbox", Procedure: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle}); err == nil || !strings.Contains(err.Error(), "expected \"delivery\", got \"unexpected delivery\"") {
-		t.Fatalf("blackbox output mismatch was not rejected with the actual comparison: %v", err)
-	}
-	if _, err := canaryExecutionResult(mismatched, QACase{ID: "CASE-WHITEBOX", Mode: "whitebox", Procedure: canaryWhiteboxProcedure, Oracle: canaryWhiteboxOracle}); err == nil || !strings.Contains(err.Error(), canaryWhiteboxMarker) {
-		t.Fatalf("whitebox output mismatch was not rejected with the expected declaration: %v", err)
+func TestPortableComparisonRetainsActualExecutionFailures(t *testing.T) {
+	for _, item := range []struct {
+		name   string
+		c      coverage.AcceptanceCase
+		e      protocol.CheckEvidence
+		actual string
+	}{
+		{"missing-delivery", coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{ExitCode: 128}, "exit=128"},
+		{"mismatched-delivery", coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: "unexpected delivery\n"}, "unexpected delivery"},
+		{"present-absent-artifact", coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: "artifact exists"}, "artifact exists"},
+		{"wrong-whitebox-test", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoResult: "pass", GoTestName: "AnotherTest"}, "actual test=AnotherTest"},
+		{"whitebox-fail", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{ExitCode: 1, GoResult: "fail", GoTestName: "TestWhiteboxDirectBehavior"}, "result=fail exit=1"},
+		{"whitebox-unmatched", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoResult: "not-executed"}, "result=not-executed"},
+		{"whitebox-skip", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoResult: "skip", GoTestName: "TestWhiteboxDirectBehavior"}, "result=skip"},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			value, err := portableComparison(item.c, protocol.ExecutionFact{Operations: []protocol.ExecutionOperationFact{{Evidence: item.e}}})
+			if err != nil || value.Result != coverage.ExecutedFail || !strings.Contains(value.Comparison, item.actual) {
+				t.Fatalf("native failure became PASS or lost actual evidence: %+v %v", value, err)
+			}
+		})
 	}
 }

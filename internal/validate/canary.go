@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
@@ -33,9 +34,8 @@ const (
 	canaryDeliveryContents  = "delivery\n"
 	canaryBlackboxProcedure = "git show HEAD:delivery.txt"
 	canaryBlackboxOracle    = `stdout equals "delivery"`
-	canaryWhiteboxProcedure = "git show HEAD:whitebox_delivered_test.go"
 	canaryWhiteboxMarker    = "func TestWhiteboxDirectBehavior(t *testing.T) {}"
-	canaryWhiteboxOracle    = `stdout contains "func TestWhiteboxDirectBehavior(t *testing.T) {}"`
+	canaryWhiteboxOracle    = "The exact approved Go test runs and passes"
 )
 
 type CanaryCheck struct {
@@ -332,7 +332,8 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	topology, routeConfirmed := false, false
 	checked := map[string]bool{}
-	for turns := 0; turns < 100; turns++ {
+	deadline := time.Now().Add(time.Minute)
+	for turns := 0; turns < 100 && time.Now().Before(deadline); turns++ {
 		run, err = f.Drive()
 		if err != nil {
 			return err
@@ -381,6 +382,15 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 		}
 		sort.Strings(ids)
 		if len(ids) == 0 {
+			checking := false
+			for _, intent := range run.AdapterIntents {
+				checking = checking || intent.Adapter != nil && intent.Adapter.Operation == "op.check"
+			}
+			if checking && (run.Next.Kind == decision.KindWait || run.Next.Kind == decision.KindHostAction) {
+				time.Sleep(50 * time.Millisecond)
+				turns--
+				continue
+			}
 			return fmt.Errorf("portable workflow stalled: next=%+v status=%s asks=%+v", run.Next, run.Status, run.PendingAsks)
 		}
 		for _, id := range ids {
@@ -417,15 +427,15 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 					return err
 				}
 			}
-			payload.ActionID = id
-			payload.Provider = admission.Provider
-			payload.Outcome = protocol.OutcomePass
 			raw, err = json.Marshal(payload)
 			if err != nil {
 				return err
 			}
-			payload.PayloadDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(raw))
-			if err = submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &payload}); err != nil {
+			event, err := worker.DecodeResult(material.Input, eventID(), raw, fmt.Sprintf("sha256:%x", sha256.Sum256(raw)))
+			if err != nil {
+				return err
+			}
+			if err = submit(event); err != nil {
 				return err
 			}
 		}
@@ -433,14 +443,23 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	return fmt.Errorf("portable workflow exceeded its bounded drive fixture")
 }
 
-func portableDevelopmentPlan() *protocol.GranularityReview {
-	return &protocol.GranularityReview{Reason: "One committed delivery and its direct whitebox declaration form one cohesive fixture.", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "marker-content", Command: "cat delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}
+func portableDevelopmentPlan() *worker.Granularity {
+	return &worker.Granularity{Reason: "One committed delivery and its direct whitebox declaration form one cohesive fixture.", VerificationTier: "FINAL", Batches: []worker.Batch{{DevelopmentBatch: protocol.DevelopmentBatch{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "marker-content", Command: "cat delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}}
 }
 
-func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (protocol.WorkerResultPayload, error) {
-	payload := protocol.WorkerResultPayload{}
+func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (worker.Result, error) {
+	payload := worker.Result{Outcome: protocol.OutcomePass}
 	if input.Review != nil {
-		payload.Review = &protocol.ReviewResultEvidence{Action: input.Review.Action, DispatchID: input.Pending.ActionID, RequirementRevision: input.Review.RequirementRevision, AuthorizationID: input.Review.AuthorizationID, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Synthetic portable fixture; no semantic reviewer or model validation is claimed."}}
+		payload.Review = &worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{
+			"binding":           "The synthetic fixture uses the exact installed role and confirmed input.",
+			"completeness":      "The bounded fixture requirement declares one delivered marker and a full verified route.",
+			"evidence":          "This deterministic portable fixture does not claim model or semantic reviewer validation.",
+			"locations":         "The fixture requirement identifies its public runtime and committed delivery artifacts.",
+			"normal-entry":      "The fixture uses the installed public runtime and registered Git workspace.",
+			"requirement-match": "The fixture plan delivers the declared marker and preserves the full route checks.",
+			"scope":             "The fixture remains within the one confirmed delivery requirement.",
+			"severity":          "The synthetic fixture reports no findings; no model severity assessment is claimed.",
+		}}
 		if input.Review.Action == review.StartReadiness {
 			payload.Review.GranularityReview = portableDevelopmentPlan()
 		}
@@ -450,7 +469,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		return payload, fmt.Errorf("portable worker lacks issued typed input")
 	}
 	in := input.Validation
-	result := &protocol.ValidationResult{Binding: in.Binding, Status: "PASS"}
+	result := &worker.Validation{Status: "PASS"}
 	payload.Validation = result
 	workspace := ""
 	if in.Workspace != nil {
@@ -465,87 +484,63 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		result.Development = &protocol.DevelopmentEvidence{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"},  Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture",  }
+		result.Development = &protocol.DevelopmentEvidence{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
 	case "engine.qa.design":
-		manifest := in.Manifest
-		mode := manifest.Binding.ReviewKind
-		c := coverage.AcceptanceCase{CaseID: "delivery-" + strings.ToLower(string(mode)), Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle}
+		mode := in.Manifest.Binding.ReviewKind
+		c := worker.Case{CaseID: "delivery-" + strings.ToLower(string(mode)), Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
+		missing := worker.Case{CaseID: "missing-" + strings.ToLower(string(mode)), Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
 		if mode == coverage.ReviewWhitebox {
-			c.Mode = coverage.CaseWhitebox
 			c.TestRef = "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"
 			c.PublicEntry, c.Preconditions, c.Steps = "", "", ""
+			c.Operations = nil
 			c.Oracle = canaryWhiteboxOracle
+			missing.TestRef = "whitebox_delivered_test.go::TestWhiteboxMissingArtifact"
+			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
+			missing.Operations = nil
+			missing.Oracle = canaryWhiteboxOracle
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			result.Development = &protocol.DevelopmentEvidence{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration",  }
+			result.Development = &protocol.DevelopmentEvidence{Paths: []string{"whitebox_delivered_test.go"}, Summary: "Wrote direct whitebox declaration"}
 		}
-		missing := coverage.AcceptanceCase{CaseID: "missing-" + strings.ToLower(string(mode)), Mode: c.Mode, Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact"}
-		if mode == coverage.ReviewWhitebox {
-			missing.TestRef = "whitebox_delivered_test.go::TestWhiteboxMissingArtifact"
-			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
-		}
-		manifest.Cases = []coverage.AcceptanceCase{c, missing}
-		for _, link := range in.SourcePoints {
-			for _, row := range manifest.Cases {
-				manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: link.SourceID, PointID: link.PointID, CaseID: row.CaseID})
-			}
+		manifest := worker.Manifest{Cases: []worker.Case{c, missing}, Coverage: map[string][]string{}}
+		for _, point := range in.Manifest.Points {
+			manifest.Coverage[point.PointID] = []string{c.CaseID, missing.CaseID}
 		}
 		result.Manifest = &manifest
 		checked["design:"+string(mode)] = true
 	case "engine.qa.review.rationale":
 		m := in.Manifest
-		r := coverage.ReviewResult{Binding: m.Binding, Scope: coverage.ScopeFull, SetStatus: coverage.StatusPass}
+		r := worker.CaseReview{SourceDecisions: map[string]worker.Decision{}, PointDecisions: map[string]worker.Decision{}, CaseDecisions: map[string]worker.Decision{}}
 		for _, source := range m.Sources {
-			r.SourceDecisions = append(r.SourceDecisions, coverage.ReviewDecision{ID: source, Status: coverage.StatusPass})
+			r.SourceDecisions[source] = worker.Decision{Status: coverage.StatusPass, Reason: "The synthetic fixture covers the declared installed delivery source."}
 		}
 		for _, point := range m.Points {
-			r.PointDecisions = append(r.PointDecisions, coverage.ReviewDecision{ID: point.PointID, Status: coverage.StatusPass})
+			r.PointDecisions[point.PointID] = worker.Decision{Status: coverage.StatusPass, Reason: "The synthetic fixture independently relates the committed artifact and missing-artifact oracle to this acceptance condition."}
 		}
 		for _, c := range m.Cases {
-			r.CaseDecisions = append(r.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID, Status: coverage.StatusPass, Reason: "Synthetic fixture binds the committed artifact procedure and exact content oracle to the declared acceptance condition."})
+			r.CaseDecisions[c.CaseID] = worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture binds the approved operation or exact Go test and its oracle to the declared acceptance condition."}
 		}
 		result.Review = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
 	case "engine.qa.execution":
-		r := coverage.ExecutionReport{Binding: *in.Execution}
-		for _, edge := range in.Whitelist.Entries {
-			mode := "blackbox"
-			procedure, oracle := canaryBlackboxProcedure, canaryBlackboxOracle
-			if edge.ReviewKind == coverage.ReviewWhitebox {
-				mode = "whitebox"
-				procedure, oracle = canaryWhiteboxProcedure, canaryWhiteboxOracle
+		result.Execution = &worker.Execution{Records: map[string]worker.Observation{}}
+		for _, fact := range in.ExecutionFacts {
+			index := slices.IndexFunc(in.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == fact.CaseID })
+			if index < 0 {
+				return payload, fmt.Errorf("portable execution fact has no approved case: %s", fact.CaseID)
 			}
-			var observed QAResultInput
-			var err error
-			if strings.HasPrefix(edge.CaseID, "missing-") {
-				if edge.ReviewKind == coverage.ReviewWhitebox {
-					output, runErr := (execNativeCommandRunner{}).Run(workspace, "go", "test", "whitebox_delivered_test.go", "-run", "^TestWhiteboxMissingArtifact$", "-count=1")
-					err = runErr
-					observed = QAResultInput{Procedure: "go test whitebox_delivered_test.go -run ^TestWhiteboxMissingArtifact$ -count=1", Observation: output, OracleResult: "The missing-artifact whitebox assertion completed successfully"}
-				} else {
-					output, runErr := (execNativeCommandRunner{}).Run(workspace, "git", "show", "HEAD:absent-marker.txt")
-					if runErr == nil {
-						return payload, fmt.Errorf("absent committed artifact was accepted: %s", output)
-					}
-					observed = QAResultInput{Procedure: "git show HEAD:absent-marker.txt", Observation: fmt.Sprintf("Git rejected absent-marker.txt: %v", runErr), OracleResult: "Expected a missing committed artifact to fail; Git returned a nonzero exit"}
-				}
-			} else {
-				observed, err = canaryExecutionResult(workspace, QACase{ID: edge.CaseID, Mode: mode, Procedure: procedure, Oracle: oracle})
-			}
+			observation, err := portableComparison(in.Manifest.Cases[index], fact)
 			if err != nil {
 				return payload, err
 			}
-			r.Records = append(r.Records, coverage.ExecutionRecord{ReviewKind: edge.ReviewKind, SourceID: edge.SourceID, PointID: edge.PointID, CaseID: edge.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: observed.Procedure, Observation: observed.Observation, Comparison: observed.OracleResult})
-			if !slices.Contains(r.Binding.ActualCaseIDs, edge.CaseID) {
-				r.Binding.ActualCaseIDs = append(r.Binding.ActualCaseIDs, edge.CaseID)
+			result.Execution.Records[fact.CaseID] = observation
+			if observation.Result != coverage.ExecutedPass {
+				result.Status = "FAIL"
 			}
-			checked["execution:"+string(edge.ReviewKind)] = true
 		}
-		result.Execution = &r
-		result.Tool = "git show"
-		result.Environment = "isolated committed Git candidate"
+		checked["execution:"+string(in.Manifest.Binding.ReviewKind)] = true
 	case "engine.gate":
 		if in.Gate == nil {
 			return payload, fmt.Errorf("portable gate lacks issued input")
@@ -557,45 +552,29 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 	return payload, nil
 }
 
-func canaryExecutionResult(root string, testCase QACase) (QAResultInput, error) {
-	runner := execNativeCommandRunner{}
-	result := QAResultInput{CaseID: testCase.ID, Outcome: "PASS"}
-	switch testCase.Mode {
-	case "blackbox":
-		if testCase.Procedure != canaryBlackboxProcedure || testCase.Oracle != canaryBlackboxOracle {
-			return QAResultInput{}, fmt.Errorf("blackbox case procedure/oracle does not match the executable canary check")
-		}
-		output, err := runner.Run(root, "git", "show", "HEAD:delivery.txt")
-		if err != nil {
-			return QAResultInput{}, err
-		}
-		expected := strings.TrimSpace(canaryDeliveryContents)
-		matches := output == expected
-		if !matches {
-			return QAResultInput{}, fmt.Errorf("delivery.txt content mismatch: expected %q, got %q", expected, output)
-		}
-		result.Procedure = canaryBlackboxProcedure
-		result.Observation = fmt.Sprintf("git show HEAD:delivery.txt stdout=%q", output)
-		result.OracleResult = fmt.Sprintf("expected stdout=%q; actual stdout=%q; equal=%t", expected, output, matches)
-	case "whitebox":
-		if testCase.Procedure != canaryWhiteboxProcedure || testCase.Oracle != canaryWhiteboxOracle {
-			return QAResultInput{}, fmt.Errorf("whitebox case procedure/oracle does not match the executable canary check")
-		}
-		output, err := runner.Run(root, "git", "show", "HEAD:whitebox_delivered_test.go")
-		if err != nil {
-			return QAResultInput{}, err
-		}
-		matches := strings.Contains(output, canaryWhiteboxMarker)
-		if !matches {
-			return QAResultInput{}, fmt.Errorf("whitebox test declaration missing from candidate: expected stdout to contain %q, got %q", canaryWhiteboxMarker, output)
-		}
-		result.Procedure = canaryWhiteboxProcedure
-		result.Observation = "git show HEAD:whitebox_delivered_test.go stdout:\n" + output
-		result.OracleResult = fmt.Sprintf("expected stdout to contain %q; contains=%t", canaryWhiteboxMarker, matches)
-	default:
-		return QAResultInput{}, fmt.Errorf("unsupported portable canary QA mode %q", testCase.Mode)
+func portableComparison(c coverage.AcceptanceCase, fact protocol.ExecutionFact) (worker.Observation, error) {
+	if len(fact.Operations) != 1 {
+		return worker.Observation{}, fmt.Errorf("portable case requires its one approved operation: %s", c.CaseID)
 	}
-	return result, nil
+	evidence := fact.Operations[0].Evidence
+	passed := false
+	comparison := ""
+	if c.Mode == coverage.CaseWhitebox {
+		_, testName, _ := strings.Cut(c.TestRef, "::")
+		passed = evidence.ExitCode == 0 && evidence.GoTestName == testName && evidence.GoResult == "pass"
+		comparison = fmt.Sprintf("expected exact Go test %s to pass; actual test=%s result=%s exit=%d", testName, evidence.GoTestName, evidence.GoResult, evidence.ExitCode)
+	} else if strings.HasPrefix(c.CaseID, "missing-") {
+		passed = evidence.ExitCode != 0 && evidence.StdoutText == "" && strings.Contains(evidence.StderrText, "absent-marker.txt")
+		comparison = fmt.Sprintf("expected Git to reject absent-marker.txt with no stdout; actual exit=%d stdout=%q stderr=%q", evidence.ExitCode, evidence.StdoutText, evidence.StderrText)
+	} else {
+		passed = evidence.ExitCode == 0 && evidence.StdoutText == canaryDeliveryContents
+		comparison = fmt.Sprintf("expected stdout=%q and exit=0; actual stdout=%q exit=%d; equal=%t", canaryDeliveryContents, evidence.StdoutText, evidence.ExitCode, passed)
+	}
+	result := coverage.ExecutedFail
+	if passed {
+		result = coverage.ExecutedPass
+	}
+	return worker.Observation{Result: result, Comparison: comparison}, nil
 }
 
 func initializeCanaryGit(root string) error {
