@@ -239,7 +239,7 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution")
 			report := executionFor(qi)
-			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
+			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			gate, gi := d.gateAction("quality")
 			gateEvent := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "original-gate-result", Validation: &protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"}}}
 			if arrival == "staged" {
@@ -410,7 +410,7 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 	for index := 0; index < 3; index++ {
 		qa, qi := d.action("engine.qa.execution")
 		report := executionFor(qi)
-		d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+		d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 		gate, gi := d.gateAction("quality")
 		findings := []review.Finding{{Severity: "P1", Message: "normal input validation accepts malformed command", SeverityRationale: "accepting malformed command violates the core input contract with no workaround", Requirement: "AC-001", NormalPath: "app run malformed-input", ActualError: "exit status zero instead of input rejection", DeferralImpact: "invalid command remains accepted", Locations: []string{"app.go:1"}}}
 		if index == 2 {

@@ -532,8 +532,8 @@ func (d *validationDriver) action(handler string) (string, protocol.ValidationIn
 
 func (d *validationDriver) materialize() {
 	d.t.Helper()
+	d.drive()
 	if !d.mockNative {
-		d.drive()
 		return
 	}
 	for id, intent := range d.run.AdapterIntents {
