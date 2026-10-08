@@ -218,3 +218,7 @@ unavailable，不估算、不造第二账本。guard 由当前 definition、rout
 Codex 原生 response ID 去重，任务墙钟包含工具等待、不含 turn 间空闲。owner 终态区间
 差值只报告，不参与 in-flight guard；多 run 区间重叠或基线不可靠时不猜数字。child
 cost 按 childRunID/dispatchID 汇总，保留主线与 child 原 owner 来源。
+
+### 拆分计划确认的程序预览
+
+在唯一的 `CONFIRM_TOPOLOGY` 拆分决定提交前，用 `workflow next --root <项目> --run-id <run> --review-decision <JSON文件或->` 预览同一 `ReviewDecisionPayload`。草稿提供拓扑或路线的语义选择；程序返回完整计划、需求/方案与拓扑/路线绑定的确认摘要及装配后的决定载荷。此读取不修改状态，显式错误的确认值会被拒绝。展示精确计划并取得该决定的确认后，将返回载荷用于原 `workflow submit`；不得把 readiness PASS 当作执行批准。普通路线沿同一入口预览；child 的内联提案仍使用原确认契约。

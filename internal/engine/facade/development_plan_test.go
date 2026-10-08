@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -525,5 +527,71 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	snap, _ := d.f.engine.Load()
 	if snap.State.Results[retry].Validation.Development.Completion.Handoff == "" || snap.State.RejectedResults[id].Payload.Validation.Development.Completion.DoD["input-contract"] != "" {
 		t.Fatal("raw complete/rejected evidence was not retained")
+	}
+}
+
+func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
+	d := nativeMasterDriver(t)
+	passPreDevelopmentReviews(t, d, commandPlan())
+	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
+	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	var token string
+	for _, ask := range d.run.PendingAsks {
+		if ask.RequestID == string(request.ID) {
+			token = ask.Token
+		}
+	}
+	path := filepath.Join(d.f.stateDir, "state.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := d.f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, confirmation := range []*protocol.DevelopmentPlanConfirmation{nil, {ReviewActionID: preview.Confirmation.ReviewActionID, Digest: "wrong"}} {
+		topology.DevelopmentPlan = confirmation
+		event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(request.ID), token, "split", protocol.ReviewDecisionPayload{Topology: topology})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = d.f.Submit(event); err == nil {
+			t.Fatal("missing or incorrect split plan confirmation accepted")
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != string(before) {
+			t.Fatal("rejected confirmation changed state", err)
+		}
+	}
+	topology.DevelopmentPlan = &preview.Confirmation
+	event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(request.ID), token, "split", protocol.ReviewDecisionPayload{Topology: topology})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := d.submit(event)
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := snapshot.State.Decisions[string(request.ID)]
+	if decision.Review == nil || !reflect.DeepEqual(decision.Review.Topology.DevelopmentPlan, &preview.Confirmation) || snapshot.State.RouteMode != "merge" {
+		t.Fatal("split lost its original plan confirmation")
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.reopen()
+	if replay := d.submit(event); !reflect.DeepEqual(replay, accepted) {
+		t.Fatal("reopen changed duplicate acceptance")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(saved) != string(after) {
+		t.Fatal("duplicate split confirmation rewrote state", err)
 	}
 }

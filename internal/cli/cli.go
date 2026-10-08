@@ -450,6 +450,7 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow next", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
+	draftPath := fs.String("review-decision", "", "read-only route or split decision preview JSON; - reads stdin")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -461,7 +462,43 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	next, err := f.Next()
-	return printValue(streams.Stdout, next, err)
+	if err != nil || *draftPath == "" {
+		return printValue(streams.Stdout, next, err)
+	}
+	var draft protocol.ReviewDecisionPayload
+	if *draftPath == "-" {
+		decoder := json.NewDecoder(streams.Stdin)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&draft); err != nil {
+			return 1, err
+		}
+	} else if err := readJSONFileInto(*draftPath, &draft); err != nil {
+		return 1, err
+	}
+	if (draft.Route == nil) == (draft.Topology == nil) || draft.Correction != nil || draft.RoundGrant != nil {
+		return 1, fmt.Errorf("plan preview needs exactly one route or split topology draft")
+	}
+	var preview *protocol.DevelopmentPlanPreview
+	var supplied *protocol.DevelopmentPlanConfirmation
+	if draft.Topology != nil {
+		supplied = draft.Topology.DevelopmentPlan
+		preview, err = f.DevelopmentPlan(protocol.RouteDecision{}, *draft.Topology)
+	} else {
+		supplied = draft.Route.DevelopmentPlan
+		preview, err = f.DevelopmentPlan(*draft.Route)
+	}
+	if err != nil {
+		return 1, err
+	}
+	if supplied != nil && *supplied != preview.Confirmation {
+		return 1, fmt.Errorf("supplied development plan confirmation differs from its exact preview")
+	}
+	if draft.Topology != nil {
+		draft.Topology.DevelopmentPlan = &preview.Confirmation
+	} else {
+		draft.Route.DevelopmentPlan = &preview.Confirmation
+	}
+	return printJSON(streams.Stdout, map[string]any{"next": next, "developmentPlan": preview, "reviewDecision": draft})
 }
 
 func runWorkflowDrive(args []string, streams IO) (int, error) {

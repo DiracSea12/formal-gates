@@ -245,6 +245,19 @@ func controlRequestEvent(t *testing.T, control ControlKind, requestID string, pa
 // 决定（payload 为 nil 时是普通决定事件）。
 func askAndDecide(t *testing.T, engine *Engine, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) Acceptance {
 	t.Helper()
+	if payload != nil && payload.Topology != nil && payload.Topology.Decision == topologySplit && payload.Topology.DevelopmentPlan == nil {
+		snapshot, err := engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pipelineEnabled(snapshot.State, engine.cfg.Definition) {
+			preview, err := engine.DevelopmentPlan(RouteDecision{}, *payload.Topology)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload.Topology.DevelopmentPlan = &preview.Confirmation
+		}
+	}
 	fp := fingerprintOf(t, engine)
 	request := controlRequestEvent(t, control, requestID, payload, options)
 	if _, err := engine.Submit(request, fp); err != nil {

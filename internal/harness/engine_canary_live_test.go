@@ -17,8 +17,7 @@ package harness
 //
 // Bounded spend: each dispatch gets at most three turns (answer-shape
 // refusals consume another turn), the repair loop is authorized at most once,
-// the whole pass has a forty-minute budget, and any unexpected Ask
-// boundary fails the pass with the run projection dumped. Every spent turn
+// an unexpected Ask boundary fails the pass with its run projection. Every spent turn
 // prints its provider, session identity and native usage. A typed event the
 // engine rejects fails the pass outright — no reshaped retries over the gate.
 //
@@ -30,8 +29,7 @@ package harness
 // -test.v -test.timeout=0`. The operator writes the displayed approval
 // line after the human approves that call. Findings outside the automatic
 // fixture decision require a typed ADJUDICATE observation on stdin.
-// Human input waiting counts toward the
-// existing forty-minute pass budget; EOF, denial and timeout fail the pass.
+// EOF and denied authorization stop the pass.
 // `go test` does not forward stdin to its test process, so it cannot approve
 // live calls. Ordinary test runs keep the live canary skipped.
 //
@@ -1727,6 +1725,51 @@ func (c *engineCanary) confirmTopology() {
 	}
 	if token == "" {
 		c.fail("topology ask %s is not pending", request.ID)
+	}
+	if topology.Decision == "split" {
+		statePath := filepath.Join(c.project, filepath.FromSlash(facade.EngineNamespace), c.currentRunID(), "state.json")
+		before, err := os.ReadFile(statePath)
+		if err != nil {
+			c.fail("preview input state: %v", err)
+		}
+		draft, err := json.Marshal(protocol.ReviewDecisionPayload{Topology: &topology})
+		if err != nil {
+			c.fail("split decision draft: %v", err)
+		}
+		var response struct {
+			ReviewDecision protocol.ReviewDecisionPayload `json:"reviewDecision"`
+		}
+		if err := json.Unmarshal(c.cli(draft, "workflow", "next", "--root", c.project, "--run-id", c.currentRunID(), "--review-decision", "-"), &response); err != nil {
+			c.fail("split plan preview: %v", err)
+		}
+		if response.ReviewDecision.Topology == nil {
+			c.fail("split preview lost its decision")
+		}
+		topology = *response.ReviewDecision.Topology
+		after, err := os.ReadFile(statePath)
+		if err != nil || !bytes.Equal(before, after) {
+			c.fail("read-only split preview changed state: %v", err)
+		}
+		wrong := *topology.DevelopmentPlan
+		wrong.Digest = "sha256:wrong"
+		bad := topology
+		bad.DevelopmentPlan = &wrong
+		body, err := json.Marshal(protocol.ReviewDecisionPayload{Topology: &bad})
+		if err != nil {
+			c.fail("wrong-confirmation draft: %v", err)
+		}
+		cmd := exec.Command(c.binary, "workflow", "next", "--root", c.project, "--run-id", c.currentRunID(), "--review-decision", "-")
+		cmd.Dir, cmd.Stdin, cmd.Env = c.project, bytes.NewReader(body), os.Environ()
+		for key, value := range c.hostEnvironment() {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+		if output, err := cmd.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("supplied development plan confirmation differs")) {
+			c.fail("wrong supplied confirmation accepted by CLI: %v %s", err, output)
+		}
+		after, err = os.ReadFile(statePath)
+		if err != nil || !bytes.Equal(before, after) {
+			c.fail("rejected split preview changed state: %v", err)
+		}
 	}
 	event, err := protocol.NewReviewDecideEvent(c.eventID(), protocol.RequestID(request.ID), token, protocol.AskOptionID(topology.Decision), protocol.ReviewDecisionPayload{
 		Topology: &topology,

@@ -337,6 +337,13 @@ func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 }
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
+	if p.Topology != nil && p.Topology.Decision == "split" && p.Topology.DevelopmentPlan == nil {
+		preview, err := d.f.DevelopmentPlan(protocol.RouteDecision{}, *p.Topology)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		p.Topology.DevelopmentPlan = &preview.Confirmation
+	}
 	id := d.eventID()
 	var e protocol.Event
 	var err error

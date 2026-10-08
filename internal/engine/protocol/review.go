@@ -96,13 +96,28 @@ func validateReviewDecisionPayload(payload *ReviewDecisionPayload) error {
 // 须是标识形状（小写字母数字连字符，同 run id 规则——owner 引用与 child
 // 认领键都以它进行）。Slices 逐项唯一与 AC 责任映射对确认需求的校验在绑
 // 定点（slice.go splitACOwners）。
+func (s *State) topologyBinding(decision *TopologyDecision) (*TopologyBinding, error) {
+	if err := validateTopologyDecision(decision); err != nil {
+		return nil, err
+	}
+	binding := &TopologyBinding{Decision: decision.Decision, Note: strings.TrimSpace(decision.Note), SplitCount: decision.SplitCount, Slices: slices.Clone(decision.Slices), Parallel: strings.TrimSpace(decision.Parallel)}
+	if decision.Decision == topologySplit {
+		owners, err := s.splitACOwners(decision)
+		if err != nil {
+			return nil, err
+		}
+		binding.ACOwners = owners
+	}
+	return binding, nil
+}
+
 func validateTopologyDecision(topology *TopologyDecision) error {
 	switch topology.Decision {
 	case topologyNoSplit:
 		if strings.TrimSpace(topology.Note) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a no-split topology requires the mandatory reason note"}
 		}
-		if topology.SplitCount != 0 || len(topology.Slices) != 0 || strings.TrimSpace(topology.Parallel) != "" || len(topology.ACOwners) != 0 {
+		if topology.SplitCount != 0 || len(topology.Slices) != 0 || strings.TrimSpace(topology.Parallel) != "" || len(topology.ACOwners) != 0 || topology.DevelopmentPlan != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a no-split topology cannot carry split parameters"}
 		}
 	case topologySplit:
@@ -518,12 +533,9 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
 		}
 		decision := payload.Topology
-		binding := &TopologyBinding{
-			Decision:   decision.Decision,
-			Note:       strings.TrimSpace(decision.Note),
-			SplitCount: decision.SplitCount,
-			Slices:     append([]string{}, decision.Slices...),
-			Parallel:   strings.TrimSpace(decision.Parallel),
+		binding, err := state.topologyBinding(decision)
+		if err != nil {
+			return err
 		}
 		if decision.Decision == topologySplit {
 			// 合并路线锁定后不再有常规路线选择：仍有未决 SELECT_ROUTE Ask
@@ -534,11 +546,15 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 					return reviewReject(fmt.Errorf("route selection ask %s is still pending; settle it before binding the split topology (the binding locks the merge route)", id))
 				}
 			}
-			owners, err := state.splitACOwners(decision)
-			if err != nil {
-				return reviewReject(err)
+			if pipelineEnabled(state, e.cfg.Definition) {
+				preview, err := state.splitPlanPreview(e.cfg.Definition, *decision)
+				if err != nil {
+					return err
+				}
+				if decision.DevelopmentPlan == nil || *decision.DevelopmentPlan != preview.Confirmation {
+					return validationError("split topology must confirm the exact readiness development plan")
+				}
 			}
-			binding.ACOwners = owners
 			// split 绑定同一事务锁定合并路线：保留总任务实例只跑强制的合并
 			// 门＋合并 QA，不抬 SELECT_ROUTE（legacy workflow.go 同点锁定；
 			// 合并验证在合并收尾执行）。

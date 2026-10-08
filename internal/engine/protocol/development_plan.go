@@ -319,13 +319,35 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 	}{id, s.RequirementRevision(), solutionRevision, s.Topology, route, preview.Tasks})}
 	return preview, nil
 }
-func (e *Engine) DevelopmentPlan(route RouteDecision) (*DevelopmentPlanPreview, error) {
+
+// splitPlanPreview projects the proposed binding without changing accepted state.
+func (s *State) splitPlanPreview(cd *compiler.CompiledDefinition, topology TopologyDecision) (*DevelopmentPlanPreview, error) {
+	if topology.Decision != topologySplit {
+		return nil, validationError("prospective plan requires split topology")
+	}
+	binding, err := s.topologyBinding(&topology)
+	if err != nil {
+		return nil, err
+	}
+	projected := *s
+	projected.Topology = binding
+	projected.RouteMode = routeModeMerge
+	return projected.developmentPlanPreview(cd, RouteDecision{Mode: routeModeMerge, Gates: mergeRouteGates()})
+}
+
+func (e *Engine) DevelopmentPlan(route RouteDecision, topology ...TopologyDecision) (*DevelopmentPlanPreview, error) {
 	_, s, err := e.load()
 	if err != nil {
 		return nil, err
 	}
 	if s == nil {
 		return nil, &RejectedError{Code: CodeNotInitialized}
+	}
+	if len(topology) > 1 {
+		return nil, validationError("plan preview has more than one prospective topology")
+	}
+	if len(topology) == 1 {
+		return s.splitPlanPreview(e.cfg.Definition, topology[0])
 	}
 	return s.developmentPlanPreview(e.cfg.Definition, route)
 }
@@ -337,10 +359,10 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 	var latest uint64
 	var p *GranularityReview
 	for id, d := range s.Decisions {
-		if d.Control != ControlSelectRoute || d.Review == nil || d.Review.Route == nil || d.Review.Route.DevelopmentPlan == nil || d.Revision < latest {
+		if decisionPlanConfirmation(d) == nil || d.Revision < latest {
 			continue
 		}
-		source := s.Results[d.Review.Route.DevelopmentPlan.ReviewActionID]
+		source := s.Results[decisionPlanConfirmation(d).ReviewActionID]
 		if source.Review == nil {
 			continue
 		}
@@ -348,10 +370,10 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 	}
 	// Identical confirmations preserve the original execution contract reference.
 	for id, d := range s.Decisions {
-		if d.Revision >= latest || d.Review == nil || d.Review.Route == nil || d.Review.Route.DevelopmentPlan == nil {
+		if d.Revision >= latest || decisionPlanConfirmation(d) == nil {
 			continue
 		}
-		source := s.Results[d.Review.Route.DevelopmentPlan.ReviewActionID]
+		source := s.Results[decisionPlanConfirmation(d).ReviewActionID]
 		if source.Review != nil && planContractDigest(source.Review.GranularityReview) == planContractDigest(p) {
 			request, revision, latest = id, source.Review.RequirementRevision, d.Revision
 		}
@@ -388,14 +410,28 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 
 // decisionPlanProposal 返回一条 SELECT_ROUTE 决定携带的计划提案来源：
 // child 读内联提案，普通 run 经 ReviewActionID 引用 readiness 结果。
+func decisionPlanConfirmation(d RecordedDecision) *DevelopmentPlanConfirmation {
+	if d.Review == nil {
+		return nil
+	}
+	if d.Control == ControlSelectRoute && d.Review.Route != nil {
+		return d.Review.Route.DevelopmentPlan
+	}
+	if d.Control == ControlConfirmTopology && d.Review.Topology != nil && d.Review.Topology.Decision == topologySplit {
+		return d.Review.Topology.DevelopmentPlan
+	}
+	return nil
+}
+
 func (s *State) decisionPlanProposal(d RecordedDecision) *GranularityReview {
-	if d.Review == nil || d.Review.Route == nil || d.Review.Route.DevelopmentPlan == nil {
+	confirmation := decisionPlanConfirmation(d)
+	if confirmation == nil {
 		return nil
 	}
 	if s.SliceChild != nil {
-		return d.Review.Route.DevelopmentPlan.Proposal
+		return confirmation.Proposal
 	}
-	source := s.Results[d.Review.Route.DevelopmentPlan.ReviewActionID]
+	source := s.Results[confirmation.ReviewActionID]
 	if source.Review == nil {
 		return nil
 	}

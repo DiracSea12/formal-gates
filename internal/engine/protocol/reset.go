@@ -224,8 +224,8 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	// retaining this one plan source does not carry that review conclusion.
 	planSource := ""
 	planRequest, _, _ := s.confirmedDevelopmentPlan()
-	if route := s.Decisions[planRequest].Review; route != nil && route.Route != nil && route.Route.DevelopmentPlan != nil {
-		planSource = route.Route.DevelopmentPlan.ReviewActionID
+	if confirmation := decisionPlanConfirmation(s.Decisions[planRequest]); confirmation != nil {
+		planSource = confirmation.ReviewActionID
 	}
 	for id := range s.Results {
 		binding := s.DispatchBindings[id]

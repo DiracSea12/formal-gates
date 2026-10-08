@@ -2397,8 +2397,8 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 // DevelopmentPlan projects the exact proposal and bindings for route confirmation.
-func (f *Facade) DevelopmentPlan(route protocol.RouteDecision) (*protocol.DevelopmentPlanPreview, error) {
-	return f.engine.DevelopmentPlan(route)
+func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...protocol.TopologyDecision) (*protocol.DevelopmentPlanPreview, error) {
+	return f.engine.DevelopmentPlan(route, topology...)
 }
 
 func reopenNativeProvider(configRoot, root string, req StartRequest) *vcs.Provider {

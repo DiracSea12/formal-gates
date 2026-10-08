@@ -243,12 +243,13 @@ type RoundGrantDecision struct {
 // 发生在此处）。ACOwners 是 split 的验收条件主责声明列表——载荷以列表
 // 形态携带使重复声明可区分拒绝，绑定点归一为 map 后落账。
 type TopologyDecision struct {
-	Decision   string    `json:"decision"`
-	Note       string    `json:"note,omitempty"`
-	SplitCount int       `json:"splitCount,omitempty"`
-	Slices     []string  `json:"slices,omitempty"`
-	Parallel   string    `json:"parallel,omitempty"`
-	ACOwners   []ACOwner `json:"acOwners,omitempty"`
+	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`
+	Decision        string                       `json:"decision"`
+	Note            string                       `json:"note,omitempty"`
+	SplitCount      int                          `json:"splitCount,omitempty"`
+	Slices          []string                     `json:"slices,omitempty"`
+	Parallel        string                       `json:"parallel,omitempty"`
+	ACOwners        []ACOwner                    `json:"acOwners,omitempty"`
 }
 
 // ACOwner 是 split 拓扑决定里的单条验收条件主责声明（AC-ID → 分片名或
