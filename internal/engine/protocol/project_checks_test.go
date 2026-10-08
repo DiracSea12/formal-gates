@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"strings"
@@ -67,5 +68,33 @@ func TestProjectChecksReuseExactApprovedPurposes(t *testing.T) {
 	combined := s.editChecks(r)
 	if len(combined) != 4 || combined[0] != first.Checks[0] || combined[1] != first.Checks[1] {
 		t.Fatalf("batch responsibility was changed or repeated: %+v", combined)
+	}
+}
+
+func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
+	p := plannedReviewEvidence(review.StartReadiness, "ready", "", "PASS", "complete", nil).GranularityReview
+	first := p.Batches[0]
+	second := first
+	second.ID, second.Artifacts = "second", []string{"second.go"}
+	p.Batches = []DevelopmentBatch{first, second}
+	p.VerificationTier = "CHECKPOINT"
+	p.CheckpointGroups = [][]string{{first.ID}, {second.ID}}
+	p.CheckpointReason = "independent functions have separate acceptance boundaries"
+	if err := ValidateGranularity(p); err != nil {
+		t.Fatal(err)
+	}
+	s := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"first", "second"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: p}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}, Validation: &Validation{Waves: []ValidationWave{{ID: "merge", Status: "COMPLETE", Scope: coverage.ScopeFull, Candidate: coverage.ValidationCandidate{Identity: "integrated", Digest: "tree"}}}}}
+	if len(s.fullProjectChecks()) != 2 || len(s.planTasks(compiledCanonicalWorkflow(t))) != 0 {
+		t.Fatal("master lost full project commands or took child development tasks")
+	}
+	tasks, checkpoint := s.planCheckpoint(compiledCanonicalWorkflow(t), p)
+	if checkpoint || len(tasks) != 0 {
+		t.Fatalf("master received child checkpoint tasks: %v %v", tasks, checkpoint)
+	}
+	w := &s.Validation.Waves[0]
+	w.CheckpointTasks = tasks
+	w.Counted = s.validationWaveCountable(w)
+	if !w.Counted || s.completedValidationWaves() != 1 {
+		t.Fatal("first integrated validation wave was omitted from repair authorization accounting")
 	}
 }
