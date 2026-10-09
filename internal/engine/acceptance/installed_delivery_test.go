@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/lifecycle"
 )
 
 // Probe edits stay in their issued root until normal resource cleanup. The
@@ -292,9 +293,24 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 
 func (d *candidateDriver) abort() {
 	d.t.Helper()
+	_, original := d.p.bindings(d.t, "candidate", "codex")
 	// Unsigned workers are never presumed stopped; the transport reports the
 	// observable fact that no agent was started before the user cancels.
 	for id := range d.run.PendingActions {
+		if _, spawned := original.SpawnReceipts[id]; spawned {
+			observed, err := lifecycle.VerifyDispatch(d.p.project, "candidate", id)
+			if err != nil || !observed.StartObserved || !observed.StopObserved {
+				d.t.Fatalf("spawned worker has no original start/stop evidence: %+v %v", observed, err)
+			}
+			for _, kind := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+				event, err := protocol.NewCorrelatedLifecycleEvent(d.id(), "codex", id, observed.Identity, kind)
+				if err != nil {
+					d.t.Fatal(err)
+				}
+				d.submit(event)
+			}
+			continue
+		}
 		event, err := protocol.NewSpawnReceiptWithFailureClass(d.id(), id, "codex", id, protocol.SpawnStatusFailed, "BUSINESS_REJECT")
 		if err != nil {
 			d.t.Fatal(err)
@@ -313,8 +329,18 @@ func (d *candidateDriver) abort() {
 	d.submit(event)
 }
 
+func (d *candidateDriver) showTerminal() {
+	d.t.Helper()
+	shown := d.p.run(d.t, "show", "candidate")
+	if shown.Status != d.run.Status || shown.Revision != d.run.Revision || !reflect.DeepEqual(shown.Termination, d.run.Termination) {
+		d.t.Fatal("terminal show changed the completed run identity or evidence")
+	}
+	d.run = shown
+}
+
 func (d *candidateDriver) assertAbortedResources() {
 	d.t.Helper()
+	d.showTerminal()
 	state := d.run.Termination
 	if d.run.Status != "ABORTED" || state == nil || !state.ResourcesCleaned() || len(state.PendingHostActions) != 0 || len(state.PendingActions) != 0 {
 		d.t.Fatalf("abort retained an execution responsibility: %+v", d.run)
@@ -353,6 +379,7 @@ func (d *candidateDriver) assertAbortedResources() {
 	d.assertAcceptedReplay(true)
 	summary := readInstalledFile(d.t, d.run.SummaryPath)
 	d.drive()
+	d.showTerminal()
 	if string(summary) != string(readInstalledFile(d.t, d.run.SummaryPath)) {
 		d.t.Fatal("abort replay changed the frozen summary")
 	}
@@ -611,6 +638,7 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 				t.Fatalf("control did not close its genuine debt: %s %+v", d.run.Status, d.run.Termination)
 			}
 			var summary facade.TerminalSummary
+			d.showTerminal()
 			if err := json.Unmarshal(readInstalledFile(t, d.run.SummaryPath), &summary); err != nil {
 				t.Fatal(err)
 			}

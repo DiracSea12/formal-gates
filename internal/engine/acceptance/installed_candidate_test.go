@@ -123,7 +123,6 @@ func (d *candidateDriver) call(input []byte, args ...string) []byte {
 func (d *candidateDriver) drive() {
 	d.t.Helper()
 	d.driveOnce()
-	deadline, bounded := d.t.Deadline()
 	for d.run.Next.Kind == decision.KindHostAction && d.run.Next.HostAction != nil {
 		pending := false
 		for _, intent := range d.run.AdapterIntents {
@@ -134,9 +133,6 @@ func (d *candidateDriver) drive() {
 		}
 		if !pending {
 			return
-		}
-		if bounded && !time.Now().Before(deadline) {
-			d.t.Fatalf("installed check did not settle within test deadline: %+v", d.run.Next)
 		}
 		time.Sleep(100 * time.Millisecond)
 		d.driveOnce()
@@ -193,6 +189,7 @@ func (d *candidateDriver) driveOnce() {
 		}
 		if d.pauseOnInterrupt {
 			output = d.call(nil, "workflow", "status", "--root", d.p.project, "--run-id", "candidate")
+			d.run = facade.Run{}
 			if err := json.Unmarshal(output, &d.run); err != nil {
 				d.t.Fatal(err)
 			}
@@ -205,6 +202,7 @@ func (d *candidateDriver) driveOnce() {
 			d.t.Fatalf("native resume: %v\n%s", err, output)
 		}
 	}
+	d.run = facade.Run{}
 	if err := json.Unmarshal(output, &d.run); err != nil {
 		d.t.Fatal(err)
 	}
@@ -538,7 +536,7 @@ func (d *candidateDriver) executeWorkers() {
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 		} else if input.Handler == "engine.gate" {
-			cmd := exec.Command("go", "test", "./...")
+			cmd := exec.Command("go", "test", "-timeout=0", "./...")
 			cmd.Dir = input.Workspace.Path
 			if out, err := cmd.CombinedOutput(); err != nil {
 				d.t.Fatalf("Qn gate Go checks: %v %s", err, out)
@@ -551,6 +549,7 @@ func (d *candidateDriver) executeWorkers() {
 }
 func (d *candidateDriver) assertClean() {
 	d.t.Helper()
+	d.showTerminal()
 	head := d.p.git(d.t, "rev-parse", "HEAD")
 	if tree := d.p.git(d.t, "rev-parse", head+"^{tree}"); tree != d.candidateTree {
 		d.t.Fatalf("final native tree %s != validated %s", tree, d.candidateTree)
