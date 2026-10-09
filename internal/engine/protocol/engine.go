@@ -1780,7 +1780,7 @@ func resultPayloadDigest(payload *WorkerResultPayload) string {
 	return digestOfCanonical(workerResultEventWire{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		InterruptionReason: payload.InterruptionReason, FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
+		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
 	})
 }
 
@@ -1790,7 +1790,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 	return WorkerResult{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		InterruptionReason: payload.InterruptionReason, FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
+		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
 		Digest: resultPayloadDigest(payload),
 	}
 }
@@ -1799,7 +1799,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	return &WorkerResultPayload{
 		ActionID: record.ActionID, Provider: record.Provider, Outcome: record.Outcome,
-		InterruptionReason: record.InterruptionReason, PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
+		SourceResult: record.SourceResult, InterruptionReason: record.InterruptionReason, PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
 	}
 }
 
@@ -1819,12 +1819,22 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			return Acceptance{}, false, &RejectedError{
-				Code:   CodeReceiptConflict,
-				Detail: fmt.Sprintf("action %q worker result replayed with different bytes (recorded %s, submitted %s)", actionID, existing.Digest, payloadDigest),
+			if existing.Validation != nil && state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch" {
+				for _, prior := range state.RecoverableResults[actionID] {
+					if prior.Digest == payloadDigest {
+						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
+					}
+				}
 			}
+			if !state.developmentContinuation(actionID, e.cfg.Definition) || result.SourceResult != existing.Digest {
+				return Acceptance{}, false, &RejectedError{
+					Code:   CodeReceiptConflict,
+					Detail: fmt.Sprintf("action %q worker result replayed with different bytes (recorded %s, submitted %s)", actionID, existing.Digest, payloadDigest),
+				}
+			}
+		} else {
+			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
 		}
-		return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
 	}
 	if obsolete, known := state.ObsoleteActions[actionID]; known {
 		if history := state.ObsoleteResults[actionID]; len(history) != 0 {
@@ -2152,6 +2162,13 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		}
 		state.Validation = next
 		if record.Validation != nil && record.Validation.Checkpoint {
+			return nil, nil
+		}
+		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch" {
+			if previous, ok := state.Results[record.ActionID]; ok {
+				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
+			}
+			state.Results[record.ActionID] = record
 			return nil, nil
 		}
 	}

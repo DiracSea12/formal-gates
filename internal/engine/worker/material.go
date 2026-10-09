@@ -49,7 +49,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		value.ResultTemplate.Validation = &Validation{}
 		switch input.Handler {
 		case "engine.development.batch":
-			instructions = "Implement only input.validation.development.batch. Report declared changed paths, summary, DoD evidence and handoff. The program freezes your delivered source and executes the approved batch commands."
+			instructions = "Implement only input.validation.development.batch. Report declared changed paths, summary, DoD evidence and handoff. The program freezes your delivered source and executes the approved batch commands. A delivered edit does not finish the batch until those actual checks pass. When development.result and checks are supplied, continue the same batch in its original workspace and native session, using the exact failed-check evidence and remaining confirmed DoD. Change only authorized artifacts; do not weaken approved tests or replay failed checks. Report your new edit; the program retains prior delivered paths and evidence and checks the new frozen source."
 			value.ReadOnly = false
 		case "engine.repair.verify":
 			instructions = "Compare each issued affected case oracle against its exact native execution facts. Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL. The program supplies commands, paths, affected-case union, procedure, stdout/stderr, exit, identities and bindings. Do not execute commands or edit files."

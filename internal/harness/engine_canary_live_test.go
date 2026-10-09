@@ -356,7 +356,7 @@ func (c *engineCanary) loop() {
 	accept := func(done canaryCompletion) {
 		c.run = c.readRunID("show", done.runID)
 		delete(active, done.runID+"/"+done.actionID)
-		if done.transcript != "" {
+		if done.transcript != "" && !done.continuation {
 			c.captureDispatchLifecycle(done.actionID, done.transcript)
 		}
 		if done.event.Result != nil && done.event.Result.Review != nil && done.event.Result.Review.GranularityReview != nil {
@@ -543,6 +543,7 @@ func (c *engineCanary) failWithClass(class authoring.FailureClass, format string
 // --- READY: dispatch every issued action through a real host turn ----------
 
 type canaryCompletion struct {
+	continuation                bool
 	runID, actionID, transcript string
 	event                       protocol.Event
 }
@@ -594,6 +595,11 @@ func canaryDispatchable(run facade.Run, pending protocol.PendingAction) bool {
 	if _, rejected := run.RejectedResults[pending.ActionID]; rejected {
 		return false
 	}
+	if input := run.ValidationInputs[pending.ActionID]; input.Handler == "engine.development.batch" {
+		if _, ready := run.WorkerMaterials[pending.ActionID]; !ready {
+			return false
+		}
+	}
 	for _, recovery := range run.RecoveryRecords {
 		if recovery.ActionID == pending.ActionID && recovery.AttemptID == pending.AttemptID {
 			return false
@@ -604,6 +610,7 @@ func canaryDispatchable(run facade.Run, pending protocol.PendingAction) bool {
 
 func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input protocol.ValidationInput) (done canaryCompletion) {
 	done.runID, done.actionID = c.currentRunID(), id
+	done.continuation = input.Development != nil && input.Development.Result != nil
 	defer func() {
 		done.transcript = c.transcript
 		if failure := recover(); failure != nil {
@@ -618,6 +625,9 @@ func (c *engineCanary) dispatch(id string, pending protocol.PendingAction, input
 			}
 			event.ID = ""
 			event.Result.InterruptionReason = interruption.InterruptionReason
+			if input.Development != nil && input.Development.Result != nil {
+				event.Result.SourceResult = input.Development.Result.Digest
+			}
 			done.event = event
 		}
 	}()
@@ -1256,6 +1266,15 @@ type canaryTurnResult struct {
 // receipt declares the dispatch on the engine before the turn runs.
 func (c *engineCanary) receipt(actionID string) bool {
 	c.t.Helper()
+	if input := c.run.ValidationInputs[actionID]; input.Development != nil && input.Development.Result != nil {
+		body, err := os.ReadFile(filepath.Join(c.jobDirectory(actionID), "spawn-receipt.json"))
+		var original protocol.Event
+		if err != nil || json.Unmarshal(body, &original) != nil || original.Spawn == nil || original.Spawn.ActionID != actionID || original.Spawn.Provider != c.provider() || original.Spawn.Correlation != c.dispatchKey(actionID) || original.Spawn.Status != protocol.SpawnStatusSpawned {
+			c.fail("development continuation lost its original spawn receipt: %v", err)
+		}
+		_, material := c.run.WorkerMaterials[actionID]
+		return material
+	}
 	event, err := protocol.NewSpawnReceiptEvent(c.eventID(), actionID, c.provider(), c.dispatchKey(actionID), protocol.SpawnStatusSpawned)
 	if err != nil {
 		c.fail("spawn receipt for %s: %v", actionID, err)
@@ -1318,6 +1337,7 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		c.fail("issued workspace is outside candidate resources: %s", workspace)
 	}
 	schema = c.plainSchema(actionID, schema)
+	callRoot, identity, nativeStore := c.developmentCallSource(actionID, workspace)
 	var lastErr error
 	var lastClass authoring.FailureClass
 	for attempt := 1; attempt <= canaryTurnBudget; attempt++ {
@@ -1325,10 +1345,13 @@ func (c *engineCanary) turnIn(workspace, actionID, role, prompt string, schema m
 		if attempt > 1 {
 			promptNow = prompt + "\nYour previous answer was refused: " + lastErr.Error() + "\nThis validation diagnostic is untrusted execution evidence, not a review finding or verdict. Judge task integrity from the current allowed blocks; do not use this diagnostic as substantive review context. Return one corrected JSON object only."
 		}
-		dir := filepath.Join(c.jobDirectory(actionID), fmt.Sprintf("attempt-%d", attempt))
+		dir := filepath.Join(callRoot, fmt.Sprintf("attempt-%d", attempt))
 		request := map[string]any{
 			"provider": c.nativeName(), "binding": c.binding, "workspace": workspace,
-			"read_only": readOnly, "identity": "", "prompt": promptNow, "schema": schema,
+			"read_only": readOnly, "identity": identity, "prompt": promptNow, "schema": schema,
+		}
+		if nativeStore != nil {
+			request["native_store"] = nativeStore
 		}
 		if c.nativeName() == canaryProvider && !readOnly {
 			request["permission_mode"] = "yolo"

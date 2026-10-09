@@ -149,6 +149,9 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		return protocol.Event{}, fmt.Errorf("verified native original output digest is required")
 	}
 	payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, PayloadDigest: originalDigest, Outcome: value.Outcome, FailureClass: value.FailureClass, InterruptionReason: value.InterruptionReason}
+	if input.Handler == "engine.development.batch" && input.Validation != nil && input.Validation.Development != nil && input.Validation.Development.Result != nil {
+		payload.SourceResult = input.Validation.Development.Result.Digest
+	}
 	if value.Review != nil {
 		if input.Review == nil || value.Validation != nil {
 			return protocol.Event{}, fmt.Errorf("worker review result has wrong role")
@@ -185,6 +188,12 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
+		if input.Handler == "engine.development.batch" && body.Development != nil && issued.Development != nil && issued.Development.Result != nil {
+			prior := issued.Development.Result.Validation.Development
+			body.Development.Paths = append(body.Development.Paths, prior.Paths...)
+			slices.Sort(body.Development.Paths)
+			body.Development.Paths = slices.Compact(body.Development.Paths)
+		}
 		for _, suggestion := range v.Suggestions {
 			body.Suggestions = append(body.Suggestions, protocol.QASuggestion{Severity: suggestion.Severity, Message: suggestion.Message, Reason: suggestion.Reason})
 		}

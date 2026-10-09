@@ -108,6 +108,8 @@ type DevelopmentPlanPreview struct {
 type DevelopmentInput struct {
 	Batch        DevelopmentBatch        `json:"batch"`
 	Dependencies map[string]WorkerResult `json:"dependencies"`
+	Result       *WorkerResult           `json:"result,omitempty"`
+	Checks       []CheckEvidence         `json:"checks,omitempty"`
 }
 
 // GranularityVerificationTiers is the finite proposal tier domain; empty uses FINAL.
@@ -565,6 +567,14 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 		return nil
 	}
 	input := &DevelopmentInput{Batch: b, Dependencies: map[string]WorkerResult{}}
+	if result := s.developmentEditResult(task); result != nil && s.developmentChecksFailed(*result) {
+		input.Result = result
+		for _, check := range s.editChecks(*result) {
+			if evidence, ok := s.checkReceipt(result.ActionID, check.ID); ok {
+				input.Checks = append(input.Checks, *evidence)
+			}
+		}
+	}
 	for _, dep := range b.DependsOn {
 		if r := s.developmentResultRecord(s.currentPlanTask(cd, p, dep)); r != nil {
 			input.Dependencies[dep] = *r

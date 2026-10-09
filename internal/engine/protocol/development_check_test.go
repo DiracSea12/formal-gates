@@ -127,6 +127,35 @@ func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
 	}
 }
 
+func TestFailedDeveloperKeepsSharedEditingFrontierOpen(t *testing.T) {
+	s, _, task := developmentCheckState(t)
+	cd := compiledCanonicalWorkflow(t)
+	addDevelopmentSource(t, s)
+	p, ready := s.nextCheckParameters("edit-action", cd)
+	if !ready {
+		t.Fatal("original check not ready")
+	}
+	addCheckReceipt(t, s, p, 1)
+	s.PendingActions = map[string]PendingAction{"edit-action": {ActionID: "edit-action", Task: task}}
+	if s.editWorkspaceQuiescent("edit", cd) {
+		t.Fatal("a developer eligible to change its failed source was treated as a settled writer")
+	}
+	// The next accepted edit has a distinct result identity. Its source cannot
+	// borrow the preceding failed source; the original receipt remains in place.
+	current := s.Results["edit-action"]
+	current.Digest = "new-edit-digest"
+	s.Results["edit-action"] = current
+	if !s.editWorkspaceQuiescent("edit", cd) {
+		t.Fatal("returned new edit did not settle its writer")
+	}
+	if _, frozen := s.editSourceProof("edit-action"); frozen {
+		t.Fatal("new edit borrowed failed source")
+	}
+	if source, ready := s.nextEditSource(cd); !ready || source.SourceResults["edit-action"] != current.Digest {
+		t.Fatal("new freeze lacks exact delivered result digest")
+	}
+}
+
 func TestDevelopmentCheckSharedFrontierFreezesAfterWriters(t *testing.T) {
 	s, batch, firstTask := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)

@@ -274,6 +274,7 @@ type SpawnReceipt struct {
 // 暂存复用同一形态）。Review 非空时是审查派发的语义证据：随结果接纳交
 // review 内核记账，并随回执字节一并参与幂等/冲突判定。
 type WorkerResult struct {
+	SourceResult       string                 `json:"sourceResult,omitempty"`
 	InterruptionReason string                 `json:"interruptionReason,omitempty"`
 	Validation         *ValidationResult      `json:"validation,omitempty"`
 	ActionID           string                 `json:"actionId"`

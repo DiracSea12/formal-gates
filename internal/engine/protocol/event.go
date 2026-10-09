@@ -193,6 +193,7 @@ const (
 // 结果上携带，RUNTIME_ERROR/FAIL 的审查结果是普通失败结果、不建
 // candidate。
 type WorkerResultPayload struct {
+	SourceResult       string `json:"sourceResult,omitempty"`
 	InterruptionReason string
 	Validation         *ValidationResult
 	ActionID           string
@@ -877,6 +878,7 @@ type spawnReceiptEventWire struct {
 }
 
 type workerResultEventWire struct {
+	SourceResult       string                `json:"sourceResult,omitempty"`
 	InterruptionReason string                `json:"interruptionReason,omitempty"`
 	Validation         *ValidationResult     `json:"validation,omitempty"`
 	ActionID           string                `json:"actionId"`
@@ -948,7 +950,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Result = &workerResultEventWire{
 			ActionID: e.Result.ActionID, Provider: e.Result.Provider,
 			Outcome: e.Result.Outcome, PayloadDigest: e.Result.PayloadDigest,
-			InterruptionReason: e.Result.InterruptionReason, FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
+			SourceResult: e.Result.SourceResult, InterruptionReason: e.Result.InterruptionReason, FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
 		}
 	}
 	if e.Observation != nil {
@@ -1037,5 +1039,5 @@ func (e Event) WithResetPreview(preview ResetPreview) Event { e.resetPreview = &
 // material template therefore names the actual submit fields rather than Go
 // struct field names; it does not perform business admission.
 func (p WorkerResultPayload) MarshalJSON() ([]byte, error) {
-	return canonicalJSON(workerResultEventWire{InterruptionReason: p.InterruptionReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
+	return canonicalJSON(workerResultEventWire{SourceResult: p.SourceResult, InterruptionReason: p.InterruptionReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
 }

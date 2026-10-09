@@ -126,6 +126,9 @@ func (s *State) editSourceProof(action string) (CandidateEvidence, bool) {
 		if err != nil || !exists || r.Validation == nil || p.Stage != "CHECK_SOURCE" || !slices.Contains(p.SourceTasks, r.Validation.Binding.Task) {
 			continue
 		}
+		if p.SourceResults[action] != r.Digest {
+			continue
+		}
 		_, proof, err := validateCandidateReceipt(s.NativeVCS(), intent, receipt)
 		if err == nil {
 			return proof, true
@@ -142,6 +145,9 @@ func (s *State) editSourceCurrent(p CandidateParameters) bool {
 	for _, task := range p.SourceTasks {
 		r := s.developmentEditResult(task)
 		if r == nil || !s.editResultCurrent(*r) || r.Validation.Binding.WorkspaceID != p.WorkspaceID {
+			return false
+		}
+		if p.SourceResults[r.ActionID] != r.Digest {
 			return false
 		}
 		paths = append(paths, r.Validation.Development.Paths...)
@@ -174,7 +180,7 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 		if workspace.Status != "READY" || !s.resourceUsable(workspace.ID) || !s.editWorkspaceQuiescent(workspace.ID, cd) {
 			continue
 		}
-		p := CandidateParameters{Stage: "CHECK_SOURCE", Base: workspace.Identity, WorkspaceID: workspace.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}
+		p := CandidateParameters{Stage: "CHECK_SOURCE", Base: workspace.Identity, WorkspaceID: workspace.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest(), SourceResults: map[string]string{}}
 		for _, sourceID := range ids {
 			source := s.Results[sourceID]
 			if !s.editResultCurrent(source) || source.Validation.Binding.WorkspaceID != workspace.ID {
@@ -184,6 +190,7 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 				continue
 			}
 			p.SourceTasks = append(p.SourceTasks, source.Validation.Binding.Task)
+			p.SourceResults[sourceID] = source.Digest
 			p.Paths = append(p.Paths, source.Validation.Development.Paths...)
 		}
 		slices.Sort(p.Paths)
@@ -197,7 +204,9 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 func (s *State) editWorkspaceQuiescent(workspace string, cd *compiler.CompiledDefinition) bool {
 	for action := range s.PendingActions {
 		if s.DispatchBindings[action].WorkspaceID == workspace {
-			return false
+			if result, ok := s.Results[action]; !ok || !s.editResultCurrent(result) || s.developmentChecksFailed(result) {
+				return false
+			}
 		}
 	}
 	for _, attempt := range s.EndedAttempts {
@@ -277,6 +286,9 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 		if err != nil || p.SourceActionID != action || p.Check.ID != check || validateCheckReceipt(intent, receipt) != nil {
 			continue
 		}
+		if source, ok := s.editSourceProof(action); ok && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
+			continue
+		}
 		var evidence CheckEvidence
 		_ = decodeAdapterValues(receipt, &evidence)
 		return &evidence, true
@@ -300,6 +312,26 @@ func (s *State) developmentChecksPassed(r WorkerResult) bool {
 		}
 	}
 	return true
+}
+
+func (s *State) developmentChecksFailed(r WorkerResult) bool {
+	if _, frozen := s.editSourceProof(r.ActionID); !frozen {
+		return false
+	}
+	for _, check := range s.editChecks(r) {
+		if evidence, done := s.checkReceipt(r.ActionID, check.ID); done && (evidence.ExitCode != 0 || evidence.Error != "") {
+			return true
+		}
+	}
+	return false
+}
+
+// A delivered edit remains in its original dispatch until approved checks
+// settle the batch. Failed checks permit another edit, never a check replay.
+func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefinition) bool {
+	result, ok := s.Results[action]
+	pending, live := s.PendingActions[action]
+	return ok && live && s.validationRole(pending.Task, cd) == "engine.development.batch" && s.editResultCurrent(result) && s.developmentChecksFailed(result)
 }
 
 func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
@@ -373,6 +405,14 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if len(s.editChecks(r)) == 0 {
 			continue
 		}
+		if s.developmentChecksPassed(r) && s.validationRole(r.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch" {
+			if _, outstanding := s.PendingActions[action]; outstanding {
+				if err := s.terminalizeTask(r.Validation.Binding.Task); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
+		}
 		source, frozen := s.editSourceProof(action)
 		if !frozen {
 			continue
@@ -410,6 +450,9 @@ func (s *State) developmentCheckFailure(definitions ...*compiler.CompiledDefinit
 		}
 		p, err := checkParameters(intent)
 		if err != nil || p.QA != nil || p.Repair != nil {
+			continue
+		}
+		if len(definitions) > 0 && s.developmentContinuation(p.SourceActionID, definitions[0]) {
 			continue
 		}
 		var e CheckEvidence

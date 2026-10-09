@@ -271,6 +271,7 @@ type CandidateParameters struct {
 	ReviewBase          string                                    `json:"reviewBase,omitempty"`
 	ReviewCases         map[string]string                         `json:"reviewCases,omitempty"`
 	SourceTasks         []runtime.TaskKey                         `json:"sourceTasks,omitempty"`
+	SourceResults       map[string]string                         `json:"sourceResults,omitempty"`
 	DesignTasks         map[coverage.ReviewKind]runtime.TaskKey   `json:"designTasks,omitempty"`
 	RouteScope          string                                    `json:"routeScope,omitempty"`
 	QAArtifacts         map[coverage.ReviewKind]CandidateArtifact `json:"qaArtifacts,omitempty"`

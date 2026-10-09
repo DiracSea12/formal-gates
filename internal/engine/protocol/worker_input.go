@@ -39,6 +39,9 @@ func (s *State) WorkerInputs(cd *compiler.CompiledDefinition) map[string]WorkerI
 		if _, rejected := s.RejectedResults[id]; rejected {
 			continue
 		}
+		if result, delivered := s.Results[id]; delivered && result.Validation != nil && s.validationRole(pending.Task, cd) == "engine.development.batch" && !s.developmentContinuation(id, cd) {
+			continue
+		}
 		input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
 		if value, ok := validation[id]; ok {
 			input.Handler = value.Handler
