@@ -45,8 +45,7 @@ type Observation struct {
 	Facts []Fact // 规范排序、非 nil（空观察为空切片）
 }
 
-// Collector 是单一来源的只读收集接口；真实收集器（VCS adapter、宿主
-// bridge、lifecycle 登记、receipt 对账、容量计算）属后续批次实现。
+// Collector 是单一来源的只读收集接口。
 // Collect 不得写任何状态；返回的事实 Source 必须与 Source() 一致。
 type Collector interface {
 	Source() FactSource

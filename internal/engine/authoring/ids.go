@@ -4,10 +4,10 @@ package authoring
 //
 // 所有 ID 均为独立命名类型：不同用途的 ID 之间、以及 ID 与裸 string 类型值
 // 之间都不可直接赋值，跨类型必须显式转换。
-// registry ID 的解析（存在性、唯一性、kind 匹配）属于后续 compiler 批次；
+// registry ID 的解析（存在性、唯一性、kind 匹配）由 compiler 持有；
 // 本层只保证类型隔离与非空。
 //
-// 命名建议沿用 spike 结论：domain.family.name（如 engine.persist.intent、
+// 命名建议：domain.family.name（如 engine.persist.intent、
 // reconcile.intent.persist、schema.ask.decision.request）。
 type (
 	// StepID 是步骤在单个 definition 内的稳定标识。

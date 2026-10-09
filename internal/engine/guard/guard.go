@@ -1,7 +1,7 @@
 // Package guard computes finite dispatch allowances from declared basis identities.
-// It performs no I/O and does not authenticate confirmations or issue tasks. Stage 4
-// will construct this input from authoritative state; a preview only proves that
-// the supplied declarations are structurally consistent (REQ-013/014).
+// It performs no I/O and does not authenticate confirmations or issue tasks.
+// A preview only proves that supplied declarations are structurally consistent
+// (REQ-013/014).
 package guard
 
 import (

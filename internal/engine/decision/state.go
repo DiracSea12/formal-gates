@@ -4,8 +4,6 @@
 //	Decide(state, obs, definition)  纯函数，产出字节级稳定的 canonical Plan
 //	SelectIssued(plan, admission)   按容量机械裁剪，分配 actionID 并持久化
 //
-// 本批只有决策与接口：真实外部事实收集器（VCS/文件/宿主/lifecycle/
-// receipt/容量）与可靠写协议（revision CAS、submit 幂等）属后续批次。
 // 依赖单向向下：authoring → compiler → encoder 之下的 runtime 模型与
 // 本包；本包不执行 handler、不写权威 state。
 package decision

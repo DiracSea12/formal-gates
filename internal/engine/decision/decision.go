@@ -29,8 +29,7 @@ const (
 	// Decide 可见的原因）。Ask 不得伪装成 Wait。
 	KindWait Kind = "WAIT"
 	// KindOperator：要求主代理核实证据/分类影响的语义判断（不替用户授权、
-	// 不执行 adapter 动作）。本批 Decide 不产出 Operator：其触发源是
-	// receipt UNKNOWN 多重匹配等对账事实，属后续可靠写入批次。
+	// 不执行 adapter 动作）。
 	KindOperator Kind = "OPERATOR"
 	// KindComplete：run 结束，无后续外部动作。
 	KindComplete Kind = "COMPLETE"

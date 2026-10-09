@@ -62,8 +62,7 @@ var (
 	workflowAskKinds   = []authoring.AskKindID{}
 )
 
-// Registry 返回注册了定义引用的全部封闭 ID 的 registry。条目不携带实现：
-// 实现绑定属后续运行时批次，编译期只需存在性、唯一性与 kind 匹配。
+// Registry 返回注册了定义引用的全部封闭 ID 的 registry；条目不携带实现。
 func Registry() *compiler.Registry {
 	reg := compiler.NewRegistry()
 	for _, h := range workflowHandlers {

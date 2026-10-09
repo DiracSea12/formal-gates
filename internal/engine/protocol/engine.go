@@ -1364,9 +1364,8 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 
 	case KindTaskProgress:
 		// 任务进度接纳：任务必须在 expected 集（非当前节点可区分拒绝）、
-		// attempt 必须是当前 Attempt（旧实例拒绝；对账路由属后续批次）、
-		// 转移合法（复用 runtime 任务状态机）。TERMINAL 时收回 expected、
-		// pendingAction 与当前 Attempt（重试开新 Attempt 是后续批次语义）。
+		// attempt 必须是当前 Attempt，转移合法（复用 runtime 任务状态机）。
+		// TERMINAL 时收回 expected、pendingAction 与当前 Attempt。
 		key := ev.Task.Task
 		if !state.expectedContains(key) {
 			return Acceptance{}, nil, false, &RejectedError{

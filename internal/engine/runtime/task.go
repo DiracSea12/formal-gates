@@ -147,8 +147,7 @@ type TaskEdge struct {
 //	VALIDATING → TERMINAL   校验完成
 //
 // 不存在回退边：重跑不把旧状态拨回 QUEUED，而是按 §6.4.3 开新 Attempt/
-// 新任务实例，旧实例经 TERMINAL stale（result-before-receipt 的对账与
-// OBSOLETE_RESULT 拒绝属后续可靠写入批次）。
+// 新任务实例，旧实例保留 TERMINAL 状态。
 var taskTransitionTable = []TaskEdge{
 	{TaskQueued, TaskIssued},
 	{TaskQueued, TaskTerminal},

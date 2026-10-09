@@ -175,8 +175,7 @@ type SpawnReceiptPayload struct {
 	FailureClass authoring.FailureClass
 }
 
-// SpawnReceipt status 的封闭集合：SPAWNED 声明派发成功；FAILED 声明派发
-// 失败（失败分类路由属后续批次，本批只落账）。
+// SpawnReceipt status 的封闭集合：SPAWNED 声明派发成功，FAILED 声明失败。
 const (
 	SpawnStatusSpawned = "SPAWNED"
 	SpawnStatusFailed  = "FAILED"

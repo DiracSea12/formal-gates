@@ -38,9 +38,9 @@ class GoAdapter:
 
     execute() is the probe/doctor path: it writes the same native-request.json
     contract the workers use, runs `formal-gates harness native <dir>` as its
-    own process and translates native-error.json back into the exception the
-    retired in-process implementation used to raise (the workers path spawns
-    the same command through the supervisor and reads the same error record).
+    own process and maps native-error.json to a harness exception. The workers
+    path spawns the same command through the supervisor and reads the same
+    error record.
     The four lifecycle operations go through the bridge like every other Go
     verification; refusals keep refuse()'s exception-family mapping.
     """

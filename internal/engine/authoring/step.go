@@ -1,5 +1,5 @@
 // Package authoring 是编排定义的唯一编写形态：六种封闭步骤变体 + constructor
-// + 公共头/共享 IO 段/变体 payload 三段式结构（ADR-001，spike 结论已拍板）。
+// + 公共头/共享 IO 段/变体 payload 三段式结构（ADR-001）。
 //
 // 封闭性与拦截分层：
 //   - Step 接口含非导出方法 seal()，外部包无法新增变体；
@@ -12,10 +12,10 @@
 //   - DecisionAuthority/RunnerKind 由变体派生物化，authoring 类型上不存在
 //     作者填写入口，写不出 HumanAskStep + ENGINE 之类的非法组合；
 //   - 变体零值与绕过 constructor 的直接构造不在正常 authoring API 约定内，
-//     后续 compiler 批次对零值步骤一律拒绝。
+//     compiler 对零值步骤一律拒绝。
 //
-// 本包只做类型层：registry 解析、全局图不变量、ordinal 派生与 canonical
-// 编码属后续批次。
+// 本包持有类型层；compiler 持有 registry 解析、全局图校验与 ordinal 派生，
+// encoder 持有 canonical 编码。
 package authoring
 
 import "time"
@@ -49,7 +49,7 @@ type PredicateRef struct {
 }
 
 // InputBinding 是 typed source binding：把依赖步骤的输出字段绑定到本步输入
-// 字段。后续 compiler 批次强制非 parallel/human 步骤的 {Inputs[i].From} 集合
+// 字段。compiler 强制非 parallel/human 步骤的 {Inputs[i].From} 集合
 // 与 Dependencies 集合精确相等。
 type InputBinding struct {
 	From        StepID
@@ -100,7 +100,7 @@ type LocalStep struct {
 
 // DurableStep 是需要独立恢复/重试/幂等的持久化副作用步骤。
 // 派生 ENGINE/DURABLE_ACTIVITY；幂等策略、reconcile、retry/timeout 全部必填
-// （§5.7 副作用类拒绝的 constructor 拦截层，比 spike 更严：reconcile 无条件必填）。
+// （§5.7 副作用类拒绝的 constructor 拦截层）。
 type DurableStep struct {
 	Header
 	IO
@@ -147,7 +147,7 @@ type HumanAskStep struct {
 	FreshnessTTL   time.Duration // 必填 > 0
 }
 
-// ParallelStep 是 fan-out/fan-in 控制步（无 handler，spike 结论已拍板）。
+// ParallelStep 是 fan-out/fan-in 控制步（无 handler）。
 // 派生 ENGINE/ENGINE_LOCAL；join/failure 策略与 >= 2 个 children 必填。
 type ParallelStep struct {
 	Header

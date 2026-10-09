@@ -128,7 +128,7 @@ var pipelineEdges = []PhaseEdge{
 // 来自总需求 §6.3.10–11——任意 ACTIVE 非终态阶段都可经用户授权的
 // reset/abort/破坏性级联进入统一 cleanup 终结路径；因此每个非 TERMINAL
 // phase 都有指向 TERMINAL 的边。用户授权的业务节点跳转（§6.3.11）经
-// suspend/quarantine/reconcile 机制由后续批次的 Controller 承载，不在
+// suspend/quarantine/reconcile 机制由 Controller 承载，不在
 // 本表展开为任意点对点边。
 var phaseTransitionTable = buildPhaseTransitionTable()
 

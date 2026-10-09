@@ -2,7 +2,7 @@
 // Encode 只认识 compiler.CompiledDefinition，不为各 authoring 变体分别实现
 // MarshalCanonical（避免默认值处理、字段排序与新增变体漏编漂移）。
 //
-// canonical 形态（spike 结论，全仓统一）：JSON、2 空格缩进、不转义 HTML、
+// canonical 形态：JSON、2 空格缩进、不转义 HTML、
 // 恰一个尾随换行；wire 结构独占形态定义（IR 结构不带 json tag）；duration
 // 一律 int64 纳秒；无 map、无 float、无 time.Time、无函数/路径/时间——字节
 // 输出只是 IR 的函数，同 IR 必得同字节。
@@ -12,8 +12,7 @@
 //
 // 身份：DefinitionDigest = 制品字节 SHA-256（Digest 函数，sha256: 前缀）。
 // handler 实现变化不进入制品字节，因此只改实现不改 ID/定义时 definition
-// digest 不变（digest 分离的制品级基础）；PackageDigest 由安装事务另行计算，
-// 属后续批次。
+// digest 不变（digest 分离的制品级基础）；PackageDigest 由安装事务另行计算。
 package encoder
 
 import (

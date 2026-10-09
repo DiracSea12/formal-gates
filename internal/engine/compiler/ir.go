@@ -6,12 +6,10 @@ import (
 	"formal-gates/internal/engine/authoring"
 )
 
-// CompiledDefinition IR（ADR-001 决策 4/5、spike §1 拍板的三段式）：编译输出
+// CompiledDefinition IR（ADR-001 决策 4/5）：编译输出
 // 是具体结构——公共头（compiler 物化段）+ 共享 IO 段 + 封闭变体 payload。
 // IR 不含函数、闭包、内存地址、绝对路径或无序 map：执行引用一律是封闭
 // registry 中的稳定 ID。
-//
-// canonical 编码与制品生成属批次 1c，本文件只定义 IR 结构本身。
 
 // StepKind 是编译产物的六值封闭步骤种类，由 authoring 变体类型派生。
 // 与 authority/runner 一样不存在作者填写入口。
@@ -41,7 +39,7 @@ type CompiledHeader struct {
 }
 
 // Payload 是封闭的 compiled 变体 payload 接口：外部包不能伪造变体 IR。
-// 变体判别只存在于 compiler 的 payload switch（spike 结论）。
+// 变体判别只存在于 compiler 的 payload switch。
 type Payload interface{ payloadSeal() }
 
 // CompiledLocalStep 是 local 变体 payload：handler 必填；timeout 可选

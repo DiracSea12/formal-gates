@@ -7,8 +7,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// Admission 是 SelectIssued 的容量输入。真实容量（在途任务上限等）由
-// 后续批次的容量收集器计算；本批只承载机械值 C。
+// Admission 是 SelectIssued 的容量输入。
 type Admission struct {
 	Capacity int
 }

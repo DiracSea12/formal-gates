@@ -19,9 +19,8 @@ BOUNDARY = (
 
 def evidence_feedback(store, ref: str, purpose: str) -> dict:
     # Artifact addressing, verify-files/process/source delegation stay in
-    # Python; the wrapper shape and the revision-binding judgement now live in
-    # Go (M2). The refusal is a typed business outcome inside the value (C4
-    # pattern), so refuse() maps it back to the HarnessError family.
+    # Python; Go owns the wrapper shape and revision-binding judgement.
+    # refuse() maps the typed refusal to the HarnessError family.
     value = store.verify_evidence(ref)
     answer = driver_bridge().call('evidence-feedback',
                                   {'ref': ref, 'purpose': purpose,
@@ -33,9 +32,7 @@ def evidence_feedback(store, ref: str, purpose: str) -> dict:
 
 def task_input(*, role, revision, base, candidate, checks, feedback):
     # Nothing from feedback is merged into bindings, tools, check commands or
-    # decisions. The wrapper shape and the canonical digest now live in Go
-    # (M2); the digest that used to be a separate digest() cross-process call
-    # is computed in-line, so Python no longer calls digest for this wrapper.
+    # decisions. Go owns the wrapper shape and canonical digest.
     return driver_bridge().call('task-input',
                                 {'role': role, 'revision': revision, 'base': base,
                                  'candidate': candidate, 'checks': checks, 'feedback': feedback})
