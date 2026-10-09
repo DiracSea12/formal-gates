@@ -23,7 +23,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				qa, qi := d.action("engine.qa.execution")
 				prior := qi.Binding.Candidate
 				report := executionFor(qi)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "tool-v1", Environment: "environment-v1"})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 				gate, gi := d.action("engine.gate")
 				d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "invalid input prints wrong diagnostic"}}})
 				wave := d.run.Validation.Waves[0]
@@ -35,7 +35,9 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 				d.drive()
 				repair, ri := d.action("engine.repair")
-				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}})
+				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}}
+				d.business(repair, edit)
+				d.verifyRepair(edit)
 				d.fixtureTool, d.fixtureEnvironment = "tool-v2", "environment-v2"
 				d.materialize()
 				d.materialize()
@@ -83,7 +85,8 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				}
 				report = scopedExecutionReport(qi, prior, false)
 				d.receipt(qa)
-				accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "out-of-scope-execution", Validation: &protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "tool-v2", Environment: "environment-v2"}}})
+				outOfScopeExecutionResult := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
+				accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "out-of-scope-execution", Validation: &outOfScopeExecutionResult}})
 				if accepted.Status != "REJECTED_INVALID_RESULT" {
 					t.Fatalf("outside EXECUTED accepted: %s", accepted.Status)
 				}
@@ -104,7 +107,8 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 							part.Records = append(part.Records, row)
 						}
 					}
-					a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scope-checkpoint", Validation: &protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Checkpoint: true, Execution: &part, Tool: "tool-v2", Environment: "environment-v2"}}})
+					scopeCheckpointResult := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Checkpoint: true, Execution: &part})
+					a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scope-checkpoint", Validation: &scopeCheckpointResult}})
 					if a.Status == "REJECTED_INVALID_RESULT" {
 						t.Fatal("valid selected-case checkpoint rejected")
 					}
@@ -122,7 +126,8 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 						}
 					}
 				}
-				accepted = d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "legal-scoped-result", Validation: &protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "tool-v2", Environment: "environment-v2"}}})
+				legalScopedResultResult := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
+				accepted = d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "legal-scoped-result", Validation: &legalScopedResultResult}})
 				if accepted.Status != "ACCEPTED" {
 					t.Fatalf("legal exact subset and original PASS rejected: %s", accepted.Status)
 				}
@@ -132,7 +137,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 					t.Fatal("AFFECTED did not require final FULL")
 				}
 				report = scopedExecutionReport(qi, prior, false)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "tool-v2", Environment: "environment-v2"})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 				d.drive()
 				waves := d.run.Validation.Waves
 				if waves[len(waves)-1].Status != "COMPLETE" {
@@ -202,7 +207,9 @@ func repairedExecutionDriver(t *testing.T) *validationDriver {
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	id, in := d.action("engine.repair")
-	d.business(id, gateRepairResult(in))
+	edit := gateRepairResult(in)
+	d.business(id, edit)
+	d.verifyRepair(edit)
 	d.materialize()
 	d.materialize()
 	return d
@@ -276,7 +283,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 					}
 				}
 			}
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			if change == "route" || change == "carry-route" {
 				id, in = d.gateAction("security")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
@@ -288,7 +295,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 				t.Fatal("affected responsibility bypassed final FULL")
 			}
 			report = executionFor(in)
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 				t.Fatal("scope-preserving transition did not finish")
@@ -310,12 +317,13 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 						report.Records[i].Result = coverage.ExecutedFail
 					}
 				}
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "FAIL", Execution: &report, Tool: "app-v1", Environment: "isolated", Findings: []review.Finding{{Severity: "P2", Message: "invalid input failed"}}})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "FAIL", Execution: &report, Findings: []review.Finding{{Severity: "P2", Message: "invalid input failed"}}}))
 			} else {
 				report.Records = report.Records[:1]
 				report.Binding.ActualCaseIDs = []string{report.Records[0].CaseID}
 				d.receipt(qa)
-				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "partial-execution", Validation: &protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Checkpoint: true, Execution: &report, Tool: "app-v1", Environment: "isolated"}}})
+				partialExecutionResult := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Checkpoint: true, Execution: &report})
+				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "partial-execution", Validation: &partialExecutionResult}})
 				for i := 0; i < 2; i++ {
 					if i > 0 {
 						qa, qi = d.action("engine.qa.execution")
@@ -348,7 +356,11 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 			}
 			d.drive()
 			id, in := d.action("engine.repair")
-			d.business(id, gateRepairResult(in))
+			edit := gateRepairResult(in)
+			d.business(id, edit)
+			if edit.Binding.PureP2 {
+				d.verifyRepair(edit)
+			}
 			d.materialize()
 			d.materialize()
 			rejectExecutionScope(d)
@@ -363,7 +375,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 					t.Fatal("missing authoritative evidence became inherited PASS")
 				}
 			}
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v2", Environment: "isolated"})
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
 			for _, in := range d.run.ValidationInputs {
 				if in.Handler == "engine.gate" {
@@ -378,7 +390,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				t.Fatal("full regression missing")
 			}
 			report = executionFor(in)
-			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v2", Environment: "isolated"})
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 				t.Fatal("full evidence did not complete")
@@ -402,7 +414,8 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 				qa, in := d.action("engine.qa.execution")
 				waveID := in.Binding.WaveID
 				report := executionFor(in)
-				event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scoped-execution", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}}}
+				scopedExecutionResult := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
+				event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scoped-execution", Validation: &scopedExecutionResult}}
 				var request protocol.Event
 				if held {
 					request = holdRequirement(t, d)
@@ -452,7 +465,7 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 					t.Fatal("scope completion bypassed FULL")
 				}
 				report = executionFor(in)
-				d.business(qa, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+				d.business(qa, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 				d.drive()
 				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 					t.Fatal("final FULL did not finish")
@@ -473,14 +486,14 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 	if in.Binding.RequirementRevision != d.run.Validation.RequirementRevision || len(in.RequiredCases) != 1 || in.RequiredCases[0] != "normal" {
 		t.Fatal("new dispatch lost current requirement or scope")
 	}
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()
 	id, in = d.action("engine.qa.execution")
 	if in.Execution.Scope != coverage.ScopeFull {
 		t.Fatal("missing final FULL")
 	}
 	report = executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()
 	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 		t.Fatal("carried pending scope could not complete")

@@ -33,7 +33,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 						}
 					}
 				}
-				result := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"}
+				result := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
 				if round == 1 {
 					result.Status = "FAIL"
 					result.Findings = []review.Finding{{Severity: "P2", Message: affected + " input output mismatch"}}
@@ -73,7 +73,11 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 				}
 				d.drive()
 				id, in = d.action("engine.repair")
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}})
+				edit := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}}
+				d.business(id, edit)
+				if edit.Binding.PureP2 {
+					d.verifyRepair(edit)
+				}
 				d.materialize()
 				d.materialize()
 				if round == 0 {
@@ -101,7 +105,8 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 				}
 			}
 			d.receipt(id)
-			a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "inheritance-evidence", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"}}})
+			inheritanceEvidenceResult := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
+			a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "inheritance-evidence", Validation: &inheritanceEvidenceResult}})
 			t.Logf("source=%s current=%s preceding repair affected=%v acceptance=%s", original, in.Binding.Candidate, example.affected, a.Status)
 			if (a.Status == "ACCEPTED") != example.accepted {
 				t.Errorf("inheritance acceptance=%s, want accepted=%v", a.Status, example.accepted)

@@ -87,6 +87,7 @@ func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	if a.Status != "ACCEPTED" {
 		t.Fatalf("original repair was not accepted: %s", a.Status)
 	}
+	d.verifyRepair(result)
 	d.materialize()
 	d.materialize()
 	d.reopen()
@@ -140,6 +141,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
+	d.drive()
 	d.receipt(reviewID)
 	a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: reviewID, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "same-approved-cases", Validation: &protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &r}}})
 	if a.Status != "ACCEPTED" {
@@ -186,7 +188,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 	}
 	id, in := d.action("engine.qa.execution")
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
@@ -204,7 +206,7 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 	d.drive()
 	id, in := d.action("engine.qa.execution")
 	r := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
@@ -250,7 +252,7 @@ func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution")
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
@@ -282,7 +284,8 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 			d.reviewReady()
 			id, in := d.action("engine.qa.execution")
 			report := executionFor(in)
-			result := protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "qa-evidence", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}}}
+			qaEvidenceResult := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
+			result := protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "qa-evidence", Validation: &qaEvidenceResult}}
 			if delivery == "staged" {
 				d.submit(result)
 			} else {
@@ -358,6 +361,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 				approved := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 			}
+			d.drive()
 			var original protocol.HostActionIntent
 			for _, intent := range d.run.AdapterIntents {
 				original = intent
@@ -412,7 +416,9 @@ func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	if after.ID != before.ID || after.Attempts != before.Attempts || after.MaxAttempts != before.MaxAttempts {
 		t.Fatal("ordinary gate addition reset repair budget")
 	}
-	d.business(id, gateRepairResult(retry))
+	edit := gateRepairResult(retry)
+	d.business(id, edit)
+	d.verifyRepair(edit)
 	d.materialize()
 	d.materialize()
 	d.gateAction("security")
@@ -560,7 +566,9 @@ func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
 	id, in := d.action("engine.repair")
-	d.business(id, gateRepairResult(in))
+	edit := gateRepairResult(in)
+	d.business(id, edit)
+	d.verifyRepair(edit)
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
@@ -582,7 +590,7 @@ func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
 			row.Procedure, row.Observation, row.Comparison = "", "", ""
 		}
 	}
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("security")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
@@ -598,7 +606,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	id, in := d.action("engine.qa.execution")
 	original := in.Binding.Candidate
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P1", Message: "valid input crashes", SeverityRationale: "core command fails without workaround", Requirement: "AC-001", NormalPath: "app run valid-input", ActualError: "panic instead of successful output", DeferralImpact: "normal valid input stays unavailable", Locations: []string{"app.go:1"}}}})
 	d.drive()
@@ -613,7 +621,11 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
 	id, in = d.action("engine.repair")
-	d.business(id, gateRepairResult(in))
+	edit := gateRepairResult(in)
+	d.business(id, edit)
+	if edit.Binding.PureP2 {
+		d.verifyRepair(edit)
+	}
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
@@ -632,7 +644,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 			report.Records[i].Comparison = ""
 		}
 	}
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	wave = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	if wave.Status != "COLLECTING" {
 		t.Fatalf("expected pending quality gate, got %s", wave.Status)

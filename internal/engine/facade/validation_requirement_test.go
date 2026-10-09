@@ -183,7 +183,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 			qa, qi := d.action("engine.qa.execution")
 			gate, gi := d.gateAction("quality")
 			report := executionFor(qi)
-			result := protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+			result := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
 			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
 			if delivery == "completed" {
 				d.receipt(qa)
@@ -218,7 +218,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 					d.drive()
 					qa, qi = d.action("engine.qa.execution")
 					report = executionFor(qi)
-					result = protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"}
+					result = nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
 					event = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
 					d.receipt(qa)
 				}
@@ -265,6 +265,7 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"
 	d.business(id, repair)
+	d.verifyRepair(repair)
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
@@ -290,7 +291,7 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 	}
 	carriedAction := id
 	interruptedWave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1].ID
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	gate, _ := d.gateAction("security")
 	candidate := *d.run.Validation.Candidate
 	confirmValidationWork(d, gate)
@@ -339,7 +340,7 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 		t.Fatal("final verification did not require FULL")
 	}
 	full := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &full, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &full}))
 	d.reopen()
 	d.drive()
 	current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -384,7 +385,10 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 	original := old.State.CandidatePromotion
 	waves := len(old.State.Validation.Waves)
 	confirmValidationWork(d, "")
-	d.drive()
+	// Inspect the requalified projection before terminal resource cleanup.
+	if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+		t.Fatal(err)
+	}
 	current, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
