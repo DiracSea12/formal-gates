@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -24,7 +25,7 @@ func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.H
 		d.materialize()
 		id, in := d.action("engine.qa.design")
 		m := in.Manifest
-		m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#normal", Oracle: "valid accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#invalid", Oracle: "invalid rejected"}}
+		m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "valid accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid rejected"}}
 		for _, c := range m.Cases {
 			m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 		}
@@ -36,6 +37,7 @@ func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.H
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 		}
 	}
+	d.drive()
 	return d, onlyCandidate(t, d, stage)
 }
 func assertCandidateStep(t *testing.T, d *validationDriver, intent protocol.HostActionIntent) {
@@ -81,11 +83,7 @@ func candidateCompletion(t *testing.T, d *validationDriver, intent protocol.Host
 	if err := json.Unmarshal(data, &p); err != nil {
 		t.Fatal(err)
 	}
-	ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", map[string]any{"parametersDigest": intent.PayloadDigest, "identity": "observed:" + intent.PayloadDigest, "digest": intent.PayloadDigest, "paths": p.Paths, "testOnly": true, "productionViewEqual": true, "gateView": gateReviewView(p)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ev
+	return d.candidateReceipt(intent.ActionID, intent, p)
 }
 func holdRequirement(t *testing.T, d *validationDriver) protocol.Event {
 	t.Helper()
@@ -449,13 +447,26 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 				}
 				expected := map[string]string{"AUTHORING": "engine.qa.design", "QA_ARTIFACT": "engine.qa.review.rationale", "REVIEW_READY": "engine.qa.execution"}[stage]
 				if stage == "DEVELOPMENT" {
+					d.drive()
 					onlyCandidate(t, d, "AUTHORING")
 				} else {
+					if stage == "REVIEW_READY" {
+						if len(accepted.Refill) != 0 || len(snap.State.PendingActions) != 0 || d.run.Next.Kind != decision.KindHostAction {
+							t.Fatal("final candidate dispatched workers before native workspaces were ready")
+						}
+					}
 					id, in := d.action(expected)
-					if snap.State.DispatchBindings[id] != in.Binding {
+					issued := snap
+					if stage == "REVIEW_READY" {
+						issued, err = d.f.engine.Load()
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					if issued.State.DispatchBindings[id] != in.Binding {
 						t.Fatal("refill did not preserve signed input")
 					}
-					if !held && len(accepted.Refill) == 0 {
+					if !held && stage != "REVIEW_READY" && len(accepted.Refill) == 0 {
 						t.Fatal("Submit omitted actual issued work")
 					}
 					if stage == "REVIEW_READY" {
@@ -465,6 +476,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 						}
 					}
 				}
+				d.drive()
 				before := d.run.Revision
 				d.submit(event)
 				d.reopen()

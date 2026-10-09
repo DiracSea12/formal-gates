@@ -18,16 +18,16 @@ import (
 
 func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 	root := t.TempDir()
-	repo := newFrozenGitRepo()
+	base := snapshotRepoCommits(t, root)[0]
 	sum := sha256.Sum256([]byte(validationDocument))
 	receipt := testReceipt()
 	receipt.RequirementRevision = hex.EncodeToString(sum[:])
 	receipt.Artifacts[0].Revision = receipt.RequirementRevision
-	f, run, err := semanticValidationFacade(t, StartOptions{Root: root, Capacity: 16, Owner: OwnerBinding{Session: "owner-session"}, VCSRunner: repo, Admission: testAdmission(t, root, "scope-owner", "sha256:scope-package", DefaultProvider), Request: StartRequest{RunID: "scope", Route: "regular", Provider: DefaultProvider, BaseSnapshot: frozenSnapshot, IntakeConfirmationReceipt: receipt}})
+	f, run, err := semanticValidationFacade(t, StartOptions{Root: root, Capacity: 16, Owner: OwnerBinding{Session: "owner-session"}, Admission: testAdmission(t, root, "scope-owner", "sha256:scope-package", DefaultProvider), Request: StartRequest{RunID: "scope", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &validationDriver{t: t, f: f, run: run, revision: receipt.RequirementRevision, provider: DefaultProvider, git: vcs.New(root, repo), frozen: repo}
+	d := &validationDriver{t: t, f: f, run: run, revision: receipt.RequirementRevision, provider: DefaultProvider, git: vcs.New(root, nil), mockNative: true}
 	binary := filepath.Join(t.TempDir(), "formal-gates")
 	source, err := filepath.Abs("../../..")
 	if err != nil {

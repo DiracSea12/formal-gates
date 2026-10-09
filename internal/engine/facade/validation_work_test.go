@@ -1,13 +1,13 @@
 package facade
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"slices"
 	"testing"
 )
 
@@ -17,71 +17,70 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 	for _, kind := range []string{"THAW", "QA_ARTIFACT_REPAIR"} {
 		for _, delivery := range []string{"receipted", "result-first", "terminal-first", "retry"} {
 			t.Run(kind+"/"+delivery, func(t *testing.T) {
-				d := newValidationDriver(t, "whitebox", "quality")
+				d := candidateSourceDriver(t, "whitebox", "quality")
 				trees := map[string]map[string]string{}
 				testBytes := "func TestNormal() { initializedInput() }; func TestInvalid() { rejectEmptyInput() }"
+				d.fixtureCandidateObserver = func(intent protocol.HostActionIntent, params protocol.CandidateParameters) protocol.Event {
+					t.Helper()
+					tree := map[string]string{}
+					if trees[params.Base] == nil {
+						trees[params.Base] = candidateSourceTree(t, d, params.Base)
+					}
+					for path, bytes := range trees[params.Base] {
+						tree[path] = bytes
+					}
+					stage := params.Stage
+					if stage == "CHECK_SOURCE" {
+						stage = "QA_ARTIFACT"
+						if slices.Contains(params.Paths, "app.go") {
+							stage = "DEVELOPMENT"
+						}
+					}
+					switch stage {
+					case "DEVELOPMENT":
+						tree["app.go"] = "func Valid(s string) bool { return s != empty }"
+					case "AUTHORING":
+					case "QA_ARTIFACT":
+						if len(params.Paths) != 1 || params.Paths[0] != "app_test.go" {
+							t.Fatal("wrong test path input")
+						}
+						tree["app_test.go"] = testBytes
+					case "REVIEW_READY":
+						for _, artifact := range params.QAArtifacts {
+							if trees[artifact.Identity] == nil {
+								t.Fatal("unknown immutable artifact")
+							}
+							for _, path := range artifact.Paths {
+								if bytes, ok := trees[artifact.Identity][path]; ok {
+									tree[path] = bytes
+								} else {
+									delete(tree, path)
+								}
+							}
+						}
+					default:
+						t.Fatal("unknown candidate stage")
+					}
+					identity, digest := freezeCandidateSource(t, d, params, tree)
+					trees[identity] = tree
+					evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, WorkspaceID: params.WorkspaceID, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
+					evidence.GateView = gateReviewView(params)
+					raw, _ := json.Marshal(evidence)
+					var values map[string]any
+					json.Unmarshal(raw, &values)
+					ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return ev
+				}
 				materialize := func() {
 					t.Helper()
+					d.drive()
 					if len(d.run.AdapterIntents) != 1 {
 						t.Fatal("one candidate operation required")
 					}
-					for _, intent := range d.run.AdapterIntents {
-						if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
-							t.Fatal("wrong actual adapter method")
-						}
-						raw, _ := json.Marshal(intent.Adapter.Params)
-						var params protocol.CandidateParameters
-						if err := json.Unmarshal(raw, &params); err != nil {
-							t.Fatal(err)
-						}
-						tree := map[string]string{}
-						if params.Base != "" && trees[params.Base] == nil {
-							t.Fatal("unknown input base")
-						}
-						for path, bytes := range trees[params.Base] {
-							tree[path] = bytes
-						}
-						switch params.Stage {
-						case "DEVELOPMENT":
-							tree["app.go"] = "func Valid(s string) bool { return s != empty }"
-						case "AUTHORING":
-						case "QA_ARTIFACT":
-							if len(params.Paths) != 1 || params.Paths[0] != "app_test.go" {
-								t.Fatal("wrong test path input")
-							}
-							tree["app_test.go"] = testBytes
-						case "REVIEW_READY":
-							for _, artifact := range params.QAArtifacts {
-								if trees[artifact.Identity] == nil {
-									t.Fatal("unknown immutable artifact")
-								}
-								for _, path := range artifact.Paths {
-									if bytes, ok := trees[artifact.Identity][path]; ok {
-										tree[path] = bytes
-									} else {
-										delete(tree, path)
-									}
-								}
-							}
-						default:
-							t.Fatal("unknown candidate stage")
-						}
-						raw, _ = json.Marshal(tree)
-						digest := fmt.Sprintf("sha256:%x", sha256.Sum256(raw))
-						trees[digest] = tree
-						evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: digest, Digest: digest, Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
-						evidence.GateView = gateReviewView(params)
-						raw, _ = json.Marshal(evidence)
-						var values map[string]any
-						json.Unmarshal(raw, &values)
-						ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
-						if err != nil {
-							t.Fatal(err)
-						}
-						d.submit(ev)
-						d.drive()
-						return
-					}
+					d.materialize()
 				}
 				id, in := d.action("engine.development.batch")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
@@ -89,7 +88,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 				materialize()
 				id, in = d.action("engine.qa.design")
 				m := in.Manifest
-				m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestNormal", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestInvalid", Oracle: "invalid input rejected"}}
+				m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 				for _, c := range m.Cases {
 					m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 				}
@@ -157,7 +156,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 				materialize()
 				qa, qi := d.action("engine.qa.execution")
 				execution := executionFor(qi)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution, Tool: "go-test", Environment: "isolated"})
+				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution}))
 				gate, gi := d.gateAction("quality")
 				d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
@@ -234,6 +233,7 @@ func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
 				id, input := d.action("engine.qa.design")
 				manifest := simpleManifest(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+				d.drive()
 				d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 				old, oldInput := d.action("engine.qa.design")
 				if replacement {

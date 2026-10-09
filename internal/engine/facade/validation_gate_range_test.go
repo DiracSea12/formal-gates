@@ -47,6 +47,7 @@ func TestGateRangeRequiresBoundOwnershipEvidence(t *testing.T) {
 			d.reopen()
 			ev = candidateCompletion(t, d, intent)
 			d.submit(ev)
+			d.drive()
 			_, in := d.gateAction("quality")
 			if in.Gate == nil || in.Gate.BaseSnapshot != frozenSnapshot || in.Gate.Gate != "quality" || in.Gate.Candidate.Identity != in.Binding.Candidate || !reflect.DeepEqual(in.Gate.TestOwnedPaths, []string{"app_test.go"}) {
 				t.Fatalf("missing exact gate input: %+v", in.Gate)
@@ -96,6 +97,7 @@ func TestGateRangeOwnershipIsNotLimitedToCurrentMaterializationPaths(t *testing.
 	ev.HostAction.AdapterEvidence.Values["gateView"] = protocol.GateReviewView{TestOwnedPaths: owned}
 	d.submit(ev)
 	d.reopen()
+	d.drive()
 	_, in := d.gateAction("quality")
 	if in.Gate == nil || !reflect.DeepEqual(in.Gate.TestOwnedPaths, owned) {
 		t.Fatal("native range ownership was reduced to this operation's writes")

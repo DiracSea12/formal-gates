@@ -154,6 +154,10 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 				d.submit(event)
 				d.reopen()
 				d.drive()
+				if choice == "REPAIR" {
+					d.verifyRepair(result)
+					d.materialize()
+				}
 				after, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)
@@ -162,7 +166,7 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 				switch choice {
 				case "REPAIR":
 					if current.Status != "REPAIRED" || after.State.Results[id].Validation == nil || after.State.Results[id].Validation.Development.Summary != result.Development.Summary || len(d.run.AdapterIntents) != 1 {
-						t.Fatal("approved repair lost its original result or frozen-source obligation")
+						t.Fatalf("approved repair lost its original result or frozen-source obligation: wave=%s result=%+v intents=%+v", current.Status, after.State.Results[id], d.run.AdapterIntents)
 					}
 
 				case "DISMISS":
