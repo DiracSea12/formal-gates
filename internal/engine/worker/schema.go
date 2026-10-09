@@ -38,7 +38,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		case "engine.repair":
 			typ = reflect.TypeOf(Repair{})
 		case "engine.merge.resolve":
-			typ = reflect.TypeOf(protocol.ConflictResolution{})
+			typ = reflect.TypeOf(ConflictResolution{})
 		case "engine.qa.design":
 			typ = reflect.TypeOf(Design{})
 		case "engine.qa.review.rationale":

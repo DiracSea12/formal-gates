@@ -1,11 +1,71 @@
 package facade
 
 import (
+	"encoding/json"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
 	"reflect"
 	"testing"
 )
+
+func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	id, in := d.action("engine.qa.design")
+	m := simpleManifest(in)
+	m.SharedSteps = []coverage.SharedStep{{ID: "setup", Procedure: "prepare the existing fixture", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf fixture"}}}}
+	m.Cases[1].SharedSteps = []string{"setup"}
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
+	id, in = d.action("engine.qa.review.rationale")
+	r := approvedReview(m)
+	r.SharedStepDecisions = []coverage.ReviewDecision{{ID: "setup", Status: coverage.StatusPass, Reason: "The fixed fixture preparation supplies the referenced negative case"}}
+	r.CaseDecisions[0].Status, r.PointDecisions[0].Status, r.SourceDecisions[0].Status = coverage.StatusFail, coverage.StatusFail, coverage.StatusFail
+	r.SetStatus = coverage.StatusFail
+	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &r})
+	id, in = d.action("engine.qa.design")
+	d.reopen()
+	d.drive()
+	in = d.run.ValidationInputs[id]
+	changed := m.Cases[0]
+	changed.Oracle = "exit zero and print accepted input"
+	value := worker.Design{Manifest: worker.Manifest{RetainCases: []string{m.Cases[1].CaseID}, RetainSharedSteps: []string{"setup"}, Cases: []worker.Case{{CaseID: changed.CaseID, Scenario: changed.Scenario, PublicEntry: changed.PublicEntry, Preconditions: changed.Preconditions, Steps: changed.Steps, Oracle: changed.Oracle, Operations: changed.Operations}}, Coverage: map[string][]string{}}}
+	missingShared := value
+	missingShared.RetainSharedSteps = nil
+	invalidRaw, err := json.Marshal(missingShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), invalidRaw, "original-native-answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := *in.Contract
+	contract.Manifests = []coverage.AcceptanceManifest{*invalid.Result.Validation.Manifest}
+	if err := contract.Validate(); err == nil {
+		t.Fatal("core accepted retained case referencing a deleted shared step")
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), raw, "original-native-answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract.Manifests = []coverage.AcceptanceManifest{*event.Result.Validation.Manifest}
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("retained complete contract rejected: %v", err)
+	}
+	d.receipt(id)
+	a := d.submit(event)
+	if a.Status == "REJECTED_INVALID_RESULT" {
+		t.Fatal("retained issued content failed original admission")
+	}
+	_, current := d.action("engine.qa.review.rationale")
+	if len(current.Manifest.Cases) != 2 || !reflect.DeepEqual(current.Manifest.Cases[0], m.Cases[1]) || len(current.InheritableReviews) != 1 || current.InheritableReviews[0].ID != m.Cases[1].CaseID || len(current.Manifest.Edges) != len(m.Edges) {
+		t.Fatal("continued design lost retained responsibility or its unchanged review")
+	}
+}
 
 func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 	for _, resume := range []bool{false, true} {

@@ -75,6 +75,9 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 		input.Validation.Execution = &coverage.ExecutionBinding{}
 		input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 	}
+	if handler == "engine.merge.resolve" {
+		input.Validation.Conflict = &protocol.ConflictInput{Evidence: protocol.IntegrationEvidence{Conflicts: []protocol.MergeConflict{{Path: "delivered_test.go"}}}}
+	}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}, {ID: "qa-design"}, {ID: "qa-execution"}}}
 	material, err := worker.Render(input, catalog)
 	if err != nil {
@@ -93,7 +96,7 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 		payload = &worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{}}}
 	}
 	if handler == "engine.merge.resolve" {
-		payload = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}
+		payload = &worker.ConflictResolution{Summary: "resolved issued conflict"}
 	}
 	return material, payload
 }
@@ -182,8 +185,10 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload a
 			switch body := payload.(type) {
 			case *worker.Development:
 				paths = body.Paths
-			case *protocol.ConflictResolution:
-				paths = body.Paths
+			case *worker.ConflictResolution:
+				for _, conflict := range material.Input.Validation.Conflict.Evidence.Conflicts {
+					paths = append(paths, conflict.Path)
+				}
 			}
 			for _, path := range paths {
 				write(path, "package main\n")
@@ -245,8 +250,11 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload a
 	switch body := payload.(type) {
 	case *worker.Development:
 		expectedDevelopment = body
-	case *protocol.ConflictResolution:
-		expectedResolution = body
+	case *worker.ConflictResolution:
+		expectedResolution = &protocol.ConflictResolution{Summary: body.Summary}
+		for _, conflict := range material.Input.Validation.Conflict.Evidence.Conflicts {
+			expectedResolution.Paths = append(expectedResolution.Paths, conflict.Path)
+		}
 	case *worker.Repair:
 		if got.GranularityReview == nil {
 			t.Fatal("repair plan lost")

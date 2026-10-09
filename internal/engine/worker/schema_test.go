@@ -15,7 +15,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"paths", "summary", "affectedCases"}, "engine.repair": {"paths", "summary", "affectedCases", "granularityReview"}, "engine.merge.resolve": {"paths", "summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"status", "findings"},
+		"engine.development.batch": {"paths", "summary", "affectedCases"}, "engine.repair": {"paths", "summary", "affectedCases", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "retainCases", "retainSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"status", "findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -113,6 +113,9 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 			if role.handler == "engine.qa.design" && role.author {
 				contracts = []string{"Associate only actual test material files", "Remove temporary build and test outputs", "produce them outside the workspace", "Do not return a separate development path declaration"}
 			}
+			if role.handler == "engine.merge.resolve" {
+				contracts = []string{"Report only the semantic resolution summary", "program supplies the exact original conflict paths", "Remove your temporary build and test outputs", "produce them outside the workspace"}
+			}
 			for _, contract := range contracts {
 				if strings.Contains(material.Prompt, contract) != role.author {
 					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
@@ -121,6 +124,10 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 			if role.handler == "engine.qa.design" && role.author {
 				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
+				}
+			} else if role.handler == "engine.merge.resolve" {
+				if strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") || strings.Contains(material.Prompt, "exact changed paths") {
+					t.Fatal("conflict resolution requests issued paths")
 				}
 			} else if role.author && !strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
 				t.Fatal("development author lost its artifact declaration")

@@ -43,6 +43,9 @@ type Gate struct {
 	Status   string    `json:"status"`
 	Findings []Finding `json:"findings"`
 }
+type ConflictResolution struct {
+	Summary string `json:"summary"`
+}
 
 // decodedResult is the role-selected assembly input, never a model wire format.
 type decodedResult struct {
@@ -117,9 +120,11 @@ type Suggestion struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type Manifest struct {
-	SharedSteps []SharedStep        `json:"sharedSteps,omitempty"`
-	Cases       []Case              `json:"cases"`
-	Coverage    map[string][]string `json:"coverage"`
+	RetainCases       []string            `json:"retainCases,omitempty"`
+	RetainSharedSteps []string            `json:"retainSharedSteps,omitempty"`
+	SharedSteps       []SharedStep        `json:"sharedSteps,omitempty"`
+	Cases             []Case              `json:"cases"`
+	Coverage          map[string][]string `json:"coverage"`
 }
 type SharedStep struct {
 	ID         string               `json:"id"`
@@ -219,6 +224,13 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		if value.Validation.Manifest != nil {
 			manifest := coverage.AcceptanceManifest{}
+			for _, id := range v.Manifest.RetainSharedSteps {
+				index := slices.IndexFunc(issued.Manifest.SharedSteps, func(item coverage.SharedStep) bool { return item.ID == id })
+				if index < 0 || slices.ContainsFunc(manifest.SharedSteps, func(item coverage.SharedStep) bool { return item.ID == id }) || slices.ContainsFunc(v.Manifest.SharedSteps, func(item SharedStep) bool { return item.ID == id }) {
+					return protocol.Event{}, fmt.Errorf("retained shared step must be issued, unique and not authored: %s", id)
+				}
+				manifest.SharedSteps = append(manifest.SharedSteps, issued.Manifest.SharedSteps[index])
+			}
 			for _, item := range v.Manifest.SharedSteps {
 				step := coverage.SharedStep{ID: item.ID, Procedure: item.Procedure, Operations: slices.Clone(item.Operations)}
 				if item.Files != nil {
@@ -231,6 +243,13 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 					}
 				}
 				manifest.SharedSteps = append(manifest.SharedSteps, step)
+			}
+			for _, id := range v.Manifest.RetainCases {
+				index := slices.IndexFunc(issued.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == id })
+				if index < 0 || slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == id }) || slices.ContainsFunc(v.Manifest.Cases, func(item Case) bool { return item.CaseID == id }) {
+					return protocol.Event{}, fmt.Errorf("retained case must be issued, unique and not authored: %s", id)
+				}
+				manifest.Cases = append(manifest.Cases, issued.Manifest.Cases[index])
 			}
 			for _, item := range v.Manifest.Cases {
 				c := coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestRef: item.TestRef}
@@ -252,6 +271,14 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			points := map[string]bool{}
 			for _, point := range issued.Manifest.Points {
 				points[point.PointID] = true
+			}
+			// An emitted point mapping replaces that point's relations. Unchanged
+			// relations survive only for cases explicitly retained or authored.
+			for _, edge := range issued.Manifest.Edges {
+				_, replaced := v.Manifest.Coverage[edge.PointID]
+				if !replaced && slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == edge.CaseID }) {
+					manifest.Edges = append(manifest.Edges, edge)
+				}
 			}
 			for _, point := range sortedKeys(value.Validation.Manifest.Coverage) {
 				if !points[point] {
@@ -485,7 +512,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		case "engine.repair":
 			target = &Repair{}
 		case "engine.merge.resolve":
-			target = &protocol.ConflictResolution{}
+			target = &ConflictResolution{}
 		case "engine.qa.design":
 			target = &Design{}
 		case "engine.qa.review.rationale":
@@ -510,8 +537,14 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			if fields["paths"] != nil || fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
 				v.Development = &Development{Paths: body.Paths, Summary: body.Summary, Completion: body.Completion, AffectedCases: body.AffectedCases}
 			}
-		case *protocol.ConflictResolution:
-			v.Resolution = body
+		case *ConflictResolution:
+			if input.Validation.Conflict == nil || len(input.Validation.Conflict.Evidence.Conflicts) == 0 {
+				return result, "", fmt.Errorf("resolution requires issued native conflicts")
+			}
+			v.Resolution = &protocol.ConflictResolution{Summary: body.Summary}
+			for _, conflict := range input.Validation.Conflict.Evidence.Conflicts {
+				v.Resolution.Paths = append(v.Resolution.Paths, conflict.Path)
+			}
 		case *Design:
 			v.Manifest, v.Checkpoint = &body.Manifest, body.Checkpoint
 		case *CaseReview:

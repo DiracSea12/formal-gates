@@ -51,7 +51,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Repair only input.validation.repair obligations. You decide whether and how to split the repair using the existing GranularityReview contract. When a frozen development member is supplied, implement only that member. Preserve approved cases and report changed paths, impact selection and semantic implementation evidence. completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report only paths, summary and affectedCases; do not invent batch IDs, DoD or handoff. The program freezes your source and runs the approved complete project checks and affected-case recipes; do not execute or report command facts."
 			value.ReadOnly = false
 		case "engine.merge.resolve":
-			instructions = "Resolve only the issued conflict in the registered workspace, preserving the frozen child inputs and dependencies. Report resolution evidence and exact changed paths."
+			instructions = "Resolve only the issued conflict in the registered workspace, preserving the frozen child inputs and dependencies. Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
 		case "engine.qa.design":
 			instructions = "Design executable coverage for every required source and acceptance point. Put every mechanically specified setup/action in reviewed operations, or use an exact <path>_test.go::TestName reference; natural-language steps never supply runtime commands. Select point-to-case coverage using the fixed coverage keys. BLACKBOX observes public behavior; WHITEBOX authors/reuses scoped acceptance tests and associates their test material using case files or referenced shared-step files. The program derives delivery paths from those relations. Implementation-only solution constraints belong to technical/diff/quality review. Missing behavior obligations, including unmapped ones, remain defects."
@@ -69,8 +69,11 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
-	if !value.ReadOnly && input.Handler != "engine.qa.execution" && input.Handler != "engine.qa.design" {
+	if !value.ReadOnly && input.Handler != "engine.qa.execution" && input.Handler != "engine.qa.design" && input.Handler != "engine.merge.resolve" {
 		instructions += " Declare only the files actually delivered as artifacts. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
+	}
+	if input.Handler == "engine.merge.resolve" {
+		instructions += " Remove your temporary build and test outputs before reporting completion, or produce them outside the workspace."
 	}
 	if input.Handler == "engine.qa.design" && !value.ReadOnly {
 		instructions += " Associate only actual test material files with cases or their referenced shared steps. Remove temporary build and test outputs from the workspace before reporting completion, or produce them outside the workspace. Do not return a separate development path declaration."

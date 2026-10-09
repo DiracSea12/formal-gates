@@ -20,6 +20,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 )
 
 const canarySplitRequirement = `# 交付
@@ -128,25 +129,26 @@ func (c *engineCanary) conflictResult(id string, input protocol.ValidationInput)
 		c.fail("conflict dispatch lacks original conflicts")
 	}
 	materials := c.materials(id, "merge conflict resolution", input)
-	var answer protocol.ConflictResolution
-	expected := []string{}
-	for _, conflict := range input.Conflict.Evidence.Conflicts {
-		expected = append(expected, conflict.Path)
-	}
-	slices.Sort(expected)
+	var answer worker.ConflictResolution
 	shape := func(raw map[string]any) error {
 		if err := decodeCanaryAnswer(raw, &answer); err != nil {
 			return err
 		}
-		actual := slices.Clone(answer.Paths)
-		slices.Sort(actual)
-		if !slices.Equal(actual, expected) || strings.TrimSpace(answer.Summary) == "" {
-			return fmt.Errorf("resolution must declare exactly the original conflict paths and summary")
+		if strings.TrimSpace(answer.Summary) == "" {
+			return fmt.Errorf("resolution requires its semantic summary")
 		}
 		return nil
 	}
-	c.turnIn(c.workspace(input), id, materials.Role, c.prompt(materials.Role, materials, "Resolve content only in input.conflict.evidence.conflicts[].path using the original incoming and prefix. Do not stage, commit or edit other paths. Report every conflict path and a summary.", false), canarySchema([]string{"paths", "summary"}, map[string]any{"paths": canaryArr(canaryStr()), "summary": canaryStr()}), false, shape)
-	return protocol.ValidationResult{Binding: input.Binding, Status: protocol.OutcomePass, Resolution: &answer}
+	native := c.turnIn(c.workspace(input), id, materials.Role, c.prompt(materials.Role, materials, "Resolve content only in input.conflict.evidence.conflicts[].path using the original incoming and prefix. Do not stage, commit or edit other paths. Report only the semantic summary; the program supplies the issued conflict paths.", false), canarySchema([]string{"summary"}, map[string]any{"summary": canaryStr()}), false, shape)
+	raw, err := json.Marshal(answer)
+	if err != nil {
+		c.fail("resolution encoding: %v", err)
+	}
+	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.merge.resolve", Provider: c.provider(), Pending: protocol.PendingAction{ActionID: id}, Validation: &input}, "worker-result", raw, native.digest)
+	if err != nil {
+		c.fail("resolution assembly: %v", err)
+	}
+	return *event.Result.Validation
 }
 
 func TestEngineGitSplitCanary(t *testing.T) {
