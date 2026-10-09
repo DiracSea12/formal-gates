@@ -1,11 +1,7 @@
-"""Differential check for the result-framing replacement unit (G1a-1).
+"""Compare native result framing against an independent decoding oracle.
 
-The pre-migration implementation is kept verbatim in `reference_result.py` and
-production never imports it. Both implementations are run over the fixed corpus
-in `result_corpus.py`, which deliberately spans Unicode, empty collections and
-refusal cases, and their accept/refuse verdicts, refusal reasons and accepted
-values are compared.
-"""
+The fixed corpus covers Unicode, empty collections and refusal cases, checking
+verdicts, refusal reasons and accepted values."""
 import json
 import tempfile
 import unittest
@@ -92,11 +88,7 @@ class ResultFrameDifferential(unittest.TestCase):
             self.assertEqual(want, got, f"production wrapper differs for {text!r}")
 
     def test_documented_divergences_from_the_reference(self):
-        """Two measured, bounded differences between the reference and Go.
-
-        Both are recorded in the C1 acceptance record. They are asserted here so
-        that any change in either direction is noticed rather than assumed.
-        """
+        """Pin surrogate handling differences between the independent oracle and Go decoder."""
         # (1) A lone surrogate written as a JSON escape. Both implementations
         #     accept the frame, but Python preserves the surrogate code point
         #     while Go's decoder substitutes U+FFFD, because a lone surrogate is
@@ -110,11 +102,8 @@ class ResultFrameDifferential(unittest.TestCase):
         self.assertEqual(got[1], '{"note":"\\ufffd"}')
         self.assertNotEqual(want[1], got[1], "if these agree now, the record must be updated")
 
-        # (2) A literal lone surrogate in the text. This fails on both sides with
-        #     UnicodeEncodeError and writes no answer.json: before the migration
-        #     the failure happened one step later, inside atomic(), because
-        #     infra.canonical encodes with ensure_ascii=False. The failure point
-        #     moved earlier; the outcome at both call sites did not change.
+        # (2) The oracle accepts a literal lone surrogate, while the Go bridge
+        # refuses text that cannot be encoded as UTF-8.
         literal = '{"note":"' + chr(0xD800) + '"}'
         self.assertEqual(run_reference(literal)[0], "accept")
         self.assertEqual(run_go(self.bridge, literal)[0], "error")

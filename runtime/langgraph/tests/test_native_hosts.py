@@ -11,10 +11,8 @@ import unittest
 from unittest.mock import Mock, patch
 from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,canonical,file_proof,read
 from formal_gates_harness.native_hosts import GoAdapter,adapter_for,execution_hosts,normalize_provider,host_catalog
-# G2c: the pre-migration zcode transport is test-only reference code now; the
-# production zcode execution path is the Go driver binary. The structural
-# assertions below pin the reference implementation the differential
-# (test_native_zcode_differential.py) compares the Go adapter against.
+# Structural assertions pin the ZCode protocol oracle used by the Go adapter's
+# differential checks. Production execution belongs to the Go driver.
 from reference_native_zcode import (Client,DEV_PERMISSION_MODE,advertised_models,apply_selection,
                                     handshake,materialize_source,reference,selection)
 
@@ -41,8 +39,7 @@ class HostRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeBlocked,'HOST_CHANGED'):adapter_for('zcode').validate_binding(binding)
             with self.assertRaisesRegex(HarnessError,'HOST_BINDING'):adapter_for('dsh').validate_binding(binding)
     def test_zcode_segment_routes_to_the_go_driver(self):
-        # G2c: both execution adapters are Go driver commands now; the package
-        # keeps only each host's own side file as transport inventory.
+        # Execution adapters use Go driver commands; host-side files form the transport inventory.
         adapter=adapter_for('zcode')
         self.assertIs(type(adapter),GoAdapter)
         self.assertEqual(adapter.entry_argv('/bind/formal-gates',Path('/jobs/k')),
@@ -106,11 +103,8 @@ class HostRegistryTests(unittest.TestCase):
         for name in ('workers.py','infra.py','cli.py'):
             text=(base/name).read_text()
             self.assertNotIn('from .native_dsh import',text,name)
-        # The retired Python execution paths must not come back through stale
-        # modules: production dsh execution went to the Go driver binary in G2b
-        # and production zcode execution (with the shared transport and the
-        # entry) in G2c; the pre-migration implementations survive only as
-        # tests/reference_* copies, which production code must not import.
+        # Production native execution uses the Go driver; independent Python
+        # transport oracles stay in test-only reference_* modules.
         for module in ('native_dsh','native_zcode','native_transport','native_entry'):
             with self.subTest(module=module),self.assertRaises(ImportError):
                 importlib.import_module('formal_gates_harness.'+module)

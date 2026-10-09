@@ -1,19 +1,8 @@
-"""Differential test for the G2a job supervisor.
+"""Compare the Go job supervisor with an independent process oracle.
 
-The pre-migration supervisor (formal_gates_harness.job) is kept verbatim in
-`reference_job.py` and is run as its own process. This test runs the Go supervisor
-(`formal-gates harness supervise`) and the reference implementation as two
-independent processes, each over its OWN job directory, and asserts the receipts
-and raw stream bytes are byte-for-byte identical (after normalising the
-non-deterministic fields started_at / finished_at and replacing each side's shared
-temp root with `<root>`).
-
-The two sides must never share a job directory: the second writer would silently
-skip its write and the comparison would degenerate. The job directories differ,
-but every path embedded in the request (argv, cwd, helper files, the PATH used by
-the child) is SHARED between the two sides so the observable receipt - including the
-exact error text - is identical.
-"""
+Each supervisor owns a separate job directory. Tests compare receipts and raw
+streams, normalizing start/finish times and directory roots. Child arguments,
+working directories, helper files and PATH are shared so error text is comparable."""
 import json
 import os
 import signal
@@ -86,7 +75,7 @@ class JobSupervisionDifferential(unittest.TestCase):
     def setUp(self):
         # One shared work tree holds every path the request embeds, so both sides
         # observe identical argv/cwd/error text.
-        self.work = tempfile.mkdtemp(prefix="g2a-work-")
+        self.work = tempfile.mkdtemp(prefix="supervisor-work-")
         # helper files for spawn-error cases
         self.noexec = os.path.join(self.work, "noexec")
         with open(self.noexec, "w") as f:
@@ -108,8 +97,8 @@ class JobSupervisionDifferential(unittest.TestCase):
         shutil.rmtree(self.work, ignore_errors=True)
 
     def run_both(self, request, go_env=None, ref_env=None, session=False):
-        go_job = tempfile.mkdtemp(prefix="g2a-go-")
-        ref_job = tempfile.mkdtemp(prefix="g2a-ref-")
+        go_job = tempfile.mkdtemp(prefix="supervisor-go-")
+        ref_job = tempfile.mkdtemp(prefix="supervisor-reference-")
         for d in (go_job, ref_job):
             with open(os.path.join(d, "request.json"), "w") as f:
                 json.dump(request, f)
@@ -301,8 +290,8 @@ class JobSupervisionDifferential(unittest.TestCase):
         self.compare(go_job, ref_job)
 
     def test_owner_exists(self):
-        go_job = tempfile.mkdtemp(prefix="g2a-go-")
-        ref_job = tempfile.mkdtemp(prefix="g2a-ref-")
+        go_job = tempfile.mkdtemp(prefix="supervisor-go-")
+        ref_job = tempfile.mkdtemp(prefix="supervisor-reference-")
         marker = os.path.join(self.work, "MARKER")
         request = {"kind": "check", "argv": ["/bin/sh", "-c", "touch " + marker],
                    "cwd": self.work, "stdin": "", "environment": {}}
@@ -337,7 +326,7 @@ class JobSupervisionDifferential(unittest.TestCase):
         ]
         for label, blocker in scenarios:
             with self.subTest(label):
-                base = tempfile.mkdtemp(prefix="g2a-path-")
+                base = tempfile.mkdtemp(prefix="supervisor-path-")
                 blocked = os.path.join(base, "blocked")
                 good = os.path.join(base, "good")
                 os.makedirs(blocked, exist_ok=True)
@@ -390,8 +379,8 @@ class JobSupervisionDifferential(unittest.TestCase):
                     "argv": ["/bin/sh", "-c", "touch " + marker + " && exec /bin/sleep 30"],
                     "cwd": self.work, "stdin": "", "environment": {}}
 
-        go_job = tempfile.mkdtemp(prefix="g2a-go-")
-        ref_job = tempfile.mkdtemp(prefix="g2a-ref-")
+        go_job = tempfile.mkdtemp(prefix="supervisor-go-")
+        ref_job = tempfile.mkdtemp(prefix="supervisor-reference-")
         for d, marker in ((go_job, go_marker), (ref_job, ref_marker)):
             with open(os.path.join(d, "request.json"), "w") as f:
                 json.dump(make_request(marker), f)
@@ -437,7 +426,7 @@ class JobSupervisionDifferential(unittest.TestCase):
         from formal_gates_harness.infra import Bridge, Store
         from pathlib import Path as _Path
 
-        root = _Path(tempfile.mkdtemp(prefix="g2a-cscope-"))
+        root = _Path(tempfile.mkdtemp(prefix="supervisor-scope-"))
         store = Store(root, {}, Bridge(BINARY))
         sentinel = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
         self.assertTrue(os.getpgid(sentinel.pid) == sentinel.pid,
@@ -487,14 +476,8 @@ class JobSupervisionDifferential(unittest.TestCase):
         sentinel.wait()
 
     def test_native_form_shape(self):
-        # The native entry form: argv is the literal native entrypoint, carrying the
-        # job directory. Because that directory differs per side, request_digest
-        # legitimately differs, so this case asserts SHAPE equality (exit 1, empty
-        # error, native-error.json written, streams present) rather than an identical
-        # digest - matching the contract's "same shape" requirement. G2c: the
-        # entrypoint is the Go narrow command itself (the Python
-        # formal_gates_harness.native_entry module was deleted with the last
-        # in-process adapter); an unknown provider still lands the typed refusal.
+        # A native job invokes the Go entrypoint with its own directory. An unknown provider
+        # produces a typed refusal; differing directory bindings require shape comparison.
         native_req = {"provider": "bogus-provider-xyz"}
         request = {"kind": "native",
                    "argv": [BINARY, "harness", "native", "<JOB>"],
@@ -506,7 +489,7 @@ class JobSupervisionDifferential(unittest.TestCase):
             ("go", BINARY, lambda j: [BINARY, "harness", "supervise", j]),
             ("ref", VENV_PYTHON, lambda j: [VENV_PYTHON, REFERENCE, j]),
         ):
-            job = tempfile.mkdtemp(prefix="g2a-native-")
+            job = tempfile.mkdtemp(prefix="supervisor-native-")
             req = dict(request)
             req["argv"] = [BINARY, "harness", "native", job]
             with open(os.path.join(job, "request.json"), "w") as f:

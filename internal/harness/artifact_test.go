@@ -89,8 +89,8 @@ func TestArtifactPlanEmptyValue(t *testing.T) {
 }
 
 func TestArtifactPlanNonFiniteRejectedAtDecode(t *testing.T) {
-	// The non-finite refusal originates at decode (UseNumber), matching the
-	// pre-migration canonical call. The transport carries the raw NaN / Infinity
+	// The non-finite refusal originates at decode (UseNumber). The transport
+	// carries the raw NaN / Infinity
 	// token, which Go's scanner rejects before the canonical encoder runs. The
 	// full bridge path (StrictDecode of the envelope) rejects the same way; this
 	// unit test pins the value-level decode that artifact-plan relies on.

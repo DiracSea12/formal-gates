@@ -1,19 +1,8 @@
-"""Reference implementation of the pre-migration job supervisor (formal_gates_harness.job).
+"""Independent test oracle for job supervision and execution receipts.
 
-Test-only. Production code must not import this module. The body below is the
-pre-migration implementation from formal_gates_harness/job.py (baseline M3),
-moved verbatim so the G2a differential can prove the Go supervisor
-(`internal/harness.Supervise`) preserves its external behaviour byte for byte.
-
-The original module was spawned as `python -m formal_gates_harness.job <dir>` and
-relied on a package-relative import (`from .infra import ...`). To run as an
-independent process from this test directory it uses the absolute import
-`formal_gates_harness.infra`; PYTHONPATH must contain
-`<repo>/runtime/langgraph` (the differential test sets this). The `main(Path)`
-signature and the `if __name__ == "__main__"` guard are preserved exactly so both
-sides of the differential run as their own process - the supervisor's whole point
-is process ownership, which an in-process call cannot demonstrate.
-"""
+Production code must not import this module. Tests run this supervisor as its
+own process with runtime/langgraph on PYTHONPATH, comparing raw streams and
+receipts against the Go supervisor in separate job directories."""
 from __future__ import annotations
 import os
 from pathlib import Path

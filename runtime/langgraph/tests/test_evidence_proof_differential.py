@@ -1,10 +1,7 @@
-"""Differential check for the evidence proof unit (G1a-2, C2).
+"""Compare file proofs and refusals against an independent evidence oracle.
 
-The pre-migration `file_proof` is kept verbatim in `reference_evidence.py` and
-production never imports it. Both implementations are run over a corpus of real
-files spanning empty, binary, Unicode-named, symlinked, unreadable and absent
-entries, and their proofs and refusal reasons are compared.
-"""
+The corpus uses real empty, binary, Unicode-named, symlinked, unreadable and
+absent files."""
 import os
 import tempfile
 import unittest

@@ -1,11 +1,6 @@
-"""Differential check for the canonical encoding unit (G1a-3, C3).
+"""Compare canonical bytes and digests against an independent encoding oracle.
 
-The pre-migration implementation is kept verbatim in `reference_canonical.py`
-and production never imports it. Both implementations are run over a fixed
-corpus and their bytes and digests are compared exactly: this encoding is the
-harness's content-addressing format, so a byte difference is a contract break,
-not a formatting preference.
-"""
+The fixed corpus pins the harness content-addressing format byte for byte."""
 import random
 import unittest
 
@@ -119,15 +114,10 @@ class CanonicalDifferential(unittest.TestCase):
         self.assertEqual(_transport_bytes(envelope).decode(), '{"operation":"x","payload":{"value":{"b":1,"a":2}}}')
 
     def test_non_finite_values_cannot_cross_the_transport(self):
-        """A measured boundary of moving canonicalisation behind the bridge.
+        """The JSON transport refuses non-finite values before canonical encoding.
 
-        The canonical format renders a non-finite float as the token Infinity,
-        which valid JSON does not allow. Python can express it; the bridge
-        envelope cannot carry it, so the request never reaches the encoder.
-        Before the migration this worked in-process. Recorded as a bounded
-        divergence: reachable only for a value that already holds a non-finite
-        float, which the result path refuses to produce.
-        """
+        The encoder can render an over-range numeric token received as raw JSON,
+        but Python non-finite floats cannot cross the bridge envelope."""
         with self.assertRaises(Exception):
             canonical({"n": float("inf")})
 
@@ -145,13 +135,7 @@ class CanonicalDifferential(unittest.TestCase):
         self.assertNotIn("1e400", rendered)
 
     def test_over_range_literal_is_accepted_then_cannot_be_canonicalised(self):
-        """The end-to-end shape of the transport boundary, measured.
-
-        A result containing the literal 1e400 passes framing - both paths agree,
-        and both report +Inf - but that value can no longer be canonicalised,
-        where before the migration it produced {"n":Infinity}. Recorded as an
-        open regression: narrow reachability, but a real behaviour change.
-        """
+        """An over-range result literal can pass framing but cannot cross canonical transport."""
         bridge = Bridge(str(PACKAGE / ".harness/bin/formal-gates"))
         accepted = bridge.call("frame-result", {"text": '{"n":1e400}'})
         self.assertTrue(accepted["accepted"])

@@ -1,8 +1,6 @@
-"""Reference implementation of the canonical encoding as it stood before C3.
+"""Independent test oracle for canonical encoding and content digests.
 
-Test-only. Production code must not import this module. The bodies below are the
-implementations from `formal_gates_harness/infra.py` at baseline C2, unchanged.
-"""
+Production code must not import this module."""
 import hashlib
 import json
 

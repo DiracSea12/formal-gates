@@ -237,7 +237,7 @@ func seriesInRedoStale(series review.Series) bool {
 	return series.FreshOwed
 }
 
-// ---- 修订屏障的单一处置表（§7.2.2 Phase A，S2） ----
+// ---- 修订屏障的单一处置表（§7.2.2 Phase A） ----
 
 // errPhaseAQuarantine 是处置表对 WORKER_RESULT 的哨兵：区别于 nil（照常
 // 接纳）与拒绝错误，表示进入持久隔离账。

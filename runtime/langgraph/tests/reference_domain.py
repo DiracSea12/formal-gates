@@ -1,12 +1,8 @@
-"""Pre-migration reference copy of the five domain judgements (G3a).
+"""Independent test oracle for harness domain judgments.
 
-Test-only. Production must not import this module. The bodies below are the
-migration-PRIOR logic of graph.py at HEAD c60b635 — evaluate's route decision,
-invoke_worker's branch order, one_check's retention rule, repair's allowance
-boundary and candidate's admission refusals — copied verbatim and lifted onto
-the payload shape the Go bridge operations take. Conditions, branch order and
-refusal wording are the contract the Go ops must reproduce.
-"""
+Production code must not import this module. Route selection, worker outcome,
+check retention, repair allowance and candidate admission are compared by
+branch order, decision values and refusal wording."""
 
 
 def evaluate_route(checks, gates):

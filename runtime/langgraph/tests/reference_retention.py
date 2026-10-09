@@ -1,19 +1,9 @@
-"""Pre-migration reference copy of the retention judgements, on the v2 payloads (G3b rework).
+"""Independent test oracle for retention judgments over fact/chunk payloads.
 
-Test-only. Production must not import this module. The conditions, branch
-order and refusal wording below are the migration-PRIOR logic of retention.py
-at HEAD f287033, lifted onto the fact/chunk payload shapes the v2 Go bridge
-operations take: inventories, member proofs and staleness rows travel in
-CHUNK-sized batches, identities travel as small typed facts, every ordering is
-carried by arrays (batch order = walk order, verify entries = the manifest's
-sorted files, stale rows = current-iteration order), and a heterogeneous
-identity value is normalized to None exactly where the Python wrapper
-normalizes it before bridging.
-
-The corpus in test_retention_differential.py pins these shapes against the
-real Go binary call for call, so an implementation that re-wholes a payload,
-reorders the branches or moves a boundary by one turns the differential red.
-"""
+Production code must not import this module. Inventories, proofs and staleness
+rows use bounded batches; arrays preserve global ordering. Tests compare
+admission, verification, projection and pruning decisions with the Go bridge,
+including normalization of heterogeneous identities."""
 from pathlib import PurePosixPath
 
 TERMINAL = {'HARNESS_COMPLETE', 'DEMO_COMPLETE', 'ABORTED'}

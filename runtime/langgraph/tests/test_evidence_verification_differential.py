@@ -1,10 +1,6 @@
-"""Differential check for the evidence verification unit (G1a-4, C4).
+"""Compare process and input-file evidence verification against an independent oracle.
 
-The pre-migration `verify_process` and the input-file loop are kept verbatim in
-`reference_evidence.py` and production never imports them. Both paths are run
-over constructed job directories and their refusals are compared by exception
-class and message, because which class a refusal raises is part of the contract.
-"""
+Constructed job directories exercise exact refusal classes and messages."""
 import json
 import tempfile
 import unittest
@@ -212,14 +208,14 @@ class EvidenceVerificationDifferential(unittest.TestCase):
         for files in (intact, changed, missing):
             with self.subTest(kind=sorted(files)[0]):
                 reference = outcome(reference_verify_input_files, files)
-                migrated = outcome(lambda: refuse(self.bridge.call(
+                actual = outcome(lambda: refuse(self.bridge.call(
                     "verify-files",
                     {"files": [{"name": str(k), "expected": v} for k, v in files.items()],
                      "label": "comparison input "},
                 )))
-                self.assertEqual(reference[0], migrated[0], f"{reference} vs {migrated}")
+                self.assertEqual(reference[0], actual[0], f"{reference} vs {actual}")
                 if reference[0] != "ok":
-                    self.assertEqual(reference[1], migrated[1], f"{reference} vs {migrated}")
+                    self.assertEqual(reference[1], actual[1], f"{reference} vs {actual}")
 
     def test_refusal_family_maps_to_exception_class(self):
         self.assertIsInstance(error_of(lambda: refuse({"ok": False, "kind": "binding", "refusal": "x"})), HarnessError)

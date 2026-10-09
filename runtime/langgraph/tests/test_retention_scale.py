@@ -1,13 +1,7 @@
-"""F1 regression: a real terminal run with 30,000 workspace files must archive,
-verify, project, preview, prune and read back end to end.
+"""Verify archive, read-back, preview and pruning of a terminal run with 30,000 files.
 
-The v1 bridge calls shipped the whole inventory (names + index + member
-proofs) in single requests; at this scale every public entry point exited 2
-with "bridge input exceeds 8 MiB" while the pre-migration Python handled the
-same run fine. The v2 fact/chunk payloads keep each request small, so this
-chain is the capacity contract. Target wall time for the whole chain: under
-90 seconds (the measured value is printed with the test).
-"""
+Fact/chunk payloads keep requests within the bridge input ceiling. The real
+workflow exercises the complete retention chain and prints elapsed time."""
 from __future__ import annotations
 import hashlib
 import os

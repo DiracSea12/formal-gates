@@ -374,7 +374,7 @@ func TestTransportTimeoutText(t *testing.T) {
 // at the total deadline. The supervisor's total-deadline discipline applies
 // only to bounded transports (合同保真要点 4).
 //
-// Margin budget (the load lesson, same shape as G2a D3): the reader loop can
+// The reader loop can
 // starve on a loaded machine, so the per-message gap needs explicit headroom,
 // not just the nominal cadence. With notifications every 0.1s and a 0.8s
 // per-message budget the unbounded side tolerates an 8x cadence gap; the

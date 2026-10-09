@@ -1,10 +1,6 @@
-"""Reference implementation of result framing as it stood before the migration.
+"""Independent test oracle for native result framing and decoding.
 
-Test-only. Production code must not import this module. It exists so the
-replacement unit (G1a-1, result decoding) can be compared against the exact
-behaviour it replaced: the body below is the implementation from
-`formal_gates_harness/native_result.py` at baseline B0, unchanged.
-"""
+Production code must not import this module."""
 import json
 import re
 

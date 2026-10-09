@@ -792,8 +792,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 
 // validatePlan rebuilds the canonical decision for the current authoritative
 // state and compares the full plan identity before any task ledger mutation.
-// Phase 2 has no external decision collectors yet, so the observation input is
-// the same explicit empty Observation used by every current caller; the
+// The observation input is the same explicit empty Observation used by callers; the
 // persistence fingerprint is bound separately to each Attempt as Snapshot.
 func (e *Engine) validatePlan(state *State, plan *decision.Plan) (PlanIdentity, error) {
 	if plan == nil {

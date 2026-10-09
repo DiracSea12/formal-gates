@@ -1,4 +1,4 @@
-// mutation_acceptance_test.go 覆盖批次 3 验收的两类拒绝性判据（对象均为
+// mutation_acceptance_test.go 覆盖两类拒绝性判据（对象均为
 // checked-in 定义源 definition.Workflow()）：
 //
 //  1. registry 完备性：缺失 ID、重复 ID、kind 不匹配三类全拒；只有完整解析

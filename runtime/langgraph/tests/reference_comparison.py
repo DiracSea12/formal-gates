@@ -1,10 +1,6 @@
-"""Pre-migration reference copy of materialize_comparison for differential tests.
+"""Independent test oracle for materialize_comparison and comparison.json encoding.
 
-Test-only. Production must not import this module. The body below is the
-migration-PRIOR implementation of materialize_comparison, byte-for-byte, except
-that the canonical encoding is taken from reference_canonical so the
-comparison.json bytes being diffed are truly the pre-migration format.
-"""
+Production code must not import this module. Encoding uses reference_canonical."""
 from pathlib import Path
 import subprocess
 from formal_gates_harness.infra import RuntimeBlocked, file_proof

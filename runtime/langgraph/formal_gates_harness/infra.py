@@ -179,10 +179,8 @@ class Store:
         self._event_lock = threading.Lock()
         self.directory.mkdir(parents=True, exist_ok=True)
     def put(self, value: Any) -> str:
-        # The content-addressing rule (ref = sha256(CanonicalJSON(value))) moved
-        # to Go (M3); this adapter only carries the request and writes the bytes
-        # Go already produced. Re-deriving canonical here would encode the same
-        # value a second time, across a second process, so we keep Go's bytes.
+        # Go owns content addressing and canonical bytes; this adapter writes
+        # the returned bytes without encoding the value again.
         answered = self.bridge.call('artifact-plan', {'value': value})
         canonical_text = answered.get('canonical')
         if canonical_text is None:
@@ -201,14 +199,11 @@ class Store:
         # and the integrity verdict (artifact-binding) only compares.
         refuse(self.bridge.call('artifact-reference', {'ref': ref}))
         path = self.directory / "artifacts" / f"{ref}.json"
-        # This is the caller's read: it produces the returned value and keeps the
-        # pre-migration OS error classes (FileNotFoundError, IsADirectoryError).
+        # The caller's read preserves OS error classes such as
+        # FileNotFoundError and IsADirectoryError.
         body = path.read_bytes()
         # The integrity verdict hashes the file Go reads at that same path, so the
-        # request stays a fixed size instead of growing with the artifact. Sending
-        # the body here is what made read capacity smaller than write capacity:
-        # the transport's own expansion put a published, referenced artifact over
-        # the shared request ceiling on the way back in. The artifact directory is
+        # request size is independent of artifact size. The artifact directory is
         # publish-once, so both reads see the same bytes.
         refuse(self.bridge.call('artifact-binding', {'ref': ref, 'path': str(path)}))
         return json.loads(body)

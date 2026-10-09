@@ -1,8 +1,6 @@
-"""Reference implementation of evidence content proofs as it stood before the migration.
+"""Independent test oracle for file content proofs and process evidence verification.
 
-Test-only. Production code must not import this module. The body below is the
-implementation from `formal_gates_harness/infra.py` at baseline C1, unchanged.
-"""
+Production code must not import this module."""
 import hashlib
 
 from formal_gates_harness.infra import RuntimeBlocked
@@ -17,12 +15,7 @@ def file_proof(path):
 
 
 def verify_process(jobs_root, process):
-    """Reference: the implementation from `Store.verify_process` at baseline C3.
-
-    Uses the reference digest and file proof so the comparison is against the
-    pre-migration behaviour end to end, not against a mixture of old and new
-    primitives.
-    """
+    """Verify process evidence with the independent digest and file-proof oracles."""
     from pathlib import Path
     from formal_gates_harness.infra import HarnessError, RuntimeBlocked, read
     from reference_canonical import digest as reference_digest

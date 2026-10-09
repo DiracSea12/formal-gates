@@ -92,9 +92,9 @@ func workerOutcome(q workerOutcomeInput) workerAction {
 	return workerAccept
 }
 
-// checkRetentionInput serves both retention phases over one operation. Phase 1
-// (evidence_valid absent) judges whether the old record is even eligible for
-// re-verification; phase 2 (evidence_valid present) turns the outcome of
+// checkRetentionInput serves eligibility and verified-outcome judgments.
+// With evidence_valid absent it checks eligibility for re-verification;
+// with evidence_valid present it turns the outcome of
 // verify_evidence into retain/fail/rerun. `old` is the three-field projection
 // of the previous record, null when there is none.
 type checkRetentionInput struct {

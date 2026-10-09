@@ -22,12 +22,8 @@ class Boundaries(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
     def test_artifact_integrity(self):
-        # M3 premise change: put/get now go through the Go bridge, so this test
-        # (which previously proved artifact read/write needed NO bridge by
-        # passing Bridge('unused')) must use a real bridge. The assertions are
-        # kept verbatim: a stored artifact round-trips, and corrupting it yields
-        # an integrity refusal. Recorded as an intentional premise change, not a
-        # deletion, in the M3 record.
+        # A stored artifact round-trips through the real bridge; corrupt bytes
+        # must produce an integrity refusal.
         with tempfile.TemporaryDirectory() as directory:
             store=Store(Path(directory),{},driver_bridge())
             ref=store.put({'result':'PASS'});self.assertEqual(store.get(ref),{'result':'PASS'})

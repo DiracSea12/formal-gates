@@ -4,7 +4,7 @@ No background deletion and no pruning of a running/paused/unknown invocation.
 An archive is evidence, not another scheduler. A small tombstone retains status
 while the full source, checkpoints (SQLite backup), jobs and artifacts live in ZIP.
 
-The retention *rules* live in `internal/harness` (G3b): member admission,
+The retention *rules* live in `internal/harness`: member admission,
 destination/settlement/skeleton/verify/stale/projection judgements and the prune
 admission/bind/marker/plan rules. This module keeps the filesystem facts and
 effects — locking, hashing, the SQLite backup, zip reading and writing, process
@@ -172,10 +172,9 @@ def archive_status(path):
 def archived_status(directory):
     marker = read(directory / MARKER)
     archive = marker['archive']
-    archive_proof = proof(archive)      # today compares this before opening the zip
-    marker_proof = marker['archive_proof']  # today's right-hand key access, same order
-    # Pre-check phase (no status yet): ARCHIVE_CHANGED fires before any zip
-    # work, exactly where the pre-migration comparison sat.
+    archive_proof = proof(archive)      # Compare before opening the zip.
+    marker_proof = marker['archive_proof']
+    # ARCHIVE_CHANGED is checked before opening the archive or reading status.
     _decide(driver_bridge().call('archive-projection', {
         'archive': str(Path(archive).resolve()), 'archive_proof': archive_proof,
         'marker': {'archive_proof': marker_proof}}))
@@ -223,8 +222,7 @@ def archive_run(directory, destination):
     with run_lock(directory):
         if (directory / MARKER).exists(): raise HarnessError('RUN_ARCHIVED: use the retained archive')
         status = _terminal(store, package)
-        # Refuse an existing destination before any inventory, hashing or
-        # backup work — the pre-migration position of this guard.
+        # Refuse an existing destination before inventory, hashing or backup.
         if destination.exists(): raise HarnessError('ARCHIVE_EXISTS: use a new destination; not overwritten')
         original = inventory(directory)
         logical_db = db_proof(directory / 'checkpoints.sqlite')

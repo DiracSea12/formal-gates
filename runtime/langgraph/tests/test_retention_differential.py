@@ -1,21 +1,9 @@
-"""End-to-end differential: the eleven G3b retention judgements vs pre-migration reference.
+"""Compare retention judgments with an independent fact/chunk oracle through the Go bridge.
 
-Every case calls the real Go binary through driver_bridge().call(op, payload)
-and compares the WHOLE answer, canonically, with reference_retention (the
-lifted pre-migration logic of retention.py at HEAD f287033, on the v2
-fact/chunk payload shapes). The corpus is deliberately discriminating: each
-operation has at least one row that pins an order, a priority or a boundary —
-SKIP before the symlink refusal, the facts before any batch entries, batch
-order as the global order, the database logical-hash special case, KEEP
-filtering with the (-depth, name) removal sort, the tombstone binding before
-staleness, and the None normalization for heterogeneous identities — so a Go
-implementation that re-wholes a payload, reorders the branches or moves a
-boundary by one turns this differential red.
-
-The sequence class at the bottom runs the real Python wrapper over the real
-bridge and pins the cross-batch and cross-operation orders the op-level rows
-cannot see alone.
-"""
+The corpus pins refusal priorities, fact-before-batch ordering, array order,
+logical database hashes, pruning order, tombstone binding and heterogeneous
+identity normalization. Sequence tests also cover cross-batch and cross-operation
+ordering in the Python wrapper."""
 import hashlib
 import json
 import os

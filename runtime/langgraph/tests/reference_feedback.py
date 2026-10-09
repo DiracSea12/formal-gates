@@ -1,11 +1,6 @@
-"""Pre-migration reference copy of task_input and evidence_feedback.
+"""Independent test oracle for task-input and evidence-feedback wrappers.
 
-Test-only. Production must not import this module. The bodies below are the
-migration-PRIOR implementations of task_input and evidence_feedback, byte for
-byte, except that `digest` is taken from reference_canonical so the canonical
-bytes being diffed are truly the pre-migration format (the live infra.digest is
-now backed by Go and is the thing under test).
-"""
+Production code must not import this module. Digests use reference_canonical."""
 from formal_gates_harness.infra import HarnessError
 from reference_canonical import digest
 

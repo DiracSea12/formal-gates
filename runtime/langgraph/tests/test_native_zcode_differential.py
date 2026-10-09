@@ -1,99 +1,9 @@
-"""Differential test for the G2c ZCode native execution path.
+"""Compare the ZCode Go adapter with an independent app-server transport oracle.
 
-The pre-migration ZCode app-server transport is kept verbatim in
-`reference_native_zcode.py` (test-only, built on `reference_native_transport`,
-like `reference_native_dsh.py` for G2b). This test runs the Go adapter
-(`formal-gates harness native <dir>`, which dispatches through the Go registry
-to internal/harness/native_zcode.go) and the reference implementation over the
-same native-request.json contract, each in its OWN evidence directory, and
-asserts the two are observably equal.
-
-Comparison faces (the G2c contract's value-level equivalence, same discipline
-as test_native_dsh_differential.py):
-
-- by value, parsed and compared as JSON after normalising each side's own root
-  path (and the per-side fake app-server path inside the request's binding):
-  every atomically written evidence file (native-request.json, identity.json,
-  tool-policy.json, native-source.json, account-provider.json, source.json,
-  answer.json, interaction-status.json). Both sides render atomics canonically;
-  the values must be equal.
-- byte for byte: the native answer text (answer.raw.txt), which is the model's
-  own text on both sides.
-- the prompt: the fixed head byte for byte, the schema JSON embedded after it
-  by value (the reference renders it with Python separators, Go canonically -
-  the registered bounded difference, same as G2b). One more registered side
-  asymmetry in the same face: the Go side presents each object's
-  additionalProperties key last instead of first (2026-09 GLM serving echoed
-  the leading directive keyword back into answers; the value is unchanged,
-  pinned by internal/harness/native_zcode_test.go and
-  native_zcode_unix_test.go).
-- by value, parsed and compared as JSON per line: the outbound protocol lines
-  the host echoed (host-frames.jsonl - including the session/create and
-  session/send parameter values; the reference sends default-separator bytes,
-  Go canonical), the routing-only trace (protocol.jsonl), the host's record of
-  frames it answered (host-replies.jsonl), the committed notification evidence
-  (native-events.jsonl), and the Go command's stdout result line (the embedded
-  binding normalised to each side's own directory).
-- the error records: the same exception-family prefix and the same message,
-  with the registered differences - a JSON body embedded in an error text (the
-  ZCODE_PROTOCOL refusal, the account-config refusal) is Python-shaped on the
-  reference side and canonical on the Go side, so those cases compare the
-  embedded body by value and expect each side's own rendering.
-- the setModel host contract (probed 2026-09-19 against the host updated that
-  morning): the method's params schema rejects a string model as invalid
-  params, an object without options.reasoningLevel is refused by the registry,
-  and an accepted object is confirmed with the options in the readback and
-  moves thoughtLevel with it. The fake mirrors that contract for both sides;
-  both sides already send the one accepted shape (the object with an
-  advertised options.reasoningLevel), so no comparison-layer difference is
-  needed. One registered side asymmetry: when the snapshot advertises no
-  models at all (an empty provider registry, where the real host's setModel
-  cannot apply anything), the Go adapter refuses before firing the frame with
-  the transport's own "not advertised; no fallback" text, while the frozen
-  reference still sends it - pinned by the Go-side-only scenario below, same
-  discipline as the applied-credential half.
-- the permission-mode contract (2026-09-20, the drop of the forced
-  setMode(yolo) that predated the G2d interaction hold): a request without
-  permission_mode switches nothing on the Go side - the session runs the
-  host's own default mode and the evidence records what the host itself
-  reported - while the frozen reference still declares yolo on every new
-  non-read-only session (its era predates the drop). The registered
-  divergence is pinned per side by the default-mode scenario below; the
-  differentially comparable scenarios below request permission_mode='yolo'
-  explicitly, the one value where the frozen reference and the Go explicit
-  path coincide frame for frame. An explicit permission_mode the host does
-  not apply is refused on both sides through the same readback contract
-  (the mismatch scenario below). Resumed and read-only sessions never
-  switch modes on either side.
-
-The two sides are deliberately asymmetric processes: the reference is called
-in-process (reference_native_zcode.execute), while the Go side is its own
-process, because one native job in one process is the Go implementation's
-whole shape. When the reference raises, the test lands native-error.json with
-exactly the five lines native_entry.py used, so error records compare too.
-
-The host is a fake app-server (FAKE_ZCODE_HOST below, after the FAKE_DSH_HOST
-precedent): it mirrors what the real app-server makes observable - the
-snapshot handshake (protocol block, session.sessionId, settings with
-model.current/available, thoughtLevel and mode), session/setMode answering
-through settings while its projection block stays a stale snapshot (the real
-host's observed shape; settings is the authoritative confirmation),
-session/setModel/setThoughtLevel readbacks, provider/updateAccountConfig
-receipts, the session/send ack followed by the session/event notification
-stream keyed by inputId/turnId/seq, client-directed reverse requests
-(interaction/requestProviderRuntimeHeaders, interaction/requestPermission),
-and the resume refusal with the host's own -32004 "Session not found:" text.
-
-Coverage division for the faces the relocation itself makes unequal: the
-reference executes its credential helper next to itself, where none exists, so
-a runtime-headers request it receives is always answered "no provisioned
-credential" - the differentially comparable case - while the applied-secret
-half of that interaction is pinned by internal/harness/
-native_zcode_unix_test.go (TestZcodeExecuteRuntimeHeadersCredential) and by
-the Go-side-only scenario below. The reference-side case below pins the
-startup acknowledgement timeout. Unbounded execution waiting is covered by
-TestZcodeTurnWaitsForItsTerminalEvent in native_zcode_unix_test.go.
-"""
+Each implementation receives the same native request and owns a separate
+evidence directory. Tests compare protocol frames, prompt/schema content,
+binding, account-provider and credential evidence with registered path/rendering
+normalization. The host is a local fake app-server; no model is called."""
 import hashlib
 import json
 import os
@@ -172,7 +82,7 @@ RUNTIME_HEADERS = 'interaction/requestProviderRuntimeHeaders'
 
 FAKE_ZCODE_HOST = '''#!PYTHON
 """Fake ZCode app-server: mirrors the observable behaviour of the real host for
-the G2c differential. Speaks the plain {id, method, params} shape on stdio,
+transport differential checks. Speaks the plain {id, method, params} shape on stdio,
 answers the snapshot sequence with settings as the authoritative confirmation
 (the projection block stays a stale snapshot, the real host's shape), streams
 session/event notifications after the accepted input, asks the client-directed
@@ -373,7 +283,7 @@ class ZCodeDifferential(unittest.TestCase):
         divergence in the module docstring).
         """
         if root is None:
-            root = Path(tempfile.mkdtemp(prefix='g2c-zcode-')).resolve()
+            root = Path(tempfile.mkdtemp(prefix='native-zcode-')).resolve()
             self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         workspace = root / 'ws'
         workspace.mkdir(exist_ok=True)
@@ -819,11 +729,8 @@ class ZCodeDifferential(unittest.TestCase):
             self.assertNotIn('session/setThoughtLevel', methods)
 
     def test_go_side_nothing_advertised_is_refused_before_set_model(self):
-        # Go side only, registered in the module docstring: a snapshot that
-        # advertises no models at all is an empty provider registry on the
-        # 2026-09-19 host, where setModel cannot apply anything (the state the
-        # failing G2c run jobs were in). The Go adapter refuses with its own
-        # text before firing the frame; the frozen reference still sends it.
+        # An empty advertised model registry must be rejected before sending setModel.
+        # The oracle and Go adapter expose separate refusal behavior for this boundary.
         empty = {'model': {'current': {'providerId': 'p1', 'modelId': 'm0'}, 'available': []},
                  'thoughtLevel': {'current': 'low'}, 'mode': {'current': 'default'}}
         _root, _workspace, _ref_dir, go_dir = self.scenario(
@@ -1156,11 +1063,11 @@ class ZCodeReconcileDifferential(unittest.TestCase):
             self.assertFalse((go_dir / 'source.json').exists())
 
     def test_native_result_prefix_is_recovered(self):
-        with tempfile.TemporaryDirectory(prefix='g2c-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='zcode-lifecycle-') as name:
             self.assert_same_outcome(Path(name).resolve(), self.RESULT_PREFIX)
 
     def test_transport_failure_is_never_laundered(self):
-        with tempfile.TemporaryDirectory(prefix='g2c-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='zcode-lifecycle-') as name:
             self.assert_same_outcome(
                 Path(name).resolve(),
                 'RuntimeBlocked: ZCODE_TRANSPORT: Invalid native protocol output',

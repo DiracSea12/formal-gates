@@ -1,55 +1,9 @@
-"""Differential test for the G2b DSH native execution path.
+"""Compare the DSH Go adapter with an independent ACP transport oracle.
 
-The pre-migration DSH ACP transport is kept verbatim in `reference_native_dsh.py`
-(test-only, like `reference_job.py` for G2a). This test runs the Go adapter
-(`formal-gates harness native <dir>`, which dispatches through the Go registry to
-internal/harness/native_dsh.go) and the reference implementation over the same
-canonical native-request.json bytes, each in its OWN evidence directory, and
-asserts the two are observably equal.
-
-Comparison faces (the contract v2 value-level equivalence):
-
-- by value, parsed and compared as JSON after normalising each side's own root
-  path (and the plugin path inside profile.json): every atomically written
-  evidence file (identity.json, source.json, answer.json,
-  interaction-status.json, profile.json, native-request.json) and the schema
-  JSON embedded in the prompt the host received (host-prompt.txt). The Go side
-  renders canonical compact bytes where the reference renders default-separator
-  bytes; the JSON values are equal and consumers parse by value, which is
-  exactly the registered difference.
-- byte for byte: the native answer text (answer.raw.txt), which is the model's
-  own text on both sides.
-- the error records: the same exception-family prefix and the same message,
-  with one registered difference - a JSON body embedded in an error text (the
-  DSH_NATIVE request refusal, a turn-end reason) is Python-shaped on the
-  reference side and canonical on the Go side, so those two cases compare the
-  embedded body by value and expect each side's own rendering.
-- by value, parsed and compared as JSON: the outbound protocol lines the host
-  echoed (host-frames.jsonl - including the session/new and session/prompt
-  parameter values), the routing-only trace (protocol.jsonl), the host's record
-  of frames it answered (host-replies.jsonl), and the Go command's stdout
-  result line.
-
-The two sides are deliberately asymmetric: the reference is called in-process
-(reference_native_dsh.execute), while the Go side is its own process, because one
-native job in one process is the Go implementation's whole shape. When the
-reference raises, the test lands native-error.json with exactly the five lines
-native_entry.py used, so error records compare byte for byte too.
-
-The host is a fake ACP peer (a temporary Python script, FAKE_DSH_HOST below,
-after the FAKE_APP_SERVER precedent): it mirrors what the real DSH plus the
-unchanged native_dsh.mjs plugin make observable - profile.json is read from
---patch, native-source.json is bound to identity.json's session, evidence events
-stream after the first user message, and every received frame and the prompt
-text are echoed for the comparison.
-
-Coverage division for one case: the timeout TEXT ('DSH_NATIVE_TIMEOUT: <method>')
-is pinned here only for the reference side (a short monkeypatched
-Client.default_timeout; the Go command has no timeout entry point) and for the
-Go side by internal/harness/native_transport_unix_test.go
-(TestTransportTimeoutText); this test covers Go's transport closure behaviour
-through the early-close and non-JSON scenarios instead.
-"""
+Each implementation receives the same native request and owns a separate
+evidence directory. Tests compare protocol frames, prompt/schema content,
+evidence and errors, normalizing directory/plugin paths and JSON rendering.
+The host is a local fake ACP peer; no model is called."""
 import json
 import os
 import shutil
@@ -120,7 +74,7 @@ def default_events(session_id='sess-root'):
 
 FAKE_DSH_HOST = '''#!PYTHON
 """Fake DSH ACP host: mirrors the observable behaviour of the real host plus the
-unchanged native_dsh.mjs plugin for the G2b differential. Reads profile.json from
+native_dsh.mjs plugin for transport differential checks. Reads profile.json from
 --patch, answers the ACP sequence, writes native-source.json/native-events.jsonl
 after the first user message and echoes every received frame and prompt."""
 import json
@@ -273,7 +227,7 @@ class DSHDifferential(unittest.TestCase):
     def scenario(self, knobs=None, identity='', probe=False, model='', reasoning_effort='',
                  request_extra=None, prewrite=None):
         """One shared root: workspace and host script shared, evidence dirs per side."""
-        root = Path(tempfile.mkdtemp(prefix='g2b-dsh-')).resolve()
+        root = Path(tempfile.mkdtemp(prefix='native-dsh-')).resolve()
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         workspace = root / 'ws'
         workspace.mkdir()
@@ -605,12 +559,8 @@ class DSHDifferential(unittest.TestCase):
 
     # --- 交互边界 -----------------------------------------------------------
     def test_permission_request_never_answered(self):
-        # G2d registered divergence: the frozen reference still refuses (its
-        # era predates the held-interaction contract); the Go binary holds the
-        # request for a user decision - no reply frame, one pending record
-        # with the host's own options verbatim - and the same turn still
-        # completes. The property both sides always pinned, that a user
-        # decision is never answered here, is unchanged.
+        # The oracle refuses a permission request; the Go adapter retains it for a user
+        # decision with the host options unchanged. Neither side answers the request.
         knobs = {'reverse_requests': [{'id': 'p-1', 'method': 'session/request_permission',
                                        'params': {'sessionId': 'sess-root',
                                                   'toolCall': {'toolCallId': 'call-1'},
@@ -808,40 +758,35 @@ class DSHReconcileDifferential(unittest.TestCase):
             self.assertFalse((go_dir / 'source.json').exists())
 
     def test_legacy_error_is_recovered(self):
-        with tempfile.TemporaryDirectory(prefix='g2b-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='dsh-lifecycle-') as name:
             self.assert_same_outcome(Path(name).resolve(), self.LEGACY)
 
     def test_native_result_prefix_is_recovered(self):
-        with tempfile.TemporaryDirectory(prefix='g2b-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='dsh-lifecycle-') as name:
             self.assert_same_outcome(Path(name).resolve(), self.RESULT_PREFIX)
 
     def test_ineligible_failure_is_refused(self):
-        with tempfile.TemporaryDirectory(prefix='g2b-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='dsh-lifecycle-') as name:
             self.assert_same_outcome(
                 Path(name).resolve(), 'RuntimeBlocked: DSH_TRANSPORT: native ACP process closed its output',
                 expected_error='DSH_RECONCILE: not a completed formatting-only failure')
 
     def test_workspace_change_is_refused(self):
-        with tempfile.TemporaryDirectory(prefix='g2b-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='dsh-lifecycle-') as name:
             root = Path(name).resolve()
             self.assert_same_outcome(
                 root, self.LEGACY, workspace_override=str(root / 'elsewhere'),
                 expected_error='DSH_RECONCILE: workspace changed')
 
     def test_model_selection_change_is_refused(self):
-        with tempfile.TemporaryDirectory(prefix='g2b-rec-') as name:
+        with tempfile.TemporaryDirectory(prefix='dsh-lifecycle-') as name:
             self.assert_same_outcome(
                 Path(name).resolve(), self.LEGACY, configured_model='other-model',
                 expected_error='DSH_RECONCILE: original model selection differs')
 
 
 class _NativeDshReference:
-    """The retired NativeAdapter's dsh lifecycle semantics, verbatim.
-
-    NativeAdapter (formal_gates_harness/native_hosts.py) was deleted when the
-    last in-process execution path was retired (G2c); these two methods are
-    what the GoAdapter's bridge operations are still compared against.
-    """
+    """Independent oracle for DSH lifecycle binding and validation."""
 
     name = 'dsh'
 
@@ -875,7 +820,7 @@ class DSHRegistryDifferential(unittest.TestCase):
         self.adapter = GoAdapter('dsh')
 
     def temporary_root(self):
-        root = Path(tempfile.mkdtemp(prefix='g2b-reg-')).resolve()
+        root = Path(tempfile.mkdtemp(prefix='dsh-registry-')).resolve()
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return root
 
@@ -989,7 +934,7 @@ class GoAdapterProbePath(unittest.TestCase):
         ensure_driver_binary()
 
     def scenario_root(self):
-        root = Path(tempfile.mkdtemp(prefix='g2b-adapter-')).resolve()
+        root = Path(tempfile.mkdtemp(prefix='dsh-adapter-')).resolve()
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         workspace = root / 'ws'
         workspace.mkdir()
@@ -1007,8 +952,7 @@ class GoAdapterProbePath(unittest.TestCase):
         return request
 
     def test_entry_argv_routes_each_host_to_its_implementation(self):
-        # Every native host is one job in one Go process now: dsh since G2b,
-        # zcode since G2c (the Python entry module was deleted with it).
+        # Each native host executes one job in its own Go process.
         for provider in ('dsh', 'zcode'):
             self.assertEqual(GoAdapter(provider).entry_argv('/bind/formal-gates', Path('/jobs/k')),
                              ['/bind/formal-gates', 'harness', 'native', '/jobs/k'])

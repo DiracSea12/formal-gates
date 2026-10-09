@@ -1,4 +1,4 @@
-// sequence_acceptance_test.go 覆盖批次 3 验收的 step 乱序/遗漏/重复判据，
+// sequence_acceptance_test.go 覆盖 step 乱序/遗漏/重复判据，
 // 比决策包的单元序列更完整：用真实 definition.Workflow() 的编译产物驱动
 // State.CompleteStep——合法完成序列 golden + 三类非法序列全拒 + 对 golden
 // 每个前缀的穷举走查（每个未满足依赖的步骤、每个已完成步骤、每个未知步骤

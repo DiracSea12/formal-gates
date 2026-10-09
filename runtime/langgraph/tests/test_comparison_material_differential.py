@@ -1,12 +1,7 @@
-"""End-to-end differential: migrated materialize_comparison vs pre-migration reference.
+"""Compare comparison materials with an independent oracle on the same real Git repository.
 
-The reference implementation (reference_comparison) runs the PRE-migration logic
-and encodes comparison.json with reference_canonical. The migrated
-implementation (formal_gates_harness.feedback) parses the git raw output in Go via
-the comparison-plan bridge and writes the Go-canonical comparison.json. Both run
-against the same real git repository but into independent material directories, so
-the diff is a pure behavioural comparison.
-"""
+The oracle uses reference_canonical. Production uses the Go comparison-plan
+bridge. Separate material directories let both paths generate their full output."""
 from pathlib import Path
 import json
 import tempfile

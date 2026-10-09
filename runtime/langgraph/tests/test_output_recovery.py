@@ -86,9 +86,7 @@ class OutputRecovery(unittest.TestCase):
                 self.assertFalse(app.get_state(config).next)
 
 class NativeInteractionProjection(unittest.TestCase):
-    """R4 (G2d contract item 2): the run-level show projection lists a job's
-    still-pending native interactions read-only, at the same level as a
-    LangGraph interrupt, without touching the flow or writing anything."""
+    """Read-only run projection of held native interactions."""
 
     PENDING = {'request_id': 'req-1', 'method': 'interaction/requestPermission',
                'connection': 2, 'summary': 'Bash: run a tool',

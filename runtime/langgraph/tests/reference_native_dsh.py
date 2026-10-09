@@ -1,35 +1,10 @@
-"""Reference implementation of the pre-migration DSH ACP transport.
+"""Independent test oracle for the DSH ACP transport.
 
-Test-only. Production code must not import this module. The body below is the
-pre-migration implementation from formal_gates_harness/native_dsh.py, moved
-verbatim so the G2b differential can prove the Go adapter
-(internal/harness/native_dsh.go behind `formal-gates harness native`) preserves
-its observable behaviour - every atomic evidence file, the error texts and the
-prompt text byte for byte, the outbound protocol lines, protocol.jsonl and
-stdout by value (the registered bounded differences). The production execution
-path for dsh is now the Go driver binary; only native_dsh.mjs stays in the
-package.
-
-The original module lived inside formal_gates_harness and used package-relative
-imports (`from .infra import ...`). To run from this test directory it uses the
-absolute imports `formal_gates_harness.infra` etc.; PYTHONPATH must contain
-`<repo>/runtime/langgraph` (the differential test sets this). The shared
-transport it was built on left the production package with the G2c zcode
-retirement, so it now builds on the tests-local reference copy
-(reference_native_transport) instead. Everything else,
-including TRANSPORT_FILES and the `Path(__file__).with_suffix('.mjs')` plugin
-lookup in make_patch, is kept exactly as it was - the differential normalises
-the plugin path it embeds into profile.json, because the reference resolves it
-next to this file while Go resolves it next to the production package.
-
-The two sides of the differential are deliberately asymmetrical processes: the
-reference side is called in-process (reference_native_dsh.execute), while the
-Go side is spawned as its own process (`formal-gates harness native <dir>`),
-because running one native job in one process is the Go implementation's whole
-shape. Error records for the reference side are written by the test using
-exactly the five lines native_entry.py used, since the entry's registry now
-dispatches dsh to Go.
-"""
+Production code must not import this module. Differential tests compare
+protocol frames, prompt content, evidence files and error records against the Go
+adapter. The oracle uses reference_native_transport; runtime/langgraph must be
+on PYTHONPATH. Each implementation owns a separate evidence directory, and
+tests normalize directory and plugin paths before comparison."""
 from __future__ import annotations
 import json
 from pathlib import Path

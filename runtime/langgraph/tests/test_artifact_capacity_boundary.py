@@ -1,21 +1,8 @@
-"""End-to-end capacity boundary for publication and read-back (G1b, M3 repair).
+"""Verify publication, read-back and worker receipt replay at the artifact capacity boundary.
 
-M3's acceptance finding was a capacity *asymmetry*, not a wrong helper: every
-unit was correct on its own, but publication accepted an artifact that read-back
-could not carry, because the read request put the artifact body on the wire while
-sharing one fixed input ceiling with every other bridge operation. Helper-level
-tests cannot see that; only the real Store.put / Store.get pair and the real
-worker receipt re-entry can.
-
-These tests therefore bound the pair, not the helpers:
-
-* read-back covers the largest artifact that publication actually accepts, found
-  from the transport's own serialiser rather than from a constant copied here;
-* the read request does not grow with the artifact, so the two ends cannot drift
-  apart again by an expansion factor;
-* a real worker completes, writes its receipt, and the same worker can re-enter
-  it - which is the user-visible consequence the finding reported.
-"""
+The largest accepted artifact is derived from the transport serializer. Read
+requests remain independent of artifact size. A completed worker must be able
+to read its recorded result on re-entry."""
 import hashlib
 import json
 import tempfile
@@ -33,7 +20,7 @@ BINARY = PACKAGE / ".harness/bin/formal-gates"
 # The ceiling every bridge operation shares, as the transport documents it.
 WIRE_LIMIT = 8 * 1024 * 1024
 
-# The size the M3 acceptance finding used for its counterexample.
+# A large artifact exercises transport capacity and receipt read-back.
 FINDING_SIZE = 6400 * 1024
 
 

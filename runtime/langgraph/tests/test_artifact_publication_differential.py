@@ -156,7 +156,7 @@ class ArtifactPublicationDifferential(unittest.TestCase):
     def test_corrupt_existing_not_repaired_on_reput(self):
         value = {"result": "PASS"}
         ref = self.publish(value)
-        # Corrupt both bound contents; M3 never repairs a publish-once file.
+        # Corrupt both bound contents; publication must not overwrite existing files.
         self.mutate(ref, b"{}")
         # Re-putting the same value must NOT overwrite the corrupt bytes.
         self.store.put(value)
@@ -179,8 +179,7 @@ class ArtifactPublicationDifferential(unittest.TestCase):
 
     def test_publish_failure_leaves_no_artifact_or_tmp(self):
         value = {"result": "PASS"}
-        # Stub the atomic rename so publish fails midway (atomic_bytes is
-        # unchanged by M3, but the matrix requires the net behaviour).
+        # Interrupt publication at its atomic rename boundary.
         with patch("formal_gates_harness.infra.os.replace",
                    side_effect=OSError("boom")):
             for store, base in ((self.store, self.live_root),

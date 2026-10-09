@@ -66,8 +66,8 @@ def materialize_comparison(workspace, materials, base, candidate):
     options = ('--no-ext-diff', '--no-textconv', '--find-renames')
     save('full.diff', git_bytes('diff', *options, '--binary', '--full-index', base, candidate, '--'))
     raw = git_bytes('diff', *options, '--raw', '--no-abbrev', '-z', base, candidate, '--').decode()
-    # The parse + representation rules now live in Go (M1); it returns the
-    # canonical comparison.json bytes and the changes that drive material export.
+    # Go parses the native delta and returns canonical comparison.json bytes
+    # and the changes used for material export.
     plan = driver_bridge().call('comparison-plan',
                                 {'base': base, 'candidate': candidate, 'diff': 'full.diff', 'raw': raw})
     changes = plan['changes']

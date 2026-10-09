@@ -1,4 +1,4 @@
-// determinism_acceptance_test.go 覆盖批次 3 验收的跨进程确定性：真实生成
+// determinism_acceptance_test.go 覆盖跨进程确定性：真实生成
 // 入口（cmd/gen-definition，`go run ./cmd/gen-definition` 的同一 main）以两个
 // 独立子进程各执行一次，产出逐字节相同的两个交付物，且与 checked-in 制品
 // 逐字节一致。

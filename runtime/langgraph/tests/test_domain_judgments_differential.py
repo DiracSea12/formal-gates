@@ -1,12 +1,7 @@
-"""End-to-end differential: the five G3a domain judgements vs pre-migration reference.
+"""Compare harness domain judgments with an independent oracle through the Go bridge.
 
-Every case calls the real Go binary through driver_bridge().call(op, payload)
-and compares the WHOLE answer, canonically, with reference_domain (the lifted
-pre-migration logic of graph.py). The corpus is deliberately discriminating:
-each operation has at least one row that pins an order, a priority or a
-boundary, so a Go implementation that sorted the projections, reordered the
-branches or moved a boundary by one turns this differential red.
-"""
+The corpus pins input order, decision priorities and allowance boundaries;
+answers are compared as complete canonical values."""
 import unittest
 
 from formal_gates_harness.infra import canonical, driver_bridge

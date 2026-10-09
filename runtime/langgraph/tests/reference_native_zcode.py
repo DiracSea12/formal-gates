@@ -1,51 +1,14 @@
-"""Reference implementation of the pre-migration ZCode app-server transport.
+"""Independent test oracle for the ZCode app-server transport.
 
-Test-only. Production code must not import this module. The body below is the
-pre-migration implementation from formal_gates_harness/native_zcode.py, moved
-verbatim so the G2c differential (test_native_zcode_differential.py) can prove
-the Go adapter (internal/harness/native_zcode.go behind
-`formal-gates harness native`) preserves its observable behaviour - every
-atomic evidence file, the error texts and the prompt text byte for byte, the
-outbound protocol lines, protocol.jsonl, native-events.jsonl and stdout by
-value (the registered bounded differences). The production execution path for
-zcode is now the Go driver binary; only zcode_credential.mjs stays in the
-package.
+Production code must not import this module. It uses reference_native_transport
+for process ownership, request/reply routing, binding and evidence. Differential
+tests compare native protocol frames, exact session/input/turn identity, prompt
+content and evidence against the Go adapter in separate evidence directories.
 
-The original module lived inside formal_gates_harness and used package-relative
-imports (`from .infra import ...`). To run from this test directory it uses the
-absolute import `formal_gates_harness.infra` and builds on the tests-local
-transport reference `reference_native_transport` (the shared production module
-was retired with it); PYTHONPATH must contain `<repo>/runtime/langgraph` (the
-differential test sets this). One relocation consequence is registered rather
-than papered over: request_auth() looks for zcode_credential.mjs next to this
-file, where no helper exists, so the reference always answers the
-runtime-headers reverse request with "no provisioned credential"; the
-credential-delivery half of that interaction is pinned by the Go
-implementation's own tests (internal/harness/native_zcode_unix_test.go,
-TestZcodeExecuteRuntimeHeadersCredential) and by the Go-side-only scenario of
-the differential. Everything else is kept exactly as it was:
-
-ZCode app-server transport, reusing the original native event contract.
-
-Only the ZCode protocol lives here; process handling, the request/reply loop,
-bindings and evidence come from native_transport. No graph imports, workflow
-callbacks, global configuration writes or model substitution. Only read-only
-roles narrow native tools. Terminals require exact session/input/turn IDs.
-
-The app-server speaks "ZCode Protocol v1". It applies no selection of its own: a
-client names an exact provider/model reference and reads the result back.
-
-A launcher that starts the app-server itself is also the side that has to hand
-over the host's account provider configuration, because the agent keeps no
-registry of its own: without it the app-server reports an empty provider list
-and no current model at all. `account_provider_configuration` rebuilds that
-overlay from the host's own provisioning index.
-
-Handing over the overlay is not enough to finish a turn. The same host asks its
-client for the request credential before every model request and abandons the
-turn when none comes back, so `respond` answers that one interaction from the
-same provisioning index -- see request_auth().
-"""
+The reference resolves its credential helper next to this file; no helper is
+provisioned there. Go credential delivery is verified separately. Provider/model
+selection and account-provider configuration come from the host provisioning
+index; the adapter makes no workflow decisions or model substitutions."""
 from __future__ import annotations
 import hashlib
 import json

@@ -11,14 +11,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from formal_gates_harness import (cli, native_hosts as hosts)
-# G2b: the pre-migration DSH transport is test-only reference code now; the
-# production dsh execution path is the Go driver binary. The dsh structural
-# assertions below pin the reference implementation the differential
-# (test_native_dsh_differential.py) compares the Go adapter against.
-# G2c: the zcode transport (and with it the shared transport module and the
-# native entry) left the production package the same way; the zcode structural
-# assertions below pin reference_native_zcode, which the G2c differential
-# (test_native_zcode_differential.py) compares the Go adapter against.
+# DSH and ZCode structural assertions pin the independent transport oracles
+# used by differential checks against the Go native adapters.
 import reference_native_dsh as dsh
 import reference_native_transport as shared
 import reference_native_zcode as zcode
@@ -41,8 +35,7 @@ class RegistryAndSelection(unittest.TestCase):
             self.assertNotEqual(runtime_identity(root, str(root / 'binary')), before)
 
     def test_execution_only_host_does_not_need_installation_registration(self):
-        # G2c: NativeAdapter is gone (every execution adapter is a Go driver
-        # command), so a runtime-only registration is a GoAdapter row too.
+        # Runtime-only host registration uses the same GoAdapter interface.
         adapter = hosts.GoAdapter('runtime-only')
         with patch.dict(hosts._ADAPTERS, {'runtime-only': adapter}):
             bridge = Mock()
@@ -306,11 +299,8 @@ class SharedTransportBoundary(unittest.TestCase):
     """One boundary serves every host; an adapter declares protocol, not mechanics."""
 
     def test_every_adapter_declares_the_shared_module_it_depends_on(self):
-        # A change to the shared mechanics must be reviewable as a transport
-        # change for every host built on it, or adoption would reject the fix.
-        # G2b/G2c: dsh's and zcode's mechanics moved into the Go driver binary,
-        # so each host's Python transport inventory is only its own host-side
-        # plugin file.
+        # Host-specific Python inventories contain each host's side file;
+        # shared native mechanics are bound through the Go driver.
         self.assertEqual(hosts.adapter_for('zcode').transport_files(), ('zcode_credential.mjs',))
         self.assertEqual(hosts.adapter_for('dsh').transport_files(), ('native_dsh.mjs',))
         # The reference copies still declare the shared module they depend on.
@@ -334,10 +324,8 @@ class SharedTransportBoundary(unittest.TestCase):
                          {'id': 'native-1', 'method': 'session/create', 'params': {}})
 
     def test_a_long_native_turn_is_not_cut_off_by_our_own_budget(self):
-        # G2b: the dsh half of this assertion (bounded=False, UNBOUNDED prompt)
-        # moved with the execution path - the per-message-wait scenarios of
-        # test_native_dsh_differential.py and the wait tests of
-        # internal/harness/native_transport_unix_test.go pin it for the Go driver.
+        # Go transport checks cover the DSH per-message wait; this case checks
+        # the independent ZCode transport oracle's wait policy.
         client = object.__new__(zcode.Client)
         self.assertEqual(client.wait(40, None), 40)           # per-message, as ACP bounds startup
         self.assertIsNone(client.wait(shared.UNBOUNDED, None))  # the host owns the turn length
@@ -375,17 +363,8 @@ class ProtocolInteractions(unittest.TestCase):
                 client.send.assert_not_called()
 
     def test_a_provider_without_a_provisioned_credential_is_reported_not_invented(self):
-        # G2c relocation consequence: request_auth looks for zcode_credential.mjs
-        # next to the module, and the reference lives in tests/ where no helper
-        # exists, so from the reference's side every runtime-headers request is
-        # the "no provisioned credential" refusal - which is exactly this
-        # case's expected honest answer. The credential-delivery half (the
-        # helper reading the host store, the secret reaching the protocol reply
-        # and no evidence) is pinned where the helper is reachable: the Go
-        # implementation's own tests (internal/harness/native_zcode_test.go
-        # TestZcodeRespondRuntimeHeadersWithCredential,
-        # native_zcode_unix_test.go TestZcodeExecuteRuntimeHeadersCredential)
-        # and the Go-side-only scenario of test_native_zcode_differential.py.
+        # The reference has no credential helper next to its module, so it must
+        # report no provisioned credential. Go credential delivery is tested separately.
         with tempfile.TemporaryDirectory() as t:
             client = self.client(t)
             client.messages.put({'id': 'headers', 'method': zcode.RUNTIME_HEADERS_METHOD,
@@ -410,11 +389,8 @@ class ProtocolInteractions(unittest.TestCase):
             self.assertNotIn('child', (Path(t) / 'native-events.jsonl').read_text())
 
     def test_transport_metadata_does_not_log_native_auth_payloads(self):
-        # The Python reader serves the remaining host (zcode); neither it nor
-        # anything else can log more. G2b: the dsh half moved with the
-        # execution path - the Go reader's routing-only trace is pinned by the
-        # protocol.jsonl value comparison in test_native_dsh_differential.py and
-        # by the trace tests of internal/harness/native_transport_unix_test.go.
+        # Routing metadata omits native authentication payloads. Both Go transports
+        # have independent checks of this same boundary.
         for module in (zcode,):
             with self.subTest(module=module.__name__):
                 client = object.__new__(module.Client)

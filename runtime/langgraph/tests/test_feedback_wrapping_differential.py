@@ -1,12 +1,8 @@
-"""End-to-end differential: migrated feedback wrappers vs pre-migration reference.
+"""Compare feedback wrappers and binding refusals with an independent oracle.
 
-The reference implementation (reference_feedback) runs the PRE-migration logic
-and encodes digests with reference_canonical. The migrated implementation
-(formal_gates_harness.feedback) builds the wrappers in Go via the task-input and
-evidence-feedback bridges. Both run against the same inputs through the same
-store double; the differential asserts byte-identical canonical bytes and that
-the binding refusal wording is unchanged.
-"""
+The oracle uses reference_canonical. Production uses task-input and
+evidence-feedback bridges. Both receive identical inputs through the same store
+double; canonical wrapper bytes and refusal wording must agree."""
 import unittest
 
 from formal_gates_harness.feedback import task_input, evidence_feedback

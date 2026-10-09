@@ -1,42 +1,9 @@
-"""Reference copy of the retired shared native transport mechanics.
+"""Independent test oracle for shared native transport mechanics.
 
-Test-only. Production code must not import this module. The body below is the
-pre-migration implementation from formal_gates_harness/native_transport.py,
-moved verbatim (G2c: with the zcode execution path, the last in-process
-consumer, retired to the Go driver binary, the shared Python transport itself
-left the production package). The G2c differential
-(test_native_zcode_differential.py) proves the Go adapters
-(internal/harness/native_transport.go behind `formal-gates harness native`)
-preserve its observable behaviour; reference_native_dsh.py and
-reference_native_zcode.py are built on this copy, exactly as their production
-originals were built on the production module.
-
-The original module lived inside formal_gates_harness and used package-relative
-imports (`from .infra import ...`). To run from this test directory it uses the
-absolute imports `formal_gates_harness.infra` and
-`formal_gates_harness.native_result`; PYTHONPATH must contain
-`<repo>/runtime/langgraph` (the tests set this). Everything else is kept
-exactly as it was:
-
-Mechanics every native host transport shares.
-
-A native transport is always the same machine: spawn one host process, speak
-line-delimited JSON over its stdio, keep a routing-only trace, answer the host's
-own client-directed requests, and write the same four evidence files. Only the
-launch arguments and the *protocol sequence* belong to the host.
-
-An adapter supplies its launch arguments and, at most, five protocol hooks, and
-inherits everything else:
-
-- ``ident``/``envelope`` how a message is addressed and framed,
-- ``respond``    how to answer a host→client request (or raise, or defer),
-- ``classify``   which host error means something other than "failed",
-- ``notification`` which notifications become evidence.
-
-The defaults cover the plain ``{id, method, params}`` JSON shape, so a host that
-speaks it needs no framing code at all. Anything a second host would also need
-belongs here, not in an adapter.
-"""
+Production code must not import this module. The DSH and ZCode transport oracles
+use it to own a host process, exchange line-delimited JSON, route requests,
+classify errors and write evidence. Protocol-specific addressing, responses and
+notifications are supplied by the adapter."""
 from __future__ import annotations
 from dataclasses import dataclass
 import json

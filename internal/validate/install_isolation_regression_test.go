@@ -11,17 +11,10 @@ import (
 	"testing"
 )
 
-// 2026-08-21 事故回归（阶段 1 批次 0A）：两次测试运行把真实用户安装的
-// ~/.formal-gates/releases/0.1.0-macos-arm64/bin/formal-gates 与
-// ~/.local/bin/formal-gates 替换成 25 字节桩（与 copyPackageFixture 写入
-// package_test.go 的桩逐字节一致），并向真实 ~/.formal-gates/registry.json
-// 写入测试记录。根因：Install/Uninstall 的共享 registry 与稳定 launcher 默认
-// 都按 HOME 解析（installRegistryPath / defaultStableLauncherPath ->
-// installHomeDir），个别测试未隔离 HOME。以下用例锁死两条不变量：
-//   - 故障注入的安装事务绝不触碰真实 HOME 下的事故路径；
-//   - 事故形态（源包桩替换稳定 launcher + 写 registry）只落在注入的临时 HOME 内。
+// Installation tests use an injected temporary HOME. Registry and launcher
+// writes must stay within that HOME; the real user's files remain unchanged.
 
-// isolationWatchedRealPaths returns the incident paths under the real user
+// isolationWatchedRealPaths returns watched installation paths under the real user
 // home. It must be called before the test replaces HOME with t.Setenv.
 func isolationWatchedRealPaths(t *testing.T) []string {
 	t.Helper()

@@ -511,17 +511,15 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 
 // zcodeInteractionObserved is zcode's attribution rule for a delivered hold's
 // continuation (hooks.observes): only a session/event that is itself a fact
-// about the held request may confirm it. Three kinds are, with the field
-// spellings of the real T4 trace,
-// .harness/validation/g2d-zcode-probe-20260920T4/native-events.jsonl:
+// about the held request may confirm it. Three event kinds carry that identity:
 //
 //   - permission.resolved, the host's own receipt for the answered request:
-//     payload {decision, reason, requestId, toolCallId} (T4 seq 57), confirmed
+//     payload {decision, reason, requestId, toolCallId}, confirmed
 //     when payload.requestId is the held request's requestId.
 //   - tool.updated, the tool call's progress: payload names the executing
-//     toolCallId (T4 seq 58-60), confirmed when it is the held request's
+//     toolCallId, confirmed when it is the held request's
 //     toolCallId.
-//   - turn.completed / turn.failed, the turn's terminal events (T4 seq 71),
+//   - turn.completed / turn.failed, the turn's terminal events,
 //     confirmed when the event's turnId is the held request's turnId.
 //
 // Everything else - session.titleUpdated and session.updated metadata,

@@ -161,7 +161,7 @@ def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, re
                 'state_migrated': False, 'model_calls': 0}
 
 def native_pending_interactions(store):
-    """Run-level read-only listing of held native interactions (G2d item 2).
+    """Run-level read-only listing of held native interactions.
 
     Each job directory's interaction-pending.json is scanned and only records
     still pending are open questions; delivered, observed and invalidated

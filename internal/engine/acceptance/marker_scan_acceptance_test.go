@@ -1,4 +1,4 @@
-// marker_scan_acceptance_test.go 覆盖批次 3 验收的 marker 扫描：
+// marker_scan_acceptance_test.go 覆盖 marker 扫描：
 //
 //   - executable 路径：checked-in 定义的编译产物经源级全步骤扫描
 //     （CompileDiagnostic + 完整 registry → 零诊断）与

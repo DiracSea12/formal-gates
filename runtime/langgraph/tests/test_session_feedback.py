@@ -147,9 +147,7 @@ class SessionFeedbackTests(unittest.TestCase):
     def test_retry_after_failed_replacement_uses_latest_series_identity(self):
         from formal_gates_harness.workers import Workers
         self.manifest['spec'].update(provider='dsh', model='test-model', reasoning_effort='high')
-        # G2b: dsh capture lives in the Go driver, so the hermetic binding comes
-        # from the manifest (exactly what make_run stores after a real probe)
-        # instead of patching the retired module's shutil.which.
+        # The hermetic native binding comes from the same manifest fields as a real probe.
         self.manifest['host_binding'] = {'provider': 'dsh',
                                          'launch': {'executable': os.sys.executable}, 'files': {}}
         worker = Workers(self.store, fixtures.PACKAGE)
