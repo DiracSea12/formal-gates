@@ -216,3 +216,16 @@ func writeCanonicalString(text string, out *strings.Builder) {
 	}
 	out.WriteByte('"')
 }
+
+// canonicalBody applies JSON tags before canonical encoding.
+func canonicalBody(value any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := decodeValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	return CanonicalJSON(plain)
+}

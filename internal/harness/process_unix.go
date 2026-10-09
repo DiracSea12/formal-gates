@@ -2,12 +2,8 @@
 
 package harness
 
-// POSIX process plumbing for the composition: the supervisor is spawned as
-// its own process group so a cancellation can signal the whole supervised
-// tree (supervisor, native job, host) exactly the way Store.cancel_jobs
-// does, and a recorded supervisor PID is re-identified by its creation time
-// read back from the platform's own process table (ps lstart), because a
-// bare integer proves nothing after pid reuse.
+// Process groups isolate supervised children for cancellation. Recorded
+// supervisors are identified by PID and creation time.
 
 import (
 	"os/exec"
@@ -22,29 +18,17 @@ func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }
 
-// jobProcessGroup reads the spawned supervisor's process group id.
-func jobProcessGroup(cmd *exec.Cmd) int {
-	if cmd.Process == nil {
-		return 0
-	}
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil {
-		return 0
-	}
-	return pgid
-}
-
 // terminateJob signals the supervisor's whole process group with SIGTERM —
 // the supervisor's own cancellation path, which settles the child and writes
 // the deterministic 130 receipt. Signalling a group that already exited is a
 // no-op.
-func terminateJob(job *liveJob) {
-	if job.pgid > 0 {
-		_ = syscall.Kill(-job.pgid, syscall.SIGTERM)
+func terminateJob(cmd *exec.Cmd, pgid int) {
+	if pgid > 0 {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 		return
 	}
-	if job.cmd != nil && job.cmd.Process != nil {
-		_ = job.cmd.Process.Signal(syscall.SIGTERM)
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 	}
 }
 

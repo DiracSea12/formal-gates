@@ -1657,3 +1657,23 @@ func (q *nativeQueue) get(wait *time.Duration) (any, int64, bool) {
 		}
 	}
 }
+
+// intOf renders a decoded JSON number as an int (-1 when it is not one).
+func intOf(value any) int {
+	if number, ok := value.(json.Number); ok {
+		if n, err := number.Int64(); err == nil {
+			return int(n)
+		}
+	}
+	return -1
+}
+
+// floatOf renders a decoded JSON number as a float (0 when it is not one).
+func floatOf(value any) float64 {
+	if number, ok := value.(json.Number); ok {
+		if f, err := number.Float64(); err == nil {
+			return f
+		}
+	}
+	return 0
+}

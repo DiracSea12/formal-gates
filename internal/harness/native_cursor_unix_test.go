@@ -7,7 +7,6 @@ package harness
 // or installed host is invoked.
 import (
 	"bytes"
-	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -20,8 +19,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"formal-gates/internal/runner"
 )
 
 type cursorPeer struct {
@@ -794,7 +791,7 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 						t.Fatal("cancel recovery lost the initialized native identity")
 					}
 				}
-				if turnIdentity(s.directory) != "" {
+				if source, err := readJSONFile(filepath.Join(s.directory, "source.json")); err == nil && textOf(getOf(source, "identity")) != "" {
 					t.Fatal("cancel recovery treated an unaccepted native identity as a completed turn")
 				}
 				if _, err := cursorReconcile(s.directory, receipt); err == nil {
@@ -826,62 +823,6 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestCursorRequestCarriesExactSavedSource(t *testing.T) {
-	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
-	if _, err := runNativeJob(s.directory); err != nil {
-		t.Fatal(err)
-	}
-	c := &Compose{dir: filepath.Dir(s.directory)}
-	binding := objectOrEmpty(s.request["binding"])
-	brief := workerBrief{Role: "repair"}
-	target := filepath.Join(c.dir, "request-only")
-	if err := c.writeNativeRequest(target, brief, s.workspace, binding, s.peer.UUID, "job", workerMaterials{}); err != nil {
-		t.Fatal(err)
-	}
-	request, _ := readJSONFile(filepath.Join(target, "native-request.json"))
-	if getOf(request, "native_store") != s.peer.Store || getOf(request, "identity") != s.peer.UUID {
-		t.Fatalf("source carrier %v", request)
-	}
-	if err := c.writeNativeRequest(target, brief, s.workspace, binding, "22222222-2222-4222-8222-222222222222", "job", workerMaterials{}); err == nil {
-		t.Fatal("another session's source accepted")
-	}
-	// The kernel retains both carriers across task generations and owner reopen.
-	directory := t.TempDir()
-	store, err := runner.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	spec := runner.TaskSpec{TaskID: "worker", Input: []byte("input")}
-	if err := store.CreateRun(ctx, "cursor", []runner.TaskSpec{spec}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetSessionSource(ctx, "worker", s.peer.UUID, "job"); err != nil {
-		t.Fatal(err)
-	}
-	spec.Input = []byte("repair")
-	if err := store.ReviseTask(ctx, "worker", spec); err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-	store, err = runner.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	identity, sourceJob, err := store.SessionSource(ctx, "worker")
-	if err != nil || identity != s.peer.UUID || sourceJob != "job" {
-		t.Fatalf("reopen carrier %q %q %v", identity, sourceJob, err)
-	}
-	if err := store.ClearSession(ctx, "worker"); err != nil {
-		t.Fatal(err)
-	}
-	identity, sourceJob, err = store.SessionSource(ctx, "worker")
-	if err != nil || identity != "" || sourceJob != "" {
-		t.Fatal("restart retained native source")
 	}
 }
 

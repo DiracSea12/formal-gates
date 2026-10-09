@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/coordination"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -542,4 +543,32 @@ func ensureEmptyStream(path string) {
 func supervisedCheck(request map[string]any) bool {
 	kind, _ := request["kind"].(string)
 	return kind == "approved-development-check" || kind == "approved-qa-check"
+}
+
+// supervisorAlive matches the recorded PID and creation time to a live process.
+func supervisorAlive(turnDir string) bool {
+	value, err := readJSONFile(filepath.Join(turnDir, "process.json"))
+	if err != nil {
+		return false
+	}
+	pid := intOf(getOf(value, "pid"))
+	if pid <= 0 {
+		return false
+	}
+	if !coordination.ProcessAlive(pid) {
+		return false
+	}
+	started := floatOf(getOf(value, "started_at"))
+	if started == 0 {
+		return false
+	}
+	created, ok := processCreationTime(pid)
+	if !ok {
+		return false
+	}
+	delta := created.Unix() - int64(started)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= 2
 }

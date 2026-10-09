@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,4 +60,34 @@ func TestBridgeUsesSemanticWorkerJudgment(t *testing.T) {
 	if !reflect.DeepEqual(checked.CheckIDs, []string{"check"}) || checked.Status != "PASS" {
 		t.Fatal("bridge did not assemble typed coverage")
 	}
+}
+
+func plainWorkerSchema(checks ...Check) map[string]any {
+	body, err := json.Marshal(WorkerSchema(checks...))
+	if err != nil {
+		return map[string]any{}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return map[string]any{}
+	}
+	return objectOrEmpty(value)
+}
+
+func validateWorkerAnswer(role string, answer map[string]any, checks []Check) (*WorkerResult, error) {
+	body, err := canonicalBody(answer)
+	if err != nil {
+		return nil, err
+	}
+	var judgment WorkerJudgment
+	if err := StrictDecode(body, &judgment); err != nil {
+		return nil, fmt.Errorf("worker answer is not a valid judgment: %w", err)
+	}
+	worker, err := workerJudgmentResult(role, judgment, checks)
+	if err != nil {
+		return nil, fmt.Errorf("worker answer refused: %w", err)
+	}
+	return &worker, nil
 }

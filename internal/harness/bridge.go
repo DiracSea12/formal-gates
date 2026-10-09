@@ -393,7 +393,7 @@ func dispatch(e envelope) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			terminateJob(&liveJob{pgid: pgid, cmd: &exec.Cmd{Process: process}})
+			terminateJob(&exec.Cmd{Process: process}, pgid)
 		}
 		return map[string]any{"alive": alive}, nil
 	case "verify-process":
