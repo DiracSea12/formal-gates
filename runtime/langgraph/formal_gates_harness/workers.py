@@ -97,7 +97,7 @@ class Workers:
                 +'Use the actual current workspace, not another project or a historical worktree. '
                 +'When task.json contains comparison, read its comparison.json, full.diff and baseline/candidate blob materials. '
                 +BOUNDARY+'\n'
-                +'For QA design/review, assess every approved check with non-empty coverage/oracle evidence in its fixed check_reviews key. Other roles may return an empty object. Do not return check IDs or fabricate approval.')
+                +'For QA design/review, assess every approved check with non-empty coverage/oracle evidence in its fixed check_reviews key. Other roles may return an empty object. Finding identities are assigned by the program. Do not return check or finding IDs or fabricate approval.')
             if handover:
                 prompt += ('\nAn operator explicitly authorized a NEW session for the SAME interrupted role task. '
                            'The previous executor is stopped. Read '+str(materials/'handover.json')+

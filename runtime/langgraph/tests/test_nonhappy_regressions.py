@@ -69,7 +69,7 @@ class NonhappyRegressions(unittest.TestCase):
         def result(worker,role,workspace):
             if role=='development':
                 (workspace/'calculator.py').write_text('def add(a,b):\n    return a+b\n')
-                return {'status':'FAIL','summary':'Mandatory development work remains (fixture)', 'findings':[{'id':'DEV1','severity':'P1','message':'Remaining obligation','paths':['calculator.py']}],'check_reviews':{}}
+                return {'status':'FAIL','summary':'Mandatory development work remains (fixture)', 'findings':[{'severity':'P1','message':'Remaining obligation','paths':['calculator.py']}],'check_reviews':{}}
             return original(worker,role,workspace)
         with patch.object(Workers,'fixture',result):
             plan=self.approve(run_graph(self.directory));stopped=self.approve(plan)

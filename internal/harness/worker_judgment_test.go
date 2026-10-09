@@ -42,7 +42,7 @@ func TestWorkerJudgmentBindsApprovedCheckCoverage(t *testing.T) {
 		}
 	}
 	value["status"] = "FAIL"
-	value["findings"] = []any{map[string]any{"id": "gap", "severity": "P2", "message": "Approved checks miss a required error response.", "paths": []any{"check.go"}}}
+	value["findings"] = []any{map[string]any{"severity": "P2", "message": "Approved checks miss a required error response.", "paths": []any{"check.go"}}}
 	result, err = validateWorkerAnswer("qa-review", value, checks)
 	if err != nil || result.Status != "FAIL" || !NeedsRepair(*result) || !strings.Contains(result.Summary, "second assertion") {
 		t.Fatal("program inferred PASS from mechanical coverage", err)
@@ -90,4 +90,64 @@ func validateWorkerAnswer(role string, answer map[string]any, checks []Check) (*
 		return nil, fmt.Errorf("worker answer refused: %w", err)
 	}
 	return &worker, nil
+}
+
+func TestWorkerJudgmentAssignsFindingIdentityAndPreservesEvidence(t *testing.T) {
+	value := map[string]any{"status": "FAIL", "summary": "Observed the documented command failure", "findings": []any{
+		map[string]any{"severity": "P1", "message": "Valid input exits without its required result.", "paths": []any{"app.go"}},
+		map[string]any{"severity": "P1", "message": "Valid input exits without its required result.", "paths": []any{"app.go"}},
+	}, "check_reviews": map[string]any{}}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := validateWorkerAnswer("implementation-quality-gate", value, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 2 || result.Findings[0].ID == result.Findings[1].ID {
+		t.Fatal("repeated findings lost their distinct occurrences")
+	}
+	for _, finding := range result.Findings {
+		if !validID(finding.ID) || finding.Severity != "P1" || finding.Message != "Valid input exits without its required result." || !reflect.DeepEqual(finding.Paths, []string{"app.go"}) {
+			t.Fatalf("finding identity assembly changed authored evidence: %+v", finding)
+		}
+	}
+	again, err := validateWorkerAnswer("implementation-quality-gate", value, nil)
+	if err != nil || !reflect.DeepEqual(result, again) {
+		t.Fatal("same judgment produced different finding identities")
+	}
+	other, err := validateWorkerAnswer("complexity-gate", value, nil)
+	if err != nil || other.Findings[0].ID == result.Findings[0].ID {
+		t.Fatal("finding identity ignored the bound role")
+	}
+	after, err := json.Marshal(value)
+	if err != nil || !bytes.Equal(raw, after) {
+		t.Fatal("finding identity assembly rewrote the model response")
+	}
+	findingSchema := WorkerSchema()["properties"].(map[string]any)["findings"].(map[string]any)["items"].(map[string]any)
+	if findingSchema["properties"].(map[string]any)["id"] != nil || !reflect.DeepEqual(findingSchema["required"], []string{"severity", "message", "paths"}) {
+		t.Fatal("model contract contains a program-owned finding identity")
+	}
+	value["findings"].([]any)[0].(map[string]any)["id"] = "authored-id"
+	if _, err := validateWorkerAnswer("implementation-quality-gate", value, nil); err == nil {
+		t.Fatal("model-owned finding identity was accepted")
+	}
+	feedback, err := json.Marshal(map[string]any{"revision": "confirmed", "role": "implementation-quality-gate", "result": result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := planEvidenceFeedback(evidenceFeedbackInput{Ref: "evidence", Purpose: "repair", Revision: "confirmed", Evidence: feedback})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range result.Findings {
+		if !bytes.Contains(body, []byte(finding.ID)) || !bytes.Contains(body, []byte(finding.Message)) {
+			t.Fatal("feedback lost the actual finding identity or content")
+		}
+	}
 }
