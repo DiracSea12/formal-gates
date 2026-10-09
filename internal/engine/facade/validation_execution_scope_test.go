@@ -499,3 +499,98 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 		t.Fatal("carried pending scope could not complete")
 	}
 }
+
+func TestQAExecutionWaitsForAllRequirementAsksAndKeepsOriginalReceipts(t *testing.T) {
+	for _, reopen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "reopened"}[reopen], func(t *testing.T) {
+			d := repairedExecutionDriver(t)
+			d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
+			qa, input := d.action("engine.qa.execution")
+			report := executionFor(input)
+			result := nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report})
+			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scoped-execution", Validation: &result}}
+			original, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipts, err := json.Marshal(original.State.HostActionReceipts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := holdRequirement(t, d)
+			second := holdRequirement(t, d)
+			d.receipt(qa)
+			if accepted := d.submit(event); accepted.Status != "QUARANTINED" {
+				t.Fatalf("held QA result was not quarantined: %+v", accepted)
+			}
+			resolve := func(request protocol.Event) {
+				var token string
+				for _, ask := range d.run.PendingAsks {
+					if ask.RequestID == string(request.ID) {
+						token = ask.Token
+					}
+				}
+				if token == "" {
+					t.Fatal("missing original requirement ask")
+				}
+				d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}})
+			}
+			resolve(first)
+			held, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(held.State.QuarantinedResults) != 1 || held.State.Results[qa].Validation != nil || held.State.Validation.Waves[1].Targets[input.Binding.Task.String()].Execution != nil {
+				t.Fatal("QA was applied while another requirement ask remained pending")
+			}
+			before, err := json.Marshal(held.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, _, err := d.f.engine.Drive(emptyFingerprint())
+			if err != nil || plan.Next.Ask == nil || plan.Next.Ready != nil || plan.Next.HostAction != nil {
+				t.Fatalf("pending requirement ask allowed dispatch instead of returning the user boundary: %+v %v", plan, err)
+			}
+			unchanged, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := json.Marshal(unchanged.State)
+			if err != nil || unchanged.Revision != held.Revision || !bytes.Equal(before, after) {
+				t.Fatal("blocked drive changed state")
+			}
+			if reopen {
+				d.reopen()
+			}
+			resolve(second)
+			settled, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(settled.State.QuarantinedResults) != 0 || !reflect.DeepEqual(settled.State.Results[qa].Validation, &result) {
+				t.Fatal("last requirement decision lost the original QA evidence")
+			}
+			target := settled.State.Validation.Waves[1].Targets[input.Binding.Task.String()]
+			if target.Status != "PASS" || target.ResultAction != qa || target.ScopeReason == "" || !reflect.DeepEqual(target.RequiredCases, []string{"normal"}) || !reflect.DeepEqual(target.Execution, &report) {
+				t.Fatal("QA replay changed its frozen scope or applied evidence")
+			}
+			actualReceipts, err := json.Marshal(settled.State.HostActionReceipts)
+			if err != nil || !bytes.Equal(actualReceipts, receipts) {
+				t.Fatal("QA replay changed original native receipts")
+			}
+			before, err = json.Marshal(settled.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(event)
+			duplicate, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err = json.Marshal(duplicate.State)
+			if err != nil || duplicate.Revision != settled.Revision || !bytes.Equal(before, after) {
+				t.Fatal("duplicate original QA event changed state")
+			}
+		})
+	}
+}

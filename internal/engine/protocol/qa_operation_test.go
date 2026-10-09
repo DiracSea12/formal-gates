@@ -286,3 +286,58 @@ func TestQACarriedDutyPreservesNativeRecipesAndReceipts(t *testing.T) {
 		})
 	}
 }
+
+func TestRequirementBarrierPreservesQAReceiptsAndFreezesExecution(t *testing.T) {
+	for _, executed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "awaiting-operation", true: "completed-operation"}[executed], func(t *testing.T) {
+			s, cd, target := qaOperationState(t)
+			plans, err := s.qaCheckPlans(target, cd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var intent HostActionIntent
+			if executed {
+				for _, p := range plans {
+					intent = addQAOperationReceipt(t, s, p, "actual output", 0)
+				}
+			} else {
+				p, ready := s.nextQACheckParameters(target.Task, cd)
+				if !ready {
+					t.Fatal("approved operation was not eligible before the requirement barrier")
+				}
+				e := &Engine{cfg: Config{Definition: cd}}
+				intent, err = e.prepareAdapterIntent(s, 1, "op.check", p, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.PendingHostActions[intent.ActionID] = intent
+				if !s.NativeActionWritable(intent, cd) {
+					t.Fatal("issued QA operation was not writable before the requirement barrier")
+				}
+			}
+			facts := s.qaExecutionFacts(target, cd)
+			receipts, err := json.Marshal(s.HostActionReceipts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.PendingAsks = map[string]PendingAsk{"requirement": {RequestID: "requirement", Control: ControlRequestRequirementChange}}
+			got, err := s.qaCheckPlans(target, cd)
+			if err != nil || !reflect.DeepEqual(got, plans) {
+				t.Fatalf("requirement barrier changed the original frozen recipe: %+v %v", got, err)
+			}
+			if !reflect.DeepEqual(s.qaExecutionFacts(target, cd), facts) {
+				t.Fatal("requirement barrier changed completed execution facts")
+			}
+			if _, ready := s.nextQACheckParameters(target.Task, cd); ready {
+				t.Fatal("requirement barrier allowed a new native QA execution")
+			}
+			if s.NativeActionWritable(intent, cd) {
+				t.Fatal("requirement barrier allowed an issued native QA writer")
+			}
+			after, err := json.Marshal(s.HostActionReceipts)
+			if err != nil || string(after) != string(receipts) {
+				t.Fatal("read-only QA projection changed native receipts")
+			}
+		})
+	}
+}
