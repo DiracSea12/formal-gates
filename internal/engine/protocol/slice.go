@@ -18,10 +18,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// 拆分 run 的持久词汇。命名权威：merge/merge-gate/merge-qa 与
-// reservedRouteGates（review.go）及 internal/validate/catalog.go:28-31 同值；
-// master-merge 与 legacy AC 责任校验（internal/validate/
-// requirement_guarantee.go）同值。
+// 拆分 run 的合并路线、验证门及 AC 责任映射持久词汇。
 const (
 	// routeModeMerge 是 split 拓扑绑定同事务锁定的合并路线：保留总任务实例
 	// 只跑强制的合并门＋合并 QA，不涉常规路线选择。
@@ -461,8 +458,8 @@ func (s *State) splitACOwners(decision *TopologyDecision) (map[string]string, er
 	return owners, nil
 }
 
-// mergeRouteGates 是 split 绑定同事务锁定的合并验证顺序（沿用 legacy：
-// merge-qa 在前、merge-gate 在后）。
+// mergeRouteGates 是 split 绑定同事务锁定的合并验证顺序：
+// merge-qa 在前、merge-gate 在后。
 func mergeRouteGates() []string {
 	return []string{mergeQAGateID, mergeGateID}
 }

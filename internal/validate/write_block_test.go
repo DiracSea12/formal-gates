@@ -196,11 +196,9 @@ func TestWriteBlockReadOnlyAllowed(t *testing.T) {
 	}
 }
 
-// TestCommandWritesFilesReadOnlyIdioms covers the P1 fix at the lowest layer:
-// read-only redirect idioms (2>&1 stderr merge、> /dev/null 丢弃输出) are not treated
-// as file writes, while real redirects, file-mutation utilities, and VCS writes
-// still are. The naive substring matching previously misjudged 2>&1 as a 2> write
-// and > /dev/null as a > write.
+// TestCommandWritesFilesReadOnlyIdioms distinguishes read-only redirections
+// (2>&1 stderr merge and > /dev/null output discard) from file redirections,
+// file-mutation utilities, and VCS writes.
 func TestCommandWritesFilesReadOnlyIdioms(t *testing.T) {
 	readOnly := []string{
 		"go test ./... 2>&1 | head",
@@ -302,9 +300,8 @@ func TestWriteBlockMainThreadNonCodeAllowed(t *testing.T) {
 	}
 }
 
-// TestWriteBlockGatesReadOnlyMentionAllowed covers 改动 3（RQ-011 实现偏差修正）：
-// 命令文本提到 .gates 但只是只读查询（grep/ls/cat/find/python3 读、只读 git 查询）不再被
-// 拦——审查类代理与主线程的活动 run 下都放行。
+// TestWriteBlockGatesReadOnlyMentionAllowed：提到 .gates 的只读查询
+// 在审查类代理与主线程的活动 run 下均放行。
 func TestWriteBlockGatesReadOnlyMentionAllowed(t *testing.T) {
 	root := t.TempDir()
 	writeActiveRunState(t, root)
@@ -336,7 +333,7 @@ func TestWriteBlockGatesReadOnlyMentionAllowed(t *testing.T) {
 	}
 }
 
-// TestWriteBlockGatesRealWritesStillDenied covers 改动 3 的真写仍拦：git add/commit、
+// TestWriteBlockGatesRealWritesStillDenied：拒绝真实写入，包括 git add/commit、
 // 输出重定向到 .gates、tee 指向 .gates 等真实写入在活动 run 下仍被拦（审查类与主线程
 // 都是）。
 func TestWriteBlockGatesRealWritesStillDenied(t *testing.T) {
@@ -370,9 +367,8 @@ func TestWriteBlockGatesRealWritesStillDenied(t *testing.T) {
 	}
 }
 
-// TestGatesMentionNotTreatedAsWrite covers 改动 3 的最低层：commandWritesFiles 与
-// bashWriteTargetsCodeOrState 不再以命令文本含 .gates 子串判写入——只读查询（提 .gates）
-// 不算写，真实写目标（git/tee/重定向到 .gates）仍算写。
+// TestGatesMentionNotTreatedAsWrite：提到 .gates 的只读查询不算写，
+// 真实写目标（git/tee/重定向到 .gates）算写。
 func TestGatesMentionNotTreatedAsWrite(t *testing.T) {
 	readOnly := []string{
 		"grep -rn gates .gates/",

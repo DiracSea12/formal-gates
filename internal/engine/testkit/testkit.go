@@ -809,8 +809,7 @@ func (p *IsolatedProject) RunInstalled(binary string, args ...string) ([]byte, e
 	return cmd.CombinedOutput()
 }
 
-// NewProtocolFixture constructs a fully isolated engine fixture without
-// reaching the legacy runtime or a stable registry.
+// ProtocolFixture holds a fully isolated engine fixture without using a stable registry.
 type ProtocolFixture struct {
 	Root       string
 	Store      *persistence.Store

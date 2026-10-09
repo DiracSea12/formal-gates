@@ -1153,8 +1153,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 			Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 			RedoStartReadiness: true, Reason: "readiness-only redo after development started",
 		})
-		// 主代理复现的原句拒绝在这里必须不再发生（决定事务的欠轮提案签
-		// 出 rev-2 新鲜轮，直接提交证据完成）。
+		// 决定事务的欠轮提案签出 rev-2 新鲜轮，直接提交证据完成。
 		freshRoundFromTheLedgerProposal(t, engine, "start.readiness", "result-readiness-2", reviewEvidenceAt(review.StartReadiness, "dispatch-readiness-2", "rev-2", "PASS", "re-reviewed readiness", nil))
 		snap := engine.LoadMustSucceed(t)
 		if readiness := snap.State.ReviewSeries.StartReadiness; readiness.Effective.Status != "PASS" || readiness.Effective.RequirementRevision != "rev-2" {

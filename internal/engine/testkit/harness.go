@@ -1715,8 +1715,8 @@ func runEnvelopeScenario(report HarnessReport, options HarnessOptions, root stri
 	case "definitiondigest":
 		envelope.DefinitionDigest = ""
 	case "":
-		// A valid envelope-write fixture exercises the positive write path;
-		// the legacy envelope scenario still requires --missing-field below.
+		// The envelope-write fixture accepts a complete envelope;
+		// the envelope rejection scenario requires --missing-field.
 		if !envelopeWrite {
 			return report, fmt.Errorf("testkit: --missing-field is required for envelope")
 		}

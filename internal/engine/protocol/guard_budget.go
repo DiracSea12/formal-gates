@@ -111,7 +111,7 @@ func (e *Engine) guardEngaged(state *State) bool {
 // topology＝绑定 digest；approvedQA＝各选中 mode 的 case-set 版本；selectedGates
 // ＝路线＋所选门；established obligations/repairs 只接 adjudication 完成、wave
 // 收齐后的有效义务与返修 TaskKey。ExternalTasks＝已确认授权全集单一枚举
-// （3.5b §C：额度来自已确认 canonical expected external TaskKey 集，Ready 只决定
+// （额度来自已确认 canonical expected external TaskKey 集，Ready 只决定
 // 本次可签发子集）：确认计划的全部批次任务（无论 Ready 与否）＋已建 wave 的全
 // 部 target（QA/门）＋返修义务全集（含欠账未签发与重走替换者）＋预授权 QA 设计/
 // 审查槽；已签发治理事实逐个归类入集，对不上＝BLOCKED_BUG。raw finding、普通

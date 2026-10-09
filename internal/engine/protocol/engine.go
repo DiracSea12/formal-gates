@@ -28,8 +28,8 @@ type ackStore struct{}
 func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
 
 // DispatchClaim 在派发签出落账时建立宿主侧 lifecycle 绑定（runID/actionID/
-// identity/provider）：identity 是回执声明的宿主 agent 相关性（实际派发身份，
-// legacy 语义），宿主 lifecycle 事件按它配对。nil＝本引擎无宿主计量集成。
+// identity/provider）：identity 是回执声明的宿主 agent 实际派发身份，
+// 宿主 lifecycle 事件按它配对。nil＝本引擎无宿主计量集成。
 type DispatchClaim func(runID, actionID, identity, provider string) error
 
 // Config 是 Engine 的定义绑定与容量输入：CompiledDefinition 供结果接纳的
@@ -2411,9 +2411,8 @@ func (e *Engine) ExecuteHostAction(operation authoring.OperationID, params any, 
 }
 
 // ExecuteHostActionWithCorrelation is the harness/adapter form that binds a
-// known transport correlation into the durable intent. The legacy convenience
-// method keeps the field empty when the host chooses the correlation only after
-// execution.
+// known transport correlation into the durable intent. ExecuteHostAction keeps
+// the field empty when the host chooses the correlation only after execution.
 func (e *Engine) ExecuteHostActionWithCorrelation(operation authoring.OperationID, params any, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
 	return e.executeHostAction(operation, params, correlation, expectedFingerprint)
 }

@@ -1,7 +1,6 @@
 // Package persistence 是 engine 的持久化基座。
 //
-// 本包只在调用方给定的隔离状态目录内读写，不触碰 legacy 状态文件、
-// 不改变任何公开 CLI 行为。基座能力：
+// 本包在调用方给定的状态目录内读写。基座能力：
 //
 //   - 版本信封：state 文档携带 writer/stateSchemaVersion/
 //     workflowDefinitionVersion/packageDigest 四字段信封，外加与

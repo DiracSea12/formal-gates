@@ -556,8 +556,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 				}
 			}
 			// split 绑定同一事务锁定合并路线：保留总任务实例只跑强制的合并
-			// 门＋合并 QA，不抬 SELECT_ROUTE（legacy workflow.go 同点锁定；
-			// 合并验证在合并收尾执行）。
+			// 门＋合并 QA，不抬 SELECT_ROUTE；合并验证在合并收尾执行。
 			state.RouteMode = routeModeMerge
 			state.SelectedGates = mergeRouteGates()
 		}
@@ -633,8 +632,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		before := state.validationRouteDigest()
 		state.RouteMode = route.Mode
 		state.SelectedGates = selected
-		// 最终路线不含黑盒时隔离工作区登记随之清空（镜像 legacy 路线弃黑盒
-		// 清空点；host 重建工作区时重新登记）。
+		// 最终路线不含黑盒时清空隔离工作区登记；host 重建工作区时重新登记。
 		if !slices.Contains(selected, "blackbox") {
 			state.QAWorktree = ""
 		}

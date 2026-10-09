@@ -202,9 +202,6 @@ func commandWritesFiles(command string) bool {
 	if isVCSWriteCommand(command) {
 		return true
 	}
-	// 按真实写目标判定（改动 3）：不再以命令文本是否含 .gates 子串判写入——只读命令
-	// （grep/ls/cat/find/python3 读、只读 git 查询等）即使提到 .gates 也放行；真写 .gates
-	// 由下面的文件变更工具与输出重定向按目标路径判定命中。
 	// 文件写入工具与文件系统变更命令（非重定向的写文件写法）。
 	for _, marker := range []string{"tee ", "sed -i", "install ", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
 		if strings.Contains(lower, marker) {
@@ -831,7 +828,7 @@ func isCodeOrRunStatePath(path string) bool {
 // 判定（> notes.md 不命中、> main.go 命中）；文件变更工具（tee / touch / mkdir /
 // rm / mv / cp / sed -i / install）按位置参数的真实目标判定，只在目标指向代码或
 // run 状态（.gates / 代码扩展名）时命中——npm install -g（写到项目外）、
-// touch notes.md（非代码）不再被保守误拦。
+// touch notes.md（非代码）不命中。
 func bashWriteTargetsCodeOrState(command string) bool {
 	// VCS 状态写入（git / svn / p4）。
 	if isVCSWriteCommand(command) {

@@ -1,6 +1,6 @@
 // Package coverage owns the QA coverage contract and fixed operation
 // resolution. It has no dependency on the workflow state machine, persistence,
-// CLI, or legacy QA case types. Resolution inspects candidate source files
+// CLI, or workflow QA case types. Resolution inspects candidate source files
 // without executing the operations it describes.
 package coverage
 

@@ -607,7 +607,7 @@ type State struct {
 	// 未就位）为 nil。
 	Guard *GuardBudget `json:"guard,omitempty"`
 	// Cost 是本 run 的 cost 权威投影（dispatch 逐条＋run 合计；owner 项缺源时
-	// 缺席）。engine run 的 cost 只由引擎事务写入，不从 legacy validate 补账。
+	// 缺席）。cost 只由引擎事务写入。
 	Cost *cost.RunCost `json:"cost,omitempty"`
 	// TokenCapMaxTokens 是项目级 token cap 配置的引擎持久化（nil＝未配置/不可
 	// 用；只统计 engine 派发用量，不含 owner 终态报告）。受理 bootstrap 一次写
@@ -836,8 +836,8 @@ func (s *State) normalizeCollections() {
 			StateRevision:  s.IntakeReceipt.Revision,
 		}}
 	}
-	// 支持 token cap 面之前持久化的 Guard 投影：缺省值归一为 UNAVAILABLE，
-	// 与重算结果可比（无配置 run 的 cap 面恒为 UNAVAILABLE）。
+	// Guard 投影支持缺省 TokenCapStatus，归一为 UNAVAILABLE；
+	// 无配置 run 的 cap 面恒为 UNAVAILABLE。
 	if s.Guard != nil && s.Guard.TokenCapStatus == "" {
 		s.Guard.TokenCapStatus = TokenCapUnavailable
 	}

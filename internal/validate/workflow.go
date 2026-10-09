@@ -46,12 +46,8 @@ func verifyRegistryBindingRecord(record RegistryRecord, root, packageRoot string
 	if canonicalRegistryPath(record.Target) != canonicalRegistryPath(canonicalPackage) || canonicalRegistryPath(record.CanonicalPaths["target"]) != canonicalRegistryPath(canonicalPackage) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
 	}
-	// Installed packages are only allowed to drive workflow writes through
-	// the fixed launcher recorded by admission.  A direct invocation of the
-	// candidate binary under the host target has the same package binding but
-	// a different executable identity and is therefore rejected.  Repository
-	// checkouts keep the legacy source-tree path and intentionally do not use
-	// this installed-launcher check.
+	// Workflow writes require the fixed launcher recorded by admission;
+	// test binaries may invoke this check directly.
 	executable, executableErr := os.Executable()
 	if executableErr != nil {
 		return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)

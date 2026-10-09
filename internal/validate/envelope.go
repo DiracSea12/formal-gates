@@ -581,9 +581,8 @@ func validAdmissionRegistryRecord(record RegistryRecord) bool {
 	if !validRegistryRecord(record) {
 		return false
 	}
-	// In-process tests exercise the legacy API with compact records. A shipped
-	// launcher must only admit the complete identity produced by the native
-	// transaction owner.
+	// In-process tests may use compact records. A shipped launcher requires
+	// the complete identity produced by the native transaction owner.
 	if isTestBinary() {
 		return true
 	}
