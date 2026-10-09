@@ -184,7 +184,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 				t.Fatal("mode partition changed")
 			}
 		}
-		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-test", Environment: "isolated"})
+		d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	}
 	id, in = d.gateAction("quality")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "normal output order differs"}}})
@@ -193,11 +193,14 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 		resolveGateFinding(d, finding, wave.ID)
 	}
 	id, in = d.action("engine.repair")
-	d.business(id, gateRepairResult(in))
+	repair := gateRepairResult(in)
+	d.business(id, repair)
+	d.verifyRepair(repair)
 	d.materialize()
 	d.materialize()
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality", "security"}})
+	d.drive()
 	id, in = d.gateAction("security")
 	for _, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.qa.execution" {
@@ -213,11 +216,11 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	}
 	id, in = qaModeAction(d, "engine.qa.execution", coverage.ReviewBlackbox)
 	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-test", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.recordExecutionScope(coverage.ReviewWhitebox, "white-normal")
 	id, in = qaModeAction(d, "engine.qa.execution", coverage.ReviewWhitebox)
 	report = executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-test", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
 		id, in = qaModeAction(d, "engine.qa.execution", mode)
@@ -225,7 +228,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 			t.Fatal("mode skipped final full execution")
 		}
 		report = executionFor(in)
-		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-test", Environment: "isolated"})
+		d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	}
 	d.drive()
 	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {

@@ -48,6 +48,13 @@ func freezeCandidateSource(t *testing.T, d *validationDriver, p protocol.Candida
 	if err := d.git.CreateWorkspace(dir, p.Base, "candidate fixture source", vcs.WorkspaceHandle{}); err != nil {
 		t.Fatal(err)
 	}
+	for path := range candidateSourceTree(t, d, p.Base) {
+		if _, retained := tree[path]; !retained {
+			if err := os.Remove(filepath.Join(dir, path)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for path, body := range tree {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0755); err != nil {
 			t.Fatal(err)

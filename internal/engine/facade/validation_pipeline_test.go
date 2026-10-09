@@ -801,7 +801,12 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 }
 
 func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
-	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
+	d := candidateSourceDriver(t, "blackbox", "whitebox", "quality")
+	request, err := d.f.request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := request.BaseSnapshot
 	id, input := d.action("engine.qa.design")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
@@ -810,27 +815,24 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
 	id, input = d.action("engine.development.batch")
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
-	trees := map[string]map[string]string{}
-	materialize := func() (string, protocol.CandidateParameters) {
+	trees := map[string]map[string]string{base: candidateSourceTree(t, d, base)}
+	observe := func(intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 		t.Helper()
-		if len(d.run.AdapterIntents) != 1 {
-			t.Fatalf("expected one typed candidate intent: %+v", d.run.AdapterIntents)
-		}
-		var intent protocol.HostActionIntent
-		for _, i := range d.run.AdapterIntents {
-			intent = i
-		}
-		data, _ := json.Marshal(intent.Adapter.Params)
-		var p protocol.CandidateParameters
-		if err := json.Unmarshal(data, &p); err != nil {
-			t.Fatal(err)
+		if trees[p.Base] == nil {
+			trees[p.Base] = candidateSourceTree(t, d, p.Base)
 		}
 		tree := map[string]string{}
 		for path, content := range trees[p.Base] {
 			tree[path] = content
 		}
-		switch p.Stage {
+		stage := p.Stage
+		if stage == "CHECK_SOURCE" {
+			stage = "QA_ARTIFACT"
+			if slices.Contains(p.Paths, "app.go") {
+				stage = "DEVELOPMENT"
+			}
+		}
+		switch stage {
 		case "DEVELOPMENT":
 			tree["app.go"] = "validated production bytes"
 			tree["old_test.go"] = "obsolete test"
@@ -850,28 +852,48 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 				}
 			}
 		}
-		identity := fmt.Sprintf("tree-%d", len(trees))
+		identity, digest := freezeCandidateSource(t, d, p, tree)
 		trees[identity] = tree
-		treeBytes, _ := json.Marshal(tree)
-		e := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(treeBytes)), Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
+		e := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: digest, WorkspaceID: p.WorkspaceID, Paths: p.Paths, TestOnly: true, ProductionViewEqual: true}
 		e.GateView = gateReviewView(p)
-		data, _ = json.Marshal(e)
+		data, _ := json.Marshal(e)
 		values := map[string]any{}
 		_ = json.Unmarshal(data, &values)
 		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
 		if err != nil {
 			t.Fatal(err)
 		}
+		return event
+	}
+	d.fixtureCandidateObserver = observe
+	materialize := func() (string, protocol.CandidateParameters) {
+		t.Helper()
+		d.drive()
+		if len(d.run.AdapterIntents) != 1 {
+			t.Fatalf("expected one typed candidate intent: %+v; next=%+v rejected=%+v sets=%+v", d.run.AdapterIntents, d.run.Next, d.run.RejectedResults, d.run.Validation.Sets)
+		}
+		var intent protocol.HostActionIntent
+		for _, i := range d.run.AdapterIntents {
+			intent = i
+		}
+		data, _ := json.Marshal(intent.Adapter.Params)
+		var p protocol.CandidateParameters
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatal(err)
+		}
+		event := observe(intent, p)
+		identity := event.HostAction.AdapterEvidence.Values["identity"].(string)
 		d.submit(event)
 		d.drive()
 		return identity, p
 	}
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
 	materialize()
 	materialize()
 	id, input = d.action("engine.qa.design")
 	m = input.Manifest
-	for _, row := range []struct{ id, scenario string }{{"white-success", "SUCCESS"}, {"white-misuse", "MISUSE"}} {
-		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go#" + row.id, Oracle: "specified input outcome"})
+	for _, row := range []struct{ id, scenario, test string }{{"white-success", "SUCCESS", "TestSuccess"}, {"white-misuse", "MISUSE", "TestMisuse"}} {
+		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.test, Oracle: "specified input outcome"})
 		m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: row.id})
 	}
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go", "old_test.go"}}})
@@ -887,7 +909,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		t.Fatal("reviewed deletion disappeared during assembly")
 	}
 	_, gate := d.gateAction("quality")
-	if p.ReviewBase != frozenSnapshot || p.Base == p.ReviewBase || gate.Gate == nil || gate.Gate.Gate != "quality" || gate.Gate.BaseSnapshot != p.ReviewBase || gate.Gate.Candidate != d.run.Validation.Waves[0].Candidate || !reflect.DeepEqual(gate.Gate.TestOwnedPaths, []string{"app_test.go", "old_test.go"}) {
+	if p.ReviewBase != base || p.Base == p.ReviewBase || gate.Gate == nil || gate.Gate.Gate != "quality" || gate.Gate.BaseSnapshot != p.ReviewBase || gate.Gate.Candidate != d.run.Validation.Waves[0].Candidate || !reflect.DeepEqual(gate.Gate.TestOwnedPaths, []string{"app_test.go", "old_test.go"}) {
 		t.Fatalf("gate range lost native base, candidate, or explicit artifact ownership: %+v", gate.Gate)
 	}
 	if len(gate.Manifest.Cases) != 0 || len(gate.Completed) != 0 || gate.Whitelist != nil {

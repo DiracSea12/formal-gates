@@ -73,14 +73,16 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	resolveGateFinding(d, finding, wave)
 	original := d.run.Validation.Findings[finding].History[0]
 	id, in := d.action("engine.repair")
-	d.business(id, gateRepairResult(in))
+	repair := gateRepairResult(in)
+	d.business(id, repair)
+	d.verifyRepair(repair)
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 	for i := 0; i < 2; i++ {
 		id, in = d.action("engine.qa.execution")
 		r := executionFor(in)
-		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+		d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 		d.drive()
 	}
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
@@ -138,7 +140,7 @@ func gateImpactBoundary(t *testing.T) *validationDriver {
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution")
 	r := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	id, in = d.gateAction("security")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	id, in = d.gateAction("quality")
@@ -159,6 +161,7 @@ func gateImpactBoundary(t *testing.T) *validationDriver {
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns = []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid authorization input", Observation: "request rejected with documented diagnostic", Comparison: "exact diagnostic matches requirement"}}
 	d.business(id, repair)
+	d.verifyRepair(repair)
 	d.materialize()
 	d.materialize()
 	wave = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
