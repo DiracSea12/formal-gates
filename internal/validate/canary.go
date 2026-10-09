@@ -457,10 +457,10 @@ func portableDevelopmentPlan() *worker.Granularity {
 	return &worker.Granularity{Reason: "One data-artifact fixture: the complete build copies the authored marker to its validation output, and the complete test checks every output byte against the declared marker. No compiler or project language is inferred.", VerificationTier: "FINAL", Batches: []worker.Batch{{DevelopmentBatch: protocol.DevelopmentBatch{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "artifact-build", Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {ID: "artifact-tests", Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}}
 }
 
-func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (worker.Result, error) {
-	payload := worker.Result{Outcome: protocol.OutcomePass}
+func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (any, error) {
+	var payload any
 	if input.Review != nil {
-		payload.Review = &worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{
+		result := &worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{
 			"binding":           "The synthetic fixture uses the exact installed role and confirmed input.",
 			"completeness":      "The bounded fixture requirement declares one delivered marker and a full verified route.",
 			"evidence":          "This deterministic portable fixture does not claim model or semantic reviewer validation.",
@@ -471,16 +471,14 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			"severity":          "The synthetic fixture reports no findings; no model severity assessment is claimed.",
 		}}
 		if input.Review.Action == review.StartReadiness {
-			payload.Review.GranularityReview = portableDevelopmentPlan()
+			result.GranularityReview = portableDevelopmentPlan()
 		}
-		return payload, nil
+		return result, nil
 	}
 	if input.Validation == nil {
 		return payload, fmt.Errorf("portable worker lacks issued typed input")
 	}
 	in := input.Validation
-	result := &worker.Validation{Status: "PASS"}
-	payload.Validation = result
 	workspace := ""
 	if in.Workspace != nil {
 		workspace = in.Workspace.Path
@@ -494,7 +492,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		result.Development = &worker.Development{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
+		payload = &worker.Development{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
 	case "engine.qa.design":
 		mode := in.Manifest.Binding.ReviewKind
@@ -519,7 +517,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		for _, point := range in.Manifest.Points {
 			manifest.Coverage[point.PointID] = []string{c.CaseID, missing.CaseID}
 		}
-		result.Manifest = &manifest
+		payload = &worker.Design{Manifest: manifest}
 		checked["design:"+string(mode)] = true
 	case "engine.qa.review.rationale":
 		m := in.Manifest
@@ -533,10 +531,11 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		for _, c := range m.Cases {
 			r.CaseDecisions[c.CaseID] = worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture binds the approved operation or exact Go test and its oracle to the declared acceptance condition."}
 		}
-		result.Review = &r
+		payload = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
 	case "engine.qa.execution":
-		result.Execution = &worker.Execution{Records: map[string]worker.Observation{}}
+		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{}}}
+		payload = result
 		for _, fact := range in.ExecutionFacts {
 			index := slices.IndexFunc(in.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == fact.CaseID })
 			if index < 0 {
@@ -546,13 +545,11 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			if err != nil {
 				return payload, err
 			}
-			result.Execution.Records[fact.CaseID] = observation
-			if observation.Result != coverage.ExecutedPass {
-				result.Status = "FAIL"
-			}
+			result.Records[fact.CaseID] = observation
 		}
 		checked["execution:"+string(in.Manifest.Binding.ReviewKind)] = true
 	case "engine.gate":
+		payload = &worker.Gate{Status: "PASS", Findings: []worker.Finding{}}
 		if in.Gate == nil {
 			return payload, fmt.Errorf("portable gate lacks issued input")
 		}

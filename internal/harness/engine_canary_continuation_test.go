@@ -138,10 +138,12 @@ func TestDevelopmentConsumerResumesOriginalNativeSession(t *testing.T) {
 		}
 		c.run.WorkerMaterials[input.Pending.ActionID] = facade.WorkerMaterial{ActionID: input.Pending.ActionID, AttemptID: input.Pending.AttemptID, Path: path, Digest: fmt.Sprintf("sha256:%x", sum)}
 		c.run.ValidationInputs[input.Pending.ActionID] = *input.Validation
-		answer, _ := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &worker.Development{Paths: []string{"app.go"}, Summary: "actual local peer semantic edit"}}})
-		if err := json.Unmarshal(answer, &s.peer.Answer); err != nil {
+		answer, _ := json.Marshal(worker.Development{Paths: []string{"app.go"}, Summary: "actual local peer semantic edit"})
+		var domain any
+		if err := json.Unmarshal(answer, &domain); err != nil {
 			t.Fatal(err)
 		}
+		s.peer.Answer = codexPeerAnswer(codexPlain(t, material.ResultSchema), domain).(map[string]any)
 		return material
 	}
 	material := putMaterial()

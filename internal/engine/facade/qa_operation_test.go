@@ -181,7 +181,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.receipt(action)
 	pending := d.run.PendingActions[action]
 	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution", Provider: d.host(), Pending: pending, Validation: &issued}
-	compare := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Checkpoint: true, Execution: &worker.Execution{Records: map[string]worker.Observation{"invalid": {Result: coverage.ExecutedPass, Comparison: "Actual stdout rejected and exit 7 match the declared negative oracle"}}}}}
+	compare := worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{"invalid": {Result: coverage.ExecutedPass, Comparison: "Actual stdout rejected and exit 7 match the declared negative oracle"}}}}
 	raw, err := json.Marshal(compare)
 	if err != nil {
 		t.Fatal(err)
@@ -199,8 +199,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	if resumedAction != action || len(resumed.Completed) != 1 || resumed.Completed[0].CaseID != "invalid" || !reflect.DeepEqual(resumed.PendingCases, []string{"normal"}) {
 		t.Fatalf("native checkpoint partition changed: %+v", resumed)
 	}
-	compare.Validation.Checkpoint = false
-	compare.Validation.Execution.Records = map[string]worker.Observation{"normal": {Result: coverage.ExecutedPass, Comparison: "Actual stdout quoted words actual-input matches the declared oracle"}}
+	compare.Records = map[string]worker.Observation{"normal": {Result: coverage.ExecutedPass, Comparison: "Actual stdout quoted words actual-input matches the declared oracle"}}
 	workerInput.Pending, workerInput.Validation = d.run.PendingActions[action], &resumed
 	raw, err = json.Marshal(compare)
 	if err != nil {
@@ -332,7 +331,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	}
 	d.receipt(action)
 	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution", Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &issued}
-	compare := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "FAIL", Checkpoint: true, Execution: &worker.Execution{Records: map[string]worker.Observation{"failure": {Result: coverage.ExecutedFail, Comparison: "The exact test ran and failed its assertion, contrary to the passing oracle"}}}}}
+	compare := worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{"failure": {Result: coverage.ExecutedFail, Comparison: "The exact test ran and failed its assertion, contrary to the passing oracle"}}}}
 	raw, _ := json.Marshal(compare)
 	event, err := worker.DecodeResult(workerInput, d.eventID(), raw, "verified-go-comparison")
 	if err != nil {
@@ -346,7 +345,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	if len(target.Execution.Records) != 1 || target.Execution.Records[0].Result != coverage.ExecutedFail || state.Validation.Waves[0].Status != "COLLECTING" {
 		t.Fatalf("failed case/no-match partition was falsified: %+v", target)
 	}
-	compare.Validation.Execution.Records = map[string]worker.Observation{"unmatched": {Result: coverage.ExecutedFail, Comparison: "claimed execution"}}
+	compare.Records = map[string]worker.Observation{"unmatched": {Result: coverage.ExecutedFail, Comparison: "claimed execution"}}
 	raw, _ = json.Marshal(compare)
 	if _, err := worker.DecodeResult(workerInput, d.eventID(), raw, "verified-invalid-comparison"); err == nil {
 		t.Fatal("no-match test became a completed FAIL row")

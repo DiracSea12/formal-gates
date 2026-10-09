@@ -54,17 +54,12 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 			switch name {
 			case "whitebox-reuse":
 				material.Input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "delivered", Files: []string{"delivered_test.go"}}}
-				payload.Validation.Manifest.Cases[0].Files = nil
+				payload.(*worker.Design).Cases[0].Files = nil
 				residue = ""
 			case "whitebox-omitted-tests":
 				residue, refuse = "omitted_test.go", true
-			case "blackbox":
-				payload.Validation.Development = nil
-			case "execution":
-				payload.Validation.Development = nil
 			case "repair-plan":
-				payload.Validation.Development = nil
-				payload.Validation.GranularityReview = &worker.Granularity{}
+				payload = &worker.Repair{GranularityReview: &worker.Granularity{}}
 			case "repair-self-run":
 				material.Input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{}}
 			}
@@ -73,7 +68,7 @@ func TestCanaryProductionArtifactDelivery(t *testing.T) {
 	}
 }
 
-func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKind) (worker.Material, worker.Result) {
+func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKind) (worker.Material, any) {
 	t.Helper()
 	input := protocol.WorkerInput{RunID: "delivery", Handler: handler, Provider: "zcode", VCS: "git", Pending: protocol.PendingAction{ActionID: "author", AttemptID: "issued-attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Deliver the authorized artifact only."}, Validation: &protocol.ValidationInput{Handler: handler, Binding: protocol.WorkBinding{WorkspaceID: "author-workspace"}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
 	if handler == "engine.qa.execution" {
@@ -85,25 +80,25 @@ func canaryArtifactMaterial(t *testing.T, handler string, kind coverage.ReviewKi
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := material.ResultTemplate
-	payload.Outcome, payload.Validation.Status = protocol.OutcomePass, protocol.OutcomePass
-	payload.Validation.Development = &worker.Development{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
-	if handler == "engine.qa.design" && kind == coverage.ReviewWhitebox {
-		payload.Validation.Development = nil
-		files := []string{"delivered_test.go"}
-		payload.Validation.Manifest = &worker.Manifest{Cases: []worker.Case{{CaseID: "delivered", Scenario: "SUCCESS", TestRef: "delivered_test.go::TestDelivered", Oracle: "running the public main entry exits zero with empty output", Files: &files}}, Coverage: map[string][]string{}}
+	var payload any = &worker.Development{Paths: []string{"delivered_test.go"}, Summary: "authorized artifact"}
+	if handler == "engine.qa.design" {
+		design := &worker.Design{Manifest: worker.Manifest{Cases: []worker.Case{}, Coverage: map[string][]string{}}}
+		if kind == coverage.ReviewWhitebox {
+			files := []string{"delivered_test.go"}
+			design.Cases = []worker.Case{{CaseID: "delivered", Scenario: "SUCCESS", TestRef: "delivered_test.go::TestDelivered", Oracle: "running the public main entry exits zero with empty output", Files: &files}}
+		}
+		payload = design
 	}
-	if handler == "engine.qa.design" && kind != coverage.ReviewWhitebox {
-		payload.Validation.Development = nil
+	if handler == "engine.qa.execution" {
+		payload = &worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{}}}
 	}
 	if handler == "engine.merge.resolve" {
-		payload.Validation.Development = nil
-		payload.Validation.Resolution = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}
+		payload = &protocol.ConflictResolution{Paths: []string{"delivered_test.go"}, Summary: "resolved issued conflict"}
 	}
 	return material, payload
 }
 
-func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload worker.Result, residue string, refuse bool) {
+func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload any, residue string, refuse bool) {
 	t.Helper()
 	s := newZcodeScenario(t, zcodeSuccessSteps, nil)
 	home := resolveNativePath(t.TempDir())
@@ -172,7 +167,7 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 		}
 		if calls == 1 {
 			if material.Input.Handler == "engine.qa.design" && !material.ReadOnly {
-				for _, designed := range payload.Validation.Manifest.Cases {
+				for _, designed := range payload.(*worker.Design).Cases {
 					if designed.Files != nil {
 						for _, path := range *designed.Files {
 							write(path, "package main\nimport(\"testing\";\"os/exec\")\nfunc TestDelivered(t *testing.T) { out, err := exec.Command(\"go\", \"run\", \".\").CombinedOutput(); if err != nil || len(out) != 0 { t.Fatalf(\"command: %v %s\", err, out) } }\n")
@@ -183,15 +178,15 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 			if request["prompt"] != material.Prompt {
 				t.Fatal("dispatch changed production material")
 			}
-			if dev := payload.Validation.Development; dev != nil {
-				for _, path := range dev.Paths {
-					write(path, "package main\n")
-				}
+			var paths []string
+			switch body := payload.(type) {
+			case *worker.Development:
+				paths = body.Paths
+			case *protocol.ConflictResolution:
+				paths = body.Paths
 			}
-			if resolution := payload.Validation.Resolution; resolution != nil {
-				for _, path := range resolution.Paths {
-					write(path, "package main\n")
-				}
+			for _, path := range paths {
+				write(path, "package main\n")
 			}
 			if residue == "frob" {
 				command("go", "build", "./...")
@@ -245,18 +240,34 @@ func runCanaryArtifactDelivery(t *testing.T, material worker.Material, payload w
 		t.Fatal("dispatch lost original input and raw evidence binding")
 	}
 	got := event.Result.Validation
-	expectedDevelopment := payload.Validation.Development
-	if material.Input.Handler == "engine.qa.design" && !material.ReadOnly {
-		expectedDevelopment = &worker.Development{Paths: []string{"delivered_test.go"}}
+	var expectedDevelopment *worker.Development
+	var expectedResolution *protocol.ConflictResolution
+	switch body := payload.(type) {
+	case *worker.Development:
+		expectedDevelopment = body
+	case *protocol.ConflictResolution:
+		expectedResolution = body
+	case *worker.Repair:
+		if got.GranularityReview == nil {
+			t.Fatal("repair plan lost")
+		}
+	case *worker.Design:
+		if !material.ReadOnly {
+			expectedDevelopment = &worker.Development{Paths: []string{"delivered_test.go"}}
+		}
 	}
-	if got.Status != payload.Validation.Status || !reflect.DeepEqual(canarySemanticDevelopment(got.Development), expectedDevelopment) || !reflect.DeepEqual(got.Resolution, payload.Validation.Resolution) || !reflect.DeepEqual(canarySemanticPlan(got.GranularityReview), payload.Validation.GranularityReview) {
+	if got.Status != "PASS" || !reflect.DeepEqual(canarySemanticDevelopment(got.Development), expectedDevelopment) || !reflect.DeepEqual(got.Resolution, expectedResolution) {
 		t.Fatal("dispatch changed semantic author evidence")
 	}
-
+	expectedJSON, _ := json.Marshal(payload)
+	var expected any
+	if err := json.Unmarshal(expectedJSON, &expected); err != nil {
+		t.Fatal(err)
+	}
 	for i := 1; i <= calls; i++ {
 		dir := filepath.Join(c.jobDirectory(material.Input.Pending.ActionID), fmt.Sprintf("attempt-%d", i))
-		var observed worker.Result
-		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(dir, "answer.json")), &observed); err != nil || !reflect.DeepEqual(observed, payload) {
+		var observed any
+		if err := json.Unmarshal(readTestFileBytes(t, filepath.Join(dir, "answer.json")), &observed); err != nil || !reflect.DeepEqual(observed, expected) {
 			t.Fatalf("native author answer changed: %v", err)
 		}
 	}

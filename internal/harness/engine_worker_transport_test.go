@@ -68,20 +68,21 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 	c := &engineCanary{t: t, nativeHost: "codex", localPeer: true, home: home, project: workspace, jobs: t.TempDir(), worker: true, binding: objectOrEmpty(s.request["binding"]), approvalDeadline: time.Now().Add(time.Minute), run: facade.Run{RunID: input.RunID, PendingActions: map[string]protocol.PendingAction{input.Pending.ActionID: input.Pending}, WorkerMaterials: map[string]facade.WorkerMaterial{input.Pending.ActionID: ref}}, approvalInput: bufio.NewReader(r), approvalOutput: canaryLocalApproval{w}}
-	payload := material.ResultTemplate
-	payload.Outcome = protocol.OutcomePass
-	payload.Review.Status = "PASS"
-	payload.Review.Findings = []worker.Finding{}
+	payload := worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{}}
+	payload.Status = "PASS"
+	payload.Findings = []worker.Finding{}
 	for _, key := range review.RequiredVerificationChecks() {
-		payload.Review.Verification[key] = "read complete confirmed delivery document: " + key
+		payload.Verification[key] = "read complete confirmed delivery document: " + key
 	}
 	answer, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(answer, &s.peer.Answer); err != nil {
+	var domain any
+	if err := json.Unmarshal(answer, &domain); err != nil {
 		t.Fatal(err)
 	}
+	s.peer.Answer = codexPeerAnswer(codexPlain(t, material.ResultSchema), domain).(map[string]any)
 	calls := 0
 	c.execute = func(request any, directory string, probe bool) (map[string]any, error) {
 		calls++
@@ -104,7 +105,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	}
 	expectedEvidence := []string{}
 	for _, key := range review.RequiredVerificationChecks() {
-		expectedEvidence = append(expectedEvidence, key+": "+payload.Review.Verification[key])
+		expectedEvidence = append(expectedEvidence, key+": "+payload.Verification[key])
 	}
 	if event.Result.Review.Verification.Evidence != strings.Join(expectedEvidence, "\n") || !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) {
 		t.Fatal("native core evidence was rewritten")
@@ -195,9 +196,9 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 				plan.CheckpointReason = "independent batches preserve frozen interfaces"
 				plan.CheckpointGroups = [][]string{{plan.Batches[0].ID}, {second.ID}}
 			}
-			payload := worker.Result{Outcome: protocol.OutcomePass, Review: &worker.Review{Status: "PASS", GranularityReview: canarySemanticPlan(plan), Findings: []worker.Finding{}, Verification: map[string]string{}}}
+			payload := worker.Review{Status: "PASS", GranularityReview: canarySemanticPlan(plan), Findings: []worker.Finding{}, Verification: map[string]string{}}
 			for _, key := range review.RequiredVerificationChecks() {
-				payload.Review.Verification[key] = "checked current signed input: " + key
+				payload.Verification[key] = "checked current signed input: " + key
 			}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
@@ -205,7 +206,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 				t.Fatal(err)
 			}
 			wire := codexPeerAnswer(codexPlain(t, schema), domain)
-			if getOf(getOf(getOf(wire, "review"), "granularityReview"), "verificationTier") != tier || len(listOf(getOf(getOf(getOf(wire, "review"), "granularityReview"), "batches"))) != len(plan.Batches) {
+			if getOf(getOf(getOf(wire, "result"), "granularityReview"), "verificationTier") != tier || len(listOf(getOf(getOf(getOf(wire, "result"), "granularityReview"), "batches"))) != len(plan.Batches) {
 				t.Fatal("peer erased native plan fields")
 			}
 			projected, err := codexDomainResult(schema, wire)
@@ -240,14 +241,14 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := worker.Validation{Status: "PASS"}
+			var payload any
 			switch handler {
 			case "engine.qa.design":
-				result.Manifest = &worker.Manifest{Cases: []worker.Case{{CaseID: "case", Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: map[string][]string{"AC": {"case"}}}
+				payload = &worker.Manifest{Cases: []worker.Case{{CaseID: "case", Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: map[string][]string{"AC": {"case"}}}
 			case "engine.qa.review.rationale":
-				result.Review = &worker.CaseReview{SourceDecisions: map[string]worker.Decision{"REQ": {Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: map[string]worker.Decision{"AC": {Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: map[string]worker.Decision{"case": {Status: coverage.StatusPass, Reason: "oracle valid"}}}
+				payload = &worker.CaseReview{SourceDecisions: map[string]worker.Decision{"REQ": {Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: map[string]worker.Decision{"AC": {Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: map[string]worker.Decision{"case": {Status: coverage.StatusPass, Reason: "oracle valid"}}}
 			case "engine.qa.execution":
-				result.Execution = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Comparison: "matches"}}}
+				payload = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Comparison: "matches"}}}
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
@@ -265,7 +266,6 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 					t.Fatal(renderErr)
 				}
 			}
-			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &result}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
 			if err != nil {
@@ -314,7 +314,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 			if err = codexPeerStrictSchema(plain); err != nil {
 				t.Fatal(err)
 			}
-			completion := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)
+			completion := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)
 			nativeCompletion, err := codexOutputSchema(completion)
 			if err != nil {
 				t.Fatal(err)
@@ -332,7 +332,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 					}
 				}
 			}
-			payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &worker.Development{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}}}
+			payload := worker.Development{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}
 			body, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)
@@ -355,12 +355,9 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, role := range []struct {
-		handler  string
-		statuses []string
-	}{{"engine.development.batch", []string{"PASS"}}, {"engine.repair", []string{"PASS"}}, {"engine.merge.resolve", []string{"PASS"}}, {"engine.qa.design", []string{"PASS"}}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
-		t.Run(role.handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: role.handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+	for _, handler := range []string{"engine.development.batch", "engine.repair", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate"} {
+		t.Run(handler, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -370,45 +367,22 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plain := objectOrEmpty(codexPlain(t, native))
-			if err = codexPeerStrictSchema(plain); err != nil {
+			if err := codexPeerStrictSchema(codexPlain(t, native)); err != nil {
 				t.Fatal(err)
 			}
-			validation := objectOrEmpty(getOf(getOf(plain, "properties"), "validation"))
-			branches := listOf(validation["anyOf"])
-			if len(branches) != 2 {
-				t.Fatal("optional validation transport shape changed")
-			}
-			status := objectOrEmpty(getOf(getOf(branches[0], "properties"), "status"))
-			expected := []any{}
-			for _, literal := range role.statuses {
-				expected = append(expected, literal)
-			}
-			if role.statuses == nil {
-				if _, present := status["enum"]; present {
-					t.Fatal("native adapter invented a business status restriction")
+			body := objectOrEmpty(listOf(codexPlain(t, schema).(map[string]any)["anyOf"])[0])
+			fields := objectOrEmpty(body["properties"])
+			if handler == "engine.gate" {
+				if !valuesEqual(getOf(fields["status"], "enum"), []any{"PASS", "FAIL"}) {
+					t.Fatal("gate semantic verdict lost")
 				}
-			} else if !valuesEqual(status["enum"], expected) {
-				t.Fatalf("native status domain differs: %v", status)
+			} else if fields["status"] != nil {
+				t.Fatal("model owns a derived role status")
 			}
-			values := role.statuses
-			if values == nil {
-				values = []string{"COMPLETED"}
-			}
-			for _, literal := range values {
-				payload := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: literal}}
-				body, err := json.Marshal(payload)
-				if err != nil {
-					t.Fatal(err)
-				}
-				domain, err := decodeNativeJSON(body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				projected, err := codexDomainResult(schema, codexPeerAnswer(schema, domain))
-				if err != nil || !valuesEqual(projected, domain) {
-					t.Fatalf("native projection rewrote status: %v", err)
-				}
+			domain := map[string]any{"interruptionReason": "Required source is not readable"}
+			projected, err := codexDomainResult(schema, codexPeerAnswer(codexPlain(t, schema), domain))
+			if err != nil || !valuesEqual(projected, domain) {
+				t.Fatal("native inability altered", err)
 			}
 			after, _ := json.Marshal(schema)
 			if !bytes.Equal(before, after) {

@@ -16,7 +16,7 @@ func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		properties := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
+		properties := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 		if properties["caseRuns"] != nil || properties["build"] != nil || properties["tests"] != nil || properties["completion"].(map[string]any)["properties"].(map[string]any)["checks"] != nil {
 			t.Fatal("model execution claims remain in the contract")
 		}
@@ -27,7 +27,7 @@ func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 			} else if claim != "none" {
 				development[claim] = []string{"passed"}
 			}
-			raw, err := json.Marshal(map[string]any{"outcome": "PASS", "validation": map[string]any{"status": "PASS", "development": development}})
+			raw, err := json.Marshal(development)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,13 +54,14 @@ func TestRepairComparisonDerivesExecutionFactsAndStatus(t *testing.T) {
 			if scenario == "case-fail" {
 				records["case-b"] = Observation{Result: coverage.ExecutedFail, Comparison: "actual output differs from oracle"}
 			}
-			value := Result{Outcome: protocol.OutcomePass, Validation: &Validation{RepairVerification: &Execution{Records: records}}}
-			if scenario == "status-claim" {
-				value.Validation.Status = protocol.OutcomePass
-			}
+			value := Execution{Records: records}
+
 			raw, err := json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if scenario == "status-claim" {
+				raw = append(raw[:len(raw)-1], []byte(`,"status":"PASS"}`)...)
 			}
 			event, err := DecodeResult(input, "result", raw, "sha256:semantic")
 			if scenario == "status-claim" {

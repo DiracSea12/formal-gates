@@ -153,7 +153,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			for _, fact := range input.ExecutionFacts {
 				comparisons[fact.CaseID] = worker.Observation{Comparison: "actual exit and output match the approved normal oracle", Result: coverage.ExecutedPass}
 			}
-			raw, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{RepairVerification: &worker.Execution{Records: comparisons}}})
+			raw, err := json.Marshal(worker.Execution{Records: comparisons})
 			if err != nil {
 				t.Fatal(err)
 			}

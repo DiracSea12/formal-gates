@@ -6,163 +6,138 @@ import (
 	"slices"
 	"strings"
 
-	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 )
 
-// ResultSchema renders the finite semantic result types; it does not validate
-// business values or interpret arbitrary schemas. Core Submit owns admission.
+// ResultSchema contains the role's semantic body and a closed inability
+// alternative. Issued identities and completed transport outcome are not model fields.
 func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
-	failures := []any{}
-	for _, class := range authoring.FailureClasses() {
-		failures = append(failures, string(class))
+	body, err := completedSchema(input)
+	if err != nil {
+		return nil, err
 	}
-	properties := map[string]any{
-		"outcome":      map[string]any{"type": "string", "enum": []any{protocol.OutcomePass, protocol.OutcomeFail, protocol.OutcomeRuntimeError}},
-		"failureClass": map[string]any{"type": "string", "enum": failures}, "interruptionReason": map[string]any{"type": "string"},
+	interruption := fixedObject(map[string]any{"interruptionReason": map[string]any{"type": "string", "minLength": 1}}, []string{"interruptionReason"})
+	if input.Handler == "engine.qa.execution" {
+		fields := interruption["properties"].(map[string]any)
+		fields["records"] = body["properties"].(map[string]any)["records"]
+		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
+	return map[string]any{"anyOf": []any{body, interruption}}, nil
+}
+
+func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
+	var typ reflect.Type
 	if input.Review != nil {
-		body, err := resultTypeSchema(reflect.TypeOf(Review{}))
-		if err != nil {
-			return nil, err
+		typ = reflect.TypeOf(Review{})
+	} else if input.Validation != nil {
+		switch input.Handler {
+		case "engine.development.batch":
+			typ = reflect.TypeOf(Development{})
+		case "engine.repair":
+			typ = reflect.TypeOf(Repair{})
+		case "engine.merge.resolve":
+			typ = reflect.TypeOf(protocol.ConflictResolution{})
+		case "engine.qa.design":
+			typ = reflect.TypeOf(Design{})
+		case "engine.qa.review.rationale":
+			typ = reflect.TypeOf(CaseReview{})
+		case "engine.qa.execution":
+			typ = reflect.TypeOf(ExecutionJudgments{})
+		case "engine.repair.verify":
+			typ = reflect.TypeOf(Execution{})
+		case "engine.gate":
+			typ = reflect.TypeOf(Gate{})
+		default:
+			return nil, fmt.Errorf("worker result schema has no role %s", input.Handler)
 		}
+	} else {
+		return nil, fmt.Errorf("worker result schema lacks typed role")
+	}
+	body, err := resultTypeSchema(typ)
+	if err != nil {
+		return nil, err
+	}
+	fields := body["properties"].(map[string]any)
+	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
-			delete(body["properties"].(map[string]any), "granularityReview")
+			delete(fields, "granularityReview")
 		}
+		fields["status"] = map[string]any{"type": "string", "enum": []string{protocol.OutcomePass, protocol.OutcomeFail}}
 		verification := map[string]any{}
 		for _, key := range review.RequiredVerificationChecks() {
 			verification[key] = map[string]any{"type": "string", "minLength": 1}
 		}
-		body["properties"].(map[string]any)["verification"] = fixedObject(verification, review.RequiredVerificationChecks())
-		properties["review"] = body
-	} else if input.Validation != nil {
-		body := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}, "required": []any{"status"}}
-		fields := body["properties"].(map[string]any)
-		allowed := map[string]bool{"Status": true}
-		var statuses []string
-		switch input.Handler {
-		case "engine.development.batch":
-			allowed["Development"] = true
-			statuses = []string{protocol.OutcomePass}
-		case "engine.repair.verify":
-			delete(allowed, "Status")
-			body["required"] = []any{"repairVerification"}
-			allowed["RepairVerification"] = true
-		case "engine.repair":
-			allowed["Development"], allowed["GranularityReview"] = true, true
-			statuses = []string{protocol.OutcomePass}
-		case "engine.merge.resolve":
-			allowed["Resolution"] = true
-			statuses = []string{protocol.OutcomePass}
-		case "engine.qa.design":
-			statuses = []string{protocol.OutcomePass}
-			for _, name := range []string{"Manifest", "Checkpoint"} {
-				allowed[name] = true
-			}
-		case "engine.qa.review.rationale":
-			allowed["Review"], allowed["Suggestions"] = true, true
-		case "engine.qa.execution":
-			for _, name := range []string{"Execution", "Checkpoint", "Findings"} {
-				allowed[name] = true
-			}
-		case "engine.gate":
-			statuses = []string{protocol.OutcomePass, protocol.OutcomeFail}
-			allowed["Findings"] = true
-		default:
-			return nil, fmt.Errorf("worker validation schema has no role %s", input.Handler)
-		}
-		typ := reflect.TypeOf(Validation{})
-		for i := 0; i < typ.NumField(); i++ {
-			field := typ.Field(i)
-			if !allowed[field.Name] {
-				continue
-			}
-			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-			child, err := resultTypeSchema(field.Type)
-			if err != nil {
-				return nil, err
-			}
-			fields[name] = child
-		}
-		if statuses != nil {
-			fields["status"] = map[string]any{"type": "string", "enum": statuses}
-		}
-		if batch := completionBatch(input); batch != nil {
-			completion := fields["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
-			dod := map[string]any{}
-			dodIDs := []string{}
-			for _, criterion := range batch.DoD {
-				dod[criterion.ID] = map[string]any{"type": "string", "minLength": 1}
-				dodIDs = append(dodIDs, criterion.ID)
-			}
-			completion["dod"] = map[string]any{"type": "object", "additionalProperties": false, "properties": dod, "required": dodIDs}
-		} else if development, present := fields["development"].(map[string]any); present && !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
-			delete(development["properties"].(map[string]any), "completion")
-		}
-
-		if input.Handler == "engine.repair.verify" {
-			records := map[string]any{}
-			for _, fact := range input.Validation.ExecutionFacts {
-				item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
-				if err != nil {
-					return nil, err
-				}
-				records[fact.CaseID] = item
-			}
-			fields["repairVerification"].(map[string]any)["properties"].(map[string]any)["records"] = fixedObject(records, input.Validation.Repair.VerificationCases)
-		}
-
-		if input.Handler == "engine.qa.design" {
-			coverageKeys := map[string]any{}
-			for _, point := range input.Validation.Manifest.Points {
-				coverageKeys[point.PointID] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
-			}
-			fields["manifest"].(map[string]any)["properties"].(map[string]any)["coverage"] = fixedObject(coverageKeys, nil)
-		}
-		if input.Handler == "engine.qa.review.rationale" {
-			items := fields["review"].(map[string]any)["properties"].(map[string]any)
-			sources, points, cases, shared := []string{}, []string{}, []string{}, []string{}
-			sources = append(sources, input.Validation.Manifest.Sources...)
-			for _, item := range input.Validation.Manifest.Points {
-				points = append(points, item.PointID)
-			}
-			for _, item := range input.Validation.Manifest.Cases {
-				cases = append(cases, item.CaseID)
-			}
-			for _, item := range input.Validation.Manifest.SharedSteps {
-				shared = append(shared, item.ID)
-			}
-			decision, err := resultTypeSchema(reflect.TypeOf(Decision{}))
-			if err != nil {
-				return nil, err
-			}
-			items["sourceDecisions"] = decisionSchema(sources, nil, decision)
-			items["pointDecisions"] = decisionSchema(points, nil, decision)
-			items["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
-			items["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
-		}
-		if input.Handler == "engine.qa.execution" {
-			fields["checkpoint"].(map[string]any)["description"] = "True only for a partial report with unfinished required case judgments. When pendingCases is empty and Completed covers requiredCases, report false or omit this field and return execution.records {}. Accepted FAIL records are complete. Status and findings remain honest semantic judgments; the program reuses Completed records."
-			keys := map[string]any{}
-			observation, err := resultTypeSchema(reflect.TypeOf(Observation{}))
-			if err != nil {
-				return nil, err
-			}
-			for _, fact := range input.Validation.ExecutionFacts {
-				if slices.Contains(input.Validation.RequiredCases, fact.CaseID) && slices.Contains(input.Validation.PendingCases, fact.CaseID) {
-					keys[fact.CaseID] = observation
-				}
-			}
-			fields["execution"].(map[string]any)["properties"].(map[string]any)["records"] = fixedObject(keys, nil)
-		}
-		properties["validation"] = body
-	} else {
-		return nil, fmt.Errorf("worker result schema lacks typed role")
+		fields["verification"] = fixedObject(verification, review.RequiredVerificationChecks())
+		return body, nil
 	}
-	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": []any{"outcome"}}
-	return schema, nil
+	if input.Handler == "engine.gate" {
+		fields["status"] = map[string]any{"type": "string", "enum": []string{protocol.OutcomePass, protocol.OutcomeFail}}
+	}
+	if batch := completionBatch(input); batch != nil {
+		completion := fields["completion"].(map[string]any)["properties"].(map[string]any)
+		dod, ids := map[string]any{}, []string{}
+		for _, criterion := range batch.DoD {
+			dod[criterion.ID] = map[string]any{"type": "string", "minLength": 1}
+			ids = append(ids, criterion.ID)
+		}
+		completion["dod"] = fixedObject(dod, ids)
+	} else if !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+		delete(fields, "completion")
+	}
+	if input.Handler == "engine.repair.verify" {
+		records := map[string]any{}
+		for _, fact := range input.Validation.ExecutionFacts {
+			item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+			if err != nil {
+				return nil, err
+			}
+			records[fact.CaseID] = item
+		}
+		fields["records"] = fixedObject(records, input.Validation.Repair.VerificationCases)
+	}
+	if input.Handler == "engine.qa.design" {
+		keys := map[string]any{}
+		for _, point := range input.Validation.Manifest.Points {
+			keys[point.PointID] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		}
+		fields["coverage"] = fixedObject(keys, nil)
+	}
+	if input.Handler == "engine.qa.review.rationale" {
+		sources, points, cases, shared := slices.Clone(input.Validation.Manifest.Sources), []string{}, []string{}, []string{}
+		for _, item := range input.Validation.Manifest.Points {
+			points = append(points, item.PointID)
+		}
+		for _, item := range input.Validation.Manifest.Cases {
+			cases = append(cases, item.CaseID)
+		}
+		for _, item := range input.Validation.Manifest.SharedSteps {
+			shared = append(shared, item.ID)
+		}
+		decision, err := resultTypeSchema(reflect.TypeOf(Decision{}))
+		if err != nil {
+			return nil, err
+		}
+		fields["sourceDecisions"] = decisionSchema(sources, nil, decision)
+		fields["pointDecisions"] = decisionSchema(points, nil, decision)
+		fields["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
+		fields["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
+	}
+	if input.Handler == "engine.qa.execution" {
+		keys := map[string]any{}
+		observation, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+		if err != nil {
+			return nil, err
+		}
+		for _, fact := range input.Validation.ExecutionFacts {
+			if slices.Contains(input.Validation.RequiredCases, fact.CaseID) && slices.Contains(input.Validation.PendingCases, fact.CaseID) {
+				keys[fact.CaseID] = observation
+			}
+		}
+		fields["records"] = fixedObject(keys, nil)
+	}
+	return body, nil
 }
 
 func resultTypeSchema(value reflect.Type) (map[string]any, error) {
@@ -244,6 +219,10 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			if !strings.Contains(options, "omitempty") {
 				required = append(required, name)
 			}
+		}
+		if value == reflect.TypeOf(Observation{}) {
+			properties["result"] = map[string]any{"type": "string", "enum": []string{string(coverage.ExecutedPass), string(coverage.ExecutedFail)}}
+			properties["comparison"] = map[string]any{"type": "string", "minLength": 1}
 		}
 		if value == reflect.TypeOf(Granularity{}) {
 			tiers := []any{}

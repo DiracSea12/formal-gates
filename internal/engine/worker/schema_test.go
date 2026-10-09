@@ -15,7 +15,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"status", "development"}, "engine.repair": {"status", "development", "granularityReview"}, "engine.merge.resolve": {"status", "resolution"}, "engine.qa.design": {"status", "manifest", "checkpoint"}, "engine.qa.review.rationale": {"status", "review", "suggestions"}, "engine.qa.execution": {"status", "execution", "checkpoint", "findings"}, "engine.gate": {"status", "findings"},
+		"engine.development.batch": {"paths", "summary", "affectedCases"}, "engine.repair": {"paths", "summary", "affectedCases", "granularityReview"}, "engine.merge.resolve": {"paths", "summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"status", "findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -23,13 +23,13 @@ func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		outer := schema["properties"].(map[string]any)
+		outer := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 		for _, key := range []string{"actionId", "provider", "payloadDigest"} {
 			if outer[key] != nil {
 				t.Fatalf("model owns %s", key)
 			}
 		}
-		fields := outer["validation"].(map[string]any)["properties"].(map[string]any)
+		fields := outer
 		if len(fields) != len(names) {
 			t.Fatalf("wrong role fields: %v", fields)
 		}
@@ -55,7 +55,7 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fields := material.ResultSchema["properties"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)
+		fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 		for _, key := range []string{"action", "dispatchId", "requirementRevision", "authorizationId"} {
 			if fields[key] != nil {
 				t.Fatalf("model owns %s", key)
@@ -65,12 +65,9 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 		if !reflect.DeepEqual(checks["required"], review.RequiredVerificationChecks()) {
 			t.Fatal("lost individual checks")
 		}
-		value := material.ResultTemplate
-		value.Outcome = "PASS"
-		value.Review.Status = "PASS"
-		value.Review.Findings = []Finding{}
+		value := Review{Status: "PASS", Findings: []Finding{}, Verification: map[string]string{}}
 		for _, key := range review.RequiredVerificationChecks() {
-			value.Review.Verification[key] = "observed " + key
+			value.Verification[key] = "observed " + key
 		}
 		body, _ := json.Marshal(value)
 		event, err := DecodeResult(input, "event", body, "original")
@@ -81,12 +78,12 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 			t.Fatal("wrong original binding")
 		}
 		for _, key := range review.RequiredVerificationChecks() {
-			delete(value.Review.Verification, key)
+			delete(value.Verification, key)
 			body, _ = json.Marshal(value)
 			if _, err := DecodeResult(input, "event", body, "original"); err == nil {
 				t.Fatalf("missing %s accepted", key)
 			}
-			value.Review.Verification[key] = "observed " + key
+			value.Verification[key] = "observed " + key
 		}
 	}
 }
@@ -122,7 +119,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 				}
 			}
 			if role.handler == "engine.qa.design" && role.author {
-				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") || material.ResultTemplate.Validation.Development != nil {
+				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
 				}
 			} else if role.author && !strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
@@ -143,9 +140,9 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fields := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)
-		if fields["manifest"] != nil {
-			m := fields["manifest"].(map[string]any)["properties"].(map[string]any)
+		fields := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+		if handler == "engine.qa.design" {
+			m := fields
 			for _, key := range []string{"binding", "sources", "points", "edges"} {
 				if m[key] != nil {
 					t.Fatalf("manifest owns %s", key)
@@ -156,16 +153,16 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 				t.Fatal("case semantics differ")
 			}
 		}
-		if fields["review"] != nil {
-			r := fields["review"].(map[string]any)["properties"].(map[string]any)
+		if handler == "engine.qa.review.rationale" {
+			r := fields
 			for _, key := range []string{"binding", "scope", "setStatus", "unboundSources"} {
 				if r[key] != nil {
 					t.Fatalf("review owns %s", key)
 				}
 			}
 		}
-		if fields["execution"] != nil {
-			e := fields["execution"].(map[string]any)["properties"].(map[string]any)
+		if handler == "engine.qa.execution" {
+			e := fields
 			if e["binding"] != nil || e["notExecuted"] != nil {
 				t.Fatal("model owns execution facts")
 			}
@@ -190,7 +187,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
+			fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
 			for name, ids := range map[string][]string{"dod": {"behavior", "interface"}} {
 				schema := fields[name].(map[string]any)
 				properties := schema["properties"].(map[string]any)
@@ -233,12 +230,12 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			if name == "other-role" {
-				if schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"] != nil {
+				if schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["development"] != nil {
 					t.Fatal("QA role exposed a duplicate development declaration")
 				}
 				return
 			}
-			development := schema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["development"].(map[string]any)["properties"].(map[string]any)
+			development := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 			if name == "unfrozen-repair" {
 				input.RunID, input.Pending.AttemptID = "run", "attempt"
 				input.RequirementDocument = requirement.FrozenRequirementProjection{Content: "confirmed requirement"}
@@ -246,7 +243,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, rule := range []string{"issued development batch or a proposed single batch", "Without either, omit completion", "development.paths, summary and affectedCases"} {
+				for _, rule := range []string{"issued development batch or a proposed single batch", "Without either, omit completion", "paths, summary and affectedCases"} {
 					if !strings.Contains(material.Prompt, rule) {
 						t.Fatalf("repair output instruction missing %q", rule)
 					}
@@ -267,32 +264,24 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch", []string{"PASS"}}, {"engine.repair", []string{"PASS"}}, {"engine.merge.resolve", []string{"PASS"}}, {"engine.qa.design", []string{"PASS"}}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
+	}{{"engine.development.batch", nil}, {"engine.repair", nil}, {"engine.merge.resolve", nil}, {"engine.qa.design", nil}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
-			status := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
-			if status["type"] != "string" {
-				t.Fatal("status wire type changed")
-			}
+			fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 			if role.statuses == nil {
-				if _, exists := status["enum"]; exists {
-					t.Fatal("role without a core status restriction acquired one")
+				if fields["status"] != nil {
+					t.Fatal("model owns a derived status")
 				}
-			} else {
-				if !reflect.DeepEqual(status["enum"], role.statuses) {
-					t.Fatalf("wrong role status domain: %v", status)
-				}
-				values, _ := json.Marshal(role.statuses)
-				if !strings.Contains(material.Prompt, "validation.status must use exactly one of these machine values: "+string(values)) {
-					t.Fatal("prompt differs from schema's finite domain")
-				}
+			} else if !reflect.DeepEqual(fields["status"].(map[string]any)["enum"], role.statuses) {
+				t.Fatal("semantic gate verdict domain changed")
 			}
-			if material.ResultTemplate.Validation.Status != "" {
-				t.Fatal("template fabricated success")
+			encoded, _ := json.Marshal(material)
+			if strings.Contains(string(encoded), "resultTemplate") {
+				t.Fatal("mechanical template retained")
 			}
 			if !material.ReadOnly && (!strings.Contains(material.Prompt, "Do not execute any VCS write operation; all VCS writes belong to engine adapters.") || !strings.Contains(material.Prompt, "Read-only VCS inspection remains permitted.")) {
 				t.Fatal("writable role lost adapter ownership or read-only inspection")
@@ -334,25 +323,22 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, instruction := range []string{"checkpoint true only for a partial report", "Completed FAIL judgments are complete", "checkpoint false or omitted and execution.records {}", "Report honest status and findings"} {
+	for _, instruction := range []string{"program derives checkpoint and overall status", "Completed FAIL judgments are complete", "return records {}", "Missing native facts never establish PASS"} {
 		if !strings.Contains(material.Prompt, instruction) {
 			t.Fatalf("final report instruction missing: %s", instruction)
 		}
 	}
-	fields := material.ResultSchema["properties"].(map[string]any)["validation"].(map[string]any)["properties"].(map[string]any)
-	description := fields["checkpoint"].(map[string]any)["description"].(string)
-	if !strings.Contains(description, "partial report with unfinished required case judgments") || !strings.Contains(description, "false or omit") || !strings.Contains(description, "Accepted FAIL records are complete") {
-		t.Fatal("schema does not distinguish partial judgments from a final failed report")
+	fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+	if fields["status"] != nil || fields["checkpoint"] != nil {
+		t.Fatal("model owns derived execution summaries")
 	}
-	records := fields["execution"].(map[string]any)["properties"].(map[string]any)["records"].(map[string]any)
-	if len(records["properties"].(map[string]any)) != 0 || records["additionalProperties"] != false || len(material.ResultTemplate.Validation.Execution.Records) != 0 {
+	records := fields["records"].(map[string]any)
+	if len(records["properties"].(map[string]any)) != 0 || records["additionalProperties"] != false {
 		t.Fatal("completed judgments were requested again")
 	}
-	for _, checkpoint := range []bool{false, true} {
-		body := decodeSemantic(t, input, Result{Outcome: "PASS", Validation: &Validation{Status: "FAIL", Checkpoint: checkpoint, Execution: &Execution{Records: map[string]Observation{}}}}).Validation
-		if body.Status != "FAIL" || body.Checkpoint != checkpoint || len(body.Execution.Records) != 0 || len(body.Execution.NotExecuted) != 0 {
-			t.Fatal("model report was rewritten or completed facts were resubmitted")
-		}
+	body := decodeSemantic(t, input, ExecutionJudgments{Execution: Execution{Records: map[string]Observation{}}}).Validation
+	if body.Status != "FAIL" || body.Checkpoint || len(body.Execution.Records) != 0 || len(body.Execution.NotExecuted) != 0 {
+		t.Fatal("completed facts were resubmitted or their FAIL lost")
 	}
 	after, err := json.Marshal(material.Input)
 	if err != nil {

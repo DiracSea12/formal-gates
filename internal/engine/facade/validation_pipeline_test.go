@@ -1375,7 +1375,7 @@ func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 	for _, row := range edit.Development.CaseRuns {
 		observations[row.CaseID] = worker.Observation{Result: row.Result, Comparison: row.Comparison}
 	}
-	raw, err := json.Marshal(worker.Result{Outcome: edit.Status, Validation: &worker.Validation{RepairVerification: &worker.Execution{Records: observations}}})
+	raw, err := json.Marshal(worker.Execution{Records: observations})
 	if err != nil {
 		d.t.Fatal(err)
 	}

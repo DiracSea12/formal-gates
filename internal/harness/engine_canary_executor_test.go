@@ -1576,7 +1576,7 @@ func (e *canaryLocalExecutor) observeProduction(m *canaryMaterials) error {
 }
 
 func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspace string, answer map[string]any) (map[string]any, error) {
-	payload := worker.Result{Outcome: protocol.OutcomePass}
+	var payload any
 	body, err := json.Marshal(answer)
 	if err != nil {
 		return nil, err
@@ -1586,7 +1586,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 		if err := json.Unmarshal(body, &decoded); err != nil {
 			return nil, err
 		}
-		payload.Review = &worker.Review{Status: decoded.Status, GranularityReview: canarySemanticPlan(decoded.Plan), Findings: []worker.Finding{}, Verification: map[string]string{
+		checked := &worker.Review{Status: decoded.Status, GranularityReview: canarySemanticPlan(decoded.Plan), Findings: []worker.Finding{}, Verification: map[string]string{
 			"binding":           "The peer consumed the exact issued prompt, requirement revision and role schema.",
 			"completeness":      "The fixture reviewed the complete confirmed requirement document and every supplied obligation.",
 			"evidence":          "The fixture judgment is grounded in the requirement text and the recorded local observations.",
@@ -1598,19 +1598,18 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 		}}
 		for _, found := range decoded.Findings {
 			f := found.finding()
-			payload.Review.Findings = append(payload.Review.Findings, worker.Finding{Severity: f.Severity, SeverityRationale: f.SeverityRationale, Category: f.Category, Requirement: f.Requirement, NormalPath: f.NormalPath, ActualError: f.ActualError, DeferralImpact: f.DeferralImpact, Verification: f.Verification, Message: f.Message, Locations: f.Locations})
+			checked.Findings = append(checked.Findings, worker.Finding{Severity: f.Severity, SeverityRationale: f.SeverityRationale, Category: f.Category, Requirement: f.Requirement, NormalPath: f.NormalPath, ActualError: f.ActualError, DeferralImpact: f.DeferralImpact, Verification: f.Verification, Message: f.Message, Locations: f.Locations})
 		}
+		payload = checked
 	} else {
 		issued := input.Validation
-		result := worker.Validation{Status: protocol.OutcomePass}
 		switch issued.Handler {
 		case "engine.repair.verify":
 			var decoded worker.Execution
 			if err := json.Unmarshal(body, &decoded); err != nil {
 				return nil, err
 			}
-			result.Status = ""
-			result.RepairVerification = &decoded
+			payload = &decoded
 
 		case "engine.development.batch", "engine.repair":
 			var decoded canaryDevelopmentAnswer
@@ -1624,9 +1623,10 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				}
 				decoded.Paths[i] = relative
 			}
-			result.Development = &worker.Development{Paths: decoded.Paths, Summary: decoded.Summary, AffectedCases: decoded.AffectedCases}
+			result := &worker.Repair{Paths: decoded.Paths, Summary: decoded.Summary, AffectedCases: decoded.AffectedCases}
+			payload = result
 			if issued.Development != nil {
-				result.Development.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Handoff: decoded.Handoff}
+				result.Completion = &protocol.DevelopmentCompletion{DoD: decoded.DoD, Handoff: decoded.Handoff}
 			}
 		case "engine.qa.design":
 			var decoded struct {
@@ -1654,7 +1654,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 				manifest.Cases = append(manifest.Cases, item)
 				manifest.Coverage[designed.PointID] = append(manifest.Coverage[designed.PointID], designed.CaseID)
 			}
-			result.Manifest = &manifest
+			payload = &worker.Design{Manifest: manifest}
 		case "engine.qa.review.rationale":
 			var decoded struct{ SourceDecisions, PointDecisions, CaseDecisions []canaryReviewDecision }
 			if err := json.Unmarshal(body, &decoded); err != nil {
@@ -1670,14 +1670,7 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			for _, d := range decoded.CaseDecisions {
 				checked.CaseDecisions[d.ID] = worker.Decision{Status: coverage.DecisionStatus(d.Status), Reason: d.Reason}
 			}
-			result.Review = &checked
-			for _, items := range []map[string]worker.Decision{checked.SourceDecisions, checked.PointDecisions, checked.CaseDecisions} {
-				for _, d := range items {
-					if d.Status != coverage.StatusPass {
-						result.Status = "FAIL"
-					}
-				}
-			}
+			payload = &checked
 		case "engine.qa.execution":
 			var decoded struct {
 				Records []struct{ CaseID, Result, Comparison string }
@@ -1688,11 +1681,8 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			report := worker.Execution{Records: map[string]worker.Observation{}}
 			for _, row := range decoded.Records {
 				report.Records[row.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(row.Result), Comparison: row.Comparison}
-				if row.Result != string(coverage.ExecutedPass) {
-					result.Status = "FAIL"
-				}
 			}
-			result.Execution = &report
+			payload = &worker.ExecutionJudgments{Execution: report}
 		case "engine.gate":
 			var decoded struct {
 				Status   string
@@ -1701,7 +1691,8 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 			if err := json.Unmarshal(body, &decoded); err != nil {
 				return nil, err
 			}
-			result.Status = decoded.Status
+			result := &worker.Gate{Status: decoded.Status, Findings: []worker.Finding{}}
+			payload = result
 			for _, found := range decoded.Findings {
 				f := found.finding()
 				result.Findings = append(result.Findings, worker.Finding{Severity: f.Severity, SeverityRationale: f.SeverityRationale, Category: f.Category, Requirement: f.Requirement, NormalPath: f.NormalPath, ActualError: f.ActualError, DeferralImpact: f.DeferralImpact, Verification: f.Verification, Message: f.Message, Locations: f.Locations})
@@ -1709,7 +1700,6 @@ func (e *canaryLocalExecutor) semanticAnswer(input protocol.WorkerInput, workspa
 		default:
 			return nil, fmt.Errorf("local semantic peer has no handler %s", issued.Handler)
 		}
-		payload.Validation = &result
 	}
 	body, err = json.Marshal(payload)
 	if err != nil {
@@ -1727,6 +1717,9 @@ func canaryCodexNativeAnswer(schema, value any) any {
 		return nil
 	}
 	contract := objectOrEmpty(schema)
+	if codexObjectUnion(contract) {
+		return map[string]any{"result": canaryCodexNativeAnswer(codexObjectBranch(contract, value), value)}
+	}
 	branches := listOf(contract["anyOf"])
 	if len(branches) == 2 {
 		if getOf(branches[0], "type") == "null" {
@@ -1835,7 +1828,7 @@ func TestCanaryQAFileEvidenceSurvivesCodexRoundTrip(t *testing.T) {
 				actual, _ := json.Marshal(projected)
 				t.Fatalf("native round trip changed file evidence: %v\noriginal=%s\nprojected=%s", err, original, actual)
 			}
-			manifest := getOf(getOf(projected, "validation"), "manifest")
+			manifest := projected
 			for _, raw := range listOf(getOf(manifest, "cases")) {
 				files, present := objectOrEmpty(raw)["files"]
 				t.Logf("projected case=%s filesPresent=%t files=%v", getOf(raw, "caseId"), present, files)
@@ -1848,7 +1841,7 @@ func TestCanaryQAFileEvidenceSurvivesCodexRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cases := listOf(getOf(getOf(getOf(plain, "validation"), "manifest"), "cases"))
+			cases := listOf(getOf(getOf(plain, "result"), "cases"))
 			objectOrEmpty(cases[0])["files"] = []any{"different-fixture.json"}
 			changed, err := codexDomainResult(plainSchema, plain)
 			if err != nil || valuesEqual(changed, domain) {

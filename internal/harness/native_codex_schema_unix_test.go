@@ -19,6 +19,9 @@ func codexPeerAnswer(schema, value any) any {
 		return nil
 	}
 	contract := objectOrEmpty(schema)
+	if codexObjectUnion(contract) {
+		return map[string]any{"result": codexPeerAnswer(codexObjectBranch(contract, value), value)}
+	}
 	if codexOpen, ok := codexOpenMap(contract); ok {
 		values := objectOrEmpty(value)
 		keys := make([]string, 0, len(values))

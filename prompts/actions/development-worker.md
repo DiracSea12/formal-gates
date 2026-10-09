@@ -44,7 +44,7 @@
 
 `input.repair` 携带同一个原返修义务的冻结问题与原始证据。开发者自主决定分不分、怎么分，
 不请求新的计划确认。小修可直接提交原 `DevelopmentEvidence`；需要分块、依赖或隔离
-分片时，在原 `engine.repair` 结果的 `validation.granularityReview` 提交完整
+分片时，在原 `engine.repair` 结果的 `granularityReview` 提交完整
 `GranularityReview`，该规划结果不包含修改完成证据。后续成员的 `input.development`
 携带批次合同及依赖结果；完成语义证据逐项覆盖 DoD 和 handoff；程序冻结精确来源并执行原批次批准的 checks。
 

@@ -436,12 +436,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 			if p.Checkpoint {
 				return nil
 			}
-			target.Status = "PASS"
-			for _, r := range target.Execution.Records {
-				if r.Result == coverage.ExecutedFail {
-					target.Status = "FAIL"
-				}
-			}
+			target.Status = string(coverage.ExecutionVerdict(target.Execution.Records))
 		} else {
 			if count != 0 || (p.Status != "PASS" && p.Status != "FAIL") {
 				return validationError("gate requires PASS/FAIL and findings")

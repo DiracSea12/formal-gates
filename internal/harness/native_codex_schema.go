@@ -20,7 +20,11 @@ func codexOutputSchema(schema any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return codexStrictSchema(copy), nil
+	translated := codexStrictSchema(copy)
+	if codexObjectUnion(objectOrEmpty(copy)) {
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []any{"result"}, "properties": map[string]any{"result": translated}}, nil
+	}
+	return translated, nil
 }
 
 func codexStrictSchema(value any) any {
@@ -69,6 +73,29 @@ func codexStrictSchema(value any) any {
 	return schema
 }
 
+// Codex requires an object root. The single native result slot carries the
+// closed semantic alternatives; it does not select a workflow role or outcome.
+func codexObjectUnion(schema map[string]any) bool {
+	branches := listOf(schema["anyOf"])
+	return len(branches) == 2 && getOf(branches[0], "type") == "object" && getOf(branches[1], "type") == "object"
+}
+func codexObjectBranch(schema map[string]any, value any) any {
+	branches := listOf(schema["anyOf"])
+	for _, branch := range branches {
+		properties := objectOrEmpty(getOf(branch, "properties"))
+		match := true
+		for name := range objectOrEmpty(value) {
+			if properties[name] == nil {
+				match = false
+			}
+		}
+		if match {
+			return branch
+		}
+	}
+	return branches[0]
+}
+
 func codexSchemaAllowsNull(value any) bool {
 	schema := objectOrEmpty(value)
 	if schema["type"] == "null" {
@@ -92,6 +119,17 @@ func codexSchemaAllowsNull(value any) bool {
 // required fields, bad values and unknown fields are retained for domain checks.
 func codexDomainResult(schema, value any) (any, error) {
 	contract := objectOrEmpty(schema)
+	if codexObjectUnion(contract) {
+		fields, ok := value.(map[string]any)
+		if !ok || len(fields) != 1 {
+			return nil, &blockedError{message: "CODEX_RESULT: closed alternatives require the native result slot"}
+		}
+		body, present := fields["result"]
+		if !present {
+			return nil, &blockedError{message: "CODEX_RESULT: native result slot is missing"}
+		}
+		return codexDomainResult(codexObjectBranch(contract, body), body)
+	}
 	if value == nil && codexSchemaAllowsNull(schema) {
 		return nil, nil
 	}
@@ -193,7 +231,7 @@ func codexTurnParameters(request any, thread string) (map[string]any, error) {
 		return nil, err
 	}
 	if !bytes.Equal(originalBytes, wireBytes) {
-		prompt += "\nNative output transport: follow the native output schema exactly. A null in an originally optional nonnullable property means omit that domain property. Dictionary fields use arrays of objects with exactly key and value; keys must be unique. The original job schema and business checks remain the domain contract."
+		prompt += "\nNative output transport: follow the native output schema exactly. A null in an originally optional nonnullable property means omit that domain property. Dictionary fields use arrays of objects with exactly key and value; keys must be unique. When the native schema has a single result slot, put the selected direct semantic body or inability alternative in that slot. The original job schema and business checks remain the domain contract."
 	}
 	params := map[string]any{"threadId": thread, "input": []any{map[string]any{"type": "text", "text": prompt}}, "outputSchema": schema}
 	for _, pair := range [][2]string{{"model", "model"}, {"reasoning_effort", "effort"}} {

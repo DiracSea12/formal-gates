@@ -185,12 +185,11 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			}
 			directory := t.TempDir()
 			session := "native-session-different-from-dispatch"
-			payload := material.ResultTemplate
-			payload.Outcome = protocol.OutcomePass
-			payload.Review.Status = "PASS"
-			payload.Review.Findings = []worker.Finding{}
+			payload := worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{}}
+			payload.Status = "PASS"
+			payload.Findings = []worker.Finding{}
 			for _, key := range review.RequiredVerificationChecks() {
-				payload.Review.Verification[key] = "verified full current requirement: " + key
+				payload.Verification[key] = "verified full current requirement: " + key
 			}
 			parsed, err := json.Marshal(payload)
 			if err != nil {

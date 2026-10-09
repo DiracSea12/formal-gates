@@ -1020,12 +1020,9 @@ func (c *engineCanary) executionResult(id string, input protocol.ValidationInput
 		return nil
 	}
 	c.turnIn(c.workspace(input), id, "QA case execution", c.prompt("QA case execution", materials, instructions, true), canaryExecutionSchema(), true, shape)
-	result := worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: protocol.OutcomePass, Execution: &worker.Execution{Records: map[string]worker.Observation{}}}}
+	result := worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{}}}
 	for _, record := range answer.Records {
-		result.Validation.Execution.Records[record.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(record.Result), Comparison: record.Comparison}
-		if record.Result != string(coverage.ExecutedPass) {
-			result.Validation.Status = protocol.OutcomeFail
-		}
+		result.Records[record.CaseID] = worker.Observation{Result: coverage.ExecutionStatus(record.Result), Comparison: record.Comparison}
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -3660,7 +3657,7 @@ func (c *engineCanary) repairComparisonResult(id string, input protocol.Validati
 	var answer worker.Execution
 	materials := canaryMaterials{Role: "repair comparison", ActionID: id, RequirementRevision: input.Binding.RequirementRevision, Input: &input}
 	turn := c.turnIn(c.workspace(input), id, "repair comparison", c.prompt("repair comparison", materials, "Compare every approved affected-case oracle against the supplied native execution facts. Return only comparison and honest result by fixed case key. Do not run commands, edit files or repeat paths, identities, procedure, observation or union fields.", true), schema, true, func(raw map[string]any) error { return decodeCanaryAnswer(raw, &answer) })
-	raw, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{RepairVerification: &answer}})
+	raw, err := json.Marshal(answer)
 	if err != nil {
 		c.fail("repair comparison encoding: %v", err)
 	}

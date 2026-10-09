@@ -420,6 +420,17 @@ type ExecutionRecord struct {
 // NotExecuted is an explicit projection for callers that want a separate
 // collection; records with ProvenanceNotExecuted must still be present in
 // Records so the complete partition can be checked.
+// ExecutionVerdict aggregates complete semantic case judgments. Unfinished or
+// unknown judgments never establish a passing result.
+func ExecutionVerdict(records []ExecutionRecord) DecisionStatus {
+	for _, record := range records {
+		if record.Result != ExecutedPass {
+			return StatusFail
+		}
+	}
+	return StatusPass
+}
+
 type ExecutionReport struct {
 	Binding     ExecutionBinding  `json:"binding"`
 	Records     []ExecutionRecord `json:"records"`

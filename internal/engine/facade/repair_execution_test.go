@@ -462,7 +462,7 @@ func nativeRepairComparison(t *testing.T, d *validationDriver, action string, in
 		}
 		records[fact.CaseID] = worker.Observation{Comparison: "actual command exit and output match the frozen oracle", Result: coverage.ExecutedPass}
 	}
-	raw, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{RepairVerification: &worker.Execution{Records: records}}})
+	raw, err := json.Marshal(worker.Execution{Records: records})
 	if err != nil {
 		t.Fatal(err)
 	}

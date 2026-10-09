@@ -14,14 +14,40 @@ import (
 	"formal-gates/internal/engine/review"
 )
 
-// Result contains only worker judgments and authored material. Issued identity
-// comes from Material.Input; workflow admission remains in protocol.Submit.
-type Result struct {
-	Outcome            string                 `json:"outcome"`
-	FailureClass       authoring.FailureClass `json:"failureClass,omitempty"`
-	InterruptionReason string                 `json:"interruptionReason,omitempty"`
-	Review             *Review                `json:"review,omitempty"`
-	Validation         *Validation            `json:"validation,omitempty"`
+// Interruption reports an inability to complete the issued semantic duty. Native
+// transport failures and their classification belong to the host adapter.
+type Interruption struct {
+	InterruptionReason string `json:"interruptionReason"`
+}
+type Repair struct {
+	Completion        *protocol.DevelopmentCompletion `json:"completion,omitempty"`
+	Paths             []string                        `json:"paths,omitempty"`
+	Summary           string                          `json:"summary,omitempty"`
+	AffectedCases     []string                        `json:"affectedCases,omitempty"`
+	GranularityReview *Granularity                    `json:"granularityReview,omitempty"`
+}
+type Design struct {
+	Manifest
+	Checkpoint bool `json:"checkpoint,omitempty"`
+}
+type ExecutionJudgments struct {
+	Execution
+	Findings []Finding `json:"findings,omitempty"`
+}
+type ExecutionInterruption struct {
+	InterruptionReason string                 `json:"interruptionReason"`
+	Records            map[string]Observation `json:"records,omitempty"`
+	Findings           []Finding              `json:"findings,omitempty"`
+}
+type Gate struct {
+	Status   string    `json:"status"`
+	Findings []Finding `json:"findings"`
+}
+
+// decodedResult is the role-selected assembly input, never a model wire format.
+type decodedResult struct {
+	Review     *Review
+	Validation *decodedValidation
 }
 type Granularity struct {
 	Reason           string     `json:"reason"`
@@ -72,18 +98,18 @@ func development(value *Development) *protocol.DevelopmentEvidence {
 	return &protocol.DevelopmentEvidence{Completion: value.Completion, Paths: value.Paths, Summary: value.Summary, AffectedCases: value.AffectedCases}
 }
 
-type Validation struct {
-	RepairVerification *Execution                   `json:"repairVerification,omitempty"`
-	Status             string                       `json:"status,omitempty"`
-	GranularityReview  *Granularity                 `json:"granularityReview,omitempty"`
-	Resolution         *protocol.ConflictResolution `json:"resolution,omitempty"`
-	Development        *Development                 `json:"development,omitempty"`
-	Manifest           *Manifest                    `json:"manifest,omitempty"`
-	Review             *CaseReview                  `json:"review,omitempty"`
-	Suggestions        []Suggestion                 `json:"suggestions,omitempty"`
-	Execution          *Execution                   `json:"execution,omitempty"`
-	Checkpoint         bool                         `json:"checkpoint,omitempty"`
-	Findings           []Finding                    `json:"findings,omitempty"`
+type decodedValidation struct {
+	RepairVerification *Execution
+	Status             string
+	GranularityReview  *Granularity
+	Resolution         *protocol.ConflictResolution
+	Development        *Development
+	Manifest           *Manifest
+	Review             *CaseReview
+	Suggestions        []Suggestion
+	Execution          *Execution
+	Checkpoint         bool
+	Findings           []Finding
 }
 type Suggestion struct {
 	Severity string `json:"severity"`
@@ -118,6 +144,7 @@ type Decision struct {
 	Reason string                  `json:"reason"`
 }
 type CaseReview struct {
+	Suggestions         []Suggestion        `json:"suggestions,omitempty"`
 	SourceDecisions     map[string]Decision `json:"sourceDecisions"`
 	PointDecisions      map[string]Decision `json:"pointDecisions"`
 	CaseDecisions       map[string]Decision `json:"caseDecisions"`
@@ -132,23 +159,19 @@ type Observation struct {
 }
 
 func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string) (protocol.Event, error) {
-	var value Result
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	value, interruption, err := decodeRoleBody(input, raw)
+	if err != nil {
 		return protocol.Event{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return protocol.Event{}, fmt.Errorf("worker result must contain one JSON object")
-	}
-	if input.Handler == "engine.repair.verify" && value.Validation != nil && value.Validation.Status != "" {
-		return protocol.Event{}, fmt.Errorf("repair comparison status is derived from case judgments")
 	}
 	if originalDigest == "" {
 		return protocol.Event{}, fmt.Errorf("verified native original output digest is required")
 	}
-	payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, PayloadDigest: originalDigest, Outcome: value.Outcome, FailureClass: value.FailureClass, InterruptionReason: value.InterruptionReason}
+	payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, PayloadDigest: originalDigest, Outcome: protocol.OutcomePass}
+	if interruption != "" {
+		payload.Outcome = protocol.OutcomeRuntimeError
+		payload.FailureClass = authoring.FailureUserActionRequired
+		payload.InterruptionReason = interruption
+	}
 	if input.Handler == "engine.development.batch" && input.Validation != nil && input.Validation.Development != nil && input.Validation.Development.Result != nil {
 		payload.SourceResult = input.Validation.Development.Result.Digest
 	}
@@ -180,9 +203,6 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		issued := input.Validation
 		v := value.Validation
-		if input.Handler == "engine.qa.design" && v.Development != nil {
-			return protocol.Event{}, fmt.Errorf("QA design delivery paths come from manifest file relations")
-		}
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
@@ -282,6 +302,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 				return protocol.Event{}, err
 			}
 			result.SetStatus = result.Verdict()
+			body.Status = string(result.SetStatus)
 			for _, id := range sources {
 				if !slices.ContainsFunc(issued.Manifest.Edges, func(edge coverage.CoverageEdge) bool { return edge.SourceID == id }) {
 					result.UnboundSources = append(result.UnboundSources, id)
@@ -314,7 +335,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 					return protocol.Event{}, fmt.Errorf("repair case has no complete issued native facts: %s", caseID)
 				}
 				comparison, present := v.RepairVerification.Records[caseID]
-				if !present || strings.TrimSpace(comparison.Comparison) == "" {
+				if !present || strings.TrimSpace(comparison.Comparison) == "" || comparison.Result != coverage.ExecutedPass && comparison.Result != coverage.ExecutedFail {
 					return protocol.Event{}, fmt.Errorf("repair case lacks an oracle comparison: %s", caseID)
 				}
 				procedure, observation, err := issued.ExecutionFacts[index].Render()
@@ -360,6 +381,9 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 					return protocol.Event{}, err
 				}
 				observation := value.Validation.Execution.Records[caseID]
+				if strings.TrimSpace(observation.Comparison) == "" || observation.Result != coverage.ExecutedPass && observation.Result != coverage.ExecutedFail {
+					return protocol.Event{}, fmt.Errorf("case judgment requires a complete oracle comparison: %s", caseID)
+				}
 				for _, op := range fact.Operations {
 					if op.Parameters.QA.GoTestRef != "" && op.Evidence.GoResult != "pass" && observation.Result == coverage.ExecutedPass {
 						return protocol.Event{}, fmt.Errorf("Go test did not actually pass: %s", caseID)
@@ -397,6 +421,11 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			}
 			body.Tool, body.Environment = protocol.ExecutionIdentities(issued.ExecutionFacts)
 			body.Execution = &report
+			body.Checkpoint = len(report.NotExecuted) > 0
+			body.Status = string(coverage.ExecutionVerdict(append(slices.Clone(issued.Completed), report.Records...)))
+			if body.Checkpoint && body.Status == protocol.OutcomePass {
+				body.Status = ""
+			}
 		}
 		payload.Validation = &body
 	}
@@ -405,6 +434,125 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 	}
 	event := protocol.Event{ID: eventID, Kind: protocol.KindWorkerResult, Result: &payload}
 	return event, event.Validate()
+}
+
+func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, string, error) {
+	schema, err := completedSchema(input)
+	if err != nil {
+		return decodedResult{}, "", err
+	}
+	var fields map[string]json.RawMessage
+	if err := decodeObject(raw, &fields); err != nil {
+		return decodedResult{}, "", err
+	}
+	if reason, present := fields["interruptionReason"]; present {
+		var text string
+		if err := json.Unmarshal(reason, &text); err != nil {
+			return decodedResult{}, "", err
+		}
+		if strings.TrimSpace(text) == "" {
+			return decodedResult{}, "", fmt.Errorf("interruption requires an actual reason")
+		}
+		if input.Handler == "engine.qa.execution" && input.Validation != nil {
+			var partial ExecutionInterruption
+			if err := decodeObject(raw, &partial); err != nil {
+				return decodedResult{}, "", err
+			}
+			if partial.Records != nil || partial.Findings != nil {
+				return decodedResult{Validation: &decodedValidation{Execution: &Execution{Records: partial.Records}, Findings: partial.Findings}}, text, nil
+			}
+		} else if len(fields) != 1 {
+			return decodedResult{}, "", fmt.Errorf("interruption cannot contain completed role evidence")
+		}
+		return decodedResult{}, text, nil
+	}
+	var result decodedResult
+	if input.Review != nil {
+		result.Review = &Review{}
+		if err := decodeObject(raw, result.Review); err != nil {
+			return result, "", err
+		}
+		if input.Review.Action != review.StartReadiness && result.Review.GranularityReview != nil {
+			return result, "", fmt.Errorf("product review cannot propose development granularity")
+		}
+	} else if input.Validation != nil {
+		v := &decodedValidation{Status: protocol.OutcomePass}
+		result.Validation = v
+		var target any
+		switch input.Handler {
+		case "engine.development.batch":
+			target = &Development{}
+		case "engine.repair":
+			target = &Repair{}
+		case "engine.merge.resolve":
+			target = &protocol.ConflictResolution{}
+		case "engine.qa.design":
+			target = &Design{}
+		case "engine.qa.review.rationale":
+			target = &CaseReview{}
+		case "engine.qa.execution":
+			target = &ExecutionJudgments{}
+		case "engine.repair.verify":
+			target = &Execution{}
+		case "engine.gate":
+			target = &Gate{}
+		default:
+			return result, "", fmt.Errorf("worker result has no semantic role %s", input.Handler)
+		}
+		if err := decodeObject(raw, target); err != nil {
+			return result, "", err
+		}
+		switch body := target.(type) {
+		case *Development:
+			v.Development = body
+		case *Repair:
+			v.GranularityReview = body.GranularityReview
+			if fields["paths"] != nil || fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
+				v.Development = &Development{Paths: body.Paths, Summary: body.Summary, Completion: body.Completion, AffectedCases: body.AffectedCases}
+			}
+		case *protocol.ConflictResolution:
+			v.Resolution = body
+		case *Design:
+			v.Manifest, v.Checkpoint = &body.Manifest, body.Checkpoint
+		case *CaseReview:
+			v.Review, v.Suggestions = body, body.Suggestions
+		case *ExecutionJudgments:
+			v.Execution, v.Findings = &body.Execution, body.Findings
+		case *Execution:
+			v.RepairVerification = body
+		case *Gate:
+			v.Status, v.Findings = body.Status, body.Findings
+		}
+	} else {
+		return result, "", fmt.Errorf("worker result lacks issued typed role")
+	}
+	for name := range fields {
+		if schema["properties"].(map[string]any)[name] == nil {
+			return result, "", fmt.Errorf("json: unknown field %q", name)
+		}
+	}
+	for _, name := range schema["required"].([]any) {
+		body, present := fields[name.(string)]
+		if !present || bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+			return result, "", fmt.Errorf("semantic role field is required: %s", name)
+		}
+	}
+	return result, "", nil
+}
+func decodeObject(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("worker result must contain one JSON object")
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("worker result must be an object")
+	}
+	return nil
 }
 
 func sortedKeys[T any](values map[string]T) []string {

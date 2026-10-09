@@ -209,7 +209,7 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 	if err := json.Unmarshal(body, &material); err != nil {
 		t.Fatal(err)
 	}
-	answer, err := json.Marshal(worker.Result{Outcome: protocol.OutcomePass, Validation: &worker.Validation{Status: "PASS", Development: &development}})
+	answer, err := json.Marshal(development)
 	if err != nil {
 		t.Fatal(err)
 	}
