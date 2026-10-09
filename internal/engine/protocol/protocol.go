@@ -547,8 +547,8 @@ type State struct {
 	QuarantinedResults map[string]WorkerResult `json:"quarantinedResults"`
 	// Results 按 actionID 落账已接纳的 worker result。
 	Results map[string]WorkerResult `json:"results"`
-	// RecoverableResults 保留未终结当前 Attempt 的失败结果历史。后续同一
-	// actionID 的 PASS 可完成原 Attempt，而相同失败 payload 仍可幂等识别。
+	// RecoverableResults 按 actionID 保留可恢复失败结果及同一开发派发中
+	// 被替代的编辑结果。历史 payload 作为原始证据保留，并用于幂等识别。
 	RecoverableResults map[string][]WorkerResult `json:"recoverableResults"`
 	// OperatorObservations 有序入账主代理核实事实（绑定来源对账项）。
 	OperatorObservations []OperatorObservation `json:"operatorObservations"`
