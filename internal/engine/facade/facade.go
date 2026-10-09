@@ -1,6 +1,4 @@
-// Package facade exposes the candidate engine surface.  It is kept
-// separate from the stable validate package so legacy workflow runs continue
-// to use their existing writer and state namespace.
+// Package facade exposes the authoritative engine workflow surface.
 package facade
 
 import (
@@ -377,9 +375,8 @@ type TerminalSummary struct {
 	GuardBudget         *protocol.GuardBudget                `json:"guardBudget,omitempty"`
 	Unverified          bool                                 `json:"unverified,omitempty"`
 	CompletedAt         string                               `json:"completedAt"`
-	// Owner 区间端点是跨代协调的终态载荷：legacy 终态只读重扫据此判定与
-	// engine run 的区间相交（本 run 状态目录随终态清理，摘要是留存的区间
-	// 事实）。endedAt 在终态 owner 协调锁段内与量取同时点盖下。
+	// Owner 区间端点随终态摘要留存，供 engine run 判定区间相交。
+	// endedAt 在终态 owner 协调锁段内与量取同时点盖下。
 	OwnerTranscript string `json:"ownerTranscript,omitempty"`
 	OwnerStartedAt  string `json:"ownerStartedAt,omitempty"`
 	OwnerEndedAt    string `json:"ownerEndedAt,omitempty"`
@@ -480,9 +477,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err := recoverStartIntent(root, req.RunID); err != nil {
 		return nil, Run{}, err
 	}
-	// Legacy and candidate runtimes share the run-id namespace. Refuse a
-	// candidate writer before creating any engine files when the legacy run
-	// already exists.
+	// Reject IDs occupied by retained run files before creating engine files.
 	legacyDir := filepath.Join(root, ".gates", "tmp", req.RunID)
 	if _, statErr := os.Stat(legacyDir); statErr == nil {
 		return nil, Run{}, fmt.Errorf("run %q already exists in legacy runtime", req.RunID)
@@ -503,9 +498,8 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
 	}
-	// regular 路线把 BaseSnapshot 从字符串变成事实（镜像 legacy workflow Start
-	// 的快照接线：base 必须可复现且是原生 HEAD 的祖先或相等）。lightweight 不
-	// 引入 VCS 依赖。
+	// regular 路线要求 BaseSnapshot 可复现且是原生 HEAD 的祖先或相等。
+	// lightweight 不引入 VCS 依赖。
 	var vcsProvider *vcs.Provider
 	var initialSnapshot string
 	if nativeRoot == "" {
@@ -735,11 +729,8 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialS
 	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, initialSnapshot, sliceStart); err != nil {
 		return err
 	}
-	// owner 区间操作（扫描＋自身标记＋peer 标记）与 token cap 绑定同在
-	// lockOwnerCost（与 legacy 同路径＝两代共同的区间协调能力）内执行：锁内
-	// 的绑定提交使后到者的扫描必见先到者的 owner 来源，并行启动的区间判定因
-	// 此闭合。锁序＝协调锁→run store 锁（与 legacy mutateRun 同序）。无 owner
-	// 来源时无区间操作，不取锁。
+	// owner 区间扫描、标记与 token cap 绑定在 lockOwnerCost 内执行，
+	// 使后到者的扫描可见先到者的 owner 来源。无 owner 来源时不取锁。
 	bindOwnerCost := func() error {
 		if strings.TrimSpace(owner.Transcript) == "" || strings.TrimSpace(owner.Provider) == "" {
 			return eng.BindCostSources(captureOwnerBinding(root, req.RunID, owner), tokenCap, emptyFingerprint())
@@ -1068,8 +1059,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 		if run, err = f.project(); err != nil {
 			return Run{}, err
 		}
-		// 终态快照边界（regular COMPLETE）：发布段内原生身份恒等（发布前后
-		// 双 resolve，镜像 legacy Seal 的发布窗口核验）。
+		// 终态快照边界（regular COMPLETE）：发布前后双 resolve 核验原生身份恒等。
 		snapshotGuard, err := f.terminalSnapshotGuard(run)
 		if err != nil {
 			return Run{}, err

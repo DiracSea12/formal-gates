@@ -91,11 +91,8 @@ func startEngineRunForWriterTest(t *testing.T) (*facade.Facade, string, string) 
 	return f, root, statePath
 }
 
-// TestLegacyWritersCannotReachEngineRunState：engine run 存在时，legacy 写
-// 入口（requirement impact 的 UpdateRequirement writer 与 authorize-repair）
-// 不可达：直接调用 legacy writer 因命名空间分离无法寻址 engine 权威状态，
-// CLI 入口对 engine run 一律非零退出且不产生任何 legacy 写入——legacy 入口
-// 不是 engine state 的第二 writer。
+// TestLegacyWritersCannotReachEngineRunState：CLI 拒绝已退役的写命令，
+// 不创建旧格式状态文件，也不改写 engine 权威状态。
 func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 	f, root, statePath := startEngineRunForWriterTest(t)
 	if _, err := f.Drive(); err != nil {
@@ -105,7 +102,7 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// CLI legacy 写入口：engine run 存在即非零退出，不创建 legacy state。
+	// 已退役写命令非零退出，不创建旧格式状态文件。
 	for _, command := range [][]string{
 		{"workflow", "requirement", "--run-id", "writer-exclusive", "--revision", "rev-2", "--root", root},
 		{"workflow", "authorize-repair", "--run-id", "writer-exclusive", "--root", root, "--package-root", "."},

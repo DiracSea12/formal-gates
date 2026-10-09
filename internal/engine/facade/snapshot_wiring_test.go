@@ -354,9 +354,8 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 	}
 }
 
-// TestPrepareCandidateRejectsUncommittedChanges：晋升要求工作区就绪（镜像
-// legacy verifySnapshotReady 语义：被跟踪修改与未跟踪交付文件都拒绝）。准入
-// （wave COMPLETE）通过后执行前拒绝——零 Git 副作用。
+// TestPrepareCandidateRejectsUncommittedChanges：晋升拒绝被跟踪修改与未跟踪
+// 交付文件；wave COMPLETE 准入后、执行前拒绝，不产生 Git 副作用。
 func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root, "dev commit")[0]
@@ -436,8 +435,8 @@ func TestRegisterQAWorktreeValidatesIdentityAndArtifacts(t *testing.T) {
 	}
 }
 
-// TestQAWorktreeClearsWhenRouteDropsBlackbox：最终路线不含黑盒时隔离工作区
-// 登记随路线确认清空（镜像 legacy 清空点；登记在路线确认之前完成）。
+// TestQAWorktreeClearsWhenRouteDropsBlackbox：最终路线不含黑盒时，
+// 路线确认清空已登记的隔离工作区。
 func TestQAWorktreeClearsWhenRouteDropsBlackbox(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
@@ -496,8 +495,8 @@ func (d *validationDriver) reviewPass(plan *protocol.GranularityReview) {
 	}
 }
 
-// TestQAWorktreeClearsWhenBlackboxSetFreezes：黑盒用例集审过冻结时隔离工作区
-// 登记清空（镜像 legacy 审过清空点）。
+// TestQAWorktreeClearsWhenBlackboxSetFreezes：黑盒用例集审过冻结时，
+// 清空隔离工作区登记。
 func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
