@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -83,7 +84,7 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "README.md"), "sample runtime\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "README_EN.md"), "sample runtime en\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "formal-gates.manifest.json"), admissionManifest, 0o600)
-	admissionWrite(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o755)
+	admissionWrite(t, filepath.Join(root, "bin", nativeBinaryName()), string(stubBinaryPayload(t)), 0o755)
 	admissionWrite(t, filepath.Join(root, "prompts", "reviewer-base.md"), "sample reviewer base\n", 0o600)
 	for _, action := range []string{
 		"carry", "development-worker", "product-review", "qa-design",
@@ -494,40 +495,68 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 // payload together with the forbidden marker file on the first run.
 func admissionFakeCodex(t *testing.T, stateFile string) string {
 	t.Helper()
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "${1:-}" = "--version" ]; then
-  echo "fake-codex 0.0.0"
-  exit 0
-fi
-if [ "${2:-}" = "--help" ]; then
-  echo "usage: codex exec --profile NAME"
-  exit 0
-fi
-runs=0
-if [ -f %q ]; then
-  runs=$(cat %q)
-fi
-runs=$((runs+1))
-printf '%%s\n' "$runs" > %q
-mode="${FAKE_CODEX_MODE:-never}"
-if [ "$mode" = "marker-proof" ]; then
-  for dir in "$PWD"/.gates/tmp/codex-hook-canary/*/payloads; do
-    [ -d "$dir" ] || continue
-    printf '{"hook_event_name":"PreToolUse","tool_name":"shell"}\n' > "$dir/hook-PreToolUse-shell-fake-codex.json"
-    printf 'HIT\n' > "$dir/../marker.txt"
-  done
-  exit 0
-fi
-if [ "$mode" = "retry-proof" ] && [ "$runs" -ge 2 ]; then
-  for dir in "$PWD"/.gates/tmp/codex-hook-canary/*/payloads; do
-    [ -d "$dir" ] || continue
-    printf '{"hook_event_name":"PreToolUse","tool_name":"shell"}\n' > "$dir/hook-PreToolUse-shell-fake-codex.json"
-  done
-fi
-exit 0
-`, stateFile, stateFile, stateFile)
 	path := filepath.Join(t.TempDir(), "fake-codex")
-	admissionWrite(t, path, script, 0o755)
+	if runtime.GOOS == "windows" {
+		path += ".exe"
+	}
+	t.Setenv("FAKE_CODEX_STATE_FILE", stateFile)
+	writeExecutableFixture(t, path, `package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+func main() {
+	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println("fake-codex 0.0.0")
+		return
+	}
+	if len(args) >= 2 && args[0] == "exec" && args[1] == "--help" {
+		fmt.Println("usage: codex exec --profile NAME")
+		return
+	}
+
+	stateFile := os.Getenv("FAKE_CODEX_STATE_FILE")
+	runs := 0
+	if data, err := os.ReadFile(stateFile); err == nil {
+		runs, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+	}
+	runs++
+	if err := os.WriteFile(stateFile, []byte(strconv.Itoa(runs)+"\n"), 0o600); err != nil {
+		panic(err)
+	}
+	mode := os.Getenv("FAKE_CODEX_MODE")
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	payloadDirs, err := filepath.Glob(filepath.Join(workingDirectory, ".gates", "tmp", "codex-hook-canary", "*", "payloads"))
+	if err != nil {
+		panic(err)
+	}
+	for _, dir := range payloadDirs {
+		if mode == "marker-proof" || (mode == "retry-proof" && runs >= 2) {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				panic(err)
+			}
+			payload := filepath.Join(dir, "hook-PreToolUse-shell-fake-codex.json")
+			if err := os.WriteFile(payload, []byte("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"shell\"}\n"), 0o600); err != nil {
+				panic(err)
+			}
+		}
+		if mode == "marker-proof" {
+			if err := os.WriteFile(filepath.Join(dir, "..", "marker.txt"), []byte("HIT\n"), 0o600); err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+`)
 	return path
 }
 

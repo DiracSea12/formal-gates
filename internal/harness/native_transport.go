@@ -1259,7 +1259,11 @@ func (c *nativeClient) deliverOneAnswer() bool {
 	if c.hooks.envelope != nil {
 		frame = c.hooks.envelope(frame)
 	}
-	if err := c.send(frame); err != nil {
+	// Sample before writing: a host can enqueue the reply's immediate
+	// continuation before stdin.Write returns.
+	deliveredArrival := c.messages.arrived()
+	err = c.send(frame)
+	if err != nil {
 		// The reply could not be delivered: the transport is dying and the
 		// next receive reports why. The hold stays pending, so the failure
 		// state is visible rather than laundered into a delivered vote.
@@ -1272,7 +1276,7 @@ func (c *nativeClient) deliverOneAnswer() bool {
 	// (Fact one was the answer file; fact three - observed - lands when a
 	// message the host attributes to the held request arrives afterwards.)
 	hold.status = "delivered"
-	hold.deliveredArrival = c.messages.arrived()
+	hold.deliveredArrival = deliveredArrival
 	hold.updatedAt = time.Now()
 	if err := c.writePendingsLocked(); err != nil {
 		return true

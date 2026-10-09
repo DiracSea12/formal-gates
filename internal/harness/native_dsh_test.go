@@ -12,9 +12,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func writeDSHLookupTarget(t *testing.T, directory string) string {
+	t.Helper()
+	name := "dsh"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func jsonNumber(literal string) any { return json.Number(literal) }
 
@@ -364,10 +378,7 @@ func TestDSHCaptureBinding(t *testing.T) {
 	if err := os.Mkdir(bindir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fake := filepath.Join(bindir, "dsh")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fake := writeDSHLookupTarget(t, bindir)
 	t.Setenv("PATH", bindir)
 	binding, err := dshCaptureBinding()
 	if err != nil {
@@ -534,13 +545,18 @@ func TestRunNativeEntryFailureShapes(t *testing.T) {
 
 	t.Run("missing request file", func(t *testing.T) {
 		directory := t.TempDir()
+		requestPath := filepath.Join(resolveNativePath(directory), "native-request.json")
+		_, wantErr := os.ReadFile(requestPath)
+		if wantErr == nil {
+			t.Fatal("missing request unexpectedly exists")
+		}
 		var errout bytes.Buffer
 		code := 0
 		stdout := captureNativeStdout(t, func() { code = RunNative(directory, &errout) })
 		if code != 1 || stdout != "" {
 			t.Fatalf("code = %d stdout = %q", code, stdout)
 		}
-		want := "open " + filepath.Join(resolveNativePath(directory), "native-request.json") + ": no such file or directory"
+		want := wantErr.Error()
 		if got := nativeRecordError(t, directory); got != want {
 			t.Fatalf("error = %q, want %q", got, want)
 		}

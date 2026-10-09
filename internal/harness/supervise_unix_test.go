@@ -17,6 +17,29 @@ import (
 	"time"
 )
 
+func TestSuperviseRecordsOperatingSystemCreationTime(t *testing.T) {
+	created, ok := processCreationTime(os.Getpid())
+	if !ok {
+		t.Fatal("cannot inspect current process creation time")
+	}
+	bin := supervisorBinary(t)
+	jobDir, _, _ := newJob(t, bin, map[string]any{
+		"kind": "check", "argv": []string{bin, "--version"}, "stdin": "",
+	})
+	if code := Supervise(jobDir); code != 0 {
+		t.Fatalf("Supervise exit = %d", code)
+	}
+	process, err := readJSONFile(filepath.Join(jobDir, "process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := objectOrEmpty(process)
+	wantStarted := float64(created.UnixNano()) / 1e9
+	if intOf(record["pid"]) != os.Getpid() || floatOf(record["started_at"]) != wantStarted {
+		t.Fatalf("process identity = %v, want pid=%d started_at=%v", record, os.Getpid(), wantStarted)
+	}
+}
+
 // TestSuperviseCancel pins SIGTERM cancellation: the receipt carries exit_code
 // 130 and the exact cancellation error, and the child is stopped.
 func TestSuperviseCancel(t *testing.T) {

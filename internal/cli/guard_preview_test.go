@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -150,14 +151,14 @@ func TestGuardPreviewBinary(t *testing.T) {
 				if err != nil || !bytes.Equal(out, first) {
 					t.Fatalf("unstable preview: %s %s %v", out, stderr, err)
 				}
-			} else if err == nil || !strings.Contains(stderr, tc.message) || !strings.Contains(stderr, inputPath) || len(out) != 0 {
+			} else if err == nil || !strings.Contains(stderr, tc.message) || !strings.Contains(stderr, strconv.Quote(inputPath)) || len(out) != 0 {
 				t.Fatalf("want %s, got %s %s %v", tc.message, out, stderr, err)
 			}
 		})
 	}
 	for _, invalid := range []string{`{`, `null`, string(fixture) + ` {}`} {
 		mustWriteCLI(t, inputPath, invalid)
-		if _, stderr, err := run("--input", inputPath); err == nil || !strings.Contains(stderr, inputPath) {
+		if _, stderr, err := run("--input", inputPath); err == nil || !strings.Contains(stderr, strconv.Quote(inputPath)) {
 			t.Fatalf("invalid JSON accepted: %s %v", stderr, err)
 		}
 	}

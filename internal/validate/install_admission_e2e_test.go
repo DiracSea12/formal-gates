@@ -87,7 +87,7 @@ func e2eInstallSource(t *testing.T) string {
 	e2eWriteFile(t, filepath.Join(root, "README.md"), "runtime\n", 0o600)
 	e2eWriteFile(t, filepath.Join(root, "README_EN.md"), "runtime\n", 0o600)
 	e2eWriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), hostTargetTestManifest, 0o600)
-	e2eWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o700)
+	e2eWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), string(stubBinaryPayload(t)), 0o700)
 	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		e2eWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}
@@ -426,7 +426,7 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("native bootstrap failed: %v", err)
 	}
-	if report.BootstrapReceiptPath != registry+".bootstrap.json" || report.ReceiptPath != report.BootstrapReceiptPath {
+	if report.BootstrapReceiptPath != filepath.ToSlash(registry+".bootstrap.json") || report.ReceiptPath != report.BootstrapReceiptPath {
 		t.Fatalf("bootstrap report did not expose its durable receipt: %+v", report)
 	}
 	afterTarget, err := PackageDigest(targets[0].targetPath)
@@ -535,38 +535,47 @@ func TestInstallLockSerializesInstallAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(unlock)
+	unlock()
 	lockPath := installLockPath(target)
 	contents := e2eReadFile(t, lockPath)
 	before, err := os.Stat(lockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertLockUnchanged := func() {
+	assertLockUnchanged := func(locked bool) {
 		t.Helper()
 		after, err := os.Stat(lockPath)
 		if err != nil || !os.SameFile(before, after) {
 			t.Fatalf("install lock identity changed: %v", err)
 		}
+		// Windows denies reads of the region while its lock is held.
+		if locked && runtime.GOOS == "windows" {
+			return
+		}
 		if data := e2eReadFile(t, lockPath); data != contents {
 			t.Fatalf("install lock contents changed: before=%q after=%q", contents, data)
 		}
 	}
+	unlock, err = acquireInstallLock(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unlock)
 	childOutput := e2eRunInstallLockChild(t, target, "held")
 	if !strings.Contains(childOutput, "held-error:") || !strings.Contains(childOutput, "lock is held") {
 		unlock()
 		t.Fatalf("cross-process install/uninstall acquired the same lock: %s", childOutput)
 	}
-	assertLockUnchanged()
+	assertLockUnchanged(true)
 	unlock()
-	assertLockUnchanged()
+	assertLockUnchanged(false)
 	// 释放即关闭描述符：锁文件持久保留（内核文件锁永不删除），能否被
 	// 第二个进程获取才是释放语义。
 	childOutput = e2eRunInstallLockChild(t, target, "free")
 	if !strings.Contains(childOutput, "free-acquired") {
 		t.Fatalf("lock could not be acquired by a second process after release: %s", childOutput)
 	}
-	assertLockUnchanged()
+	assertLockUnchanged(false)
 }
 
 func TestInstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
@@ -838,7 +847,36 @@ func TestReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T) {
 	// actually launched. It also observes the transaction journal while it is
 	// running: smoke must happen after the switch, but before the journal moves
 	// to committed.
-	e2eWriteFile(t, binarySource, fmt.Sprintf("#!/bin/sh\nset -eu\nprintf 'candidate-smoke-ran\\n' > %q\nprintf 'exec-path=%%s\\n' \"$0\" >> %q\nprintf 'journal-phase=%%s\\n' \"$(awk -F'\\\"' '/\\\"phase\\\"/ {print $4; exit}' %q)\" >> %q\nexit 23\n", marker, marker, journal, marker), 0o700)
+	t.Setenv("FAKE_SMOKE_MARKER", marker)
+	t.Setenv("FAKE_SMOKE_JOURNAL", journal)
+	writeExecutableFixture(t, binarySource, `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+func main() {
+	marker := os.Getenv("FAKE_SMOKE_MARKER")
+	journal := os.Getenv("FAKE_SMOKE_JOURNAL")
+	data, err := os.ReadFile(journal)
+	if err != nil {
+		panic(err)
+	}
+	var state struct {
+		Phase string
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		panic(err)
+	}
+	evidence := fmt.Sprintf("candidate-smoke-ran\nexec-path=%s\njournal-phase=%s\n", os.Args[0], state.Phase)
+	if err := os.WriteFile(marker, []byte(evidence), 0o600); err != nil {
+		panic(err)
+	}
+	os.Exit(23)
+}
+`)
 	e2eWriteFile(t, filepath.Join(source, "candidate-only.txt"), "candidate\n", 0o600)
 	e2eWriteFile(t, filepath.Join(release, "stable.txt"), "stable\n", 0o600)
 	e2eWriteFile(t, binary, "stable executable\n", 0o700)

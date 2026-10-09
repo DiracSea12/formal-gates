@@ -19,6 +19,13 @@ import (
 	"time"
 )
 
+type immediateReplyWriter struct {
+	write func([]byte) (int, error)
+}
+
+func (w immediateReplyWriter) Write(body []byte) (int, error) { return w.write(body) }
+func (immediateReplyWriter) Close() error                     { return nil }
+
 // mustCanonical is the canonical JSON text of value, for byte-shape asserts.
 func mustCanonical(t *testing.T, value any) string {
 	t.Helper()
@@ -170,6 +177,127 @@ func TestNativeQueueUnbounded(t *testing.T) {
 	}
 }
 
+// TestNativeHeldAnswerObservationBoundary pins answer delivery's arrival
+// boundary. Messages already queued before the answer cannot acknowledge it,
+// while a continuation emitted synchronously from the answer write can.
+func TestNativeHeldAnswerObservationBoundary(t *testing.T) {
+	newHold := func() *nativePendingHold {
+		return &nativePendingHold{
+			requestID: "reply-1",
+			method:    "session/request_permission",
+			frameID:   "frame-1",
+			params:    map[string]any{},
+			spec: &nativeInteractionSpec{
+				reply: func(map[string]any, nativeAnswerChoice) (map[string]any, error) {
+					return map[string]any{"result": map[string]any{"outcome": "selected"}}, nil
+				},
+			},
+			status: "pending",
+		}
+	}
+	writeAnswer := func(t *testing.T, directory string) {
+		t.Helper()
+		body := []byte(`{"request_id":"reply-1","option":"allow","cancel":false}`)
+		if err := os.WriteFile(filepath.Join(directory, "interaction-answer.json"), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("immediate continuation is observed", func(t *testing.T) {
+		directory := t.TempDir()
+		queue := newNativeQueue()
+		hold := newHold()
+		var replyChoice nativeAnswerChoice
+		hold.spec.reply = func(_ map[string]any, choice nativeAnswerChoice) (map[string]any, error) {
+			replyChoice = choice
+			return map[string]any{"result": map[string]any{"outcome": "selected"}}, nil
+		}
+		client := &nativeClient{
+			directory: directory,
+			messages:  queue,
+			holdings:  []*nativePendingHold{hold},
+			hooks: nativeHooks{observes: func(*nativePendingHold, map[string]any) bool {
+				return true
+			}},
+		}
+		queue.put(map[string]any{"kind": "before-answer"})
+		var sent []byte
+		client.stdin = immediateReplyWriter{write: func(body []byte) (int, error) {
+			sent = append(sent, body...)
+			queue.put(map[string]any{"kind": "immediate-continuation"})
+			return len(body), nil
+		}}
+		writeAnswer(t, directory)
+
+		if !client.deliverOneAnswer() {
+			t.Fatal("answer file was not consumed")
+		}
+		if hold.status != "delivered" || hold.deliveredArrival != 1 {
+			t.Fatalf("after delivery: status = %q boundary = %d, want delivered at 1", hold.status, hold.deliveredArrival)
+		}
+		wantFrame := mustCanonical(t, map[string]any{
+			"id": "frame-1", "result": map[string]any{"outcome": "selected"},
+		}) + "\n"
+		if string(sent) != wantFrame {
+			t.Fatalf("answer frame = %q, want %q", sent, wantFrame)
+		}
+		if replyChoice.OptionID != "allow" || replyChoice.Cancel {
+			t.Fatalf("reply choice = %+v, want option allow without cancel", replyChoice)
+		}
+
+		value, arrival, ok := queue.get(nil)
+		if !ok {
+			t.Fatal("pre-answer message missing")
+		}
+		client.observePendings(value.(map[string]any), arrival)
+		if hold.status != "delivered" {
+			t.Fatalf("pre-answer message changed status to %q", hold.status)
+		}
+
+		value, arrival, ok = queue.get(nil)
+		if !ok {
+			t.Fatal("immediate continuation missing")
+		}
+		client.observePendings(value.(map[string]any), arrival)
+		if hold.status != "observed" {
+			t.Fatalf("immediate continuation left status at %q", hold.status)
+		}
+		pending, err := readJSONFile(filepath.Join(directory, "interaction-pending.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		records := listOf(pending)
+		if len(records) != 1 {
+			t.Fatalf("pending records = %v, want one", pending)
+		}
+		record := objectOrEmpty(records[0])
+		if textOf(record["request_id"]) != "reply-1" || textOf(record["status"]) != "observed" {
+			t.Fatalf("pending record = %v, want reply-1 observed", record)
+		}
+	})
+
+	t.Run("failed send remains pending", func(t *testing.T) {
+		directory := t.TempDir()
+		hold := newHold()
+		client := &nativeClient{
+			directory: directory,
+			messages:  newNativeQueue(),
+			holdings:  []*nativePendingHold{hold},
+			stdin: immediateReplyWriter{write: func([]byte) (int, error) {
+				return 0, io.ErrClosedPipe
+			}},
+		}
+		writeAnswer(t, directory)
+
+		if !client.deliverOneAnswer() {
+			t.Fatal("answer file was not consumed")
+		}
+		if hold.status != "pending" || hold.deliveredArrival != 0 {
+			t.Fatalf("failed send: status = %q boundary = %d, want pending at 0", hold.status, hold.deliveredArrival)
+		}
+	})
+}
+
 // TestNativeWaitDuration pins wait(): per-message budget without a deadline,
 // unlimited for UNBOUNDED, and the 0.1s floor against a passing deadline
 // (mirrors the reference's wait() unit assertions).
@@ -204,7 +332,8 @@ func TestReadJSONFileSemantics(t *testing.T) {
 
 	absent := filepath.Join(directory, "absent.json")
 	_, err = readJSONFile(absent)
-	if err == nil || err.Error() != "open "+absent+": no such file or directory" {
+	pathErr, ok := err.(*os.PathError)
+	if !ok || pathErr.Op != "open" || pathErr.Path != absent || !os.IsNotExist(pathErr.Err) {
 		t.Fatalf("missing file: %v", err)
 	}
 
