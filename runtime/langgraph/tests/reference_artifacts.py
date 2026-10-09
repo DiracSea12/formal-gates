@@ -1,13 +1,9 @@
-"""Reference implementation of Store.put / Store.get as they stood before M3.
+"""Independent oracle for content-addressed Store.put / Store.get behavior.
 
-Test-only. Production code must not import this module. The bodies below are the
-pre-migration implementations from formal_gates_harness/infra.py (baseline M2),
-unchanged. The content-addressing rule (ref = sha256(canonical(value))) lived
-there verbatim; at that baseline canonical() was already backed by Go, so this
-reference calls the same Go-backed canonical and therefore yields byte-identical
-references and the same non-finite-number behaviour as the migrated unit. The
-point of the differential is to prove the Python adapter plumbing (path layout,
-publish-once check, the two-call refusal ordering) preserves the behaviour.
+Test-only; production code must not import this module. The reference uses
+sha256(canonical(value)) with the Go-backed canonical encoder. Differential
+checks compare references, non-finite-number refusals, path layout,
+publish-once checks, and refusal ordering.
 """
 import hashlib
 import json

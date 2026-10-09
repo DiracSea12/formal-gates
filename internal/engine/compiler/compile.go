@@ -32,7 +32,7 @@ func blockedBugError(format string, args ...any) *Error {
 // Definition 是编译输入：definition 版本信封 + 入口节点 + 显式步骤表
 // （ADR-001：显式节点/步骤表是唯一定义编写形态的表段，由 authoring 变体
 // 构成）。Steps 的顺序只是 assembly 顺序，不进入编译产物——ordinal 由
-// compiler 按确定性拓扑序派生，assembly 顺序不得泄漏进制品（spike 结论）。
+// compiler 按确定性拓扑序派生，assembly 顺序不得泄漏进制品。
 type Definition struct {
 	Version   authoring.DefinitionVersion
 	EntryNode authoring.NodeID

@@ -15,7 +15,7 @@ const (
 
 // RunnerKind 是执行责任的第二维（§5.3）：该步在哪里、以何种可靠性边界执行。
 // HOST 只表示外部能力/执行位置，不拥有流程决定权；不存在 CONTROL 值，
-// 并行控制步物化为 ENGINE/ENGINE_LOCAL（spike 结论已拍板）。
+// 并行控制步物化为 ENGINE/ENGINE_LOCAL。
 type RunnerKind string
 
 const (

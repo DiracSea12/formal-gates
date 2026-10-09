@@ -12,8 +12,7 @@ import (
 	"path/filepath"
 )
 
-// AcquireRun serializes creation of a run id across the legacy and candidate
-// namespaces.
+// AcquireRun serializes creation of a run ID at the repository root.
 func AcquireRun(root, runID string) (func(), error) {
 	path := filepath.Join(root, ".gates", "run-locks", runID+".lock")
 	unlock, err := AcquirePath(path, "run start")
@@ -23,9 +22,8 @@ func AcquireRun(root, runID string) (func(), error) {
 	return unlock, nil
 }
 
-// AcquireRunWaiting 获取与 AcquireRun 同一锁对象的独占锁，但持锁冲突时等待
-// 而不是立即失败。用于跨 run 的串行化段（如 child run 在 master 账上认领分
-// 片）：等待后按持久事实判定，不把并发竞争当失败上抛。
+// AcquireRunWaiting 获取与 AcquireRun 同一锁对象的独占锁，持锁冲突时等待。
+// 调用者在锁内按持久事实执行串行化操作。
 func AcquireRunWaiting(root, runID string) (func(), error) {
 	return AcquirePathWaiting(filepath.Join(root, ".gates", "run-locks", runID+".lock"), "run start")
 }

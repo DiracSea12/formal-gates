@@ -204,9 +204,9 @@ func TestUnavailableSourceFallsBackToRequestGuard(t *testing.T) {
 	}
 }
 
-// TestNoCostSourceKeepsLegacyBehavior：未装 bridge（nil）时不参与判定——结
+// TestNoCostSourceCompletesWithoutProjection：未装 bridge（nil）时不参与判定——结
 // 果照常完成、无 cost 投影。
-func TestNoCostSourceKeepsLegacyBehavior(t *testing.T) {
+func TestNoCostSourceCompletesWithoutProjection(t *testing.T) {
 	engine := costEngineFixture(t, nil)
 	acceptance, err := dispatchPassResult(t, engine, "cost-result")
 	if err != nil || acceptance.Status != "ACCEPTED" {

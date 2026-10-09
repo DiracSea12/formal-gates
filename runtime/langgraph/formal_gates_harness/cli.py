@@ -309,7 +309,7 @@ def make_demo(root: Path,native=False,provider=None):
                     provider=provider if native else 'fixture',fixture=not native)
 
 def main():
-    parser=argparse.ArgumentParser(prog='formal-gates harness',description='Optional LangGraph development driver, not the legacy formal Seal route')
+    parser=argparse.ArgumentParser(prog='formal-gates harness',description='Optional LangGraph development harness')
     commands=parser.add_subparsers(dest='command',required=True)
     commands.add_parser('hosts',help='List native execution adapters and existing host integrations')
     health=commands.add_parser('doctor',help='Probe a native host without sending a model prompt')

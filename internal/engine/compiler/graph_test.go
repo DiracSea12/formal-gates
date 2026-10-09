@@ -330,7 +330,7 @@ func depsEqual(cs CompiledStep, want []authoring.StepID) bool {
 }
 
 // TestInputsEqualDeps：typed source bindings 集合与依赖集合精确相等
-// （spike 拍板不变量：删依赖必被拒，与 submit 的 source bindings 校验同源）。
+// （删依赖必被拒，与 submit 的 source bindings 校验同源）。
 func TestInputsEqualDeps(t *testing.T) {
 	t.Run("binding from non-dependency", func(t *testing.T) {
 		root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")

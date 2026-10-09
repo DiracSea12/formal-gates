@@ -8,13 +8,13 @@ import (
 
 // 封闭 registry（ADR-001 决策 3/9）：七类 registry ID（HandlerID/PredicateID/
 // CodecID/ReconcileID/SchemaID/OperationID/AskKindID）共用单一 ID 命名空间。单一
-// 命名空间的收益（spike 实证）：把 handler ID 填进 predicate 槽不是含糊的
+// 命名空间的收益：把 handler ID 填进 predicate 槽不是含糊的
 // not found，而是立即暴露为 kind 不匹配，错误更早更准。
 //
 // 条目不携带函数/闭包：编译只做 ID 解析（存在、唯一、kind 匹配），实现绑定
-// 属运行时批次；compiled IR 里 likewise 只有稳定 ID 引用。
+// 由运行时持有；compiled IR 里 likewise 只有稳定 ID 引用。
 //
-// 命名建议沿用 spike 结论 domain.family.name（如 engine.persist.intent、
+// 命名建议为 domain.family.name（如 engine.persist.intent、
 // reconcile.intent.persist、schema.ask.decision.request）。
 
 // EntryKind 是 registry 条目的槽位种类。同一原始 ID 只能注册为其中一种；

@@ -1,18 +1,13 @@
-"""Differential check for the artifact publication unit (G1b, M3).
+"""Differential check for artifact publication against an independent oracle.
 
-The pre-migration Store.put/Store.get are kept verbatim in reference_artifacts.py
-and production never imports them. Both paths are run over the contract's
-required-case matrix and their outcomes compared by exception CLASS (identity,
-not isinstance) and message, because which class a refusal raises is part of the
-contract: the two business refusals must be exactly HarnessError, never
-RuntimeBlocked (a subclass that assertRaises(HarnessError) cannot tell apart).
+The oracle in reference_artifacts.py is test-only. Both implementations cover
+the contract's required cases, comparing exact exception classes and messages.
+The two business refusals must be exactly HarnessError rather than RuntimeBlocked,
+which assertRaises(HarnessError) cannot distinguish from its parent class.
 
-Each implementation publishes into its OWN tree. Sharing one directory would let
-the reference create the artifact first, so the migrated Store.put would find it
-present and skip its write entirely; independent trees are what make the
-published bytes comparable. Because the roots then differ, OS error messages are
-normalised (each tree's root becomes <root>) before being compared, so the shape
-of the message is still proven equal across distinct roots.
+Each implementation publishes into its own tree, so both execute their writes
+and the published bytes can be compared. OS error messages are normalized by
+replacing each tree's root with <root>, preserving comparison across distinct roots.
 """
 import base64
 import hashlib

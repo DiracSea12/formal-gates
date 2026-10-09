@@ -11,7 +11,7 @@ import (
 
 // checkRefs 校验引用存在性：依赖、并行 children 与 join 目标都必须是表内
 // 步骤。它必须先于定序执行，保证"引用缺失"报的是 not found 而不是伪装成
-// cycle（spike 结论）。
+// cycle。
 func checkRefs(steps []CompiledStep, index map[authoring.StepID]int) error {
 	for i := range steps {
 		cs := &steps[i]
@@ -37,7 +37,7 @@ func checkRefs(steps []CompiledStep, index map[authoring.StepID]int) error {
 // computeOrdinals 以确定性 Kahn 拓扑序派生 ordinal：每轮从 ready 集合
 // （全部依赖已定序的步骤）中取 (nodeID, stepID) 字典序最小者。ordinal 是
 // 图性质的函数，与输入 assembly 顺序无关——这是 assembly 顺序不泄漏进
-// 制品的关键（spike 实证）。无法收敛即存在依赖循环，报出卡住的步骤集合。
+// 制品的关键。无法收敛即存在依赖循环，报出卡住的步骤集合。
 func computeOrdinals(steps []CompiledStep) (map[authoring.StepID]int, error) {
 	assigned := make(map[authoring.StepID]int, len(steps))
 	done := make([]bool, len(steps))

@@ -305,7 +305,7 @@ func TestEncodeRejectsMarkerAndIncoherentIR(t *testing.T) {
 
 // TestDigestSeparationBasis：digest 只覆盖制品字节——同一定义重复编译/编码
 // digest 不变；改变拓扑（增删依赖等语义变化）digest 必变。handler 实现字节
-// 不进入制品，PackageDigest 路径由后续批次承载（本测试固化制品级分离基础）。
+// 不进入制品。
 func TestDigestSeparationBasis(t *testing.T) {
 	stable := encoder.Digest(encodeWorkflow(t))
 	if again := encoder.Digest(encodeWorkflow(t)); again != stable {

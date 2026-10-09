@@ -1,12 +1,11 @@
-// digest_acceptance_test.go 覆盖批次 3 验收的两条 digest 判据（对
+// digest_acceptance_test.go 覆盖两条 digest 判据（对
 // checked-in definitions/workflow.json 的定义源 definition.Workflow()）：
 //
 //  1. 分离：仅"实现侧"（registry 实例/槽位描述）变化，DefinitionDigest 不变；
 //  2. 敏感性：定义语义逐项变异（依赖/policy/reason/schema/handler/join 语义），
 //     每类变异 DefinitionDigest 必变。
 //
-// PackageDigest（安装事务侧的实现包摘要）属后续批次；本文件固化分离的结构
-// 基础——DefinitionDigest 的唯一输入是 canonical 制品字节，而制品字节是
+// DefinitionDigest 的唯一输入是 canonical 制品字节，而制品字节是
 // 定义 IR 的纯函数；registry 只是激活门控，不进入字节。
 package acceptance_test
 
