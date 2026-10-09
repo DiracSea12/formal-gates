@@ -37,6 +37,9 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	d.reopen()
+	passedGate := gate
+	passedInput := gi
+	passedResult, _ := json.Marshal(driverState(t, d).Results[passedGate])
 	originalWave, _ := json.Marshal(d.run.Validation.Waves[0])
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
@@ -103,10 +106,34 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	}
 	d.materialize()
 	d.materialize()
-	gate, gi = d.gateAction("quality")
-	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.reopen()
 	d.drive()
+	state := driverState(t, d)
+	carried := false
+	for _, decision := range state.RequirementRevisions[len(state.RequirementRevisions)-1].WorkDecisions {
+		if decision.Work.ActionID == passedGate && decision.Disposition == protocol.RequirementWorkCarry {
+			carried = true
+		}
+	}
+	currentResult, _ := json.Marshal(state.Results[passedGate])
+	if !carried || !bytes.Equal(passedResult, currentResult) {
+		t.Fatal("confirmed gate carry changed its original result or lost explicit authority")
+	}
+	currentWave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if nextInput.Binding.PureP2 || currentWave.Candidate.Identity == passedInput.Binding.Candidate || !slices.Contains(currentWave.SourceTasks, nextInput.Binding.Task) {
+		t.Fatal("P1 replacement did not establish its new candidate and source responsibility")
+	}
+	gate, gi = d.gateAction("quality")
+	if gate == passedGate || gi.Binding.Candidate != currentWave.Candidate.Identity || gi.Binding.Task == passedInput.Binding.Task {
+		t.Fatal("new P1 candidate reused the original gate input")
+	}
+	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
+	d.drive()
+	for _, target := range d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Targets {
+		if target.Gate == "quality" && (target.Status != "PASS" || target.ResultAction != gate) {
+			t.Fatal("final candidate lost its accepted gate responsibility")
+		}
+	}
 	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 		t.Fatal("replacement repair cannot finish final validation")
 	}
@@ -169,7 +196,11 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				if n == 1 && inflight {
 					break
 				}
-				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply exact output correction"}})
+				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply exact output correction"}}
+				d.business(repair, edit)
+				if ri.Binding.PureP2 {
+					d.verifyRepair(edit)
+				}
 				d.materialize()
 				d.materialize()
 				// Pure P2's successful carry may complete without a new gate. Requesting a
@@ -218,7 +249,11 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				if in.Binding != oldInputs[1].Binding {
 					t.Fatal("pending carried repair lost signed input")
 				}
-				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "finish carried correction"}})
+				edit := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "finish carried correction"}}
+				d.business(id, edit)
+				if in.Binding.PureP2 {
+					d.verifyRepair(edit)
+				}
 			}
 			d.materialize()
 			var replacements []protocol.WorkBinding
@@ -244,7 +279,11 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 					t.Fatal("multiple same-workspace repairs dispatched")
 				}
 				replacements = append(replacements, ri.Binding)
-				d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "redo original correction on actual current production base"}})
+				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "redo original correction on actual current production base"}}
+				d.business(repair, edit)
+				if ri.Binding.PureP2 {
+					d.verifyRepair(edit)
+				}
 				if reopen {
 					d.reopen()
 				}
@@ -254,18 +293,41 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				t.Fatal("redo duties or their actual bases were folded")
 			}
 			var issued protocol.CandidateParameters
+			var finalIntent protocol.HostActionIntent
 			for _, intent := range d.run.AdapterIntents {
-				data, _ := json.Marshal(intent.Adapter.Params)
-				if err := json.Unmarshal(data, &issued); err != nil {
+				if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+					continue
+				}
+				var params protocol.CandidateParameters
+				if err := decodeNativeParams(intent, &params); err != nil {
 					t.Fatal(err)
 				}
+				if params.Stage == "REVIEW_READY" {
+					if finalIntent.ActionID != "" {
+						t.Fatal("multiple final candidate writers")
+					}
+					finalIntent, issued = intent, params
+				}
 			}
-			if issued.Stage != "REVIEW_READY" {
+			if finalIntent.ActionID == "" {
 				t.Fatal("missing final candidate intent")
 			}
-			d.materialize()
+			d.fixtureCandidate(finalIntent.ActionID, finalIntent, issued)
 			d.drive()
 			frozen := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			state := driverState(t, d)
+			receipt := state.HostActionReceipts[finalIntent.ActionID]
+			var evidence protocol.CandidateEvidence
+			if receipt.AdapterEvidence == nil {
+				t.Fatal("final candidate has no original native evidence")
+			}
+			data, _ := json.Marshal(receipt.AdapterEvidence.Values)
+			if err := json.Unmarshal(data, &evidence); err != nil {
+				t.Fatal(err)
+			}
+			if receipt.Status != protocol.HostActionStatusExecuted || receipt.PayloadDigest != finalIntent.PayloadDigest || state.ReconciledEffects[finalIntent.ActionID].ObservationDigest != receipt.Digest || evidence.ParametersDigest != finalIntent.PayloadDigest || evidence.Identity != frozen.Candidate.Identity || evidence.Digest != frozen.Candidate.Digest {
+				t.Fatal("final candidate lost its exact signed effect and accepted receipt")
+			}
 			if !slices.Equal(frozen.SourceTasks, issued.SourceTasks) {
 				t.Fatal("wave lost exact accepted candidate sources")
 			}

@@ -814,6 +814,9 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			if err := json.Unmarshal(bytes, &params); err != nil {
 				t.Fatal(err)
 			}
+			if params.Stage != "CHECK_SOURCE" {
+				t.Fatal("original edit source was not frozen before its programmed checks")
+			}
 			state := driverState(t, d)
 			candidateFacts, complete, err := d.f.nativeEvidence(state, intent, true)
 			if err != nil || !complete || candidateFacts.Candidate == nil {
@@ -849,12 +852,13 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			}
 			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}})
 			if !held {
-				if d.run.Status != "ABORTING" || len(d.run.AdapterIntents) != 1 {
+				if original, pending := d.run.AdapterIntents[intent.ActionID]; d.run.Status != "ABORTING" || !pending || !reflect.DeepEqual(original, intent) {
 					t.Fatal("unreceipted candidate effect was discarded")
 				}
 				d.submit(receipt)
 			}
 			d.submit(receipt)
+			d.completeWorkerTerminations()
 			d.reopen()
 			d.drive()
 			if d.run.Status != "ABORTED" || d.run.Termination.Validation.Candidate != nil || d.run.Termination.Validation.DevelopmentSnapshot != "" || len(d.run.Termination.PendingHostActions) != 0 {

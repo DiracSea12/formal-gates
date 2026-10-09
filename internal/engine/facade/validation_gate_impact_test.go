@@ -103,7 +103,7 @@ func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
 				for i := 0; i < 2; i++ {
 					id, in := d.action("engine.qa.execution")
 					r := executionFor(in)
-					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: "app-v1", Environment: "isolated"})
+					d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 					d.drive()
 				}
 				last := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]

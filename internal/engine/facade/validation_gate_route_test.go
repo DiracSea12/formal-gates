@@ -67,10 +67,6 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 				t.Fatal("selected gates did not complete")
 			}
-			if _, err := d.f.PrepareCandidate("verified ordinary gate candidate"); err != nil {
-				t.Fatal(err)
-			}
-			d.drive()
 			d.reopen()
 			if d.run.Status != "COMPLETE" {
 				t.Fatalf("gate-only run status = %s", d.run.Status)

@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -283,10 +284,6 @@ func (d *validationDriver) drive() {
 		if !waiting {
 			return
 		}
-		deadline, bounded := d.t.Deadline()
-		if bounded && !time.Now().Before(deadline) {
-			d.t.Fatalf("native check did not settle within test deadline: %+v", r.Next)
-		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -534,8 +531,20 @@ func (d *validationDriver) materialize() {
 	if !d.mockNative {
 		return
 	}
-	for id, intent := range d.run.AdapterIntents {
+	snapshot := driverState(d.t, d)
+	ids := make([]string, 0, len(d.run.AdapterIntents))
+	for id := range d.run.AdapterIntents {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, func(a, b string) int {
+		return cmp.Compare(d.run.AdapterIntents[a].Revision, d.run.AdapterIntents[b].Revision)
+	})
+	for _, id := range ids {
+		intent := d.run.AdapterIntents[id]
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+			continue
+		}
+		if !snapshot.NativeActionWritable(intent, d.f.definition) {
 			continue
 		}
 		data, _ := json.Marshal(intent.Adapter.Params)
@@ -1370,7 +1379,25 @@ func fixtureStreamProof(value string) protocol.CheckStreamProof {
 // Repair comparison uses its own issued role and the retained native facts.
 func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 	d.t.Helper()
-	id, _ := d.action("engine.repair.verify")
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	id := ""
+	var input protocol.WorkerInput
+	for action, issued := range snapshot.State.WorkerInputs(d.f.definition) {
+		if issued.Handler != "engine.repair.verify" || issued.Validation == nil {
+			continue
+		}
+		original := snapshot.State.Results[issued.Validation.Binding.VerificationSource]
+		if original.Validation != nil && original.Validation.Binding.Task == edit.Binding.Task {
+			id, input = action, issued
+		}
+	}
+	if id == "" {
+		d.t.Fatal("repair edit has no issued comparison for its original source")
+	}
 	observations := map[string]worker.Observation{}
 	for _, row := range edit.Development.CaseRuns {
 		observations[row.CaseID] = worker.Observation{Result: row.Result, Comparison: row.Comparison}
@@ -1379,11 +1406,6 @@ func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	snapshot, err := d.f.engine.Load()
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	input := snapshot.State.WorkerInputs(d.f.definition)[id]
 	sum := sha256.Sum256(raw)
 	event, err := worker.DecodeResult(input, d.eventID(), raw, fmt.Sprintf("sha256:%x", sum))
 	if err != nil {

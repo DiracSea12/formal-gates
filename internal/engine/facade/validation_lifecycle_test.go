@@ -201,12 +201,27 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 			qa, qi := d.action("engine.qa.execution")
 			gate, gi := d.action("engine.gate")
 			report := executionFor(qi)
-			report.Records[0].Result = coverage.ExecutedFail
-			report.Records[0].Procedure = "Invoked the public command with invalid input"
-			report.Records[0].Observation = "Process exited 2 and rejected the invalid input"
-			report.Records[0].Comparison = "Case expected exit 1, while the requirement only requires input rejection"
-			failed := report.Records[0]
-			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "FAIL", Execution: &report, Tool: "app-v1", Environment: "isolated-project", Findings: []review.Finding{{Severity: "P2", Message: "Exit status differs from case oracle"}}})
+			var failed coverage.ExecutionRecord
+			for i := range report.Records {
+				if report.Records[i].CaseID == "invalid" {
+					var actual int
+					for _, fact := range qi.ExecutionFacts {
+						if fact.CaseID == "invalid" {
+							actual = fact.Operations[len(fact.Operations)-1].Evidence.ExitCode
+						}
+					}
+					if actual != 2 {
+						t.Fatalf("invalid input did not establish its original exit-2 observation: %d", actual)
+					}
+					report.Records[i].Result = coverage.ExecutedFail
+					report.Records[i].Comparison = fmt.Sprintf("Case expected exit 1, while actual exit %d satisfies the requirement's input rejection", actual)
+					failed = report.Records[i]
+				}
+			}
+			if failed.CaseID == "" {
+				t.Fatal("approved invalid-input case is missing")
+			}
+			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "FAIL", Execution: &report, Findings: []review.Finding{{Severity: "P2", Message: "Exit status differs from case oracle"}}}))
 			req := protocol.ValidationRequest{Kind: "VALIDATION_DETAIL_DISPOSITION", Target: qi.Binding.WaveID, Mode: coverage.ReviewBlackbox, Category: "SUCCESS_FAILURE_CRITERIA", AffectedCases: []string{failed.CaseID}, Remedies: []string{"QA_ARTIFACT_REPAIR", "DISMISS"}}
 			request := func() protocol.Event {
 				return protocol.Event{ID: d.eventID(), Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Choose remedy"}}, Validation: &req}}

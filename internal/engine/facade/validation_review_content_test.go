@@ -1,8 +1,6 @@
 package facade
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,96 +16,52 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 	for _, changed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("content-changed-%v", changed), func(t *testing.T) {
 
-			d := newValidationDriver(t, "whitebox", "quality")
-			trees := map[string]map[string]string{}
-			testBytes := "package app\nimport \"testing\"\nfunc sharedInput() string { return \"\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
-			fixtureCount := 0
-			materialize := func() {
-				var intent protocol.HostActionIntent
-				for _, value := range d.run.AdapterIntents {
-					intent = value
-				}
-				if intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
-					t.Fatal("missing typed candidate operation")
-				}
-				data, _ := json.Marshal(intent.Adapter.Params)
-				var params protocol.CandidateParameters
-				if err := json.Unmarshal(data, &params); err != nil {
-					t.Fatal(err)
-				}
-				tree := map[string]string{}
-				if params.Base != "" {
-					if trees[params.Base] == nil {
-						t.Fatalf("unknown requested base %s", params.Base)
-					}
-				}
-				for path, value := range trees[params.Base] {
-					tree[path] = value
-				}
-				switch params.Stage {
-				case "DEVELOPMENT":
-					tree["app.go"] = "package app\nfunc Validate(input string) bool { return input != \"\" }\n"
-				case "AUTHORING":
-				case "QA_ARTIFACT":
-					if len(params.Paths) != 1 || params.Paths[0] != "app_test.go" {
-						t.Fatalf("unexpected declared QA paths %v", params.Paths)
-					}
-					tree["app_test.go"] = testBytes
-				default:
-					t.Fatalf("unexpected stage %s", params.Stage)
-				}
-				if params.Stage == "QA_ARTIFACT" {
-					dir := t.TempDir()
-					for path, content := range tree {
-						if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0600); err != nil {
-							t.Fatal(err)
-						}
-					}
-					if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module app\ngo 1.24\n"), 0600); err != nil {
-						t.Fatal(err)
-					}
-					cmd := exec.Command("go", "test", "-run", "^TestNegative$", "-count=1")
-					cmd.Dir = dir
-					output, err := cmd.CombinedOutput()
-					t.Logf("negative test on QA artifact %d: error=%v output=%s", fixtureCount, err, output)
-					if fixtureCount == 0 && err != nil || fixtureCount == 1 && ((changed && err == nil) || (!changed && err != nil)) {
-						t.Fatal("fixture did not change actual negative-test behavior")
-					}
-					fixtureCount++
-				}
-				bytes, _ := json.Marshal(tree)
-				sum := sha256.Sum256(bytes)
-				identity := fmt.Sprintf("candidate-%d", len(trees)+1)
-				trees[identity] = tree
-				evidence := protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, Identity: identity, Digest: fmt.Sprintf("sha256:%x", sum), Paths: params.Paths, TestOnly: true, ProductionViewEqual: true}
-				evidence.GateView = gateReviewView(params)
-				if params.Stage == "QA_ARTIFACT" && tree["app.go"] != trees[params.Base]["app.go"] {
-					t.Fatal("production bytes changed")
-				}
-				data, _ = json.Marshal(evidence)
-				values := map[string]any{}
-				_ = json.Unmarshal(data, &values)
-				event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := nativeMasterAt(t, root, base, nil)
+			passPreDevelopmentReviews(t, d, commandPlan())
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
+			d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality"}))
+			d.drive()
+			testBytes := "package main\nimport \"testing\"\nfunc sharedInput() string { return \"\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
+			read := func(identity, path string) string {
+				cmd := exec.Command("git", "-C", root, "show", identity+":"+path)
+				content, err := cmd.Output()
 				if err != nil {
 					t.Fatal(err)
 				}
-				d.submit(event)
-				d.drive()
+				return string(content)
+			}
+			negative := func(input protocol.ValidationInput, shouldFail bool) {
+				cmd := exec.Command("go", "test", "-timeout=0", "-run", "^TestNegative$", "-count=1", ".")
+				cmd.Dir = input.Workspace.Path
+				output, err := cmd.CombinedOutput()
+				t.Logf("negative test on actual candidate %s: error=%v output=%s", input.Binding.Candidate, err, output)
+				if (err != nil) != shouldFail {
+					t.Fatal("fixture did not establish the original negative-test behavior")
+				}
 			}
 			id, input := d.action("engine.development.batch")
+			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\nfunc Validate(input string) bool { return input != \"\" }\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
-			materialize()
-			materialize()
+			d.materialize()
+			d.materialize()
 			id, input = d.action("engine.qa.design")
 			m := input.Manifest
-			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go#TestPositive", Oracle: "valid input accepted"}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go#TestNegative", Oracle: "invalid input rejected"}}
+			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestPositive", Oracle: "valid input accepted", Files: []string{"app_test.go"}}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestNegative", Oracle: "invalid input rejected", Files: []string{"app_test.go"}}}
 			for _, c := range m.Cases {
 				m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 			}
+			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte(testBytes), 0600); err != nil {
+				t.Fatal(err)
+			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
-			materialize()
+			d.materialize()
 			id, input = d.action("engine.qa.review.rationale")
 			oldCandidate := input.Binding.Candidate
+			negative(input, false)
 			r := approvedReview(m)
 			r.SetStatus = coverage.StatusFail
 			r.SourceDecisions[0].Status = coverage.StatusFail
@@ -116,16 +70,20 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Review: &r})
 			d.drive()
 			if changed {
-				testBytes = "package app\nimport \"testing\"\nfunc sharedInput() string { return \"two\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
+				testBytes = "package main\nimport \"testing\"\nfunc sharedInput() string { return \"two\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
 			}
 			id, input = d.action("engine.qa.design")
+			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte(testBytes), 0600); err != nil {
+				t.Fatal(err)
+			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "Changed shared setup in app_test.go used by both tests"}})
-			materialize()
+			d.materialize()
 			id, input = d.action("engine.qa.review.rationale")
-			if (trees[oldCandidate]["app_test.go"] == trees[input.Binding.Candidate]["app_test.go"]) == changed || trees[oldCandidate]["app.go"] != trees[input.Binding.Candidate]["app.go"] {
+			if (read(oldCandidate, "app_test.go") == read(input.Binding.Candidate, "app_test.go")) == changed || read(oldCandidate, "app.go") != read(input.Binding.Candidate, "app.go") {
 				t.Fatal("fixture did not isolate a real test-only shared-helper content change")
 			}
-			t.Logf("test content before=%q after=%q", trees[oldCandidate]["app_test.go"], trees[input.Binding.Candidate]["app_test.go"])
+			negative(input, changed)
+			t.Logf("test content before=%q after=%q", read(oldCandidate, "app_test.go"), read(input.Binding.Candidate, "app_test.go"))
 			t.Logf("old candidate=%s new=%s inheritable=%v modified=%v", oldCandidate, input.Binding.Candidate, input.InheritableReviews, d.run.Validation.Sets[coverage.ReviewWhitebox].Paths)
 			r = approvedReview(m)
 			r.CaseDecisions[1].Inherited = true
@@ -136,7 +94,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 				r.CaseDecisions[0].Status = coverage.StatusFail
 			}
 			d.receipt(id)
-			a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "new-review", Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r}}})
+			a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "new-review", Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r}}})
 			t.Logf("inherited review=%s final status=%s", a.Status, d.run.Validation.Sets[coverage.ReviewWhitebox].Status)
 			if changed {
 				if a.Status != "REJECTED_INVALID_RESULT" {

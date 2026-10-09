@@ -6,6 +6,7 @@ package facade
 // 析出的真实身份完成精确计量；终态收口移除 lifecycle 活动标记。
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,9 +77,11 @@ func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
 
 	// cap 已达后在途的 QA 派发：瞬态恢复入口必须零效果＋落预算 Ask。
 	qaID := ""
-	for pendingID := range snap.State.PendingActions {
-		qaID = pendingID
-		break
+	for pendingID, pending := range snap.State.PendingActions {
+		if input, ok := snap.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == snap.State.Attempts[pending.Task].ID {
+			qaID = pendingID
+			break
+		}
 	}
 	if qaID == "" {
 		t.Fatal("no governed dispatch remained in flight after the cap was reached")
@@ -143,6 +146,7 @@ func TestResultSubmissionSurvivesTokenCapRefillBoundary(t *testing.T) {
 	}
 	d := plannedValidationDriverAt(t, root, meteredProvider, nil, p, "blackbox")
 	first, input := planBatchAction(d, "parser")
+	originalAttempt := d.run.Attempts[input.Binding.Task]
 	accepted := completeMeteredDispatch(t, d, root, first, "agent-parser", []string{
 		`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3}}}`,
 	}, &protocol.WorkerResultPayload{ActionID: first, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "parser-digest", Validation: &protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"}})
@@ -157,8 +161,7 @@ func TestResultSubmissionSurvivesTokenCapRefillBoundary(t *testing.T) {
 	if entry.Source != "transcript" || entry.TotalInputTokens+entry.OutputTokens != 21 {
 		t.Fatalf("boundary dropped the observation: cost = %+v", entry)
 	}
-	// PASS 完成的执行按 removeTaskBookkeeping 清理；观察事实的持久载体是
-	// Results 账本（不在暂存）。
+	// Accepted edits keep their original execution until programmed checks settle.
 	record, recorded := snap.State.Results[first]
 	if !recorded || record.Outcome != protocol.OutcomePass {
 		t.Fatalf("boundary dropped the accepted result: %+v", record)
@@ -166,11 +169,46 @@ func TestResultSubmissionSurvivesTokenCapRefillBoundary(t *testing.T) {
 	if _, staged := snap.State.StagedResults[first]; staged {
 		t.Fatal("accepted result stayed staged at the boundary")
 	}
-	if _, issued := snap.State.PendingActions[first]; issued {
-		t.Fatal("boundary re-issued the completed action")
+	if attempt := snap.State.Attempts[input.Binding.Task]; attempt.ID != originalAttempt.ID || attempt.ActionID != first {
+		t.Fatal("boundary re-issued the original edit execution")
+	}
+	d.drive()
+	snap, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issued := snap.State.PendingActions[first]; issued || snap.State.TaskStatusOf(input.Binding.Task) != runtime.TaskTerminal {
+		t.Fatal("programmed source checks did not complete and clear the original action")
+	}
+	checks := map[string]bool{}
+	for action, receipt := range snap.State.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" {
+			continue
+		}
+		var evidence protocol.CheckEvidence
+		if decodeReceiptEvidence(receipt, &evidence) != nil || evidence.SourceActionID != first {
+			continue
+		}
+		intent := snap.State.ReconciledEffects[action].Intent
+		if intent == nil || intent.Adapter == nil {
+			t.Fatal("check receipt lost its original approved invocation")
+		}
+		var params protocol.CheckParameters
+		body, _ := json.Marshal(intent.Adapter.Params)
+		if json.Unmarshal(body, &params) != nil || receipt.Status != protocol.HostActionStatusExecuted || evidence.ExitCode != 0 || evidence.Error != "" || evidence.SourceIdentity != params.SourceIdentity || evidence.SourceDigest != params.SourceDigest {
+			t.Fatal("original check receipt did not prove successful execution on its frozen source")
+		}
+		for _, approved := range input.Development.Batch.Checks {
+			if params.Check == approved {
+				checks[approved.ID] = true
+			}
+		}
+	}
+	if len(checks) != len(input.Development.Batch.Checks) {
+		t.Fatal("original action completed without every approved check receipt")
 	}
 	for pendingID, pending := range snap.State.PendingActions {
-		if pending.Task.Scope == "plan:command:command" {
+		if input := snap.State.ValidationInputs(d.f.definition)[pendingID]; input.Development != nil && input.Development.Batch.ID == "command" {
 			t.Fatalf("dependent batch issued at the reached cap: %s %+v", pendingID, pending)
 		}
 	}
