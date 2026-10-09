@@ -72,7 +72,7 @@ func (s *State) endedWorkCurrent(a Attempt, cd *compiler.CompiledDefinition) boo
 	if !a.Business || s.ObsoleteActions[a.ActionID].ReplacedBy != "" {
 		return false
 	}
-	if result, ok := s.Results[a.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Development == nil || result.Validation.Binding.BatchID == "" || s.developmentChecksPassed(result)) {
+	if result, ok := s.Results[a.ActionID]; ok && result.Outcome == OutcomePass && (s.validationRole(a.Task, cd) != "engine.development.batch" || s.developmentChecksPassed(result)) {
 		return false
 	}
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
