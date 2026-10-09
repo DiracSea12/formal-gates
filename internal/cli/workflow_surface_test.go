@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/requirement"
 	"os"
 	"path/filepath"
@@ -49,9 +50,11 @@ func TestWorkflowPrecheckIsReadOnlyAndShowsExactConfirmationContent(t *testing.T
 		t.Fatal(stderr.String())
 	}
 	var report struct {
-		Content  string                                  `json:"content"`
-		Revision string                                  `json:"revision"`
-		Document requirement.FrozenRequirementProjection `json:"requirementDocument"`
+		Content   string                                  `json:"content"`
+		Revision  string                                  `json:"revision"`
+		Document  requirement.FrozenRequirementProjection `json:"requirementDocument"`
+		Materials []facade.IntakeMaterial                 `json:"materials"`
+		Candidate facade.IntakeConfirmationReceipt        `json:"intakeCandidate"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 		t.Fatal(err)
@@ -59,12 +62,43 @@ func TestWorkflowPrecheckIsReadOnlyAndShowsExactConfirmationContent(t *testing.T
 	if report.Content != projection.Content || report.Revision != projection.ContentDigest || !reflect.DeepEqual(report.Document, projection) {
 		t.Fatal("precheck changed the full content, revision or typed projection")
 	}
+	if len(report.Materials) != 1 || report.Materials[0].Content != report.Content || report.Materials[0].Revision != report.Revision || report.Candidate.RequirementRevision != report.Revision || report.Candidate.SolutionRevision != report.Revision || report.Candidate.Digest == "" {
+		t.Fatal("precheck did not prepare its exact single-file intake candidate")
+	}
 	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
 		t.Fatal("precheck created runtime or bootstrap state")
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || string(after) != body {
 		t.Fatal("precheck changed the source bytes")
+	}
+}
+
+func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
+	root := t.TempDir()
+	for path, content := range map[string]string{"request.md": "# Actual request\n", "design.md": "# Actual solution\n", "reference.md": "# Selected reference\n"} {
+		mustWriteCLI(t, filepath.Join(root, path), content)
+	}
+	var out, stderr bytes.Buffer
+	args := []string{"workflow", "start", "--precheck", "--root", root, "--route", "lightweight", "--requirement", "request.md", "--solution", "design.md", "--artifact", "reference.md"}
+	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var preview facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Materials) != 3 || preview.RequirementDocument != nil || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.SolutionRevision != preview.Materials[0].Revision {
+		t.Fatal("precheck lost explicit material selection")
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "unconfirmed", "--route", "lightweight"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --intake-receipt") {
+		t.Fatalf("preview substituted for explicit confirmation receipt: %s", stderr.String())
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 3 {
+		t.Fatal("unconfirmed material selection wrote receipt, registry or runtime state", err)
 	}
 }
 

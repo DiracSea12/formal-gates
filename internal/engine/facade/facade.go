@@ -2073,9 +2073,7 @@ func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) er
 		if readErr != nil {
 			return fmt.Errorf("%s: artifact %s is unavailable: %w", InvalidIntakeConfirmation, artifact.Path, readErr)
 		}
-		normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
-		sum := sha256.Sum256([]byte(normalized))
-		observed := hex.EncodeToString(sum[:])
+		observed := requirementContentRevision(data)
 		if observed != artifact.Revision {
 			return fmt.Errorf("%s: artifact %s revision mismatch (receipt %s, current %s)", InvalidIntakeConfirmation, artifact.Path, artifact.Revision, observed)
 		}

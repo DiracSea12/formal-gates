@@ -46,7 +46,9 @@ regular 路线 full/custom 在技术审和计划/拓扑确认后选择，不能�
 ## 正式流程
 
 1. **受理与确认。** 唯一正式文件包含完整需求/方案和 REQ/AC/来源；先结构预检，
-   再展示全文和精确 revision，等待用户确认。lightweight 不要求结构化正式需求案。
+   再展示全部选定材料全文和精确 revisions，等待用户确认。预检程序生成
+   intakeCandidate；确认后机械保存该完整对象为 start 的 receipt，禁止手抄其绑定。
+   lightweight 不要求结构化正式需求案，预检使用 --route lightweight。
 2. **启动与登记。** start 绑定已确认 intake receipt 和当前安装身份，不接受 split 意向。
    首次 drive 自动登记该确认。regular 的产品审、技术审、开发与 QA 只消费确认 revision。
 3. **产品审、技术审。** 先独立产品审，通过后才独立技术审；每次 fresh review 读取完整

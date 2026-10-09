@@ -18,7 +18,6 @@ import (
 	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
-	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -354,29 +353,25 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	intakePath := fs.String("intake-receipt", "", "typed confirmation receipt of the prechecked requirement and solution")
 	precheck := fs.Bool("precheck", false, "read and project the complete requirement before confirmation; creates no run")
 	requirementPath := fs.String("requirement", "", "requirement document path for --precheck")
+	solutionPath := fs.String("solution", "", "solution material for --precheck; defaults to the requirement document")
+	var artifacts stringListFlag
+	fs.Var(&artifacts, "artifact", "additional confirmation material for --precheck; repeat as needed")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	routeName := strings.ToLower(strings.TrimSpace(*route))
+	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
+		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
 	}
 	if *precheck {
 		if strings.TrimSpace(*requirementPath) == "" {
 			return 1, fmt.Errorf("workflow start --precheck requires --requirement")
 		}
-		path := *requirementPath
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(*root, path)
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return 1, err
-		}
-		document, err := requirement.ParseRequirementProjection(*requirementPath, body)
-		if err != nil {
-			return 1, err
-		}
-		return printJSON(streams.Stdout, map[string]any{"content": document.Content, "revision": document.ContentDigest, "requirementDocument": document})
+		preview, err := facade.PrepareIntake(*root, *requirementPath, *solutionPath, artifacts, routeName != "lightweight")
+		return printValue(streams.Stdout, preview, err)
 	}
-	if *requirementPath != "" {
-		return 1, fmt.Errorf("--requirement is only available with --precheck; start requires the confirmed intake receipt")
+	if *requirementPath != "" || *solutionPath != "" || len(artifacts) != 0 {
+		return 1, fmt.Errorf("--requirement, --solution and --artifact are only available with --precheck; start requires the confirmed intake receipt")
 	}
 	receipt, err := readEngineIntakeReceipt(*intakePath)
 	if err != nil {
@@ -384,10 +379,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	}
 	if strings.TrimSpace(*runID) == "" {
 		return 1, fmt.Errorf("workflow start requires --run-id")
-	}
-	routeName := strings.ToLower(strings.TrimSpace(*route))
-	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
-		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
 	}
 	packageRoot := *pkg
 	if strings.TrimSpace(workflowFlag(args, "package-root", "")) == "" {

@@ -14,7 +14,6 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/testkit"
-	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -61,16 +60,11 @@ func writerIntakeReceipt(t *testing.T, root string) facade.IntakeConfirmationRec
 	path := "requirements.md"
 	content := cliStructuredRequirement("Engine entries preserve the authoritative run binding and reject legacy writes.") + "\n## 方案\n\nUse the engine namespace and its public entry points; legacy write commands must reject this run.\n"
 	mustWriteCLI(t, filepath.Join(root, path), content)
-	document, err := requirement.ParseRequirementProjection(path, []byte(content))
+	preview, err := facade.PrepareIntake(root, path, "", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return facade.IntakeConfirmationReceipt{
-		Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport,
-		RequirementSource: path, RequirementRevision: document.ContentDigest,
-		Artifacts:        []facade.IntakeArtifact{{Path: path, Revision: document.ContentDigest}},
-		SolutionRevision: document.ContentDigest, SolutionDigest: "sha256:" + document.ContentDigest,
-	}
+	return preview.IntakeCandidate
 }
 
 // startEngineRunForWriterTest 以 façade 建立真实 engine run（regular 路线，

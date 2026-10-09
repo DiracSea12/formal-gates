@@ -65,34 +65,33 @@ REQ/AC 身份唯一，直接字段顺序为要求→验收条件→来源；全�
 formal-gates workflow start --precheck --root <repo> --requirement <requirement-file>
 ```
 
-输出 `content` 全文、`revision` 精确内容摘要与 `requirementDocument` 结构投影；不创建
-run/receipt，不读取或写入 admission/registry。`--requirement` 仅供 precheck，不是正常
-start 的材料绑定入口。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
+输出 `content` 全文、`revision` 精确内容摘要、`requirementDocument` 结构投影，以及
+程序准备的 `intakeCandidate`。`materials` 含全部选定材料的规范化全文和各自 revision；
+`--solution <path>` 选择独立方案文件，缺省使用正式文件本身；可重复 `--artifact <path>`
+添加需确认的材料。路径、内容摘要、方案绑定与固定 transport 均由程序组装，无需手抄。
+不创建 run 或落盘 receipt，不读取或写入 admission/registry。材料选择 flags 仅供
+precheck；正常 start 只接收已确认 receipt。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
 展示和确认。确认前不启动开发 run、不选择后续路线、不派发后续代理。结构预检的通过
 不是产品审、技术审或 QA 的 PASS。
 
 ### Typed intake receipt
 
-确认 receipt 是受理材料，不是模型调用记录。`start --intake-receipt` 读取 UTF-8 JSON：
+`intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
+精确 revisions，等待用户明确确认之后，才将返回的 `intakeCandidate` 整体保存为 UTF-8
+JSON receipt，并交给 `start --intake-receipt`。保存是机械抽取完整对象，不重新填写固定
+字段、路径或摘要。确认 receipt 是受理材料，不是模型调用记录。
 
-| 字段 | 含义 |
-| --- | --- |
-| `source` | 固定为 `stable-driver`。 |
-| `authority` | 固定为 `stable-driver`。 |
-| `transport` | 固定为 `stable-launcher`。 |
-| `requirementSource` | 唯一正式文件的项目相对路径。 |
-| `requirementRevision` | 完整正式文件规范化内容的 SHA-256，64 位十六进制。 |
-| `artifacts` | 完整受理材料集，每项为相对 `path` 与内容 `revision`，含正式文件。 |
-| `solutionRevision` | 承载方案的已确认材料内容 revision；方案与需求同文件时与 requirement revision 相同。 |
-| `solutionDigest` | `sha256:` 加对应 solution revision。 |
-| `coverage` | 可选 typed coverage 材料；regular 的完整 REQ/AC 投影仍来自同一已确认需求案。 |
-| `confirmedAt` / `expiresAt` | 可选传输元数据，不代替内容绑定。 |
-| `digest` | 可选 canonical intake digest，由 façade 计算并校验。 |
+程序固定 `source/authority=stable-driver` 与 `transport=stable-launcher`，登记
+`requirementSource/requirementRevision`、完整 `artifacts`、选定方案的
+`solutionRevision/solutionDigest` 以及 canonical `digest`。可选 `coverage` 仅表达额外
+需确认的方案义务；regular 的完整 REQ/AC 投影仍来自同一已确认需求案。预检不制造
+确认、选择后续路线或自动调用 start。
 
 内容 revision 将 CRLF 规范化为 LF 后计算。路径不能重复或越出项目；start 重算实际
 材料内容，拒绝与 receipt 不符的文件。首次 drive 把确认与 intake digest 恰好登记一次，
 后续步骤消费该确认 revision，不再询问同一全文确认。lightweight 不要求 REQ/AC 案，
-但仍使用真实已确认需求/方案材料的 typed receipt。
+但仍使用真实已确认需求/方案材料的 typed receipt；其准备使用同一命令加
+`--route lightweight`，展示完整材料而不要求 REQ/AC 结构。
 
 ## 启动与 run 控制
 
