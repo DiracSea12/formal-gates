@@ -8,7 +8,8 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 本版本以 engine 的已签发动作、typed Ask 和单一状态为流程权威。公开入口、收据字段与
 调用形式唯一持有在[正式流程](references/formal-flow.md)；安装维护见
 [安装与 Hook](references/install-and-hooks.md)。宿主执行能力和真实验证结论分开记录，
-启动前核对当前安装副本的原生能力。当前开发候选尚未完成最终 canary、发布或全局切换。
+启动前核对当前安装副本的原生能力；doctor、fixture 或配置不能替代真实 canary。
+发布与全局切换分别保留独立验收证据，未运行项如实标记未验证或 skip。
 
 ## 范围边界
 

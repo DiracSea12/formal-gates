@@ -64,8 +64,8 @@ run、不认证用户确认或任务合法性。[输入与算法](references/gua
 
 宿主适配器只持有原生启动、执行、观测、恢复与证据传输，业务决策由 engine 与用户
 typed Ask 管理。安装支持和执行支持分别核对；doctor、模拟与配置存在不能替代真实
-canary。当前候选尚未完成阶段 7 的最终证据、发布和全局切换。五宿主与 Git/SVN/P4
-非分片/分片的完整验收须绑定同一候选和实际安装副本，未运行项如实标记未验证或 skip。
+canary。发布与全局切换分别保留独立验收证据；五宿主与 Git/SVN/P4 非分片/分片
+的完整验收须绑定同一候选和实际安装副本，未运行项如实标记未验证或 skip。
 
 开发 harness 的用法、原生能力与恢复边界见 [harness 说明](references/langgraph-harness.md)。
 其 demo/fixture 或 HARNESS_COMPLETE 不等于正式 Seal。

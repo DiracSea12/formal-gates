@@ -77,9 +77,9 @@ arbitrary dynamic plugin SDK; a new control semantic still needs an explicit des
 
 Host adapters own native launch, execution, observation, recovery, and evidence transport. The
 engine and user typed Ask own business decisions. Installation and execution capabilities are
-separate. Doctor, fixtures, or configuration presence do not prove a real canary. The current
-candidate has not completed final stage-7 evidence, release, or global cutover. Five-host and
-Git/SVN/P4 unsliced/sliced acceptance must bind the same candidate and actual installed copy;
+separate. Doctor, fixtures, or configuration presence do not prove a real canary. Release and
+global cutover each require their own acceptance evidence. Five-host and Git/SVN/P4
+unsliced/sliced acceptance must bind the same candidate and actual installed copy;
 unexecuted cells are reported as unverified or skipped.
 
 The [development harness](references/langgraph-harness.md) documents native capability and recovery.
