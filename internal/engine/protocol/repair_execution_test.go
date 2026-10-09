@@ -273,7 +273,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			s.DispatchBindings["plan"] = binding
 			e := &Engine{cfg: Config{Definition: cd}}
 			plan := WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: "PASS", GranularityReview: p}}
-			if err := e.acceptValidationResult(s, plan); err != nil {
+			if err := e.acceptValidationResult(s, plan, 2); err != nil {
 				t.Fatal(err)
 			}
 			s.Results["plan"] = plan
@@ -302,7 +302,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 				action := key.String() + ":review"
 				s.DispatchBindings[action] = b
 				r := WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: b, Status: "FAIL", Findings: []review.Finding{{Severity: severity, Message: "normal command behavior fails", Requirement: "AC-001", NormalPath: "app normal", ActualError: "wrong normal output", DeferralImpact: "normal command unusable", SeverityRationale: "normal behavior contract", Locations: []string{"parser.go:1"}}}}}
-				if err := e.acceptValidationResult(s, r); err != nil {
+				if err := e.acceptValidationResult(s, r, 2); err != nil {
 					t.Fatal(err)
 				}
 				s.Results[action] = r

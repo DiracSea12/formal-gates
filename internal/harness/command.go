@@ -8,9 +8,23 @@ import (
 	"path/filepath"
 )
 
+// ExecutionAdmission holds the engine's existing execution window until the
+// native job or supervisor has claimed its original process evidence.
+type ExecutionAdmission func(string, map[string]any) (func(), error)
+
+func admitExecution(directory string, request map[string]any, admissions []ExecutionAdmission) (func(), error) {
+	if len(admissions) > 0 && admissions[0] != nil {
+		return admissions[0](directory, request)
+	}
+	if _, managed := request["engine"]; managed {
+		return nil, fmt.Errorf("UNSUPPORTED_EXECUTION: engine admission is unavailable")
+	}
+	return nil, nil
+}
+
 // RunCommand keeps the temporary Python runner behind a Go-owned boundary.
 // Ordinary Go commands do not need Python installed.
-func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
+func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
 	if len(args) > 0 && args[0] == "bridge" {
 		return Bridge(in, out)
 	}
@@ -19,7 +33,7 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 			fmt.Fprintln(errout, "harness supervise requires a job directory")
 			return 2
 		}
-		return Supervise(args[1])
+		return Supervise(args[1], admissions...)
 	}
 	if len(args) > 0 && args[0] == "native" {
 		// One native job, one process.
@@ -29,7 +43,7 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer) int {
 			fmt.Fprintln(errout, "harness native requires a job directory")
 			return 2
 		}
-		return RunNative(args[1], errout)
+		return RunNative(args[1], errout, admissions...)
 	}
 	if len(args) > 0 && args[0] == "native-respond" {
 		// Answer one held native interaction from the user's own shell.

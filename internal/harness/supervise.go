@@ -57,7 +57,7 @@ const defpath = "/bin:/usr/bin"
 //   - 2 when an owner already exists (no exit.json, no process.json, no child);
 //   - any other non-zero when the supervisor itself cannot proceed
 //     (missing/malformed request.json) - again with no receipt written.
-func Supervise(directory string) int {
+func Supervise(directory string, admissions ...ExecutionAdmission) int {
 	dir := directory
 
 	requestRaw, err := os.ReadFile(filepath.Join(dir, "request.json"))
@@ -72,44 +72,37 @@ func Supervise(directory string) int {
 		fmt.Fprintf(os.Stderr, "supervise: cannot parse request.json: %v\n", err)
 		return 1
 	}
+	if _, err := os.Stat(filepath.Join(dir, "owner")); err == nil {
+		return 2
+	} else if !os.IsNotExist(err) {
+		return 1
+	}
+	release, err := admitExecution(dir, request, admissions)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "supervise: %v\n", err)
+		return 1
+	}
+	if release != nil {
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
+	}
 
 	// Owner lock: O_CREAT|O_EXCL|O_WRONLY, mode 0600. A pre-existing owner means
 	// another supervisor already owns this job, so back off without writing
 	// anything (Store.job's poll loop will read the existing receipt).
-	fd, err := os.OpenFile(filepath.Join(dir, "owner"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := claimJob(dir, request); err != nil {
 		if os.IsExist(err) {
 			return 2
 		}
 		fmt.Fprintf(os.Stderr, "supervise: cannot claim owner: %v\n", err)
 		return 1
 	}
-	fd.Close()
-
-	// Process identity is written BEFORE the child starts so Store.job's liveness
-	// probe can observe it. OS creation time identifies a process even when its
-	// supervisor entry starts later under load.
-	created := time.Now()
-	if processCreated, ok := processCreationTime(os.Getpid()); ok {
-		created = processCreated
-	}
-	procStarted := float64(created.UnixNano()) / 1e9
-	process := map[string]any{"pid": os.Getpid(), "started_at": procStarted}
-	if supervisedCheck(request) {
-		pgid, err := nativeProcessGroupID(os.Getpid())
-		if err != nil {
-			return 1
-		}
-		digest, err := CanonicalDigest(request)
-		if err != nil {
-			return 1
-		}
-		process["request_digest"] = digest
-		process["pgid"] = pgid
-	}
-	if err := writeAtomicJSON(filepath.Join(dir, "process.json"), process); err != nil {
-		fmt.Fprintf(os.Stderr, "supervise: cannot write process.json: %v\n", err)
-		return 1
+	if release != nil {
+		release()
+		release = nil
 	}
 
 	started := float64(time.Now().UnixNano()) / 1e9
@@ -148,7 +141,7 @@ func Supervise(directory string) int {
 			"stderr.log": proofToMap(stderrProof),
 		},
 	}
-	if supervisedCheck(request) {
+	if supervisedOwnedJob(request) {
 		receipt["tool_identity"], receipt["environment_identity"] = executionFacts["tool"], executionFacts["environment"]
 	}
 	if err := writeAtomicJSON(filepath.Join(dir, "exit.json"), receipt); err != nil {
@@ -156,6 +149,35 @@ func Supervise(directory string) int {
 		return 1
 	}
 	return 0
+}
+
+// claimJob is shared by supervisors and direct native jobs. The original owner
+// is exclusive; missing completion evidence never grants another execution.
+func claimJob(directory string, request map[string]any) error {
+	fd, err := os.OpenFile(filepath.Join(directory, "owner"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	if err := fd.Close(); err != nil {
+		return err
+	}
+	created := time.Now()
+	if actual, ok := processCreationTime(os.Getpid()); ok {
+		created = actual
+	}
+	process := map[string]any{"pid": os.Getpid(), "started_at": float64(created.UnixNano()) / 1e9}
+	if supervisedOwnedJob(request) {
+		pgid, err := nativeProcessGroupID(os.Getpid())
+		if err != nil {
+			return err
+		}
+		digest, err := CanonicalDigest(request)
+		if err != nil {
+			return err
+		}
+		process["request_digest"], process["pgid"] = digest, pgid
+	}
+	return writeAtomicJSON(filepath.Join(directory, "process.json"), process)
 }
 
 // resolveSpawn performs every validation CPython's subprocess.Popen does before
@@ -306,7 +328,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stdout: outF,
 		Stderr: errF,
 	}
-	if supervisedCheck(request) {
+	if supervisedOwnedJob(request) {
 		cmd.SysProcAttr = supervisorSysProcAttr()
 	}
 	if startErr := cmd.Start(); startErr != nil {
@@ -318,10 +340,10 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		// EACCES, ENOEXEC, and any other errno: record the first and continue.
 		return 0, mapExecError(startErr, argv[0]), false
 	}
-	if supervisedCheck(request) {
+	if supervisedOwnedJob(request) {
 		defer signalSupervisedChild(cmd, true)
 	}
-	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedCheck(request))
+	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedOwnedJob(request))
 	if cancelled {
 		return 130, "owned job was cancelled", true
 	}
@@ -548,6 +570,11 @@ func ensureEmptyStream(path string) {
 func supervisedCheck(request map[string]any) bool {
 	kind, _ := request["kind"].(string)
 	return kind == "approved-development-check" || kind == "approved-qa-check"
+}
+
+func supervisedOwnedJob(request map[string]any) bool {
+	_, managed := request["engine"]
+	return supervisedCheck(request) || request["kind"] == "native" && managed
 }
 
 // supervisorAlive matches the recorded PID and creation time to a live process.

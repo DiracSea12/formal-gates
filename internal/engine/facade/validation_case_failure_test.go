@@ -158,7 +158,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			for tries := 0; tries < 5; tries++ {
 				d.drive()
-				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status == "COMPLETE" && d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Scope == coverage.ScopeFull {
+				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status == "COMPLETE" && d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Scope == coverage.ScopeAffected {
 					break
 				}
 				for action, input := range d.run.ValidationInputs {
@@ -172,8 +172,8 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				}
 			}
 			last := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-			if last.Status != "COMPLETE" || last.Scope != coverage.ScopeFull {
-				t.Fatal("case repair failed to reach actual full validation")
+			if last.Status != "COMPLETE" || last.Scope != coverage.ScopeAffected {
+				t.Fatal("case repair failed to complete required affected validation")
 			}
 			retained, _ := json.Marshal(d.run.Validation.Waves[0].Targets[in.Binding.Task.String()].Execution)
 			if string(raw) != string(retained) {

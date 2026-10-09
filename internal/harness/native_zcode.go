@@ -1250,10 +1250,11 @@ func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort
 		}
 	}
 	if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-		"identity":  z.identity,
-		"provider":  "zcode",
-		"workspace": workspace,
-		"selection": configured,
+		"identity":        z.identity,
+		"provider":        "zcode",
+		"workspace":       workspace,
+		"selection":       configured,
+		"acknowledgement": map[string]any{"protocol": getOf(snapshot, "protocol"), "session": getOf(snapshot, "session")},
 	}); err != nil {
 		return nil, err
 	}
@@ -1359,6 +1360,7 @@ func zcodeMaterializeSource(directory string) (map[string]any, error) {
 		"native_turn":    turn,
 		"input_id":       inputID,
 		"selection":      selection,
+		"transcript":     filepath.Join(directory, "native-events.jsonl"),
 		"usage_evidence": getOf(endPayload, "usage"),
 	})
 }
@@ -1643,10 +1645,11 @@ func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSes
 	client.identity = s.identity
 	s.attached = true
 	if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-		"identity":  s.identity,
-		"provider":  "zcode",
-		"workspace": req.workspace,
-		"selection": zcodeSelection(snapshot),
+		"identity":        s.identity,
+		"provider":        "zcode",
+		"workspace":       req.workspace,
+		"selection":       zcodeSelection(snapshot),
+		"acknowledgement": map[string]any{"protocol": getOf(snapshot, "protocol"), "session": getOf(snapshot, "session")},
 	}); err != nil {
 		return nil, err
 	}

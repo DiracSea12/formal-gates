@@ -775,10 +775,20 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	}, &protocol.WorkerResultPayload{ActionID: first, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "parser-digest", Validation: &protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"}})
 	// 第二条派发以不可解析 transcript 完成：来源 unavailable（未知用量）、
 	// 已知总量停在被真实计量的 21。
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := before.State.Cost.Dispatches[first]
+	if entry.Source != "transcript" || entry.TotalInputTokens+entry.OutputTokens != 21 || before.State.Results[first].Outcome != protocol.OutcomePass {
+		t.Fatal("parser completion did not retain the original metered 21 tokens")
+	}
 	qa := ""
-	for pendingID := range d.run.PendingActions {
-		qa = pendingID
-		break
+	for pendingID, pending := range before.State.PendingActions {
+		if input, ok := before.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == before.State.Attempts[pending.Task].ID {
+			qa = pendingID
+			break
+		}
 	}
 	if qa == "" {
 		t.Fatal("no second dispatch in flight")

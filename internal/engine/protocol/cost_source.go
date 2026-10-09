@@ -30,10 +30,12 @@ type CostSourceRef struct {
 	Correlation string `json:"correlation,omitempty"`
 }
 
-// ResolvedCostSource 是一次解析结果：State 三值＋READY 时的精确用量。
+// ResolvedCostSource 是一次解析结果：State 三值、READY 的精确用量与
+// UNAVAILABLE 的缺源原因。
 type ResolvedCostSource struct {
-	State CostSourceState
-	Usage cost.Usage
+	State  CostSourceState
+	Usage  cost.Usage
+	Reason string
 }
 
 // CostSourceState 是 typed source 引用的三值解析结果。
@@ -45,7 +47,7 @@ type CostSourceState = string
 type CostSourceResolver func(ref CostSourceRef) ResolvedCostSource
 
 // dispatchCostHeld 在结果完成前解析派发的计量来源：READY/UNAVAILABLE 即刻把
-// 条目记入 State.Cost（幂等由 cost.Record 持有）；PENDING 报告滞留（调用方把
+// 条目记入 State.Cost；未完派发更新原累计值，已完成派发保持幂等。PENDING 报告滞留（调用方把
 // 结果留在回执边界，acceptance 记 COST_PENDING）。无 bridge（nil）时不参与
 // 判定，行为与未集成时一致。
 func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
@@ -70,8 +72,8 @@ func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
 	return resolved.State == CostSourcePending
 }
 
-// recordDispatchCost 把解析结果写入 run 的 cost 投影（唯一写入点经
-// cost.Record；重复完成不重复累计）。
+// recordDispatchCost 通过原执行 owner 区分累计更新与完成后冻结。
+// 同 action 的继续与恢复使用同一条 cost；重复完成不重复累计。
 func (e *Engine) recordDispatchCost(state *State, actionID string, resolved ResolvedCostSource) {
 	pending, known := state.PendingActions[actionID]
 	if !known {
@@ -83,6 +85,7 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 		Target: pending.Task.String(),
 		Kind:   "action",
 		Source: cost.SourceUnavailable,
+		Reason: resolved.Reason,
 	}
 	if state.validationRole(pending.Task, e.cfg.Definition) == "engine.gate" {
 		entry.Kind = "gate"
@@ -94,7 +97,11 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 		entry.OutputTokens = resolved.Usage.OutputTokens
 		entry.TotalInputTokens = resolved.Usage.InputCacheHitTokens + resolved.Usage.InputCacheMissTokens
 	}
-	cost.Record(state.costLedger(), actionID, entry)
+	if _, _, current := state.workerActionTarget(actionID); current {
+		cost.RecordCumulative(state.costLedger(), actionID, entry)
+	} else {
+		cost.Record(state.costLedger(), actionID, entry)
+	}
 }
 
 // costLedger 返回（必要时初始化）run 的 cost 投影。

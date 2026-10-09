@@ -223,6 +223,13 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: task, Provenance: provenance, MaxAttempts: &attempts})
 		return nil
 	}
+	if input := state.validationObservationInput(); input != nil {
+		if _, registered := pipelineStep(e.cfg.Definition, "engine.validation.observation"); registered {
+			if err := declare(observationTask(e.cfg.Definition, input)); err != nil {
+				return guard.Basis{}, err
+			}
+		}
+	}
 	// 桶 1：确认计划的全部批次任务（currentPlanTask 逐批，依赖未 Ready 同样
 	// 计入——批次身份是 plan digest，不随签发进度漂移）。
 	for _, task := range state.planTasks(e.cfg.Definition) {
@@ -446,6 +453,18 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		maxAttempts = attempt.MaxAttempts
 	}
 	switch role {
+	case "engine.validation.observation":
+		if input := state.validationObservationInput(); input != nil && source == observationTask(e.cfg.Definition, input) {
+			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
+		}
+		for _, binding := range state.DispatchBindings {
+			if state.sourceValidationTask(binding.Task) == source {
+				if wave := state.validationWave(binding.WaveID); wave != nil && wave.Candidate.Identity == binding.Candidate {
+					return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
+				}
+			}
+		}
+		return guard.Provenance{}, 0, false
 	case "engine.merge.resolve":
 		input := state.conflictInput(source.Scope)
 		if input == nil || len(input.Evidence.Conflicts) == 0 {

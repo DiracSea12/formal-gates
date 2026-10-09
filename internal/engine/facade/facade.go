@@ -250,10 +250,11 @@ type RequirementChangeFace struct {
 // ReviewFace 是 run 的审查投影：两条 series 与拓扑/路线绑定，以及当前
 // 权威需求 revision 与最近一次修订确认。
 type ReviewFace struct {
-	Actions       []ReviewActionFace        `json:"actions"`
-	Topology      *protocol.TopologyBinding `json:"topology,omitempty"`
-	RouteMode     string                    `json:"routeMode,omitempty"`
-	SelectedGates []string                  `json:"selectedGates,omitempty"`
+	ReadinessProposal *protocol.GranularityReview `json:"readinessProposal,omitempty"`
+	Actions           []ReviewActionFace          `json:"actions"`
+	Topology          *protocol.TopologyBinding   `json:"topology,omitempty"`
+	RouteMode         string                      `json:"routeMode,omitempty"`
+	SelectedGates     []string                    `json:"selectedGates,omitempty"`
 	// RequirementRevision 是当前权威需求 revision（确认账本末条）。
 	RequirementRevision string `json:"requirementRevision"`
 	// LastRequirementChange 是最近一次修订确认；从未修订时为空。
@@ -263,6 +264,7 @@ type ReviewFace struct {
 // reviewFace 从权威 state 派生只读审查投影（纯函数）。
 func reviewFace(state *protocol.State) ReviewFace {
 	return ReviewFace{
+		ReadinessProposal: state.ReadinessProposal(),
 		Actions: []ReviewActionFace{
 			reviewActionFace(state.ReviewSeries.ProductReview),
 			reviewActionFace(state.ReviewSeries.StartReadiness),

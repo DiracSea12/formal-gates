@@ -300,8 +300,12 @@ func (f *Facade) observeOwnerCost() (ownerInterval, *cost.OwnerCost, error) {
 	}
 	interval := ownerInterval{transcript: transcript, startedAt: startedAt, endedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	entry := cost.OwnerCost{Source: cost.SourceUnavailable}
-	if !overlapped {
-		if usage, err := cost.MeasureOwner(provider, transcript, baseline); err == nil {
+	if overlapped {
+		entry.Reason = "owner usage interval overlaps another run"
+	} else {
+		if usage, err := cost.MeasureOwner(provider, transcript, baseline); err != nil {
+			entry.Reason = err.Error()
+		} else {
 			entry = cost.OwnerCost{
 				InputCacheHitTokens:  usage.InputCacheHitTokens,
 				InputCacheMissTokens: usage.InputCacheMissTokens,

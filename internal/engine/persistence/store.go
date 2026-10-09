@@ -226,7 +226,7 @@ func (s *Store) terminalCleanupComplete() (bool, error) {
 // retainedTerminalEntry is the finite immutable evidence and lock inventory.
 // Cleanup and its recovered completion check use the same inventory.
 func (s *Store) retainedTerminalEntry(name string) bool {
-	return name == "request.json" || name == "materials" || name == "checks" || name == "slice-guarantee.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock"
+	return name == "request.json" || name == "materials" || name == "checks" || name == "native" || name == "executor.lock" || name == "slice-guarantee.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName || name == "promotion.lock"
 }
 
 // Load 读取并校验当前 state。文件不存在时返回包装的 fs.ErrNotExist；

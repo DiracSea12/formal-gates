@@ -12,6 +12,34 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
+func TestCodexNativeSchemaPreservesThreeClosedBodies(t *testing.T) {
+	object := func(name string) map[string]any {
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{name}, "properties": map[string]any{name: map[string]any{"type": "string"}}}
+	}
+	domain := map[string]any{"anyOf": []any{object("complete"), object("remainingWork"), object("interruptionReason")}}
+	native, err := codexOutputSchema(domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getOf(native, "type") != "object" || getOf(getOf(native, "properties"), "result") == nil {
+		t.Fatal("native object root lost its closed bodies")
+	}
+	for _, name := range []string{"complete", "remainingWork", "interruptionReason"} {
+		want := map[string]any{name: "original semantic value"}
+		got, err := codexDomainResult(domain, map[string]any{"result": want})
+		if err != nil || !valuesEqual(got, want) {
+			t.Fatalf("closed body %s changed: %v %v", name, got, err)
+		}
+	}
+	nullable := map[string]any{"anyOf": []any{object("value"), map[string]any{"type": "null"}}}
+	if codexObjectUnion(nullable) {
+		t.Fatal("nullable value was wrapped as an object union")
+	}
+	if got, err := codexDomainResult(nullable, nil); err != nil || got != nil {
+		t.Fatal("native nullable value changed", got, err)
+	}
+}
+
 // This peer checks native schema admission, not domain business results.
 func codexPeerStrictSchema(value any) error {
 	schema := objectOrEmpty(value)
@@ -38,9 +66,11 @@ func codexPeerStrictSchema(value any) error {
 			return err
 		}
 	}
-	for _, child := range listOf(schema["anyOf"]) {
-		if err := codexPeerStrictSchema(child); err != nil {
-			return err
+	for _, key := range []string{"anyOf", "prefixItems"} {
+		for _, child := range listOf(schema[key]) {
+			if err := codexPeerStrictSchema(child); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

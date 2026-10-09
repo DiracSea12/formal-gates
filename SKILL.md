@@ -69,8 +69,8 @@ regular 路线 full/custom 在技术审和计划/拓扑确认后选择，不能�
    QA 按批准步骤消费准备→目标→采集操作；门只读基线至最终候选完整实现 diff。
    一个 FAIL/运行错误不停止独立兄弟任务。每项 source 结算、usage、guard 后自动补位。
 8. **统一修复。** 全部目标终结、错误处置和 finding 裁决完成后，NEW/SAME_AS/DISMISSED
-   归并 canonical problems，只建一个 repair。普通修复固定 AFFECTED；开启 requirement guarantee 的最终候选 Seal 前须 FULL，
-   必需 QA 与门全部有效 PASS（含合法继承）后才可 Seal。
+   归并 canonical problems，只建一个 repair。普通修复固定 AFFECTED；按[公共合同](references/formal-flow.md#继承判定修复授权与-seal)
+   核齐本轮必需 QA 与门的有效结果（含合法继承）后完成，不追加最终 FULL。
    门审 P2 必须修复，以实跑自测/carry 保留门 PASS，不增加复审轮；门审 P3 只作 Seal advisory。
 9. **Promotion 与 Seal。** 固定同一实际候选的 tree/blob/mode/ref 和需求/QA/验证绑定，
    promotion 后核对等价 receipt，Seal 不再生成候选。drive 先持久化可恢复终结 intent，再清理全部登记资源；无残留 receipt 后固化终态。
@@ -85,9 +85,11 @@ lightweight 是正式流程内的路线（非受理阶段选项）。用户明�
 
 ## 宿主执行纪律
 
-主代理只提交事实和明确用户决定。使用 show/next 中实际签发的 actionId、TaskKey、Attempt、
-候选和原生身份；不能手造任务、次数、wave 或扩大授权。唯一事件写入口为 submit；drive
-执行程序拥有的机械动作和实际宿主调用。重复结果重放不重复副作用，UNKNOWN 先对账。
+主代理只提交事实和明确用户决定。`workflow drive` 自动消费本 run 选定平台上的已签发
+任务，核对材料与原生身份、采集结果并继续推进；不跨平台混派，不手造任务、次数、wave
+或扩大授权。用户选择通过原 typed Ask/submit 接纳；语义判断由原角色完成。重复结果
+重放不重复副作用，UNKNOWN 先对账。`--single-step` 仅作维护诊断，推进同一业务路径后
+返回，停止后续原生任务消费。
 
 QA 操作在原设计与审查中补齐批准配方并冻结，见 [QA 固定操作契约](references/qa-operations.md)。
 程序按原动作绑定执行已批准 operations 或精确 Go testRef，保留真实收据与未完成责任。

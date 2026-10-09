@@ -129,23 +129,30 @@ reset、abort、adopt-external、路线调整、精确 waiver/skip 和 HUMAN 合
 
 ## 原生运行时派发
 
-Next 只返回 Ready、HostAction、Ask、Wait、Operator、Complete 六类边界。主代理原样、
-整批搬运已签发 action，不手造 TaskKey、Attempt、wave、额度或独立任务。drive 执行
-程序拥有的机械动作和原生适配器调用；宿主只负责原生执行、观测、恢复和证据传输。
+Next 只返回 Ready、HostAction、Ask、Wait、Operator、Complete 六类边界。普通
+`workflow drive` 在本 run 选定的平台自动派发已签发任务、收取原始结果和继续推进，
+到真实用户决定、具体执行阻塞或完成时返回；不在各平台之间混派。控制 submit 接纳后
+使用同一消费者推进，worker receipt/result 接纳不递归启动消费者。
 
-外部原生执行结果通过同一 submit 接纳路径提交：
+材料、action/TaskKey/Attempt、候选、作用域、配方和原生身份由程序原样组装并在实际
+调用前核验；角色只填写其语义结果。普通开发和返修的未完成交付沿原任务、原会话和
+剩余职责继续，不当作失败重试。ADJUDICATE、受影响用例和门影响判断沿原签发的语义
+职责执行；程序不猜 NEW/SAME_AS、受影响范围或用户批准。缺少配方、UNKNOWN 或无法
+核实的原执行事实保留具体阻塞，不能靠模型自述、合成 transcript 或其他宿主证据推进。
 
-```bash
-formal-gates workflow submit --root <repo> --run-id <id> \
-  --worker-material <issued-material-reference.json> \
-  --native-directory <original-evidence-directory> \
-  --native-source <original-native-source.json> --event-id <result-event-id>
-```
+同一原 job 的 owner、request、process、exit 和 native source 承载正常执行与恢复事实。
+完整原结果只观察并通过原 submit 接纳；原 source 丢响应时先 reconcile，不能盲目重派。
+spawn、result、lifecycle 和 HostAction receipt 绑定同一 action、provider 与 Attempt。
 
-使用 engine 签发的材料引用与原始证据，不能把模型自述、合成 transcript 或其他宿主
-证据当作完成记录。spawn、result、lifecycle 与 HostAction receipt 绑定同一 action、
-provider 和 Attempt。UNKNOWN 先 observe/reconcile；唯一匹配 attach，不能盲目重派。
-正常执行和恢复共用任务提交与业务接纳路径，恢复只找执行事实。
+维护时可给 drive/submit 加 `--single-step`，沿同一业务处理与接纳路径推进后返回，
+不自动消费后续原生任务。该选项不授予手工扩大 payload 或绕过执行前核验的能力。
+受管 native/supervisor 程序入口与宿主工具前 hook 的覆盖分别取证；没有实机证据的
+宿主裸派发/恢复/模型工具入口不宣称具备完整执行前准入保证。
+
+已释放的分片沿各自原 run 消费同一条程序路径，父流程收取原分片收据，合并后集中 QA。
+子流程的实际 Ask 连同原 requestId、选项和原因展示在父输出 children 中，用户仍决定
+子流程路线或实际无法推进的处置。技术准备审的已接受原计划直接展示在 review.readinessProposal，
+确认时审阅该完整计划及原 revision，不重新抄写计划摘要。
 
 ## 开发之前
 
@@ -194,8 +201,10 @@ RETRY_EXHAUSTED 进入对应 Ask，授权只增加当前精确动作的一轮或
 ## 继承判定、修复授权与 Seal
 
 普通返修固定只跑受影响 QA 子集 AFFECTED；需要继承的结果须精确 view receipt 证明。
-开启 requirement guarantee 的最终候选 Seal 前须 FULL；必需 QA/门全部有效 PASS
-（含合法继承）后才可 Seal。
+有效原 FULL、本候选 AFFECTED 的实际执行与合法继承须完整覆盖当前批准的 QA、门和
+开发来源；本轮必需义务全部有效通过后即可完成，不自动追加最终 FULL。
+首次必要 FULL、新增或受影响义务、用例重开及原来源绑定仍须核验；缺失、失效或
+未完成结果阻止交付。显式 waiver/skip 沿既有授权处置，不能作为执行 PASS。
 门审 P2 修复以真实构建、测试和 carry 凭据保留门 PASS，不增加门复审轮；门审 P3 仅
 Seal advisory。QA Review 可选 P2/P3 在 FROZEN 前按 suggestion ID 与理由处置。
 
@@ -211,8 +220,11 @@ promotion 固定同一候选 tree/blob/mode/ref 与需求/QA/验证绑定，核�
 ## 成本计量
 
 source 就绪才用原生 transcript 结算同一 cost 投影；未就绪 Wait，明确不可用记
-unavailable，不估算、不造第二账本。guard 由当前 definition、route/topology、已确认
+unavailable，不估算、不造第二账本。DSH、ZCode 按绑定的原生会话/完成记录解析实际
+usage；不可计量 token 显示 null 并保留 reason，不能用零代替。guard 由当前 definition、route/topology、已确认
 计划、expected TaskKey 与有限 retry policy 纯函数计算；host、主代理和用户不提交额度。
+同一未完 dispatch 的继续与恢复用原会话累计值更新该条并按差额入总计，完成与重复提交
+保持幂等；续次 source 不可用保留已计量前缀，并以 unavailable 标明当前来源资格。
 
 Codex 原生 response ID 去重，任务墙钟包含工具等待、不含 turn 间空闲。owner 终态区间
 差值只报告，不参与 in-flight guard；多 run 区间重叠或基线不可靠时不猜数字。child

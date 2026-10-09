@@ -275,7 +275,7 @@ func (s *State) requiredWorkTasks() []runtime.TaskKey {
 		}
 	}
 	for id, result := range s.Results {
-		if result.Outcome != OutcomePass {
+		if result.Outcome != OutcomePass || result.Validation != nil && result.Validation.Status == "CONTINUE" {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[id]; obsolete {

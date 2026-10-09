@@ -517,13 +517,6 @@ func TestExactWaiverAndQARetryPreserveUnselectedProblems(t *testing.T) {
 	d.reopen()
 	d.drive()
 	current = d.run.Validation.Waves[3]
-	if latest := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]; latest.Scope == coverage.ScopeFull && latest.Status == "COLLECTING" {
-		id, in := d.action("engine.qa.execution")
-		report := executionFor(in)
-		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
-		d.reopen()
-		d.drive()
-	}
 	current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	var finalGate *protocol.ValidationTarget
 	for _, target := range current.Targets {
@@ -614,7 +607,7 @@ func completeWaivedCandidate(d *validationDriver) {
 	d.reopen()
 	d.drive()
 	if !d.run.NotGuaranteed || d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-		d.t.Fatal("waived candidate did not complete final FULL validation")
+		d.t.Fatal("waived candidate did not complete required validation")
 	}
 }
 
@@ -1372,16 +1365,11 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 						t.Fatal("persisted repair result lost its signed input or development evidence")
 					}
 				} else {
-					if current.Scope == coverage.ScopeFull && current.Status == "COLLECTING" {
-						full, fullInput := d.action("engine.qa.execution")
-						fullReport := executionFor(fullInput)
-						d.business(full, nativeExecutionResult(fullInput, protocol.ValidationResult{Binding: fullInput.Binding, Status: "PASS", Execution: &fullReport}))
-					}
 					d.reopen()
 					d.drive()
 					current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 					if current.Status != "COMPLETE" || !d.run.NotGuaranteed || authorizationSnapshot(d).State.Tasks[ask.Validation.Binding.Task] != runtime.TaskTerminal {
-						t.Fatal("whole waiver with fresh PASS failed to complete full validation as not guaranteed")
+						t.Fatal("whole waiver with fresh PASS failed to complete required validation as not guaranteed")
 					}
 				}
 				assertAuthorizationReplay(d, event)

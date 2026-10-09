@@ -100,15 +100,13 @@ func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
 						}
 					}
 				}
-				for i := 0; i < 2; i++ {
-					id, in := d.action("engine.qa.execution")
-					r := executionFor(in)
-					d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
-					d.drive()
-				}
+				id, in := d.action("engine.qa.execution")
+				r := executionFor(in)
+				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
+				d.drive()
 				last := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-				if last.Status != "COMPLETE" || last.Scope != coverage.ScopeFull {
-					t.Fatal("real final FULL did not complete")
+				if last.Status != "COMPLETE" || last.Scope != coverage.ScopeAffected {
+					t.Fatal("required affected evidence did not complete")
 				}
 				for _, target := range last.Targets {
 					if target.Gate == "security" && target.GateImpact != nil && target.GateImpact.Decision != choice {

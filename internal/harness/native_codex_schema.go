@@ -67,8 +67,10 @@ func codexStrictSchema(value any) any {
 			schema[key] = codexStrictSchema(child)
 		}
 	}
-	for i, child := range listOf(schema["anyOf"]) {
-		listOf(schema["anyOf"])[i] = codexStrictSchema(child)
+	for _, key := range []string{"anyOf", "prefixItems"} {
+		for i, child := range listOf(schema[key]) {
+			listOf(schema[key])[i] = codexStrictSchema(child)
+		}
 	}
 	return schema
 }
@@ -77,7 +79,15 @@ func codexStrictSchema(value any) any {
 // closed semantic alternatives; it does not select a workflow role or outcome.
 func codexObjectUnion(schema map[string]any) bool {
 	branches := listOf(schema["anyOf"])
-	return len(branches) == 2 && getOf(branches[0], "type") == "object" && getOf(branches[1], "type") == "object"
+	if len(branches) < 2 {
+		return false
+	}
+	for _, branch := range branches {
+		if getOf(branch, "type") != "object" {
+			return false
+		}
+	}
+	return true
 }
 func codexObjectBranch(schema map[string]any, value any) any {
 	branches := listOf(schema["anyOf"])
@@ -191,7 +201,11 @@ func codexDomainResult(schema, value any) (any, error) {
 		}
 	case []any:
 		for i, field := range result {
-			decoded, err := codexDomainResult(contract["items"], field)
+			item := contract["items"]
+			if prefix := listOf(contract["prefixItems"]); i < len(prefix) {
+				item = prefix[i]
+			}
+			decoded, err := codexDomainResult(item, field)
 			if err != nil {
 				return nil, err
 			}

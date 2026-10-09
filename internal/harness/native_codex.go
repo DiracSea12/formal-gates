@@ -352,7 +352,7 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	}
 	selection := map[string]any{"model": getOf(opened, "model"), "reasoning_effort": getOf(opened, "reasoningEffort")}
 	nativeSource := map[string]any{"threadId": thread, "workspace": workspace, "thread": nativeThread, "configuration": opened, "selection": selection}
-	if err = writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"identity": thread, "workspace": workspace, "selection": selection}); err != nil {
+	if err = writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"identity": thread, "workspace": workspace, "selection": selection, "acknowledgement": opened}); err != nil {
 		return nil, err
 	}
 	if err = writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
@@ -398,7 +398,7 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 		case <-done:
 		}
 	}()
-	if err = writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"identity": thread, "workspace": workspace, "selection": selection}); err != nil {
+	if err = writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"identity": thread, "workspace": workspace, "selection": selection, "acknowledgement": opened}); err != nil {
 		return nil, err
 	}
 	if err = writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {

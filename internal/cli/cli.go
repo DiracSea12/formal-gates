@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,6 +25,7 @@ import (
 type IO struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
+	Context        context.Context
 }
 
 func Run(program string, args []string, streams IO) int {
@@ -496,6 +498,7 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow drive", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
+	singleStep := fs.Bool("single-step", false, "diagnostic: advance engine facts without consuming native workers")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -506,8 +509,12 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	run, err := f.Drive()
-	return printValue(streams.Stdout, run, err)
+	if *singleStep {
+		run, err := f.Drive()
+		return printValue(streams.Stdout, run, err)
+	}
+	value, executionErr := consumeWorkflow(streams, f, *root, *runID)
+	return printWorkflowConsumption(streams, value, executionErr)
 }
 
 func runWorkflowSubmit(args []string, streams IO) (int, error) {
@@ -518,6 +525,7 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	nativeDirectory := fs.String("native-directory", "", "original native evidence directory")
 	sourcePath := fs.String("native-source", "", "original native source receipt JSON")
 	eventID := fs.String("event-id", "", "worker result event identity")
+	singleStep := fs.Bool("single-step", false, "diagnostic: accept this event without consuming subsequent native workers")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -550,6 +558,11 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	acceptance, run, err := f.Submit(event)
 	if err != nil {
 		return 1, err
+	}
+	if !*singleStep && workflowControlEvent(event) {
+		value, executionErr := consumeWorkflow(streams, f, *root, *runID)
+		value.Acceptance = &acceptance
+		return printWorkflowConsumption(streams, value, executionErr)
 	}
 	return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 }

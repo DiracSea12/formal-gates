@@ -391,7 +391,7 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 			if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 				return nil, err
 			}
-			if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"provider": "cursor", "identity": identity, "native_store": store, "workspace": workspace, "selection": selection}); err != nil {
+			if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"provider": "cursor", "identity": identity, "native_store": store, "workspace": workspace, "selection": selection, "acknowledgement": event}); err != nil {
 				return nil, err
 			}
 			releaseSelection()

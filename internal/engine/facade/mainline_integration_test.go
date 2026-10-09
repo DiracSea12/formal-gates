@@ -544,12 +544,10 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		}
 	}
 	master.drive()
-	full := master.run.Validation.Waves[len(master.run.Validation.Waves)-1]
-	if full.Scope != coverage.ScopeFull || full.Candidate != current.Candidate {
-		t.Fatal("AFFECTED completion did not unlock final FULL on the same candidate")
+	concluded := master.run.Validation.Waves[len(master.run.Validation.Waves)-1]
+	if concluded.Scope != coverage.ScopeAffected || concluded.Candidate != current.Candidate || concluded.Status != "COMPLETE" {
+		t.Fatal("parallel required validation did not complete on the repaired candidate")
 	}
-	passMainlineTargets(t, master)
-	master.drive()
 	if master.run.Status != "COMPLETE" {
 		t.Fatal("repaired mainline did not complete", master.run.Status)
 	}
@@ -575,6 +573,28 @@ func TestMainlineReusesOnlyEqualOriginalFullGateInputs(t *testing.T) {
 		receipt := readSliceReceipt(t, child)
 		if receipt.Receipt.Validation.Candidate.Identity == state.ChildCreation.Source {
 			t.Fatal("fixture omitted child content")
+		}
+	}
+	for _, scope := range []coverage.ScopeMode{coverage.ScopeFull, coverage.ScopeAffected} {
+		// QA execution scope does not narrow an ordinary gate's issued native range.
+		for id, receipt := range state.SliceReceipts {
+			receipt.Receipt.Validation.Scope = scope
+			state.SliceReceipts[id] = receipt
+		}
+		ownership, err := master.f.ownershipAt(state, state.Validation.Candidate.Identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		views, err := master.f.childValidationViews(state, state.Validation.Candidate.Identity, ownership)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range views {
+			for _, gate := range view.Gates {
+				if !gate.Equal || gate.SourceDigest == "" || gate.SourceDigest != gate.CandidateDigest || gate.SourceAction == "" {
+					t.Fatalf("%s wave lost its equal original full gate range: %+v", scope, gate)
+				}
+			}
 		}
 	}
 	passMainlineTargets(t, master)

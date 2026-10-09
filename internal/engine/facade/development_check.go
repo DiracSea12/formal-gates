@@ -32,36 +32,21 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 	if err := decodeNativeParams(intent, &p); err != nil {
 		return nativeResult{}, false, err
 	}
-	workspace := s.NativeResources[p.WorkspaceID]
-	if workspace.Status != "READY" || workspace.Owner != s.RunID || p.QA != nil && p.QA.WorkspaceRoot != workspace.Path {
-		return nativeResult{}, false, fmt.Errorf("check has no registered ready workspace")
-	}
 	directory := filepath.Join(f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
-	argv := []string{"/bin/sh", "-c", p.Check.Command}
-	cwd, stdin, testName := workspace.Path, "", ""
-	kind := "approved-development-check"
-	if p.QA != nil {
-		kind = "approved-qa-check"
-		operation := p.QA.Operation
-		if p.QA.GoTestRef != "" {
-			resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			operation, cwd, testName = resolved.Operation, filepath.Join(workspace.Path, resolved.Directory), resolved.GoTestName
-		} else {
-			cwd = filepath.Join(workspace.Path, p.QA.Directory)
-		}
-		stdin = operation.Stdin
-		if operation.Kind == coverage.OperationArgv {
-			argv = operation.Argv
-		} else if operation.Kind == coverage.OperationShell {
-			argv = []string{"/bin/sh", "-c", operation.Command}
-		} else {
-			return nativeResult{}, false, fmt.Errorf("QA operation has no approved invocation")
-		}
+	request, err := f.checkRequest(s, intent, p)
+	if err != nil {
+		return nativeResult{}, false, err
 	}
-	request := map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "parameters_digest": intent.PayloadDigest}
+	workspace := s.NativeResources[p.WorkspaceID]
+	argv, cwd := request["argv"].([]string), request["cwd"].(string)
+	testName := ""
+	if p.QA != nil && p.QA.GoTestRef != "" {
+		resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		testName = resolved.GoTestName
+	}
 
 	digest, err := f.checkRequestDigest(request)
 	if err != nil {
@@ -235,6 +220,39 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 		return nil
 	})
 	return nativeResult{}, false, err
+}
+
+// checkRequest owns the exact approved invocation for execution and admission.
+func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionIntent, p protocol.CheckParameters) (map[string]any, error) {
+	workspace := s.NativeResources[p.WorkspaceID]
+	if workspace.Status != "READY" || workspace.Owner != s.RunID || p.QA != nil && p.QA.WorkspaceRoot != workspace.Path {
+		return nil, fmt.Errorf("check has no registered ready workspace")
+	}
+	argv := []string{"/bin/sh", "-c", p.Check.Command}
+	cwd, stdin, kind := workspace.Path, "", "approved-development-check"
+	if p.QA != nil {
+		kind = "approved-qa-check"
+		operation := p.QA.Operation
+		if p.QA.GoTestRef != "" {
+			resolved, err := coverage.GoTestOperation(p.QA.GoTestRef)
+			if err != nil {
+				return nil, err
+			}
+			operation, cwd = resolved.Operation, filepath.Join(workspace.Path, resolved.Directory)
+		} else {
+			cwd = filepath.Join(workspace.Path, p.QA.Directory)
+		}
+		stdin = operation.Stdin
+		switch operation.Kind {
+		case coverage.OperationArgv:
+			argv = operation.Argv
+		case coverage.OperationShell:
+			argv = []string{"/bin/sh", "-c", operation.Command}
+		default:
+			return nil, fmt.Errorf("QA operation has no approved invocation")
+		}
+	}
+	return map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "parameters_digest": intent.PayloadDigest, "engine": map[string]any{"root": f.root, "runId": f.runID, "actionId": intent.ActionID}}, nil
 }
 
 func (f *Facade) checkBridge(operation string, payload any, result any) error {

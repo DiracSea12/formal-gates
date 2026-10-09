@@ -11,6 +11,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/authoring"
 	"io"
 	"os"
 	"os/exec"
@@ -492,7 +493,7 @@ func dshExecute(request any, directory string, probe bool) (result map[string]an
 			return nil, err
 		}
 		if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-			"identity": identity, "workspace": workspace, "selection": configured}); err != nil {
+			"identity": identity, "workspace": workspace, "selection": configured, "acknowledgement": created}); err != nil {
 			return nil, err
 		}
 		for _, name := range []string{"model", "reasoning_effort"} {
@@ -626,9 +627,9 @@ func sameKeySet(object map[string]any, names []string) bool {
 // native-request.json, dispatches by provider, prints the result JSON to
 // stdout as one canonical line, and on ANY execution error writes
 // native-error.json (canonical), echoes the same text to stderr and returns 1.
-func RunNative(directory string, errout io.Writer) int {
+func RunNative(directory string, errout io.Writer, admissions ...ExecutionAdmission) int {
 	resolved := resolveNativePath(directory)
-	result, err := runNativeJob(resolved)
+	result, err := runNativeJob(resolved, admissions...)
 	if err != nil {
 		writeNativeError(resolved, err, errout)
 		return 1
@@ -642,13 +643,49 @@ func RunNative(directory string, errout io.Writer) int {
 	return 0
 }
 
-func runNativeJob(directory string) (map[string]any, error) {
+func runNativeJob(directory string, admissions ...ExecutionAdmission) (map[string]any, error) {
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
 		return nil, err
 	}
-	if _, isObject := request.(map[string]any); !isObject {
+	object, isObject := request.(map[string]any)
+	if !isObject {
 		return nil, fmt.Errorf("native-request.json must contain a JSON object")
+	}
+	if _, managed := object["engine"]; managed {
+		if source, err := readJSONFile(filepath.Join(directory, "source.json")); err == nil {
+			provider, ok := getOf(source, "provider").(string)
+			if !ok {
+				return nil, fmt.Errorf("native source provider is missing")
+			}
+			impl, err := nativeImplementationFor(provider)
+			if err != nil {
+				return nil, err
+			}
+			if err := impl.verifySource(directory, source); err != nil {
+				return nil, err
+			}
+			return source.(map[string]any), nil
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if _, err := os.Stat(filepath.Join(directory, "exit.json")); err == nil {
+			provider, _ := object["provider"].(string)
+			return NativeJobSource(provider, directory)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	release, err := admitExecution(directory, object, admissions)
+	if err != nil {
+		return nil, err
+	}
+	if release != nil {
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
 	}
 	providerValue, present := entryOf(request, "provider")
 	if !present {
@@ -676,7 +713,18 @@ func runNativeJob(directory string) (map[string]any, error) {
 			}
 		}
 	}
-	return impl.execute(request, directory, getOf(request, "probe") == true)
+	if release != nil {
+		if err := prepareNativeInvocation(directory, object, impl); err != nil {
+			return nil, err
+		}
+		release()
+		release = nil
+	}
+	source, err := impl.execute(request, directory, getOf(request, "probe") == true)
+	if _, managed := object["engine"]; managed && getOf(request, "probe") != true && err != nil {
+		return nil, &nativeInvocationError{err}
+	}
+	return source, err
 }
 
 // writeNativeError lands the failure record and echoes it to stderr.
@@ -685,6 +733,11 @@ func runNativeJob(directory string) (map[string]any, error) {
 func writeNativeError(directory string, err error, errout io.Writer) {
 	text := nativeErrorText(err)
 	detail := map[string]any{"error": text}
+	if invocation, ok := err.(*nativeInvocationError); ok {
+		detail["invoked"] = true
+		detail["failure_class"] = invocation.failureClass()
+		err = invocation.err
+	}
 	if unavailable, ok := err.(*sessionUnavailableError); ok {
 		method := unavailable.method
 		if method == "" {
@@ -701,6 +754,37 @@ func writeNativeError(directory string, err error, errout io.Writer) {
 		return
 	}
 	fmt.Fprintln(errout, text)
+}
+
+// NativeBinding uses the existing host registry's capture and proof validation.
+func NativeBinding(provider string) (map[string]any, error) {
+	impl, err := nativeImplementationFor(provider)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := impl.capture()
+	if err != nil {
+		return nil, err
+	}
+	if err := impl.validateBinding(binding); err != nil {
+		return nil, err
+	}
+	return binding, nil
+}
+
+type nativeInvocationError struct{ err error }
+
+func (e *nativeInvocationError) Error() string { return nativeErrorText(e.err) }
+func (e *nativeInvocationError) Unwrap() error { return e.err }
+func (e *nativeInvocationError) failureClass() authoring.FailureClass {
+	switch e.err.(type) {
+	case *bindingError:
+		return authoring.FailureInvariantViolation
+	case *blockedError, *sessionUnavailableError:
+		return authoring.FailureUserActionRequired
+	default:
+		return authoring.FailureTransientEngine
+	}
 }
 
 // --- the four native bridge operations -----------------------------------------

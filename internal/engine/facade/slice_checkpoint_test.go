@@ -222,7 +222,7 @@ func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
 	child := promotedSlice(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	child.drive()
 	r := readSliceReceipt(t, child).Receipt
-	if r.Cost.Owner == nil || *r.Cost.Owner != (cost.OwnerCost{Source: cost.SourceUnavailable}) || r.OwnerTranscript != path || r.OwnerStartedAt == "" || r.OwnerEndedAt == "" {
+	if r.Cost.Owner == nil || *r.Cost.Owner != (cost.OwnerCost{Source: cost.SourceUnavailable, Reason: "owner baseline is unavailable"}) || r.OwnerTranscript != path || r.OwnerStartedAt == "" || r.OwnerEndedAt == "" {
 		t.Fatalf("unavailable owner was fabricated or dropped: %+v", r)
 	}
 }

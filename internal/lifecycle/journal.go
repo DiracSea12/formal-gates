@@ -29,6 +29,47 @@ type bindingRecord struct {
 	Identity   string `json:"identity"`
 }
 
+// ObserveNativeCompletion records verified native start/terminal facts for an
+// already bound dispatch. It shares the original normalized event journal;
+// host tool-hook payloads and engine lifecycle events retain their own meaning.
+func ObserveNativeCompletion(root, runID, dispatchID, provider, identity string) error {
+	return observeNativeEvents(root, runID, dispatchID, provider, identity, eventStart, eventStop)
+}
+
+func ObserveNativeStart(root, runID, dispatchID, provider, identity string) error {
+	return observeNativeEvents(root, runID, dispatchID, provider, identity, eventStart)
+}
+
+func observeNativeEvents(root, runID, dispatchID, provider, identity string, events ...string) error {
+	adapter, err := adapterFor(provider)
+	if err != nil {
+		return err
+	}
+	provider = adapter.name
+	binding, found, err := readBinding(root, runID, dispatchID)
+	if err != nil {
+		return err
+	}
+	if !found || binding.Provider != provider || binding.Identity != identity {
+		return fmt.Errorf("native completion differs from its original dispatch binding")
+	}
+	for _, event := range events {
+		if existing, readErr := readEvent(runEventPath(root, runID, dispatchID, event)); readErr == nil {
+			if existing.Provider != provider || existing.Identity != identity {
+				return fmt.Errorf("native completion differs from the original lifecycle fact")
+			}
+			continue
+		} else if !os.IsNotExist(readErr) {
+			return readErr
+		}
+		record := eventRecord{Provider: provider, Event: event, Identity: identity}
+		if _, err := recordBoundEvent(root, binding, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func recordEvent(root string, record eventRecord) (bool, error) {
 	bindings, err := matchingBindings(root, record)
 	if err != nil {
@@ -52,7 +93,10 @@ func recordEvent(root string, record eventRecord) (bool, error) {
 		}
 		return duplicate, nil
 	}
-	binding := bindings[0]
+	return recordBoundEvent(root, bindings[0], record)
+}
+
+func recordBoundEvent(root string, binding bindingRecord, record eventRecord) (bool, error) {
 	duplicate, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, record.Event), record)
 	if err != nil {
 		return false, err

@@ -119,6 +119,7 @@ var descriptors = []Descriptor{
 		Paths:           PathLayout{ProjectManaged: "AGENTS.md"},
 		Hook:            HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true,
+		CostProvider: DeepSeek,
 	},
 	{
 		ID:           ZCode,
@@ -132,6 +133,7 @@ var descriptors = []Descriptor{
 		},
 		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
 		LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
+		CostProvider: ZCode,
 	},
 	{
 		ID:              Default,

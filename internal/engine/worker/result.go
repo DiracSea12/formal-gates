@@ -19,6 +19,11 @@ import (
 type Interruption struct {
 	InterruptionReason string `json:"interruptionReason"`
 }
+type DevelopmentContinuation struct {
+	Paths         []string `json:"paths"`
+	Summary       string   `json:"summary"`
+	RemainingWork string   `json:"remainingWork"`
+}
 type Repair struct {
 	Completion        *protocol.DevelopmentCompletion `json:"completion,omitempty"`
 	Paths             []string                        `json:"paths,omitempty"`
@@ -88,6 +93,7 @@ type Finding struct {
 	Locations         []string                   `json:"locations,omitempty"`
 }
 type Development struct {
+	RemainingWork string                          `json:"-"`
 	Completion    *protocol.DevelopmentCompletion `json:"completion,omitempty"`
 	Paths         []string                        `json:"paths"`
 	Summary       string                          `json:"summary"`
@@ -98,10 +104,11 @@ func development(value *Development) *protocol.DevelopmentEvidence {
 	if value == nil {
 		return nil
 	}
-	return &protocol.DevelopmentEvidence{Completion: value.Completion, Paths: value.Paths, Summary: value.Summary, AffectedCases: value.AffectedCases}
+	return &protocol.DevelopmentEvidence{RemainingWork: value.RemainingWork, Completion: value.Completion, Paths: value.Paths, Summary: value.Summary, AffectedCases: value.AffectedCases}
 }
 
 type decodedValidation struct {
+	Observations       *ObservationJudgments
 	RepairVerification *Execution
 	Status             string
 	GranularityReview  *Granularity
@@ -177,8 +184,8 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		payload.FailureClass = authoring.FailureUserActionRequired
 		payload.InterruptionReason = interruption
 	}
-	if input.Handler == "engine.development.batch" && input.Validation != nil && input.Validation.Development != nil && input.Validation.Development.Result != nil {
-		payload.SourceResult = input.Validation.Development.Result.Digest
+	if prior := developmentSource(input); prior != nil {
+		payload.SourceResult = prior.Digest
 	}
 	if value.Review != nil {
 		if input.Review == nil || value.Validation != nil {
@@ -213,8 +220,15 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
-		if input.Handler == "engine.development.batch" && body.Development != nil && issued.Development != nil && issued.Development.Result != nil {
-			prior := issued.Development.Result.Validation.Development
+		if v.Observations != nil {
+			observations, err := assembleObservations(issued.Observation, v.Observations)
+			if err != nil {
+				return protocol.Event{}, err
+			}
+			body.Observations = observations
+		}
+		if source := developmentSource(input); source != nil && body.Development != nil {
+			prior := source.Validation.Development
 			body.Development.Paths = append(body.Development.Paths, prior.Paths...)
 			slices.Sort(body.Development.Paths)
 			body.Development.Paths = slices.Compact(body.Development.Paths)
@@ -472,6 +486,19 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	if err := decodeObject(raw, &fields); err != nil {
 		return decodedResult{}, "", err
 	}
+	if _, present := fields["remainingWork"]; present {
+		if input.Validation == nil || input.Handler != "engine.development.batch" && input.Handler != "engine.repair" {
+			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
+		}
+		var partial DevelopmentContinuation
+		if err := decodeObject(raw, &partial); err != nil {
+			return decodedResult{}, "", err
+		}
+		if partial.Paths == nil || strings.TrimSpace(partial.Summary) == "" || strings.TrimSpace(partial.RemainingWork) == "" {
+			return decodedResult{}, "", fmt.Errorf("development continuation requires delivered paths, summary and actual remaining work")
+		}
+		return decodedResult{Validation: &decodedValidation{Status: "CONTINUE", Development: &Development{Paths: partial.Paths, Summary: partial.Summary, RemainingWork: partial.RemainingWork}}}, "", nil
+	}
 	if reason, present := fields["interruptionReason"]; present {
 		var text string
 		if err := json.Unmarshal(reason, &text); err != nil {
@@ -519,6 +546,8 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			target = &CaseReview{}
 		case "engine.qa.execution":
 			target = &ExecutionJudgments{}
+		case "engine.validation.observation":
+			target = &ObservationJudgments{}
 		case "engine.repair.verify":
 			target = &Execution{}
 		case "engine.gate":
@@ -549,6 +578,8 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			v.Manifest, v.Checkpoint = &body.Manifest, body.Checkpoint
 		case *CaseReview:
 			v.Review, v.Suggestions = body, body.Suggestions
+		case *ObservationJudgments:
+			v.Observations = body
 		case *ExecutionJudgments:
 			v.Execution, v.Findings = &body.Execution, body.Findings
 		case *Execution:
@@ -647,4 +678,17 @@ func granularity(value *Granularity) *protocol.GranularityReview {
 		result.Batches = append(result.Batches, batch)
 	}
 	return result
+}
+
+func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
+	if input.Validation == nil {
+		return nil
+	}
+	if input.Handler == "engine.development.batch" && input.Validation.Development != nil {
+		return input.Validation.Development.Result
+	}
+	if input.Handler == "engine.repair" && input.Validation.Repair != nil {
+		return input.Validation.Repair.Result
+	}
+	return nil
 }

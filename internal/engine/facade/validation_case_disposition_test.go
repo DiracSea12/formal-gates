@@ -161,11 +161,15 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			affected, ai := d.action("engine.qa.execution")
 			affectedReport := executionFor(ai)
 			d.business(affected, nativeExecutionResult(ai, protocol.ValidationResult{Binding: ai.Binding, Status: "PASS", Execution: &affectedReport}))
+			d.assertRequiredValidationComplete(coverage.ScopeAffected)
+			d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY"}}})
+			decideValidation(d, d.validationAsk("QA_RETRY"), "approve", ai.Binding.Task.String())
 			d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 1, StdoutText: "unexpected whitespace validation error"}}
+			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			d.drive()
 			id, in := d.action("engine.qa.execution")
-			if in.Execution.Scope != coverage.ScopeFull {
-				t.Fatal("expected final FULL")
+			if in.Execution.Scope != coverage.ScopeAffected || len(in.RequiredCases) != 2 {
+				t.Fatal("explicit QA retry lost its complete approved scope")
 			}
 			report := executionFor(in)
 			for i := range report.Records {

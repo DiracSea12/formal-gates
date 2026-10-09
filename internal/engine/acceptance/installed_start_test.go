@@ -85,6 +85,9 @@ func (p installedStartProject) git(t *testing.T, args ...string) string {
 }
 
 func (p installedStartProject) command(input []byte, args ...string) *exec.Cmd {
+	if len(args) > 1 && args[0] == "workflow" && (args[1] == "drive" || args[1] == "submit") {
+		args = append(args, "--single-step")
+	}
 	cmd := exec.Command(p.binary, args...)
 	cmd.Dir = p.project
 	cmd.Stdin = bytes.NewReader(input)

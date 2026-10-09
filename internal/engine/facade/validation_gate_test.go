@@ -106,23 +106,21 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				executed = executionFor(input)
 				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				d.drive()
-				full := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-				if full.Scope != coverage.ScopeFull || full.Candidate != wave.Candidate {
-					t.Fatal("final FULL did not retain the affected candidate")
+				concluded := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				if concluded.Scope != coverage.ScopeAffected || concluded.Candidate != wave.Candidate {
+					t.Fatal("completed validation did not retain the affected candidate")
 				}
-				for _, target := range full.Targets {
+				for _, target := range concluded.Targets {
 					if target.Gate == "security" {
 						if target.Status != original {
-							t.Fatalf("scope-only transition changed %s to %s", original, target.Status)
+							t.Fatalf("completion changed %s to %s", original, target.Status)
 						}
 						if original == "DISPOSED" && target.DispositionReason == "" {
 							t.Fatal("same-candidate disposition lost its reason")
 						}
 					}
 				}
-				id, input = d.action("engine.qa.execution")
-				executed = executionFor(input)
-				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
+				d.assertRequiredValidationComplete(coverage.ScopeAffected)
 				d.reopen()
 				d.drive()
 				completed := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]

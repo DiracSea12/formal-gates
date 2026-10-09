@@ -204,7 +204,7 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 func (s *State) editWorkspaceQuiescent(workspace string, cd *compiler.CompiledDefinition) bool {
 	for action := range s.PendingActions {
 		if s.DispatchBindings[action].WorkspaceID == workspace {
-			if result, ok := s.Results[action]; !ok || !s.editResultCurrent(result) || s.developmentChecksFailed(result) {
+			if result, ok := s.Results[action]; !ok || !s.editResultCurrent(result) || s.developmentContinuation(action, cd) {
 				return false
 			}
 		}
@@ -297,6 +297,9 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 }
 
 func (s *State) developmentChecksPassed(r WorkerResult) bool {
+	if r.Validation == nil || r.Validation.Status != "PASS" {
+		return false
+	}
 	checks := s.editChecks(r)
 	if len(checks) == 0 {
 		return false
@@ -326,17 +329,21 @@ func (s *State) developmentChecksFailed(r WorkerResult) bool {
 	return false
 }
 
-// A delivered edit remains in its original dispatch until approved checks
-// settle the batch. Failed checks permit another edit, never a check replay.
+// Unfinished development retains its original dispatch. Approved check
+// failures permit another edit against the same obligation, never a check replay.
 func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefinition) bool {
 	result, ok := s.Results[action]
 	pending, live := s.PendingActions[action]
-	return ok && live && s.validationRole(pending.Task, cd) == "engine.development.batch" && s.editResultCurrent(result) && s.developmentChecksFailed(result)
+	if !ok || !live || !s.editResultCurrent(result) {
+		return false
+	}
+	role := s.validationRole(pending.Task, cd)
+	return (role == "engine.development.batch" || role == "engine.repair") && result.Validation.Status == "CONTINUE" || role == "engine.development.batch" && s.developmentChecksFailed(result)
 }
 
 func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
 	r, ok := s.Results[action]
-	if !ok || !s.editResultCurrent(r) {
+	if !ok || !s.editResultCurrent(r) || r.Validation.Status != "PASS" {
 		return CheckParameters{}, false
 	}
 	checks := s.editChecks(r)

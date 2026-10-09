@@ -800,8 +800,16 @@ func canaryEnvironment(home, localAppData string) []string {
 
 func installedScriptRuntimeDetail(report InstallReport) string {
 	for _, target := range report.Targets {
+		files, err := installPackageFiles(target.TargetPath, true)
+		if err != nil {
+			return err.Error()
+		}
+		declared := map[string]bool{}
+		for _, file := range files {
+			declared[file.Path] = true
+		}
 		var found []string
-		err := filepath.WalkDir(target.TargetPath, func(path string, entry os.DirEntry, err error) error {
+		err = filepath.WalkDir(target.TargetPath, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -813,7 +821,7 @@ func installedScriptRuntimeDetail(report InstallReport) string {
 				if err != nil {
 					return err
 				}
-				if !contains(installRuntimeEntries, filepath.ToSlash(rel)) {
+				if !declared[filepath.ToSlash(rel)] {
 					found = append(found, slash(path))
 				}
 			}

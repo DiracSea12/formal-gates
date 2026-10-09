@@ -73,6 +73,7 @@ type RepairCaseEvidence struct {
 	Result      coverage.ExecutionStatus `json:"result"`
 }
 type DevelopmentEvidence struct {
+	RemainingWork string                 `json:"remainingWork,omitempty"`
 	Completion    *DevelopmentCompletion `json:"completion,omitempty"`
 	CaseRuns      []RepairCaseEvidence   `json:"caseRuns,omitempty"`
 	Paths         []string               `json:"paths"`
@@ -83,6 +84,7 @@ type DevelopmentEvidence struct {
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
 // transport; Status and per-item results describe the business verdict.
 type ValidationResult struct {
+	Observations      []OperatorObservationPayload `json:"observations,omitempty"`
 	GranularityReview *GranularityReview           `json:"granularityReview,omitempty"`
 	Resolution        *ConflictResolution          `json:"resolution,omitempty"`
 	Binding           WorkBinding                  `json:"binding"`
@@ -348,7 +350,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate", "engine.repair", "engine.repair.verify":
+	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.validation.observation", "engine.gate", "engine.repair", "engine.repair.verify":
 		return string(p.Handler)
 	}
 	return ""
@@ -488,6 +490,15 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	role := s.validationRole(key, cd)
+	if role == "engine.validation.observation" {
+		if input := s.validationObservationInput(); input != nil && s.sourceValidationTask(key) == observationTask(cd, input) {
+			b.WaveID, b.Candidate = input.WaveID, input.Candidate.Identity
+		}
+		if r := s.taskResource(key, cd); r.Status == "READY" {
+			b.WorkspaceID = r.ID
+		}
+		return b
+	}
 	if role == "engine.repair.verify" {
 		if context, ok := s.repairComparisonContext(key, cd); ok {
 			return context.binding
@@ -594,6 +605,11 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			reason = decision.WaitCapacity
 		}
 		view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: reason})
+	}
+	if input := s.validationObservationInput(); input != nil {
+		if _, registered := pipelineStep(cd, "engine.validation.observation"); registered {
+			add("engine.validation.observation", observationTask(cd, input).Scope, false)
+		}
 	}
 	s.projectDevelopmentTasks(view, cd)
 	s.projectRepairGates(view, cd)

@@ -222,15 +222,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	report = executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()
-	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
-		id, in = qaModeAction(d, "engine.qa.execution", mode)
-		if in.Execution.Scope != coverage.ScopeFull || len(in.RequiredCases) != 2 {
-			t.Fatal("mode skipped final full execution")
-		}
-		report = executionFor(in)
-		d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-	}
-	d.drive()
+	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 		t.Fatal("legal mode union did not complete")
 	}

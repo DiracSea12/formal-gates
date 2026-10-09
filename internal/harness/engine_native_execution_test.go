@@ -1,0 +1,1028 @@
+//go:build !windows
+
+package harness
+
+// These cases run the installed command against the original local app-server
+// peer. Its RPC log counts actual model turns; it never starts an installed host.
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"formal-gates/internal/cost"
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/validate"
+)
+
+func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facade.WorkerMaterial, *codexScenario, string) {
+	t.Helper()
+	s := newCodexScenario(t)
+	project := s.workspace
+	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(canaryRequirementDocument), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "app.go"), []byte("package main\nfunc main() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte(".gates/\n.codex/\nAGENTS.md\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=NativeFixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=NativeFixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	git("config", "user.name", "Native fixture")
+	git("config", "user.email", "fixture@example.invalid")
+	git("add", ".")
+	git("commit", "-qm", "Native fixture input")
+	base := git("rev-parse", "HEAD")
+	registry, target, generation, lease, token := testkit.Installation(t, project, "native-target", "sha256:native-package", "codex")
+	source, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"prompts", "gates"} {
+		if err := filepath.WalkDir(filepath.Join(source, name), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(source, path)
+			if err != nil {
+				return err
+			}
+			out := filepath.Join(target, rel)
+			if entry.IsDir() {
+				return os.MkdirAll(out, 0700)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(out, body, 0600)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binary := filepath.Join(target, "bin", "formal-gates")
+	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = source
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("candidate build: %v %s", err, out)
+	}
+	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
+	if len(installed) > 0 && installed[0] {
+		candidate := t.TempDir()
+		inventory, err := validate.PackageReceipt(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range inventory.Entries {
+			body, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(entry.Path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(candidate, filepath.FromSlash(entry.Path))
+			if err := os.MkdirAll(filepath.Dir(out), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(out, body, os.FileMode(entry.Mode)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body, err := os.ReadFile(binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(candidate, "bin"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "bin", "formal-gates"), body, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", s.home)
+		t.Setenv("USERPROFILE", s.home)
+		binary = filepath.Join(s.home, ".local", "bin", "formal-gates")
+		options := validate.InstallOptions{Source: candidate, Host: "codex", Scope: "project", Project: project, BinaryTarget: binary, Force: true, SkipHooks: true}
+		if _, err := validate.Install(options); err != nil {
+			t.Fatal(err)
+		}
+		options.Bootstrap = true
+		report, err := validate.Install(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry, err := validate.LoadRegistry(report.Registry)
+		if err != nil || len(registry.Records) != 1 {
+			t.Fatal("installed registry", err)
+		}
+		record := registry.Records[0]
+		admission = facade.Admission{RegistryPath: report.Registry, Target: record.Target, Root: project, Provider: "codex", PackageDigest: record.PackageDigest, InstalledTargetIdentity: record.ID, Generation: record.Generation, Lease: record.Lease, Token: record.Token}
+	}
+	c := engineCanary{t: t, doc: []byte(canaryRequirementDocument)}
+	f, _, err := facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: "native-execution", Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref facade.WorkerMaterial
+	for _, value := range run.WorkerMaterials {
+		ref = value
+	}
+	if ref.ActionID == "" {
+		t.Fatal("fixture did not issue its actual worker")
+	}
+	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request = request
+	s.directory = directory
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Native capture resolves this real peer executable and its isolated config.
+	t.Setenv("HOME", s.home)
+	t.Setenv("CODEX_HOME", s.config)
+	t.Setenv("PATH", filepath.Dir(s.home)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binding, err := NativeBinding("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["binding"] = binding
+	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), map[string]any{"interruptionReason": "The local peer needs an explicit user decision"}).(map[string]any)
+	s.peer.StrictSchema = true
+	s.save(t)
+	return f, ref, s, binary
+}
+
+func nativePeerTurns(t *testing.T, s *codexScenario) int {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var value map[string]any
+		if err := json.Unmarshal(line, &value); err != nil {
+			t.Fatal(err)
+		}
+		if value["method"] == "turn/start" {
+			count++
+		}
+	}
+	return count
+}
+
+func TestEngineNativeRejectsChangedInputsBeforeTurn(t *testing.T) {
+	_, _, s, binary := engineNativeFixture(t)
+	statePath := filepath.Join(s.workspace, facade.EngineNamespace, "native-execution", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"attempt", "prompt", "scope", "probe"} {
+		t.Run(field, func(t *testing.T) {
+			body, err := json.Marshal(s.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := decodeNativeJSON(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := objectOrEmpty(value)
+			switch field {
+			case "attempt":
+				engine := objectOrEmpty(request["engine"])
+				material := objectOrEmpty(engine["workerMaterial"])
+				material["attemptId"] = "different-attempt"
+				engine["workerMaterial"] = material
+				request["engine"] = engine
+			case "prompt":
+				request["prompt"] = "different worker payload"
+			case "scope":
+				request["scope"] = "FULL"
+			case "probe":
+				request["probe"] = true
+			}
+			if err := writeAtomicJSON(filepath.Join(s.directory, "native-request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(binary, "harness", "native", s.directory)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("changed input accepted: %s", out)
+			}
+			if nativePeerTurns(t, s) != 0 {
+				t.Fatal("rejected input reached the native turn")
+			}
+			if _, err := os.Stat(filepath.Join(s.directory, "owner")); !os.IsNotExist(err) {
+				t.Fatal("rejected input claimed execution", err)
+			}
+			after, err := os.ReadFile(statePath)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("rejection changed engine facts", err)
+			}
+		})
+	}
+}
+
+func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
+	_, _, s, binary := engineNativeFixture(t, true)
+	call := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("installed %v: %v %s", args, err, out)
+		}
+		return out
+	}
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--single-step")
+	if nativePeerTurns(t, s) != 0 {
+		t.Fatal("diagnostic step started a model turn")
+	}
+	body := call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	var consumed struct {
+		Boundary string     `json:"boundary"`
+		Run      facade.Run `json:"run"`
+	}
+	if err := json.Unmarshal(body, &consumed); err != nil {
+		t.Fatal(err)
+	}
+	if nativePeerTurns(t, s) != 1 || consumed.Boundary != "ASK" || len(consumed.Run.PendingAsks) == 0 {
+		t.Fatalf("default did not consume then stop for the actual decision: %s", body)
+	}
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	call("harness", "native", s.directory)
+	if nativePeerTurns(t, s) != 1 {
+		t.Fatal("accepted native result was executed again")
+	}
+	if _, err := os.Stat(filepath.Join(s.directory, "exit.json")); err != nil {
+		t.Fatal("original supervisor exit receipt is missing", err)
+	}
+	if err := os.Remove(filepath.Join(s.directory, "source.json")); err != nil {
+		t.Fatal(err)
+	}
+	call("harness", "native", s.directory)
+	if nativePeerTurns(t, s) != 1 {
+		t.Fatal("lost response observation started another turn")
+	}
+}
+
+func TestEngineNativeOriginalJobOwnsConcurrentTurns(t *testing.T) {
+	_, _, s, binary := engineNativeFixture(t)
+	var wg sync.WaitGroup
+	errors := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput()
+			errors <- err
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	succeeded := false
+	for err := range errors {
+		succeeded = succeeded || err == nil
+	}
+	if !succeeded || nativePeerTurns(t, s) != 1 {
+		t.Fatal("original job did not own exactly one concurrent native turn")
+	}
+	if out, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput(); err != nil {
+		t.Fatalf("completed source observation: %v %s", err, out)
+	}
+	if nativePeerTurns(t, s) != 1 {
+		t.Fatal("completed original native source was replayed as another turn")
+	}
+}
+
+func TestEngineNativeUnknownOwnerNeverStartsTurn(t *testing.T) {
+	_, _, s, binary := engineNativeFixture(t)
+	if err := os.WriteFile(filepath.Join(s.directory, "owner"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput(); err == nil || !bytes.Contains(out, []byte("UNKNOWN")) {
+		t.Fatalf("unknown original owner: %v %s", err, out)
+	}
+	if nativePeerTurns(t, s) != 0 {
+		t.Fatal("unknown original effect started a native turn")
+	}
+}
+
+func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
+	f, ref, s, binary := engineNativeFixture(t, true)
+	_, request, directory, err := f.WorkerExecutionRequest(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request["environment"] = map[string]any{"UNISSUED": "value"}
+	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("blocked native response: %v %s", err, out)
+	}
+	var response struct {
+		Boundary string            `json:"boundary"`
+		Blocked  map[string]string `json:"blocked"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Boundary != "BLOCKED" || !strings.Contains(response.Blocked[ref.ActionID], "without an exit receipt") {
+		t.Fatalf("missing original supervisor failure: %s", out)
+	}
+	if nativePeerTurns(t, s) != 0 {
+		t.Fatal("rejected original supervisor reached a native turn")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "owner")); !os.IsNotExist(err) {
+		t.Fatal("rejected supervisor claimed an effect", err)
+	}
+}
+
+// Setup accepts explicit review/control fixtures without claiming native calls.
+// Only the subsequent developer and gate execute against the actual RPC peer.
+func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario) *protocol.GranularityReview {
+	t.Helper()
+	plan := &protocol.GranularityReview{Reason: "One complete command delivery", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "implementation", Description: "Deliver app.go"}}, Deliverable: "app.go delivery", PublicEntry: "go run app.go", Artifacts: []string{"app.go"}, Interfaces: "Existing command", StateBoundary: "No persistent state", Risk: "Retain command behavior", DoD: []protocol.DevelopmentCriterion{{ID: "delivery", Description: "Deliver the original app.go task"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build -o " + filepath.Join(t.TempDir(), "app") + " app.go"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -count=1 app.go"}}, Rollback: "Restore original app.go", Recovery: "Continue original task", Handoff: "Report original delivery", ContextCost: "One file and its behavior"}}}
+	for _, role := range []review.Action{review.ProductReview, review.StartReadiness} {
+		run, err := f.Drive()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ref facade.WorkerMaterial
+		for id, pending := range run.PendingActions {
+			if pending.ReviewSeries == role {
+				ref = run.WorkerMaterials[id]
+			}
+		}
+		var material worker.Material
+		body, err := os.ReadFile(ref.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &material); err != nil {
+			t.Fatal(err)
+		}
+		identity := "setup:" + ref.ActionID
+		spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID(identity), ref.ActionID, "codex", identity, protocol.SpawnStatusSpawned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := f.Submit(spawn); err != nil {
+			t.Fatal(err)
+		}
+		if err := lifecycle.ObserveNativeCompletion(s.workspace, "native-execution", ref.ActionID, "codex", identity); err != nil {
+			t.Fatal(err)
+		}
+		evidence := protocol.ReviewResultEvidence{Action: role, DispatchID: ref.ActionID, RequirementRevision: material.Input.Review.RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "Explicit fixture review for the native continuation scenario"}}
+		if role == review.StartReadiness {
+			evidence.GranularityReview = plan
+		}
+		event, err := protocol.NewReviewWorkerResultEvent(protocol.EventID("setup-result:"+ref.ActionID), ref.ActionID, "codex", "sha256:fixture-review", evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := f.Submit(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return plan
+}
+
+func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (facade.WorkerMaterial, protocol.WorkerInput) {
+	t.Helper()
+	stageNativeReviews(t, f, s)
+	request, err := protocol.NewRequestEvent("setup-topology", protocol.ControlConfirmTopology, protocol.AskOption{ID: "no-split", Label: "one command"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(request); err != nil {
+		t.Fatal(err)
+	}
+	token, err := f.Freshness(string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := protocol.NewReviewDecideEvent("setup-topology-decision", protocol.RequestID(request.ID), token, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command scenario"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(decision); err != nil {
+		t.Fatal(err)
+	}
+	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
+	preview, err := f.DevelopmentPlan(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route.DevelopmentPlan = &preview.Confirmation
+	request, err = protocol.NewRouteRequestEvent("setup-route", route.Gates, protocol.AskOption{ID: "custom", Label: "command gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(request); err != nil {
+		t.Fatal(err)
+	}
+	token, err = f.Freshness(string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err = protocol.NewReviewDecideEvent("setup-route-decision", protocol.RequestID(request.ID), token, "custom", protocol.ReviewDecisionPayload{Route: &route})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(decision); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, input := range run.ValidationInputs {
+		if input.Handler == "engine.development.batch" {
+			ref := run.WorkerMaterials[id]
+			body, err := os.ReadFile(ref.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var material worker.Material
+			if err := json.Unmarshal(body, &material); err != nil {
+				t.Fatal(err)
+			}
+			return ref, material.Input
+		}
+	}
+	t.Fatal("fixture did not issue original developer")
+	return facade.WorkerMaterial{}, protocol.WorkerInput{}
+}
+
+func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
+	f, _, s, binary := engineNativeFixture(t, true)
+	ref, input := stageNativeDevelopment(t, f, s)
+	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.request = request
+	s.directory = directory
+	s.workspace = input.Validation.Workspace.Path
+	binding, err := NativeBinding("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["binding"] = binding
+	s.peer.Mode = "workflow-progress"
+	s.peer.WorkerAction = ref.ActionID
+	s.peer.WorkerAttempt = ref.AttemptID
+	s.peer.Answer = nil
+	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	s.save(t)
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution")
+	out, err := cmd.CombinedOutput()
+	if err := os.WriteFile(filepath.Join(s.config, "consumer.json"), out, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatalf("automatic continuation: %v %s", err, out)
+	}
+	var response struct {
+		Boundary string            `json:"boundary"`
+		Run      facade.Run        `json:"run"`
+		Blocked  map[string]string `json:"blocked"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Boundary != "ASK" || len(response.Blocked) != 0 {
+		t.Fatalf("original continuation did not reach its actual next decision: %s", out)
+	}
+	actionRoot := filepath.Dir(directory)
+	entries, err := os.ReadDir(actionRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("wanted two partials and complete in one action: %d", len(entries))
+	}
+	identity := ""
+	digests := map[string]bool{}
+	for _, entry := range entries {
+		job := filepath.Join(actionRoot, entry.Name())
+		source, err := NativeJobSource("codex", job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nativeIdentity := source["identity"].(string)
+		if identity != "" && identity != nativeIdentity {
+			t.Fatal("continuation replaced its original native identity")
+		}
+		identity = nativeIdentity
+		var req map[string]any
+		body, err := os.ReadFile(filepath.Join(job, "native-request.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatal(err)
+		}
+		material := objectOrEmpty(getOf(getOf(req, "engine"), "workerMaterial"))
+		if material["actionId"] != ref.ActionID || material["attemptId"] != ref.AttemptID {
+			t.Fatal("continuation changed original action or attempt")
+		}
+		digests[textOf(material["digest"])] = true
+	}
+	if len(digests) != 3 || nativePeerTurns(t, s) != 4 {
+		t.Fatalf("native task progress or independent gate counts differ: materials=%d turns=%d", len(digests), nativePeerTurns(t, s))
+	}
+	var envelope struct {
+		Content protocol.State `json:"content"`
+	}
+	stateBody, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, "native-execution", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stateBody, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := cost.ParseTranscript("codex", filepath.Join(s.config, identity+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, recorded := envelope.Content.Cost.Dispatches[ref.ActionID]
+	if !recorded || entry.InputCacheMissTokens != usage.InputCacheMissTokens || entry.InputCacheHitTokens != usage.InputCacheHitTokens || entry.OutputTokens != usage.OutputTokens {
+		t.Fatalf("original dispatch cost lost native continuation usage: ledger=%+v actual=%+v", entry, usage)
+	}
+	for _, record := range response.Run.RecoveryRecords {
+		if record.ActionID == ref.ActionID {
+			t.Fatal("normal unfinished work was routed as a recovery attempt")
+		}
+	}
+	t.Logf("original_action=%s original_attempt=%s native_identity=%s material_count=%d real_turns=%d", ref.ActionID, ref.AttemptID, identity, len(digests), nativePeerTurns(t, s))
+}
+
+func fRoot(ref facade.WorkerMaterial) string {
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(ref.Path)))))
+}
+
+func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
+	for _, choice := range []string{"resume", "abort"} {
+		t.Run(choice, func(t *testing.T) {
+			f, _, s, binary := engineNativeFixture(t, true)
+			call := func(input []byte, args ...string) []byte {
+				t.Helper()
+				cmd := exec.Command(binary, args...)
+				cmd.Stdin = bytes.NewReader(input)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("installed %v: %v %s", args, err, out)
+				}
+				return out
+			}
+			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			run, err := f.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ask facade.PendingAskFace
+			for _, pending := range run.PendingAsks {
+				if pending.Control == protocol.ControlRecovery {
+					ask = pending
+				}
+			}
+			if ask.RequestID == "" {
+				t.Fatal("native interruption produced no original recovery ask")
+			}
+			decision, err := protocol.NewDecideEvent("native-test-decision", protocol.RequestID(ask.RequestID), ask.Token, protocol.AskOptionID(choice))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(decision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call(body, "workflow", "submit", "--root", s.workspace, "--run-id", "native-execution", "--single-step")
+			run, err = f.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var intent protocol.HostActionIntent
+			for _, signed := range run.AdapterIntents {
+				if choice == "resume" && signed.Resume != nil || choice == "abort" && signed.Terminate != nil {
+					intent = signed
+				}
+			}
+			if intent.ActionID == "" && choice == "resume" {
+				t.Fatal("decision did not sign its original native responsibility")
+			}
+			if choice == "resume" {
+				ref := run.WorkerMaterials[intent.Resume.WorkerActionID]
+				request, _, directory, err := f.WorkerExecutionRequest(ref, intent.ActionID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				request["binding"], err = NativeBinding("codex")
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.request = request
+				s.directory = directory
+				s.peer.Answer = codexPeerAnswer(codexPlain(t, request["schema"]), map[string]any{"interruptionReason": "The original resumed task needs another user decision"}).(map[string]any)
+				s.save(t)
+			}
+			out := call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			var response struct {
+				Run      facade.Run        `json:"run"`
+				Boundary string            `json:"boundary"`
+				Blocked  map[string]string `json:"blocked"`
+			}
+			if err := json.Unmarshal(out, &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Blocked) > 0 {
+				t.Fatalf("signed original effect did not execute: %s", out)
+			}
+			want := 1
+			if choice == "resume" {
+				want = 2
+			}
+			if nativePeerTurns(t, s) != want {
+				t.Fatalf("signed %s duplicated or lost native turns: %d", choice, nativePeerTurns(t, s))
+			}
+			if choice == "abort" && response.Run.Status != "ABORTED" {
+				t.Fatalf("termination did not finish original abort: %s", out)
+			}
+			if choice == "resume" && response.Boundary != "ASK" {
+				t.Fatalf("resumed original task lost its next decision: %s", out)
+			}
+			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			if nativePeerTurns(t, s) != want {
+				t.Fatal("completed native responsibility was executed twice")
+			}
+		})
+	}
+}
+
+func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
+	f, ref, s, binary := engineNativeFixture(t, true)
+	s.peer.Mode = "wait"
+	s.save(t)
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	// The actual host acknowledgement must be recorded before abort can target it.
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("consumer ended before native acknowledgement: %v %s", err, out.Bytes())
+		default:
+		}
+		var envelope struct {
+			Content protocol.State `json:"content"`
+		}
+		body, err := os.ReadFile(filepath.Join(s.workspace, facade.EngineNamespace, "native-execution", "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if receipt := envelope.Content.SpawnReceipts[ref.ActionID]; receipt.Status == protocol.SpawnStatusSpawned {
+			observed := false
+			for _, event := range envelope.Content.LifecycleEvents {
+				observed = observed || event.Identity == receipt.Correlation && event.Event == protocol.LifecycleStart
+			}
+			if observed {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	request, err := protocol.NewRequestEvent("native-active-abort", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort this active test task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(request); err != nil {
+		t.Fatal(err)
+	}
+	token, err := f.Freshness(string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := protocol.NewDecideEvent("native-active-abort-decision", protocol.RequestID(request.ID), token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(decision); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("original native cancellation: %v %s", err, out.Bytes())
+	}
+	var response struct {
+		Run     facade.Run        `json:"run"`
+		Blocked map[string]string `json:"blocked"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Run.Status != "ABORTED" || len(response.Blocked) != 0 || nativePeerTurns(t, s) != 1 {
+		t.Fatalf("original cancellation did not complete exactly once: %s", out.Bytes())
+	}
+	if NativeJobAlive(s.directory) {
+		t.Fatal("original native supervisor still runs")
+	}
+	var receipt map[string]any
+	raw, err := os.ReadFile(filepath.Join(s.directory, "exit.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt["exit_code"] != float64(130) {
+		t.Fatalf("original cancellation receipt lost actual process outcome: %s", raw)
+	}
+}
+
+func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
+	s := newCodexScenario(t)
+	s.save(t)
+	source, err := s.execute(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := NativeStartEvidence("codex", s.directory)
+	if err != nil {
+		body, _ := os.ReadFile(filepath.Join(s.directory, "identity.json"))
+		t.Fatalf("actual acknowledgement rejected: %v %s", err, body)
+	}
+	if identity != source["identity"] {
+		t.Fatal("native start and completed source identities differ")
+	}
+	start, err := readJSONFile(filepath.Join(s.directory, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := objectOrEmpty(start)
+	delete(object, "acknowledgement")
+	if err := writeAtomicJSON(filepath.Join(s.directory, "identity.json"), object); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NativeStartEvidence("codex", s.directory); err == nil {
+		t.Fatal("identity file alone replaced the actual native acknowledgement")
+	}
+}
+
+func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
+	f, _, s, binary := engineNativeFixture(t, true)
+	plan := stageNativeReviews(t, f, s)
+	run, err := f.Show()
+	if err != nil || !reflect.DeepEqual(run.Review.ReadinessProposal, plan) {
+		t.Fatal("original accepted readiness proposal is not public", err)
+	}
+	decide := func(owner *facade.Facade, kind protocol.ControlKind, choice string, payload protocol.ReviewDecisionPayload) {
+		t.Helper()
+		ask, err := protocol.NewRequestEvent(protocol.EventID("child-choice:"+choice), kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+		if kind == protocol.ControlSelectRoute {
+			ask, err = protocol.NewRouteRequestEvent(protocol.EventID("child-choice:"+choice), payload.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := owner.Submit(ask); err != nil {
+			t.Fatal(err)
+		}
+		token, err := owner.Freshness(string(ask.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := protocol.NewReviewDecideEvent(protocol.EventID("child-decision:"+choice), protocol.RequestID(ask.ID), token, protocol.AskOptionID(choice), payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := owner.Submit(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	topology := &protocol.TopologyDecision{Decision: "split", SplitCount: 2, Slices: []string{"core", "tooling"}, Parallel: "Two independent deliveries", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}, {AC: "AC-002", Owner: "master-merge"}}}
+	preview, err := f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology.DevelopmentPlan = &preview.Confirmation
+	decide(f, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
+	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
+	s.peer.Mode = "workflow-decision"
+	s.peer.Answer = nil
+	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	s.save(t)
+	call := func() map[string]any {
+		t.Helper()
+		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("automatic released children: %v %s", err, out)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatal(err)
+		}
+		blocked := objectOrEmpty(response["blocked"])
+		for _, child := range objectOrEmpty(response["children"]) {
+			for id, reason := range objectOrEmpty(getOf(child, "blocked")) {
+				blocked[id] = reason
+			}
+		}
+		if len(blocked) != 0 {
+			filepath.WalkDir(filepath.Join(s.workspace, facade.EngineNamespace), func(path string, entry os.DirEntry, err error) error {
+				if err == nil && !entry.IsDir() && (entry.Name() == "stderr.log" || entry.Name() == "supervisor.log" || entry.Name() == "native-error.json") {
+					body, _ := os.ReadFile(path)
+					t.Logf("original_native_failure=%s %s", path, body)
+				}
+				if err == nil && !entry.IsDir() && entry.Name() == "source.json" {
+					_, observeErr := NativeJobSource("codex", filepath.Dir(path))
+					t.Logf("original_completed_source=%s verifier=%v", path, observeErr)
+				}
+				return err
+			})
+		}
+		return response
+	}
+	response := call()
+	children := objectOrEmpty(response["children"])
+	if response["boundary"] != "ASK" || len(children) != 2 || nativePeerTurns(t, s) != 1 {
+		t.Fatalf("children lost their own original route decisions: %s", textOf(response))
+	}
+	run, err = f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := facade.Open(s.workspace, run.SliceChildren["core"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRun, err := child.Show()
+	if err != nil || len(childRun.PendingAsks) != 1 || childRun.PendingAsks[0].Control != protocol.ControlSelectRoute {
+		t.Fatal("child did not retain its typed route Ask", err)
+	}
+	childRoute := protocol.RouteDecision{Mode: "custom", Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: plan}}
+	preview, err = child.DevelopmentPlan(childRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRoute.DevelopmentPlan = &preview.Confirmation
+	ask := childRun.PendingAsks[0]
+	event, err := protocol.NewReviewDecideEvent("approve-child-route", protocol.RequestID(ask.RequestID), ask.Token, "custom", protocol.ReviewDecisionPayload{Route: &childRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := child.Submit(event); err != nil {
+		t.Fatal(err)
+	}
+	s.peer.Mode = "workflow-decision"
+	s.peer.Answer = nil
+	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	s.save(t)
+	response = call()
+	children = objectOrEmpty(response["children"])
+	core := objectOrEmpty(children[run.SliceChildren["core"]])
+	if response["boundary"] != "ASK" || getOf(core, "boundary") != "ASK" || nativePeerTurns(t, s) != 2 {
+		t.Fatalf("parent did not consume the original released child once: %s", textOf(response))
+	}
+	if childRun, err = child.Show(); err != nil || len(childRun.PendingAsks) == 0 {
+		t.Fatal("native result did not reach the original child decision", err)
+	}
+	var envelope struct {
+		Content protocol.State `json:"content"`
+	}
+	body, err := os.ReadFile(filepath.Join(s.workspace, facade.EngineNamespace, childRun.RunID, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	accepted := false
+	for id, receipt := range envelope.Content.SpawnReceipts {
+		if receipt.Status != protocol.SpawnStatusSpawned {
+			continue
+		}
+		material := childRun.WorkerMaterials[id]
+		actionDir := filepath.Dir(facade.WorkerExecutionDirectory(material, ""))
+		jobs, err := os.ReadDir(actionDir)
+		if err != nil || len(jobs) != 1 {
+			t.Fatal("child original invocation evidence differs", err)
+		}
+		directory := filepath.Join(actionDir, jobs[0].Name())
+		var request struct {
+			Engine struct {
+				WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
+			} `json:"engine"`
+		}
+		body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Engine.WorkerMaterial.ActionID != id || request.Engine.WorkerMaterial.AttemptID != material.AttemptID {
+			t.Fatal("child source lost its original action/attempt")
+		}
+		source, err := NativeJobSource("codex", directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if source["identity"] != receipt.Correlation || source["provider"] != "codex" {
+			t.Fatal("child receipt differs from actual native source")
+		}
+		_, digest, _, err := NativeResultEvidence("codex", directory, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cause := "The gate peer needs an explicit user decision"
+		resultMatched := false
+		for _, result := range envelope.Content.RecoverableResults[id] {
+			resultMatched = resultMatched || result.PayloadDigest == digest && result.FailureClass == authoring.FailureUserActionRequired && result.InterruptionReason == cause
+		}
+		askMatched := false
+		for _, ask := range childRun.PendingAsks {
+			if ask.Control != protocol.ControlRecovery {
+				continue
+			}
+			for _, record := range envelope.Content.RecoveryRecords {
+				if record.ActionID == id && record.RequestID == ask.RequestID && record.Class == authoring.FailureUserActionRequired && record.InterruptionReason == cause {
+					askMatched = true
+				}
+			}
+			projected, _ := json.Marshal(getOf(getOf(core, "run"), "pendingAsks"))
+			if !strings.Contains(string(projected), ask.RequestID) {
+				t.Fatal("parent concealed the original child request")
+			}
+		}
+		if !resultMatched || !askMatched {
+			t.Fatal("child Ask lost its actual inability cause/result/request lineage")
+		}
+		accepted = true
+	}
+	if !accepted {
+		t.Fatal("child has no actual native spawn/source owner")
+	}
+	call()
+	if nativePeerTurns(t, s) != 2 {
+		t.Fatal("parent replay duplicated child native work")
+	}
+}

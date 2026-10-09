@@ -259,7 +259,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	s.Completed = nil
 	keptTasks := map[runtime.TaskKey]runtime.TaskStatus{}
 	for id, result := range s.Results {
-		if result.Outcome == OutcomePass {
+		if result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") {
 			if binding, ok := s.DispatchBindings[id]; ok {
 				keptTasks[binding.Task] = runtime.TaskTerminal
 			}
@@ -278,7 +278,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	pkg := &RequirementDecisionPackage{Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
 	for _, work := range e.requirementWork(s) {
 		disposition := RequirementWorkRedo
-		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch" {
+		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch" {
 			disposition = RequirementWorkCarry
 		}
 		pkg.WorkDecisions = append(pkg.WorkDecisions, RequirementWorkDecision{Work: work, Disposition: disposition, Reason: d.Reset.Reason})
@@ -388,7 +388,7 @@ func (s *State) beforeResetBoundary(actionID string) bool {
 	if !ok || !d.Reset.Applied {
 		return false
 	}
-	if result, ok := s.Results[actionID]; ok && result.Outcome == OutcomePass {
+	if result, ok := s.Results[actionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") {
 		return false
 	}
 	return s.issuedRevisionOf(actionID) <= d.Revision

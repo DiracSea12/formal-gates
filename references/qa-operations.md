@@ -81,3 +81,18 @@ identity 和完整 raw diff 供这次审查，不提前声称 test-only 或生�
 改写条目重复。未选中保留且未改写的条目删除，原覆盖关系也不保留该 case。未变关系从原 manifest
 搬运；`coverage` 的已提交点键替换该点的整个 case 列表，`[]` 清除该点关系。模型不回抄未变实际载荷。
 改写条目省略 `files` 时，程序从原签发材料保留该关联；明确提交 `[]` 清除它。
+
+## 冻结验证职责的语义判断
+
+`engine.validation.observation` 将当前波次尚未完成的 ADJUDICATE、EXECUTION_SCOPE 与
+GATE_IMPACT 投影为一个签发包，使用原生只读 worker 材料和原 WORKER_RESULT 接纳路径。
+模型按输入顺序返回 findings/scopes/gateImpacts 判断数组；程序填充 kind、波次、发现与
+目标身份、历史位置、新问题 ID、状态和绑定。发现关联与 affected cases 是语义选择。
+程序先核完整包的当前输入身份，再在同一事务逐项调用原 observation validator；任何
+一项非法不会留下包内部分判断。原 typed Operator observation API 同样保留。
+
+EXECUTION_SCOPE 只能选择已批准且非空的用例子集，必须包含程序依据原继承规则标出的
+全部 mustExecute 项；未选项须有真实、未受影响的原始 PASS。GATE_IMPACT 只根据该门
+原始 PASS 和当前原生范围安排 INHERIT/RERUN，不提供门审结论；实际门审输入保持其
+原有 QA 隔离。判断包的有限职责、TaskKey 和重试策略由原波次、输入摘要、步骤声明与
+Attempt 拥有；拓扑、路线、额外额度、豁免和处置仍通过原 typed Ask 请求用户确认。

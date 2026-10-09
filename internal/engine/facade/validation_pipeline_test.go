@@ -1418,3 +1418,22 @@ func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 	}
 	d.drive()
 }
+
+// Required validation includes the approved complement's original PASS facts.
+func (d *validationDriver) assertRequiredValidationComplete(scope coverage.ScopeMode) {
+	d.t.Helper()
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if wave.Status != "COMPLETE" || wave.Scope != scope || !snapshot.State.FinalValidationComplete(d.f.definition) {
+		d.t.Fatalf("required validation did not qualify for promotion: scope=%s status=%s next=%+v", wave.Scope, wave.Status, d.run.Next)
+	}
+	for _, input := range d.run.ValidationInputs {
+		if input.Handler == "engine.qa.execution" || input.Handler == "engine.gate" {
+			d.t.Fatal("completed validation issued an additional QA or gate")
+		}
+	}
+}

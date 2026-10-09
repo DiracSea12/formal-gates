@@ -87,7 +87,7 @@ func (f *Facade) childValidationViews(s *protocol.State, head string, currentOwn
 			gateView := protocol.ChildGateView{SourceCandidate: binding.Candidate, SourceAction: action}
 			// A carry or repair result without this gate's original signed FULL
 			// input cannot prove equality. Its preserved receipt remains evidence.
-			if result.Target.Status != "PASS" || verdict.Status != "PASS" || verdict.Development != nil || binding.Task.Step != result.Target.Task.Step || binding.RequirementRevision != s.Validation.RequirementRevision || child.Validation.Scope != coverage.ScopeFull || binding.Candidate == "" {
+			if result.Target.Status != "PASS" || verdict.Status != "PASS" || verdict.Development != nil || binding.Task.Step != result.Target.Task.Step || binding.RequirementRevision != s.Validation.RequirementRevision || binding.Candidate == "" {
 				view.Gates[result.Target.Gate] = gateView
 				continue
 			}

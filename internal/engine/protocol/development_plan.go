@@ -275,6 +275,12 @@ func (s *State) readinessProposal() (string, *GranularityReview) {
 	}
 	return "", nil
 }
+
+// ReadinessProposal projects the effective readiness worker's original contract.
+func (s *State) ReadinessProposal() *GranularityReview {
+	_, proposal := s.readinessProposal()
+	return proposal
+}
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
 	return pipelineTask(cd, "engine.development.batch", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
 }
@@ -520,6 +526,9 @@ func (s *State) developmentResult(task runtime.TaskKey) *DevelopmentEvidence {
 	return record.Validation.Development
 }
 func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidence) error {
+	if e.RemainingWork != "" {
+		return validationError("completion cannot retain unfinished work")
+	}
 	if e.Completion == nil || strings.TrimSpace(e.Completion.Handoff) == "" {
 		return validationError("batch completion requires DoD and handoff evidence")
 	}
@@ -567,7 +576,7 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 		return nil
 	}
 	input := &DevelopmentInput{Batch: b, Dependencies: map[string]WorkerResult{}}
-	if result := s.developmentEditResult(task); result != nil && s.developmentChecksFailed(*result) {
+	if result := s.developmentEditResult(task); result != nil && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(*result)) {
 		input.Result = result
 		for _, check := range s.editChecks(*result) {
 			if evidence, ok := s.checkReceipt(result.ActionID, check.ID); ok {
@@ -664,7 +673,7 @@ func (s *State) planCheckpoint(cd *compiler.CompiledDefinition, p *GranularityRe
 		cleared := false
 		if s.Validation != nil {
 			for _, w := range s.Validation.Waves {
-				if w.Status == "COMPLETE" && w.Scope == "FULL" && sameTaskSet(w.CheckpointTasks, tasks) {
+				if w.Status == "COMPLETE" && sameTaskSet(w.CheckpointTasks, tasks) && s.validationEvidenceComplete(&w) {
 					cleared = true
 					break
 				}
@@ -844,4 +853,11 @@ func (s *State) fullProjectChecks() []DevelopmentCheck {
 		}
 	}
 	return checks
+}
+
+func validateDevelopmentContinuation(e *DevelopmentEvidence) error {
+	if e == nil || e.Paths == nil || strings.TrimSpace(e.Summary) == "" || strings.TrimSpace(e.RemainingWork) == "" || e.Completion != nil || len(e.CaseRuns) != 0 {
+		return validationError("development continuation requires actual progress and remaining work without completion claims")
+	}
+	return nil
 }

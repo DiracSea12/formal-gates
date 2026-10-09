@@ -624,21 +624,38 @@ func TestCleanupTerminalRetainsNativeCheckEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "checks", "original-operation", "exit.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	expected := []byte(`{"exit_code":7,"request_digest":"original","streams":{"stdout.log":{"sha256":"proof","size":8}}}`)
+	paths := []string{filepath.Join(dir, "checks", "original-operation", "exit.json"), filepath.Join(dir, "native", "original-action", "original-call", "source.json")}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, expected, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lease, err := os.OpenFile(filepath.Join(dir, "executor.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []byte(`{"exit_code":7,"request_digest":"original","streams":{"stdout.log":{"sha256":"proof","size":8}}}`)
-	if err := os.WriteFile(path, expected, 0600); err != nil {
+	defer lease.Close()
+	held, err := lease.Stat()
+	if err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
 		if err := store.CleanupTerminal(); err != nil {
 			t.Fatal(err)
 		}
-		actual, err := os.ReadFile(path)
-		if err != nil || string(actual) != string(expected) {
-			t.Fatalf("native evidence changed: %s %v", actual, err)
+		for _, path := range paths {
+			actual, err := os.ReadFile(path)
+			if err != nil || string(actual) != string(expected) {
+				t.Fatalf("native evidence changed: %s %v", actual, err)
+			}
+		}
+		actual, err := os.Stat(lease.Name())
+		if err != nil || !os.SameFile(held, actual) {
+			t.Fatal("terminal cleanup replaced the held consumer lease inode", err)
 		}
 	}
 }

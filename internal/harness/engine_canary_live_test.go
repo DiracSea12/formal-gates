@@ -2908,6 +2908,9 @@ func (c *engineCanary) workspace(input protocol.ValidationInput) string {
 }
 
 func (c *engineCanary) cli(input []byte, args ...string) []byte {
+	if len(args) > 1 && args[0] == "workflow" && (args[1] == "drive" || args[1] == "submit") {
+		args = append(args, "--single-step")
+	}
 	cmd := exec.Command(c.binary, args...)
 	cmd.Dir = c.project
 	cmd.Stdin = bytes.NewReader(input)

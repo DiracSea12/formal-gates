@@ -225,19 +225,26 @@ stable registry。
 receipt schema。事务的可观察顺序固定为：
 
 ```text
-lock(admission/install -> registry)
+candidate-binary package validation against its own source package
+  -> lock(admission/install -> registry)
+  -> reconcile any unfinished install journal
   -> journal intent(old/new runtime, pointer/config, registry digests)
   -> temp + backups
-  -> copy + manifest/Lstat/realpath/digest validation
+  -> copy manifest-selected native subset + Lstat/realpath/digest validation
   -> switch release/installed target (journal=switched; old registry remains authoritative)
-  -> installed-binary package validation + post-switch/pre-commit smoke
-  -> atomic current/pointer/config + registry record commit
+  -> actual installed-binary package validation + --version smoke
+  -> hook/managed-rule writes + atomic stable-launcher publication
+  -> actual stable-launcher --version smoke
+  -> registry record commit
   -> journal committed + install receipt
 ```
 
 这里的 post-switch 指 release/installed target 已切换但公共 pointer/config 和 registry 尚未
-提交；smoke 必须从实际 installed binary path 启动。只有 smoke 通过后才共同提交 runtime
-和 registry；任一 runtime、pointer/config 或 registry 提交失败，都由同一 owner
+提交；候选自身 CLI 核其包合同，native owner 按同一 manifest 核复制集合与字节。
+source 与 target 分别由各自包内 binary 执行 package validation；实际 installed binary
+执行 `--version` smoke。hook/规则写入后原子发布固定 launcher，并从其实际路径执行
+`--version` smoke，通过后提交 registry。
+任一 runtime、pointer/config 或 registry 提交失败，都由同一 owner
 observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery receipt。receipt 至少
 包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
 managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resource canonical paths。

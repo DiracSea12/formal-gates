@@ -138,8 +138,14 @@ func ValidateRepairPlan(p *GranularityReview, completion bool) error {
 func (s *State) acceptRepairResult(record WorkerResult) error {
 	p := record.Validation
 	work := s.repairMember(p.Binding.Task)
-	if work == nil || work.wave.ID != p.Binding.WaveID || work.result != nil || p.Status != "PASS" {
+	if work == nil || work.wave.ID != p.Binding.WaveID || work.result != nil || (p.Status != "PASS" && p.Status != "CONTINUE") {
 		return validationError("repair result does not bind an unfinished authorized member")
+	}
+	if p.Status == "CONTINUE" {
+		if p.GranularityReview != nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil {
+			return validationError("repair continuation carries only actual implementation progress")
+		}
+		return validateDevelopmentContinuation(p.Development)
 	}
 	if p.GranularityReview != nil {
 		if work.plan != nil || work.task != s.replacementFold(work.wave.Repair.Task) {
@@ -156,7 +162,7 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		}
 		work.batch = &p.GranularityReview.Batches[0]
 	}
-	if p.Development == nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil || len(p.Development.Paths) == 0 || strings.TrimSpace(p.Development.Summary) == "" {
+	if p.Development == nil || p.Manifest != nil || p.Review != nil || p.Execution != nil || p.Resolution != nil || len(p.Development.Paths) == 0 || strings.TrimSpace(p.Development.Summary) == "" || p.Development.RemainingWork != "" {
 		return validationError("repair completion requires declared paths and summary")
 	}
 

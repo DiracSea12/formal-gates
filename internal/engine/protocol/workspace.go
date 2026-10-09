@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
@@ -50,7 +49,7 @@ func (s *State) AdmitPromotion(cd *compiler.CompiledDefinition) error {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires a run without an abort decision"}
 	}
 	if !s.FinalValidationComplete(cd) {
-		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires the final validation wave to be COMPLETE and FULL for the complete current development plan"}
+		return &RejectedError{Code: CodeEventNotCurrent, Detail: "candidate promotion requires the final validation wave to be COMPLETE with current evidence for the complete development plan"}
 	}
 	return nil
 }
@@ -205,7 +204,7 @@ func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
 }
 
 // AcceptedNativeSnapshot is the physical target accepted by native receipt
-// admission. Current candidate and FULL qualification are derived separately.
+// admission. Current candidate and validation qualification are derived separately.
 func (s *State) AcceptedNativeSnapshot() string {
 	if s.CandidatePromotion != nil {
 		return s.CandidatePromotion.Final
@@ -221,8 +220,8 @@ func (s *State) AcceptedNativeSnapshot() string {
 }
 
 // FinalValidationComplete derives delivery qualification from the current
-// confirmed plan and its complete source set. A checkpoint only releases later
-// development; an AFFECTED wave still owes FULL validation of the same candidate.
+// confirmed plan, complete source set and approved execution evidence. A
+// checkpoint only releases later development.
 func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
 	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return false
@@ -237,11 +236,11 @@ func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
 		}
 	}
 	w := s.currentValidationWave()
-	if w == nil || w.Status != "COMPLETE" || w.Scope != "FULL" || w.RequirementRevision != s.Validation.RequirementRevision || w.Generation != s.Validation.Generation || w.RouteDigest != s.validationRouteDigest() || s.Validation.Candidate == nil || w.Candidate != *s.Validation.Candidate {
+	if w == nil || w.Status != "COMPLETE" || w.RequirementRevision != s.Validation.RequirementRevision || w.Generation != s.Validation.Generation || w.RouteDigest != s.validationRouteDigest() || s.Validation.Candidate == nil || w.Candidate != *s.Validation.Candidate {
 		return false
 	}
 	sources, _, _, complete := s.developmentSources(cd)
-	return complete && sameTaskSet(w.SourceTasks, sources)
+	return complete && sameTaskSet(w.SourceTasks, sources) && s.validateFinalCoverage() == nil && digestOfCanonical(w.Coverage) == digestOfCanonical(s.coverageContract(s.Validation.Candidate)) && s.validationEvidenceComplete(w)
 }
 
 func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
@@ -330,14 +329,14 @@ func (s *State) retireNative(intent HostActionIntent, status, digest string, obs
 }
 
 // validateCurrentPromotion is signing qualification; historical receipt
-// authorization remains tied to the original COMPLETE FULL wave.
+// authorization remains tied to the original complete validation wave.
 func (s *State) validateCurrentPromotion(p CandidateParameters, cd *compiler.CompiledDefinition) error {
 	if err := s.AdmitPromotion(cd); err != nil {
 		return err
 	}
 	v, w := s.Validation, s.currentValidationWave()
 	if p.Promotion == nil || p.RequirementRevision != v.RequirementRevision || p.Generation != v.Generation || p.RouteScope != s.validationRouteDigest() || !sameTaskSet(p.SourceTasks, w.SourceTasks) {
-		return validationError("promotion differs from current FULL qualification")
+		return validationError("promotion differs from current validation qualification")
 	}
 	target := p.Promotion
 	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" && target.TargetStart.PendingFingerprint == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly {
@@ -420,7 +419,7 @@ func (s *State) promotionAuthorized(p CandidateParameters) bool {
 		return false
 	}
 	for _, w := range s.Validation.Waves {
-		if w.Status == "COMPLETE" && w.Scope == coverage.ScopeFull && w.Generation == p.Generation && w.RequirementRevision == p.RequirementRevision && w.RouteDigest == p.RouteScope && w.Candidate.Identity == p.Promotion.Source && w.Candidate.Digest == p.Promotion.SourceDigest && sameTaskSet(w.SourceTasks, p.SourceTasks) {
+		if w.Status == "COMPLETE" && w.Generation == p.Generation && w.RequirementRevision == p.RequirementRevision && w.RouteDigest == p.RouteScope && w.Candidate.Identity == p.Promotion.Source && w.Candidate.Digest == p.Promotion.SourceDigest && sameTaskSet(w.SourceTasks, p.SourceTasks) && s.validationEvidenceComplete(&w) {
 			return true
 		}
 	}

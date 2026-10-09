@@ -36,7 +36,7 @@ func (f *Facade) materializeSliceGuarantee(s *protocol.State) (*TerminalMaterial
 		return nil, nil
 	}
 	if !s.FinalValidationComplete(f.definition) {
-		return nil, fmt.Errorf("active slice guarantee requires complete final FULL validation")
+		return nil, fmt.Errorf("active slice guarantee requires complete current validation evidence")
 	}
 	receipts := make([]protocol.SliceReceipt, 0, len(s.Topology.Slices))
 	for _, slice := range s.Topology.Slices {

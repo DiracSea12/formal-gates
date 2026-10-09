@@ -24,7 +24,18 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["records"] = body["properties"].(map[string]any)["records"]
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
-	return map[string]any{"anyOf": []any{body, interruption}}, nil
+	alternatives := []any{body, interruption}
+	if input.Validation != nil && (input.Handler == "engine.development.batch" || input.Handler == "engine.repair") {
+		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
+		if err != nil {
+			return nil, err
+		}
+		for _, field := range []string{"summary", "remainingWork"} {
+			partial["properties"].(map[string]any)[field] = map[string]any{"type": "string", "minLength": 1}
+		}
+		alternatives = append(alternatives, partial)
+	}
+	return map[string]any{"anyOf": alternatives}, nil
 }
 
 func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
@@ -45,6 +56,8 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			typ = reflect.TypeOf(CaseReview{})
 		case "engine.qa.execution":
 			typ = reflect.TypeOf(ExecutionJudgments{})
+		case "engine.validation.observation":
+			typ = reflect.TypeOf(ObservationJudgments{})
 		case "engine.repair.verify":
 			typ = reflect.TypeOf(Execution{})
 		case "engine.gate":
@@ -70,6 +83,51 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			verification[key] = map[string]any{"type": "string", "minLength": 1}
 		}
 		fields["verification"] = fixedObject(verification, review.RequiredVerificationChecks())
+		return body, nil
+	}
+	if input.Handler == "engine.validation.observation" {
+		if input.Validation.Observation == nil {
+			return nil, fmt.Errorf("semantic worker lacks current issued duties")
+		}
+		findings, scopes, impacts := []any{}, []any{}, []any{}
+		for _, source := range input.Validation.Observation.Findings {
+			item, err := resultTypeSchema(reflect.TypeOf(FindingJudgment{}))
+			if err != nil {
+				return nil, err
+			}
+			item["description"] = "Judge only this issued finding: " + source.Finding.ID
+			properties := item["properties"].(map[string]any)
+			properties["decision"] = map[string]any{"type": "string", "enum": []string{"NEW", "SAME_AS", "DISMISSED"}}
+			if source.Finding.ExecutionFailure != nil {
+				delete(properties, "severity")
+				delete(properties, "severityRationale")
+				delete(properties["verification"].(map[string]any)["properties"].(map[string]any), "severity")
+			} else {
+				properties["severity"] = map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}
+			}
+			findings = append(findings, item)
+		}
+		for _, source := range input.Validation.Observation.Scopes {
+			item, err := resultTypeSchema(reflect.TypeOf(ScopeJudgment{}))
+			if err != nil {
+				return nil, err
+			}
+			item["description"] = "Judge only this issued QA scope: " + string(source.Mode)
+			item["properties"].(map[string]any)["cases"].(map[string]any)["items"] = map[string]any{"type": "string", "enum": source.ApprovedCases}
+			scopes = append(scopes, item)
+		}
+		for _, source := range input.Validation.Observation.GateImpacts {
+			item, err := resultTypeSchema(reflect.TypeOf(ImpactJudgment{}))
+			if err != nil {
+				return nil, err
+			}
+			item["description"] = "Judge only this issued gate impact: " + source.Gate
+			item["properties"].(map[string]any)["decision"] = map[string]any{"type": "string", "enum": []string{"INHERIT", "RERUN"}}
+			impacts = append(impacts, item)
+		}
+		for name, items := range map[string][]any{"findings": findings, "scopes": scopes, "gateImpacts": impacts} {
+			fields[name] = map[string]any{"type": "array", "prefixItems": items, "items": false, "minItems": len(items), "maxItems": len(items)}
+		}
 		return body, nil
 	}
 	if input.Handler == "engine.gate" {

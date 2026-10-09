@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -935,7 +937,7 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
 	// manifest 登记五个可安装 host target：install 会拒绝 manifest 未登记为
 	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
-	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","hosts":[`+
+	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[`+
 		`{"name":"Claude Code","support":"host-target"},`+
 		`{"name":"Codex","support":"host-target"},`+
 		`{"name":"Cursor","support":"host-target"},`+
@@ -943,7 +945,11 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		`{"name":"ZCode","support":"host-target"}]}`+"\n")
 	mustWriteCLI(t, filepath.Join(source, "go.mod"), "module formal-gates\n")
 	mustWriteCLI(t, filepath.Join(source, ".github", "workflows", "portable-validation.yml"), "portable validation\n")
-	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), "binary\n")
+	payload, err := installPackageOwnerBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), string(payload))
 	if err := os.Chmod(filepath.Join(source, "bin", installTestBinaryName()), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -978,6 +984,25 @@ const (
 func testManagedRuleBlock(rule string) string {
 	return testManagedRulesStartMarker + "\n" + rule + "\n" + testManagedRulesEndMarker + "\n"
 }
+
+var installPackageOwnerBinary = sync.OnceValues(func() ([]byte, error) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return nil, fmt.Errorf("cannot locate CLI test source")
+	}
+	dir, err := os.MkdirTemp("", "formal-gates-package-owner-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, installTestBinaryName())
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	build := exec.Command("go", "build", "-o", path, filepath.Join(repoRoot, "internal", "validate", "testdata", "package_owner.go"))
+	if output, err := build.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("build package owner: %w: %s", err, output)
+	}
+	return os.ReadFile(path)
+})
 
 func installTestBinaryName() string {
 	if runtime.GOOS == "windows" {

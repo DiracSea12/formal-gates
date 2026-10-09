@@ -559,6 +559,17 @@ func validateManifest(root string, result *Result) {
 	}
 }
 
+// Manifest directory parts include their descendants. Directory traversal may
+// also reach an explicitly declared file under an ignored parent directory.
+func manifestContainsPath(parts []string, path string, directory bool) bool {
+	for _, part := range parts {
+		if path == strings.TrimSuffix(part, "/") || strings.HasSuffix(part, "/") && strings.HasPrefix(path, part) || directory && strings.HasPrefix(part, path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func unknownManifestParts(parts []string) []string {
 	unknown := []string{}
 	for _, part := range parts {

@@ -238,10 +238,6 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 			return changed, nil
 		}
 	}
-	if w != nil && w.Status == "COMPLETE" && w.Scope == coverage.ScopeAffected && v.Candidate != nil && s.nextRepairWork() == nil {
-		return e.freezeValidationWave(s, coverage.ScopeFull, "", w.SourceTasks) || changed, nil
-	}
-
 	if _, _, _, complete := s.developmentSources(e.cfg.Definition); !complete {
 		if _, integration := s.integrationParameters(e.cfg.Definition); integration {
 			return e.advanceIntegration(s, nextRevision)
@@ -507,8 +503,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			w.Reviews = append(w.Reviews, *v.Sets[mode].Review)
 		}
 	}
-	// A FULL obligation after AFFECTED on the same candidate is distinct, while
-	// retrying either obligation keeps its TaskKey and frozen expected set.
+	// Retrying an obligation keeps its TaskKey and frozen expected set.
 	w.ID = digestOfCanonical(struct {
 		Candidate     coverage.ValidationCandidate
 		Versions      map[coverage.ReviewKind]string
@@ -699,10 +694,7 @@ func (e *Engine) adjudicateValidation(s *State, subject string, items []FindingR
 			if item.ProblemID != "" {
 				return validationError("NEW problem identity is assigned by the engine")
 			}
-			item.ProblemID = digestOfCanonical(struct {
-				Finding  string
-				Revision int
-			}{f.ID, len(f.History) + 1})
+			item.ProblemID = FindingProblemID(*f)
 			s.Validation.Problems[item.ProblemID] = &ValidationProblem{ID: item.ProblemID, FindingIDs: []string{f.ID}}
 		case "SAME_AS":
 			p := s.Validation.Problems[item.ProblemID]
@@ -771,7 +763,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 			w.Status = "ADJUDICATING"
 			changed = true
 		}
-		if s.unresolvedQA(w) || s.validateCoverageRelations() != nil {
+		if !s.validationEvidenceComplete(w) || s.validateCoverageRelations() != nil {
 			return changed, nil
 		}
 		if w.Status == "COMPLETE" {
@@ -865,7 +857,7 @@ func (e *Engine) applyPromotionReceipt(s *State, intent HostActionIntent, params
 		return nil
 	}
 	if !s.promotionAuthorized(params) {
-		return validationError("promotion receipt has no originally qualified FULL source")
+		return validationError("promotion receipt has no originally qualified validation source")
 	}
 	p := evidence.Promotion
 	chain, err := s.PromotionChain(intent)

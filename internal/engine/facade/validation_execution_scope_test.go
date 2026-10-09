@@ -132,17 +132,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 					t.Fatalf("legal exact subset and original PASS rejected: %s", accepted.Status)
 				}
 				d.drive()
-				qa, qi = d.action("engine.qa.execution")
-				if qi.Execution.Scope != coverage.ScopeFull {
-					t.Fatal("AFFECTED did not require final FULL")
-				}
-				report = scopedExecutionReport(qi, prior, false)
-				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
-				d.drive()
-				waves := d.run.Validation.Waves
-				if waves[len(waves)-1].Status != "COMPLETE" {
-					t.Fatal("real final FULL did not complete")
-				}
+				d.assertRequiredValidationComplete(coverage.ScopeAffected)
 				snapshot, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)
@@ -290,16 +280,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 			}
 			d.reopen()
 			d.drive()
-			id, in = d.action("engine.qa.execution")
-			if in.Execution.Scope != coverage.ScopeFull {
-				t.Fatal("affected responsibility bypassed final FULL")
-			}
-			report = executionFor(in)
-			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-			d.drive()
-			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-				t.Fatal("scope-preserving transition did not finish")
-			}
+			d.assertRequiredValidationComplete(coverage.ScopeAffected)
 		})
 	}
 }
@@ -385,16 +366,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				}
 			}
 			d.drive()
-			id, in = d.action("engine.qa.execution")
-			if in.Execution.Scope != coverage.ScopeFull {
-				t.Fatal("full regression missing")
-			}
-			report = executionFor(in)
-			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-			d.drive()
-			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-				t.Fatal("full evidence did not complete")
-			}
+			d.assertRequiredValidationComplete(coverage.ScopeAffected)
 			if evidence == "disposed-checkpoint" {
 				old := d.run.Validation.Waves[0].Targets[qi.Binding.Task.String()]
 				if old.ResultAction != "" || old.Status != "DISPOSED" || len(old.Execution.Records) != 1 {
@@ -460,16 +432,7 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 				if !bytes.Equal(before, afterBytes) {
 					t.Fatal("duplicate scoped result wrote state")
 				}
-				qa, in = d.action("engine.qa.execution")
-				if in.Execution.Scope != coverage.ScopeFull {
-					t.Fatal("scope completion bypassed FULL")
-				}
-				report = executionFor(in)
-				d.business(qa, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-				d.drive()
-				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-					t.Fatal("final FULL did not finish")
-				}
+				d.assertRequiredValidationComplete(coverage.ScopeAffected)
 			})
 		}
 	}
@@ -488,16 +451,7 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 	}
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()
-	id, in = d.action("engine.qa.execution")
-	if in.Execution.Scope != coverage.ScopeFull {
-		t.Fatal("missing final FULL")
-	}
-	report = executionFor(in)
-	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-	d.drive()
-	if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
-		t.Fatal("carried pending scope could not complete")
-	}
+	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 }
 
 func TestQAExecutionWaitsForAllRequirementAsksAndKeepsOriginalReceipts(t *testing.T) {

@@ -74,6 +74,10 @@ order, collection order and exact duplicates do not affect the result or digest.
 The Controller is responsible for accepting only confirmed plan expansion;
 preauthorized repair slots may be added mechanically. Finding-derived sources require
 completed Operator adjudication and, for wave findings, a collected wave and its unique
-repair obligation. Raw findings, ordinary results, receipts and resume never add slots.
+repair obligation. The registered semantic observation role may declare one current frozen
+judgment package from a collected wave or pending scope/impact targets. Its input identity
+and retry bound come from the original wave and step/Attempt owners; raw finding count
+does not declare per-finding calls or repair slots. Ordinary results, receipts and resume
+never independently add slots.
 The pure function checks declared identities and cross-references only; it cannot
 establish those workflow facts from an arbitrary JSON file.

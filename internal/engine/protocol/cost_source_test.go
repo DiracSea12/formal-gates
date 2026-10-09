@@ -16,6 +16,7 @@ import (
 type costSourceProbe struct {
 	state  CostSourceState
 	usage  cost.Usage
+	reason string
 	called int
 }
 
@@ -25,7 +26,7 @@ func (p *costSourceProbe) resolver() CostSourceResolver {
 		if ref.Provider != testProvider || ref.ActionID == "" || ref.Correlation == "" {
 			return ResolvedCostSource{State: CostSourceUnavailable}
 		}
-		return ResolvedCostSource{State: p.state, Usage: p.usage}
+		return ResolvedCostSource{State: p.state, Usage: p.usage, Reason: p.reason}
 	}
 }
 
@@ -188,7 +189,7 @@ func TestWorkerResultHeldAtCostPending(t *testing.T) {
 // UNAVAILABLE 条目（零数字、不伪造）后照常完成，request/attempt guard 继续
 // 生效。
 func TestUnavailableSourceFallsBackToRequestGuard(t *testing.T) {
-	probe := &costSourceProbe{state: CostSourceUnavailable}
+	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "dispatch stop has no transcript path"}
 	engine := costEngineFixture(t, probe.resolver())
 	acceptance, err := dispatchPassResult(t, engine, "cost-result")
 	if err != nil || acceptance.Status != "ACCEPTED" {
@@ -196,7 +197,7 @@ func TestUnavailableSourceFallsBackToRequestGuard(t *testing.T) {
 	}
 	snap := engine.LoadMustSucceed(t)
 	entry := snap.State.Cost.Dispatches[acceptance.ActionID]
-	if entry.Source != cost.SourceUnavailable || entry.TotalInputTokens != 0 || entry.OutputTokens != 0 {
+	if entry.Source != cost.SourceUnavailable || entry.Reason != probe.reason || entry.TotalInputTokens != 0 || entry.OutputTokens != 0 {
 		t.Fatalf("unavailable entry = %+v", entry)
 	}
 	if _, admitted := snap.State.Results[acceptance.ActionID]; !admitted {

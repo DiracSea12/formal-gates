@@ -10,8 +10,8 @@ package cost
 const (
 	// SourceTranscript marks an entry backfilled from a parsed transcript.
 	SourceTranscript = "transcript"
-	// SourceUnavailable marks an entry with no parseable transcript; it
-	// carries zero numbers because the real usage is explicitly absent.
+	// SourceUnavailable marks an entry without a complete measured source.
+	// Known cumulative measurements remain; absent measurements serialize as null.
 	SourceUnavailable = "unavailable"
 )
 
@@ -41,6 +41,7 @@ type DispatchCost struct {
 	OutputTokens         int64  `json:"outputTokens"`
 	TotalInputTokens     int64  `json:"totalInputTokens"`
 	Source               string `json:"source"` // "transcript" | "unavailable"
+	Reason               string `json:"reason,omitempty"`
 	// Codex retains the exact source and native task timing on this same entry.
 	TranscriptPath string      `json:"transcriptPath,omitempty"`
 	Timing         *TaskTiming `json:"timing,omitempty"`
@@ -55,7 +56,7 @@ type TaskTiming struct {
 }
 
 // Usage is the exact metered token usage parsed from one host transcript,
-// normalized to the pricing categories shared by both hosts.
+// normalized to the pricing categories shared by the supported hosts.
 type Usage struct {
 	InputCacheHitTokens  int64
 	InputCacheMissTokens int64
@@ -77,6 +78,25 @@ func Record(run *RunCost, dispatchID string, entry DispatchCost) {
 	}
 	run.Dispatches[dispatchID] = entry
 	run.addTokens(entry.TotalInputTokens, entry.InputCacheHitTokens, entry.InputCacheMissTokens, entry.OutputTokens)
+}
+
+// RecordCumulative updates one active dispatch from its original source's
+// cumulative usage. An unavailable continuation preserves the measured prefix.
+func RecordCumulative(run *RunCost, dispatchID string, entry DispatchCost) {
+	if run == nil {
+		return
+	}
+	previous, recorded := run.Dispatches[dispatchID]
+	if !recorded {
+		Record(run, dispatchID, entry)
+		return
+	}
+	if entry.Source == SourceUnavailable {
+		previous.Source, previous.Reason = entry.Source, entry.Reason
+		entry = previous
+	}
+	run.Dispatches[dispatchID] = entry
+	run.addTokens(entry.TotalInputTokens-previous.TotalInputTokens, entry.InputCacheHitTokens-previous.InputCacheHitTokens, entry.InputCacheMissTokens-previous.InputCacheMissTokens, entry.OutputTokens-previous.OutputTokens)
 }
 
 // addTokens is shared by dispatch and owner recording. Output stays separate

@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/prompts"
 
 	"formal-gates/internal/validate"
 )
@@ -137,7 +138,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	cliGit(t, root, "commit", "-m", "base")
 	pkg := t.TempDir()
 	mustWriteCLI(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "shared contract\n")
-	for _, id := range []string{"requirements-clarification", "product-review", "start-readiness", "qa-design", "qa-review", "qa-execution", "carry", "development-worker"} {
+	for _, id := range prompts.RequiredActionIDs {
 		mustWriteCLI(t, filepath.Join(pkg, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")

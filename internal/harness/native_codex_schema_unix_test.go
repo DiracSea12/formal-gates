@@ -10,7 +10,10 @@ import (
 	"sort"
 	"testing"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/requirement"
 )
 
 // codexPeerAnswer spells a domain fixture in the native transport schema.
@@ -46,11 +49,62 @@ func codexPeerAnswer(schema, value any) any {
 	case []any:
 		rows := make([]any, len(input))
 		for i, item := range input {
-			rows[i] = codexPeerAnswer(contract["items"], item)
+			itemSchema := contract["items"]
+			if prefix := listOf(contract["prefixItems"]); i < len(prefix) {
+				itemSchema = prefix[i]
+			}
+			rows[i] = codexPeerAnswer(itemSchema, item)
 		}
 		return rows
 	}
 	return value
+}
+
+func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
+	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.validation.observation", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "finding"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"case"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain := map[string]any{"findings": []any{map[string]any{"decision": "DISMISSED", "requirement": "scope", "normalPath": "normal", "module": "command", "rootCause": "outside requirement", "consequence": "none", "severity": "P3", "severityRationale": "outside scope", "verification": map[string]any{"scope": "checked", "severity": "checked", "causality": "checked", "reproduction": "checked", "classification": "checked"}, "reason": "outside scope"}}, "scopes": []any{map[string]any{"cases": []any{"case"}, "reason": "The changed public behavior affects the original case"}}, "gateImpacts": []any{map[string]any{"decision": "RERUN", "reason": "The changed implementation affects this gate"}}}
+	s := newCodexScenario(t)
+	s.request["schema"] = schema
+	s.peer.StrictSchema = true
+	s.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+	source, err := s.execute(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, digest, _, err := NativeResultEvidence("codex", s.directory, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual map[string]any
+	if err := json.Unmarshal(raw, &actual); err != nil {
+		t.Fatal(err)
+	}
+	if !valuesEqual(actual, domain) {
+		t.Fatalf("native tuple transport changed semantic values: %s", raw)
+	}
+	event, err := worker.DecodeResult(input, "result", raw, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := event.Result.Validation.Observations
+	if len(rows) != 3 || rows[0].Validation.Findings[0].FindingID != "finding" || rows[1].Validation.Mode != coverage.ReviewBlackbox || rows[2].Validation.Gate != "quality" {
+		t.Fatal("tuple projection lost the original issued obligations")
+	}
+	before, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NativeJobSource("codex", s.directory); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("source observation repeated the semantic native call")
+	}
 }
 
 func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {

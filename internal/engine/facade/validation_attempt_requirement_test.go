@@ -438,19 +438,14 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 				t.Fatal("carried repair discharged explicitly redone gate")
 			}
 			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
-			for i := 0; i < 2; i++ {
-				qa, qi := d.action("engine.qa.execution")
-				want := coverage.ScopeAffected
-				if i == 1 {
-					want = coverage.ScopeFull
-				}
-				if qi.Execution.Scope != want {
-					t.Fatal("repair lost affected then full contract")
-				}
-				r := executionFor(qi)
-				tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
-				d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
+			qa, qi := d.action("engine.qa.execution")
+			if qi.Execution.Scope != coverage.ScopeAffected {
+				t.Fatal("repair changed its required affected scope")
 			}
+			r := executionFor(qi)
+			tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
+			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
+			d.assertRequiredValidationComplete(coverage.ScopeAffected)
 			d.reopen()
 			d.drive()
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {

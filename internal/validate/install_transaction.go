@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,21 +33,25 @@ func newStagedInstallTree(source, destination string, runtimeOnly bool) stagedIn
 	return stagedInstallTree{Source: source, Destination: destination, Temp: filepath.Join(filepath.Dir(destination), fmt.Sprintf(".formal-gates-stage-%d", time.Now().UnixNano())), RuntimeOnly: runtimeOnly}
 }
 
-func prepareInstallTree(candidate stagedInstallTree) (stagedInstallTree, error) {
+func prepareInstallTree(candidate stagedInstallTree, source PackageReceiptReport) (stagedInstallTree, error) {
 	if err := os.MkdirAll(filepath.Dir(candidate.Destination), 0o700); err != nil {
 		return stagedInstallTree{}, err
 	}
-	if candidate.RuntimeOnly {
-		if err := copyInstallRuntime(candidate.Source, candidate.Temp, true); err != nil {
-			return stagedInstallTree{}, err
-		}
-	} else if err := copyTreeImmutableForInstall(candidate.Source, candidate.Temp); err != nil {
+	entries, err := selectInstallPackageFiles(source, candidate.RuntimeOnly)
+	if err != nil {
+		return stagedInstallTree{}, err
+	}
+	if err := copyInstallPackageFiles(candidate.Source, candidate.Temp, entries); err != nil {
 		return stagedInstallTree{}, err
 	}
 	receipt, err := PackageReceipt(candidate.Temp, candidate.Source)
 	if err != nil {
 		_ = os.RemoveAll(candidate.Temp)
 		return stagedInstallTree{}, fmt.Errorf("prepared install package validation failed: %w", err)
+	}
+	if !sameInstallPackageFiles(entries, receipt.Entries) {
+		_ = os.RemoveAll(candidate.Temp)
+		return stagedInstallTree{}, fmt.Errorf("prepared install package differs from source package")
 	}
 	candidate.Prepared = receipt
 	return candidate, nil
@@ -70,7 +73,7 @@ func switchPreparedInstallTree(candidate *stagedInstallTree, force bool) error {
 	return nil
 }
 
-func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder bool) error {
+func verifySwitchedInstallTree(candidate stagedInstallTree) error {
 	for _, phase := range []string{"verify-stage:installed-target", "verify-stage:manifest", "verify-stage:realpath", "verify-stage:digest"} {
 		if err := installFault(phase); err != nil {
 			return err
@@ -83,23 +86,111 @@ func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder boo
 	if installed.Digest != candidate.Prepared.Digest {
 		return fmt.Errorf("switched install package digest mismatch: prepared %s, installed %s", candidate.Prepared.Digest, installed.Digest)
 	}
+	if err := validateInstallPackage(candidate.Destination); err != nil {
+		return fmt.Errorf("installed package validation failed: %w", err)
+	}
 	binary := filepath.Join(candidate.Destination, "bin", nativeBinaryName())
-	if err := runInstalledBinarySmokeWithPolicy(binary, allowPlaceholder); err != nil {
+	if err := runInstalledBinarySmoke(binary); err != nil {
 		return fmt.Errorf("installed binary smoke failed: %w", err)
 	}
 	return nil
 }
 
-func copyTreeImmutable(source, target string) error {
-	return copyTreeImmutableWithFaults(source, target, false)
+// PackageReceipt owns the immutable input set. The package manifest selects
+// which of those files belong in a host installation.
+func installPackageFiles(source string, runtimeOnly bool) ([]PackageEntry, error) {
+	receipt, err := PackageReceipt(source)
+	if err != nil {
+		return nil, err
+	}
+	return selectInstallPackageFiles(receipt, runtimeOnly)
 }
 
-func copyTreeImmutableForInstall(source, target string) error {
-	return copyTreeImmutableWithFaults(source, target, true)
+func selectInstallPackageFiles(receipt PackageReceiptReport, runtimeOnly bool) ([]PackageEntry, error) {
+	data, err := os.ReadFile(filepath.Join(receipt.Root, "formal-gates.manifest.json"))
+	if err != nil {
+		return nil, err
+	}
+	var doc manifest
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if !runtimeOnly {
+		return receipt.Entries, nil
+	}
+	selected := make([]PackageEntry, 0)
+	for _, entry := range receipt.Entries {
+		if manifestContainsPath(doc.Parts, entry.Path, false) && (!isScriptRuntimeExtension(entry.Path) || contains(doc.Parts, entry.Path)) {
+			selected = append(selected, entry)
+		}
+	}
+	return selected, nil
 }
 
-func copyTreeImmutableWithFaults(source, target string, injectFaults bool) error {
+func sameInstallPackageFiles(expected, actual []PackageEntry) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for index, entry := range expected {
+		observed := actual[index]
+		entry.RealPath, observed.RealPath = "", ""
+		if entry != observed {
+			return false
+		}
+	}
+	return true
+}
+
+func copyInstallPackageFiles(source, target string, entries []PackageEntry) error {
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(source, "formal-gates.manifest.json"))
+	if err != nil {
+		return err
+	}
+	var doc manifest
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	// Declared empty directories are package shape; file receipts own bytes.
+	for _, part := range doc.Parts {
+		local := filepath.FromSlash(strings.TrimSuffix(part, "/"))
+		if !filepath.IsLocal(local) || local == "." || filepath.ToSlash(filepath.Clean(local)) != strings.TrimSuffix(part, "/") {
+			return fmt.Errorf("manifest package part is not a package-local path: %q", part)
+		}
+		if strings.HasSuffix(part, "/") && !excludedPackagePath(strings.TrimSuffix(part, "/"), true) {
+			if err := os.MkdirAll(filepath.Join(target, filepath.FromSlash(part)), 0o700); err != nil {
+				return err
+			}
+		}
+	}
 	runtimeFaultChecked := false
+	for _, entry := range entries {
+		relative := filepath.FromSlash(entry.Path)
+		if err := copyFile(filepath.Join(source, relative), filepath.Join(target, relative), os.FileMode(entry.Mode)); err != nil {
+			return err
+		}
+		if err := installFault("copy-component:" + entry.Path); err != nil {
+			return err
+		}
+		topLevel := strings.Split(entry.Path, "/")[0]
+		if topLevel != entry.Path {
+			if err := installFault("copy-component:" + topLevel); err != nil {
+				return err
+			}
+		}
+		if !runtimeFaultChecked {
+			runtimeFaultChecked = true
+			if err := installFault("copy-component:runtime"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func copyTreeImmutable(source, target string) error {
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -130,22 +221,8 @@ func copyTreeImmutableWithFaults(source, target string, injectFaults bool) error
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("release entry %s is not an immutable regular file", filepath.ToSlash(rel))
 		}
-		topLevel := strings.Split(filepath.ToSlash(rel), "/")[0]
 		if err := copyFile(path, filepath.Join(target, rel), info.Mode()); err != nil {
 			return err
-		}
-		if injectFaults && (topLevel == "prompts" || topLevel == "gates") {
-			if err := installFault("copy-component:" + topLevel); err != nil {
-				return err
-			}
-		}
-		// Inject after a real file crosses the copy boundary, not before the
-		// walk starts. This exercises staged-copy rollback rather than setup.
-		if injectFaults && !runtimeFaultChecked {
-			runtimeFaultChecked = true
-			if err := installFault("copy-component:runtime"); err != nil {
-				return err
-			}
 		}
 		return nil
 	})
@@ -683,7 +760,7 @@ func canonicalInstallFaultPhase(phase string) string {
 	return normalized
 }
 
-func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error {
+func runInstalledBinarySmoke(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("installed binary smoke path is empty")
 	}
@@ -694,36 +771,15 @@ func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return fmt.Errorf("installed binary smoke path is not an immutable regular file: %s", path)
 	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		return readErr
-	}
 	if err := validateBinaryFormat(path); err != nil {
-		if !allowPlaceholder {
-			return err
-		}
-		// Small in-process install fixtures use this exact marker instead of a
-		// cross-platform binary. Complete packages always select strict mode.
-		if string(data) != "binary\n" {
-			return err
-		}
-		return nil
+		return err
 	}
-	// 安装后 smoke 挂起会把整个安装事务（连同其持有的锁）无限期拖住。
-	// 给 smoke 一个明确超时，让挂起以确定性失败进入既有回滚路径，而不
-	// 是让事务悬置。
-	ctx, cancel := context.WithTimeout(context.Background(), installedBinarySmokeTimeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, path, "--version")
+	command := exec.Command(path, "--version")
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %w (%s)", path, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
-
-// installedBinarySmokeTimeout 是 installed binary --version smoke 的上限。
-// 正常 smoke 即时完成；该上限只为把挂起故障转化为确定性失败。
-const installedBinarySmokeTimeout = 2 * time.Minute
 
 func installLockPath(target string) string {
 	return filepath.Join(filepath.Dir(target), ".formal-gates-install.lock")

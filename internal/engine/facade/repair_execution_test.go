@@ -429,8 +429,8 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	d.drive()
 	state = driverState(t, d)
 	last := state.Validation.Waves[len(state.Validation.Waves)-1]
-	if last.Status != "COMPLETE" || last.Scope != coverage.ScopeFull {
-		t.Fatalf("final validation did not complete FULL: %+v", last)
+	if last.Status != "COMPLETE" || last.Scope != coverage.ScopeAffected {
+		t.Fatalf("required affected validation did not complete: %+v", last)
 	}
 	problem := state.Validation.Findings[finding].History[0].ProblemID
 	if state.Validation.Problems[problem].ResolvedWave == "" {

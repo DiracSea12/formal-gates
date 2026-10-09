@@ -119,30 +119,6 @@ type installTarget struct {
 	managedRulePath string
 }
 
-var installRuntimeEntries = []string{
-	"SKILL.md",
-	"README.md",
-	"README_EN.md",
-	"formal-gates.manifest.json",
-	"bin",
-	"agents",
-	"prompts",
-	"gates",
-	"references",
-	"definitions",
-	"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
-	"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
-}
-
-// Complete packages keep the source files required by the installed-binary
-// package validator. Runtime-only test fixtures may omit these entries.
-var installPackageEntries = []string{
-	"go.mod",
-	".github/workflows/portable-validation.yml",
-	"cmd",
-	"internal",
-}
-
 func Install(options InstallOptions) (InstallReport, error) {
 	if strings.TrimSpace(options.Source) == "" {
 		return InstallReport{}, fmt.Errorf("formal-gates source is required (--source); it must point at the package directory to install")
@@ -229,15 +205,8 @@ func Install(options InstallOptions) (InstallReport, error) {
 			}
 		}
 	}
-	// A source checkout/release must pass the complete package contract.  The
-	// documented runtime-only install fixture intentionally omits development
-	// sources, so it receives the manifest checks below without being rejected
-	// for files that are not part of the copied runtime subset.
-	completePackage := isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
-	if completePackage {
-		if packageResult := Package(sourceAbs); !packageResult.OK() {
-			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %s", resultSummary(packageResult))
-		}
+	if err := validateInstallPackage(sourceAbs); err != nil {
+		return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %w", err)
 	}
 	manifestData, readErr := os.ReadFile(filepath.Join(sourceAbs, "formal-gates.manifest.json"))
 	if readErr != nil {
@@ -252,9 +221,6 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	if unknown := unknownManifestHosts(manifestShape.Hosts); len(unknown) > 0 {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported host target %q", unknown[0])
-	}
-	if unknown := unknownManifestParts(manifestShape.Parts); len(unknown) > 0 {
-		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported package target %q", unknown[0])
 	}
 	// An install target is only valid when this payload's manifest registers
 	// the requested host as an installable host target. A manifest that omits
@@ -427,7 +393,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if err := persistOuterJournal(outerPath, outer); err != nil {
 			return InstallReport{}, rollbackAll(err)
 		}
-		candidate, prepareErr := prepareInstallTree(candidate)
+		candidate, prepareErr := prepareInstallTree(candidate, sourcePackage)
 		if prepareErr != nil {
 			return InstallReport{}, rollbackAll(prepareErr)
 		}
@@ -439,7 +405,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if err := persistOuterJournal(outerPath, outer); err != nil {
 			return InstallReport{}, rollbackAll(err)
 		}
-		candidate, prepareErr := prepareInstallTree(candidate)
+		candidate, prepareErr := prepareInstallTree(candidate, sourcePackage)
 		if prepareErr != nil {
 			return InstallReport{}, rollbackAll(prepareErr)
 		}
@@ -465,8 +431,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		return InstallReport{}, rollbackAll(err)
 	}
 	for _, candidate := range staged {
-		strict := !candidate.RuntimeOnly || isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
-		if smokeErr := verifySwitchedInstallTree(candidate, !strict); smokeErr != nil {
+		if smokeErr := verifySwitchedInstallTree(candidate); smokeErr != nil {
 			return InstallReport{}, rollbackAll(smokeErr)
 		}
 	}
@@ -481,7 +446,6 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
 		launcherSource = filepath.Join(canonicalRegistryPath(options.ReleaseRoot), "bin", nativeBinaryName())
 	}
-	strictLauncher := isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
 	managedRuleChanges := map[string]bool{}
 	hookChanges := map[string]bool{}
 	for _, target := range targets {
@@ -517,7 +481,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, rollbackAll(err)
 		}
 	}
-	if err := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictLauncher); err != nil {
+	if err := runInstalledBinarySmoke(targets[0].launcherPath); err != nil {
 		return InstallReport{}, rollbackAll(fmt.Errorf("stable launcher smoke failed: %w", err))
 	}
 	records := make([]RegistryRecord, 0, len(targets))
@@ -1248,10 +1212,19 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 					writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr))
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target %q is not an installed artifact", record.Target))
 				}
+				if _, targetErr := PackageReceipt(record.Target); targetErr != nil {
+					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target receipt failed: %w", targetErr))
+				}
+				if targetErr := validateInstallPackage(record.Target); targetErr != nil {
+					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target package validation failed: %w", targetErr))
+				}
 			}
 		}
 	}
-	strictBinary := isFile(filepath.Join(source.Root, "internal", "validate", "runner.go"))
+	expected, expectedErr := selectInstallPackageFiles(source, true)
+	if expectedErr != nil {
+		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap source inventory failed: %w", expectedErr))
+	}
 	targetDigests := map[string]string{}
 	for _, target := range targets {
 		if targetErr := assertInstallSource(target.targetPath); targetErr != nil {
@@ -1267,13 +1240,19 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target receipt failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target receipt failed: %w", targetErr))
 		}
+		if !sameInstallPackageFiles(expected, targetReceipt.Entries) {
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target differs from source package"))
+		}
+		if targetErr := validateInstallPackage(target.targetPath); targetErr != nil {
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target package validation failed: %w", targetErr))
+		}
 		targetDigests[canonicalRegistryPath(target.targetPath)] = targetReceipt.Digest
-		if targetErr := runInstalledBinarySmokeWithPolicy(filepath.Join(target.targetPath, "bin", nativeBinaryName()), !strictBinary); targetErr != nil {
+		if targetErr := runInstalledBinarySmoke(filepath.Join(target.targetPath, "bin", nativeBinaryName())); targetErr != nil {
 			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target smoke failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target smoke failed: %w", targetErr))
 		}
 	}
-	if targetErr := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictBinary); targetErr != nil {
+	if targetErr := runInstalledBinarySmoke(targets[0].launcherPath); targetErr != nil {
 		writeBootstrapAdmissionRejection(registryPath, targets[0], options, "", fmt.Sprintf("bootstrap stable launcher smoke failed: %v", targetErr))
 		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap stable launcher smoke failed: %w", targetErr))
 	}
@@ -1622,20 +1601,24 @@ func normalizeInstallScope(scope string) (string, error) {
 }
 
 func assertInstallSource(source string) error {
-	for _, entry := range installRuntimeEntries {
-		if !exists(filepath.Join(source, filepath.FromSlash(entry))) {
-			if entry == "definitions" {
-				// Older runtime-only fixtures do not expose the future engine
-				// definition. Complete release packages are checked by Package;
-				// this source admission check only validates the copied runtime set.
-				continue
-			}
-			return fmt.Errorf("formal-gates source is incomplete; missing %s under %s", entry, source)
-		}
+	if !isFile(filepath.Join(source, "formal-gates.manifest.json")) {
+		return fmt.Errorf("formal-gates source is incomplete; missing formal-gates.manifest.json under %s", source)
 	}
 	binaryRel := filepath.Join("bin", nativeBinaryName())
 	if !isFile(filepath.Join(source, binaryRel)) {
 		return fmt.Errorf("formal-gates native binary is missing at %s; build it first with: go build -o %s ./cmd/formal-gates", filepath.Join(source, binaryRel), filepath.Join("bin", nativeBinaryName()))
+	}
+	return nil
+}
+
+// The candidate binary owns its package contract; the installer owns admission
+// and verifies the immutable bytes copied through its transaction.
+func validateInstallPackage(root string) error {
+	binary := filepath.Join(root, "bin", nativeBinaryName())
+	command := exec.Command(binary, "package", "validate", "--root", root)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", binary, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -1783,31 +1766,11 @@ func copyInstallRuntime(source, target string, force bool) error {
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return err
 	}
-	runtimeFaultChecked := false
-	entries := append(append([]string{}, installRuntimeEntries...), installPackageEntries...)
-	for _, entry := range entries {
-		from := filepath.Join(source, filepath.FromSlash(entry))
-		to := filepath.Join(target, filepath.FromSlash(entry))
-		if !exists(from) {
-			// Runtime-only fixtures may omit optional package-validation inputs;
-			// complete release packages copy them so installed targets validate
-			// independently of the source checkout.
-			continue
-		}
-		if err := copyPath(from, to); err != nil {
-			return err
-		}
-		if err := installFault("copy-component:" + entry); err != nil {
-			return err
-		}
-		if !runtimeFaultChecked {
-			runtimeFaultChecked = true
-			if err := installFault("copy-component:runtime"); err != nil {
-				return err
-			}
-		}
+	entries, err := installPackageFiles(source, true)
+	if err != nil {
+		return err
 	}
-	return removePycache(target)
+	return copyInstallPackageFiles(source, target, entries)
 }
 
 func removeExistingInstallTarget(target string) error {
@@ -1818,55 +1781,6 @@ func removeExistingInstallTarget(target string) error {
 		return fmt.Errorf("refusing to replace unexpected target path: %s", target)
 	}
 	return os.RemoveAll(target)
-}
-
-func copyPath(from, to string) error {
-	info, err := os.Stat(from)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		return copyDir(from, to)
-	}
-	return copyFile(from, to, info.Mode())
-}
-
-func copyDir(from, to string) error {
-	return filepath.WalkDir(from, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(from, path)
-		if err != nil {
-			return err
-		}
-		if shouldSkipNativeInstallEntry(rel, entry) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		target := filepath.Join(to, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		return copyFile(path, target, info.Mode())
-	})
-}
-
-func shouldSkipNativeInstallEntry(rel string, entry os.DirEntry) bool {
-	if rel == "." {
-		return false
-	}
-	name := strings.ToLower(entry.Name())
-	if entry.IsDir() {
-		return name == "__pycache__"
-	}
-	return isScriptRuntimeExtension(name)
 }
 
 func isScriptRuntimeExtension(name string) bool {
@@ -1886,30 +1800,10 @@ func copyFile(from, to string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
 	}
-	if mode == 0 {
-		mode = 0o600
+	if err := os.WriteFile(to, data, mode.Perm()); err != nil {
+		return err
 	}
-	if filepath.Base(to) == nativeBinaryName() {
-		// A package fixture may have been copied with a non-executable mode;
-		// installed native binaries must still be runnable by the smoke gate.
-		mode |= 0o111
-	}
-	return os.WriteFile(to, data, mode.Perm())
-}
-
-func removePycache(root string) error {
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && entry.Name() == "__pycache__" {
-			if err := os.RemoveAll(path); err != nil {
-				return err
-			}
-			return filepath.SkipDir
-		}
-		return nil
-	})
+	return os.Chmod(to, mode.Perm())
 }
 
 type hookCapability struct {

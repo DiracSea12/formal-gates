@@ -256,7 +256,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 	}
 }
 
-func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
+func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
@@ -323,33 +323,15 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	for _, target := range current.Targets {
-		if current.Scope == coverage.ScopeFull && target.Kind == "QA" && target.Status == "PASS" && target.Execution != nil {
-			for _, r := range target.Execution.Records {
-				if r.Provenance == coverage.ProvenanceInherited {
-					t.Fatalf("current %s wave claimed FULL PASS from inherited record: %+v", current.Status, r)
-				}
-			}
-		}
-	}
-	if current.Status == "COMPLETE" {
-		t.Fatal("final FULL completed without executing all cases on current candidate")
-	}
-	id, in = d.action("engine.qa.execution")
-	if in.Execution.Scope != coverage.ScopeFull {
-		t.Fatal("final verification did not require FULL")
-	}
-	full := executionFor(in)
-	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &full}))
 	d.reopen()
-	d.drive()
+	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 	current = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	if current.Status != "COMPLETE" || current.Candidate != candidate {
-		t.Fatal("actual final FULL did not complete the same candidate")
+	if current.Candidate != candidate {
+		t.Fatal("required validation changed the carried candidate")
 	}
 	for _, target := range current.Targets {
-		if target.Kind == "QA" && (target.ResultAction != id || target.Execution == nil || !reflect.DeepEqual(target.Execution.Records, full.Records)) {
-			t.Fatal("FULL did not retain actual complete execution")
+		if target.Kind == "QA" && (target.ResultAction != carriedAction || target.Execution == nil || !reflect.DeepEqual(target.Execution.Records, report.Records)) {
+			t.Fatal("completion did not retain original approved affected execution")
 		}
 	}
 	counted := 0
@@ -359,7 +341,7 @@ func TestRequirementCarryPreservesAffectedThenFullExecution(t *testing.T) {
 		}
 	}
 	if counted != 1 {
-		t.Fatalf("pure P2 repair or final FULL consumed extra business waves: %d", counted)
+		t.Fatalf("pure P2 repair consumed extra business waves: %d", counted)
 	}
 }
 

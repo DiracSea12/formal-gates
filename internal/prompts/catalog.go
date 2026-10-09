@@ -17,7 +17,7 @@ import (
 
 var IDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-var RequiredActionIDs = []string{"carry", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness"}
+var RequiredActionIDs = []string{"carry", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness", "validation-observation"}
 
 // 内置 QA 模式与合并验证的保留 ID。它们不是门文件，而是 CLI 识别的内置条目：
 // blackbox（黑盒，真实 QA：在 QA 隔离工作区按当前需求设计、快照后对主工作区已构建

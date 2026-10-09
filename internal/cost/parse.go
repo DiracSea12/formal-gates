@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"formal-gates/internal/host"
 )
@@ -14,23 +16,51 @@ type transcriptParser func(io.Reader) (Usage, error)
 // expose a supported transcript format simply omit an entry and remain
 // UNAVAILABLE instead of fabricating usage.
 var transcriptParsers = map[string]transcriptParser{
-	host.Claude: parseClaudeTranscript,
-	host.Codex:  parseCodexTranscript,
+	host.Claude:   parseClaudeTranscript,
+	host.Codex:    parseCodexTranscript,
+	host.DeepSeek: parseDSHTranscript,
+	host.ZCode:    parseZCodeTranscript,
 }
 
 // ParseTranscript parses exact token usage from a host transcript file,
 // selecting the provider adapter by host name. Unsupported providers,
 // unreadable files, and transcripts with no parseable usage return an error
 // so the caller marks the dispatch UNAVAILABLE rather than fabricating a
-// number. Adapters never fail on unknown line shapes or missing fields;
-// those lines are skipped.
+// number. Unknown line shapes are skipped; recognized usage records must
+// satisfy their provider's counter contract.
 func ParseTranscript(provider, path string) (Usage, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return Usage{}, err
+	return ParseTranscriptFiles(provider, path)
+
+}
+
+// ParseTranscriptFiles reads original streams once through the provider parser.
+// One parser invocation retains its native response/turn deduplication across files.
+func ParseTranscriptFiles(provider string, paths ...string) (Usage, error) {
+	readers := []io.Reader{}
+	files := []*os.File{}
+	seen := map[string]bool{}
+	defer func() {
+		for _, file := range files {
+			file.Close()
+		}
+	}()
+	for _, path := range paths {
+		path = filepath.Clean(path)
+		if seen[path] {
+			continue
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return Usage{}, err
+		}
+		seen[path] = true
+		files = append(files, file)
+		if len(readers) > 0 {
+			readers = append(readers, strings.NewReader("\n"))
+		}
+		readers = append(readers, file)
 	}
-	defer file.Close()
-	return parseTranscript(provider, file)
+	return parseTranscript(provider, io.MultiReader(readers...))
 }
 
 // The same adapters parse dispatch files and the fixed bytes of owner snapshots.

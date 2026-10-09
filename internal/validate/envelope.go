@@ -228,6 +228,21 @@ func WriteBaselineReceipt(path string, receipt BaselineReceipt) error {
 	return writeJSONAtomically(path, receipt)
 }
 
+func excludedPackagePath(path string, directory bool) bool {
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	if parts[0] == ".git" || parts[0] == ".gates" || parts[0] == ".harness" {
+		return true
+	}
+	if directory {
+		for _, part := range parts {
+			if strings.EqualFold(part, "__pycache__") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // PackageReceipt computes a deterministic digest over package files.  Symlink
 // entries are rejected instead of followed, which makes a receipt immutable
 // with respect to a mutable development worktree.
@@ -252,8 +267,17 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		return PackageReceiptReport{}, err
 	}
 	entries := make([]PackageEntry, 0)
+	var packageManifest manifest
+	if data, err := os.ReadFile(filepath.Join(root, "formal-gates.manifest.json")); err == nil {
+		if err := json.Unmarshal(data, &packageManifest); err != nil {
+			return PackageReceiptReport{}, fmt.Errorf("package manifest JSON is invalid: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return PackageReceiptReport{}, err
+	}
 	// In a source checkout, Git already identifies local, untracked data.
-	// Tracked files remain package inputs even when an ignore rule matches them.
+	// Tracked and manifest-declared files remain package inputs even when an
+	// ignore rule matches them.
 	ignored := map[string]bool{}
 	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
 		out, err := exec.Command("git", "-C", root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").Output()
@@ -277,17 +301,21 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		if err != nil {
 			return err
 		}
+		ignoredPath := false
+		for name := range ignored {
+			if filepath.ToSlash(rel) == name || strings.HasPrefix(filepath.ToSlash(rel), name+"/") {
+				ignoredPath = true
+				break
+			}
+		}
 		// Local development executors/evidence are not immutable package inputs.
-		if rel == ".git" || rel == ".gates" || rel == ".harness" || ignored[filepath.ToSlash(rel)] {
+		if excludedPackagePath(rel, dirEntry.IsDir()) || ignoredPath && !manifestContainsPath(packageManifest.Parts, filepath.ToSlash(rel), dirEntry.IsDir()) {
 			if dirEntry.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if dirEntry.IsDir() {
-			if strings.EqualFold(filepath.Base(path), "__pycache__") {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		info, err := os.Lstat(path)

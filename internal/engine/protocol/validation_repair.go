@@ -131,6 +131,7 @@ func (s *State) repairReady(w *repairWork) bool {
 
 // RepairInput carries the original problem evidence, not only lookup IDs.
 type RepairInput struct {
+	Result            *WorkerResult                 `json:"result,omitempty"`
 	VerificationPaths []string                      `json:"verificationPaths,omitempty"`
 	VerificationCases []string                      `json:"verificationCases,omitempty"`
 	OriginTask        runtime.TaskKey               `json:"originTask"`
@@ -184,6 +185,9 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 		}
 		input := &RepairInput{OriginTask: w.wave.Repair.Task, Plan: w.plan, Route: s.repairRoute(w), Obligation: ValidationRepair{Task: task, Problems: slices.Clone(w.wave.Repair.Problems), PureP2: w.wave.Repair.PureP2 || w.pureP2}}
 
+		if result := s.developmentEditResult(task); result != nil && result.Validation.Status == "CONTINUE" {
+			input.Result = result
+		}
 		_, cutoff := s.repairIssue(w.wave.Repair.Task)
 		if w.previous != nil {
 			_, cutoff = s.repairIssue(task)

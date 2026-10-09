@@ -13,60 +13,78 @@ import (
 	"time"
 
 	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/engine/vcs"
 )
 
-func developmentCheckFixture(t *testing.T) (*Facade, *protocol.State, string) {
+func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) (*Facade, *protocol.State, string) {
 	t.Helper()
 	root := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	run("init", "-q")
-	run("config", "user.name", "Check Fixture")
-	run("config", "user.email", "check@example.invalid")
+	snapshotRepoCommits(t, root)
 	if err := os.WriteFile(filepath.Join(root, "app.txt"), []byte("source"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "app.txt")
-	run("commit", "-qm", "Source")
-	base := run("rev-parse", "HEAD")
-	scratch := filepath.Join(t.TempDir(), "check")
-	run("worktree", "add", "--detach", scratch, base)
-	admission := testAdmission(t, root, "check-runtime", "sha256:package", DefaultProvider)
-	binary := filepath.Join(admission.Target, "bin", "formal-gates")
-	if err := os.MkdirAll(filepath.Dir(binary), 0755); err != nil {
+	for _, args := range [][]string{{"add", "app.txt"}, {"commit", "-qm", "Check source"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("check source %v %s", err, out)
+		}
+	}
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
 		t.Fatal(err)
 	}
+	base := strings.TrimSpace(string(out))
+	d := nativeMasterAt(t, root, base, nil)
+	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
 	build.Dir = "../../.."
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build owning runtime: %v %s", err, out)
+		t.Fatalf("build check runtime %v %s", err, out)
 	}
-	f := &Facade{root: root, admission: *admission, stateDir: t.TempDir(), vcs: vcs.New(root, vcs.ExecRunner{})}
-	s := &protocol.State{RunID: "run", NativeResources: map[string]protocol.NativeResource{"check": {ID: "check", Owner: "run", Role: "check", Path: scratch, Source: base, Identity: base, Status: "READY"}}}
-	return f, s, base
+	plan := commandPlan()
+	plan.Batches[0].Checks = checks
+	d.reviewPass(plan)
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved check contract"}})
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	d.drive()
+	action, input := planBatchAction(d, "command")
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // delivered input\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+	if _, err := d.f.Drive(); err != nil {
+		t.Fatal(err)
+	}
+	return d.f, driverState(t, d), base
 }
 
 func developmentCheckIntent(t *testing.T, f *Facade, s *protocol.State, base, action, command string) protocol.HostActionIntent {
 	t.Helper()
-	digest, err := f.vcs.TreeDigest(base)
-	if err != nil {
-		t.Fatal(err)
+	intents := []protocol.HostActionIntent{}
+	for _, intent := range s.PendingHostActions {
+		intents = append(intents, intent)
 	}
-	p := protocol.CheckParameters{SourceActionID: "edit", Check: protocol.DevelopmentCheck{ID: action, Command: command}, WorkspaceID: "check", SourceIdentity: base, SourceDigest: digest}
-	values, err := evidenceFields(p)
-	if err != nil {
-		t.Fatal(err)
+	for _, effect := range s.ReconciledEffects {
+		if effect.Intent != nil {
+			intents = append(intents, *effect.Intent)
+		}
 	}
-	return protocol.HostActionIntent{ActionID: action, PayloadDigest: action + "-digest", Adapter: &protocol.AdapterHostAction{Operation: "op.check", Params: values}}
+	for _, intent := range intents {
+		if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
+			continue
+		}
+		var parameters protocol.CheckParameters
+		if err := decodeNativeParams(intent, &parameters); err != nil {
+			t.Fatal(err)
+		}
+		if parameters.Check.ID == action && parameters.Check.Command == command {
+			return intent
+		}
+	}
+	t.Fatalf("check %s is not in the original approved contract", action)
+	return protocol.HostActionIntent{}
 }
 
 func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent protocol.HostActionIntent, execute bool) protocol.CheckEvidence {
@@ -76,6 +94,7 @@ func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent 
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	for !done {
 		time.Sleep(10 * time.Millisecond)
 		result, done, err = f.checkEvidence(s, intent, false, &invoked)
@@ -90,8 +109,8 @@ func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent 
 }
 
 func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
-	f, s, base := developmentCheckFixture(t)
 	command := "printf '%s' 'a b' | cat > generated; printf x >> executions; printf '%s' 'a b'"
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "quoted", Purpose: protocol.CheckFullBuild, Command: command}, protocol.DevelopmentCheck{ID: "dependent", Purpose: protocol.CheckFullTests, Command: "test \"$(cat generated)\" = 'a b'; printf 'dependent'"})
 	intent := developmentCheckIntent(t, f, s, base, "quoted", command)
 	first := observeDevelopmentCheck(t, f, s, intent, true)
 	if first.ExitCode != 0 || first.Error != "" {
@@ -108,7 +127,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	if err := readCheckDocument(filepath.Join(first.Directory, "request.json"), &request); err != nil {
 		t.Fatal(err)
 	}
-	if len(request.Argv) != 3 || request.Argv[2] != command || request.Cwd != s.NativeResources["check"].Path {
+	if len(request.Argv) != 3 || request.Argv[2] != command || request.Cwd != first.WorkingDirectory {
 		t.Fatalf("actual command transport %#v", request)
 	}
 	toolBytes, err := os.ReadFile("/bin/sh")
@@ -140,10 +159,18 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	if second != first {
 		t.Fatalf("recovered execution differs: %#v %#v", first, second)
 	}
-	count, err := os.ReadFile(filepath.Join(s.NativeResources["check"].Path, "executions"))
+	count, err := os.ReadFile(filepath.Join(first.WorkingDirectory, "executions"))
 	if err != nil || string(count) != "x" {
 		t.Fatalf("check repeated effect %q %v", count, err)
 	}
+	if _, err := f.Drive(); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = snap.State
 	dependent := developmentCheckIntent(t, f, s, base, "dependent", "test \"$(cat generated)\" = 'a b'; printf 'dependent'")
 	if result := observeDevelopmentCheck(t, f, s, dependent, true); result.ExitCode != 0 {
 		t.Fatalf("same batch generator dependency lost %#v", result)
@@ -176,7 +203,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 }
 
 func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
-	f, s, base := developmentCheckFixture(t)
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "exit-comparison", Purpose: protocol.CheckFullBuild, Command: "sh -c 'exit 2'; test $? -eq 1"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "exit-comparison", "sh -c 'exit 2'; test $? -eq 1")
 	result := observeDevelopmentCheck(t, f, s, intent, true)
 	if result.ExitCode != 1 || result.Error != "" {
@@ -192,13 +219,13 @@ func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
 }
 
 func TestDevelopmentCheckAbortSettlesProcess(t *testing.T) {
-	f, s, base := developmentCheckFixture(t)
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "cancel", Purpose: protocol.CheckFullBuild, Command: "printf 'started'; sleep 10"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "cancel", "printf 'started'; sleep 10")
 	invoked := false
 	if _, done, err := f.checkEvidence(s, intent, true, &invoked); err != nil || done {
 		t.Fatalf("start check: %v %v", done, err)
 	}
-	directory := filepath.Join(f.stateDir, "checks", intent.ActionID)
+	directory := filepath.Join(f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
 	deadline := time.Now().Add(time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(directory, "process.json")); err == nil {
@@ -322,7 +349,7 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 }
 
 func TestDevelopmentCheckSourceChangeCannotProveInput(t *testing.T) {
-	f, s, base := developmentCheckFixture(t)
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "source-change", Purpose: protocol.CheckFullBuild, Command: "printf changed > app.txt; printf 'exit zero'"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "source-change", "printf changed > app.txt; printf 'exit zero'")
 	result := observeDevelopmentCheck(t, f, s, intent, true)
 	if result.ExitCode != 0 || result.Error != "check changed an immutable source input: app.txt" {

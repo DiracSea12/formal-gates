@@ -28,7 +28,7 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
 7. **并行验证。** engine 冻结完整 expected-set，按容量并行执行 QA 与各门，及时补位。
    门看基线到最终候选完整 diff，独立 QA 的用例与执行证据不作为门审输入。
 8. **统一返修。** wave 收齐、错误处置与问题裁决完成后，只建一份 repair。普通返修
-   固定只跑受影响 QA；开启 requirement guarantee 的最终候选 Seal 前须 FULL。门审 P2
+   固定只跑受影响 QA；按[公共合同](references/formal-flow.md#继承判定修复授权与-seal)核齐本轮义务后完成，不追加最终 FULL。门审 P2
    修复后 carry、不复审；门审 P3 只作 Seal advisory。
 9. **Promotion 与 Seal。** 核对同一候选的等价 receipt，清理全部登记资源并证明无残留
    后才 Complete。Seal、主线集成、真实 canary 和全局切换分别留证。

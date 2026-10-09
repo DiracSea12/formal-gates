@@ -215,3 +215,53 @@ func (s *State) carryExecutionScope(target *ValidationTarget, previous, current 
 	target.RequiredCases = slices.Clone(old.RequiredCases)
 	target.ScopeReason = old.ScopeReason
 }
+
+// validationEvidenceComplete reconciles the frozen duties against approved
+// case records and their original inheritance authority. Explicit dispositions
+// remain dispositions; they do not supply execution PASS evidence.
+func (s *State) validationEvidenceComplete(wave *ValidationWave) bool {
+	if wave.Scope != coverage.ScopeFull && wave.Scope != coverage.ScopeAffected || !s.validationFindingsAdjudicated(wave) || len(s.validationObligations(wave)) != 0 {
+		return false
+	}
+	for _, target := range wave.Targets {
+		switch target.Status {
+		case "DISPOSED", "AUTHORIZED_SKIP":
+			continue
+		case "PASS", "FAIL":
+		default:
+			return false
+		}
+		if target.Reuse == nil {
+			result := s.Results[target.ResultAction]
+			if result.Outcome != OutcomePass || result.Validation == nil || result.Validation.Checkpoint {
+				return false
+			}
+		}
+		if target.Kind != "QA" {
+			continue
+		}
+		contract, whitelist, err := s.executionContract(target.Mode, wave)
+		if err != nil || target.Execution == nil || target.Execution.Binding.Scope != wave.Scope || contract.ValidateResults(whitelist, *target.Execution) != nil {
+			return false
+		}
+		required := requiredExecutionCases(wave, target, whitelist)
+		if len(required) == 0 {
+			return false
+		}
+		if target.Status == "PASS" && coverage.ExecutionVerdict(target.Execution.Records) != coverage.StatusPass {
+			return false
+		}
+		for _, row := range target.Execution.Records {
+			if row.Provenance != coverage.ProvenanceExecuted && row.Provenance != coverage.ProvenanceInherited || slices.Contains(required, row.CaseID) != (row.Provenance == coverage.ProvenanceExecuted) {
+				return false
+			}
+			if row.Provenance == coverage.ProvenanceInherited {
+				edge := coverage.WhitelistEntry{ReviewKind: row.ReviewKind, SourceID: row.SourceID, PointID: row.PointID, CaseID: row.CaseID}
+				if _, err := s.inheritedExecutionRecord(wave, target.Mode, edge, row.InheritedFromCandidate, row.ReuseEvidence); err != nil {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}

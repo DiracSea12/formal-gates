@@ -9,14 +9,15 @@ import (
 	"os"
 )
 
-// OwnerCost belongs only to this run. SourceUnavailable carries zero numbers;
-// it means the interval could not be measured, not that no tokens were used.
+// OwnerCost belongs only to this run. SourceUnavailable means the interval
+// could not be measured; its absent measurement is serialized as null.
 type OwnerCost struct {
 	InputCacheHitTokens  int64  `json:"inputCacheHitTokens"`
 	InputCacheMissTokens int64  `json:"inputCacheMissTokens"`
 	OutputTokens         int64  `json:"outputTokens"`
 	TotalInputTokens     int64  `json:"totalInputTokens"`
 	Source               string `json:"source"`
+	Reason               string `json:"reason,omitempty"`
 }
 
 // TranscriptSnapshot fixes the parsed start baseline and the bytes it covers.

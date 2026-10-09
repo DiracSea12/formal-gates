@@ -199,6 +199,24 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return NativeResource{}
 		}
 		return s.taskResource(set.DesignTask, cd)
+	case "engine.validation.observation":
+		if input := s.validationObservationInput(); input != nil {
+			ids := []string{}
+			for id, r := range s.NativeResources {
+				if r.Role == "candidate" && r.Identity == input.Candidate.Identity && r.Status == "READY" && s.resourceUsable(id) {
+					ids = append(ids, id)
+				}
+			}
+			slices.Sort(ids)
+			if len(ids) > 0 {
+				return s.NativeResources[ids[0]]
+			}
+			source = input.Candidate.Identity
+			scope = input.WaveID
+			role = "candidate"
+		} else {
+			return NativeResource{}
+		}
 	case "engine.qa.execution", "engine.gate":
 		if _, target := s.repairGateTarget(key); target != nil {
 			if binding, ok := s.repairGateBinding(key, s.repairWork()); ok {

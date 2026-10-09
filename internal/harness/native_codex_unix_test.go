@@ -13,6 +13,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
 	"io"
 	"os"
 	"os/exec"
@@ -37,6 +39,8 @@ type codexPeerInput struct {
 	Reverse       []any          `json:"reverse"`
 	Answer        map[string]any `json:"answer,omitempty"`
 	Replies       []any          `json:"replies"`
+	WorkerAction  string         `json:"worker_action,omitempty"`
+	WorkerAttempt string         `json:"worker_attempt,omitempty"`
 }
 
 func codexPeerID(text string) string {
@@ -69,7 +73,8 @@ func TestCodexRPCPeer(t *testing.T) {
 		panic(err)
 	}
 	cwd, _ := os.Getwd()
-	if resolveNativePath(cwd) != resolveNativePath(peer.Workspace) || os.Getenv("HOME") != peer.Home {
+	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision"
+	if (!workflow && resolveNativePath(cwd) != resolveNativePath(peer.Workspace)) || os.Getenv("HOME") != peer.Home {
 		panic("native environment/workspace differs")
 	}
 	if os.Getenv("CODEX_HOME") != peer.Config {
@@ -118,8 +123,17 @@ func TestCodexRPCPeer(t *testing.T) {
 	}
 	frame = read()
 	method := getOf(frame, "method")
-	check(getOf(frame, "params"), peer.ThreadParams)
+	if workflow {
+		params := objectOrEmpty(getOf(frame, "params"))
+		check(params["cwd"], cwd)
+		peer.ThreadParams = params
+	} else {
+		check(getOf(frame, "params"), peer.ThreadParams)
+	}
 	thread := codexPeerID(peer.Workspace + textOf(peer.TurnParams))
+	if workflow {
+		thread = codexPeerID(cwd + fmt.Sprint(os.Getpid()) + textOf(peer.ThreadParams))
+	}
 	historyPath := func(id string) string { return filepath.Join(os.Getenv("CODEX_HOME"), id+".json") }
 	var history []string
 	if valuesEqual(method, "thread/resume") {
@@ -142,6 +156,9 @@ func TestCodexRPCPeer(t *testing.T) {
 		thread = codexPeerID("another thread")
 	}
 	nativeThread := map[string]any{"id": thread, "sessionId": codexPeerID("shared tree"), "cliVersion": "0.154.0", "createdAt": 1, "updatedAt": 1, "cwd": cwd, "ephemeral": false, "modelProvider": "peer", "preview": "peer history", "projectId": nil, "source": "appServer", "status": map[string]any{"type": "idle"}, "turns": []any{}, "path": historyPath(thread)}
+	if workflow {
+		nativeThread["path"] = filepath.Join(peer.Config, thread+".jsonl")
+	}
 	configuration := map[string]any{}
 	for key, value := range peer.Configuration {
 		configuration[key] = value
@@ -170,7 +187,12 @@ func TestCodexRPCPeer(t *testing.T) {
 		expected[k] = v
 	}
 	expected["threadId"] = thread
-	check(getOf(frame, "params"), expected)
+	if workflow {
+		expected = objectOrEmpty(getOf(frame, "params"))
+		check(expected["threadId"], thread)
+	} else {
+		check(getOf(frame, "params"), expected)
+	}
 	if peer.StrictSchema {
 		if err := codexPeerStrictSchema(getOf(getOf(frame, "params"), "outputSchema")); err != nil {
 			emit(map[string]any{"id": getOf(frame, "id"), "error": map[string]any{"code": 400, "message": "invalid_json_schema: " + err.Error()}})
@@ -211,6 +233,59 @@ func TestCodexRPCPeer(t *testing.T) {
 	if peer.Answer != nil {
 		answer = peer.Answer
 	}
+	if workflow {
+		start := strings.Index(prompt, "[Action input]\n")
+		end := strings.Index(prompt, "\n\n[Dispatch]")
+		if start < 0 || end <= start {
+			panic("native prompt has no original worker input")
+		}
+		var input protocol.WorkerInput
+		if err := json.Unmarshal([]byte(prompt[start+len("[Action input]\n"):end]), &input); err != nil {
+			panic(err)
+		}
+		if input.Validation == nil || input.Validation.Workspace == nil || resolveNativePath(input.Validation.Workspace.Path) != resolveNativePath(cwd) {
+			panic("native worker workspace differs from original input")
+		}
+		if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider != "codex" {
+			panic("native worker has no original dispatch identity")
+		}
+		domain := map[string]any{"interruptionReason": "The gate peer needs an explicit user decision"}
+		if input.Handler == "engine.development.batch" && peer.Mode == "workflow-progress" {
+			check(input.Pending.ActionID, peer.WorkerAction)
+			check(input.Pending.AttemptID, peer.WorkerAttempt)
+			if len(history) > 1 && (input.Validation.Development.Result == nil || input.Validation.Development.Result.Validation == nil || input.Validation.Development.Result.Validation.Development == nil || input.Validation.Development.Result.Validation.Development.RemainingWork == "") {
+				panic("native continuation lost original remaining work")
+			}
+			if len(history) <= 2 {
+				domain = map[string]any{"paths": []string{}, "summary": fmt.Sprintf("Completed part %d of the same task", len(history)), "remainingWork": "Finish the same app.go delivery"}
+			} else {
+				if len(history) != 3 {
+					panic("native worker repeated completed scope")
+				}
+				if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
+					panic(err)
+				}
+				dod := map[string]string{}
+				for _, item := range input.Validation.Development.Batch.DoD {
+					dod[item.ID] = "The fixture delivered the actual app.go file"
+				}
+				domain = map[string]any{"paths": []string{"app.go"}, "summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
+			}
+		}
+		schema, err := worker.ResultSchema(input)
+		if err != nil {
+			panic(err)
+		}
+		plain, err := json.Marshal(schema)
+		if err != nil {
+			panic(err)
+		}
+		originalSchema, err := decodeNativeJSON(plain)
+		if err != nil {
+			panic(err)
+		}
+		answer = codexPeerAnswer(originalSchema, domain).(map[string]any)
+	}
 	text, _ := json.Marshal(answer)
 	if peer.Mode == "bad_json" {
 		text = []byte("invalid business json")
@@ -232,6 +307,41 @@ func TestCodexRPCPeer(t *testing.T) {
 	}
 	emit(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": eventThread, "turnId": eventTurn, "item": item, "completedAtMs": 2}})
 	usage := map[string]any{"last": map[string]any{"inputTokens": len(prompt), "cachedInputTokens": 0, "outputTokens": len(text), "reasoningOutputTokens": 0, "totalTokens": len(prompt) + len(text)}, "total": map[string]any{"inputTokens": len(strings.Join(history, "")), "cachedInputTokens": 0, "outputTokens": len(text), "reasoningOutputTokens": 0, "totalTokens": len(prompt) + len(text)}, "modelContextWindow": 10000}
+	if workflow {
+		path := filepath.Join(peer.Config, thread+".jsonl")
+		previousOutput := 0
+		if body, err := os.ReadFile(path); err == nil {
+			for _, line := range bytes.Split(body, []byte{'\n'}) {
+				if len(line) == 0 {
+					continue
+				}
+				record, err := decodeNativeJSON(line)
+				if err != nil {
+					panic(err)
+				}
+				previousOutput += intOf(getOf(getOf(getOf(record, "payload"), "usage"), "output_tokens"))
+			}
+		} else if !os.IsNotExist(err) {
+			panic(err)
+		}
+		cumulativeOutput := previousOutput + len(text)
+		usage["total"] = map[string]any{"inputTokens": len(strings.Join(history, "")), "cachedInputTokens": 0, "outputTokens": cumulativeOutput, "reasoningOutputTokens": 0, "totalTokens": len(strings.Join(history, "")) + cumulativeOutput}
+		record := map[string]any{"type": "token_usage_record", "payload": map[string]any{"response_id": turn, "model": "peer-default", "usage": map[string]any{"input_tokens": len(prompt), "cached_input_tokens": 0, "output_tokens": len(text)}, "thread_token_usage": map[string]any{"input_tokens": len(strings.Join(history, "")), "cached_input_tokens": 0, "output_tokens": cumulativeOutput}}}
+		line, err := json.Marshal(record)
+		if err != nil {
+			panic(err)
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := file.Write(append(line, '\n')); err != nil {
+			panic(err)
+		}
+		if err := file.Close(); err != nil {
+			panic(err)
+		}
+	}
 	for i := 0; i < 2; i++ {
 		emit(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": eventThread, "turnId": eventTurn, "tokenUsage": usage}})
 	}

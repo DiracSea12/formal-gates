@@ -233,7 +233,7 @@ func claudeExecute(request any, directory string, probe bool) (map[string]any, e
 			}
 			if changed {
 				if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-					"identity": identity, "workspace": workspace, "selection": selection}); err != nil {
+					"identity": identity, "workspace": workspace, "selection": selection, "acknowledgement": message}); err != nil {
 					return nil, err
 				}
 				if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {

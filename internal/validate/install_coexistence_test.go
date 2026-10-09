@@ -10,7 +10,7 @@ import (
 	"formal-gates/internal/engine/facade"
 )
 
-const coexistenceManifest = `{"name":"formal-gates","hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
+const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
 
 func coexistenceWriteFile(t *testing.T, path, data string, mode os.FileMode) {
 	t.Helper()
@@ -29,10 +29,7 @@ func coexistenceSource(t *testing.T) string {
 	coexistenceWriteFile(t, filepath.Join(root, "README.md"), "runtime fixture\n", 0o600)
 	coexistenceWriteFile(t, filepath.Join(root, "README_EN.md"), "runtime fixture\n", 0o600)
 	coexistenceWriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), coexistenceManifest, 0o600)
-	// 宽松 smoke 策略的进程内夹具标记（见 install_transaction.go
-	// runInstalledBinarySmokeWithPolicy）：安装现在会一路走到安装后 smoke，POSIX
-	// shebang 桩在 Windows 上会被 fork/exec 当作损坏的 PE 拒绝。
-	coexistenceWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "binary\n", 0o700)
+	coexistenceWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), string(stubBinaryPayload(t)), 0o700)
 	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		coexistenceWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}

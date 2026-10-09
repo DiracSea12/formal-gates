@@ -51,6 +51,10 @@ func (s *State) reviewTask(mode coverage.ReviewKind, generation uint64, version 
 // inapplicable dispatch keeps its receipt/identity bookkeeping until observed.
 func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinition) bool {
 	role := s.validationRole(b.Task, cd)
+	if role == "engine.validation.observation" {
+		input := s.validationObservationInput()
+		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
+	}
 	if role != "engine.qa.design" && role != "engine.qa.review.rationale" {
 		return true
 	}
@@ -150,6 +154,10 @@ func (s *State) prewaveInputsCurrent(b WorkBinding) bool {
 func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinition) bool {
 	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
 		return false
+	}
+	if s.validationRole(b.Task, cd) == "engine.validation.observation" {
+		input := s.validationObservationInput()
+		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
 	if s.validationRole(b.Task, cd) == "engine.repair.verify" {
 		context, current := s.repairComparisonContext(b.Task, cd)

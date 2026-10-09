@@ -350,9 +350,9 @@ const (
 // 核实的事实集合（复用 decision.Fact 的 typed 形态与来源枚举）与它绑定
 // 的来源对账项标识（如 actionID/receipt）。
 type OperatorObservationPayload struct {
-	Validation *ValidationObservation
-	Subject    string
-	Facts      []decision.Fact
+	Validation *ValidationObservation `json:"validation,omitempty"`
+	Subject    string                 `json:"subject"`
+	Facts      []decision.Fact        `json:"facts,omitempty"`
 }
 
 // HostActionReceiptPayload 是 HOST_ACTION_RECEIPT 的 payload：

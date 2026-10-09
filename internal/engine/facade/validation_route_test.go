@@ -561,7 +561,7 @@ func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing
 	}
 }
 
-func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
+func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
@@ -594,13 +594,10 @@ func TestRouteAdditionPreservesAffectedThenFullExecution(t *testing.T) {
 	id, in = d.gateAction("security")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.drive()
-	_, in = d.action("engine.qa.execution")
-	if in.Execution.Scope != coverage.ScopeFull || len(in.Completed) != 0 || len(in.PendingCases) != 2 {
-		t.Fatal("route change let inherited evidence discharge final FULL execution")
-	}
+	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 }
 
-func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
+func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution")
@@ -667,9 +664,7 @@ func TestRouteAdditionRequiresFullExecutionAfterAffected(t *testing.T) {
 			}
 		}
 	}
-	if wave.Scope == coverage.ScopeFull && wave.Status == "COMPLETE" {
-		t.Fatal("route addition converted inherited AFFECTED evidence into final FULL completion without executing all cases")
-	}
+	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 }
 
 // TestRouteReselectionBeforeDevelopmentReconfirmsPlan：§6.3.1 开发前可重选

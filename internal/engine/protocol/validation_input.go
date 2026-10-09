@@ -11,6 +11,7 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
+	Observation    *ObservationInput  `json:"observation,omitempty"`
 	ReviewBase     string             `json:"reviewBase,omitempty"`
 	ReviewArtifact *CandidateEvidence `json:"reviewArtifact,omitempty"`
 	ExecutionFacts []ExecutionFact    `json:"executionFacts,omitempty"`
@@ -93,6 +94,10 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	}
 	if role == "engine.merge.resolve" {
 		input.Conflict = s.conflictInput(pending.Task.Scope)
+	}
+	if role == "engine.validation.observation" {
+		input.Observation = s.validationObservationInput()
+		return input
 	}
 	if role == "engine.gate" {
 		input.Gate = s.gateInput(binding, pending.Task)

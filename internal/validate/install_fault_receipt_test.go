@@ -280,8 +280,8 @@ func TestInstalledPackageInventoryAndHelp(t *testing.T) {
 	if installedReceipt.Digest != report.Targets[0].InstalledDigest || report.Targets[0].InstalledLstat != pathLstat(target) {
 		t.Fatalf("installed target identity is not bound to the installed tree: report=%+v receipt=%+v", report.Targets[0], installedReceipt)
 	}
-	for _, entry := range installRuntimeEntries {
-		path := filepath.Join(target, filepath.FromSlash(entry))
+	for _, entry := range packageManifest.Parts {
+		path := filepath.Join(target, filepath.FromSlash(strings.TrimSuffix(entry, "/")))
 		if _, err := os.Lstat(path); err != nil {
 			t.Fatalf("installed runtime inventory omits %s: %v", entry, err)
 		}

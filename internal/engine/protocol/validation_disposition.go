@@ -175,15 +175,6 @@ func (s *State) validationObligationWaived(w *ValidationWave, target *Validation
 	return false
 }
 
-func (s *State) unresolvedQA(w *ValidationWave) bool {
-	for _, obligation := range s.validationObligationDetails(w) {
-		if obligation.target.Kind == "QA" {
-			return true
-		}
-	}
-	return false
-}
-
 // A case-set waiver never approves a review. It applies only to the accepted
 // design and fixed development source described in its original request.
 func (s *State) caseSetWaiver(mode coverage.ReviewKind) string {

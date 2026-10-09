@@ -232,7 +232,7 @@ func (s *State) validateCaseReview(mode coverage.ReviewKind, r coverage.ReviewRe
 
 // prepareValidationResult builds only the next QA domain value. Transport,
 // capacity, barrier and attempt facts stay in their existing transaction.
-func (e *Engine) prepareValidationResult(s *State, record WorkerResult) (*Validation, error) {
+func (e *Engine) prepareValidationResult(s *State, record WorkerResult, nextRevision uint64) (*Validation, error) {
 	copy := *s
 	data, err := json.Marshal(s.Validation)
 	if err != nil {
@@ -243,13 +243,13 @@ func (e *Engine) prepareValidationResult(s *State, record WorkerResult) (*Valida
 		return nil, err
 	}
 	copy.Validation = &next
-	if err := e.acceptValidationResult(&copy, record); err != nil {
+	if err := e.acceptValidationResult(&copy, record, nextRevision); err != nil {
 		return nil, err
 	}
 	return &next, nil
 }
 
-func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
+func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevision uint64) error {
 	p := record.Validation
 	b, known := s.DispatchBindings[record.ActionID]
 	if !known {
@@ -294,6 +294,9 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
+	if p.Status == "CONTINUE" && role != "engine.development.batch" && role != "engine.repair" {
+		return validationError("only development and repair can continue unfinished work")
+	}
 	if p.GranularityReview != nil && role != "engine.repair" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
@@ -305,12 +308,20 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
-	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil, p.Resolution != nil} {
+	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil, p.Resolution != nil, len(p.Observations) > 0} {
 		if present {
 			count++
 		}
 	}
+	if len(p.Observations) > 0 && role != "engine.validation.observation" {
+		return validationError("observation duties belong to the semantic observation worker")
+	}
 	switch role {
+	case "engine.validation.observation":
+		if count != 1 || p.Status != "PASS" || p.Observations == nil {
+			return validationError("semantic observation requires only its complete issued judgments")
+		}
+		return e.acceptWorkerObservations(s, record, nextRevision)
 	case "engine.merge.resolve":
 		input := s.conflictInput(b.Task.Scope)
 		if count != 1 || p.Status != "PASS" || p.Resolution == nil || input == nil || p.Resolution.Summary == "" {
@@ -331,7 +342,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 	case "engine.repair":
 		return s.acceptRepairResult(record)
 	case "engine.development.batch":
-		if count != 1 || p.Development == nil || p.Status != "PASS" || len(p.Development.Paths) == 0 || p.Development.Summary == "" {
+		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {
 			return validationError("development requires declared paths and summary")
 		}
 		if role == "engine.development.batch" {
@@ -339,7 +350,11 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult) error {
 			if !ok {
 				return validationError("development task is not a confirmed batch")
 			}
-			if err := validateDevelopmentCompletion(batch, p.Development); err != nil {
+			if p.Status == "CONTINUE" {
+				if err := validateDevelopmentContinuation(p.Development); err != nil {
+					return err
+				}
+			} else if err := validateDevelopmentCompletion(batch, p.Development); err != nil {
 				return err
 			}
 			if s.Validation.DevelopmentSnapshot != "" {
