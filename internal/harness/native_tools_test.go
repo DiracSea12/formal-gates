@@ -1,0 +1,512 @@
+package harness
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
+)
+
+func nativeToolFixture(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "action", "call")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	materialPath := filepath.Join(root, "material.json")
+	material := worker.Material{Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}}}}
+	if err := writeAtomicJSON(materialPath, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": false, "engine": map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": "issued-action"}}}); err != nil {
+		t.Fatal(err)
+	}
+	return directory, workspace
+}
+
+func callWorkspace(t *testing.T, tools *nativeWorkspaceTools, args string) map[string]any {
+	t.Helper()
+	value, err := tools.call(json.RawMessage(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.(map[string]any)
+}
+
+func nativeToolAdmission(directory string, request map[string]any) (func(), error) {
+	if getOf(getOf(request, "engine"), "workerMaterial") == nil {
+		return nil, fmt.Errorf("missing original material reference")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "withdrawn")); err == nil {
+		return nil, fmt.Errorf("original action was withdrawn")
+	}
+	return func() {}, nil
+}
+
+func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	if err := os.WriteFile(filepath.Join(workspace, "file.txt"), []byte("first\nsecond\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing := callWorkspace(t, tools, `{"action":"list"}`)
+	if listing["listing"] != 1 {
+		t.Fatalf("first listing: %v", listing)
+	}
+	read := callWorkspace(t, tools, `{"action":"read","listing":1,"entry":1}`)
+	if read["read"] != 2 {
+		t.Fatalf("read identity: %v", read)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "earlier.txt"), []byte("different target"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	continued := filepath.Join(filepath.Dir(directory), "continued")
+	if err := os.Mkdir(continued, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(continued, "native-request.json"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := newNativeWorkspaceTools(continued, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callWorkspace(t, recovered, `{"action":"replace","read":2,"from":2,"to":2,"content":"updated\n"}`)
+	got, err := os.ReadFile(filepath.Join(workspace, "file.txt"))
+	if err != nil || string(got) != "first\nupdated\n" {
+		t.Fatalf("original read target: %q %v", got, err)
+	}
+	got, err = os.ReadFile(filepath.Join(workspace, "earlier.txt"))
+	if err != nil || string(got) != "different target" {
+		t.Fatalf("new listing entry was rebound: %q %v", got, err)
+	}
+	listing = callWorkspace(t, recovered, `{"action":"list"}`)
+	if listing["listing"] != 3 || len(recovered.facts[0].Paths) != 1 || recovered.facts[0].RequestDigest != tools.requestDigest {
+		t.Fatalf("published facts overwritten: %v %+v", listing, recovered.facts)
+	}
+	if _, err := recovered.call(json.RawMessage(`{"action":"replace","read":2,"from":1,"to":1,"content":"stale"}`)); err == nil {
+		t.Fatal("changed file reused stale read bytes")
+	}
+}
+
+func TestNativeWorkspaceFactsRejectDifferentWorkspace(t *testing.T) {
+	directory, _ := nativeToolFixture(t)
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callWorkspace(t, tools, `{"action":"list"}`)
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	objectOrEmpty(request)["workspace"] = other
+	materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+	if err := writeAtomicJSON(materialPath, worker.Material{Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: other}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newNativeWorkspaceTools(directory); err == nil || !strings.Contains(err.Error(), "another action/workspace") {
+		t.Fatalf("wrong workspace reused published facts: %v", err)
+	}
+}
+
+func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	if err := os.WriteFile(filepath.Join(workspace, "input.txt"), []byte("original\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"workspace\",\"arguments\":{\"action\":\"list\"}}}\n")
+	var output, errors bytes.Buffer
+	if code := RunCommand([]string{"native-tools", directory}, input, &output, &errors, nativeToolAdmission); code != 0 {
+		t.Fatalf("MCP code %d: %s", code, &errors)
+	}
+	decoder := json.NewDecoder(&output)
+	decoder.UseNumber()
+	for _, id := range []int{1, 2, 3} {
+		var reply map[string]any
+		if err := decoder.Decode(&reply); err != nil {
+			t.Fatal(err)
+		}
+		if intOf(reply["id"]) != id || reply["jsonrpc"] != "2.0" || reply["error"] != nil {
+			t.Fatalf("original MCP response: %v", reply)
+		}
+		if id == 1 && getOf(reply["result"], "protocolVersion") != "2024-11-05" {
+			t.Fatalf("changed MCP protocol: %v", reply)
+		}
+		if id == 2 && len(listOf(getOf(reply["result"], "tools"))) != 1 {
+			t.Fatalf("tool surface: %v", reply)
+		}
+	}
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.facts) != 1 || tools.facts[0].Workspace != resolveNativePath(workspace) || tools.facts[0].RequestDigest != tools.requestDigest {
+		t.Fatalf("tool receipt lacks original authority: %+v", tools.facts)
+	}
+	readDirectory, readWorkspace := nativeToolFixture(t)
+	request, err := readJSONFile(filepath.Join(readDirectory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectOrEmpty(request)["read_only"] = true
+	materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+	if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: readWorkspace}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(readDirectory, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	readTools, err := newNativeWorkspaceTools(readDirectory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"unauthorized"}`)); err == nil {
+		t.Fatal("read-only action wrote a file")
+	}
+	if _, err := os.Stat(filepath.Join(readWorkspace, "extra.txt")); !os.IsNotExist(err) {
+		t.Fatalf("read-only side effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "withdrawn"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"late"}`)); err == nil || !strings.Contains(err.Error(), "withdrawn") {
+		t.Fatalf("withdrawn action bypassed original admission: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "extra.txt")); !os.IsNotExist(err) {
+		t.Fatalf("withdrawn action side effect: %v", err)
+	}
+}
+
+func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectOrEmpty(request)["read_only"] = true
+	materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+	if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	call := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"workspace","arguments":{"action":"list"},"_meta":{"original":"native-context"}}}` + "\n"
+	var output, errors bytes.Buffer
+	if code := NativeTools(directory, strings.NewReader(call), &output, &errors, nativeToolAdmission); code != 0 {
+		t.Fatalf("original tools call: %d %s", code, &errors)
+	}
+	for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("{}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := evidenceSource(directory, "fixture", "native-session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyNativeSource(directory, source, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if getOf(getOf(source, "files"), nativeToolCallsFile) == nil || getOf(getOf(source, "files"), nativeToolContextFile) == nil {
+		t.Fatal("original source omitted tools proof", source)
+	}
+	recorded, err := os.ReadFile(filepath.Join(directory, nativeToolCallsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var originalCall map[string]any
+	callDecoder := json.NewDecoder(bytes.NewReader(recorded))
+	callDecoder.UseNumber()
+	if err := callDecoder.Decode(&originalCall); err != nil {
+		t.Fatal(err)
+	}
+	if getOf(getOf(getOf(originalCall, "request"), "params"), "_meta") == nil || intOf(getOf(getOf(originalCall, "request"), "id")) != 7 {
+		t.Fatal("native call context was discarded", string(recorded))
+	}
+	continued := filepath.Join(filepath.Dir(directory), "resume")
+	if err := os.Mkdir(continued, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(continued, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	errors.Reset()
+	if code := NativeTools(continued, strings.NewReader(call), &output, &errors, nativeToolAdmission); code != 0 {
+		t.Fatalf("continued tools call: %d %s", code, &errors)
+	}
+	if err := verifyNativeSource(directory, source, "fixture"); err != nil {
+		t.Fatalf("later appended facts invalidated completed source: %v", err)
+	}
+	replayed, err := evidenceSource(directory, "fixture", "native-session", nil)
+	if err != nil || !valuesEqual(replayed, source) {
+		t.Fatalf("lost response rebound tool facts: %v", err)
+	}
+	context, err := readJSONFile(filepath.Join(directory, nativeToolContextFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectOrEmpty(context)["workspace"] = t.TempDir()
+	if err := writeAtomicJSON(filepath.Join(directory, nativeToolContextFile), context); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyNativeSource(directory, source, "fixture"); err == nil {
+		t.Fatal("source accepted changed tool authority")
+	}
+}
+
+func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
+	workspace, _ := nativePathsFixture(t)
+	provider := vcs.New(workspace, nil)
+	base, err := provider.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "left.txt"), []byte("candidate\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Track([]string{"left.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Commit("candidate source"); err != nil {
+		t.Fatal(err)
+	}
+	head, err := provider.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	materialPath := filepath.Join(directory, "material.json")
+	material := worker.Material{ReadOnly: true, Input: protocol.WorkerInput{VCS: "git", Pending: protocol.PendingAction{ActionID: "gate-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Gate: &protocol.GateInput{BaseSnapshot: base, Candidate: coverage.ValidationCandidate{Identity: head}}}}}
+	if err := writeAtomicJSON(materialPath, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true, "engine": map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": "gate-action"}}}); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "left.txt"), []byte("later workspace edit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	comparison := callWorkspace(t, tools, `{"action":"comparison"}`)
+	rows := comparison["changes"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("issued range: %v", rows)
+	}
+	row := rows[0].(map[string]any)
+	if row["path"] != "left.txt" || row["before"] != "initial\n" || row["after"] != "candidate\n" {
+		t.Fatalf("tool read a later workspace or wrong range: %v", row)
+	}
+	if row["entry"] != nil || row["baseText"] != nil || row["text"] != nil {
+		t.Fatal("comparison duplicates file content", row)
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"comparison","base":"different"}`)); err == nil {
+		t.Fatal("model supplied a mechanical snapshot reference")
+	}
+}
+
+func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(t *testing.T) {
+	directory, _ := nativeToolFixture(t)
+	var window sync.Mutex
+	admit := func(directory string, request map[string]any) (func(), error) {
+		if _, err := nativeToolAdmission(directory, request); err != nil {
+			return nil, err
+		}
+		window.Lock()
+		return window.Unlock, nil
+	}
+	first, err := newNativeWorkspaceTools(directory, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newNativeWorkspaceTools(directory, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan int, 2)
+	errors := make(chan error, 2)
+	for _, tools := range []*nativeWorkspaceTools{first, second} {
+		go func(tools *nativeWorkspaceTools) {
+			value, err := tools.call(json.RawMessage(`{"action":"list"}`))
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- value.(map[string]any)["listing"].(int)
+		}(tools)
+	}
+	seen := map[int]bool{}
+	for range 2 {
+		select {
+		case value := <-results:
+			seen[value] = true
+		case err := <-errors:
+			t.Fatal(err)
+		}
+	}
+	if !seen[1] || !seen[2] {
+		t.Fatalf("two original calls reused a published identity: %v", seen)
+	}
+	recovered, err := newNativeWorkspaceTools(directory, admit)
+	if err != nil || len(recovered.facts) != 2 {
+		t.Fatalf("actual published facts: %+v %v", recovered, err)
+	}
+}
+
+func workspaceMCP(t *testing.T, directory string, args map[string]any) (map[string]any, bool) {
+	t.Helper()
+	frame, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "workspace", "arguments": args}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output, errors bytes.Buffer
+	if code := RunCommand([]string{"native-tools", directory}, bytes.NewReader(frame), &output, &errors, nativeToolAdmission); code != 0 {
+		t.Fatalf("public MCP: %d %s", code, &errors)
+	}
+	var reply map[string]any
+	decoder := json.NewDecoder(&output)
+	decoder.UseNumber()
+	if err := decoder.Decode(&reply); err != nil {
+		t.Fatal(err)
+	}
+	result := objectOrEmpty(reply["result"])
+	content := listOf(result["content"])
+	if len(content) != 1 {
+		t.Fatalf("actual MCP reply: %v", reply)
+	}
+	if result["isError"] == true {
+		return map[string]any{"error": getOf(content[0], "text")}, true
+	}
+	var body map[string]any
+	decoder = json.NewDecoder(strings.NewReader(textOf(getOf(content[0], "text"))))
+	decoder.UseNumber()
+	if err := decoder.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body, false
+}
+
+func TestNativeWorkspaceRemovePreservesSymlinkTargets(t *testing.T) {
+	for _, kind := range []string{"file", "directory", "dangling"} {
+		t.Run(kind, func(t *testing.T) {
+			directory, workspace := nativeToolFixture(t)
+			target := filepath.Join(workspace, "target")
+			if kind == "file" {
+				if err := os.WriteFile(target, []byte("target bytes\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "directory" {
+				if err := os.Mkdir(target, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			link := filepath.Join(workspace, "link")
+			if err := os.Symlink("target", link); err != nil {
+				t.Fatal(err)
+			}
+			listing, failed := workspaceMCP(t, directory, map[string]any{"action": "list"})
+			if failed {
+				t.Fatal(listing)
+			}
+			var entry any
+			for _, choice := range listOf(listing["entries"]) {
+				if getOf(choice, "name") == "link" {
+					entry = getOf(choice, "entry")
+				}
+			}
+			if entry == nil {
+				t.Fatal("original listing omitted link", listing)
+			}
+			removed, failed := workspaceMCP(t, directory, map[string]any{"action": "remove", "listing": listing["listing"], "entry": entry})
+			if failed || removed["removed"] != true {
+				t.Fatalf("original link removal: %v %v", removed, failed)
+			}
+			if _, err := os.Lstat(link); !os.IsNotExist(err) {
+				t.Fatalf("selected directory entry remains: %v", err)
+			}
+			if kind == "file" {
+				body, err := os.ReadFile(target)
+				if err != nil || string(body) != "target bytes\n" {
+					t.Fatalf("removed target instead of link: %q %v", body, err)
+				}
+			}
+			if kind == "directory" {
+				info, err := os.Stat(target)
+				if err != nil || !info.IsDir() {
+					t.Fatalf("removed target directory: %v", err)
+				}
+			}
+			if kind == "dangling" {
+				if _, err := os.Stat(target); !os.IsNotExist(err) {
+					t.Fatalf("dangling target was created: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeWorkspaceSymlinkReadAndReplaceUseOriginalTarget(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	if err := os.WriteFile(filepath.Join(workspace, "target"), []byte("before\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(workspace, "link")); err != nil {
+		t.Fatal(err)
+	}
+	listing, failed := workspaceMCP(t, directory, map[string]any{"action": "list"})
+	if failed {
+		t.Fatal(listing)
+	}
+	var entry any
+	for _, choice := range listOf(listing["entries"]) {
+		if getOf(choice, "name") == "link" {
+			entry = getOf(choice, "entry")
+		}
+	}
+	read, failed := workspaceMCP(t, directory, map[string]any{"action": "read", "listing": listing["listing"], "entry": entry})
+	if failed || !valuesEqual(read["lines"], []any{"before\n"}) {
+		t.Fatalf("link target read: %v", read)
+	}
+	replaced, failed := workspaceMCP(t, directory, map[string]any{"action": "replace", "read": read["read"], "from": 1, "to": 1, "content": "after\n"})
+	if failed || replaced["written"] != true {
+		t.Fatalf("link target edit: %v", replaced)
+	}
+	body, err := os.ReadFile(filepath.Join(workspace, "target"))
+	if err != nil || string(body) != "after\n" {
+		t.Fatalf("original target edit: %q %v", body, err)
+	}
+	if link, err := os.Readlink(filepath.Join(workspace, "link")); err != nil || link != "target" {
+		t.Fatalf("link entry was replaced: %q %v", link, err)
+	}
+}

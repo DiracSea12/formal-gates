@@ -1405,7 +1405,15 @@ func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 	for _, row := range edit.Development.CaseRuns {
 		observations[row.CaseID] = worker.Observation{Result: row.Result, Comparison: row.Comparison}
 	}
-	raw, err := json.Marshal(worker.Execution{Records: observations})
+	records := []*worker.Observation{}
+	for _, caseID := range input.Validation.Repair.VerificationCases {
+		value, exists := observations[caseID]
+		if !exists {
+			d.t.Fatalf("original repair comparison lacks issued case %s", caseID)
+		}
+		records = append(records, &value)
+	}
+	raw, err := json.Marshal(worker.Execution{Records: records})
 	if err != nil {
 		d.t.Fatal(err)
 	}

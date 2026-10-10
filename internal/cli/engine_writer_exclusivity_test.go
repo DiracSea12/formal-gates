@@ -124,6 +124,13 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 func startAdmittedEngineRun(t *testing.T, root string) *facade.Facade {
 	t.Helper()
 	source := writeInstallSource(t, "source")
+	homePath, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		t.Fatal(homeErr)
+	}
+	originalInvocation := os.Args[0]
+	os.Args[0] = filepath.Join(homePath, ".local", "bin", "formal-gates")
+	t.Cleanup(func() { os.Args[0] = originalInvocation })
 	var stdout, stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("install failed (rc=%d): %s%s", code, stdout.String(), stderr.String())
@@ -256,7 +263,7 @@ func TestAlternatingLegacyAndEngineEntriesKeepBindingLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 交替：legacy requirement（拒）→ engine status（通）→ engine submit 无效
-	// 事件（engine 侧拒绝，非落闸）→ legacy abort（拒）→ engine status（通）。
+	// 语义请求（engine 侧拒绝，非落闸）→ legacy abort（拒）→ engine status（通）。
 	var stdout, stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "requirement", "--run-id", "writer-exclusive", "--root", root, "--revision", "r2", "--meaning", "meaning-preserved"}, IO{Stdout: &stdout, Stderr: &stderr}); code == 0 {
 		t.Fatal("legacy requirement entry accepted an engine run")
@@ -271,8 +278,8 @@ func TestAlternatingLegacyAndEngineEntriesKeepBindingLocked(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "submit", "--run-id", "writer-exclusive", "--root", root}, IO{Stdin: strings.NewReader(`{"id":"probe-1","kind":"NOT_A_KIND"}`), Stdout: &stdout, Stderr: &stderr}); code == 0 {
-		t.Fatal("engine submit accepted an unknown event kind")
+	if code := Run("formal-gates", []string{"workflow", "next", "--run-id", "writer-exclusive", "--root", root, "--decision", "-"}, IO{Stdin: strings.NewReader(`{"request":"NOT_A_KIND"}`), Stdout: &stdout, Stderr: &stderr}); code == 0 {
+		t.Fatal("engine control candidate accepted an unknown request kind")
 	}
 	stdout.Reset()
 	stderr.Reset()

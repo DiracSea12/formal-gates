@@ -1044,17 +1044,6 @@ func launcherInvocationMatches(expected string) bool {
 // the transaction launcher and the process must be invoked through it. A
 // different raw candidate cannot impersonate the selected launcher.
 func RequireInstallLauncher(options InstallOptions) error {
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	// Go's in-process unit test binaries do not expose the shipped executable
-	// name.  Production artifacts always use nativeBinaryName, so this branch is
-	// not a public compatibility mode.
-	base := filepath.Base(filepath.Clean(executable))
-	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
-		return nil
-	}
 	expected := defaultStableLauncherPath(options)
 	if strings.TrimSpace(options.BinaryTarget) != "" {
 		// A caller that supplies a launcher path owns that path for the
@@ -1094,14 +1083,6 @@ func RequireInstallLauncher(options InstallOptions) error {
 }
 
 func RequireUninstallLauncher(options UninstallOptions) error {
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	base := filepath.Base(filepath.Clean(executable))
-	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
-		return nil
-	}
 	registry := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
 	doc, err := LoadRegistry(registry)
 	if err != nil {

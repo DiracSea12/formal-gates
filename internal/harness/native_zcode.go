@@ -3,7 +3,7 @@ package harness
 // The ZCode app-server adapter. Only the ZCode protocol lives here;
 // process handling, the request/reply loop, bindings and evidence come from
 // native_transport. No graph imports, workflow callbacks, global configuration
-// writes or model substitution. Only read-only roles narrow native tools.
+// writes or model substitution. Issued roles use the registered workspace tool.
 // Terminals require exact session/input/turn IDs.
 //
 // The app-server speaks "ZCode Protocol v1". It applies no selection of its
@@ -42,18 +42,9 @@ import (
 	"time"
 )
 
-// App-server has no read-only mode. Its native allowlist also governs MCP;
-// arbitrary command/plugin executors cannot enforce this role's write boundary.
-var zcodeReadOnlyTools = []string{"Read", "Glob", "Grep", "WebSearch", "WebFetch"}
-
-// zcodeReadOnlyToolsValue is READ_ONLY_TOOLS as an evidence value.
-func zcodeReadOnlyToolsValue() []any {
-	value := make([]any, len(zcodeReadOnlyTools))
-	for index, name := range zcodeReadOnlyTools {
-		value[index] = name
-	}
-	return value
-}
+// The native allowlist restricts builtin and MCP tools. The registered handler
+// takes execution authority from the original issued request.
+var zcodeManagedTools = []any{"mcp__formal-gates__workspace", "AskUserQuestion"}
 
 // The handshake every snapshot carries. A different one means the app-server
 // no longer speaks the protocol this transport was accepted against.
@@ -1590,8 +1581,13 @@ func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSes
 	} else {
 		params["persistence"] = "immediate"
 	}
-	if req.readOnly {
-		params["toolAllowlist"] = zcodeReadOnlyToolsValue()
+	if !probe {
+		server, err := nativeToolServer(directory)
+		if err != nil {
+			return nil, err
+		}
+		params["mcpServers"] = []any{server}
+		params["toolAllowlist"] = zcodeManagedTools
 	}
 	if probe && req.previous == "" {
 		params["titleGenerationEnabled"] = false
@@ -1661,7 +1657,7 @@ func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSes
 	if req.readOnly {
 		if err := writeAtomicJSON(filepath.Join(directory, "tool-policy.json"), map[string]any{
 			"read_only": true,
-			"allowed":   zcodeReadOnlyToolsValue(),
+			"allowed":   zcodeManagedTools,
 		}); err != nil {
 			return nil, err
 		}

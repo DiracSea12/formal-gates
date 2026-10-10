@@ -18,7 +18,6 @@ from .graph import Flow
 from .infra import Bridge, HarnessError, RuntimeBlocked, Store, atomic, driver_bridge, git, read, run_lock, runtime_identity
 from .native_hosts import adapter_for, execution_hosts, host_catalog, normalize_provider
 
-BASELINE='517de91f1b480ec969bd91385c29ce38d8bc2841'
 
 def package_root():
     value=os.environ.get('FORMAL_GATES_HARNESS_ROOT')
@@ -80,7 +79,7 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
         raise HarnessError('Invalid run id')
     directory=root/'.harness'/'runs'/run_id
     directory.mkdir(parents=True,exist_ok=False)
-    manifest={'run_id':run_id,'profile':'harness-v1','baseline':BASELINE,'created_at':time.time(),
+    manifest={'run_id':run_id,'profile':'harness-v1','created_at':time.time(),
               **validated,'runtime_identity':runtime_identity(root,binary_path()),'fixture':fixture}
     if binding is not None: manifest['host_binding'] = binding
     policy = (root / 'prompts/reviewer-base.md').read_bytes()
@@ -109,7 +108,7 @@ def open_run(path: str | Path):
     return root,Store(directory,manifest,bridge)
 
 
-def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, reason: str):
+def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, reason: str, *, confirm=True):
     """Explicit dev-only adoption, not a graph/state migration or a model tool.
 
     Exact runtime identities and a preserved source snapshot are required. The
@@ -153,6 +152,7 @@ def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, re
         receipt = {'kind': 'transport-fix-adoption', 'from_runtime': before, 'to_runtime': after,
                    'revision': manifest['revision'], 'reason': reason, 'snapshot': str(snapshot),
                    'changed': {p: {'before': old[p], 'after': new[p]} for p in sorted(changed)}}
+        if not confirm: return receipt
         target = directory / 'transport-adoption.json'
         if target.exists() and read(target) != receipt:
             raise HarnessError('Different transport adoption already recorded')
@@ -286,6 +286,26 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
                 raise
             return status_projection(store,app,config)
 
+def prepare_answer(directory: str | Path, decision: str, selection: int = 1):
+    current = run_graph(directory, advance=False)
+    pending = current['interrupts']
+    if selection < 1 or selection > len(pending):
+        raise HarnessError('Select a current question by its displayed 1-based position')
+    item = pending[selection - 1]
+    if decision not in item['request']['choices']:
+        raise HarnessError('The decision is not offered by this question')
+    return {'directory': str(Path(directory).resolve()), 'interrupt': item['id'], 'answer': {'decision': decision, 'revision': item['request']['revision']}}
+
+def require_decision_run(directory: str | Path,candidate: dict):
+    if candidate.get('directory')!=str(Path(directory).resolve()):
+        raise HarnessError('The saved decision belongs to a different run')
+
+def prepare_adoption(directory: str | Path, snapshot: str | Path, reason: str):
+    root = package_root()
+    manifest = read(Path(directory) / 'manifest.json')
+    receipt=adopt_transport(Path(directory),Path(snapshot),manifest['runtime_identity'],runtime_identity(root,binary_path()),reason,confirm=False)
+    return {'directory':str(Path(directory).resolve()),**receipt}
+
 def make_demo(root: Path,native=False,provider=None):
     if native: provider = select_provider(driver_bridge(), provider)
     directory=root/'.harness'/'samples'/(('native-' if native else 'fixture-')+uuid.uuid4().hex[:12]);directory.mkdir(parents=True)
@@ -322,16 +342,16 @@ def main():
     inspect_archive = commands.add_parser('archive-show', help='Verify/read archived status without the old graph runtime')
     inspect_archive.add_argument('--archive', required=True)
     adoption = commands.add_parser('adopt-transport', help='Explicit dev-only transport fix; requires preserved runtime and exact identities')
-    adoption.add_argument('--run', required=True); adoption.add_argument('--snapshot', required=True)
-    adoption.add_argument('--from-runtime', required=True); adoption.add_argument('--to-runtime', required=True)
-    adoption.add_argument('--reason', required=True)
+    adoption.add_argument('--run', required=True); adoption.add_argument('--snapshot')
+    adoption.add_argument('--reason'); adoption.add_argument('--save-decision'); adoption.add_argument('--decision-file')
     start=commands.add_parser('start');start.add_argument('--project',required=True);start.add_argument('--requirement',required=True);start.add_argument('--checks',required=True)
     start.add_argument('--provider',help='Execution host; overrides FORMAL_GATES_HARNESS_PROVIDER');start.add_argument('--model',default='');start.add_argument('--reasoning-effort',default='')
     start.add_argument('--gates',nargs='+',default=['complexity-gate','implementation-quality-gate']);start.add_argument('--repair-limit',type=int,default=2);start.add_argument('--run-id',default='')
     for name in ('show','resume','respond','cancel'):
         sub=commands.add_parser(name);sub.add_argument('--run',required=True)
         if name=='respond':
-            sub.add_argument('--decision',required=True);sub.add_argument('--revision',required=True);sub.add_argument('--interrupt',required=True)
+            sub.add_argument('--decision');sub.add_argument('--question',type=int,default=1)
+            sub.add_argument('--save-decision');sub.add_argument('--decision-file')
         if name=='cancel':sub.add_argument('--confirm',action='store_true',required=True)
     demo=commands.add_parser('demo',help='Create isolated sample; fixture by default, --native uses the selected execution host')
     demo.add_argument('--provider'); demo.add_argument('--native',action='store_true');demo.add_argument('--approve-sample',action='store_true',help='Approve this command-created sample only; never bypass runtime or review blockers')
@@ -350,7 +370,13 @@ def main():
             from .retention import archive_status
             result=archive_status(args.archive)
         elif args.command=='adopt-transport':
-            result=adopt_transport(Path(args.run),Path(args.snapshot),args.from_runtime,args.to_runtime,args.reason)
+            if args.save_decision and not args.decision_file and args.snapshot and args.reason:
+                result=prepare_adoption(args.run,args.snapshot,args.reason);atomic(Path(args.save_decision),result)
+            elif args.decision_file and not args.save_decision and not args.snapshot and not args.reason:
+                candidate=read(Path(args.decision_file))
+                require_decision_run(args.run,candidate)
+                result=adopt_transport(Path(args.run),Path(candidate['snapshot']),candidate['from_runtime'],candidate['to_runtime'],candidate['reason'])
+            else: raise HarnessError('Prepare adoption with --snapshot --reason --save-decision; confirm the saved candidate with --decision-file')
         elif args.command=='start':
             directory=make_run(root,Path(args.project),Path(args.requirement),read(Path(args.checks)),args.gates,args.provider,args.model,args.reasoning_effort,args.repair_limit,args.run_id)
             result=run_graph(directory)
@@ -364,8 +390,15 @@ def main():
             _,store=open_run(args.run);store.cancel_jobs();result={'status':'CANCEL_REQUESTED','run_id':store.manifest['run_id'],
                 'note':'Only owned child jobs were signalled. Use resume to observe cancelled jobs and resolve their explicit interruption.'}
         else:
-            answer={'decision':args.decision,'revision':args.revision} if args.command=='respond' else None
-            result=run_graph(args.run,answer,getattr(args,'interrupt',''),advance=args.command!='show')
+            if args.command=='respond':
+                if args.save_decision and args.decision and not args.decision_file:
+                    result=prepare_answer(args.run,args.decision,args.question);atomic(Path(args.save_decision),result)
+                elif args.decision_file and not args.save_decision and not args.decision:
+                    candidate=read(Path(args.decision_file))
+                    require_decision_run(args.run,candidate)
+                    result=run_graph(args.run,candidate['answer'],candidate['interrupt'])
+                else: raise HarnessError('Prepare the actual choice with --decision --save-decision; confirm the saved candidate with --decision-file')
+            else: result=run_graph(args.run,advance=args.command!='show')
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except KeyboardInterrupt:return 130
     except (HarnessError,OSError,ValueError) as exc:

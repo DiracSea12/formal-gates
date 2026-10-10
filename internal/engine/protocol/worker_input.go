@@ -43,14 +43,15 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 // WorkerInput is a projection of an issued action, not another work ledger.
 // Review and Validation carry their existing owners' exact business context.
 type WorkerInput struct {
-	RunID               string                                  `json:"runId"`
-	Provider            string                                  `json:"provider"`
-	VCS                 string                                  `json:"vcs"`
-	Pending             PendingAction                           `json:"pending"`
-	Handler             string                                  `json:"handler"`
-	RequirementDocument requirement.FrozenRequirementProjection `json:"requirementDocument"`
-	Review              *WorkerReviewInput                      `json:"review,omitempty"`
-	Validation          *ValidationInput                        `json:"validation,omitempty"`
+	AvailableRouteCandidates []string                                `json:"availableRouteCandidates,omitempty"`
+	RunID                    string                                  `json:"runId"`
+	Provider                 string                                  `json:"provider"`
+	VCS                      string                                  `json:"vcs"`
+	Pending                  PendingAction                           `json:"pending"`
+	Handler                  string                                  `json:"handler"`
+	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
+	Review                   *WorkerReviewInput                      `json:"review,omitempty"`
+	Validation               *ValidationInput                        `json:"validation,omitempty"`
 }
 
 type WorkerReviewInput struct {

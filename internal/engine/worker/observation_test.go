@@ -20,13 +20,13 @@ func TestObservationSameAsSelectsOnlyIssuedRelatedCandidates(t *testing.T) {
 	input := observationWorkerInput()
 	input.Validation.Observation.Problems = []protocol.ObservationProblem{{ValidationProblem: protocol.ValidationProblem{ID: "sha256:original-problem", FindingIDs: []string{"original-finding"}}, Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "original-finding", History: []protocol.FindingResolution{{RootCause: "original verified root cause", ProblemID: "sha256:original-problem"}}}, Evidence: protocol.WorkerResult{PayloadDigest: "original-source-digest"}}}}}
 	selected := 1
-	value := ObservationJudgments{Findings: []FindingJudgment{{Decision: "SAME_AS", SameAs: &selected}, {Decision: "NEW"}}, Scopes: []ScopeJudgment{{Cases: []string{"broken"}}}, GateImpacts: []ImpactJudgment{{Decision: "RERUN"}}}
+	value := ObservationJudgments{Findings: []FindingJudgment{{Decision: "SAME_AS", SameAs: &selected}, {Decision: "NEW"}}, Scopes: []ScopeJudgment{{Cases: []int{1}}}, GateImpacts: []ImpactJudgment{{Decision: "RERUN"}}}
 	decode := func() ([]protocol.OperatorObservationPayload, error) {
 		raw, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)
 		}
-		event, err := DecodeResult(input, "related", raw, "original-native-digest")
+		event, err := DecodeResultWithPaths(input, "related", raw, "original-native-digest", []string{})
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +66,7 @@ func TestObservationSameAsSelectsOnlyIssuedRelatedCandidates(t *testing.T) {
 	if _, err := decode(); err == nil {
 		t.Fatal("candidate attached to non-SAME_AS decision admitted")
 	}
-	if _, err := DecodeResult(input, "raw-id", []byte(`{"findings":[{"decision":"SAME_AS","sameAs":"sha256:original-problem"},{"decision":"NEW"}],"scopes":[{"cases":["broken"],"reason":"impact"}],"gateImpacts":[{"decision":"RERUN","reason":"impact"}]}`), "original-native-digest"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "raw-id", []byte(`{"findings":[{"decision":"SAME_AS","sameAs":"sha256:original-problem"},{"decision":"NEW"}],"scopes":[{"cases":["broken"],"reason":"impact"}],"gateImpacts":[{"decision":"RERUN","reason":"impact"}]}`), "original-native-digest", []string{}); err == nil {
 		t.Fatal("raw-ID fallback admitted")
 	}
 	schema, err := ResultSchema(input)
@@ -111,13 +111,13 @@ func TestObservationJudgmentAssemblesOrderedIssuedIdentities(t *testing.T) {
 		}
 	}
 	selected := 2
-	value := ObservationJudgments{Findings: []FindingJudgment{{Decision: "SAME_AS", SameAs: &selected, Reason: "same actual root cause"}, {Decision: "NEW", Reason: "new actual root cause"}}, Scopes: []ScopeJudgment{{Cases: []string{"broken"}, Reason: "changed input behavior"}}, GateImpacts: []ImpactJudgment{{Decision: "RERUN", Reason: "implementation changes this gate range"}}}
+	value := ObservationJudgments{Findings: []FindingJudgment{{Decision: "SAME_AS", SameAs: &selected, Reason: "same actual root cause"}, {Decision: "NEW", Reason: "new actual root cause"}}, Scopes: []ScopeJudgment{{Cases: []int{1}, Reason: "changed input behavior"}}, GateImpacts: []ImpactJudgment{{Decision: "RERUN", Reason: "implementation changes this gate range"}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
 	original := string(raw)
-	event, err := DecodeResult(input, "result", raw, "actual-native-output")
+	event, err := DecodeResultWithPaths(input, "result", raw, "actual-native-output", []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +137,10 @@ func TestObservationJudgmentAssemblesOrderedIssuedIdentities(t *testing.T) {
 	}
 	value.Findings = value.Findings[:1]
 	raw, _ = json.Marshal(value)
-	if _, err := DecodeResult(input, "missing", raw, "raw"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "missing", raw, "raw", []string{}); err == nil {
 		t.Fatal("omitted duty admitted")
 	}
-	if _, err := DecodeResult(input, "copied", []byte(`{"findings":[],"scopes":[],"gateImpacts":[],"kind":"ADJUDICATE"}`), "raw"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "copied", []byte(`{"findings":[],"scopes":[],"gateImpacts":[],"kind":"ADJUDICATE"}`), "raw", []string{}); err == nil {
 		t.Fatal("copied observation kind admitted")
 	}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "validation-observation", Content: "Judge actual evidence"}}}

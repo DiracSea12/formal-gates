@@ -108,6 +108,7 @@ func e2eRegistryRecord(id, target, launcher, scope, host, project, status string
 		ID: id, Target: target, LauncherPath: launcher, Scope: scope, Host: host,
 		ProjectRoot: project, StateRoot: state, ResourceRoot: resources,
 		RuntimeSibling: runtime, Status: status,
+		VCSIdentity: "fixture-native", PackageDigest: "sha256:fixture-source", InstalledDigest: "sha256:fixture-target",
 		CanonicalPaths: map[string]string{
 			"target": target, "launcher": launcher, "projectRoot": project,
 			"stateRoot": state, "resourceRoot": resources, "runtimeSibling": runtime,

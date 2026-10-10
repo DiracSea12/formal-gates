@@ -12,6 +12,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/requirement"
 )
@@ -24,6 +25,9 @@ func codexPeerAnswer(schema, value any) any {
 	contract := objectOrEmpty(schema)
 	if codexObjectUnion(contract) {
 		return map[string]any{"result": codexPeerAnswer(codexObjectBranch(contract, value), value)}
+	}
+	if len(listOf(contract["anyOf"])) > 0 {
+		return codexPeerAnswer(codexObjectBranch(contract, value), value)
 	}
 	if codexOpen, ok := codexOpenMap(contract); ok {
 		values := objectOrEmpty(value)
@@ -66,7 +70,7 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	domain := map[string]any{"findings": []any{map[string]any{"decision": "DISMISSED", "requirement": "scope", "normalPath": "normal", "module": "command", "rootCause": "outside requirement", "consequence": "none", "severity": "P3", "severityRationale": "outside scope", "verification": map[string]any{"scope": "checked", "severity": "checked", "causality": "checked", "reproduction": "checked", "classification": "checked"}, "reason": "outside scope"}}, "scopes": []any{map[string]any{"cases": []any{"case"}, "reason": "The changed public behavior affects the original case"}}, "gateImpacts": []any{map[string]any{"decision": "RERUN", "reason": "The changed implementation affects this gate"}}}
+	domain := map[string]any{"findings": []any{map[string]any{"decision": "DISMISSED", "requirement": "scope", "normalPath": "normal", "module": "command", "rootCause": "outside requirement", "consequence": "none", "severity": "P3", "severityRationale": "outside scope", "verification": map[string]any{"scope": "checked", "severity": "checked", "causality": "checked", "reproduction": "checked", "classification": "checked"}, "reason": "outside scope"}}, "scopes": []any{map[string]any{"cases": []any{1}, "reason": "The changed public behavior affects the original case"}}, "gateImpacts": []any{map[string]any{"decision": "RERUN", "reason": "The changed implementation affects this gate"}}}
 	s := newCodexScenario(t)
 	s.request["schema"] = schema
 	s.peer.StrictSchema = true
@@ -108,97 +112,92 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 }
 
 func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
-	plan := canaryLocalPlan(false)
-	plan.Batches[0].DoD[0].ID = "chosen-in-this-answer"
-	plan.Batches[0].Checks[0].ID = "chosen-check-in-this-answer"
-	batch := protocol.DevelopmentInput{Batch: plan.Batches[0]}
-	completion := map[string]any{"paths": []string{"command.go"}, "summary": "implemented declared behavior", "dod": map[string]string{"chosen-in-this-answer": "complete"}, "handoff": "ready for native integration"}
-	review := map[string]any{"status": "PASS", "findings": []any{}, "verification": map[string]any{"checks": []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, "evidence": "read exact current materials"}, "plan": canarySemanticPlan(plan)}
-	repair := map[string]any{}
-	for key, value := range completion {
-		repair[key] = value
+	plan := nativeWorkerGranularityFixture()
+	batch := protocol.DevelopmentBatch{ID: "issued-batch", DoD: []protocol.DevelopmentCriterion{{ID: "issued-condition", Description: "declared behavior"}}}
+	verification := []string{}
+	for _, name := range review.RequiredVerificationChecks() {
+		verification = append(verification, "read exact current materials: "+name)
 	}
-	repair["granularityReview"] = canarySemanticPlan(plan)
-	repairSchema := canaryDevelopmentSchema(nil)
-	repairSchema["required"] = []string{}
-	repairSchema["properties"].(map[string]any)["granularityReview"] = getOf(getOf(canaryReviewSchema(true), "properties"), "plan")
 	for _, sample := range []struct {
 		name   string
-		schema any
-		domain map[string]any
+		input  protocol.WorkerInput
+		domain any
 	}{
-		{"readiness", codexReadinessSchema(t), review},
-		{"confirmed-batch", canaryDevelopmentSchema(&batch), completion},
-		{"autonomous-repair", repairSchema, repair},
-		{"all-required-worker", WorkerSchema(), map[string]any{"status": "PASS", "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}}},
+		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
+		{"confirmed-batch", protocol.WorkerInput{Handler: "engine.development.batch", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
+		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: plan}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
-			s := newCodexScenario(t)
-			s.request["schema"] = sample.schema
-			s.peer.StrictSchema = true
-			domain := codexPlain(t, sample.domain).(map[string]any)
-			schema := codexPlain(t, sample.schema)
-			s.peer.Answer = codexPeerAnswer(schema, domain).(map[string]any)
-			before, _ := json.Marshal(sample.schema)
-			source, err := s.execute(t)
+			schema, err := worker.ResultSchema(sample.input)
 			if err != nil {
 				t.Fatal(err)
 			}
-			after, _ := json.Marshal(sample.schema)
+			domain := codexPlain(t, sample.domain).(map[string]any)
+			scenario := newCodexScenario(t)
+			scenario.request["schema"] = schema
+			scenario.peer.StrictSchema = true
+			scenario.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+			before, _ := json.Marshal(schema)
+			source, err := scenario.execute(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, _ := json.Marshal(schema)
 			if !bytes.Equal(before, after) {
 				t.Fatal("request domain schema mutated")
 			}
-			got, err := readJSONFile(filepath.Join(s.directory, "answer.json"))
-			if err != nil || !valuesEqual(got, domain) {
-				t.Fatalf("domain result = %v %v", got, err)
+			answer, err := readJSONFile(filepath.Join(scenario.directory, "answer.json"))
+			if err != nil || !valuesEqual(answer, domain) {
+				t.Fatalf("domain result = %v %v", answer, err)
 			}
-			expectedRaw, _ := json.Marshal(s.peer.Answer)
-			raw, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			expectedRaw, _ := json.Marshal(scenario.peer.Answer)
+			raw, err := os.ReadFile(filepath.Join(scenario.directory, "answer.raw.txt"))
 			if err != nil || !bytes.Equal(raw, expectedRaw) {
 				t.Fatal("native raw answer was rewritten")
 			}
-			if err := codexVerifySource(s.directory, source); err != nil {
-				t.Fatal(err)
-			}
-			rpc, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+			normalized, digest, _, err := NativeResultEvidence("codex", scenario.directory, source)
 			if err != nil {
 				t.Fatal(err)
 			}
-			recovered, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
+			// This protocol peer performs no workspace edit. Delivery paths therefore
+			// remain the observed empty diff rather than a model-authored path list.
+			event, err := worker.DecodeResultWithPaths(sample.input, "native-result", normalized, digest, []string{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch sample.name {
+			case "readiness":
+				if err := protocol.ValidateGranularity(event.Result.Review.GranularityReview); err != nil {
+					t.Fatal(err)
+				}
+			case "confirmed-batch":
+				if event.Result.Validation.Development.Completion.DoD[batch.DoD[0].ID] != "complete" {
+					t.Fatal("completion lost the original issued DoD binding")
+				}
+			case "autonomous-repair":
+				plan := event.Result.Validation.GranularityReview
+				if err := protocol.ValidateRepairPlan(plan, true); err != nil {
+					t.Fatal(err)
+				}
+				if event.Result.Validation.Development.Completion.DoD[plan.Batches[0].DoD[0].ID] != "complete" {
+					t.Fatal("single repair plan completion lost its program-assigned criterion")
+				}
+			}
+			rpc, err := os.ReadFile(filepath.Join(scenario.config, "rpc.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := codexReconcile(scenario.directory, map[string]any{"exit_code": 0})
 			if err != nil || !valuesEqual(recovered, source) {
 				t.Fatalf("recovered source = %v %v", recovered, err)
 			}
-			repeated, _ := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
-			repeatedRaw, _ := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			repeated, _ := os.ReadFile(filepath.Join(scenario.config, "rpc.jsonl"))
+			repeatedRaw, _ := os.ReadFile(filepath.Join(scenario.directory, "answer.raw.txt"))
 			if !bytes.Equal(rpc, repeated) || !bytes.Equal(raw, repeatedRaw) {
 				t.Fatal("recovery replayed work or changed raw evidence")
 			}
 			if getOf(source, "usage_evidence") == nil {
-				t.Fatal("native usage evidence missing")
-			}
-			switch sample.name {
-			case "readiness":
-				var answer canaryReviewAnswer
-				if err := decodeCanaryAnswer(got.(map[string]any), &answer); err != nil {
-					t.Fatal(err)
-				}
-				if err := canaryReviewShape(&answer, true); err != nil {
-					t.Fatal(err)
-				}
-			case "autonomous-repair":
-				var answer canaryDevelopmentAnswer
-				if err := decodeCanaryAnswer(got.(map[string]any), &answer); err != nil {
-					t.Fatal(err)
-				}
-				if err := protocol.ValidateRepairPlan(answer.Plan, true); err != nil {
-					t.Fatal(err)
-				}
-				if err := canaryDevelopmentShape(&answer, true); err != nil {
-					t.Fatal(err)
-				}
-				if answer.DoD[answer.Plan.Batches[0].DoD[0].ID] != "complete" {
-					t.Fatal("new plan's completion ID was lost")
-				}
+				t.Fatal("original native usage evidence missing")
 			}
 		})
 	}
@@ -212,23 +211,18 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 	}
 	for _, name := range []string{"small-repair", "single-completion", "split-plan"} {
 		t.Run(name, func(t *testing.T) {
-			result := worker.Repair{Paths: []string{"command.py"}, Summary: "Implemented the confirmed command", AffectedCases: []string{"normal-input"}}
+			result := worker.Repair{Summary: "Implemented the confirmed command"}
 			if name != "small-repair" {
-				plan := canaryLocalPlan(false)
+				plan := nativeWorkerGranularityFixture()
 				if name == "split-plan" {
-					plan = canaryLocalPlan(true)
-					result.Paths, result.Summary, result.AffectedCases = nil, "", nil
+					second := nativeWorkerGranularityFixture().Batches[0]
+					second.Artifacts = []string{"utility.go"}
+					plan.Batches = append(plan.Batches, second)
+					result.Summary = ""
 				} else {
-					result.Completion = &protocol.DevelopmentCompletion{DoD: map[string]string{plan.Batches[0].DoD[0].ID: "Implemented"}, Handoff: "Ready for approved checks"}
+					result.Completion = &worker.Completion{DoD: []string{"Implemented"}, Handoff: "Ready for approved checks"}
 				}
-				encoded, err := json.Marshal(canarySemanticPlan(plan))
-				if err != nil {
-					t.Fatal(err)
-				}
-				result.GranularityReview = &worker.Granularity{}
-				if err := json.Unmarshal(encoded, result.GranularityReview); err != nil {
-					t.Fatal(err)
-				}
+				result.GranularityReview = plan
 			}
 			domain := codexPlain(t, result).(map[string]any)
 			s := newCodexScenario(t)
@@ -242,8 +236,11 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			if err != nil || !valuesEqual(answer, domain) {
 				t.Fatalf("native repair altered its semantic branch: %v %v", answer, err)
 			}
-			raw, _ := json.Marshal(answer)
-			if _, err := worker.DecodeResult(input, "result", raw, "original-native-output"); err != nil {
+			normalized, digest, _, err := NativeResultEvidence("codex", s.directory, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := worker.DecodeResultWithPaths(input, "result", normalized, digest, []string{}); err != nil {
 				t.Fatalf("normalized repair no longer satisfies the domain contract: %v", err)
 			}
 			if err := codexVerifySource(s.directory, source); err != nil {

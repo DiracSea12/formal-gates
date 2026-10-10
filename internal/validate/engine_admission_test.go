@@ -20,6 +20,7 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(home, ".local", "bin", "formal-gates")
+	fixtureLauncherInvocation(t, launcher)
 	global := admissionRepairRecord(target, launcher, home)
 	projectOne := t.TempDir()
 	projectTwo := t.TempDir()
@@ -88,6 +89,7 @@ func TestEngineAdmissionNormalizesRegisteredHostAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := admissionRepairRecord(target, filepath.Join(home, "bin", "formal-gates"), home)
+	fixtureLauncherInvocation(t, record.LauncherPath)
 	record.PackageDigest, record.InstalledDigest = packageDigest, installed.Digest
 	path := filepath.Join(home, ".formal-gates", "registry.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

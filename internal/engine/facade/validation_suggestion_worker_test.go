@@ -3,6 +3,7 @@ package facade
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -54,9 +55,21 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			original := snapshot.State.WorkerInputs(d.f.definition)[id]
-			judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{}, GateImpacts: []worker.ImpactJudgment{}, Suggestions: []worker.SuggestionJudgment{{Decision: "DEFER", Reason: "Optional setup is outside the confirmed acceptance", AffectedCases: []string{}}, {Decision: "DECLINE", Reason: "Approved output already has the specified oracle", AffectedCases: []string{}}}}
+			judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{}, GateImpacts: []worker.ImpactJudgment{}, Suggestions: []worker.SuggestionJudgment{{Decision: "DEFER", Reason: "Optional setup is outside the confirmed acceptance", AffectedCases: []int{}}, {Decision: "DECLINE", Reason: "Approved output already has the specified oracle", AffectedCases: []int{}}}}
 			if affected {
-				judgment.Suggestions[0] = worker.SuggestionJudgment{Decision: "ACCEPT", Reason: "Clarify this case's executable preparation", AffectedCases: []string{"invalid"}}
+				index := slices.IndexFunc(issued[0].Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == "invalid" })
+				if index < 0 {
+					t.Fatal("fixture does not contain the original invalid-input case")
+				}
+				judgment.Suggestions[0] = worker.SuggestionJudgment{Decision: "ACCEPT", Reason: "Clarify this case's executable preparation", AffectedCases: []int{index + 1}}
+				bad := judgment
+				bad.Suggestions = append([]worker.SuggestionJudgment{}, judgment.Suggestions...)
+				bad.Suggestions[0].AffectedCases = []int{len(issued[0].Manifest.Cases) + 1}
+				raw, _ := json.Marshal(bad)
+				if _, err := worker.DecodeResult(original, d.eventID(), raw, "out-of-range-suggestion-case"); err == nil {
+					t.Fatal("unknown affected case selection accepted outside the original manifest")
+				}
+
 			}
 			raw, _ := json.Marshal(judgment)
 			event, err := worker.DecodeResult(original, d.eventID(), raw, "original-suggestion-judgment")
@@ -136,7 +149,7 @@ func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{}, GateImpacts: []worker.ImpactJudgment{}, Suggestions: []worker.SuggestionJudgment{{Decision: "DEFER", Reason: "Confirmed public-entry cases already cover their acceptance", AffectedCases: []string{}}, {Decision: "DECLINE", Reason: "Approved test explanations already preserve the intended oracle", AffectedCases: []string{}}}}
+	judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{}, GateImpacts: []worker.ImpactJudgment{}, Suggestions: []worker.SuggestionJudgment{{Decision: "DEFER", Reason: "Confirmed public-entry cases already cover their acceptance", AffectedCases: []int{}}, {Decision: "DECLINE", Reason: "Approved test explanations already preserve the intended oracle", AffectedCases: []int{}}}}
 	raw, _ := json.Marshal(judgment)
 	event, err := worker.DecodeResult(snapshot.State.WorkerInputs(d.f.definition)[id], d.eventID(), raw, "original-multi-mode-judgment")
 	if err != nil {
@@ -179,5 +192,52 @@ func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
 	_, in = d.action("engine.validation.observation")
 	if len(in.Observation.Suggestions) != 1 || !reflect.DeepEqual(in.Observation.Suggestions[0].Manifest, manifest) || len(d.run.Validation.Waves) == 0 {
 		t.Fatal("existing wave hid the newly approved case suggestion")
+	}
+}
+
+func TestAcceptedSuggestionReachesIssuedCaseRevision(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	id, input := d.action("engine.qa.design")
+	manifest := simpleManifest(input)
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+	d.drive()
+	id, input = d.action("engine.qa.review.rationale")
+	approved := approvedReview(manifest)
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved, Suggestions: []protocol.QASuggestion{{Severity: "P3", Message: "Specify the rejecting diagnostic in the invalid oracle"}}})
+	suggestion := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
+	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "case correction", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: suggestion.ID, Decision: "ACCEPT", Reason: "The corrected oracle must state the actual diagnostic", AffectedCases: []string{"invalid"}}}})
+	d.drive()
+	id, input = d.action("engine.qa.design")
+	if len(input.AcceptedSuggestions) != 1 || input.AcceptedSuggestions[0].ID != suggestion.ID || input.AcceptedSuggestions[0].Message != suggestion.Message || input.AcceptedSuggestions[0].Decision != "ACCEPT" || !reflect.DeepEqual(input.AffectedCases, []string{"invalid"}) {
+		t.Fatal("issued revision omitted its original accepted instruction or exact affected cases")
+	}
+	d.reopen()
+	d.drive()
+	repeatedID, repeatedInput := d.action("engine.qa.design")
+	if repeatedID != id || !reflect.DeepEqual(input, repeatedInput) {
+		t.Fatal("recovery changed the issued correction or created another design duty")
+	}
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResult(snapshot.State.WorkerInputs(d.f.definition)[id], d.eventID(), []byte(`{"cases":[{"oracle":"rejects invalid input with its specified diagnostic"}]}`), "original-case-correction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.receipt(id)
+	if accepted := d.submit(event); accepted.Status != "ACCEPTED" {
+		t.Fatalf("case revision rejected: %+v", accepted)
+	}
+	d.drive()
+	id, input = d.action("engine.qa.review.rationale")
+	if !reflect.DeepEqual(input.Manifest.Cases[0], manifest.Cases[0]) || input.Manifest.Cases[1].Oracle != "rejects invalid input with its specified diagnostic" || len(input.InheritableReviews) != 1 || input.InheritableReviews[0].ID != "normal" || len(input.AcceptedSuggestions) != 1 || input.AcceptedSuggestions[0].ID != suggestion.ID || !reflect.DeepEqual(input.AffectedCases, []string{"invalid"}) {
+		t.Fatal("revision changed an unaffected case or inherited the affected approval")
+	}
+	approved = approvedReview(input.Manifest)
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved})
+	d.drive()
+	if set := d.run.Validation.Sets[coverage.ReviewBlackbox]; set.Status != "FROZEN" || len(set.ReviewHistory) != 2 || len(set.AffectedCases) != 0 {
+		t.Fatal("independently approved correction did not finish in the original owner")
 	}
 }

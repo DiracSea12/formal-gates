@@ -69,7 +69,7 @@ class NonhappyRegressions(unittest.TestCase):
         def result(worker,role,workspace):
             if role=='development':
                 (workspace/'calculator.py').write_text('def add(a,b):\n    return a+b\n')
-                return {'status':'FAIL','summary':'Mandatory development work remains (fixture)', 'findings':[{'severity':'P1','message':'Remaining obligation','paths':['calculator.py']}],'check_reviews':{}}
+                return {'summary':'Mandatory development work remains (fixture)', 'findings':[{'severity':'P1','message':'Remaining obligation','paths':['calculator.py']}],'check_reviews':[]}
             return original(worker,role,workspace)
         with patch.object(Workers,'fixture',result):
             plan=self.approve(run_graph(self.directory));stopped=self.approve(plan)
@@ -133,7 +133,7 @@ class NonhappyRegressions(unittest.TestCase):
         self.assertEqual(self.store.get(final['development'])['source']['identity'],'new-native')
         self.assertTrue(flow.workers.run.call_args.kwargs['restart_session'])
     def test_one_unfenced_result_allowed_but_competing_results_rejected(self):
-        result={'status':'PASS','summary':'complete','findings':[],'check_reviews':{}}
+        result={'status':'PASS','summary':'complete','findings':[],'check_reviews':[]}
         self.assertEqual(decode_result('Explanation.\n\n'+json.dumps(result)),result)
         with self.assertRaises(RuntimeBlocked):decode_result('Explanation.\n'+json.dumps(result)+'\n{"status":"FAIL"}')
 

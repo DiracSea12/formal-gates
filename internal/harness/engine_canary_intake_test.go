@@ -28,7 +28,7 @@ func (c *engineCanary) confirmedIntake() facade.IntakeConfirmationReceipt {
 }
 
 func TestCanaryCanonicalIntakeBindsCompleteDocument(t *testing.T) {
-	for _, document := range []string{canaryRequirementDocument, canarySplitRequirement} {
+	for _, document := range []string{canaryRequirementDocument, nativeTextRequirement} {
 		c := &engineCanary{t: t, doc: []byte(document)}
 		receipt := c.confirmedIntake()
 		projection, err := requirement.ParseRequirementProjection(receipt.RequirementSource, c.doc)

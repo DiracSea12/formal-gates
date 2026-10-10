@@ -15,7 +15,6 @@ import (
 
 const Version = 1
 const Profile = "harness-v1"
-const Baseline = "517de91f1b480ec969bd91385c29ce38d8bc2841"
 
 type Check struct {
 	ID           string   `json:"id"`
@@ -272,20 +271,53 @@ type FindingJudgment struct {
 // WorkerJudgment carries authored role evidence; finding and approved check
 // identities are assembled before ValidateWorker.
 type WorkerJudgment struct {
-	Status       string            `json:"status"`
-	Summary      string            `json:"summary"`
-	Findings     []FindingJudgment `json:"findings"`
-	CheckReviews map[string]string `json:"check_reviews"`
+	InterruptionReason string            `json:"interruptionReason,omitempty"`
+	RemainingWork      string            `json:"remainingWork,omitempty"`
+	Summary            string            `json:"summary"`
+	Findings           []FindingJudgment `json:"findings"`
+	CheckReviews       []string          `json:"check_reviews"`
 }
 
 func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) (WorkerResult, error) {
-	if strings.TrimSpace(judgment.Summary) == "" {
-		return WorkerResult{}, fmt.Errorf("worker result needs a summary")
+	if judgment.InterruptionReason == "" && (strings.TrimSpace(judgment.Summary) == "" || judgment.RemainingWork == "" && judgment.CheckReviews == nil) {
+		return WorkerResult{}, fmt.Errorf("completed worker requires semantic summary and ordered check reviews")
 	}
-	if judgment.CheckReviews == nil {
-		return WorkerResult{}, fmt.Errorf("check_reviews must be an explicit object")
+	if judgment.InterruptionReason != "" && (judgment.Summary != "" || judgment.Findings != nil || judgment.CheckReviews != nil) {
+		return WorkerResult{}, fmt.Errorf("interruption cannot contain completed role placeholders")
 	}
-	result := WorkerResult{Status: judgment.Status, Summary: judgment.Summary, CheckIDs: []string{}}
+	if judgment.InterruptionReason != "" || judgment.RemainingWork != "" {
+		if judgment.Findings == nil {
+			judgment.Findings = []FindingJudgment{}
+		}
+		if judgment.CheckReviews == nil {
+			judgment.CheckReviews = []string{}
+		}
+	}
+	status := "PASS"
+	for _, finding := range judgment.Findings {
+		if finding.Severity == "P0" || finding.Severity == "P1" {
+			status = "FAIL"
+		}
+	}
+	if judgment.InterruptionReason != "" && judgment.RemainingWork != "" {
+		return WorkerResult{}, fmt.Errorf("interruption and continuation are distinct semantic reports")
+	}
+	summary := judgment.Summary
+	if judgment.InterruptionReason != "" {
+		if strings.TrimSpace(judgment.InterruptionReason) == "" {
+			return WorkerResult{}, fmt.Errorf("interruption reason is empty")
+		}
+		status = "BLOCKED"
+		summary = judgment.InterruptionReason
+	}
+	if judgment.RemainingWork != "" {
+		if strings.TrimSpace(judgment.RemainingWork) == "" {
+			return WorkerResult{}, fmt.Errorf("remaining work is empty")
+		}
+		status = "CONTINUE"
+		summary += "\n" + judgment.RemainingWork
+	}
+	result := WorkerResult{Status: status, Summary: summary, CheckIDs: []string{}}
 	if judgment.Findings != nil {
 		result.Findings = make([]Finding, len(judgment.Findings))
 		for i, finding := range judgment.Findings {
@@ -293,25 +325,20 @@ func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) 
 				Role, Status, Summary string
 				Ordinal               int
 				Finding               FindingJudgment
-			}{role, judgment.Status, judgment.Summary, i, finding})
+			}{role, status, judgment.Summary, i, finding})
 			result.Findings[i] = Finding{ID: id, Severity: finding.Severity, Message: finding.Message, Paths: finding.Paths}
 		}
 	}
-	known := map[string]bool{}
-	for _, check := range checks {
-		known[check.ID] = true
-		if evidence, exists := judgment.CheckReviews[check.ID]; exists {
-			if strings.TrimSpace(evidence) == "" {
-				return WorkerResult{}, fmt.Errorf("check review evidence is empty: %s", check.ID)
-			}
-			result.CheckIDs = append(result.CheckIDs, check.ID)
-			result.Summary += "\nCheck " + check.ID + ": " + evidence
-		}
+	if len(judgment.CheckReviews) != 0 && len(judgment.CheckReviews) != len(checks) {
+		return WorkerResult{}, fmt.Errorf("check reviews must follow the approved check order")
 	}
-	for id := range judgment.CheckReviews {
-		if !known[id] {
-			return WorkerResult{}, fmt.Errorf("unknown check review: %s", id)
+	for index, evidence := range judgment.CheckReviews {
+		check := checks[index]
+		if strings.TrimSpace(evidence) == "" {
+			return WorkerResult{}, fmt.Errorf("check review evidence is empty: %s", check.ID)
 		}
+		result.CheckIDs = append(result.CheckIDs, check.ID)
+		result.Summary += "\nCheck " + check.ID + ": " + evidence
 	}
 	if err := ValidateWorker(role, result, checks); err != nil {
 		return WorkerResult{}, err
@@ -322,9 +349,17 @@ func WorkerSchema(checks ...Check) map[string]any {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	arr := func(item any) map[string]any { return map[string]any{"type": "array", "items": item} }
 	finding := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"severity", "message", "paths"}, "properties": map[string]any{"severity": map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}, "message": str(), "paths": arr(str())}}
-	reviews := map[string]any{}
+	reviews := []any{}
 	for _, check := range checks {
-		reviews[check.ID] = map[string]any{"type": "string", "minLength": 1}
+		reviews = append(reviews, map[string]any{"type": "string", "minLength": 1, "description": "Assess the approved check: " + strings.Join(check.Argv, " ")})
 	}
-	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "summary", "findings", "check_reviews"}, "properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "BLOCKED", "CONTINUE"}}, "summary": str(), "findings": arr(finding), "check_reviews": map[string]any{"type": "object", "additionalProperties": false, "properties": reviews, "required": []string{}}}}
+	tuple := map[string]any{"type": "array", "prefixItems": reviews, "items": false, "minItems": len(reviews), "maxItems": len(reviews)}
+	reviewSchema := any(tuple)
+	if len(checks) > 0 {
+		reviewSchema = map[string]any{"anyOf": []any{tuple, map[string]any{"type": "array", "maxItems": 0}}}
+	}
+	completed := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"summary", "findings", "check_reviews"}, "properties": map[string]any{"summary": str(), "findings": arr(finding), "check_reviews": reviewSchema}}
+	interruption := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"interruptionReason"}, "properties": map[string]any{"interruptionReason": map[string]any{"type": "string", "minLength": 1}}}
+	continuation := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"summary", "remainingWork"}, "properties": map[string]any{"summary": str(), "remainingWork": map[string]any{"type": "string", "minLength": 1}, "findings": arr(finding)}}
+	return map[string]any{"anyOf": []any{completed, interruption, continuation}}
 }

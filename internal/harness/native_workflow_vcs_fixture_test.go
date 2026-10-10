@@ -9,54 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
-	"testing"
 	"time"
 
-	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/vcs"
 )
-
-// The same installed workflow consumes real SVN and P4 workspaces. Only host
-// transport is synthetic; candidate identities and all native effects are real.
-func TestCanaryInstalledNativeFlows(t *testing.T) {
-	for _, provider := range []string{"svn", "p4"} {
-		t.Run(provider, func(t *testing.T) {
-			for _, split := range []bool{true, false} {
-				name := "split"
-				if !split {
-					name = "no-split"
-				}
-				t.Run(name, func(t *testing.T) { runCanaryInstalledFlow(t, provider, split, canaryProvider) })
-			}
-		})
-	}
-}
-
-func TestCanaryInstalledNativeTransportFailureKeepsIndependentFrontier(t *testing.T) {
-	for _, provider := range []string{"svn", "p4"} {
-		t.Run(provider, func(t *testing.T) {
-			for _, mode := range []string{"transient", "permanent"} {
-				t.Run(mode, func(t *testing.T) { runCanaryInstalledTransportFailure(t, provider, mode) })
-			}
-		})
-	}
-}
-
-// Every cell is separately selectable in a test binary. The existing live
-// authorization owner checks each call; the ordinary suite spends nothing.
-func TestEngineNativeCanary(t *testing.T) {
-	if os.Getenv("FORMAL_GATES_ENGINE_CANARY") != "1" {
-		t.Skip("engine canary: set FORMAL_GATES_ENGINE_CANARY=1 (real host calls, real spend)")
-	}
-	for _, provider := range []string{"svn", "p4"} {
-		t.Run(provider, func(t *testing.T) {
-			t.Run("split", func(t *testing.T) { runEngineSplitCanary(t, provider) })
-			t.Run("no-split", func(t *testing.T) { runEngineNoSplitCanary(t, provider, canaryProvider) })
-		})
-	}
-}
 
 func (c *engineCanary) fixtureCommand(dir, command string, input []byte, args ...string) string {
 	c.t.Helper()
@@ -106,8 +63,7 @@ func (c *engineCanary) initFixtureRepository(repositoryRoot ...string) {
 	for key, value := range c.hostEnvironment() {
 		c.t.Setenv(key, value)
 	}
-	// Nested SVN working copies make Go stamping ambiguous; native snapshots
-	// are verified by Provider, while these builds check fixture behavior.
+
 	c.t.Setenv("GOFLAGS", strings.TrimSpace(os.Getenv("GOFLAGS")+" -buildvcs=false"))
 	c.fixtureCommand(c.project, "go", nil, "env", "GOFLAGS")
 	if c.vcs.Name() == "svn" {
@@ -176,87 +132,4 @@ func (c *engineCanary) commitFixture(paths []string, message string) string {
 		c.fail("fixture snapshot: %v", err)
 	}
 	return identity
-}
-
-// Both terminal consumers check the same complete native promotion and finite
-// resource registry. Path existence alone does not prove native cleanup.
-func (c *engineCanary) assertNativeTerminal(base string, final facade.Run, paths []string) (string, string) {
-	c.t.Helper()
-	head, err := c.vcs.Resolve()
-	if err != nil {
-		c.fail("final native snapshot: %v", err)
-	}
-	if err := c.vcs.Verify(head); err != nil {
-		c.fail("final snapshot is not reproducible: %v", err)
-	}
-	tree, err := c.vcs.TreeDigest(head)
-	if err != nil {
-		c.fail("final native digest: %v", err)
-	}
-	c.promotion.assertTerminal(c)
-	c.assertCanonicalGuarantee(final)
-	terminal := final.Termination
-	if terminal == nil || !terminal.ResourcesCleaned() || terminal.CandidatePromotion == nil {
-		c.fail("terminal resource/promotion proof missing")
-	}
-	proof := terminal.CandidatePromotion
-	if proof.Provider != c.vcs.Name() || proof.Final != head || proof.FinalDigest != tree || proof.SourceDigest != tree || final.PromotedSnapshot != head {
-		c.fail("promotion does not bind the actual native snapshot and full tree")
-	}
-	validated, err := c.vcs.TreeEntries(proof.Source)
-	if err != nil {
-		c.fail("validated native candidate cannot be reproduced: %v", err)
-	}
-	delivered, err := c.vcs.TreeEntries(head)
-	if err != nil || !canaryValuesEqual(validated, delivered) {
-		c.fail("promotion changed complete native bytes or metadata: %v", err)
-	}
-	count, err := c.vcs.CommitCount(base, head)
-	if err != nil || count != 1 {
-		c.fail("final range holds %d commits, want one organized commit: %v", count, err)
-	}
-	status, err := c.vcs.Status()
-	if err != nil || status != "" {
-		c.fail("final native workspace is not clean: %s %v", status, err)
-	}
-	changed, err := c.vcs.DiffNames(base, head)
-	if err != nil {
-		c.fail("final native range: %v", err)
-	}
-	for _, path := range paths {
-		if !slices.Contains(changed, path) {
-			c.fail("final candidate misses %s: %v", path, changed)
-		}
-	}
-	if c.vcs.Name() == "git" {
-		trees, err := c.vcs.Worktrees()
-		if err != nil || len(trees) != 1 {
-			c.fail("native Git worktree residuals: %+v %v", trees, err)
-		}
-	}
-	for _, resource := range terminal.NativeResources {
-		if resource.Path == "" || resource.Identity == "" || resource.Owner == "" {
-			c.fail("native resource lost issued path/identity/owner: %+v", resource)
-		}
-		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
-			c.fail("native resource directory remains: %s %v", resource.Path, err)
-		}
-		absent, err := c.vcs.WorkspaceAbsent(resource.Path, resource.Handle)
-		if err != nil || !absent {
-			c.fail("native resource registration remains: %+v %v", resource, err)
-		}
-		if c.vcs.Name() == "git" {
-			ref := c.fixtureCommand(c.project, "git", nil, "for-each-ref", "--format=%(objectname)", resource.Ref)
-			if ref != "" {
-				c.fail("native resource ref remains: %s", ref)
-			}
-		}
-	}
-	return head, tree
-}
-
-// The integration-owned flag gap is independent of the two function batches.
-// Merge QA and merge-gate observe it before the existing master repair closes it.
-func (c *engineCanary) splitFlagContract() bool {
-	return c.split
 }

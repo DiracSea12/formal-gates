@@ -12,10 +12,10 @@ from .native_hosts import adapter_for
 ROLES = {
     "product-review": "Check the requirement for coherent scope and concrete acceptance. Do not implement.",
     "technical-review": "Review feasibility and the smallest implementation plan. State the plan in summary. Do not implement.",
-    "development": "Implement only the approved requirement in this workspace. Do not git commit. Use CONTINUE only for genuinely unfinished work.",
+    "development": "Implement only the approved requirement in this workspace. Do not git commit. Report remainingWork only for genuinely unfinished work.",
     "repair": "Repair only the supplied mandatory findings and failed checks. Preserve unrelated working code. Do not git commit.",
-    "qa-design": "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in its fixed check_reviews key. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
-    "qa-review": "Independently review the supplied QA design for coverage and feasibility. Assess every authorized check using its fixed check_reviews key. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
+    "qa-design": "Independently assess the approved checks against requirements using ONLY the baseline workspace. Explain the coverage and oracle of each check in the approved check order. Missing implementation on the baseline is expected, not a blocker. A real coverage gap is FAIL.",
+    "qa-review": "Independently review the supplied QA design for coverage and feasibility. Assess every authorized check in the approved check order. Missing implementation on the baseline is expected. Do not implement or change approved commands.",
     "complexity-gate": "Review the full base-to-candidate change for unnecessary complexity and changes unrelated to the approved requirement. Do not implement.",
     "implementation-quality-gate": "Review the full base-to-candidate change for correctness and maintainability. Inspect actual code and assertions. Do not implement.",
 }
@@ -92,12 +92,12 @@ class Workers:
                 +'Do not control the formal-gates workflow, edit flow state, claim user approval, commit or push. '
                 +'Read-only roles must not edit files. Development and repair must not edit the approved verification scripts or .formal-gates-input materials. '
                 +'Only the provided role result schema is accepted. Do not return internal bindings, goto or state patches. '
-                +'PASS cannot contain P0/P1. Runtime or missing-access blockers are BLOCKED, not PASS. '
+                +'PASS cannot contain P0/P1. Report an actual interruptionReason for runtime or missing-access blockers; overall status is program-derived. '
                 +'P2 is mandatory to repair and P3 advisory; do not promote optional suggestions to blockers. '
                 +'Use the actual current workspace, not another project or a historical worktree. '
                 +'When task.json contains comparison, read its comparison.json, full.diff and baseline/candidate blob materials. '
                 +BOUNDARY+'\n'
-                +'For QA design/review, assess every approved check with non-empty coverage/oracle evidence in its fixed check_reviews key. Other roles may return an empty object. Finding identities are assigned by the program. Do not return check or finding IDs or fabricate approval.')
+                +'For QA design/review, assess every approved check with non-empty coverage/oracle evidence in the approved check order. Other roles return an empty array. Finding identities are assigned by the program. Do not return check or finding IDs or fabricate approval.')
             if handover:
                 prompt += ('\nAn operator explicitly authorized a NEW session for the SAME interrupted role task. '
                            'The previous executor is stopped. Read '+str(materials/'handover.json')+
@@ -150,13 +150,13 @@ class Workers:
         output={'result':checked['result'],'needs_repair':checked['needs_repair'],'source':source,
                 'role':role,'input':key_data,'input_files':input_files,'revision':self.store.manifest['revision']}
         ref=self.store.put(output);atomic(receipt,{'ref':ref})
-        self.store.event('worker-complete',role=role,operation=key,status=result['status'],evidence=ref)
+        self.store.event('worker-complete',role=role,operation=key,status=checked['result']['status'],evidence=ref)
         return output
     def fixture(self,role: str,workspace: Path) -> dict:
         if not self.store.manifest.get('fixture'): raise HarnessError('Fixture workers are restricted to the explicitly labelled demo')
-        checks={c['id']: 'Deterministic coverage/oracle fixture; NOT an independent review.' for c in self.spec['checks']}
+        checks=['Deterministic coverage/oracle fixture; NOT an independent review.' for c in self.spec['checks']]
         if role=='development':
             time.sleep(.15);(workspace/'calculator.py').write_text('def add(a, b):\n    return a - b  # intentional demo defect\n')
         if role=='repair':(workspace/'calculator.py').write_text('def add(a, b):\n    return a + b\n')
-        return {'status':'PASS','summary':f'Deterministic {role} fixture; NOT an independent model review.',
-                'findings':[],'check_reviews':checks if role in ('qa-design','qa-review') else {}}
+        return {'summary':f'Deterministic {role} fixture; NOT an independent model review.',
+                'findings':[],'check_reviews':checks if role in ('qa-design','qa-review') else []}

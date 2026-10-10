@@ -144,7 +144,7 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 		"identity": "", "model": "claude-fixture-model", "reasoning_effort": "high", "prompt": prompt, "schema": plainWorkerSchema()}
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace,
 		"model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity}
-	answer := map[string]any{"status": "PASS", "summary": "native answer " + identity, "findings": []any{}, "check_reviews": map[string]any{}}
+	answer := map[string]any{"summary": "native answer " + identity, "findings": []any{}, "check_reviews": []any{}}
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity,
 		"uuid": "result-" + identity, "num_turns": 3, "result": "ignored when structured output is available", "structured_output": answer,
 		"usage": map[string]any{"input_tokens": 12, "output_tokens": 3}, "modelUsage": map[string]any{"claude-fixture-model": map[string]any{"inputTokens": 12}}}
@@ -159,11 +159,12 @@ func (s *claudeScenario) save(t *testing.T) {
 	t.Helper()
 	schema := mustCanonical(t, s.request["schema"])
 	s.peer.Args = []string{"-p", textOf(s.request["prompt"]), "--output-format", "stream-json", "--verbose", "--include-hook-events", "--json-schema", schema}
-	if s.request["read_only"] == true {
-		s.peer.Args = append(s.peer.Args, "--tools", "Read,Glob,Grep")
-	} else {
-		s.peer.Args = append(s.peer.Args, "--allowedTools", "Read,Glob,Grep,Bash,Edit,Write,Agent")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
+	mcpConfig := mustCanonical(t, map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": executable, "args": []any{"harness", "native-tools", s.directory}}}})
+	s.peer.Args = append(s.peer.Args, "--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig)
 	for _, option := range []struct{ key, flag string }{{"identity", "--resume"}, {"model", "--model"}, {"reasoning_effort", "--effort"}} {
 		if value, _ := s.request[option.key].(string); value != "" {
 			s.peer.Args = append(s.peer.Args, option.flag, value)
@@ -409,7 +410,7 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 		delete(terminal, "structured_output")
 		delete(terminal, "usage")
 		delete(terminal, "modelUsage")
-		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"status": "PASS", "summary": "text result", "findings": []any{}, "check_reviews": map[string]any{}}) + "\n```"
+		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"summary": "text result", "findings": []any{}, "check_reviews": []any{}}) + "\n```"
 		if invalidRole {
 			terminal["result"] = `{"status":"unexpected","summary":"invalid role result","findings":[],"check_reviews":{}}`
 		}

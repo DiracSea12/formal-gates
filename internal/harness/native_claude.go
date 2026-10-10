@@ -134,16 +134,20 @@ func claudeExecute(request any, directory string, probe bool) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
-	readOnly, ok := getOf(request, "read_only").(bool)
+	_, ok = getOf(request, "read_only").(bool)
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
 	argv := []string{executable, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-hook-events", "--json-schema", string(schema)}
-	if readOnly {
-		argv = append(argv, "--tools", "Read,Glob,Grep")
-	} else {
-		argv = append(argv, "--allowedTools", "Read,Glob,Grep,Bash,Edit,Write,Agent")
+	server, err := nativeToolServer(directory)
+	if err != nil {
+		return nil, err
 	}
+	mcpConfig, err := canonicalBody(map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": server["command"], "args": server["args"]}}})
+	if err != nil {
+		return nil, err
+	}
+	argv = append(argv, "--tools", "", "--strict-mcp-config", "--mcp-config", string(mcpConfig))
 	for _, option := range []struct{ key, flag string }{{"identity", "--resume"}, {"model", "--model"}, {"reasoning_effort", "--effort"}} {
 		if value, _ := getOf(request, option.key).(string); value != "" {
 			argv = append(argv, option.flag, value)

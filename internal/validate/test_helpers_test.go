@@ -67,3 +67,28 @@ func engineAdmissionFixture(t *testing.T, root, packageDigest, recordID string) 
 	return &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: facade.DefaultProvider,
 		PackageDigest: packageDigest, InstalledTargetIdentity: recordID, Generation: generation, Lease: lease, Token: token}
 }
+
+// Unit tests select the same invocation identity accepted by the production
+// launcher owner. Native subprocess coverage supplies its actual executable.
+func fixtureLauncherInvocation(t testing.TB, path string) {
+	t.Helper()
+	original := os.Args[0]
+	os.Args[0] = path
+	t.Cleanup(func() { os.Args[0] = original })
+}
+
+// Workflow fixtures invoke the launcher named by their committed installation.
+// Missing or mismatched records remain visible to the normal admission checks.
+func fixtureRegisteredInvocation(registry, target, recordID string) func() {
+	original := os.Args[0]
+	if document, err := LoadRegistry(registry); err == nil {
+		for _, record := range document.Records {
+			if recordID != "" && record.ID != recordID || target != "" && canonicalRegistryPath(record.Target) != canonicalRegistryPath(target) {
+				continue
+			}
+			os.Args[0] = record.LauncherPath
+			break
+		}
+	}
+	return func() { os.Args[0] = original }
+}

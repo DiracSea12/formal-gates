@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,9 +150,13 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 				t.Fatalf("passing complete suite failed: %+v", actual)
 			}
 			verification, input := wait("engine.repair.verify")
-			comparisons := map[string]worker.Observation{}
-			for _, fact := range input.ExecutionFacts {
-				comparisons[fact.CaseID] = worker.Observation{Comparison: "actual exit and output match the approved normal oracle", Result: coverage.ExecutedPass}
+			comparisons := []*worker.Observation{}
+			for _, caseID := range input.Repair.VerificationCases {
+				index := slices.IndexFunc(input.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == caseID })
+				if index < 0 {
+					t.Fatal("repair comparison lacks original native facts for its issued case")
+				}
+				comparisons = append(comparisons, &worker.Observation{Comparison: "actual exit and output match the approved normal oracle", Result: coverage.ExecutedPass})
 			}
 			raw, err := json.Marshal(worker.Execution{Records: comparisons})
 			if err != nil {

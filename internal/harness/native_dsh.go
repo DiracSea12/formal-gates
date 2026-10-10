@@ -215,11 +215,14 @@ func dshPluginPath() (string, error) {
 
 // makeDSHPatch writes profile.json: the harness-native plugin (read_only adds
 // sandboxPolicy to its inject list) and the ACP overlay; a probe additionally
-// disables session-title-llm. The read-only tool surface itself is enforced by
-// the unchanged native_dsh.mjs inside the host - there is no second permission
-// engine here.
+// disables session-title-llm. The native hook registers the original-request
+// workspace tool and restricts builtins; engine admission owns every operation.
 func makeDSHPatch(directory string, readOnly bool, probe bool) (string, error) {
 	plugin, err := dshPluginPath()
+	if err != nil {
+		return "", err
+	}
+	executable, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +235,7 @@ func makeDSHPatch(directory string, readOnly bool, probe bool) (string, error) {
 			"id":     "harness-native",
 			"name":   plugin,
 			"inject": inject,
-			"config": map[string]any{"directory": directory, "read_only": readOnly},
+			"config": map[string]any{"directory": directory, "read_only": readOnly, "executable": executable, "tool": nativeWorkspaceToolSchema(readOnly), "managed_tools": !probe},
 		}}},
 		map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}},
 	}

@@ -1,28 +1,42 @@
-// DSH-local transport policy and native evidence, not a scheduler or new tool API.
+// DSH-native workspace tool registration, policy and original source evidence.
 import { appendFileSync, writeFileSync, renameSync, readFileSync, existsSync } from 'node:fs'
 import { join, isAbsolute } from 'node:path'
+import { spawn } from 'node:child_process'
 export const name = 'formal-gates-harness-native'
 export const inject = ['tools']
 export function apply(ctx, config) {
   if (!isAbsolute(config.directory) || typeof config.read_only !== 'boolean') throw new Error('Invalid harness native configuration')
+  if (config.managed_tools) {
+    if (!isAbsolute(config.executable) || config.tool?.name !== 'workspace') throw new Error('Native workspace tool requires its executable and schema')
+    let previous = Promise.resolve()
+    const unregister = ctx.tools.register({
+      name: config.tool.name,
+      description: config.tool.description,
+      parameters: config.tool.inputSchema,
+      output: { schema: { type: 'object' }, render(_args, result) { return [{ type: 'text', text: JSON.stringify(result) }] } },
+      execute(args) {
+        const call = previous.then(() => invokeWorkspace(config, args))
+        previous = call.catch(() => {})
+        return call
+      },
+    })
+    const allowed = new Set(['workspace', 'AskUserQuestion', 'ask_user_question'])
+    const unguard = ctx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'Issued action uses the registered workspace tool')
+    ctx.effect(() => () => { unguard(); unregister() })
+    ctx.on('agent/created', ({ agent }) => {
+      const tools = ctx.tools.schemas(agent).map(tool => tool.name)
+      agent.ctx.tools.restrict({ deny: tools.filter(name => !allowed.has(name)) })
+      writeFileSync(join(config.directory, 'tool-policy.json'), JSON.stringify({ read_only: config.read_only, available: tools, allowed: tools.filter(name => allowed.has(name)) }), { mode: 0o600 })
+    })
+  }
   if (config.read_only) {
     if (!ctx.get('sandboxPolicy')) throw new Error('DSH read-only role requires native sandbox policy')
-    // Native filesystem/shell policy confines these tools. Arbitrary plugin
-    // executors have no equivalent read-only contract in this transport.
-    // The native in-process delegation tools inherit the session sandbox;
-    // this same hook also confines every child. Native web reads remain usable.
-    const allowed = new Set(['Read','read','read_file','Glob','glob','Grep','grep','Bash','bash','shell','Search','search','WebSearch','WebFetch','web_search','web_fetch','List','list','list_directory','read_image','job_output','job_list','subagent','subagent_fork','send_message','list_agents','list_subagent_models'])
-    const unguard = ctx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'Read-only role requires a confined native tool')
-    ctx.effect(() => () => unguard())
     ctx.on('agent/created', ({ agent }) => {
       // This is DSH's native session-mode write path; it preserves the user's
       // approval policy and applies equally to restored and child sessions.
       if (agent.ctx.get('sandboxPolicy').overrideOf(agent.session) !== 'read-only') {
         agent.session.append('sandbox/mode', {mode:'read-only'})
       }
-      const tools = ctx.tools.schemas(agent).map(tool => tool.name)
-      agent.ctx.tools.restrict({ deny: tools.filter(name => !allowed.has(name)) })
-      writeFileSync(join(config.directory, 'tool-policy.json'), JSON.stringify({read_only:true, available:tools, allowed:tools.filter(name=>allowed.has(name))}), {mode:0o600})
     })
   }
   let sessionId, turnId
@@ -46,4 +60,25 @@ export function apply(ctx, config) {
     appendFileSync(join(config.directory,'native-events.jsonl'),JSON.stringify({sessionId,event})+'\n',{mode:0o600})
   })
   ctx.provide('harnessNativeReady',true)
+}
+
+function invokeWorkspace(config, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(config.executable, ['harness', 'native-tools', config.directory], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const output = [], errors = []
+    let failed
+    child.stdout.on('data', chunk => output.push(chunk))
+    child.stderr.on('data', chunk => errors.push(chunk))
+    child.on('error', error => { failed = error })
+    child.on('close', code => {
+      if (failed) { reject(failed); return }
+      if (code !== 0) { reject(new Error(Buffer.concat(errors).toString('utf8'))); return }
+      try {
+        const reply = JSON.parse(Buffer.concat(output).toString('utf8'))
+        if (reply.error || reply.result?.isError) throw new Error(reply.error?.message ?? reply.result?.content?.[0]?.text)
+        resolve(JSON.parse(reply.result.content[0].text))
+      } catch (error) { reject(error) }
+    })
+    child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace', arguments: args } }) + '\n')
+  })
 }

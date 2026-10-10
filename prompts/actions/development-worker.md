@@ -49,8 +49,7 @@
 `GranularityReview`，该规划结果不包含修改完成证据。后续成员的 `input.development`
 携带批次合同及依赖结果；完成语义证据逐项覆盖 DoD 和 handoff；程序冻结精确来源并执行原批次批准的 checks。
 
-每个隔离批次可在 `route` 选择 `full` 或 `custom` 普通门，候选 `gates` 和子集
-`selected` 使用既有路线契约。不携带普通黑盒/白盒 QA 或保留合并门；省略 route 时
+每个隔离批次可在 `route` 选择 `full` 或 `custom` 普通门，普通门全集由程序从原 catalog 取得；`selected` 仅选择该目录的 1 起始序号。不携带普通黑盒/白盒 QA 或保留合并门；省略 route 时
 继承本 run 的普通门。原 run 的 QA、最终合并门及合并 QA 责任保留。CHECKPOINT
 分组只控制开发前沿，不改变冻结用例或原返修业务轮归属。纯 P2 保留不复审和 carry
 例外，保留 affectedCases 及逐项 caseRuns 的真实证据；批准命令由程序执行并记录实际结果。

@@ -12,7 +12,7 @@ import (
 )
 
 func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T) {
-	for _, scenario := range []string{"complete", "unaffected-only", "illegal-impact"} {
+	for _, scenario := range []string{"complete", "mandatory-and-selected", "illegal-impact"} {
 		t.Run(scenario, func(t *testing.T) {
 			d := gateImpactBoundary(t)
 			id, input := d.action("engine.validation.observation")
@@ -29,9 +29,9 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 				t.Fatal(err)
 			}
 			original := snapshot.State.WorkerInputs(d.f.definition)[id]
-			judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{{Cases: []string{"invalid"}, Reason: "Only rejection diagnostic changed; original normal behavior remains unaffected"}}, GateImpacts: []worker.ImpactJudgment{{Decision: "INHERIT", Reason: "Original authorization security responsibility and reviewed range remain unaffected"}}}
-			if scenario == "unaffected-only" {
-				judgment.Scopes[0].Cases = []string{"normal"}
+			judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{{Cases: []int{}, Reason: "Only rejection diagnostic changed; original normal behavior remains unaffected"}}, GateImpacts: []worker.ImpactJudgment{{Decision: "INHERIT", Reason: "Original authorization security responsibility and reviewed range remain unaffected"}}}
+			if scenario == "mandatory-and-selected" {
+				judgment.Scopes[0].Cases = []int{slices.Index(issued.Scopes[0].ApprovedCases, "normal") + 1}
 			}
 			if scenario == "illegal-impact" {
 				judgment.GateImpacts[0].Decision = "PASS"
@@ -50,7 +50,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 				t.Fatal(err)
 			}
 			accepted := d.submit(event)
-			if scenario != "complete" {
+			if scenario == "illegal-impact" {
 				if accepted.Status != "REJECTED_INVALID_RESULT" {
 					t.Fatalf("original validator did not reject invalid %s: %#v", scenario, accepted)
 				}
@@ -71,8 +71,12 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 				t.Fatal(err)
 			}
 			wave := after.State.Validation.Waves[len(after.State.Validation.Waves)-1]
+			required := []string{"invalid"}
+			if scenario == "mandatory-and-selected" {
+				required = append(required, "normal")
+			}
 			for _, target := range wave.Targets {
-				if target.Kind == "QA" && (!slices.Equal(target.RequiredCases, []string{"invalid"}) || target.ScopeReason == "") {
+				if target.Kind == "QA" && (!slices.Equal(target.RequiredCases, required) || target.ScopeReason == "") {
 					t.Fatal("program did not retain exact affected subset")
 				}
 				if target.Gate == "security" && (target.GateImpact.Decision != "INHERIT" || target.ResultAction != impact.Evidence.ActionID) {
@@ -109,7 +113,14 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 			}
 			d.drive()
 			_, qa := d.action("engine.qa.execution")
-			if !slices.Equal(qa.RequiredCases, []string{"invalid"}) || len(qa.Inherited) != 1 || qa.Inherited[0].CaseID != "normal" || qa.Inherited[0].Result != coverage.ExecutedPass {
+			if !slices.Equal(qa.RequiredCases, required) {
+				t.Fatal("scope dropped required or selected case")
+			}
+			if scenario == "mandatory-and-selected" {
+				if len(qa.Inherited) != 0 {
+					t.Fatal("executed selected case was falsely inherited")
+				}
+			} else if len(qa.Inherited) != 1 || qa.Inherited[0].CaseID != "normal" || qa.Inherited[0].Result != coverage.ExecutedPass {
 				t.Fatal("scope bypassed original complementary inheritance")
 			}
 

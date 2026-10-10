@@ -46,3 +46,23 @@ func mustWriteCLI(t *testing.T, path, text string) {
 		t.Fatal(err)
 	}
 }
+
+// Install CLI fixtures supply the documented transaction launcher's invocation
+// identity. The production launcher checker and registry owner remain active.
+func runInstalledFixture(t *testing.T, args []string, streams IO) int {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, ".local", "bin", installTestBinaryName())
+	for i, arg := range args {
+		if arg == "--binary-target" && i+1 < len(args) {
+			launcher = args[i+1]
+		}
+	}
+	original := os.Args[0]
+	os.Args[0] = launcher
+	defer func() { os.Args[0] = original }()
+	return Run("formal-gates", args, streams)
+}

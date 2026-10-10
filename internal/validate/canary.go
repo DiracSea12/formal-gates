@@ -22,6 +22,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	engineRuntime "formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
@@ -430,7 +431,18 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			if err != nil {
 				return err
 			}
-			event, err := worker.DecodeResult(material.Input, eventID(), raw, fmt.Sprintf("sha256:%x", sha256.Sum256(raw)))
+			var paths []string
+			if !material.ReadOnly && material.Input.Validation != nil && material.Input.Validation.Workspace != nil {
+				resource := material.Input.Validation.Workspace
+				paths, err = vcs.NewNative(root, material.Input.VCS, nil).At(resource.Path, resource.Handle).ChangedPaths()
+				if err != nil {
+					return err
+				}
+				if paths == nil {
+					paths = []string{}
+				}
+			}
+			event, err := worker.DecodeResultWithPaths(material.Input, eventID(), raw, fmt.Sprintf("sha256:%x", sha256.Sum256(raw)), paths)
 			if err != nil {
 				return err
 			}
@@ -454,22 +466,19 @@ func portableLifecyclePayload(root string, input protocol.WorkerInput) ([]byte, 
 }
 
 func portableDevelopmentPlan() *worker.Granularity {
-	return &worker.Granularity{Reason: "One data-artifact fixture: the complete build copies the authored marker to its validation output, and the complete test checks every output byte against the declared marker. No compiler or project language is inferred.", VerificationTier: "FINAL", Batches: []worker.Batch{{DevelopmentBatch: protocol.DevelopmentBatch{ID: "delivery", Subtasks: []protocol.DevelopmentSubtask{{ID: "write-delivery", Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Git candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}, Checks: []protocol.DevelopmentCheck{{ID: "artifact-build", Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {ID: "artifact-tests", Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes and touched path", ContextCost: "One file and one acceptance condition"}}}}
+	return &worker.Granularity{Reason: "One data-artifact fixture with exact byte build/test checks and no inferred language.", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, Artifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Native candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []worker.Criterion{{Description: "Exact delivery marker content"}}, Checks: []worker.Check{{Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes", ContextCost: "One file and one acceptance condition"}}}
 }
 
 func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (any, error) {
 	var payload any
 	if input.Review != nil {
-		result := &worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{
-			"binding":           "The synthetic fixture uses the exact installed role and confirmed input.",
-			"completeness":      "The bounded fixture requirement declares one delivered marker and a full verified route.",
-			"evidence":          "This deterministic portable fixture does not claim model or semantic reviewer validation.",
-			"locations":         "The fixture requirement identifies its public runtime and committed delivery artifacts.",
-			"normal-entry":      "The fixture uses the installed public runtime and registered Git workspace.",
-			"requirement-match": "The fixture plan delivers the declared marker and preserves the full route checks.",
-			"scope":             "The fixture remains within the one confirmed delivery requirement.",
-			"severity":          "The synthetic fixture reports no findings; no model severity assessment is claimed.",
-		}}
+		evidence := map[string]string{
+			"binding": "The synthetic fixture uses the installed role and confirmed input.", "completeness": "The fixture requirement declares its delivery marker and full verified route.", "evidence": "This deterministic fixture does not claim model or semantic reviewer validation.", "locations": "The fixture identifies its public runtime and committed delivery artifacts.", "normal-entry": "The installed runtime and registered native workspace are used.", "requirement-match": "The plan delivers the declared marker and preserves route checks.", "scope": "The fixture remains within its confirmed requirement.", "severity": "No findings are claimed by this synthetic fixture.",
+		}
+		result := &worker.Review{Findings: []worker.Finding{}}
+		for _, key := range review.RequiredVerificationChecks() {
+			result.Verification = append(result.Verification, evidence[key])
+		}
 		if input.Review.Action == review.StartReadiness {
 			result.GranularityReview = portableDevelopmentPlan()
 		}
@@ -492,12 +501,12 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		payload = &worker.Development{Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"marker": "delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Paths: []string{"delivery.txt"}, Summary: "Wrote the exact portable delivery fixture"}
+		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
 	case "engine.qa.design":
 		mode := in.Manifest.Binding.ReviewKind
-		c := worker.Case{CaseID: "delivery-" + strings.ToLower(string(mode)), Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
-		missing := worker.Case{CaseID: "missing-" + strings.ToLower(string(mode)), Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
+		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
+		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
 		if mode == coverage.ReviewWhitebox {
 			c.TestRef = "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"
 			c.PublicEntry, c.Preconditions, c.Steps = "", "", ""
@@ -513,43 +522,49 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 			files := []string{"whitebox_delivered_test.go"}
 			c.Files, missing.Files = &files, &files
 		}
-		manifest := worker.Manifest{Cases: []worker.Case{c, missing}, Coverage: map[string][]string{}}
-		for _, point := range in.Manifest.Points {
-			manifest.Coverage[point.PointID] = []string{c.CaseID, missing.CaseID}
+		manifest := worker.DesignManifest{Cases: []worker.DesignedCase{c, missing}, Coverage: [][]int{}}
+		for range in.Manifest.Points {
+			manifest.Coverage = append(manifest.Coverage, []int{1, 2})
 		}
-		payload = &worker.Design{Manifest: manifest}
+		payload = &worker.Design{DesignManifest: manifest}
 		checked["design:"+string(mode)] = true
 	case "engine.qa.review.rationale":
 		m := in.Manifest
-		r := worker.CaseReview{SourceDecisions: map[string]worker.Decision{}, PointDecisions: map[string]worker.Decision{}, CaseDecisions: map[string]worker.Decision{}}
-		for _, source := range m.Sources {
-			r.SourceDecisions[source] = worker.Decision{Status: coverage.StatusPass, Reason: "The synthetic fixture covers the declared installed delivery source."}
+		r := worker.CaseReview{SourceDecisions: []*worker.Decision{}, PointDecisions: []*worker.Decision{}, CaseDecisions: []*worker.Decision{}}
+		for range m.Sources {
+			r.SourceDecisions = append(r.SourceDecisions, &worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture covers the declared installed delivery source."})
 		}
-		for _, point := range m.Points {
-			r.PointDecisions[point.PointID] = worker.Decision{Status: coverage.StatusPass, Reason: "The synthetic fixture independently relates the committed artifact and missing-artifact oracle to this acceptance condition."}
+		for range m.Points {
+			r.PointDecisions = append(r.PointDecisions, &worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture relates committed/missing-artifact oracles to this condition."})
 		}
-		for _, c := range m.Cases {
-			r.CaseDecisions[c.CaseID] = worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture binds the approved operation or exact Go test and its oracle to the declared acceptance condition."}
+		for range m.Cases {
+			r.CaseDecisions = append(r.CaseDecisions, &worker.Decision{Status: coverage.StatusPass, Reason: "Synthetic fixture binds its approved operation or Go test and oracle."})
 		}
 		payload = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
 	case "engine.qa.execution":
-		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: map[string]worker.Observation{}}}
+		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{}}}
 		payload = result
+		seen := []string{}
 		for _, fact := range in.ExecutionFacts {
+			if !slices.Contains(in.RequiredCases, fact.CaseID) || !slices.Contains(in.PendingCases, fact.CaseID) || slices.Contains(seen, fact.CaseID) {
+				continue
+			}
+			seen = append(seen, fact.CaseID)
 			index := slices.IndexFunc(in.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == fact.CaseID })
 			if index < 0 {
-				return payload, fmt.Errorf("portable execution fact has no approved case: %s", fact.CaseID)
+				return payload, fmt.Errorf("portable execution lacks its approved case: %s", fact.CaseID)
 			}
 			observation, err := portableComparison(in.Manifest.Cases[index], fact)
 			if err != nil {
 				return payload, err
 			}
-			result.Records[fact.CaseID] = observation
+			result.Records = append(result.Records, &observation)
 		}
+
 		checked["execution:"+string(in.Manifest.Binding.ReviewKind)] = true
 	case "engine.gate":
-		payload = &worker.Gate{Status: "PASS", Findings: []worker.Finding{}}
+		payload = &worker.Gate{Findings: []worker.Finding{}}
 		if in.Gate == nil {
 			return payload, fmt.Errorf("portable gate lacks issued input")
 		}
@@ -571,7 +586,7 @@ func portableComparison(c coverage.AcceptanceCase, fact protocol.ExecutionFact) 
 		_, testName, _ := strings.Cut(c.TestRef, "::")
 		passed = evidence.ExitCode == 0 && evidence.GoTestName == testName && evidence.GoResult == "pass"
 		comparison = fmt.Sprintf("expected exact Go test %s to pass; actual test=%s result=%s exit=%d", testName, evidence.GoTestName, evidence.GoResult, evidence.ExitCode)
-	} else if strings.HasPrefix(c.CaseID, "missing-") {
+	} else if strings.Contains(c.Steps, "absent-marker.txt") {
 		passed = evidence.ExitCode != 0 && evidence.StdoutText == "" && strings.Contains(evidence.StderrText, "absent-marker.txt")
 		comparison = fmt.Sprintf("expected Git to reject absent-marker.txt with no stdout; actual exit=%d stdout=%q stderr=%q", evidence.ExitCode, evidence.StdoutText, evidence.StderrText)
 	} else {

@@ -568,7 +568,21 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	if nativeSession == "" {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native result session proof is missing")
 	}
-	event, err := worker.DecodeResult(value.Input, eventID, answer, digest)
+	var paths []string
+	if !request.ReadOnly {
+		facts, err := json.Marshal(source["effects"])
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		var captured struct {
+			Paths []string `json:"paths"`
+		}
+		if err := json.Unmarshal(facts, &captured); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		paths = captured.Paths
+	}
+	event, err := worker.DecodeResultWithPaths(value.Input, eventID, answer, digest, paths)
 	if err != nil {
 		event, err = worker.InvalidResult(value.Input, eventID, digest, err.Error())
 		if err != nil {

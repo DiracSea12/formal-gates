@@ -54,3 +54,20 @@ func TestMaterialProvidesRequirementBodyOnceWithoutChangingIssuedInput(t *testin
 		})
 	}
 }
+
+func TestReadinessUsesOneOrdinaryGateChoiceOrder(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}, Gates: []prompts.PromptDefinition{{ID: "quality"}}}
+	material, err := Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
+	var context protocol.WorkerInput
+	if err := json.Unmarshal([]byte(raw), &context); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(context.AvailableRouteCandidates, material.Input.AvailableRouteCandidates) || !reflect.DeepEqual(context.AvailableRouteCandidates, []string{"quality"}) {
+		t.Fatal("model choice order differs from original decoder input")
+	}
+}

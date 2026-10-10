@@ -64,33 +64,28 @@ func TestComposeStandaloneGatePrompt(t *testing.T) {
 // TestValidateStandaloneGateResult covers result-contract validation:
 // the same semantic rules as a gate result, with no run-state writes.
 func TestValidateStandaloneGateResult(t *testing.T) {
-	for _, item := range []struct {
-		name    string
-		raw     string
-		wantErr string
-	}{
-		{name: "pass", raw: `{"status":"PASS","findings":[]}`},
-		{name: "p2 pass", raw: `{"status":"PASS","findings":[{"severity":"P2","message":"suggestion"}]}`},
-		{name: "p3 pass", raw: `{"status":"PASS","findings":[{"severity":"P3","message":"suggestion"}]}`},
-		{name: "fail", raw: `{"status":"FAIL","findings":[{"severity":"P1","message":"blocker"}]}`},
-		{name: "runtime", raw: `{"status":"RUNTIME_ERROR","message":"VCS unavailable"}`},
-		{name: "pass with p1", raw: `{"status":"PASS","findings":[{"severity":"P1","message":"blocker"}]}`, wantErr: "P2"},
-		{name: "fail without p0p1", raw: `{"status":"FAIL","findings":[{"severity":"P2","message":"minor"}]}`, wantErr: "P0 or P1"},
-		{name: "runtime without message", raw: `{"status":"RUNTIME_ERROR"}`, wantErr: "message"},
-		{name: "bad json", raw: `{`, wantErr: "not valid JSON"},
+	for _, item := range []struct{ name, raw, status, wantErr string }{
+		{"empty completed review", `{"findings":[]}`, "PASS", ""},
+		{"advisory findings", `{"findings":[{"severity":"P2","message":"suggestion"},{"severity":"P3","message":"minor"}]}`, "PASS", ""},
+		{"blocking finding", `{"findings":[{"severity":"P1","message":"blocker"}]}`, "FAIL", ""},
+		{"highest severity", `{"findings":[{"severity":"P0","message":"blocking error"}]}`, "FAIL", ""},
+		{"actual inability", `{"interruptionReason":"VCS unavailable"}`, "RUNTIME_ERROR", ""},
+		{"forbidden status", `{"status":"PASS","findings":[]}`, "", "unknown field"},
+		{"inability with findings", `{"interruptionReason":"VCS unavailable","findings":[{"severity":"P2","message":"suggestion"}]}`, "", "cannot include"},
+		{"blank inability", `{"interruptionReason":" "}`, "", "actual reason"},
+		{"missing judgment", `{}`, "", "requires findings"},
+		{"bad json", `{`, "", "not valid JSON"},
+		{"trailing object", `{"findings":[]} {}`, "", "one JSON object"},
 	} {
 		result, err := ValidateStandaloneGateResult([]byte(item.raw))
-		if item.wantErr == "" {
-			if err != nil {
-				t.Fatalf("%s: unexpected error: %v", item.name, err)
-			}
-			if result.Status == "" {
-				t.Fatalf("%s: empty status", item.name)
+		if item.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), item.wantErr) {
+				t.Fatalf("%s: want %q, got %v", item.name, item.wantErr, err)
 			}
 			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), item.wantErr) {
-			t.Fatalf("%s: want error containing %q, got %v", item.name, item.wantErr, err)
+		if err != nil || result.Status != item.status {
+			t.Fatalf("%s: status %q, want %q: %v", item.name, result.Status, item.status, err)
 		}
 	}
 }

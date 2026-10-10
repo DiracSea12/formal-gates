@@ -209,7 +209,7 @@ func certify(q sealInput) (any, error) {
 	if q.Spec.Provider == "fixture" {
 		level, status = "fixture", "DEMO_COMPLETE"
 	}
-	return map[string]any{"contract_version": Version, "profile": Profile, "status": status, "evidence_level": level, "candidate": q.Candidate, "revision": q.Revision, "checks": q.Checks, "gates": q.Gates, "baseline": Baseline, "full_3_5c_equivalence": false}, nil
+	return map[string]any{"contract_version": Version, "profile": Profile, "status": status, "evidence_level": level, "candidate": q.Candidate, "revision": q.Revision, "checks": q.Checks, "gates": q.Gates}, nil
 }
 
 // orderedProofDTO carries one recorded proof in document order.

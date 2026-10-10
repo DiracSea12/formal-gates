@@ -20,19 +20,17 @@ type Interruption struct {
 	InterruptionReason string `json:"interruptionReason"`
 }
 type DevelopmentContinuation struct {
-	Paths         []string `json:"paths"`
-	Summary       string   `json:"summary"`
-	RemainingWork string   `json:"remainingWork"`
+	Summary       string `json:"summary"`
+	RemainingWork string `json:"remainingWork"`
 }
 type Repair struct {
-	Completion        *protocol.DevelopmentCompletion `json:"completion,omitempty"`
-	Paths             []string                        `json:"paths,omitempty"`
-	Summary           string                          `json:"summary,omitempty"`
-	AffectedCases     []string                        `json:"affectedCases,omitempty"`
-	GranularityReview *Granularity                    `json:"granularityReview,omitempty"`
+	Completion        *Completion  `json:"completion,omitempty"`
+	Summary           string       `json:"summary,omitempty"`
+	AffectedCases     []int        `json:"affectedCases,omitempty"`
+	GranularityReview *Granularity `json:"granularityReview,omitempty"`
 }
 type Design struct {
-	Manifest
+	DesignManifest
 	Checkpoint bool `json:"checkpoint,omitempty"`
 }
 type ExecutionJudgments struct {
@@ -40,12 +38,11 @@ type ExecutionJudgments struct {
 	Findings []Finding `json:"findings,omitempty"`
 }
 type ExecutionInterruption struct {
-	InterruptionReason string                 `json:"interruptionReason"`
-	Records            map[string]Observation `json:"records,omitempty"`
-	Findings           []Finding              `json:"findings,omitempty"`
+	InterruptionReason string         `json:"interruptionReason"`
+	Records            []*Observation `json:"records,omitempty"`
+	Findings           []Finding      `json:"findings,omitempty"`
 }
 type Gate struct {
-	Status   string    `json:"status"`
 	Findings []Finding `json:"findings"`
 }
 type ConflictResolution struct {
@@ -54,31 +51,59 @@ type ConflictResolution struct {
 
 // decodedResult is the role-selected assembly input, never a model wire format.
 type decodedResult struct {
-	Review     *Review
-	Validation *decodedValidation
+	Review      *Review
+	Validation  *decodedValidation
+	Granularity *protocol.GranularityReview
 }
 type Granularity struct {
-	Reason           string     `json:"reason"`
-	Batches          []Batch    `json:"batches"`
-	VerificationTier string     `json:"verificationTier"`
-	CheckpointGroups [][]string `json:"checkpointGroups,omitempty"`
-	CheckpointReason string     `json:"checkpointReason,omitempty"`
+	Reason           string  `json:"reason"`
+	Batches          []Batch `json:"batches"`
+	VerificationTier string  `json:"verificationTier"`
+	CheckpointGroups [][]int `json:"checkpointGroups,omitempty"`
+	CheckpointReason string  `json:"checkpointReason,omitempty"`
 }
 type Batch struct {
-	protocol.DevelopmentBatch
-	Route *RouteProposal `json:"route,omitempty"`
+	Owner         *int           `json:"owner,omitempty"`
+	DependsOn     []int          `json:"dependsOn,omitempty"`
+	Route         *RouteProposal `json:"route,omitempty"`
+	Subtasks      []Subtask      `json:"subtasks"`
+	Deliverable   string         `json:"deliverable"`
+	PublicEntry   string         `json:"publicEntry"`
+	Artifacts     []string       `json:"artifacts"`
+	Interfaces    string         `json:"interfaces"`
+	StateBoundary string         `json:"stateBoundary"`
+	Risk          string         `json:"risk"`
+	DoD           []Criterion    `json:"dod"`
+	Checks        []Check        `json:"checks"`
+	Rollback      string         `json:"rollback"`
+	Recovery      string         `json:"recovery"`
+	Handoff       string         `json:"handoff"`
+	ContextCost   string         `json:"contextCost"`
+	Spike         bool           `json:"spike,omitempty"`
+}
+type Subtask struct {
+	Description string `json:"description"`
+}
+type Criterion struct {
+	Description string `json:"description"`
+}
+type Check struct {
+	Purpose string `json:"purpose,omitempty"`
+	Command string `json:"command"`
 }
 type RouteProposal struct {
-	Mode     string   `json:"mode"`
-	Gates    []string `json:"gates"`
-	Selected []string `json:"selected,omitempty"`
+	Mode     string `json:"mode"`
+	Selected []int  `json:"selected,omitempty"`
+}
+type Completion struct {
+	DoD     []string `json:"dod"`
+	Handoff string   `json:"handoff"`
 }
 type Review struct {
-	GranularityReview *Granularity      `json:"granularityReview,omitempty"`
-	Status            string            `json:"status"`
-	Message           string            `json:"message,omitempty"`
-	Findings          []Finding         `json:"findings"`
-	Verification      map[string]string `json:"verification"`
+	GranularityReview *Granularity `json:"granularityReview,omitempty"`
+	Message           string       `json:"message,omitempty"`
+	Findings          []Finding    `json:"findings"`
+	Verification      []string     `json:"verification"`
 }
 type Finding struct {
 	Severity          string                     `json:"severity"`
@@ -93,18 +118,18 @@ type Finding struct {
 	Locations         []string                   `json:"locations,omitempty"`
 }
 type Development struct {
-	RemainingWork string                          `json:"-"`
-	Completion    *protocol.DevelopmentCompletion `json:"completion,omitempty"`
-	Paths         []string                        `json:"paths"`
-	Summary       string                          `json:"summary"`
-	AffectedCases []string                        `json:"affectedCases,omitempty"`
+	RemainingWork string      `json:"-"`
+	Completion    *Completion `json:"completion,omitempty"`
+	paths         []string
+	Summary       string `json:"summary"`
+	AffectedCases []int  `json:"affectedCases,omitempty"`
 }
 
 func development(value *Development) *protocol.DevelopmentEvidence {
 	if value == nil {
 		return nil
 	}
-	return &protocol.DevelopmentEvidence{RemainingWork: value.RemainingWork, Completion: value.Completion, Paths: value.Paths, Summary: value.Summary, AffectedCases: value.AffectedCases}
+	return &protocol.DevelopmentEvidence{RemainingWork: value.RemainingWork, Completion: nil, Paths: value.paths, Summary: value.Summary, AffectedCases: nil}
 }
 
 type decodedValidation struct {
@@ -125,6 +150,29 @@ type Suggestion struct {
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
 	Reason   string `json:"reason,omitempty"`
+}
+type DesignManifest struct {
+	RetainCases       []int                `json:"retainCases,omitempty"`
+	RetainSharedSteps []int                `json:"retainSharedSteps,omitempty"`
+	SharedSteps       []DesignedSharedStep `json:"sharedSteps,omitempty"`
+	Cases             []DesignedCase       `json:"cases"`
+	Coverage          [][]int              `json:"coverage"`
+}
+type DesignedSharedStep struct {
+	Procedure  string               `json:"procedure"`
+	Operations []coverage.Operation `json:"operations,omitempty"`
+	Files      *[]string            `json:"files,omitempty"`
+}
+type DesignedCase struct {
+	Files         *[]string            `json:"files,omitempty"`
+	Operations    []coverage.Operation `json:"operations,omitempty"`
+	Scenario      string               `json:"scenario"`
+	SharedSteps   []int                `json:"sharedSteps,omitempty"`
+	PublicEntry   string               `json:"publicEntry,omitempty"`
+	Preconditions string               `json:"preconditions,omitempty"`
+	Steps         string               `json:"steps,omitempty"`
+	Oracle        string               `json:"oracle"`
+	TestRef       string               `json:"testRef,omitempty"`
 }
 type Manifest struct {
 	RetainCases       []string            `json:"retainCases,omitempty"`
@@ -156,14 +204,14 @@ type Decision struct {
 	Reason string                  `json:"reason"`
 }
 type CaseReview struct {
-	Suggestions         []Suggestion        `json:"suggestions,omitempty"`
-	SourceDecisions     map[string]Decision `json:"sourceDecisions"`
-	PointDecisions      map[string]Decision `json:"pointDecisions"`
-	CaseDecisions       map[string]Decision `json:"caseDecisions"`
-	SharedStepDecisions map[string]Decision `json:"sharedStepDecisions,omitempty"`
+	Suggestions         []Suggestion `json:"suggestions,omitempty"`
+	SourceDecisions     []*Decision  `json:"sourceDecisions"`
+	PointDecisions      []*Decision  `json:"pointDecisions"`
+	CaseDecisions       []*Decision  `json:"caseDecisions"`
+	SharedStepDecisions []*Decision  `json:"sharedStepDecisions,omitempty"`
 }
 type Execution struct {
-	Records map[string]Observation `json:"records"`
+	Records []*Observation `json:"records"`
 }
 type Observation struct {
 	Comparison string                   `json:"comparison"`
@@ -183,6 +231,12 @@ func InvalidResult(input protocol.WorkerInput, eventID protocol.EventID, digest,
 }
 
 func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string) (protocol.Event, error) {
+	return DecodeResultWithPaths(input, eventID, raw, originalDigest, nil)
+}
+
+// DecodeResultWithPaths assembles the native terminal's captured VCS changes.
+// The caller supplies the original source-bound facts, including on recovery.
+func DecodeResultWithPaths(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string, paths []string) (protocol.Event, error) {
 	value, interruption, err := decodeRoleBody(input, raw)
 	if err != nil {
 		return protocol.Event{}, err
@@ -204,7 +258,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			return protocol.Event{}, fmt.Errorf("worker review result has wrong role")
 		}
 		r := value.Review
-		body := protocol.ReviewResultEvidence{GranularityReview: granularity(r.GranularityReview), Status: r.Status, Message: r.Message, Findings: findings(r.Findings)}
+		body := protocol.ReviewResultEvidence{GranularityReview: value.Granularity, Status: findingStatus(r.Findings), Message: r.Message, Findings: findings(r.Findings)}
 		body.Action, body.DispatchID, body.RequirementRevision, body.AuthorizationID = input.Review.Action, input.Pending.ActionID, input.Review.RequirementRevision, input.Review.AuthorizationID
 		checks := review.RequiredVerificationChecks()
 		if len(value.Review.Verification) != len(checks) {
@@ -212,7 +266,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		evidence := []string{}
 		for _, key := range checks {
-			text := strings.TrimSpace(value.Review.Verification[key])
+			text := strings.TrimSpace(value.Review.Verification[len(evidence)])
 			if text == "" {
 				return protocol.Event{}, fmt.Errorf("review verification evidence is missing: %s", key)
 			}
@@ -227,11 +281,32 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 		}
 		issued := input.Validation
 		v := value.Validation
+		if v.Development != nil {
+			if paths == nil {
+				return protocol.Event{}, fmt.Errorf("development requires original native terminal path facts")
+			}
+			v.Development.paths = slices.Clone(paths)
+		}
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
-		body := protocol.ValidationResult{Status: v.Status, GranularityReview: granularity(v.GranularityReview), Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
+		body := protocol.ValidationResult{Status: v.Status, GranularityReview: value.Granularity, Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
 		body.Binding = issued.Binding
+		if body.Development != nil {
+			batch := completionBatch(input)
+			if batch == nil && body.GranularityReview != nil && len(body.GranularityReview.Batches) == 1 {
+				batch = &body.GranularityReview.Batches[0]
+			}
+			var err error
+			body.Development.Completion, err = assembleCompletion(v.Development.Completion, batch)
+			if err != nil {
+				return protocol.Event{}, err
+			}
+			body.Development.AffectedCases, err = selectIDs(v.Development.AffectedCases, repairCaseIDs(issued))
+			if err != nil {
+				return protocol.Event{}, err
+			}
+		}
 		if v.Observations != nil {
 			observations, err := assembleObservations(issued.Observation, v.Observations)
 			if err != nil {
@@ -298,23 +373,26 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			for _, point := range issued.Manifest.Points {
 				points[point.PointID] = true
 			}
-			// An emitted point mapping replaces that point's relations. Unchanged
-			// relations survive only for cases explicitly retained or authored.
+			// Coverage selects relations; existing relations retain their original
+			// representation and order so unchanged approval evidence stays exact.
 			for _, edge := range issued.Manifest.Edges {
-				_, replaced := v.Manifest.Coverage[edge.PointID]
-				if !replaced && slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == edge.CaseID }) {
+				selected, replaced := v.Manifest.Coverage[edge.PointID]
+				if (!replaced || slices.Contains(selected, edge.CaseID)) && slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == edge.CaseID }) {
 					manifest.Edges = append(manifest.Edges, edge)
 				}
 			}
-			for _, point := range sortedKeys(value.Validation.Manifest.Coverage) {
+			for _, point := range sortedKeys(v.Manifest.Coverage) {
 				if !points[point] {
 					return protocol.Event{}, fmt.Errorf("coverage selects unknown point: %s", point)
 				}
-				for _, caseID := range value.Validation.Manifest.Coverage[point] {
+				for _, caseID := range v.Manifest.Coverage[point] {
 					for _, link := range issued.SourcePoints {
-						if link.PointID == point {
-							manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{ReviewKind: manifest.Binding.ReviewKind, SourceID: link.SourceID, PointID: point, CaseID: caseID})
+						if link.PointID != point || slices.ContainsFunc(manifest.Edges, func(edge coverage.CoverageEdge) bool {
+							return edge.SourceID == link.SourceID && edge.PointID == point && edge.CaseID == caseID
+						}) {
+							continue
 						}
+						manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{ReviewKind: manifest.Binding.ReviewKind, SourceID: link.SourceID, PointID: point, CaseID: caseID})
 					}
 				}
 			}
@@ -377,7 +455,11 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			if input.Handler != "engine.repair.verify" || issued.Repair == nil || issued.Repair.FinalCandidate == nil {
 				return protocol.Event{}, fmt.Errorf("repair comparison lacks its issued native responsibility")
 			}
-			if len(v.RepairVerification.Records) != len(issued.Repair.VerificationCases) {
+			repairRecords, err := observations(v.RepairVerification.Records, issued.Repair.VerificationCases)
+			if err != nil {
+				return protocol.Event{}, err
+			}
+			if len(repairRecords) != len(issued.Repair.VerificationCases) {
 				return protocol.Event{}, fmt.Errorf("repair comparison must cover exactly its issued affected cases")
 			}
 			d := protocol.DevelopmentEvidence{Paths: slices.Clone(issued.Repair.VerificationPaths), AffectedCases: slices.Clone(issued.Repair.VerificationCases), Summary: "Compared the approved affected cases against native execution evidence"}
@@ -387,7 +469,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 				if index < 0 {
 					return protocol.Event{}, fmt.Errorf("repair case has no complete issued native facts: %s", caseID)
 				}
-				comparison, present := v.RepairVerification.Records[caseID]
+				comparison, present := repairRecords[caseID]
 				if !present || strings.TrimSpace(comparison.Comparison) == "" || comparison.Result != coverage.ExecutedPass && comparison.Result != coverage.ExecutedFail {
 					return protocol.Event{}, fmt.Errorf("repair case lacks an oracle comparison: %s", caseID)
 				}
@@ -418,9 +500,13 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 			if issued.Execution == nil || issued.Whitelist == nil {
 				return protocol.Event{}, fmt.Errorf("execution lacks issued whitelist and binding")
 			}
+			records, err := observations(value.Validation.Execution.Records, executionCaseIDs(issued))
+			if err != nil {
+				return protocol.Event{}, err
+			}
 			report := coverage.ExecutionReport{Binding: *issued.Execution}
 			report.Binding.ActualCaseIDs = nil
-			for _, caseID := range sortedKeys(value.Validation.Execution.Records) {
+			for _, caseID := range sortedKeys(records) {
 				if !slices.Contains(issued.PendingCases, caseID) || !slices.Contains(issued.RequiredCases, caseID) {
 					return protocol.Event{}, fmt.Errorf("execution selects a case outside pending scope: %s", caseID)
 				}
@@ -433,7 +519,7 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 				if err != nil {
 					return protocol.Event{}, err
 				}
-				observation := value.Validation.Execution.Records[caseID]
+				observation := records[caseID]
 				if strings.TrimSpace(observation.Comparison) == "" || observation.Result != coverage.ExecutedPass && observation.Result != coverage.ExecutedFail {
 					return protocol.Event{}, fmt.Errorf("case judgment requires a complete oracle comparison: %s", caseID)
 				}
@@ -505,6 +591,9 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 	case "engine.merge.resolve":
 		return &ConflictResolution{}, nil
 	case "engine.qa.design":
+		if len(input.Validation.AffectedCases) > 0 {
+			return &CaseRevisions{}, nil
+		}
 		return &Design{}, nil
 	case "engine.qa.review.rationale":
 		return &CaseReview{}, nil
@@ -538,10 +627,10 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		if err := decodeObject(raw, &partial); err != nil {
 			return decodedResult{}, "", err
 		}
-		if partial.Paths == nil || strings.TrimSpace(partial.Summary) == "" || strings.TrimSpace(partial.RemainingWork) == "" {
-			return decodedResult{}, "", fmt.Errorf("development continuation requires delivered paths, summary and actual remaining work")
+		if strings.TrimSpace(partial.Summary) == "" || strings.TrimSpace(partial.RemainingWork) == "" {
+			return decodedResult{}, "", fmt.Errorf("development continuation requires summary and actual remaining work")
 		}
-		return decodedResult{Validation: &decodedValidation{Status: "CONTINUE", Development: &Development{Paths: partial.Paths, Summary: partial.Summary, RemainingWork: partial.RemainingWork}}}, "", nil
+		return decodedResult{Validation: &decodedValidation{Status: "CONTINUE", Development: &Development{Summary: partial.Summary, RemainingWork: partial.RemainingWork}}}, "", nil
 	}
 	if reason, present := fields["interruptionReason"]; present {
 		var text string
@@ -588,8 +677,8 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			v.Development = body
 		case *Repair:
 			v.GranularityReview = body.GranularityReview
-			if fields["paths"] != nil || fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
-				v.Development = &Development{Paths: body.Paths, Summary: body.Summary, Completion: body.Completion, AffectedCases: body.AffectedCases}
+			if fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
+				v.Development = &Development{Summary: body.Summary, Completion: body.Completion, AffectedCases: body.AffectedCases}
 			}
 		case *ConflictResolution:
 			if input.Validation.Conflict == nil || len(input.Validation.Conflict.Evidence.Conflicts) == 0 {
@@ -600,7 +689,17 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 				v.Resolution.Paths = append(v.Resolution.Paths, conflict.Path)
 			}
 		case *Design:
-			v.Manifest, v.Checkpoint = &body.Manifest, body.Checkpoint
+			manifest, err := assembleDesign(input, body)
+			if err != nil {
+				return result, "", err
+			}
+			v.Manifest, v.Checkpoint = manifest, body.Checkpoint
+		case *CaseRevisions:
+			manifest, err := reviseCases(input.Validation, body)
+			if err != nil {
+				return result, "", err
+			}
+			v.Manifest, v.Checkpoint = manifest, body.Checkpoint
 		case *CaseReview:
 			v.Review, v.Suggestions = body, body.Suggestions
 		case *ObservationJudgments:
@@ -610,10 +709,21 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		case *Execution:
 			v.RepairVerification = body
 		case *Gate:
-			v.Status, v.Findings = body.Status, body.Findings
+			v.Status, v.Findings = findingStatus(body.Findings), body.Findings
 		}
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
+	}
+	var proposed *Granularity
+	if result.Review != nil {
+		proposed = result.Review.GranularityReview
+	}
+	if result.Validation != nil {
+		proposed = result.Validation.GranularityReview
+	}
+	result.Granularity, err = DecodeGranularity(input, proposed)
+	if err != nil {
+		return result, "", err
 	}
 	for name := range fields {
 		if schema["properties"].(map[string]any)[name] == nil {
@@ -655,25 +765,32 @@ func sortedKeys[T any](values map[string]T) []string {
 func sameEdge(left, right coverage.ExecutionRecord) bool {
 	return left.ReviewKind == right.ReviewKind && left.SourceID == right.SourceID && left.PointID == right.PointID && left.CaseID == right.CaseID
 }
-func decisions(values map[string]Decision, ids []string, inherited []coverage.ReviewDecision) ([]coverage.ReviewDecision, error) {
-	for key := range values {
-		if !slices.Contains(ids, key) {
-			return nil, fmt.Errorf("review selects unknown item: %s", key)
+func decisions(values []*Decision, ids []string, inherited []coverage.ReviewDecision) ([]coverage.ReviewDecision, error) {
+	required := 0
+	for _, id := range ids {
+		if !slices.ContainsFunc(inherited, func(item coverage.ReviewDecision) bool { return item.ID == id }) {
+			required++
 		}
 	}
+	if len(values) != required {
+		return nil, fmt.Errorf("review must follow the issued non-inherited item order")
+	}
 	result := []coverage.ReviewDecision{}
+	selected := 0
 	for _, id := range ids {
-		if value, exists := values[id]; exists {
-			result = append(result, coverage.ReviewDecision{ID: id, Status: value.Status, Reason: value.Reason})
+		prior := slices.IndexFunc(inherited, func(item coverage.ReviewDecision) bool { return item.ID == id })
+		if prior >= 0 {
+			value := inherited[prior]
+			value.Inherited = true
+			result = append(result, value)
 			continue
 		}
-		prior := slices.IndexFunc(inherited, func(item coverage.ReviewDecision) bool { return item.ID == id })
-		if prior < 0 {
+		value := values[selected]
+		selected++
+		if value == nil {
 			return nil, fmt.Errorf("review decision is missing: %s", id)
 		}
-		value := inherited[prior]
-		value.Inherited = true
-		result = append(result, value)
+		result = append(result, coverage.ReviewDecision{ID: id, Status: value.Status, Reason: value.Reason})
 	}
 	return result, nil
 }
@@ -685,22 +802,6 @@ func findings(values []Finding) []review.Finding {
 	result := make([]review.Finding, 0, len(values))
 	for _, item := range values {
 		result = append(result, review.Finding{Severity: item.Severity, SeverityRationale: item.SeverityRationale, Category: item.Category, Requirement: item.Requirement, NormalPath: item.NormalPath, ActualError: item.ActualError, DeferralImpact: item.DeferralImpact, Verification: item.Verification, Message: item.Message, Locations: slices.Clone(item.Locations)})
-	}
-	return result
-}
-
-func granularity(value *Granularity) *protocol.GranularityReview {
-	if value == nil {
-		return nil
-	}
-	result := &protocol.GranularityReview{Reason: value.Reason, VerificationTier: value.VerificationTier, CheckpointGroups: value.CheckpointGroups, CheckpointReason: value.CheckpointReason}
-	for _, item := range value.Batches {
-		batch := item.DevelopmentBatch
-		batch.Route = nil
-		if item.Route != nil {
-			batch.Route = &protocol.RouteDecision{Mode: item.Route.Mode, Gates: slices.Clone(item.Route.Gates), Selected: slices.Clone(item.Route.Selected)}
-		}
-		result.Batches = append(result.Batches, batch)
 	}
 	return result
 }

@@ -24,6 +24,7 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	project := repairGitProject(t)
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
 	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
 
 	first, err := Install(InstallOptions{
 		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
@@ -173,6 +174,8 @@ func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
 		after.PackageDigest != before.PackageDigest || after.InstalledDigest != before.InstalledDigest {
 		t.Fatalf("bootstrap rotated registered identity: before=%+v after=%+v", before, after)
 	}
+	restore := fixtureRegisteredInvocation(registry, first.Targets[0].TargetPath, "")
+	defer restore()
 	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
 	if err != nil {
 		t.Fatalf("admission after release-root bootstrap failed: %v", err)
@@ -370,6 +373,8 @@ func TestEngineDriveRejectsDisabledAdmissionBeforeArtifactWrite(t *testing.T) {
 }
 
 func repairStartEngine(project, target, registry, runID string) (*facade.Facade, facade.Run, error) {
+	restore := fixtureRegisteredInvocation(registry, target, "")
+	defer restore()
 	admission, err := ResolveEngineAdmission(project, target, registry)
 	if err != nil {
 		return nil, facade.Run{}, err

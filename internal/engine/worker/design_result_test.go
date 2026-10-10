@@ -30,9 +30,9 @@ func retainedDesignInput() protocol.WorkerInput {
 func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 	input := retainedDesignInput()
 	before, _ := json.Marshal(input)
-	raw := []byte(`{"retainCases":["keep"],"retainSharedSteps":["setup"],"cases":[{"caseId":"change","scenario":"SUCCESS","oracle":"rewritten oracle"}],"coverage":{}}`)
+	raw := []byte(`{"retainCases":[1],"retainSharedSteps":[1],"cases":[{"scenario":"SUCCESS","oracle":"rewritten oracle"}],"coverage":[null,[2]]}`)
 	original := bytes.Clone(raw)
-	result, err := DecodeResult(input, "result", raw, "verified-original-output")
+	result, err := DecodeResultWithPaths(input, "result", raw, "verified-original-output", []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +40,11 @@ func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 	if !reflect.DeepEqual(manifest.Cases[0], input.Validation.Manifest.Cases[0]) || !reflect.DeepEqual(manifest.SharedSteps, input.Validation.Manifest.SharedSteps[:1]) {
 		t.Fatal("retention changed issued narrative, operations, argv/stdin or files")
 	}
-	if len(manifest.Cases) != 2 || manifest.Cases[1].Oracle != "rewritten oracle" || !reflect.DeepEqual(manifest.Edges, input.Validation.Manifest.Edges[:3]) {
+	if len(manifest.Cases) != 2 || manifest.Cases[1].Oracle != "rewritten oracle" || len(manifest.Edges) != 3 || manifest.Edges[2].CaseID != manifest.Cases[1].CaseID {
 		t.Fatal("rewriting or deleting a case changed retained relations")
 	}
 	input.Validation.Interruption = &protocol.RecoveryRecord{}
-	resumed, err := DecodeResult(input, "result", raw, "verified-original-output")
+	resumed, err := DecodeResultWithPaths(input, "result", raw, "verified-original-output", []string{})
 	if err != nil || !reflect.DeepEqual(result, resumed) {
 		t.Fatal("recovered input uses a different assembly", err)
 	}
@@ -57,14 +57,14 @@ func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 
 func TestDesignCoverageReplacesAndClearsExplicitPointMappings(t *testing.T) {
 	input := retainedDesignInput()
-	value := Design{Manifest: Manifest{RetainCases: []string{"keep", "change"}, RetainSharedSteps: []string{"setup"}, Cases: []Case{}, Coverage: map[string][]string{"one": {}, "two": {"keep"}}}}
+	value := Design{DesignManifest: DesignManifest{RetainCases: []int{1, 2}, RetainSharedSteps: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{{}, {1}}}}
 	manifest := decodeSemantic(t, input, value).Validation.Manifest
 	want := []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "two", CaseID: "keep"}}
 	if !reflect.DeepEqual(manifest.Edges, want) {
 		t.Fatalf("changed mapping mixed with original relations: %+v", manifest.Edges)
 	}
-	value.Manifest.RetainCases, value.Manifest.RetainSharedSteps = nil, nil
-	value.Manifest.Coverage = map[string][]string{}
+	value.DesignManifest.RetainCases, value.DesignManifest.RetainSharedSteps = nil, nil
+	value.DesignManifest.Coverage = [][]int{nil, nil}
 	manifest = decodeSemantic(t, input, value).Validation.Manifest
 	if len(manifest.Cases) != 0 || len(manifest.SharedSteps) != 0 || len(manifest.Edges) != 0 {
 		t.Fatal("omission silently retained a deleted entry or relation")
@@ -80,7 +80,7 @@ func TestDesignRetentionRejectsUnknownDuplicateAndAuthoredIDs(t *testing.T) {
 		`{"retainSharedSteps":["setup","setup"],"cases":[],"coverage":{}}`,
 		`{"retainSharedSteps":["setup"],"sharedSteps":[{"id":"setup","procedure":"conflicting instructions"}],"cases":[],"coverage":{}}`,
 	} {
-		if _, err := DecodeResult(retainedDesignInput(), "result", []byte(raw), "original-output"); err == nil {
+		if _, err := DecodeResultWithPaths(retainedDesignInput(), "result", []byte(raw), "original-output", []string{}); err == nil {
 			t.Fatalf("ambiguous retention accepted: %s", raw)
 		}
 	}
@@ -88,7 +88,7 @@ func TestDesignRetentionRejectsUnknownDuplicateAndAuthoredIDs(t *testing.T) {
 
 func TestDesignRetentionPreservesSharedReferenceForCoreValidation(t *testing.T) {
 	input := retainedDesignInput()
-	manifest := decodeSemantic(t, input, Design{Manifest: Manifest{RetainCases: []string{"keep"}, Cases: []Case{}, Coverage: map[string][]string{}}}).Validation.Manifest
+	manifest := decodeSemantic(t, input, Design{DesignManifest: DesignManifest{RetainCases: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{nil, nil}}}).Validation.Manifest
 	if len(manifest.SharedSteps) != 0 || !reflect.DeepEqual(manifest.Cases[0].SharedSteps, []string{"setup"}) {
 		t.Fatal("assembly invented a shared step or erased a real invalid reference")
 	}
@@ -101,7 +101,7 @@ func TestConflictResolutionUsesExactIssuedPaths(t *testing.T) {
 	raw := []byte(`{"summary":"Resolved the conflicting behavior while preserving both approved interfaces"}`)
 	before, _ := json.Marshal(input)
 	original := bytes.Clone(raw)
-	result, err := DecodeResult(input, "result", raw, "original-native-output")
+	result, err := DecodeResultWithPaths(input, "result", raw, "original-native-output", []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestConflictResolutionUsesExactIssuedPaths(t *testing.T) {
 		t.Fatal("resolution reconstructed a different path set or output proof")
 	}
 	input.Validation.Interruption = &protocol.RecoveryRecord{}
-	resumed, err := DecodeResult(input, "result", raw, "original-native-output")
+	resumed, err := DecodeResultWithPaths(input, "result", raw, "original-native-output", []string{})
 	if err != nil || !reflect.DeepEqual(result, resumed) {
 		t.Fatal("recovery uses another conflict assembly", err)
 	}
@@ -118,15 +118,27 @@ func TestConflictResolutionUsesExactIssuedPaths(t *testing.T) {
 	if !bytes.Equal(before, after) || !bytes.Equal(original, raw) {
 		t.Fatal("resolution mutated original input/output")
 	}
-	if _, err := DecodeResult(input, "result", []byte(`{"paths":["a.go"],"summary":"authored path copy"}`), "original-native-output"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "result", []byte(`{"paths":["a.go"],"summary":"authored path copy"}`), "original-native-output", []string{}); err == nil {
 		t.Fatal("model path authority accepted")
 	}
 	input.Validation.Conflict = nil
-	if _, err := DecodeResult(input, "result", raw, "original-native-output"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "result", raw, "original-native-output", []string{}); err == nil {
 		t.Fatal("missing original conflict gained a completed result")
 	}
 	input.Validation.Conflict = &protocol.ConflictInput{}
-	if _, err := DecodeResult(input, "result", raw, "original-native-output"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "result", raw, "original-native-output", []string{}); err == nil {
 		t.Fatal("empty original conflict gained a completed result")
+	}
+}
+
+func TestDesignCoverageKeepsOriginalRelationValuesAndOrder(t *testing.T) {
+	input := retainedDesignInput()
+	input.Validation.Manifest.Edges[0], input.Validation.Manifest.Edges[1] = input.Validation.Manifest.Edges[1], input.Validation.Manifest.Edges[0]
+	input.Validation.Manifest.Edges[0].ReviewKind = ""
+	original := append([]coverage.CoverageEdge(nil), input.Validation.Manifest.Edges[:2]...)
+	value := Design{DesignManifest: DesignManifest{RetainCases: []int{1}, RetainSharedSteps: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{{1}, nil}}}
+	manifest := decodeSemantic(t, input, value).Validation.Manifest
+	if !reflect.DeepEqual(manifest.Edges, original) || !reflect.DeepEqual(manifest.Cases[0], input.Validation.Manifest.Cases[0]) {
+		t.Fatal("unchanged selected coverage relations or case were rewritten by model choice order")
 	}
 }

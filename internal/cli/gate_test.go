@@ -26,14 +26,22 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 		t.Fatal("gate run accepted an unknown gate id")
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	if code := Run("formal-gates", []string{"gate", "report"}, IO{Stdin: strings.NewReader(`{"status":"FAIL","findings":[{"severity":"P1","message":"blocker","locations":["internal/cli/cli.go:1"]}]}`), Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("gate report rejected a valid FAIL result: %s", stderr.String())
-	}
-	for _, want := range []string{"脱离 run 的快速检查", "status: FAIL", "blocker"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Fatalf("gate report display missing %q: %s", want, stdout.String())
-		}
+	for _, sample := range []struct{ status, body, message string }{
+		{"PASS", `{"findings":[]}`, ""},
+		{"FAIL", `{"findings":[{"severity":"P1","message":"blocker","locations":["internal/cli/cli.go:1"]}]}`, "blocker"},
+		{"RUNTIME_ERROR", `{"interruptionReason":"Native VCS unavailable"}`, "Native VCS unavailable"},
+	} {
+		t.Run(sample.status, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			if code := Run("formal-gates", []string{"gate", "report"}, IO{Stdin: strings.NewReader(sample.body), Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				t.Fatalf("gate report rejected a valid %s result: %s", sample.status, stderr.String())
+			}
+			for _, want := range []string{"脱离 run 的快速检查", "status: " + sample.status, sample.message} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("gate report display missing %q: %s", want, stdout.String())
+				}
+			}
+		})
 	}
 }

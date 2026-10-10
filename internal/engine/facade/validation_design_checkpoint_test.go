@@ -6,6 +6,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -28,7 +29,21 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	in = d.run.ValidationInputs[id]
 	changed := m.Cases[0]
 	changed.Oracle = "exit zero and print accepted input"
-	value := worker.Design{Manifest: worker.Manifest{RetainCases: []string{m.Cases[1].CaseID}, RetainSharedSteps: []string{"setup"}, Cases: []worker.Case{{CaseID: changed.CaseID, Scenario: changed.Scenario, PublicEntry: changed.PublicEntry, Preconditions: changed.Preconditions, Steps: changed.Steps, Oracle: changed.Oracle, Operations: changed.Operations}}, Coverage: map[string][]string{}}}
+	coverageChoices := make([][]int, len(in.Manifest.Points))
+	for index, point := range in.Manifest.Points {
+		for _, edge := range m.Edges {
+			if edge.PointID == point.PointID {
+				selected := 2
+				if edge.CaseID == m.Cases[1].CaseID {
+					selected = 1
+				}
+				if !slices.Contains(coverageChoices[index], selected) {
+					coverageChoices[index] = append(coverageChoices[index], selected)
+				}
+			}
+		}
+	}
+	value := worker.Design{DesignManifest: worker.DesignManifest{RetainCases: []int{slices.IndexFunc(in.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == m.Cases[1].CaseID }) + 1}, RetainSharedSteps: []int{1}, Cases: []worker.DesignedCase{{Scenario: changed.Scenario, PublicEntry: changed.PublicEntry, Preconditions: changed.Preconditions, Steps: changed.Steps, Oracle: changed.Oracle, Operations: changed.Operations}}, Coverage: coverageChoices}}
 	missingShared := value
 	missingShared.RetainSharedSteps = nil
 	invalidRaw, err := json.Marshal(missingShared)
@@ -63,7 +78,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	}
 	_, current := d.action("engine.qa.review.rationale")
 	if len(current.Manifest.Cases) != 2 || !reflect.DeepEqual(current.Manifest.Cases[0], m.Cases[1]) || len(current.InheritableReviews) != 1 || current.InheritableReviews[0].ID != m.Cases[1].CaseID || len(current.Manifest.Edges) != len(m.Edges) {
-		t.Fatal("continued design lost retained responsibility or its unchanged review")
+		t.Fatalf("continued design lost retained responsibility or its unchanged review: cases=%#v original=%#v inherited=%#v edges=%#v originalEdges=%#v", current.Manifest.Cases, m.Cases[1], current.InheritableReviews, current.Manifest.Edges, m.Edges)
 	}
 }
 

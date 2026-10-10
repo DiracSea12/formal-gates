@@ -139,3 +139,33 @@ func TestWorkflowUnsupportedStateIsDiagnosticOnly(t *testing.T) {
 		t.Fatal("diagnostic or unsupported entry rewrote old state")
 	}
 }
+
+func TestWorkflowPrecheckSavesExactCandidateWithoutStartingRun(t *testing.T) {
+	root := t.TempDir()
+	body := cliStructuredRequirement("Implement only the documented command behavior.")
+	mustWriteCLI(t, filepath.Join(root, "request.md"), body)
+	saved := filepath.Join(root, "confirmation.json")
+	var out, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "request.md", "--save-candidate", saved}, IO{Stdout: &out, Stderr: &stderr})
+	if code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var preview facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt facade.IntakeConfirmationReceipt
+	if err = json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(receipt, preview.IntakeCandidate) {
+		t.Fatal("saved candidate differed from complete program output")
+	}
+	if _, err = os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
+		t.Fatal("saving an intake candidate started a run or wrote admission", err)
+	}
+}

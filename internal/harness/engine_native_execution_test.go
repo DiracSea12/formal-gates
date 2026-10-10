@@ -910,24 +910,28 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var ask facade.PendingAskFace
-			for _, pending := range run.PendingAsks {
+			askPosition := 0
+			for index, pending := range run.PendingAsks {
 				if pending.Control == protocol.ControlRecovery {
-					ask = pending
+					askPosition = index + 1
 				}
 			}
-			if ask.RequestID == "" {
+			if askPosition == 0 {
 				t.Fatal("native interruption produced no original recovery ask")
 			}
-			decision, err := protocol.NewDecideEvent("native-test-decision", protocol.RequestID(ask.RequestID), ask.Token, protocol.AskOptionID(choice))
+			candidate, err := f.PrepareControl(facade.ControlInput{Ask: askPosition, Choice: choice})
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := json.Marshal(decision)
+			body, err := json.Marshal(candidate)
 			if err != nil {
 				t.Fatal(err)
 			}
-			call(body, "workflow", "submit", "--root", s.workspace, "--run-id", "native-execution", "--single-step")
+			confirmation := filepath.Join(s.config, "recovery-confirmation.json")
+			if err := os.WriteFile(confirmation, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			call(nil, "workflow", "submit", "--root", s.workspace, "--run-id", "native-execution", "--confirmation", confirmation, "--single-step")
 			run, err = f.Show()
 			if err != nil {
 				t.Fatal(err)

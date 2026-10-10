@@ -13,9 +13,10 @@ class WorkerJudgmentTests(unittest.TestCase):
         checks = [{'id': 'normal', 'argv': ['true'], 'dependencies': ['app.py']},
                   {'id': 'boundary', 'argv': ['true'], 'dependencies': ['app.py']}]
         bridge = Bridge(str(BINARY))
-        schema = bridge.call('schema', {'checks': checks})
+        schema = bridge.call('schema', {'checks': checks})['anyOf'][0]
         self.assertNotIn('check_ids', schema['properties'])
-        self.assertEqual(set(schema['properties']['check_reviews']['properties']), {'normal', 'boundary'})
+        self.assertNotIn('status', schema['properties'])
+        self.assertEqual(schema['properties']['check_reviews']['anyOf'][0]['minItems'],2)
         with tempfile.TemporaryDirectory() as home:
             root = Path(home)
             manifest = {'spec': {'provider': 'fixture', 'checks': checks}, 'revision': 'confirmed', 'fixture': True}
@@ -23,13 +24,14 @@ class WorkerJudgmentTests(unittest.TestCase):
             workers = Workers(store, PACKAGE)
             model = workers.fixture('qa-review', root)
             self.assertNotIn('check_ids', model)
-            self.assertEqual(set(model['check_reviews']), {'normal', 'boundary'})
+            self.assertEqual(len(model['check_reviews']),2)
+            self.assertNotIn('status',model)
             output = workers.run('qa-review', root, {'candidate': 'original'})
             self.assertEqual(output['result']['check_ids'], ['normal', 'boundary'])
-            self.assertEqual(output['result']['status'], model['status'])
+            self.assertEqual(output['result']['status'], 'PASS')
             self.assertEqual(output['result']['findings'], model['findings'])
             self.assertEqual(output['result']['summary'], model['summary'] + ''.join(
-                '\nCheck ' + check['id'] + ': ' + model['check_reviews'][check['id']] for check in checks))
+                '\nCheck ' + check['id'] + ': ' + model['check_reviews'][index] for index,check in enumerate(checks)))
             self.assertEqual(output['source']['model_calls'], 0)
             self.assertEqual(workers.run('qa-review', root, {'candidate': 'original'}), output)
         for result in ({**model, 'check_ids': ['normal', 'boundary']},

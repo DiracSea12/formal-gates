@@ -15,9 +15,9 @@ Completed 只作上下文，Inherited 由程序沿原批准分区组装。不得
 用例，也不得添加名单外用例。AFFECTED 使用已批准的固定受影响子集；FULL 使用完整
 批准集，比较者不得自行改变范围。
 
-报告只填写当前待判断用例的逐项比较和 EXECUTED_PASS/EXECUTED_FAIL，以及真实发现。
+报告按签发 executionFacts 中 pending 且 required 的用例顺序填写 records 数组，仅含逐项比较和 EXECUTED_PASS/EXECUTED_FAIL；未完成项使用 null，以及真实发现。
 程序从这些判断、已接纳 Completed/Inherited 记录和批准覆盖边推导整体状态及部分报告标志。
-已完成的 FAIL 也是完成判断。没有新判断时返回 records 为 {}，不要重复报告或重跑已完成项。
+已完成的 FAIL 也是完成判断。没有新判断时返回 records 为 []，不要重复报告或重跑已完成项。
 无法完成时填写实际 interruptionReason；可以保留已有完整事实支持的部分比较，不把缺证据当 PASS。
 尚未完整执行的用例继续保持未完成；程序沿原收据观察已执行前缀并沿
 原入口合并 Completed，续跑只处理尚未完成且绑定有效的责任。候选、配方、工具或环境不匹配的证据不能继承。用例缺少可机械执行的动作时，

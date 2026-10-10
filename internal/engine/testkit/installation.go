@@ -21,7 +21,7 @@ func Installation(t testing.TB, root, recordID, packageDigest, provider string) 
 		"id": recordID, "target": target, "host": provider, "scope": "project", "projectRoot": root,
 		"launcherPath": filepath.Join(dir, "launcher"), "stateRoot": filepath.Join(root, ".gates"),
 		"resourceRoot": filepath.Join(root, ".formal-gates-resources"), "runtimeSibling": filepath.Join(dir, "runtime"),
-		"status": "active", "packageDigest": packageDigest, "installedDigest": packageDigest,
+		"status": "active", "packageDigest": packageDigest, "installedDigest": packageDigest, "vcsIdentity": "fixture-native",
 		"generation": generation, "lease": lease, "token": token,
 	}
 	canonical := map[string]string{}

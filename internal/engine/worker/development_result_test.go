@@ -21,7 +21,7 @@ func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 			t.Fatal("model execution claims remain in the contract")
 		}
 		for _, claim := range []string{"none", "build", "tests", "checks", "caseRuns"} {
-			development := map[string]any{"paths": []string{"command.go"}, "summary": "Implemented public behavior", "completion": map[string]any{"dod": map[string]string{"behavior": "Public behavior implemented"}, "handoff": "Ready for program checks"}}
+			development := map[string]any{"summary": "Implemented public behavior", "completion": map[string]any{"dod": []string{"Public behavior implemented"}, "handoff": "Ready for program checks"}}
 			if claim == "checks" {
 				development["completion"].(map[string]any)[claim] = map[string]string{"actual": "passed"}
 			} else if claim != "none" {
@@ -31,7 +31,7 @@ func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			event, err := DecodeResult(input, "result", raw, "sha256:original")
+			event, err := DecodeResultWithPaths(input, "result", raw, "sha256:original", []string{})
 			if claim == "none" {
 				if err != nil || event.Result.Validation.Development.Completion.DoD["behavior"] != "Public behavior implemented" || event.Result.Validation.Binding != input.Validation.Binding {
 					t.Fatalf("semantic DoD/handoff/binding was lost %v %#v", err, event)
@@ -50,9 +50,9 @@ func TestRepairComparisonDerivesExecutionFactsAndStatus(t *testing.T) {
 	}
 	for _, scenario := range []string{"all-pass", "case-fail", "status-claim"} {
 		t.Run(scenario, func(t *testing.T) {
-			records := map[string]Observation{"case-a": {Result: coverage.ExecutedPass, Comparison: "output matches case-a"}, "case-b": {Result: coverage.ExecutedPass, Comparison: "output matches case-b"}}
+			records := []*Observation{{Result: coverage.ExecutedPass, Comparison: "output matches case-a"}, {Result: coverage.ExecutedPass, Comparison: "output matches case-b"}}
 			if scenario == "case-fail" {
-				records["case-b"] = Observation{Result: coverage.ExecutedFail, Comparison: "actual output differs from oracle"}
+				records[1] = &Observation{Result: coverage.ExecutedFail, Comparison: "actual output differs from oracle"}
 			}
 			value := Execution{Records: records}
 
@@ -63,7 +63,7 @@ func TestRepairComparisonDerivesExecutionFactsAndStatus(t *testing.T) {
 			if scenario == "status-claim" {
 				raw = append(raw[:len(raw)-1], []byte(`,"status":"PASS"}`)...)
 			}
-			event, err := DecodeResult(input, "result", raw, "sha256:semantic")
+			event, err := DecodeResultWithPaths(input, "result", raw, "sha256:semantic", []string{})
 			if scenario == "status-claim" {
 				if err == nil {
 					t.Fatal("model repeated a program-derived status")

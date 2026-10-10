@@ -52,7 +52,7 @@ class DriverTests(unittest.TestCase):
                 state=app.invoke(Command(resume={'decision':'approve','revision':self.manifest['revision']}),self.config,durability='sync')
                 if expected:self.assertEqual(state['__interrupt__'][0].value['kind'],expected)
             result=self.store.get(state['terminal'])
-            self.assertEqual(result['status'],'DEMO_COMPLETE');self.assertFalse(result['full_3_5c_equivalence'])
+            self.assertEqual(result['status'],'DEMO_COMPLETE')
             self.assertEqual(state['round'],1)
             events=[json.loads(line) for line in (self.directory/'events.jsonl').read_text().splitlines()]
             self.assertEqual(len([e for e in events if e['event']=='check-complete' and e['check']=='addition']),2)

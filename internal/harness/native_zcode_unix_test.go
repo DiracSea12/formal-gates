@@ -198,6 +198,7 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	}
 	if !valuesEqual(identityRecord, map[string]any{
 		"identity": "s-1", "provider": "zcode", "workspace": scenario.workspace,
+		"acknowledgement": map[string]any{"protocol": map[string]any{"name": "ZCode Protocol", "version": 1}, "session": map[string]any{"sessionId": "s-1"}},
 		"selection": map[string]any{
 			"model":            `{"modelId":"m1","providerId":"p1"}`,
 			"reasoning_effort": "low"},
@@ -240,8 +241,8 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	if !strings.Contains(echo, `"persistence":"immediate"`) {
 		t.Fatalf("create must persist immediately:\n%s", echo)
 	}
-	if strings.Contains(echo, "toolAllowlist") || strings.Contains(echo, "titleGenerationEnabled") {
-		t.Fatalf("a plain new session carries neither allowlist nor probe flag:\n%s", echo)
+	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","AskUserQuestion"]`) || !strings.Contains(echo, `"mcpServers":[`) || strings.Contains(echo, "titleGenerationEnabled") {
+		t.Fatalf("a writable action must register managed tools without a probe flag:\n%s", echo)
 	}
 	if !strings.Contains(echo, `"deliveryKind":"desktop-continuous"`) {
 		t.Fatalf("subscribe frame:\n%s", echo)
@@ -302,7 +303,7 @@ func TestZcodeExecuteReadOnly(t *testing.T) {
 		t.Fatalf("code = %d, stderr = %q", code, errout.String())
 	}
 	if policy := readTestFileBytes(t, filepath.Join(scenario.directory, "tool-policy.json")); string(policy) !=
-		`{"allowed":["Read","Glob","Grep","WebSearch","WebFetch"],"read_only":true}` {
+		`{"allowed":["mcp__formal-gates__workspace","AskUserQuestion"],"read_only":true}` {
 		t.Fatalf("tool-policy.json = %s", policy)
 	}
 	sourceValue, err := readJSONFile(filepath.Join(scenario.directory, "native-source.json"))
@@ -314,8 +315,25 @@ func TestZcodeExecuteReadOnly(t *testing.T) {
 		t.Fatalf("read-only source must not carry a mode: %v", source)
 	}
 	echo := readTestFile(t, scenario.echoPath)
-	if !strings.Contains(echo, `"toolAllowlist":["Read","Glob","Grep","WebSearch","WebFetch"]`) {
+	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","AskUserQuestion"]`) {
 		t.Fatalf("create must carry the allowlist:\n%s", echo)
+	}
+	frames := strings.Split(strings.TrimSpace(echo), "\n")
+	registered := false
+	for _, frame := range frames {
+		value := decodeTestJSON(t, frame)
+		if getOf(value, "method") != "session/create" {
+			continue
+		}
+		servers := listOf(getOf(getOf(value, "params"), "mcpServers"))
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		registered = len(servers) == 1 && getOf(servers[0], "command") == executable && valuesEqual(getOf(servers[0], "args"), []any{"harness", "native-tools", scenario.directory})
+	}
+	if !registered {
+		t.Fatalf("create did not register original job tool endpoint: %s", echo)
 	}
 	if strings.Contains(echo, `"method":"session/setMode"`) {
 		t.Fatalf("a read-only session must not declare a mode:\n%s", echo)

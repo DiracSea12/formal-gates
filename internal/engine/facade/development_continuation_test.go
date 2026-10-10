@@ -15,6 +15,7 @@ import (
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 )
@@ -38,8 +39,12 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	}
 	d.receipt(id)
 	originalMaterial := d.run.WorkerMaterials[id]
-	completion := batchEvidence(input).Completion
-	original := submitDevelopmentSemanticFixture(t, d, originalMaterial, worker.Development{Paths: input.Development.Batch.Artifacts, Summary: "delivered edit; approved source checks still own completion", Completion: completion}, "fixture-native-session")
+	priorCompletion := batchEvidence(input).Completion
+	completion := &worker.Completion{Handoff: priorCompletion.Handoff}
+	for _, criterion := range input.Development.Batch.DoD {
+		completion.DoD = append(completion.DoD, priorCompletion.DoD[criterion.ID])
+	}
+	original := submitDevelopmentSemanticFixture(t, d, originalMaterial, worker.Development{Summary: "delivered edit; approved source checks still own completion", Completion: completion}, "fixture-native-session")
 	d.drive()
 	failed := driverState(t, d)
 	var failedReceipt protocol.HostActionReceipt
@@ -114,7 +119,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// incomplete change\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	next := submitDevelopmentSemanticFixture(t, d, continuation, worker.Development{Paths: []string{"app.go"}, Summary: "changed original implementation; actual checks still own completion", Completion: completion}, "fixture-native-session")
+	next := submitDevelopmentSemanticFixture(t, d, continuation, worker.Development{Summary: "changed original implementation; actual checks still own completion", Completion: completion}, "fixture-native-session")
 	d.drive()
 	second := driverState(t, d)
 	if second.Results[id].Digest == result.Digest || second.PendingActions[id].AttemptID != issued.ID {
@@ -135,7 +140,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// ready\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	final := submitDevelopmentSemanticFixture(t, d, d.run.WorkerMaterials[id], worker.Development{Paths: []string{"app.go"}, Summary: "completed original authorized implementation", Completion: completion}, "fixture-native-session")
+	final := submitDevelopmentSemanticFixture(t, d, d.run.WorkerMaterials[id], worker.Development{Summary: "completed original authorized implementation", Completion: completion}, "fixture-native-session")
 	d.drive()
 	completed := driverState(t, d)
 	if completed.TaskStatusOf(input.Binding.Task) != runtime.TaskTerminal || completed.PendingActions[id].ActionID != "" || len(completed.RecoverableResults[id]) != 2 || completed.RecoverableResults[id][0].Digest != result.Digest {
@@ -228,12 +233,21 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 		}
 		return answer, digest, session, nil
 	}
-	acceptance, run, err := d.f.SubmitWorkerResult(eventID, ref, directory, map[string]any{"session": session}, verify)
+	resource := material.Input.Validation.Workspace
+	paths, err := vcs.NewNative(resource.Path, material.Input.VCS, nil).At(resource.Path, resource.Handle).ChangedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths == nil {
+		paths = []string{}
+	}
+	source := map[string]any{"session": session, "effects": map[string]any{"paths": paths}}
+	acceptance, run, err := d.f.SubmitWorkerResult(eventID, ref, directory, source, verify)
 	if err != nil || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("semantic result admission: %+v %v", acceptance, err)
 	}
 	d.run = run
-	event, err := worker.DecodeResult(material.Input, eventID, answer, digest)
+	event, err := worker.DecodeResultWithPaths(material.Input, eventID, answer, digest, paths)
 	if err != nil {
 		t.Fatal(err)
 	}

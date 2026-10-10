@@ -15,9 +15,9 @@ type ObservationJudgments struct {
 	Suggestions []SuggestionJudgment `json:"suggestions,omitempty"`
 }
 type SuggestionJudgment struct {
-	Decision      string   `json:"decision"`
-	Reason        string   `json:"reason"`
-	AffectedCases []string `json:"affectedCases"`
+	Decision      string `json:"decision"`
+	Reason        string `json:"reason"`
+	AffectedCases []int  `json:"affectedCases"`
 }
 type FindingJudgment struct {
 	Decision          string                     `json:"decision"`
@@ -33,8 +33,8 @@ type FindingJudgment struct {
 	Reason            string                     `json:"reason"`
 }
 type ScopeJudgment struct {
-	Cases  []string `json:"cases"`
-	Reason string   `json:"reason"`
+	Cases  []int  `json:"cases"`
+	Reason string `json:"reason"`
 }
 type ImpactJudgment struct {
 	Decision string `json:"decision"`
@@ -87,7 +87,16 @@ func assembleObservations(input *protocol.ObservationInput, judgments *Observati
 	}
 	for index, source := range input.Scopes {
 		value := judgments.Scopes[index]
-		appendObservation(protocol.ValidationObservation{Kind: "EXECUTION_SCOPE", Mode: source.Mode, AffectedCases: value.Cases, Reason: value.Reason})
+		cases, err := selectIDs(value.Cases, source.ApprovedCases)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range source.MustExecute {
+			if !slices.Contains(cases, id) {
+				cases = append(cases, id)
+			}
+		}
+		appendObservation(protocol.ValidationObservation{Kind: "EXECUTION_SCOPE", Mode: source.Mode, AffectedCases: cases, Reason: value.Reason})
 	}
 	for index, source := range input.GateImpacts {
 		value := judgments.GateImpacts[index]
@@ -95,7 +104,15 @@ func assembleObservations(input *protocol.ObservationInput, judgments *Observati
 	}
 	for index, source := range input.Suggestions {
 		value := judgments.Suggestions[index]
-		appendObservation(protocol.ValidationObservation{Kind: "SUGGESTION", Mode: source.Mode, SuggestionID: source.Suggestion.ID, Decision: value.Decision, Reason: value.Reason, AffectedCases: value.AffectedCases})
+		ids := []string{}
+		for _, item := range source.Manifest.Cases {
+			ids = append(ids, item.CaseID)
+		}
+		cases, err := selectIDs(value.AffectedCases, ids)
+		if err != nil {
+			return nil, err
+		}
+		appendObservation(protocol.ValidationObservation{Kind: "SUGGESTION", Mode: source.Mode, SuggestionID: source.Suggestion.ID, Decision: value.Decision, Reason: value.Reason, AffectedCases: cases})
 	}
 	return observations, nil
 }

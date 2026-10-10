@@ -4,7 +4,7 @@ package harness
 // transport is always the
 // same machine: spawn one host process, speak line-delimited JSON over its
 // stdio, keep a routing-only trace, answer the host's own client-directed
-// requests and write the same four evidence files. Only the launch arguments
+// requests and write the original source evidence. Only the launch arguments
 // and the protocol sequence belong to an adapter, supplied as plain hooks. No
 // interface, no registry,
 // no assembly injection: the adapter and the transport live in this one
@@ -376,7 +376,7 @@ func validateNativeBinding(binding any, provider string) error {
 
 // verifyNativeSource is the proof-checking body behind every adapter's
 // verify_source (dshVerifySource, zcodeVerifySource): provider/identity must
-// match, the proof set must be exactly the four evidence files, and each proof
+// match, the proof set must be exactly the original evidence files, and each proof
 // must still hold against the directory. Only the provider name differs
 // between the adapters.
 func verifyNativeSource(directory string, source any, provider string) error {
@@ -389,7 +389,11 @@ func verifyNativeSource(directory string, source any, provider string) error {
 		return &blockedError{message: "NATIVE_BINDING: missing or different provider/identity"}
 	}
 	proofs := objectOrEmpty(getOrOf(object, "files", nil))
-	if !sameKeySet(proofs, nativeSourceFiles) {
+	expectedFiles, err := nativeEvidenceFiles(directory)
+	if err != nil {
+		return err
+	}
+	if !sameKeySet(proofs, expectedFiles) {
 		return &blockedError{message: "EVIDENCE_MISSING: native source proofs absent"}
 	}
 	for name, bound := range proofs {
@@ -399,6 +403,30 @@ func verifyNativeSource(directory string, source any, provider string) error {
 		}
 		if !valuesEqual(proof, bound) {
 			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
+		}
+	}
+	if err := verifyNativeToolEvidence(directory); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	if err != nil {
+		return err
+	}
+	facts, err := nativePathEvidence(directory, string(raw), false)
+	if err != nil {
+		return err
+	}
+	if facts != nil {
+		encoded, err := canonicalBody(facts)
+		if err != nil {
+			return err
+		}
+		value, err := decodeNativeJSON(encoded)
+		if err != nil {
+			return err
+		}
+		if !valuesEqual(getOf(source, "effects"), value) {
+			return &blockedError{message: "EVIDENCE_CHANGED: native terminal path facts"}
 		}
 	}
 	return nil
@@ -465,6 +493,7 @@ func writeNativeAnswer(directory, text, prefix string) error {
 // shared framing contract retain the native message exactly.
 func writeNativeAnswerProjected(directory, text, prefix string, project func(map[string]any) (map[string]any, error)) error {
 	raw := filepath.Join(directory, "answer.raw.txt")
+	originalRaw := text
 	if _, statErr := os.Stat(raw); statErr == nil {
 		body, err := os.ReadFile(raw)
 		if err != nil {
@@ -473,12 +502,19 @@ func writeNativeAnswerProjected(directory, text, prefix string, project func(map
 		if normalizeNewlines(string(body)) != normalizeNewlines(text) {
 			return &blockedError{message: prefix + "_RESULT: saved output differs"}
 		}
+		originalRaw = string(body)
 	} else if os.IsNotExist(statErr) {
+		if _, err := nativePathEvidence(directory, text, true); err != nil {
+			return err
+		}
 		if err := os.WriteFile(raw, []byte(text), 0o644); err != nil {
 			return err
 		}
 	} else {
 		return statErr
+	}
+	if _, err := nativePathEvidence(directory, originalRaw, false); err != nil {
+		return err
 	}
 	result, refusal := FrameResult(text)
 	if refusal != "" {
@@ -516,14 +552,21 @@ func normalizeNewlines(text string) string {
 }
 
 // evidenceSource is the receipt every host returns: provider, identity, the
-// caller's extra keys, then proofs for the four evidence files.
+// caller's extra keys and the original evidence file proofs.
 func evidenceSource(directory, provider string, identity any, extra map[string]any) (map[string]any, error) {
+	if err := verifyNativeToolEvidence(directory); err != nil {
+		return nil, err
+	}
 	receipt := map[string]any{"provider": provider, "identity": identity}
 	for key, value := range extra {
 		receipt[key] = value
 	}
 	files := map[string]any{}
-	for _, name := range nativeSourceFiles {
+	names, err := nativeEvidenceFiles(directory)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
 		proof, err := fileProofOf(filepath.Join(directory, name))
 		if err != nil {
 			return nil, err
@@ -531,6 +574,25 @@ func evidenceSource(directory, provider string, identity any, extra map[string]a
 		files[name] = proof
 	}
 	receipt["files"] = files
+	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	if err != nil {
+		return nil, err
+	}
+	facts, err := nativePathEvidence(directory, string(raw), false)
+	if err != nil {
+		return nil, err
+	}
+	if facts != nil {
+		encoded, err := canonicalBody(facts)
+		if err != nil {
+			return nil, err
+		}
+		value, err := decodeNativeJSON(encoded)
+		if err != nil {
+			return nil, err
+		}
+		receipt["effects"] = value
+	}
 	return receipt, nil
 }
 

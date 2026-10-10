@@ -47,7 +47,8 @@ regular 路线 full/custom 在技术审和计划/拓扑确认后选择，不能�
 
 1. **受理与确认。** 唯一正式文件包含完整需求/方案和 REQ/AC/来源；先结构预检，
    再展示全部选定材料全文和精确 revisions，等待用户确认。预检程序生成
-   intakeCandidate；确认后机械保存该完整对象为 start 的 receipt，禁止手抄其绑定。
+   intakeCandidate，并用 --save-candidate 程序保存完整对象。展示后等待真实确认，再把
+   原文件交给 start；禁止代理抄取、改写或重新拼装任何绑定。
    lightweight 不要求结构化正式需求案，预检使用 --route lightweight。
 2. **启动与登记。** start 绑定已确认 intake receipt 和当前安装身份，不接受 split 意向。
    首次 drive 自动登记该确认。regular 的产品审、技术审、开发与 QA 只消费确认 revision。
@@ -56,6 +57,8 @@ regular 路线 full/custom 在技术审和计划/拓扑确认后选择，不能�
    技术审形成 granularity_review，包括 Batch → Subtask、依赖、接口、状态边界、DoD、
    验证、恢复和交接。不把文件数、commit 数或编号当作拆分理由。
 4. **计划与路线。** 用户确认当前 planDigest 与 split 拓扑或 no-split 理由，再确认 full/custom。
+   所有决定由 next --decision --save-candidate 生成完整确认文件，展示后等待真实确认，
+   再 submit --confirmation 原文件；不手填事件身份、token、摘要或原载荷。
    需求保证绑定已确认单一结构化需求案，split 的 child 由 engine 创建；
    使用当前安装实际提供的 VCS/宿主能力，不能把安装成功当作全流程验证通过。
 5. **开发与黑盒并发。** 开发只读已确认任务；黑盒在基线隔离工作区独立设计/审查，不读

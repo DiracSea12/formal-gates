@@ -354,6 +354,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	route := fs.String("route", "", "regular or lightweight")
 	intakePath := fs.String("intake-receipt", "", "typed confirmation receipt of the prechecked requirement and solution")
 	precheck := fs.Bool("precheck", false, "read and project the complete requirement before confirmation; creates no run")
+	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated intake candidate; creates no run")
 	requirementPath := fs.String("requirement", "", "requirement document path for --precheck")
 	solutionPath := fs.String("solution", "", "solution material for --precheck; defaults to the requirement document")
 	var artifacts stringListFlag
@@ -370,9 +371,12 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 			return 1, fmt.Errorf("workflow start --precheck requires --requirement")
 		}
 		preview, err := facade.PrepareIntake(*root, *requirementPath, *solutionPath, artifacts, routeName != "lightweight")
+		if err == nil && *saveCandidate != "" {
+			err = saveWorkflowCandidate(*saveCandidate, preview.IntakeCandidate)
+		}
 		return printValue(streams.Stdout, preview, err)
 	}
-	if *requirementPath != "" || *solutionPath != "" || len(artifacts) != 0 {
+	if *requirementPath != "" || *solutionPath != "" || len(artifacts) != 0 || *saveCandidate != "" {
 		return 1, fmt.Errorf("--requirement, --solution and --artifact are only available with --precheck; start requires the confirmed intake receipt")
 	}
 	receipt, err := readEngineIntakeReceipt(*intakePath)
@@ -443,55 +447,34 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow next", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
-	draftPath := fs.String("review-decision", "", "read-only route or split decision preview JSON; - reads stdin")
+	draftPath := fs.String("decision", "", "semantic control choices JSON; - reads stdin")
+	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated control confirmation")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
 	f, ok, err := openEngineIfPresent(*root, *runID)
+	if err != nil {
+		return 1, err
+	}
 	if !ok {
 		return 1, fmt.Errorf("workflow next is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
-	if err != nil {
-		return 1, err
-	}
-	next, err := f.Next()
-	if err != nil || *draftPath == "" {
+	if *draftPath == "" {
+		if *saveCandidate != "" {
+			return 1, fmt.Errorf("--save-candidate requires --decision")
+		}
+		next, err := f.Next()
 		return printValue(streams.Stdout, next, err)
 	}
-	var draft protocol.ReviewDecisionPayload
-	if *draftPath == "-" {
-		decoder := json.NewDecoder(streams.Stdin)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&draft); err != nil {
-			return 1, err
-		}
-	} else if err := readJSONFileInto(*draftPath, &draft); err != nil {
+	var input facade.ControlInput
+	if err := readWorkflowInput(*draftPath, streams.Stdin, &input); err != nil {
 		return 1, err
 	}
-	if (draft.Route == nil) == (draft.Topology == nil) || draft.Correction != nil || draft.RoundGrant != nil {
-		return 1, fmt.Errorf("plan preview needs exactly one route or split topology draft")
+	candidate, err := f.PrepareControl(input)
+	if err == nil && *saveCandidate != "" {
+		err = saveWorkflowCandidate(*saveCandidate, candidate)
 	}
-	var preview *protocol.DevelopmentPlanPreview
-	var supplied *protocol.DevelopmentPlanConfirmation
-	if draft.Topology != nil {
-		supplied = draft.Topology.DevelopmentPlan
-		preview, err = f.DevelopmentPlan(protocol.RouteDecision{}, *draft.Topology)
-	} else {
-		supplied = draft.Route.DevelopmentPlan
-		preview, err = f.DevelopmentPlan(*draft.Route)
-	}
-	if err != nil {
-		return 1, err
-	}
-	if supplied != nil && (supplied.ReviewActionID != "" || supplied.Digest != "" || supplied.Proposal == nil) && *supplied != preview.Confirmation {
-		return 1, fmt.Errorf("supplied development plan confirmation differs from its exact preview")
-	}
-	if draft.Topology != nil {
-		draft.Topology.DevelopmentPlan = &preview.Confirmation
-	} else {
-		draft.Route.DevelopmentPlan = &preview.Confirmation
-	}
-	return printJSON(streams.Stdout, map[string]any{"next": next, "developmentPlan": preview, "reviewDecision": draft})
+	return printValue(streams.Stdout, candidate, err)
 }
 
 func runWorkflowDrive(args []string, streams IO) (int, error) {
@@ -524,7 +507,7 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	materialPath := fs.String("worker-material", "", "issued material reference JSON file")
 	nativeDirectory := fs.String("native-directory", "", "original native evidence directory")
 	sourcePath := fs.String("native-source", "", "original native source receipt JSON")
-	eventID := fs.String("event-id", "", "worker result event identity")
+	confirmationPath := fs.String("confirmation", "", "complete control candidate saved by workflow next after the user confirms its displayed content")
 	singleStep := fs.Bool("single-step", false, "diagnostic: accept this event without consuming subsequent native workers")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
@@ -545,17 +528,47 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		if err := readJSONFileInto(*sourcePath, &source); err != nil {
 			return 1, err
 		}
-		acceptance, run, err := f.SubmitWorkerResult(protocol.EventID(*eventID), material, *nativeDirectory, source, harness.NativeResultEvidence)
+		sourceDigest, err := harness.CanonicalDigest(source)
+		if err != nil {
+			return 1, err
+		}
+		eventID := protocol.EventID("worker-result:" + material.Digest + ":" + sourceDigest)
+		acceptance, run, err := f.SubmitWorkerResult(eventID, material, *nativeDirectory, source, harness.NativeResultEvidence)
 		if err != nil {
 			return 1, err
 		}
 		return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 	}
 	var event protocol.Event
-	if err := json.NewDecoder(streams.Stdin).Decode(&event); err != nil {
-		return 1, fmt.Errorf("workflow submit requires a typed event JSON object on stdin: %w", err)
+	var saved *facade.ControlCandidate
+	if *confirmationPath != "" {
+		var candidate facade.ControlCandidate
+		if err := readWorkflowInput(*confirmationPath, streams.Stdin, &candidate); err != nil {
+			return 1, err
+		}
+		saved = &candidate
+		event = candidate.Event
+	} else {
+		var input facade.ControlInput
+		if err := readWorkflowInput("-", streams.Stdin, &input); err != nil {
+			return 1, fmt.Errorf("workflow submit requires semantic control choices, not a manually assembled event: %w", err)
+		}
+		if input.Request == "" {
+			return 1, fmt.Errorf("user decisions require the complete candidate saved by workflow next --decision --save-candidate, then submit --confirmation after confirmation")
+		}
+		candidate, err := f.PrepareControl(input)
+		if err != nil {
+			return 1, err
+		}
+		event = candidate.Event
 	}
-	acceptance, run, err := f.Submit(event)
+	var acceptance protocol.Acceptance
+	var run facade.Run
+	if saved != nil {
+		acceptance, run, err = f.SubmitControl(*saved)
+	} else {
+		acceptance, run, err = f.Submit(event)
+	}
 	if err != nil {
 		return 1, err
 	}
@@ -867,6 +880,38 @@ func (f *stringListFlag) Set(value string) error {
 
 func rootFlags(fs *flag.FlagSet) (*string, *string) {
 	return fs.String("root", ".", "repository root"), fs.String("package-root", ".", "installed formal-gates package root")
+}
+
+func readWorkflowInput(path string, stdin io.Reader, value any) error {
+	reader := stdin
+	if path != "-" {
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		reader = file
+	}
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("expected one complete JSON object")
+		}
+		return err
+	}
+	return nil
+}
+func saveWorkflowCandidate(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
 }
 
 func readEngineIntakeReceipt(input string) (facade.IntakeConfirmationReceipt, error) {

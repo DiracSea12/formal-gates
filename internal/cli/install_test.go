@@ -14,9 +14,8 @@ import (
 )
 
 // A plain candidate may not select its own explicit transaction path as a
-// stable launcher in a fresh namespace.  This is the process-level fence used
-// by the portable canary; in-process tests intentionally bypass launcher
-// discovery because their executable is a Go test binary.
+// stable launcher in a fresh namespace. The subprocess supplies its actual
+// invocation; positive CLI fixtures supply the normal registered launcher.
 func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -58,7 +57,7 @@ func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install",
 		"--source", source,
 		"--host", "claude",
@@ -100,7 +99,7 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 			source := writeInstallSource(t, "source")
 			project := t.TempDir()
 			var stdout, stderr bytes.Buffer
-			code := Run("formal-gates", []string{
+			code := runInstalledFixture(t, []string{
 				"install", "--source", source, "--host", tc.host, "--scope", "project",
 				"--project", project, "--skip-hooks",
 			}, IO{Stdout: &stdout, Stderr: &stderr})
@@ -151,7 +150,7 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 				writeOldHookConfig(t, configPath, tc.host)
 				var stdout, stderr bytes.Buffer
 
-				code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr})
+				code := runInstalledFixture(t, args, IO{Stdout: &stdout, Stderr: &stderr})
 
 				if code != 0 {
 					t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -220,7 +219,7 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 		},
 	})
 	var stdout, stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("ZCode global install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	assertFileContains(t, filepath.Join(home, ".zcode", "skills", "formal-gates", "SKILL.md"), "source")
@@ -237,7 +236,7 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"uninstall", "--host", "zcode", "--scope", "global"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"uninstall", "--host", "zcode", "--scope", "global"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("ZCode global uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".zcode", "skills", "formal-gates")); !os.IsNotExist(err) {
@@ -254,7 +253,7 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 	project := t.TempDir()
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "zcode", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("ZCode project install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	assertFileContains(t, filepath.Join(project, ".zcode", "skills", "formal-gates", "SKILL.md"), "source")
@@ -266,18 +265,18 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 	// host must retain the managed block while the other host remains active.
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("Codex project install for shared AGENTS.md failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"uninstall", "--host", "zcode", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"uninstall", "--host", "zcode", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("ZCode project uninstall with active Codex failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	assertFileContains(t, filepath.Join(project, "AGENTS.md"), testManagedRuleLatest)
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"uninstall", "--host", "codex", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runInstalledFixture(t, []string{"uninstall", "--host", "codex", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("Codex project uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if remaining := readFile(t, filepath.Join(project, "AGENTS.md")); strings.Contains(remaining, testManagedRulesStartMarker) {
@@ -289,7 +288,7 @@ func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) 
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "dsh", "--scope", "project", "--project", project, "--force",
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -310,7 +309,7 @@ func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) 
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{
+	if code := runInstalledFixture(t, []string{
 		"uninstall", "--host", "dsh", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("expected dsh project uninstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -339,7 +338,7 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 `)
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "dsh", "--scope", "global", "--force",
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -368,7 +367,7 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 	// 重复安装收敛为一条，不再叠加。
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{
+	if code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "dsh", "--scope", "global", "--force",
 	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("expected reinstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -379,7 +378,7 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{
+	if code := runInstalledFixture(t, []string{
 		"uninstall", "--host", "dsh", "--scope", "global",
 	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("expected dsh uninstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -405,7 +404,7 @@ func TestRunInstallRejectsRemovedMultiHostAlias(t *testing.T) {
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "both", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 
@@ -425,7 +424,7 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 			uninstallArgs := []string{"uninstall", "--host", host, "--scope", "project", "--project", project}
 
 			var stdout, stderr bytes.Buffer
-			if code := Run("formal-gates", installArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			if code := runInstalledFixture(t, installArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 				t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 			if !containsHookCommand(t, config, "echo formal-gates status") {
@@ -434,7 +433,7 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 
 			stdout.Reset()
 			stderr.Reset()
-			if code := Run("formal-gates", uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			if code := runInstalledFixture(t, uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 				t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 			if !containsHookCommand(t, config, "echo formal-gates status") {
@@ -462,7 +461,7 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	writeCodexHookConfig(t, config, legacyCommand, oldCurrentCommand, "echo formal-gates status")
 
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--force",
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -484,7 +483,7 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	writeCodexHookConfig(t, config, legacyCommand, currentCommand, "echo formal-gates status")
 	stdout.Reset()
 	stderr.Reset()
-	code = Run("formal-gates", []string{
+	code = runInstalledFixture(t, []string{
 		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -505,21 +504,25 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 }
 
 func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
-	// 2026-08-21 事故根因修复：uninstall 的共享 registry 默认按 HOME 解析
-	// （installRegistryPath -> installHomeDir）。本用例此前未隔离 HOME，
-	// 会加载并回写真实 ~/.formal-gates/registry.json，还在真实 ~/.formal-gates/
-	// 下留 uninstall 事务与锁文件。先隔离 HOME 再执行同一 uninstall 语义。
+	source := writeInstallSource(t, "registered legacy target")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
 	target := testInstallTargetPath(project, "codex", "project")
 	config := testHookConfigPath(project, "codex", "project")
+	var setupOut, setupErr bytes.Buffer
+	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks"}, IO{Stdout: &setupOut, Stderr: &setupErr}); code != 0 {
+		t.Fatal(setupErr.String())
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
 	mustWriteCLI(t, filepath.Join(target, "SKILL.md"), "legacy runtime\n")
 	writeUserOwnedHookConfig(t, config, "codex")
 
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -544,7 +547,7 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 	mustWriteCLI(t, managedPath, originalRule)
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks",
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 
@@ -565,7 +568,7 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 
 func TestRunInstallRejectsRemovedConfigureHooksFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{"install", "--configure-hooks"}, IO{Stdout: &stdout, Stderr: &stderr})
+	code := runInstalledFixture(t, []string{"install", "--configure-hooks"}, IO{Stdout: &stdout, Stderr: &stderr})
 
 	if code == 0 {
 		t.Fatal("expected removed --configure-hooks flag to be rejected")
@@ -577,7 +580,7 @@ func TestRunInstallRejectsRemovedConfigureHooksFlag(t *testing.T) {
 
 func TestRunInstallRejectsCandidateBinaryWriterFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{"install", "--candidate-binary", "/tmp/candidate/formal-gates"}, IO{Stdout: &stdout, Stderr: &stderr})
+	code := runInstalledFixture(t, []string{"install", "--candidate-binary", "/tmp/candidate/formal-gates"}, IO{Stdout: &stdout, Stderr: &stderr})
 
 	if code == 0 {
 		t.Fatal("expected candidate writer flag to be rejected")
@@ -594,7 +597,7 @@ func TestRunInstallHookFailureDoesNotClaimInstallSuccess(t *testing.T) {
 	mustWriteCLI(t, configPath, "not json\n")
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", source, "--host", "claude", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 
@@ -616,7 +619,7 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 	target := filepath.Join(project, ".codex", "skills", "formal-gates")
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install", "--source", first, "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -626,7 +629,7 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run("formal-gates", []string{
+	code = runInstalledFixture(t, []string{
 		"install", "--source", second, "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code == 0 {
@@ -638,7 +641,7 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run("formal-gates", []string{
+	code = runInstalledFixture(t, []string{
 		"install", "--source", second, "--host", "codex", "--scope", "project", "--project", project, "--force",
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
@@ -657,7 +660,7 @@ func TestRunInstallGlobalUsesTemporaryHome(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	var stdout, stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install",
 		"--source", source,
 		"--host", "codex",
@@ -678,7 +681,7 @@ func TestRunInstallRequiresBuiltNativeBinary(t *testing.T) {
 	project := t.TempDir()
 	var stderr bytes.Buffer
 
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"install",
 		"--source", source,
 		"--host", "claude",
@@ -715,7 +718,7 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleOld)+testManagedRuleBlock("STALE_FORMAL_GATES_RULE"))
 				}
 				var stdout, stderr bytes.Buffer
-				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				if code := runInstalledFixture(t, args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 					t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
 				if managed == "" {
@@ -728,7 +731,7 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 
 				stdout.Reset()
 				stderr.Reset()
-				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				if code := runInstalledFixture(t, args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 					t.Fatalf("reinstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
 				assertManagedRuleState(t, managed, true)
@@ -761,12 +764,12 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 				writeOldHookConfig(t, config, host)
 
 				var stdout, stderr bytes.Buffer
-				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				if code := runInstalledFixture(t, args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 					t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
 				stdout.Reset()
 				stderr.Reset()
-				if code := Run("formal-gates", uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				if code := runInstalledFixture(t, uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 					t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
 
@@ -793,18 +796,26 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 }
 
 func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
-	// 2026-08-21 事故根因修复：与 TestRunUninstallRemovesLegacyRuntime 同类——
-	// uninstall 的共享 registry 默认按 HOME 解析，未隔离时会加载并回写真实
-	// ~/.formal-gates/registry.json（epoch 前移）。先隔离 HOME。
+	source := writeInstallSource(t, "registered marker owner")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
+	var setupOut, setupErr bytes.Buffer
+	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks"}, IO{Stdout: &setupOut, Stderr: &setupErr}); code != 0 {
+		t.Fatal(setupErr.String())
+	}
+	if err := os.RemoveAll(testInstallTargetPath(project, "codex", "project")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
 	managed := filepath.Join(project, "AGENTS.md")
 	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleLatest))
 
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{
+	code := runInstalledFixture(t, []string{
 		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {

@@ -3,7 +3,6 @@ package validate
 import (
 	"fmt"
 
-	"os"
 	"path/filepath"
 
 	"strings"
@@ -46,14 +45,7 @@ func verifyRegistryBindingRecord(record RegistryRecord, root, packageRoot string
 	if canonicalRegistryPath(record.Target) != canonicalRegistryPath(canonicalPackage) || canonicalRegistryPath(record.CanonicalPaths["target"]) != canonicalRegistryPath(canonicalPackage) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
 	}
-	// Workflow writes require the fixed launcher recorded by admission;
-	// test binaries may invoke this check directly.
-	executable, executableErr := os.Executable()
-	if executableErr != nil {
-		return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
-	}
-	base := filepath.Base(filepath.Clean(executable))
-	if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && !launcherInvocationMatches(record.LauncherPath) {
+	if !launcherInvocationMatches(record.LauncherPath) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: workflow must be driven by stable launcher %s", record.LauncherPath)
 	}
 	return nil
@@ -76,22 +68,15 @@ func verifyRegisteredTargetIdentity(record RegistryRecord) error {
 	return nil
 }
 
-func validateSemanticResult(status, message string, findings []FindingInput) (string, []Finding, error) {
-	status = strings.ToUpper(strings.TrimSpace(status))
-	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
-		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
-	}
-	if status == "FAIL" && len(findings) == 0 {
-		return "", nil, fmt.Errorf("FAIL requires at least one finding")
-	}
-	if status == "RUNTIME_ERROR" {
+func validateSemanticResult(interruptionReason string, findings []FindingInput) (string, []Finding, error) {
+	status := "PASS"
+	if interruptionReason != "" {
 		if len(findings) != 0 {
-			return "", nil, fmt.Errorf("RUNTIME_ERROR cannot include reviewer findings")
+			return "", nil, fmt.Errorf("interrupted review cannot include reviewer findings")
 		}
-		if strings.TrimSpace(message) == "" {
-			return "", nil, fmt.Errorf("RUNTIME_ERROR requires a message")
-		}
+		status = "RUNTIME_ERROR"
 	}
+
 	converted := make([]Finding, 0, len(findings))
 	hasBlocking := false
 	for _, input := range findings {
@@ -116,11 +101,8 @@ func validateSemanticResult(status, message string, findings []FindingInput) (st
 		finding.ID = findingStableID(finding)
 		converted = append(converted, finding)
 	}
-	if status == "PASS" && hasBlocking {
-		return "", nil, fmt.Errorf("PASS can include only P2/P3 findings")
-	}
-	if status == "FAIL" && !hasBlocking {
-		return "", nil, fmt.Errorf("FAIL requires at least one P0 or P1 finding")
+	if hasBlocking {
+		status = "FAIL"
 	}
 	return status, converted, nil
 }

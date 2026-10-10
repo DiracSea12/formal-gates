@@ -44,7 +44,9 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 		t.Fatalf("build check runtime %v %s", err, out)
 	}
 	plan := commandPlan()
-	plan.Batches[0].Checks = checks
+	if len(checks) > 0 {
+		plan.Batches[0].Checks = checks
+	}
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved check contract"}})
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
@@ -57,7 +59,54 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 	if _, err := d.f.Drive(); err != nil {
 		t.Fatal(err)
 	}
-	return d.f, driverState(t, d), base
+	state := driverState(t, d)
+	t.Cleanup(func() {
+		// The fixture may launch sibling checks while preparing its source.
+		// Observe their original receipts before removing their owned workspace.
+		for _, intent := range state.PendingHostActions {
+			if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
+				continue
+			}
+			directory := filepath.Join(d.f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
+			if _, err := os.Stat(filepath.Join(directory, "request.json")); err != nil {
+				continue
+			}
+			var request map[string]any
+			if err := readCheckDocument(filepath.Join(directory, "request.json"), &request); err != nil {
+				t.Error(err)
+				continue
+			}
+			digest, err := d.f.checkRequestDigest(request)
+			if err != nil {
+				t.Error(err)
+				continue
+			}
+			for {
+				var receipt struct {
+					RequestDigest string `json:"request_digest"`
+					ExitCode      *int   `json:"exit_code"`
+				}
+				if err := readCheckDocument(filepath.Join(directory, "exit.json"), &receipt); err == nil {
+					if receipt.RequestDigest != digest || receipt.ExitCode == nil {
+						t.Error("original check exit does not match its request")
+					}
+					break
+				}
+				var process struct {
+					Alive bool `json:"alive"`
+				}
+				if err := d.f.checkBridge("supervisor-process", map[string]any{"directory": directory, "requestDigest": digest, "cancel": false}, &process); err != nil {
+					t.Error(err)
+					break
+				}
+				if !process.Alive {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	return d.f, state, base
 }
 
 func developmentCheckIntent(t *testing.T, f *Facade, s *protocol.State, base, action, command string) protocol.HostActionIntent {

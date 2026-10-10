@@ -174,7 +174,7 @@ func TestCertificateRejectsMissingAndStaleEvidence(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if v.(map[string]any)["status"] != "HARNESS_COMPLETE" || v.(map[string]any)["full_3_5c_equivalence"] != false {
+	if v.(map[string]any)["status"] != "HARNESS_COMPLETE" {
 		t.Fatal("misleading certificate")
 	}
 	q.Checks[0].Binding = "stale"

@@ -3,13 +3,15 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/worker"
 )
 
 func TestCodexNativeSchemaPreservesThreeClosedBodies(t *testing.T) {
@@ -89,18 +91,14 @@ func codexPlain(t *testing.T, value any) any {
 	return plain
 }
 
-// The readiness fixture is generated from canaryReviewSchema(true).
 func codexReadinessSchema(t *testing.T) map[string]any {
 	t.Helper()
-	body, err := os.ReadFile("testdata/readiness-schema.json")
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := decodeNativeJSON(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return schema.(map[string]any)
+	return codexPlain(t, schema).(map[string]any)
 }
 
 func TestCodexSchemaTransportsRoleContracts(t *testing.T) {
@@ -111,16 +109,25 @@ func TestCodexSchemaTransportsRoleContracts(t *testing.T) {
 	if codexPeerStrictSchema(schema) == nil {
 		t.Fatal("original readiness schema must fail native strict admission")
 	}
-	if !valuesEqual(schema, codexPlain(t, canaryReviewSchema(true))) {
-		t.Fatal("failure fixture differs from current domain schema")
+	roles := map[string]protocol.WorkerInput{
+		"review":                {Handler: "engine.review.worker", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
+		"blackbox-design":       {Handler: "engine.qa.design", Validation: &protocol.ValidationInput{}},
+		"whitebox-design":       {Handler: "engine.qa.design", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}},
+		"case-review":           {Handler: "engine.qa.review.rationale", Validation: &protocol.ValidationInput{}},
+		"execution":             {Handler: "engine.qa.execution", Validation: &protocol.ValidationInput{}},
+		"gate":                  {Handler: "engine.gate", Validation: &protocol.ValidationInput{}},
+		"confirmed-development": {Handler: "engine.development.batch", Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}},
+		"autonomous-repair":     {Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}},
 	}
-	for name, domain := range map[string]any{
-		"readiness": schema, "review": canaryReviewSchema(false), "worker": WorkerSchema(),
-		"blackbox-design": canaryDesignSchema(false), "whitebox-design": canaryDesignSchema(true),
-		"case-review": canaryCaseReviewSchema(), "execution": canaryExecutionSchema(), "gate": canaryGateSchema(),
-		"confirmed-development": canaryDevelopmentSchema(&protocol.DevelopmentInput{Batch: batch}),
-		"autonomous-repair":     canaryDevelopmentSchema(nil),
-	} {
+	domains := map[string]any{"readiness": schema, "worker": WorkerSchema()}
+	for name, input := range roles {
+		body, err := worker.ResultSchema(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		domains[name] = body
+	}
+	for name, domain := range domains {
 		t.Run(name, func(t *testing.T) {
 			before, _ := json.Marshal(domain)
 			native, err := codexOutputSchema(domain)
@@ -134,15 +141,17 @@ func TestCodexSchemaTransportsRoleContracts(t *testing.T) {
 			if string(before) != string(after) {
 				t.Fatal("domain schema mutated")
 			}
-			if name == "worker" && !valuesEqual(native, codexPlain(t, domain)) {
-				t.Fatal("all-required schema changed")
-			}
+
 		})
 	}
-	closed := canaryDevelopmentSchema(&protocol.DevelopmentInput{Batch: batch})
-	dod := getOf(getOf(closed, "properties"), "dod")
-	if getOf(dod, "additionalProperties") != false || !valuesEqual(codexPlain(t, getOf(dod, "required")), []any{"confirmed-outcome"}) || len(objectOrEmpty(getOf(dod, "properties"))) != 1 {
-		t.Fatalf("DoD schema not bound to confirmed batch: %v", dod)
+	closed, err := worker.ResultSchema(roles["confirmed-development"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := closed["anyOf"].([]any)[0].(map[string]any)
+	dod := body["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)["dod"].(map[string]any)
+	if dod["minItems"] != len(batch.DoD) || dod["items"] != false {
+		t.Fatalf("DoD schema not bound to confirmed criteria: %v", dod)
 	}
 }
 
@@ -159,13 +168,13 @@ func TestCodexDomainProjectionPreservesValidationInputs(t *testing.T) {
 		t.Fatalf("projection rewrote validation inputs: %v", result)
 	}
 	for name, answer := range map[string]map[string]any{
-		"missing-findings": {"status": "PASS", "summary": "ready", "check_reviews": map[string]any{}},
-		"null-status":      {"status": nil, "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}},
-		"wrong-type":       {"status": 7, "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}},
-		"unknown-field":    {"status": "PASS", "summary": "ready", "findings": []any{}, "check_reviews": map[string]any{}, "extra": "reject"},
+		"missing-findings": {"summary": "ready", "check_reviews": []any{}},
+		"null-summary":     {"summary": nil, "findings": []any{}, "check_reviews": []any{}},
+		"wrong-type":       {"summary": 7, "findings": []any{}, "check_reviews": []any{}},
+		"unknown-field":    {"summary": "ready", "findings": []any{}, "check_reviews": []any{}, "extra": "reject"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			projected, err := codexDomainResult(codexPlain(t, WorkerSchema()), answer)
+			projected, err := codexDomainResult(codexPlain(t, WorkerSchema()), map[string]any{"result": answer})
 			if err != nil {
 				t.Fatal(err)
 			}

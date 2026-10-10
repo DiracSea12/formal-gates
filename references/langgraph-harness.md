@@ -3,7 +3,7 @@
 harness 使用 LangGraph 编排开发期角色，用 Go 校验规格、角色结果和完成资格。
 它不是新的正式流程引擎，也不安装、替换或自动启动 formal-gates 正式流程。
 `HARNESS_COMPLETE` 是原生开发流水线的结果；`DEMO_COMPLETE` 是确定性夹具结果。
-两者都不是正式 Seal、独立门审结论或完整 3.5c 等价证明。
+两者只报告该次 harness 的实际验证结果。
 
 ## 设置与宿主选择
 
@@ -116,7 +116,9 @@ CLI 没有 `zcode` 命令，只能以
 ```sh
 ./scripts/harness start --provider dsh --project /absolute/project   --requirement /absolute/requirement.md --checks /absolute/checks.json
 ./scripts/harness show --run /absolute/run
-./scripts/harness respond --run /absolute/run --revision <returned-revision>   --interrupt <returned-id> --decision approve
+./scripts/harness respond --run /absolute/run --decision approve --save-decision /absolute/decision.json
+# 查看该候选并明确确认后：
+./scripts/harness respond --run /absolute/run --decision-file /absolute/decision.json
 ```
 
 需要干净的本地 Git 仓库。需求确认与计划确认分别绑定当前 revision 和 interrupt ID。
@@ -137,8 +139,10 @@ Gitlink 仅给出对象身份并明确不包含嵌套仓库。材料绑定同一
 
 ```sh
 ./scripts/harness resume --run /absolute/run
-./scripts/harness respond --run /absolute/run --revision <revision>   --interrupt <interrupt-id> --decision retry
-./scripts/harness respond --run /absolute/run --revision <revision>   --interrupt <interrupt-id> --decision restart-session
+./scripts/harness respond --run /absolute/run --decision retry --save-decision /absolute/retry.json
+./scripts/harness respond --run /absolute/run --decision-file /absolute/retry.json
+./scripts/harness respond --run /absolute/run --decision restart-session --save-decision /absolute/restart.json
+./scripts/harness respond --run /absolute/run --decision-file /absolute/restart.json
 ./scripts/harness cancel --run /absolute/run --confirm
 ```
 
@@ -165,7 +169,9 @@ job 已存在但缺少真实退出回执时不会盲目重复启动。已完成�
 `adopt-transport` 仅用于已保全原运行时、无活动 job、处于可接管 runtime 边界的显式开发修复：
 
 ```sh
-./scripts/harness adopt-transport --run /absolute/run --snapshot /absolute/preserved-runtime   --from-runtime <original-identity> --to-runtime <reviewed-identity> --reason "Reviewed transport fix"
+./scripts/harness adopt-transport --run /absolute/run --snapshot /absolute/preserved-runtime --reason "Reviewed transport fix" --save-decision /absolute/adoption.json
+# 查看实际源/目标身份和变更并明确确认后：
+./scripts/harness adopt-transport --run /absolute/run --decision-file /absolute/adoption.json
 ```
 
 可接管文件由绑定适配器声明，另含既有共享 CLI/worker 范围；图、Go binary、依赖锁和

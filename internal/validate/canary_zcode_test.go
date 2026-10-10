@@ -26,6 +26,8 @@ func TestPortableZCodeInstalledWorkflowCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := report.Targets[0]
+	restore := fixtureRegisteredInvocation(report.Registry, target.TargetPath, target.RegistryRecordID)
+	defer restore()
 	admission, err := ResolveEngineAdmissionByRecord(target.RegistryRecordID, report.Registry)
 	if err != nil || admission.Provider != host.ZCode {
 		t.Fatalf("installed provider identity: %+v %v", admission, err)

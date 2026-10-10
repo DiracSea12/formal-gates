@@ -69,7 +69,8 @@ formal-gates workflow start --precheck --root <repo> --requirement <requirement-
 程序准备的 `intakeCandidate`。`materials` 含全部选定材料的规范化全文和各自 revision；
 `--solution <path>` 选择独立方案文件，缺省使用正式文件本身；可重复 `--artifact <path>`
 添加需确认的材料。路径、内容摘要、方案绑定与固定 transport 均由程序组装，无需手抄。
-不创建 run 或落盘 receipt，不读取或写入 admission/registry。材料选择 flags 仅供
+不创建 run 或确认 receipt，不读取或写入 admission/registry。可加 `--save-candidate <文件>`
+由程序保存同一完整 `intakeCandidate`；保存候选不代表确认。材料选择 flags 仅供
 precheck；正常 start 只接收已确认 receipt。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
 展示和确认。确认前不启动开发 run、不选择后续路线、不派发后续代理。结构预检的通过
 不是产品审、技术审或 QA 的 PASS。
@@ -77,9 +78,9 @@ precheck；正常 start 只接收已确认 receipt。预检只核结构、字段
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
-精确 revisions，等待用户明确确认之后，才将返回的 `intakeCandidate` 整体保存为 UTF-8
-JSON receipt，并交给 `start --intake-receipt`。保存是机械抽取完整对象，不重新填写固定
-字段、路径或摘要。确认 receipt 是受理材料，不是模型调用记录。
+精确 revisions。预检的 `--save-candidate <文件>` 已由程序保存完整对象；等待用户明确
+确认后，将原文件交给 `start --intake-receipt`。代理不抽取 JSON、不抄写字段、路径、
+摘要或全文。保存候选不会启动 run；确认 receipt 是受理材料，不是模型调用记录。
 
 程序固定 `source/authority=stable-driver` 与 `transport=stable-launcher`，登记
 `requirementSource/requirementRevision`、完整 `artifacts`、选定方案的
@@ -107,7 +108,11 @@ formal-gates workflow drive --root <repo> --run-id <id>
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow status --root <repo> --run-id <id>
 formal-gates workflow next --root <repo> --run-id <id>
-formal-gates workflow submit --root <repo> --run-id <id> < <typed-event.json>
+formal-gates workflow submit --root <repo> --run-id <id> < <request-choices.json>
+formal-gates workflow next --root <repo> --run-id <id> --decision <choices.json> \
+  --save-candidate <confirmation.json>
+# 展示程序返回的完整对象，获得用户明确确认后：
+formal-gates workflow submit --root <repo> --run-id <id> --confirmation <confirmation.json>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
@@ -117,15 +122,25 @@ regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文
 lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
 在开发中降为 lightweight。
 
-`submit` 的输入是当前协议 schema 的 typed Event，事件身份与 Kind 对应的 payload
-成对匹配。主动控制先创建 REQUEST Ask，再从 show/next 取当前 request ID、选项、
-freshness token 和绑定 digest，经 DECIDE 登记用户实际决定；不能用自由 USER 写事件。
-同 event ID 同 digest 重放返回稳定接纳，不重放副作用；同 ID 不同 digest 拒绝。
+`submit` 的 stdin 只接真实语义请求，`request` 选择当前控制类型；程序创建 REQUEST
+Ask，不直接授权。决定使用 `next --decision --save-candidate`：`ask` 是 show 中当前
+未决 Ask 的一基序号，`choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
+Event、原 request/token、当前 revision 和展示材料。确认后 `submit --confirmation`
+接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
+同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
-reset、abort、adopt-external、路线调整、精确 waiver/skip 和 HUMAN 合法节点跳转均走
-当前 `availableActions` 与 typed Ask。跳转先处理受影响在途工作、结果、候选和副作用，
-终止目标统一 cleanup。Operator 核实事实与建议，不替用户授权。活动 run 的内容修订
-先冻结受影响推进，确认完整新 revision 后逐项决定重走/续用；不猜未确认影响。
+路线的候选门全集、计划绑定、审查候选和 finding、reset 保留与清理范围、需求变更的
+原工作身份与 child 原材料、验证摘要与 revision 均由程序读取同一权威状态。模型仅
+选择短序号或业务枚举、解释语义变化，不复述身份、摘要、路径前缀或原对象。
+`gates`、review/candidate/finding、QA cases/obligations 均是一基序号；split 的 `owners`
+按当前确认需求中 AC 的原顺序选择，0 表示 master-merge，正整数选择分片。开发提案、
+需求与所有必须展示的原文由候选对象完整提供；不得把预览或保存当作用户批准。
+
+主动 reset/abort 和需求变化先创建请求，再展示原 Ask 对应完整候选并等待真实确认。
+活动 run 修订先冻结推进，`requirement` 仅填写含义分类、重走业务项、实际影响解释及
+逐项 CARRY/REDO 选择；程序从正式需求文件取全文/revision，并装配原 work/child 身份。
+引擎签发的 recovery、fresh、retry、额外审查和 skip/waiver 只决定其当前 Ask，不自己
+创建相应授权。Operator 核实事实和建议，不能替用户授权。
 
 ## 原生运行时派发
 
@@ -235,4 +250,8 @@ cost 按 childRunID/dispatchID 汇总，保留主线与 child 原 owner 来源�
 
 ### 拆分计划确认的程序预览
 
-在唯一的 `CONFIRM_TOPOLOGY` 拆分决定提交前，用 `workflow next --root <项目> --run-id <run> --review-decision <JSON文件或->` 预览同一 `ReviewDecisionPayload`。草稿提供拓扑或路线的语义选择；程序返回完整计划、需求/方案与拓扑/路线绑定的确认摘要及装配后的决定载荷。此读取不修改状态，显式错误的确认值会被拒绝。展示精确计划并取得该决定的确认后，将返回载荷用于原 `workflow submit`；不得把 readiness PASS 当作执行批准。普通路线沿同一入口预览；child 的内联提案仍使用原确认契约。
+拓扑、路线和其他决定使用同一 `workflow next --decision <语义选择.json> --save-candidate
+<确认文件.json>`。程序读取当前 readiness 提案、已确认需求、完整路线目录和原 Ask，
+返回完整计划及其精确绑定，同时保存完整确认事件。展示该对象并取得用户确认之后，
+`workflow submit --confirmation <确认文件.json>` 沿原 typed 接纳继续；不从输出中抄取
+载荷，也不把 readiness PASS 当作执行批准。child 沿同一入口消费父级原确认计划。

@@ -68,12 +68,11 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		if input.Review.Action != review.StartReadiness {
 			delete(fields, "granularityReview")
 		}
-		fields["status"] = map[string]any{"type": "string", "enum": []string{protocol.OutcomePass, protocol.OutcomeFail}}
-		verification := map[string]any{}
+		verification := []any{}
 		for _, key := range review.RequiredVerificationChecks() {
-			verification[key] = map[string]any{"type": "string", "minLength": 1}
+			verification = append(verification, map[string]any{"type": "string", "minLength": 1, "description": "Evidence for " + key})
 		}
-		fields["verification"] = fixedObject(verification, review.RequiredVerificationChecks())
+		fields["verification"] = orderedSchema(verification)
 		return body, nil
 	}
 	if input.Handler == "engine.validation.observation" {
@@ -124,7 +123,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				return nil, err
 			}
 			item["description"] = "Judge only this issued QA scope: " + string(source.Mode)
-			item["properties"].(map[string]any)["cases"].(map[string]any)["items"] = map[string]any{"type": "string", "enum": source.ApprovedCases}
+			item["properties"].(map[string]any)["cases"].(map[string]any)["items"] = indexSchema(source.ApprovedCases)
 			scopes = append(scopes, item)
 		}
 		for _, source := range input.Validation.Observation.GateImpacts {
@@ -148,7 +147,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			for _, entry := range source.Manifest.Cases {
 				cases = append(cases, entry.CaseID)
 			}
-			properties["affectedCases"].(map[string]any)["items"] = map[string]any{"type": "string", "enum": cases}
+			properties["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
 			suggestions = append(suggestions, item)
 		}
 		if len(suggestions) == 0 {
@@ -164,37 +163,53 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		return body, nil
 	}
-	if input.Handler == "engine.gate" {
-		fields["status"] = map[string]any{"type": "string", "enum": []string{protocol.OutcomePass, protocol.OutcomeFail}}
-	}
+
 	if batch := completionBatch(input); batch != nil {
 		completion := fields["completion"].(map[string]any)["properties"].(map[string]any)
-		dod, ids := map[string]any{}, []string{}
+		items := []any{}
 		for _, criterion := range batch.DoD {
-			dod[criterion.ID] = map[string]any{"type": "string", "minLength": 1}
-			ids = append(ids, criterion.ID)
+			items = append(items, map[string]any{"type": "string", "minLength": 1, "description": criterion.Description})
 		}
-		completion["dod"] = fixedObject(dod, ids)
+		completion["dod"] = orderedSchema(items)
 	} else if !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
 	if input.Handler == "engine.repair.verify" {
-		records := map[string]any{}
-		for _, fact := range input.Validation.ExecutionFacts {
-			item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
-			if err != nil {
-				return nil, err
-			}
-			records[fact.CaseID] = item
+		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+		if err != nil {
+			return nil, err
 		}
-		fields["records"] = fixedObject(records, input.Validation.Repair.VerificationCases)
+		fields["records"] = comparisonSchema(input.Validation.Repair.VerificationCases, item, false)
 	}
 	if input.Handler == "engine.qa.design" {
-		keys := map[string]any{}
-		for _, point := range input.Validation.Manifest.Points {
-			keys[point.PointID] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		if len(input.Validation.AffectedCases) > 0 {
+			cases := []any{}
+			for _, id := range input.Validation.AffectedCases {
+				item, err := resultTypeSchema(reflect.TypeOf(CaseChange{}))
+				if err != nil {
+					return nil, err
+				}
+				item["description"] = "Change only this issued case: " + id
+				cases = append(cases, item)
+			}
+			fields["cases"] = map[string]any{"type": "array", "prefixItems": cases, "items": false, "minItems": len(cases), "maxItems": len(cases)}
+			shared := []any{}
+			for _, step := range revisionSharedSteps(input.Validation) {
+				item, err := resultTypeSchema(reflect.TypeOf(SharedStepChange{}))
+				if err != nil {
+					return nil, err
+				}
+				item["description"] = "Change only this issued shared instruction: " + step.ID
+				shared = append(shared, item)
+			}
+			fields["sharedSteps"] = map[string]any{"type": "array", "prefixItems": shared, "items": false, "minItems": len(shared), "maxItems": len(shared)}
+			return body, nil
 		}
-		fields["coverage"] = fixedObject(keys, nil)
+		items := []any{}
+		for _, point := range input.Validation.Manifest.Points {
+			items = append(items, map[string]any{"anyOf": []any{map[string]any{"type": "null"}, map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "description": "Choose cases covering: " + point.ObservableBehavior}}})
+		}
+		fields["coverage"] = orderedSchema(items)
 	}
 	if input.Handler == "engine.qa.review.rationale" {
 		sources, points, cases, shared := slices.Clone(input.Validation.Manifest.Sources), []string{}, []string{}, []string{}
@@ -217,17 +232,11 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
 	}
 	if input.Handler == "engine.qa.execution" {
-		keys := map[string]any{}
-		observation, err := resultTypeSchema(reflect.TypeOf(Observation{}))
+		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 		if err != nil {
 			return nil, err
 		}
-		for _, fact := range input.Validation.ExecutionFacts {
-			if slices.Contains(input.Validation.RequiredCases, fact.CaseID) && slices.Contains(input.Validation.PendingCases, fact.CaseID) {
-				keys[fact.CaseID] = observation
-			}
-		}
-		fields["records"] = fixedObject(keys, nil)
+		fields["records"] = comparisonSchema(executionCaseIDs(input.Validation), item, true)
 	}
 	return body, nil
 }
@@ -273,9 +282,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 		required := []any{}
 		for i := 0; i < value.NumField(); i++ {
 			field := value.Field(i)
-			if value == reflect.TypeOf(protocol.DevelopmentBatch{}) && field.Name == "Route" {
-				continue
-			}
+
 			if field.PkgPath != "" {
 				continue
 			}
@@ -285,7 +292,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 				continue
 			}
 			child, err := resultTypeSchema(field.Type)
-			if value == reflect.TypeOf(protocol.DevelopmentCheck{}) && field.Name == "Purpose" {
+			if value == reflect.TypeOf(Check{}) && field.Name == "Purpose" {
 				child = map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
 			}
 			if err != nil {
@@ -301,7 +308,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			if name == "" {
 				name = field.Name
 			}
-			if value == reflect.TypeOf(Case{}) && field.Name == "Scenario" {
+			if (value == reflect.TypeOf(Case{}) || value == reflect.TypeOf(DesignedCase{})) && field.Name == "Scenario" {
 				child["enum"] = coverage.Scenarios()
 			}
 			if value == reflect.TypeOf(Suggestion{}) && field.Name == "Severity" {
@@ -322,7 +329,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 				tiers = append(tiers, tier)
 			}
 			properties["verificationTier"] = map[string]any{"type": "string", "enum": tiers}
-			return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required, "description": protocol.GranularityResultContract()}, nil
+			return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required, "description": "Propose semantic batch boundaries; omit IDs. Dependencies and checkpointGroups select 1-based batch positions; owner is 0 for master merge or a positive slice number. FINAL/CHECKPOINT, approved purposes and complete-project checks retain their issued meaning."}, nil
 		}
 
 		return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}, nil
@@ -349,13 +356,33 @@ func fixedObject(properties map[string]any, required []string) map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
 }
 func decisionSchema(ids []string, inherited []coverage.ReviewDecision, decision map[string]any) map[string]any {
-	properties := map[string]any{}
-	required := []string{}
+	items := []any{}
 	for _, id := range ids {
-		properties[id] = decision
 		if !slices.ContainsFunc(inherited, func(item coverage.ReviewDecision) bool { return item.ID == id }) {
-			required = append(required, id)
+			items = append(items, decision)
 		}
 	}
-	return fixedObject(properties, required)
+	return orderedSchema(items)
+}
+func orderedSchema(items []any) map[string]any {
+	return map[string]any{"type": "array", "prefixItems": items, "items": false, "minItems": len(items), "maxItems": len(items)}
+}
+func comparisonSchema(ids []string, item map[string]any, partial bool) map[string]any {
+	items := []any{}
+	for _, id := range ids {
+		value := maps.Clone(item)
+		value["description"] = "Compare the issued case: " + id
+		if partial {
+			value = map[string]any{"anyOf": []any{value, map[string]any{"type": "null"}}}
+		}
+		items = append(items, value)
+	}
+	return orderedSchema(items)
+}
+func indexSchema(ids []string) map[string]any {
+	indices := []int{}
+	for index := range ids {
+		indices = append(indices, index+1)
+	}
+	return map[string]any{"type": "integer", "enum": indices, "description": "Select the 1-based issued item number; the program supplies its actual ID."}
 }

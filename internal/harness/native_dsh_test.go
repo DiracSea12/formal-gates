@@ -94,9 +94,11 @@ func TestMakeDSHPatch(t *testing.T) {
 		t.Fatalf("patch path = %q", path)
 	}
 	plugin := filepath.Join(root, "runtime", "langgraph", "formal_gates_harness", "native_dsh.mjs")
-	want := `[{"insert":[{"config":{"directory":` + canonicalString(t, directory) +
-		`,"read_only":true},"id":"harness-native","inject":["tools","sandboxPolicy"],"name":` +
-		canonicalString(t, plugin) + `}]},{"id":"acp","inject":["acpAppStartup","harnessNativeReady"]}]`
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mustCanonical(t, []any{map[string]any{"insert": []any{map[string]any{"config": map[string]any{"directory": directory, "read_only": true, "executable": executable, "tool": nativeWorkspaceToolSchema(true), "managed_tools": true}, "id": "harness-native", "inject": []any{"tools", "sandboxPolicy"}, "name": plugin}}}, map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}}})
 	if got := readTestFileBytes(t, path); string(got) != want {
 		t.Fatalf("patch:\n got %s\nwant %s", got, want)
 	}

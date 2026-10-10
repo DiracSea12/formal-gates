@@ -81,7 +81,7 @@ class CursorSourceContext(unittest.TestCase):
                 directory = root/'jobs'/key; native = read(directory/'native-request.json'); captured.append(native)
                 atomic(directory/'identity.json', {'identity':native['identity'],'native_store':native['native_store'],
                                                    'workspace':str(workspace),'provider':'cursor'})
-                atomic(directory/'answer.json', {'status':'PASS','summary':'finished','findings':[],'check_reviews':{}})
+                atomic(directory/'answer.json', {'summary':'finished','findings':[],'check_reviews':[]})
                 atomic(directory/'source.json', {'provider':'cursor','identity':native['identity'],'native_store':native['native_store']})
                 return {'exit_code':0,'error':''}
             store.job.side_effect = job

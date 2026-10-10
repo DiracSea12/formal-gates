@@ -451,7 +451,7 @@ func nativeRepairComparison(t *testing.T, d *validationDriver, action string, in
 	if input.Handler != "engine.repair.verify" || len(input.ExecutionFacts) != len(input.Repair.VerificationCases) {
 		t.Fatal("comparison lacks complete native case facts")
 	}
-	records := map[string]worker.Observation{}
+	records := []*worker.Observation{}
 	for _, fact := range input.ExecutionFacts {
 		if fact.CaseID != "normal" || len(fact.Operations) == 0 {
 			t.Fatal("comparison omitted the frozen normal invocation")
@@ -460,7 +460,14 @@ func nativeRepairComparison(t *testing.T, d *validationDriver, action string, in
 		if last.Evidence.ExitCode != 0 || last.Evidence.StdoutText != "" || last.Evidence.StderrText != "" {
 			t.Fatalf("normal public invocation actual facts: %+v", last.Evidence)
 		}
-		records[fact.CaseID] = worker.Observation{Comparison: "actual command exit and output match the frozen oracle", Result: coverage.ExecutedPass}
+
+	}
+	for _, caseID := range input.Repair.VerificationCases {
+		index := slices.IndexFunc(input.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == caseID })
+		if index < 0 {
+			t.Fatal("repair comparison lacks original facts for its selected case")
+		}
+		records = append(records, &worker.Observation{Comparison: "actual command exit and output match the frozen oracle", Result: coverage.ExecutedPass})
 	}
 	raw, err := json.Marshal(worker.Execution{Records: records})
 	if err != nil {

@@ -3,22 +3,18 @@
 package harness
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"formal-gates/internal/prompts"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"formal-gates/internal/engine/coverage"
-	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -53,26 +49,10 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.MarshalIndent(material, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body = append(body, '\n')
-	hash := sha256.Sum256(body)
-	materialPath := filepath.Join(home, "material.json")
-	if err := os.WriteFile(materialPath, body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	ref := facade.WorkerMaterial{ActionID: input.Pending.ActionID, AttemptID: input.Pending.AttemptID, Path: materialPath, Digest: "sha256:" + hex.EncodeToString(hash[:]), ReadOnly: true}
-	r, w := io.Pipe()
-	defer r.Close()
-	defer w.Close()
-	c := &engineCanary{t: t, nativeHost: "codex", localPeer: true, home: home, project: workspace, jobs: t.TempDir(), worker: true, binding: objectOrEmpty(s.request["binding"]), approvalDeadline: time.Now().Add(time.Minute), run: facade.Run{RunID: input.RunID, PendingActions: map[string]protocol.PendingAction{input.Pending.ActionID: input.Pending}, WorkerMaterials: map[string]facade.WorkerMaterial{input.Pending.ActionID: ref}}, approvalInput: bufio.NewReader(r), approvalOutput: canaryLocalApproval{w}}
-	payload := worker.Review{Status: "PASS", Findings: []worker.Finding{}, Verification: map[string]string{}}
-	payload.Status = "PASS"
-	payload.Findings = []worker.Finding{}
+	s.request["prompt"], s.request["schema"], s.request["read_only"] = material.Prompt, material.ResultSchema, true
+	payload := worker.Review{Findings: []worker.Finding{}, Verification: []string{}}
 	for _, key := range review.RequiredVerificationChecks() {
-		payload.Verification[key] = "read complete confirmed delivery document: " + key
+		payload.Verification = append(payload.Verification, "read complete confirmed delivery document: "+key)
 	}
 	answer, err := json.Marshal(payload)
 	if err != nil {
@@ -83,29 +63,30 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.peer.Answer = codexPeerAnswer(codexPlain(t, material.ResultSchema), domain).(map[string]any)
-	calls := 0
-	c.execute = func(request any, directory string, probe bool) (map[string]any, error) {
-		calls++
-		if probe || getOf(request, "prompt") != material.Prompt || !valuesEqual(getOf(request, "schema"), codexPlain(t, material.ResultSchema)) || getOf(request, "workspace") != workspace || getOf(request, "read_only") != true {
-			t.Fatal("native call did not consume exact production prompt/schema/role input")
-		}
-		s.request = request.(map[string]any)
-		s.directory = directory
-		s.peer.StrictSchema = true
-		return s.execute(t)
+	s.peer.StrictSchema = true
+	source, err := s.execute(t)
+	if err != nil {
+		t.Fatal(err)
 	}
-	event := c.dispatchProduction(input.Pending.ActionID, material)
-	if calls != 1 || event.Result == nil || event.Result.ActionID != input.Pending.ActionID || event.Result.Review.DispatchID != input.Pending.ActionID || event.Result.Review.RequirementRevision != doc.ContentDigest {
-		t.Fatal("complete core native payload was converted or rebound")
+	answerBytes, digest, _, err := NativeResultEvidence("codex", s.directory, source)
+	if err != nil {
+		t.Fatal(err)
 	}
-	raw := readTestFileBytes(t, filepath.Join(c.transcript, "answer.raw.txt"))
+	event, err := worker.DecodeResult(input, "original-native-worker-result", answerBytes, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Result == nil || event.Result.ActionID != input.Pending.ActionID || event.Result.Review.DispatchID != input.Pending.ActionID || event.Result.Review.RequirementRevision != doc.ContentDigest {
+		t.Fatal("core native result was converted or rebound")
+	}
+	raw := readTestFileBytes(t, filepath.Join(s.directory, "answer.raw.txt"))
 	rawHash := sha256.Sum256(raw)
 	if event.Result.PayloadDigest != "sha256:"+hex.EncodeToString(rawHash[:]) {
 		t.Fatal("final event used a shape/decoded digest instead of original native bytes")
 	}
 	expectedEvidence := []string{}
-	for _, key := range review.RequiredVerificationChecks() {
-		expectedEvidence = append(expectedEvidence, key+": "+payload.Verification[key])
+	for index, key := range review.RequiredVerificationChecks() {
+		expectedEvidence = append(expectedEvidence, key+": "+payload.Verification[index])
 	}
 	if event.Result.Review.Verification.Evidence != strings.Join(expectedEvidence, "\n") || !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) {
 		t.Fatal("native core evidence was rewritten")
@@ -136,37 +117,6 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 	}
 }
 
-func bindCanaryReviewMaterial(t *testing.T, c *engineCanary, pending protocol.PendingAction, content []byte) {
-	t.Helper()
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := prompts.LoadPromptCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, err := requirement.ParseRequirementProjection(filepath.Join(c.project, "requirements.md"), content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := protocol.WorkerInput{RunID: c.run.RunID, Provider: c.provider(), VCS: "git", Handler: "engine.review.worker", Pending: pending, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: doc.ContentDigest}}
-	material, err := worker.Render(input, catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(material)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "worker-material.json")
-	if err := os.WriteFile(path, body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	hash := sha256.Sum256(body)
-	c.run.WorkerMaterials = map[string]facade.WorkerMaterial{pending.ActionID: {ActionID: pending.ActionID, AttemptID: pending.AttemptID, Path: path, Digest: "sha256:" + hex.EncodeToString(hash[:]), ReadOnly: material.ReadOnly}}
-}
-
 func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 	input := protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
@@ -183,22 +133,21 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 	}
 	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 		t.Run(tier, func(t *testing.T) {
-			plan := canaryLocalPlan(false)
+			plan := nativeWorkerGranularityFixture()
 			plan.VerificationTier = tier
 			plan.CheckpointReason = ""
 			plan.CheckpointGroups = nil
 			if tier == "CHECKPOINT" {
 				second := plan.Batches[0]
-				second.ID = "second"
-				second.Subtasks = []protocol.DevelopmentSubtask{{ID: "second-task", Description: "consume the first artifact"}}
-				second.DependsOn = []string{plan.Batches[0].ID}
+				second.Subtasks = []worker.Subtask{{Description: "consume the first artifact"}}
+				second.DependsOn = []int{1}
 				plan.Batches = append(plan.Batches, second)
 				plan.CheckpointReason = "independent batches preserve frozen interfaces"
-				plan.CheckpointGroups = [][]string{{plan.Batches[0].ID}, {second.ID}}
+				plan.CheckpointGroups = [][]int{{1}, {2}}
 			}
-			payload := worker.Review{Status: "PASS", GranularityReview: canarySemanticPlan(plan), Findings: []worker.Finding{}, Verification: map[string]string{}}
+			payload := worker.Review{GranularityReview: plan, Findings: []worker.Finding{}, Verification: []string{}}
 			for _, key := range review.RequiredVerificationChecks() {
-				payload.Verification[key] = "checked current signed input: " + key
+				payload.Verification = append(payload.Verification, "checked current signed input: "+key)
 			}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
@@ -244,16 +193,16 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			var payload any
 			switch handler {
 			case "engine.qa.design":
-				payload = &worker.Manifest{Cases: []worker.Case{{CaseID: "case", Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: map[string][]string{"AC": {"case"}}}
+				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
 			case "engine.qa.review.rationale":
-				payload = &worker.CaseReview{SourceDecisions: map[string]worker.Decision{"REQ": {Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: map[string]worker.Decision{"AC": {Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: map[string]worker.Decision{"case": {Status: coverage.StatusPass, Reason: "oracle valid"}}}
+				payload = &worker.CaseReview{SourceDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "oracle valid"}}}
 			case "engine.qa.execution":
-				payload = &worker.Execution{Records: map[string]worker.Observation{"case": {Result: coverage.ExecutedPass, Comparison: "matches"}}}
+				payload = &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{{Result: coverage.ExecutedPass, Comparison: "matches"}}}, Findings: []worker.Finding{}}
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
 			case "engine.qa.design":
-				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
+				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: []string{}, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
 			case "engine.qa.review.rationale":
 				expected.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}, SharedStepDecisions: []coverage.ReviewDecision{}, SetStatus: coverage.StatusPass}
 			case "engine.qa.execution":
@@ -281,15 +230,24 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			wire := codexPeerAnswer(codexPlain(t, schema), domain)
 			projected, err := codexDomainResult(schema, wire)
 			if err != nil || !valuesEqual(projected, domain) {
-				t.Fatal("native machine values changed", err)
+				t.Fatalf("native machine values changed: got=%#v expected=%#v error=%v", projected, domain, err)
 			}
 			actual, _ := json.Marshal(projected)
 			event, err := worker.DecodeResult(input, "result", actual, "sha256:original")
 			if err != nil {
 				t.Fatal(err)
 			}
+			if handler == "engine.qa.design" {
+				actual := event.Result.Validation.Manifest
+				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID == "case" {
+					t.Fatal("design did not issue a new program identity")
+				}
+				expected.Manifest.Cases[0].CaseID = actual.Cases[0].CaseID
+				expected.Manifest.Edges = append([]coverage.CoverageEdge{}, manifest.Edges...)
+				expected.Manifest.Edges[0].CaseID = actual.Cases[0].CaseID
+			}
 			if !reflect.DeepEqual(event.Result.Validation, &expected) {
-				t.Fatalf("typed role evidence lost: got=%+v expected=%+v", event.Result.Validation, expected)
+				t.Fatalf("typed role evidence lost: got=%#v expected=%#v; manifest got=%#v expected=%#v", event.Result.Validation, expected, event.Result.Validation.Manifest, expected.Manifest)
 				t.Fatal("typed role/issued binding lost", err)
 			}
 		})
@@ -320,19 +278,11 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			fields := objectOrEmpty(getOf(nativeCompletion, "properties"))
-			for name, ids := range map[string][]string{"dod": {"behavior"}} {
-				field := objectOrEmpty(fields[name])
-				properties := objectOrEmpty(field["properties"])
-				if field["type"] != "object" || field["additionalProperties"] != false || len(properties) != len(ids) || len(listOf(field["required"])) != len(ids) {
-					t.Fatalf("native %s did not retain its closed object", name)
-				}
-				for _, id := range ids {
-					if properties[id] == nil {
-						t.Fatalf("native %s omitted %s", name, id)
-					}
-				}
+			dod := objectOrEmpty(fields["dod"])
+			if dod["type"] != "array" || len(listOf(dod["prefixItems"])) != len(batch.DoD) || !valuesEqual(dod["minItems"], len(batch.DoD)) || !valuesEqual(dod["maxItems"], len(batch.DoD)) {
+				t.Fatal("native completion must carry exactly one ordered rationale per issued DoD")
 			}
-			payload := worker.Development{Paths: []string{"command.go"}, Summary: "completed owned duty", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "verified"}, Handoff: "ready"}}
+			payload := worker.Development{Summary: "completed owned duty", Completion: &worker.Completion{DoD: []string{"verified"}, Handoff: "ready"}}
 			body, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)
@@ -372,12 +322,8 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 			}
 			body := objectOrEmpty(listOf(codexPlain(t, schema).(map[string]any)["anyOf"])[0])
 			fields := objectOrEmpty(body["properties"])
-			if handler == "engine.gate" {
-				if !valuesEqual(getOf(fields["status"], "enum"), []any{"PASS", "FAIL"}) {
-					t.Fatal("gate semantic verdict lost")
-				}
-			} else if fields["status"] != nil {
-				t.Fatal("model owns a derived role status")
+			if fields["status"] != nil {
+				t.Fatal("model owns a program-derived role status")
 			}
 			domain := map[string]any{"interruptionReason": "Required source is not readable"}
 			projected, err := codexDomainResult(schema, codexPeerAnswer(codexPlain(t, schema), domain))
@@ -390,4 +336,8 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+func nativeWorkerGranularityFixture() *worker.Granularity {
+	return &worker.Granularity{Reason: "one cohesive public behavior", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "implement the documented public behavior"}}, Deliverable: "public behavior matches the confirmed input contract", PublicEntry: "app", Artifacts: []string{"app.go"}, Interfaces: "existing input and output", StateBoundary: "no persistent state", Risk: "invalid inputs must be rejected", DoD: []worker.Criterion{{Description: "normal and invalid inputs satisfy their outcomes"}}, Checks: []worker.Check{{Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "revert the behavior change", Recovery: "repeat from the accepted baseline", Handoff: "implementation ready for independent validation", ContextCost: "one public interface fits the implementation context"}}}
 }

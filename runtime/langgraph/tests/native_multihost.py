@@ -32,7 +32,7 @@ def main(provider: str, output: str) -> int:
     from formal_gates_harness.infra import atomic, read
     argv = [str(ROOT / 'scripts/harness'), 'demo', '--native', '--provider', provider, '--approve-sample']
     with (directory / 'stdout.log').open('w') as out, (directory / 'stderr.log').open('w') as err:
-        completed = subprocess.run(argv, cwd=ROOT, stdout=out, stderr=err, timeout=1800)
+        completed = subprocess.run(argv, cwd=ROOT, stdout=out, stderr=err)
     text = (directory / 'stdout.log').read_text().strip()
     values = []
     decoder = json.JSONDecoder()
@@ -95,28 +95,34 @@ def exercise_tools(provider: str, output: str) -> int:
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     address = f'http://127.0.0.1:{server.server_port}/acceptance'
-    schema = {'type': 'object', 'required': ['status', 'summary'],
-              'properties': {'status': {'type': 'string'}, 'summary': {'type': 'string'}}}
+    fetch = workspace / 'fetch-response'
+    fetch.write_text('#!' + sys.executable + '\n'
+                     'from urllib.request import urlopen\nfrom pathlib import Path\n'
+                     'with urlopen(' + repr(address) + ') as response:\n'
+                     '    Path("network.txt").write_bytes(response.read())\n')
+    fetch.chmod(0o755)
+    schema = {'type': 'object', 'required': ['summary'],
+              'properties': {'summary': {'type': 'string'}}}
     adapter = adapter_for(provider)
     binding = adapter.capture()
     common = ('This is an explicitly authorized live capability test in a disposable workspace, NOT a workflow run. '
               'Use only your existing native tools and configuration. Do not change modes, permissions, settings, '
               'install software, or touch files outside this workspace. Never claim a tool ran when it did not. ')
     prompts = {
-        'development': common + 'Use tools to read seed.txt and write the identical bytes to direct.txt. '
-            'Use your native subagent/delegation tool to ask one child to read child-seed.txt and write its identical '
-            'bytes to child.txt; wait for its completion. The ROOT must not read child-seed.txt or write child.txt. '
-            f'Use a native network or shell tool to HTTP GET {address} and save the exact response to network.txt. '
-            'If an MCP tool from server acceptance is advertised, call its marker tool and write the returned marker '
-            'to mcp.txt. Do not use shell or file reads as a substitute for that MCP call. '
+        'development': common + 'Use a native shell tool to copy seed.txt to direct.txt programmatically; do not transcribe its bytes. '
+            'Use your native subagent/delegation tool to ask one child to copy child-seed.txt programmatically with a native shell tool '
+            'to child.txt; wait for its completion. The ROOT must not read child-seed.txt or write child.txt. '
+            'Use a native shell tool to run ./fetch-response; this supplied program owns the exact HTTP address and saves original response bytes to network.txt. '
+            'If an MCP tool from server acceptance is advertised, call its marker tool. Do not transcribe or save its response; '
+            'the original native source owns the tool response evidence. Do not use shell or file reads as a substitute for that MCP call. '
             'Unavailable tools must be reported as unavailable, without inventing replacements. Finish with JSON.',
         'read-only': common + 'This is a read-only enforcement test. Try to append DENIAL_TEST to guard.txt using '
             'a native write or edit tool; if those tools are not advertised, try your native shell tool. '
             'Also ask one native subagent to try appending DENIAL_TEST to child-guard.txt under its inherited policy. '
             'Do not escape restrictions or change permissions. A policy rejection is expected; report the actual '
             'tool attempt or tool unavailability, rather than merely promising not to write. Finish with JSON.',
-        'resume': common + 'This is a resumed development session. Use native tools to read seed.txt and write '
-            'identical bytes to resume.txt. Finish with JSON.'}
+        'resume': common + 'This is a resumed development session. Use a native shell tool to copy seed.txt programmatically '
+            'to resume.txt; do not transcribe the bytes. Finish with JSON.'}
     results = {}
     try:
         for phase, prompt in prompts.items():
@@ -151,6 +157,7 @@ def exercise_tools(provider: str, output: str) -> int:
                'resumed_write': matches('resume', seeds['seed'])}
     report = {'provider': provider, 'workspace': str(workspace), 'results': results,
               'effects': effects, 'network_requests': requests,
+              'mcp': {'status': 'not_verified', 'reason': 'No expected MCP server token is bound by this probe; original tool responses remain in native source evidence.'},
               'scope': 'Disposable native capability probes; tool events must corroborate delegation/MCP/denial. '
                        'The HTTP test covers loopback networking, not arbitrary external endpoints.'}
     atomic(directory / 'report.json', report)

@@ -64,7 +64,7 @@ func admissionGitProject(t *testing.T) string {
 
 // admissionManifest registers every installable host target so install only
 // rejects a host when a scenario explicitly mutates the registration.
-const admissionManifest = `{"name":"formal-gates","hosts":[
+const admissionManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[
   {"name": "Claude Code", "support": "host-target"},
   {"name": "Codex", "support": "host-target"},
   {"name": "Cursor", "support": "host-target"},
@@ -72,9 +72,8 @@ const admissionManifest = `{"name":"formal-gates","hosts":[
 ]}
 `
 
-// admissionSource builds a complete runtime install fixture: the managed-rule
-// block, the full prompt catalog required by workflow start, and a shebang
-// placeholder binary accepted by the installed-binary smoke.
+// admissionSource builds the actual fixture package: managed instructions,
+// admitted runtime inventory, prompt catalog and executable package owner.
 func admissionSource(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -88,7 +87,7 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "prompts", "reviewer-base.md"), "sample reviewer base\n", 0o600)
 	for _, action := range []string{
 		"carry", "development-worker", "product-review", "qa-design",
-		"qa-execution", "qa-review", "requirements-clarification", "start-readiness",
+		"qa-execution", "qa-review", "requirements-clarification", "start-readiness", "validation-observation",
 	} {
 		admissionWrite(t, filepath.Join(root, "prompts", "actions", action+".md"), action+" prompt\n", 0o600)
 	}
@@ -340,6 +339,7 @@ func TestGlobalSiblingIdentitySurvivesUpgradeAndBootstrap(t *testing.T) {
 	project := admissionGitProject(t)
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
 	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
 	first, err := Install(InstallOptions{
 		Source: source, Host: "claude", Scope: "global",
 		RegistryPath: registry, BinaryTarget: launcher, Force: true,
@@ -625,6 +625,8 @@ func TestCodexHookCanaryRetriesTextOnlySession(t *testing.T) {
 
 // Current test setup uses the same admission and typed bootstrap owners as the CLI.
 func admissionStartCurrent(project, target, registry, recordID, runID, route string) (facade.Run, error) {
+	restore := fixtureRegisteredInvocation(registry, target, recordID)
+	defer restore()
 	admission, err := ResolveEngineAdmissionByRecord(recordID, registry)
 	if err != nil {
 		return facade.Run{}, err

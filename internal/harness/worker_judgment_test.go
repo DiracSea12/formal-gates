@@ -11,7 +11,7 @@ import (
 
 func TestWorkerJudgmentBindsApprovedCheckCoverage(t *testing.T) {
 	checks := []Check{{ID: "first", Argv: []string{"go", "test", "./first"}}, {ID: "second", Argv: []string{"go", "test", "./second"}}}
-	value := map[string]any{"status": "PASS", "summary": "Actual independent check review", "findings": []any{}, "check_reviews": map[string]any{"first": "The first command exercises the normal entry and compares its documented result.", "second": "The second assertion detects an invalid state transition at the approved boundary."}}
+	value := map[string]any{"summary": "Actual independent check review", "findings": []any{}, "check_reviews": []string{"The first command exercises the normal entry and compares its documented result.", "The second assertion detects an invalid state transition at the approved boundary."}}
 	result, err := validateWorkerAnswer("qa-design", value, checks)
 	if err != nil {
 		t.Fatal(err)
@@ -21,16 +21,16 @@ func TestWorkerJudgmentBindsApprovedCheckCoverage(t *testing.T) {
 		t.Fatalf("lost issued check identity or judgment: %+v", result)
 	}
 	schema := WorkerSchema(checks...)
-	properties := schema["properties"].(map[string]any)
-	if properties["check_ids"] != nil || !reflect.DeepEqual(properties["check_reviews"].(map[string]any)["properties"].(map[string]any)["first"], map[string]any{"type": "string", "minLength": 1}) {
+	properties := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+	if properties["check_ids"] != nil || properties["status"] != nil || properties["check_reviews"].(map[string]any)["anyOf"] == nil {
 		t.Fatal("model still owns approved ID list")
 	}
 	for _, change := range []func(map[string]any){
 		func(v map[string]any) { v["check_ids"] = []any{"first", "second"} },
-		func(v map[string]any) { v["check_reviews"] = map[string]any{"first": "actual evidence"} },
-		func(v map[string]any) { v["check_reviews"] = map[string]any{"first": "actual evidence", "second": ""} },
+		func(v map[string]any) { v["check_reviews"] = []string{"actual evidence"} },
+		func(v map[string]any) { v["check_reviews"] = []string{"actual evidence", ""} },
 		func(v map[string]any) {
-			v["check_reviews"] = map[string]any{"first": "actual evidence", "second": "actual evidence", "unknown": "unapproved"}
+			v["check_reviews"] = []string{"actual evidence", "actual evidence", "unapproved"}
 		},
 	} {
 		raw, _ := json.Marshal(value)
@@ -41,15 +41,15 @@ func TestWorkerJudgmentBindsApprovedCheckCoverage(t *testing.T) {
 			t.Fatalf("accepted invalid semantic coverage: %v", candidate)
 		}
 	}
-	value["status"] = "FAIL"
+
 	value["findings"] = []any{map[string]any{"severity": "P2", "message": "Approved checks miss a required error response.", "paths": []any{"check.go"}}}
 	result, err = validateWorkerAnswer("qa-review", value, checks)
-	if err != nil || result.Status != "FAIL" || !NeedsRepair(*result) || !strings.Contains(result.Summary, "second assertion") {
+	if err != nil || result.Status != "PASS" || !NeedsRepair(*result) || !strings.Contains(result.Summary, "second assertion") {
 		t.Fatal("program inferred PASS from mechanical coverage", err)
 	}
 }
 func TestBridgeUsesSemanticWorkerJudgment(t *testing.T) {
-	result := map[string]any{"status": "PASS", "summary": "Reviewed documented behavior", "findings": []any{}, "check_reviews": map[string]any{"check": "The approved check has a real assertion of the required response."}}
+	result := map[string]any{"summary": "Reviewed documented behavior", "findings": []any{}, "check_reviews": []string{"The approved check has a real assertion of the required response."}}
 	checks := []Check{{ID: "check", Argv: []string{"true"}}}
 	payload, _ := json.Marshal(map[string]any{"role": "qa-review", "checks": checks, "result": result})
 	actual, err := dispatch(envelope{Operation: "validate-worker", Payload: payload})
@@ -93,10 +93,10 @@ func validateWorkerAnswer(role string, answer map[string]any, checks []Check) (*
 }
 
 func TestWorkerJudgmentAssignsFindingIdentityAndPreservesEvidence(t *testing.T) {
-	value := map[string]any{"status": "FAIL", "summary": "Observed the documented command failure", "findings": []any{
+	value := map[string]any{"summary": "Observed the documented command failure", "findings": []any{
 		map[string]any{"severity": "P1", "message": "Valid input exits without its required result.", "paths": []any{"app.go"}},
 		map[string]any{"severity": "P1", "message": "Valid input exits without its required result.", "paths": []any{"app.go"}},
-	}, "check_reviews": map[string]any{}}
+	}, "check_reviews": []string{}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestWorkerJudgmentAssignsFindingIdentityAndPreservesEvidence(t *testing.T) 
 	if err != nil || !bytes.Equal(raw, after) {
 		t.Fatal("finding identity assembly rewrote the model response")
 	}
-	findingSchema := WorkerSchema()["properties"].(map[string]any)["findings"].(map[string]any)["items"].(map[string]any)
+	findingSchema := WorkerSchema()["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["findings"].(map[string]any)["items"].(map[string]any)
 	if findingSchema["properties"].(map[string]any)["id"] != nil || !reflect.DeepEqual(findingSchema["required"], []string{"severity", "message", "paths"}) {
 		t.Fatal("model contract contains a program-owned finding identity")
 	}
@@ -148,6 +148,26 @@ func TestWorkerJudgmentAssignsFindingIdentityAndPreservesEvidence(t *testing.T) 
 	for _, finding := range result.Findings {
 		if !bytes.Contains(body, []byte(finding.ID)) || !bytes.Contains(body, []byte(finding.Message)) {
 			t.Fatal("feedback lost the actual finding identity or content")
+		}
+	}
+}
+
+func TestWorkerJudgmentDerivesSemanticStatusAndKeepsRealInability(t *testing.T) {
+	for _, sample := range []struct {
+		role   string
+		body   map[string]any
+		status string
+	}{
+		{"development", map[string]any{"summary": "Progress", "findings": []any{}, "check_reviews": []string{}, "remainingWork": "Implement remaining public behavior"}, "CONTINUE"},
+		{"qa-review", map[string]any{"interruptionReason": "The registered workspace is unavailable"}, "BLOCKED"},
+	} {
+		result, err := validateWorkerAnswer(sample.role, sample.body, nil)
+		if err != nil || result.Status != sample.status {
+			t.Fatal("program lost actual semantic reason", err)
+		}
+		sample.body["status"] = sample.status
+		if _, err := validateWorkerAnswer(sample.role, sample.body, nil); err == nil {
+			t.Fatal("model status accepted")
 		}
 	}
 }

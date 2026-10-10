@@ -28,9 +28,9 @@ func TestSuggestionJudgmentsAssembleOnlyIssuedIdentities(t *testing.T) {
 			}
 		}
 	}
-	judgment := ObservationJudgments{Findings: []FindingJudgment{}, Scopes: []ScopeJudgment{}, GateImpacts: []ImpactJudgment{}, Suggestions: []SuggestionJudgment{{Decision: "DEFER", Reason: "Optional wording is outside the confirmed acceptance", AffectedCases: []string{}}, {Decision: "ACCEPT", Reason: "Change only the executable preparation", AffectedCases: []string{"white"}}}}
+	judgment := ObservationJudgments{Findings: []FindingJudgment{}, Scopes: []ScopeJudgment{}, GateImpacts: []ImpactJudgment{}, Suggestions: []SuggestionJudgment{{Decision: "DEFER", Reason: "Optional wording is outside the confirmed acceptance", AffectedCases: []int{}}, {Decision: "ACCEPT", Reason: "Change only the executable preparation", AffectedCases: []int{1}}}}
 	raw, _ := json.Marshal(judgment)
-	event, err := DecodeResult(input, "result", raw, "original-output")
+	event, err := DecodeResultWithPaths(input, "result", raw, "original-output", []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,10 +40,10 @@ func TestSuggestionJudgmentsAssembleOnlyIssuedIdentities(t *testing.T) {
 	}
 	judgment.Suggestions = judgment.Suggestions[:1]
 	raw, _ = json.Marshal(judgment)
-	if _, err := DecodeResult(input, "missing", raw, "original-output"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "missing", raw, "original-output", []string{}); err == nil {
 		t.Fatal("missing suggested duty admitted")
 	}
-	if _, err := DecodeResult(input, "copied", []byte(`{"findings":[],"scopes":[],"gateImpacts":[],"suggestions":[],"suggestionId":"public"}`), "original-output"); err == nil {
+	if _, err := DecodeResultWithPaths(input, "copied", []byte(`{"findings":[],"scopes":[],"gateImpacts":[],"suggestions":[],"suggestionId":"public"}`), "original-output", []string{}); err == nil {
 		t.Fatal("model-copied identity admitted")
 	}
 }

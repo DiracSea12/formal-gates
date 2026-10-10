@@ -128,6 +128,7 @@ func installRecord(id, target, launcher, scope, host, projectRoot, status string
 		ID: id, Target: target, LauncherPath: launcher, Scope: scope, Host: host,
 		ProjectRoot: projectRoot, StateRoot: stateRoot, ResourceRoot: resourceRoot,
 		RuntimeSibling: runtimeSibling, Status: status,
+		VCSIdentity: "fixture-native", PackageDigest: "sha256:fixture-source", InstalledDigest: "sha256:fixture-target",
 		Generation: 1, Lease: "lease-" + id, Token: "token-" + id,
 		CanonicalPaths: map[string]string{
 			"target": target, "launcher": launcher, "projectRoot": projectRoot,

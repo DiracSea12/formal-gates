@@ -75,8 +75,6 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if !autoResolve {
 		want = canonicalRegistryPath(packageAbs)
 	}
-	executable, _ := os.Executable()
-	launcher := canonicalRegistryPath(executable)
 	type candidate struct {
 		record    RegistryRecord
 		exactRoot bool
@@ -96,7 +94,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 		if !autoResolve && target != want {
 			continue
 		}
-		if (autoResolve || requestedRecordID != "") && !isTestBinary() && (launcher == "" || canonicalRegistryPath(record.LauncherPath) != launcher) {
+		if (autoResolve || requestedRecordID != "") && !launcherInvocationMatches(record.LauncherPath) {
 			continue
 		}
 		exactRoot, applicable := admissionRecordRootMatch(record, root, len(registryNamespace) != 0)

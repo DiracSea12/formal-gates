@@ -16,7 +16,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"paths", "summary", "affectedCases"}, "engine.repair": {"paths", "summary", "affectedCases", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "retainCases", "retainSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"status", "findings"},
+		"engine.development.batch": {"summary", "affectedCases"}, "engine.repair": {"summary", "affectedCases", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "retainCases", "retainSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -63,28 +63,29 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 			}
 		}
 		checks := fields["verification"].(map[string]any)
-		if !reflect.DeepEqual(checks["required"], review.RequiredVerificationChecks()) {
+		if checks["minItems"] != len(review.RequiredVerificationChecks()) || checks["items"] != false {
 			t.Fatal("lost individual checks")
 		}
-		value := Review{Status: "PASS", Findings: []Finding{}, Verification: map[string]string{}}
+		value := Review{Findings: []Finding{}, Verification: []string{}}
 		for _, key := range review.RequiredVerificationChecks() {
-			value.Verification[key] = "observed " + key
+			value.Verification = append(value.Verification, "observed "+key)
 		}
 		body, _ := json.Marshal(value)
-		event, err := DecodeResult(input, "event", body, "original")
+		event, err := DecodeResultWithPaths(input, "event", body, "original", []string{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) || event.Result.Review.RequirementRevision != "revision" {
 			t.Fatal("wrong original binding")
 		}
-		for _, key := range review.RequiredVerificationChecks() {
-			delete(value.Verification, key)
+		for index, key := range review.RequiredVerificationChecks() {
+			original := slices.Clone(value.Verification)
+			value.Verification = append(value.Verification[:index], value.Verification[index+1:]...)
 			body, _ = json.Marshal(value)
-			if _, err := DecodeResult(input, "event", body, "original"); err == nil {
+			if _, err := DecodeResultWithPaths(input, "event", body, "original", []string{}); err == nil {
 				t.Fatalf("missing %s accepted", key)
 			}
-			value.Verification[key] = "observed " + key
+			value.Verification = original
 		}
 	}
 }
@@ -110,7 +111,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			contracts := []string{"Declare only the files actually delivered as artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"}
+			contracts := []string{"Deliver only actual authorized artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"}
 			if role.handler == "engine.qa.design" && role.author {
 				contracts = []string{"Associate only actual test material files", "Remove temporary build and test outputs", "produce them outside the workspace", "Do not return a separate development path declaration"}
 			}
@@ -123,14 +124,14 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 				}
 			}
 			if role.handler == "engine.qa.design" && role.author {
-				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
+				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
 				}
 			} else if role.handler == "engine.merge.resolve" {
-				if strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") || strings.Contains(material.Prompt, "exact changed paths") {
+				if strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") || strings.Contains(material.Prompt, "exact changed paths") {
 					t.Fatal("conflict resolution requests issued paths")
 				}
-			} else if role.author && !strings.Contains(material.Prompt, "Declare only the files actually delivered as artifacts") {
+			} else if role.author && !strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 				t.Fatal("development author lost its artifact declaration")
 			}
 			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
@@ -174,7 +175,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 			if e["binding"] != nil || e["notExecuted"] != nil {
 				t.Fatal("model owns execution facts")
 			}
-			r := e["records"].(map[string]any)["properties"].(map[string]any)["case"].(map[string]any)["properties"].(map[string]any)
+			r := e["records"].(map[string]any)["prefixItems"].([]any)[0].(map[string]any)["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 			for _, key := range []string{"caseId", "reviewKind", "sourceId", "pointId", "provenance", "reuseEvidence", "inheritedFromCandidate", "procedure", "observation", "tool", "environment"} {
 				if r[key] != nil {
 					t.Fatalf("model owns %s", key)
@@ -196,22 +197,20 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)["properties"].(map[string]any)
-			for name, ids := range map[string][]string{"dod": {"behavior", "interface"}} {
-				schema := fields[name].(map[string]any)
-				properties := schema["properties"].(map[string]any)
-				if schema["additionalProperties"] != false || !reflect.DeepEqual(schema["required"], ids) || len(properties) != len(ids) {
-					t.Fatalf("%s is not exactly the issued key set: %v", name, schema)
-				}
-				for _, id := range ids {
-					field := properties[id].(map[string]any)
-					if field["type"] != "string" || field["minLength"] != 1 {
-						t.Fatal("completion evidence lost non-empty string contract")
-					}
+			tuple := fields["dod"].(map[string]any)
+			if tuple["minItems"] != len(batch.DoD) || tuple["items"] != false {
+				t.Fatal("completion does not use issued criteria order")
+			}
+			for _, raw := range tuple["prefixItems"].([]any) {
+				item := raw.(map[string]any)
+				if item["type"] != "string" || item["minLength"] != 1 {
+					t.Fatal("semantic evidence lost")
 				}
 			}
-			if !strings.Contains(material.Prompt, "do not omit or add keys") || !strings.Contains(material.Prompt, "Approved command execution and its evidence belong to the program") {
-				t.Fatal("additional evidence destination missing")
+			if !strings.Contains(material.Prompt, "do not copy IDs") || !strings.Contains(material.Prompt, "Approved command execution") {
+				t.Fatal("completion owner missing")
 			}
+
 			after, _ := json.Marshal(input)
 			if string(before) != string(after) {
 				t.Fatal("schema/material mutated issued input")
@@ -251,7 +250,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, rule := range []string{"issued development batch or a proposed single batch", "Without either, omit completion", "paths, summary and affectedCases"} {
+				for _, rule := range []string{"issued development batch or a proposed single batch", "Without either, omit completion", "summary and affectedCases"} {
 					if !strings.Contains(material.Prompt, rule) {
 						t.Fatalf("repair output instruction missing %q", rule)
 					}
@@ -261,7 +260,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				}
 				proposed := schema["anyOf"].([]any)[3].(map[string]any)["properties"].(map[string]any)
 				completion := proposed["completion"].(map[string]any)["properties"].(map[string]any)
-				if _, ok := completion["dod"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
+				if completion["dod"].(map[string]any)["type"] != "array" {
 					t.Fatal("single proposed repair batch cannot supply authored DoD evidence")
 				}
 			} else if development["completion"] != nil {
@@ -272,7 +271,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 }
 
 func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -297,26 +296,26 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 			t.Fatal("completion alternative permits a missing or multiple-batch proposal")
 		}
 	}
-	batch := Batch{DevelopmentBatch: protocol.DevelopmentBatch{ID: "command"}}
+	batch := Batch{DoD: []Criterion{{Description: "Normal input"}}}
 	for _, scenario := range []string{"small-repair", "single-proposal", "split-plan", "unplanned-completion", "split-completion"} {
 		t.Run(scenario, func(t *testing.T) {
-			result := Repair{Paths: []string{"command.py"}, Summary: "Implemented the confirmed command", AffectedCases: []string{"normal-input"}}
+			result := Repair{Summary: "Implemented the confirmed command", AffectedCases: []int{1}}
 			if scenario != "small-repair" && scenario != "unplanned-completion" {
 				result.GranularityReview = &Granularity{Reason: "One command boundary", VerificationTier: "FINAL", Batches: []Batch{batch}}
 			}
 			if scenario == "split-plan" || scenario == "split-completion" {
-				result.GranularityReview.Batches = append(result.GranularityReview.Batches, Batch{DevelopmentBatch: protocol.DevelopmentBatch{ID: "output"}})
+				result.GranularityReview.Batches = append(result.GranularityReview.Batches, Batch{})
 			}
 			if scenario == "split-plan" {
-				result.Paths, result.Summary, result.AffectedCases = nil, "", nil
+				result.Summary, result.AffectedCases = "", nil
 			} else if scenario != "small-repair" {
-				result.Completion = &protocol.DevelopmentCompletion{DoD: map[string]string{"normal-input": "Implemented"}, Handoff: "Ready for approved checks"}
+				result.Completion = &Completion{DoD: []string{"Implemented"}, Handoff: "Ready for approved checks"}
 			}
 			raw, err := json.Marshal(result)
 			if err != nil {
 				t.Fatal(err)
 			}
-			event, err := DecodeResult(input, "result", raw, "original-native-output")
+			event, err := DecodeResultWithPaths(input, "result", raw, "original-native-output", []string{})
 			invalid := scenario == "unplanned-completion" || scenario == "split-completion"
 			if (err != nil) != invalid {
 				t.Fatalf("repair completion boundary changed: %v", err)
@@ -333,7 +332,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch", nil}, {"engine.repair", nil}, {"engine.merge.resolve", nil}, {"engine.qa.design", nil}, {"engine.gate", []string{"PASS", "FAIL"}}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
+	}{{"engine.development.batch", nil}, {"engine.repair", nil}, {"engine.merge.resolve", nil}, {"engine.qa.design", nil}, {"engine.gate", nil}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)
@@ -392,7 +391,7 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, instruction := range []string{"program derives checkpoint and overall status", "Completed FAIL judgments are complete", "return records {}", "Missing native facts never establish PASS"} {
+	for _, instruction := range []string{"program derives checkpoint and overall status", "Completed FAIL judgments are complete", "return records []", "Missing native facts never establish PASS"} {
 		if !strings.Contains(material.Prompt, instruction) {
 			t.Fatalf("final report instruction missing: %s", instruction)
 		}
@@ -402,10 +401,10 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 		t.Fatal("model owns derived execution summaries")
 	}
 	records := fields["records"].(map[string]any)
-	if len(records["properties"].(map[string]any)) != 0 || records["additionalProperties"] != false {
+	if len(records["prefixItems"].([]any)) != 0 || records["items"] != false {
 		t.Fatal("completed judgments were requested again")
 	}
-	body := decodeSemantic(t, input, ExecutionJudgments{Execution: Execution{Records: map[string]Observation{}}}).Validation
+	body := decodeSemantic(t, input, ExecutionJudgments{Execution: Execution{Records: []*Observation{}}}).Validation
 	if body.Status != "FAIL" || body.Checkpoint || len(body.Execution.Records) != 0 || len(body.Execution.NotExecuted) != 0 {
 		t.Fatal("completed facts were resubmitted or their FAIL lost")
 	}

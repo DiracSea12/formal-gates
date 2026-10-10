@@ -609,29 +609,9 @@ func validAdmissionRegistryRecord(record RegistryRecord) bool {
 	if !validRegistryRecord(record) {
 		return false
 	}
-	// In-process tests may use compact records. A shipped launcher requires
-	// the complete identity produced by the native transaction owner.
-	if isTestBinary() {
-		return true
-	}
 	return record.Generation != 0 && strings.TrimSpace(record.Lease) != "" &&
 		strings.TrimSpace(record.Token) != "" && strings.TrimSpace(record.VCSIdentity) != "" &&
 		strings.TrimSpace(record.PackageDigest) != "" && strings.TrimSpace(record.InstalledDigest) != ""
-}
-
-func isTestBinary() bool {
-	// qastructure 构建标签见 testbinary_*.go：以该标签编译的二进制（含复制到
-	// launcher/candidate 路径的改名测试副本）按测试二进制对待；生产构建该常
-	// 量为 false，唯一剩余的判定是可执行文件名。
-	if qastructureBuild {
-		return true
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	base := filepath.Base(filepath.Clean(executable))
-	return strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe")
 }
 
 func normalizeRegistryRecord(record *RegistryRecord, generation uint64) {
