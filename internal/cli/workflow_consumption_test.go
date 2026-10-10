@@ -51,6 +51,10 @@ func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
 			if result.Boundary != status || result.Progress.Running != 0 || len(result.Children) != 0 {
 				t.Fatalf("terminal boundary=%+v", result)
 			}
+			controls, err := f.ControlRuns()
+			if err != nil || len(controls) != 1 || controls[0].Status != status {
+				t.Fatal("terminal control projection looked up a retired child", err)
+			}
 			if _, err := os.Stat(filepath.Join(directory, "state.json")); !os.IsNotExist(err) {
 				t.Fatal("terminal transition retained active state", err)
 			}

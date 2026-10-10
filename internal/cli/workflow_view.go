@@ -74,6 +74,38 @@ func workflowRunView(run facade.Run) map[string]any {
 	return view
 }
 
+func workflowControlRunViews(runs []facade.Run) map[string]map[string]any {
+	views := make(map[string]map[string]any, len(runs))
+	number := 0
+	for _, run := range runs {
+		view := workflowRunView(run)
+		for _, question := range view["questions"].([]map[string]any) {
+			number++
+			question["ask"] = number
+		}
+		views[run.RunID] = view
+	}
+	return views
+}
+
+func printCurrentWorkflowRun(streams IO, f *facade.Facade, executionErr error) (int, error) {
+	if executionErr != nil {
+		return 1, executionErr
+	}
+	runs, err := f.ControlRuns()
+	if err != nil {
+		return 1, err
+	}
+	views := workflowControlRunViews(runs)
+	view := views[runs[0].RunID]
+	children := []map[string]any{}
+	for index, run := range runs[1:] {
+		children = append(children, map[string]any{"child": index + 1, "run": views[run.RunID]})
+	}
+	view["children"] = children
+	return printJSON(streams.Stdout, view)
+}
+
 func numberedChoices(values []string) []map[string]any {
 	choices := []map[string]any{}
 	for index, value := range values {
@@ -108,10 +140,18 @@ func workflowReviewChoices(review facade.ReviewFace) []map[string]any {
 func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any {
 	run := workflowRunView(candidate.Run)
 	questions := []map[string]any{}
+	request := ""
 	if candidate.Event.Decide != nil {
+		request = string(candidate.Event.Decide.Request)
+	} else if candidate.Event.Request != nil {
+		request = string(candidate.Event.Request.Request)
+	}
+	if request != "" {
 		for index, ask := range candidate.Run.PendingAsks {
-			if ask.RequestID == string(candidate.Event.Decide.Request) {
-				questions = append(questions, run["questions"].([]map[string]any)[index])
+			if ask.RequestID == request {
+				question := run["questions"].([]map[string]any)[index]
+				question["ask"] = candidate.Input.Ask
+				questions = append(questions, question)
 				break
 			}
 		}
@@ -131,8 +171,9 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	return view
 }
 
-func workflowConsumptionView(value workflowConsumption) map[string]any {
-	view := map[string]any{"run": workflowRunView(value.Run), "boundary": value.Boundary, "progress": value.Progress}
+func workflowConsumptionView(value workflowConsumption, runs map[string]map[string]any) map[string]any {
+	run := runs[value.Run.RunID]
+	view := map[string]any{"run": run, "boundary": value.Boundary, "progress": value.Progress}
 	if value.Acceptance != nil {
 		view["acceptance"] = map[string]any{"status": value.Acceptance.Status, "revision": value.Acceptance.Revision}
 	}
@@ -153,7 +194,7 @@ func workflowConsumptionView(value workflowConsumption) map[string]any {
 	}
 	sort.Strings(keys)
 	for index, key := range keys {
-		child := workflowConsumptionView(value.Children[key])
+		child := workflowConsumptionView(value.Children[key], runs)
 		child["child"] = index + 1
 		children = append(children, child)
 	}
@@ -161,11 +202,30 @@ func workflowConsumptionView(value workflowConsumption) map[string]any {
 	return view
 }
 
-func printWorkflowView(streams IO, value workflowConsumption, machine bool, executionErr error) (int, error) {
+func printCurrentWorkflowConsumption(streams IO, f *facade.Facade, value workflowConsumption, machine bool, executionErr error) (int, error) {
 	if machine {
 		return printWorkflowConsumption(streams, value, executionErr)
 	}
-	if code, err := printJSON(streams.Stdout, workflowConsumptionView(value)); err != nil {
+	runs, err := f.ControlRuns()
+	if err != nil {
+		return 1, errors.Join(executionErr, err)
+	}
+	children := make(map[string]workflowConsumption, len(runs)-1)
+	for _, run := range runs[1:] {
+		child := value.Children[run.RunID]
+		child.Run = run
+		children[run.RunID] = child
+	}
+	value.Run, value.Children = runs[0], children
+	return printWorkflowView(streams, value, false, executionErr, runs)
+}
+
+func printWorkflowView(streams IO, value workflowConsumption, machine bool, executionErr error, runs []facade.Run) (int, error) {
+	if machine {
+		return printWorkflowConsumption(streams, value, executionErr)
+	}
+	views := workflowControlRunViews(runs)
+	if code, err := printJSON(streams.Stdout, workflowConsumptionView(value, views)); err != nil {
 		return code, err
 	}
 	if executionErr != nil {

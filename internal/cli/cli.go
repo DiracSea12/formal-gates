@@ -405,11 +405,11 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if transcript != "" && ownerProvider != "" {
 		owner.Transcript, owner.Provider = transcript, ownerProvider
 	}
-	_, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcs, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, PackageRoot: *pkg, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcs, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, PackageRoot: *pkg, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
-	return printValue(streams.Stdout, workflowRunView(run), err)
+	return printCurrentWorkflowRun(streams, f, err)
 }
 
 func runWorkflowShow(args []string, streams IO) (int, error) {
@@ -427,11 +427,11 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	if !ok {
 		return 1, fmt.Errorf("UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
-	run, err := f.Show()
 	if *machine {
+		run, err := f.Show()
 		return printValue(streams.Stdout, run, err)
 	}
-	return printValue(streams.Stdout, workflowRunView(run), err)
+	return printCurrentWorkflowRun(streams, f, nil)
 }
 
 func runWorkflowStatus(args []string, streams IO) (int, error) {
@@ -449,11 +449,11 @@ func runWorkflowStatus(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	run, err := f.Status()
 	if *machine {
+		run, err := f.Status()
 		return printValue(streams.Stdout, run, err)
 	}
-	return printValue(streams.Stdout, workflowRunView(run), err)
+	return printCurrentWorkflowRun(streams, f, nil)
 }
 
 func runWorkflowNext(args []string, streams IO) (int, error) {
@@ -481,14 +481,17 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 			next, err := f.Next()
 			return printValue(streams.Stdout, next, err)
 		}
-		run, err := f.Show()
-		return printValue(streams.Stdout, workflowRunView(run), err)
+		return printCurrentWorkflowRun(streams, f, nil)
 	}
 	var input facade.ControlInput
 	if err := readWorkflowInput(*draftPath, streams.Stdin, &input); err != nil {
 		return 1, err
 	}
-	candidate, err := f.PrepareControl(input)
+	prepare := f.PrepareCurrentControl
+	if *machine {
+		prepare = f.PrepareControl
+	}
+	candidate, err := prepare(input)
 	if err != nil {
 		return 1, err
 	}
@@ -524,10 +527,10 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 		if *machine {
 			return printValue(streams.Stdout, run, err)
 		}
-		return printValue(streams.Stdout, workflowRunView(run), err)
+		return printCurrentWorkflowRun(streams, f, err)
 	}
 	value, executionErr := consumeWorkflow(streams, f, *root, *runID)
-	return printWorkflowView(streams, value, *machine, executionErr)
+	return printCurrentWorkflowConsumption(streams, f, value, *machine, executionErr)
 }
 
 func runWorkflowSubmit(args []string, streams IO) (int, error) {
@@ -592,7 +595,7 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		if *machine {
 			return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 		}
-		return printJSON(streams.Stdout, workflowConsumptionView(workflowConsumption{Run: run, Acceptance: &acceptance}))
+		return printCurrentWorkflowConsumption(streams, f, workflowConsumption{Run: run, Acceptance: &acceptance}, false, nil)
 	}
 	var event protocol.Event
 	if saved != nil {
@@ -605,7 +608,11 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		if input.Request == "" {
 			return 1, fmt.Errorf("user decisions require the complete candidate saved by workflow next --decision --save-candidate, then submit --confirmation after confirmation")
 		}
-		candidate, err := f.PrepareControl(input)
+		prepare := f.PrepareCurrentControl
+		if *machine {
+			prepare = f.PrepareControl
+		}
+		candidate, err := prepare(input)
 		if err != nil {
 			return 1, err
 		}
@@ -624,12 +631,12 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if !*singleStep && workflowControlEvent(event) {
 		value, executionErr := consumeWorkflow(streams, f, *root, *runID)
 		value.Acceptance = &acceptance
-		return printWorkflowView(streams, value, *machine, executionErr)
+		return printCurrentWorkflowConsumption(streams, f, value, *machine, executionErr)
 	}
 	if *machine {
 		return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 	}
-	return printJSON(streams.Stdout, workflowConsumptionView(workflowConsumption{Run: run, Acceptance: &acceptance}))
+	return printCurrentWorkflowConsumption(streams, f, workflowConsumption{Run: run, Acceptance: &acceptance}, false, nil)
 }
 
 func runWorkflowDiagnose(args []string, streams IO) (int, error) {

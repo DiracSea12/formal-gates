@@ -101,10 +101,19 @@ func selectStrings(values []string, positions []int, label string) ([]string, er
 }
 
 func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
+	unlock, err := f.acquireControlReadWindow()
+	if err != nil {
+		return ControlCandidate{}, err
+	}
+	defer unlock()
 	run, err := f.Show()
 	if err != nil {
 		return ControlCandidate{}, err
 	}
+	return f.prepareControl(input, run)
+}
+
+func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, error) {
 	candidate := ControlCandidate{Root: f.root, Input: input, Run: run}
 	event := protocol.Event{Kind: protocol.KindDecide}
 	if input.Request != "" {

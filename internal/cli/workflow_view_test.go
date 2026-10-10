@@ -100,7 +100,7 @@ func TestWorkflowViewPreservesExecutionExitAndMachineConsumption(t *testing.T) {
 	for _, machine := range []bool{false, true} {
 		for _, failure := range []error{nil, context.Canceled} {
 			var out, stderr bytes.Buffer
-			code, err := printWorkflowView(IO{Stdout: &out, Stderr: &stderr}, value, machine, failure)
+			code, err := printWorkflowView(IO{Stdout: &out, Stderr: &stderr}, value, machine, failure, []facade.Run{value.Run})
 			if err != nil || failure == nil && code != 0 || failure != nil && code != 130 || !strings.Contains(out.String(), "original execution failure") {
 				t.Fatalf("presentation changed the execution boundary: %d %v %s", code, err, out.String())
 			}
@@ -163,10 +163,10 @@ func TestWorkflowConfirmationUsesPreparedAskAndPreservesPreparationErrors(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The successful event owns the binding; unused draft fields are not identity.
+	// The event owns its original Ask; input.Ask supplies the display number.
 	candidate.Input.Ask = 99
 	questions := workflowConfirmationView(candidate)["run"].(map[string]any)["questions"].([]map[string]any)
-	if len(questions) != 1 || questions[0]["ask"] != 1 || candidate.Event.Decide.Request != protocol.RequestID(ask.RequestID) {
+	if len(questions) != 1 || questions[0]["ask"] != 99 || candidate.Event.Decide.Request != protocol.RequestID(ask.RequestID) {
 		t.Fatal("confirmation did not use the prepared event's original Ask", questions)
 	}
 }

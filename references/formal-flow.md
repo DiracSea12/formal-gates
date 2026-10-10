@@ -131,8 +131,9 @@ lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/�
 在开发中降为 lightweight。
 
 `submit` 的 stdin 只接真实语义请求，`request` 选择当前控制类型；程序创建 REQUEST
-Ask，不直接授权。决定使用 `next --decision --save-candidate`：`ask` 是 show 中当前
-未决 Ask 的一基序号，`choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
+Ask，不直接授权。决定使用 `next --decision --save-candidate`：默认展示的 `ask` 先编号当前 run
+未决 Ask，再按子 run 的稳定顺序编号已建立的当前子流程 Ask；程序绑定原目标，`--machine` 保留本地投影。
+`choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
 Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation`
 接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。

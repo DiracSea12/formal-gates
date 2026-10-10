@@ -8,13 +8,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 )
 
-func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
+func splitControlWorkflow(t *testing.T) (*facade.Facade, *codexScenario, string) {
+	t.Helper()
 	master, _, scenario, binary := engineNativeFixture(t, true)
 	stageNativeReviews(t, master, scenario, "core", "tooling", "master-merge")
 	if requested, err := master.RequestWorkflowChoice(); err != nil || !requested {
@@ -45,9 +50,189 @@ func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
 	if err != nil || len(run.SliceChildren) != 2 {
 		t.Fatal("Controller did not create the actual original children", err)
 	}
+	return master, scenario, binary
+}
+
+func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
+	master, scenario, binary := splitControlWorkflow(t)
+	run, err := master.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(run.SliceChildren))
+	for _, id := range run.SliceChildren {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		child, err := facade.Open(scenario.workspace, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := child.Drive(); err != nil {
+			t.Fatal(err)
+		}
+		if requested, err := child.RequestWorkflowChoice(); err != nil || !requested {
+			t.Fatal("child did not issue its actual route Ask", err)
+		}
+	}
+	current, err := master.ControlRuns()
+	if err != nil || len(current) != 3 || len(current[1].PendingAsks) != 1 || len(current[2].PendingAsks) != 1 {
+		t.Fatal("current query did not contain both real child Asks", err)
+	}
+	target := current[2]
+	number := len(current[0].PendingAsks) + 2
+	files := func() map[string]string {
+		t.Helper()
+		all := map[string]string{}
+		err := filepath.WalkDir(filepath.Join(scenario.workspace, facade.EngineNamespace), func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			body, err := os.ReadFile(path)
+			all[path] = string(body)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return all
+	}
+	invoke := func(input string, args ...string) ([]byte, error) {
+		command := exec.Command(binary, append([]string{"workflow"}, args...)...)
+		command.Stdin = strings.NewReader(input)
+		return command.CombinedOutput()
+	}
+	before := files()
+	for _, entry := range []string{"show", "status", "next"} {
+		body, err := invoke("", entry, "--root", scenario.workspace, "--run-id", run.RunID)
+		if err != nil {
+			t.Fatalf("%s: %v %s", entry, err, body)
+		}
+		var view struct {
+			Children []struct {
+				Run struct {
+					RunID     string
+					Questions []struct {
+						Ask     int
+						Control protocol.ControlKind
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(body, &view); err != nil {
+			t.Fatal(err)
+		}
+		if len(view.Children) != 2 || view.Children[1].Run.RunID != target.RunID || len(view.Children[1].Run.Questions) != 1 || view.Children[1].Run.Questions[0].Ask != number || view.Children[1].Run.Questions[0].Control != protocol.ControlSelectRoute {
+			t.Fatalf("%s did not display the shared actual target: %s", entry, body)
+		}
+	}
+	if !reflect.DeepEqual(before, files()) {
+		t.Fatal("pure control projection wrote workflow evidence")
+	}
+	for _, input := range []string{`{"ask":99,"choice":"full"}`, `{"ask":2,"choice":"unoffered"}`} {
+		if body, err := invoke(input, "next", "--root", scenario.workspace, "--run-id", run.RunID, "--decision", "-"); err == nil {
+			t.Fatalf("invalid current choice accepted: %s", body)
+		}
+	}
+	input, err := json.Marshal(facade.ControlInput{Ask: number, Choice: "full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{filepath.Join(t.TempDir(), "confirmation.json"), filepath.Join(t.TempDir(), "confirmation.json")}
+	var wg sync.WaitGroup
+	results := make(chan error, len(paths))
+	for _, path := range paths {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := invoke(string(input), "next", "--root", scenario.workspace, "--run-id", run.RunID, "--decision", "-", "--save-candidate", path)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var candidate facade.ControlCandidate
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		var actual facade.ControlCandidate
+		if err != nil || json.Unmarshal(body, &actual) != nil {
+			t.Fatal("original candidate unavailable", err)
+		}
+		if actual.Root != scenario.workspace || actual.Run.RunID != target.RunID || actual.Input.Ask != number || actual.Event.Decide.Request != protocol.RequestID(target.PendingAsks[0].RequestID) || actual.Event.Decide.Token != target.PendingAsks[0].Token || actual.DevelopmentPlan == nil {
+			t.Fatal("global selection lost the original target, Ask, token or full plan")
+		}
+		if candidate.Event.ID != "" && !reflect.DeepEqual(candidate, actual) {
+			t.Fatal("parallel preparation changed original binding")
+		}
+		candidate = actual
+	}
+	if !reflect.DeepEqual(before, files()) {
+		t.Fatal("candidate preparation wrote workflow state")
+	}
+	body, err := invoke("", "submit", "--confirmation", paths[0], "--single-step")
+	if err != nil {
+		t.Fatalf("original confirmation rejected: %v %s", err, body)
+	}
+	accepted := files()
+	if _, err := facade.Open(scenario.workspace, target.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := invoke("", "submit", "--confirmation", paths[0], "--single-step"); err != nil || !reflect.DeepEqual(accepted, files()) {
+		t.Fatalf("reopened confirmation replay changed original state: %v %s", err, body)
+	}
+	remaining, err := master.PrepareCurrentControl(facade.ControlInput{Ask: len(current[0].PendingAsks) + 1, Choice: "full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalePath := filepath.Join(t.TempDir(), "confirmation.json")
+	if err := writeAtomicJSON(stalePath, remaining); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := facade.Open(scenario.workspace, remaining.Run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := owner.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := owner.SubmitControl(request); err != nil {
+		t.Fatal(err)
+	}
+	prior := files()
+	if body, err := invoke("", "submit", "--confirmation", stalePath, "--single-step"); err == nil || !strings.Contains(string(body), "freshness") || !reflect.DeepEqual(prior, files()) {
+		t.Fatalf("stale original candidate changed state: %v %s", err, body)
+	}
+	if turns := nativePeerTurns(t, scenario); turns != 0 {
+		t.Fatalf("control selection executed %d native turns", turns)
+	}
+}
+
+func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
+	master, scenario, binary := splitControlWorkflow(t)
+	run, err := master.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
 	child, err := facade.Open(scenario.workspace, run.SliceChildren["core"])
 	if err != nil {
 		t.Fatal(err)
+	}
+	askPosition := func(t *testing.T, run facade.Run, control protocol.ControlKind) int {
+		t.Helper()
+		for index, ask := range run.PendingAsks {
+			if ask.Control == control {
+				return index + 1
+			}
+		}
+		t.Fatalf("missing actual %s Ask", control)
+		return 0
 	}
 	invoke := func(t *testing.T, input string, args ...string) []byte {
 		t.Helper()
