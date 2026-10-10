@@ -173,7 +173,11 @@ func NativeFailureEvidence(provider, directory string) ([]byte, string, string, 
 	if refusal != "" {
 		return nil, "", "", fmt.Errorf("%s", refusal)
 	}
-	return body, "sha256:" + proof.SHA256, identity, nil
+	digest, err := CanonicalDigest(map[string]any{"request_digest": getOf(receipt, "request_digest"), "failure_digest": proof.SHA256})
+	if err != nil {
+		return nil, "", "", err
+	}
+	return body, "sha256:" + digest, identity, nil
 }
 
 // DetachSupervisor keeps an admitted native job independent of its foreground

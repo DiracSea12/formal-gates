@@ -310,8 +310,8 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 }
 
 func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) {
-	_, ref, s, binary := engineNativeFixture(t, true)
-	s.peer.Mode = "failed"
+	f, ref, s, binary := engineNativeFixture(t, true)
+	s.peer.Mode = "bad_json"
 	s.save(t)
 	for range 2 {
 		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
@@ -349,6 +349,69 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 			t.Fatal("failure class/cause did not reach original recovery owner")
 		}
 	}
+	originalDirectory := s.directory
+	originalBody, originalDigest, originalIdentity, err := NativeFailureEvidence("codex", originalDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	askPosition := 0
+	for i, ask := range run.PendingAsks {
+		if ask.Control == protocol.ControlRecovery {
+			askPosition = i + 1
+		}
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: askPosition, Choice: "resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.SubmitControl(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := ""
+	for _, intent := range run.AdapterIntents {
+		if intent.Resume != nil {
+			resume = intent.ActionID
+		}
+	}
+	if resume == "" {
+		t.Fatal("original recovery did not sign a resume")
+	}
+	request, _, directory, err := f.WorkerExecutionRequest(ref, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request["binding"] = s.request["binding"]
+	s.request, s.directory = request, directory
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.save(t)
+	for range 2 {
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		if err != nil {
+			t.Fatalf("resumed original failed native observation: %v %s", err, out)
+		}
+		var response struct {
+			Boundary string     `json:"boundary"`
+			Run      facade.Run `json:"run"`
+		}
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Boundary != "ASK" || len(response.Run.PendingAsks) == 0 || nativePeerTurns(t, s) != 2 {
+			t.Fatalf("separate same-error resume did not reach its own recovery once: %s", out)
+		}
+		body, digest, identity, err := NativeFailureEvidence("codex", directory)
+		if err != nil || !bytes.Equal(body, originalBody) || digest == originalDigest || identity != originalIdentity {
+			t.Fatalf("failure invocation identity lost: %q %s %s, %v", body, digest, identity, err)
+		}
+	}
+	s.directory = originalDirectory
 	path := filepath.Join(s.directory, "exit.json")
 	body, err := os.ReadFile(path)
 	if err != nil {
