@@ -123,7 +123,6 @@ type Development struct {
 	Completion    *Completion `json:"completion,omitempty"`
 	paths         []string
 	Summary       string `json:"summary"`
-	AffectedCases []int  `json:"affectedCases,omitempty"`
 }
 
 func development(value *Development) *protocol.DevelopmentEvidence {
@@ -134,18 +133,19 @@ func development(value *Development) *protocol.DevelopmentEvidence {
 }
 
 type decodedValidation struct {
-	Observations       *ObservationJudgments
-	RepairVerification *Execution
-	Status             string
-	GranularityReview  *Granularity
-	Resolution         *protocol.ConflictResolution
-	Development        *Development
-	Manifest           *Manifest
-	Review             *CaseReview
-	Suggestions        []Suggestion
-	Execution          *Execution
-	Checkpoint         bool
-	Findings           []Finding
+	Observations        *ObservationJudgments
+	RepairVerification  *Execution
+	Status              string
+	GranularityReview   *Granularity
+	Resolution          *protocol.ConflictResolution
+	Development         *Development
+	RepairAffectedCases []int
+	Manifest            *Manifest
+	Review              *CaseReview
+	Suggestions         []Suggestion
+	Execution           *Execution
+	Checkpoint          bool
+	Findings            []Finding
 }
 type Suggestion struct {
 	Severity string `json:"severity"`
@@ -315,7 +315,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			if err != nil {
 				return protocol.Event{}, err
 			}
-			body.Development.AffectedCases, err = selectIDs(v.Development.AffectedCases, repairCaseIDs(issued))
+			body.Development.AffectedCases, err = selectIDs(v.RepairAffectedCases, repairCaseIDs(issued))
 			if err != nil {
 				return protocol.Event{}, err
 			}
@@ -690,8 +690,9 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			v.Development = body
 		case *Repair:
 			v.GranularityReview = body.GranularityReview
+			v.RepairAffectedCases = body.AffectedCases
 			if fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
-				v.Development = &Development{Summary: body.Summary, Completion: body.Completion, AffectedCases: body.AffectedCases}
+				v.Development = &Development{Summary: body.Summary, Completion: body.Completion}
 			}
 		case *ConflictResolution:
 			if input.Validation.Conflict == nil || len(input.Validation.Conflict.Evidence.Conflicts) == 0 {

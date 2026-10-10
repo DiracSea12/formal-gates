@@ -2,11 +2,103 @@ package worker
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
+
+func TestDevelopmentResultOwnsOnlyIssuedBatchEvidence(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.development.batch", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}}}}}
+	raw := []byte(`{"summary":"Implemented public behavior","completion":{"dod":["Public behavior implemented"],"handoff":"Ready for program checks"}}`)
+	for _, resumed := range []bool{false, true} {
+		if resumed {
+			input.Validation.Development.Result = &protocol.WorkerResult{Digest: "accepted-progress", Validation: &protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Paths: []string{"library.txt"}, RemainingWork: "Implement the public command"}}}
+		}
+		original, err := DecodeResultWithPaths(input, "result", raw, "original-output", []string{"command.txt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var recovered protocol.WorkerInput
+		if err := json.Unmarshal(stored, &recovered); err != nil {
+			t.Fatal(err)
+		}
+		replay, err := DecodeResultWithPaths(recovered, "result", raw, "original-output", []string{"command.txt"})
+		if err != nil || !reflect.DeepEqual(original, replay) {
+			t.Fatalf("recovery changed original acceptance: %v", err)
+		}
+		result := original.Result
+		development := result.Validation.Development
+		if result.ActionID != input.Pending.ActionID || result.PayloadDigest != "original-output" || development.Completion.DoD["behavior"] != "Public behavior implemented" || len(development.AffectedCases) != 0 {
+			t.Fatalf("issued batch or original source changed: %+v", result)
+		}
+		if resumed && (result.SourceResult != "accepted-progress" || !reflect.DeepEqual(development.Paths, []string{"command.txt", "library.txt"})) {
+			t.Fatal("continuation lost original source or delivered paths")
+		}
+		mixed := append(append([]byte{}, raw[:len(raw)-1]...), []byte(`,"affectedCases":[1,2,3]}`)...)
+		if _, err := DecodeResultWithPaths(recovered, "invalid", mixed, "original-invalid-output", []string{}); err == nil || !strings.Contains(err.Error(), `unknown field "affectedCases"`) {
+			t.Fatalf("development accepted repair-only evidence: %v", err)
+		}
+	}
+}
+
+func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "second"}}}, {Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "third"}}}}}}}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+	choices := fields["affectedCases"].(map[string]any)["items"].(map[string]any)["enum"]
+	if !reflect.DeepEqual(choices, []int{1, 2, 3}) {
+		t.Fatalf("repair choices do not follow the original unique contract order: %v", choices)
+	}
+	raw := []byte(`{"summary":"Repaired public behavior","affectedCases":[3,1]}`)
+	stored, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered protocol.WorkerInput
+	if err := json.Unmarshal(stored, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	original, err := DecodeResultWithPaths(input, "result", raw, "original-output", []string{"command.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := DecodeResultWithPaths(recovered, "result", raw, "original-output", []string{"command.txt"})
+	if err != nil || !reflect.DeepEqual(original, replay) || !reflect.DeepEqual(original.Result.Validation.Development.AffectedCases, []string{"third", "first"}) {
+		t.Fatalf("repair impact or original recovery acceptance changed: %v %+v", err, replay)
+	}
+	for _, invalid := range []string{`{"summary":"Repaired","affectedCases":[4]}`, `{"summary":"Repaired","affectedCases":[1,1]}`} {
+		if _, err := DecodeResultWithPaths(input, "invalid", []byte(invalid), "invalid-output", []string{}); err == nil {
+			t.Fatalf("repair admitted an unissued or repeated choice: %s", invalid)
+		}
+	}
+	input.Validation.Contract = nil
+	schema, err = ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields = schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+	if fields["affectedCases"] != nil {
+		t.Fatal("repair without case duties exposed a case field")
+	}
+	for _, raw := range []string{`{"summary":"Repaired","affectedCases":[]}`, `{"summary":"Repaired","affectedCases":[1]}`} {
+		if _, err := DecodeResultWithPaths(input, "invalid", []byte(raw), "invalid-output", []string{}); err == nil || !strings.Contains(err.Error(), `unknown field "affectedCases"`) {
+			t.Fatalf("repair accepted evidence outside its duties: %v", err)
+		}
+	}
+	if _, err := DecodeResultWithPaths(input, "result", []byte(`{"summary":"Repaired"}`), "original-output", []string{}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "actual", Command: "false"}}}

@@ -53,7 +53,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
 			value.ReadOnly = true
 		case "engine.repair":
-			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report only summary and affectedCases. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
+			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report summary. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
+			if len(repairCaseIDs(input.Validation)) > 0 {
+				instructions += " affectedCases selects the affected cases from contract manifests in their original order, with duplicates removed; use 1-based positions."
+			}
 			value.ReadOnly = false
 		case "engine.merge.resolve":
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."

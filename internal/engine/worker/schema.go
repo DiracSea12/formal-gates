@@ -64,6 +64,13 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
+	if input.Handler == "engine.repair" {
+		if cases := repairCaseIDs(input.Validation); len(cases) > 0 {
+			fields["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
+		} else {
+			delete(fields, "affectedCases")
+		}
+	}
 	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
 			delete(fields, "granularityReview")
