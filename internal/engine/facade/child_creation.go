@@ -91,6 +91,12 @@ func (f *Facade) driveChildren() error {
 	}
 	_, aborted := s.AbortDecision()
 	if s.ChildCreation != nil && aborted {
+		if s.ChildCreation.Previous != nil {
+			settled, err := f.cancelReplacedChildren(s)
+			if err != nil || !settled {
+				return err
+			}
+		}
 		return f.cancelChildren(s)
 	}
 	if s.ChildCreation != nil && s.Topology != nil && !reflect.DeepEqual(s.ChildCreation.Topology, *s.Topology) && !s.RequirementBarrierActive() {
@@ -482,9 +488,7 @@ func (f *Facade) driveChildWorkspace(intent protocol.HostActionIntent, execute b
 	return f.completeNativeIntent(parent.State, intent, mayWrite)
 }
 
-// retireReplacedChildren consumes the same cancellation/cleanup handlers, using
-// the frozen predecessor and the original topology authorization as evidence.
-func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
+func (f *Facade) cancelReplacedChildren(parent *protocol.State) (bool, error) {
 	settled := true
 	for _, old := range parent.ChildCreation.Previous.Children {
 		if slices.ContainsFunc(parent.ChildCreation.Children, func(c protocol.ChildPreparation) bool { return c.RunID == old.RunID }) {
@@ -523,8 +527,15 @@ func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
 			return false, err
 		}
 	}
-	if !settled {
-		return false, nil
+	return settled, nil
+}
+
+// Target retirement waits for cancellation through the frozen predecessor's
+// original topology authorization before removing its native resources.
+func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
+	settled, err := f.cancelReplacedChildren(parent)
+	if err != nil || !settled {
+		return false, err
 	}
 	if err := f.engine.CleanupReplacedTargets(emptyFingerprint()); err != nil {
 		return false, err
