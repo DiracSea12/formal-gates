@@ -280,7 +280,7 @@ func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer,
 	return 0
 }
 
-func cursorExecute(request any, directory string, probe bool) (map[string]any, error) {
+func cursorExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}

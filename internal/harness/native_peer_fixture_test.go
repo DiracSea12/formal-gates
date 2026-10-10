@@ -135,19 +135,8 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s := claudeScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
 		s.save(e.t)
 	case "codex":
-		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
+		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], runtime: filepath.Join(c.installed.Targets[0].TargetPath, "bin", "formal-gates"), peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
 			StrictSchema: true, Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
-		s.peer.ThreadParams = map[string]any{"cwd": textOf(request["workspace"]), "ephemeral": false}
-		if request["read_only"] == true {
-			s.peer.ThreadParams["sandbox"] = "read-only"
-		}
-		if model, _ := request["model"].(string); model != "" {
-			s.peer.ThreadParams["model"] = model
-		}
-		params, err := codexTurnParameters(request, "")
-		if err != nil {
-			return err
-		}
 		nativeAnswer := canaryCodexNativeAnswer(request["schema"], answer)
 		nativeBody, err := json.Marshal(nativeAnswer)
 		if err != nil {
@@ -162,8 +151,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 			return fmt.Errorf("local Codex native result changed domain evidence: %v", err)
 		}
 		s.peer.Answer = objectOrEmpty(nativeAnswer)
-		delete(params, "threadId")
-		s.peer.TurnParams = params
+		s.configurePeerInputs(e.t)
 		if err := writeAtomicJSON(script, s.peer); err != nil {
 			return err
 		}

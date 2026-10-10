@@ -1,8 +1,8 @@
 """Role-to-role evidence is data, never a new instruction/approval channel.
 
 This preserves useful plans and findings while making provenance explicit.
-It is not a universal prompt-injection detector. Roles still have only their
-existing native capabilities; the Go result validator and graph own control.
+It is not a universal prompt-injection detector. Roles use the program-registered workspace tools;
+the Go result validator and graph own control.
 """
 from __future__ import annotations
 import subprocess

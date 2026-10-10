@@ -405,7 +405,7 @@ func configuredIs(configured map[string]any, option, requested string) bool {
 }
 
 // dshExecute runs DSH's ACP sequence for one request (native_dsh.execute).
-func dshExecute(request any, directory string, probe bool) (result map[string]any, err error) {
+func dshExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (result map[string]any, err error) {
 	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
 		return nil, mkdirErr
 	}
@@ -730,7 +730,7 @@ func runNativeJob(directory string, admissions ...ExecutionAdmission) (map[strin
 		release()
 		release = nil
 	}
-	source, err := impl.execute(request, directory, getOf(request, "probe") == true)
+	source, err := impl.execute(request, directory, getOf(request, "probe") == true, admissions...)
 	if _, managed := object["engine"]; managed && getOf(request, "probe") != true && err != nil {
 		return nil, &nativeInvocationError{err}
 	}

@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
@@ -21,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,6 +35,7 @@ type codexPeerInput struct {
 	Home          string         `json:"home"`
 	Config        string         `json:"config"`
 	ThreadParams  map[string]any `json:"thread_params"`
+	ToolArgument  string         `json:"tool_argument"`
 	TurnParams    map[string]any `json:"turn_params"`
 	Configuration map[string]any `json:"configuration"`
 	Mode          string         `json:"mode"`
@@ -58,7 +61,7 @@ func TestCodexRPCPeer(t *testing.T) {
 		return
 	}
 	args = args[1:]
-	if !reflect.DeepEqual(args, []string{"app-server", "--stdio"}) {
+	if len(args) != 4 || !reflect.DeepEqual(args[:3], []string{"app-server", "--stdio", "-c"}) {
 		panic("native argv differs")
 	}
 	script := os.Getenv("CODEX_PEER_SCRIPT")
@@ -72,6 +75,9 @@ func TestCodexRPCPeer(t *testing.T) {
 	var peer codexPeerInput
 	if err = json.Unmarshal(raw, &peer); err != nil {
 		panic(err)
+	}
+	if args[3] != peer.ToolArgument {
+		panic(fmt.Sprintf("native hook argument differs: %s != %s", args[3], peer.ToolArgument))
 	}
 	cwd, _ := os.Getwd()
 	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision" || peer.Mode == "workflow-invalid-review" || peer.Mode == "workflow-held"
@@ -200,7 +206,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			os.Exit(0)
 		}
 	}
-	turn := codexPeerID(thread + textOf(expected))
+	turn := codexPeerID(thread + textOf(expected) + fmt.Sprint(len(history)))
 	reply(frame, map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
 	// Persist the original prompt immediately: interrupt/transport close leaves
 	// this context available to the next native thread/resume process.
@@ -408,6 +414,7 @@ type codexScenario struct {
 	request                            map[string]any
 	peer                               codexPeerInput
 	directory, workspace, home, config string
+	runtime                            string
 }
 
 func newCodexScenario(t *testing.T) *codexScenario {
@@ -468,10 +475,21 @@ func newCodexScenario(t *testing.T) *codexScenario {
 	return s
 }
 
-func (s *codexScenario) save(t *testing.T) {
+func (s *codexScenario) configurePeerInputs(t *testing.T) {
 	t.Helper()
 	s.peer.Config = s.config
-	s.peer.ThreadParams = map[string]any{"cwd": s.workspace}
+	s.peer.ThreadParams = map[string]any{"cwd": s.workspace, "config": map[string]any{"bypass_hook_trust": true, "features.shell_tool": false, "features.unified_exec": false, "tools.view_image": false, "web_search": "disabled"}}
+	executable := s.runtime
+	if executable == "" {
+		var err error
+		executable, err = os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	command := quote(executable) + " harness codex-tool-permission " + quote(s.directory)
+	s.peer.ToolArgument = `hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`
 	if s.request["read_only"] == true {
 		s.peer.ThreadParams["sandbox"] = "read-only"
 	}
@@ -483,6 +501,7 @@ func (s *codexScenario) save(t *testing.T) {
 		s.peer.ThreadParams["excludeTurns"] = true
 	} else {
 		s.peer.ThreadParams["ephemeral"] = false
+		s.peer.ThreadParams["dynamicTools"] = []any{nativeWorkspaceToolSchema(s.request["read_only"] == true)}
 	}
 	params, err := codexTurnParameters(s.request, "")
 	if err != nil {
@@ -490,6 +509,11 @@ func (s *codexScenario) save(t *testing.T) {
 	}
 	delete(params, "threadId")
 	s.peer.TurnParams = params
+}
+
+func (s *codexScenario) save(t *testing.T) {
+	t.Helper()
+	s.configurePeerInputs(t)
 	if err := writeAtomicJSON(filepath.Join(s.directory, "native-request.json"), s.request); err != nil {
 		t.Fatal(err)
 	}
@@ -500,6 +524,7 @@ func (s *codexScenario) save(t *testing.T) {
 
 func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 	t.Helper()
+	s.runtime = ""
 	s.save(t)
 	return codexExecute(s.request, s.directory, s.peer.Mode == "probe")
 }
@@ -510,7 +535,8 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	s.request["schema"] = WorkerSchema()
 	s.request["read_only"] = true
 	s.peer.StrictSchema = true
-	s.peer.Answer = map[string]any{"status": "PASS", "summary": "compared complete native evidence", "findings": []any{}, "check_reviews": map[string]any{}}
+	domain := map[string]any{"summary": "compared complete native evidence", "findings": []any{}, "check_reviews": []any{}}
+	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)
@@ -551,7 +577,7 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 		t.Fatalf("fixture frame is not large: %d", len(turnFrame))
 	}
 	answer, err := readJSONFile(filepath.Join(s.directory, "answer.json"))
-	if err != nil || !valuesEqual(answer, s.peer.Answer) {
+	if err != nil || !valuesEqual(answer, domain) {
 		t.Fatalf("large input changed semantic answer: %v %v", answer, err)
 	}
 	observed, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
@@ -563,6 +589,164 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 		t.Fatal("large frame recovery issued new native work")
 	}
 	t.Logf("complete native turn/start frame=%d bytes", len(turnFrame))
+}
+
+func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
+	f, ref, s, binary := engineNativeFixture(t, true)
+	entries, err := os.ReadDir(s.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := []any{}
+	appEntry := 0
+	for i, entry := range entries {
+		choices = append(choices, map[string]any{"entry": i + 1, "name": entry.Name(), "directory": entry.IsDir()})
+		if entry.Name() == "app.go" {
+			appEntry = i + 1
+		}
+	}
+	listing, _ := json.Marshal(map[string]any{"listing": 1, "entries": choices})
+	s.peer.Reverse = []any{map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "original-list", "namespace": nil, "tool": "workspace", "arguments": map[string]any{"action": "list"}}}}
+	s.peer.Replies = []any{map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(listing)}}, "success": true}}
+	s.save(t)
+	call := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("original installed CLI %v: %v\n%s", args, err, out)
+		}
+		t.Logf("original CLI result: %s", out)
+		return out
+	}
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	originalDirectory := s.directory
+	originalSource, err := NativeJobSource("codex", originalDirectory)
+	if err != nil || nativePeerTurns(t, s) != 1 {
+		for _, name := range []string{"native-error.json", "exit.json", "native.stderr"} {
+			if body, readErr := os.ReadFile(filepath.Join(originalDirectory, name)); readErr == nil {
+				t.Logf("original %s: %s", name, body)
+			}
+		}
+		t.Fatalf("original managed call: %v %v", originalSource, err)
+	}
+	verifySource := func(directory string, source map[string]any, resume bool) {
+		t.Helper()
+		if err := codexVerifySource(directory, source); err != nil {
+			t.Fatal(err)
+		}
+		value, err := readJSONFile(filepath.Join(directory, "native-source.json"))
+		if err != nil || getOf(getOf(value, "thread_request"), "config").(map[string]any)["bypass_hook_trust"] != true {
+			t.Fatalf("native request did not preserve original hook configuration: %v %v", value, err)
+		}
+		registered := getOf(getOf(value, "thread_request"), "dynamicTools")
+		if resume && registered != nil || !resume && len(listOf(registered)) != 1 {
+			t.Fatalf("original registration/resume contract changed: %v", value)
+		}
+	}
+	verifySource(originalDirectory, originalSource, false)
+	rejectLate := func(directory string) {
+		t.Helper()
+		before, err := os.ReadFile(filepath.Join(directory, nativeToolCallsFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "workspace", "cwd": s.workspace})
+		cmd := exec.Command(binary, "harness", "codex-tool-permission", directory)
+		cmd.Stdin = bytes.NewReader(input)
+		if output, err := cmd.CombinedOutput(); err == nil || len(output) == 0 {
+			t.Fatalf("closed execution admitted an old hook: %v %s", err, output)
+		}
+		after, err := os.ReadFile(filepath.Join(directory, nativeToolCallsFile))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("rejected callback altered original native tool evidence", err)
+		}
+	}
+	rejectLate(originalDirectory)
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirm := func(input facade.ControlInput) facade.Run {
+		t.Helper()
+		candidate, err := f.PrepareControl(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, updated, err := f.SubmitControl(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return updated
+	}
+	position := func(run facade.Run, control protocol.ControlKind) int {
+		t.Helper()
+		for i, ask := range run.PendingAsks {
+			if ask.Control == control {
+				return i + 1
+			}
+		}
+		t.Fatalf("missing original %s Ask", control)
+		return 0
+	}
+	run = confirm(facade.ControlInput{Ask: position(run, protocol.ControlRecovery), Choice: "resume"})
+	resume := ""
+	for _, intent := range run.AdapterIntents {
+		if intent.Resume != nil {
+			resume = intent.ActionID
+		}
+	}
+	if resume == "" {
+		t.Fatal("original resume was not signed")
+	}
+	request, _, directory, err := f.WorkerExecutionRequest(ref, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request["binding"] = s.request["binding"]
+	s.request, s.directory = request, directory
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(s.workspace, "app.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(body), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	read, _ := json.Marshal(map[string]any{"read": 2, "lines": lines})
+	s.peer.Reverse = []any{map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "resumed-read", "namespace": nil, "tool": "workspace", "arguments": map[string]any{"action": "read", "listing": 1, "entry": appEntry}}}}
+	s.peer.Replies = []any{map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(read)}}, "success": true}}
+	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), map[string]any{"interruptionReason": "The original resumed read finished; this peer now needs an operator decision"}).(map[string]any)
+	s.save(t)
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	continued, err := NativeJobSource("codex", directory)
+	if err != nil || continued["identity"] != originalSource["identity"] || valuesEqual(continued["native_turn"], originalSource["native_turn"]) || nativePeerTurns(t, s) != 2 {
+		t.Fatalf("original resumed tool context: %v %v", continued, err)
+	}
+	verifySource(directory, continued, true)
+	verifySource(originalDirectory, originalSource, false)
+	context, err := readJSONFile(filepath.Join(directory, nativeToolContextFile))
+	if err != nil || getOf(listOf(getOf(context, "facts"))[0], "job") != originalDirectory {
+		t.Fatalf("resume rebound original published facts: %v %v", context, err)
+	}
+	run = confirm(facade.ControlInput{Request: protocol.ControlAbort})
+	run = confirm(facade.ControlInput{Ask: position(run, protocol.ControlAbort), Choice: "abort"})
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	run, err = f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "ABORTED" {
+		t.Fatalf("original abort was not consumed: %s", run.Status)
+	}
+	rejectLate(directory)
+	verifySource(directory, continued, true)
+	if nativePeerTurns(t, s) != 2 {
+		t.Fatal("closed tool request started another native turn")
+	}
 }
 
 func TestCodexNativeContinuationAndRecovery(t *testing.T) {
@@ -863,6 +1047,7 @@ func TestCodexNativeSupervisorAndInterrupt(t *testing.T) {
 	for _, mode := range []string{"complete", "interrupt", "supervisor_cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			s := newCodexScenario(t)
+			s.runtime = bin
 			if mode != "complete" {
 				s.peer.Mode = "wait"
 			}
@@ -1001,6 +1186,7 @@ func TestCodexNativePeerRejectsWrongLaunchInputs(t *testing.T) {
 	for _, dimension := range []string{"valid", "argv", "config", "home", "cwd"} {
 		t.Run(dimension, func(t *testing.T) {
 			s := newCodexScenario(t)
+			s.runtime = binary
 			s.save(t)
 			binding := objectOrEmpty(s.request["binding"])
 			launch := objectOrEmpty(binding["launch"])

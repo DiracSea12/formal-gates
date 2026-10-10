@@ -62,7 +62,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 			calls = append(calls, "reconcile")
 			return source, nil
 		},
-		execute: func(got any, dir string, probe bool) (map[string]any, error) {
+		execute: func(got any, dir string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
 			if dir != directory || !probe || getOf(got, "prompt") != "exact prompt" {
 				t.Fatalf("execute input = %#v %s %v", got, dir, probe)
 			}

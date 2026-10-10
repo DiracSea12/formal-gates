@@ -86,7 +86,7 @@ func claudeSessionUnavailable(identity, text string) error {
 	return nil
 }
 
-func claudeExecute(request any, directory string, probe bool) (map[string]any, error) {
+func claudeExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}

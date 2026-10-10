@@ -47,6 +47,84 @@ func callWorkspace(t *testing.T, tools *nativeWorkspaceTools, args string) map[s
 	return value.(map[string]any)
 }
 
+func TestNativeWorkspaceReadsProgramSuppliedTaskMaterials(t *testing.T) {
+	workspace, directory := t.TempDir(), t.TempDir()
+	materials := filepath.Join(workspace, ".formal-gates-input", "operation")
+	files := map[string]string{
+		"requirement.md":                 "Approved requirement\n",
+		"reviewer-base.md":               "Review the approved scope\n",
+		"task.json":                      `{"bindings":{"revision":"opaque-revision","base":"opaque-base","candidate":"opaque-candidate"},"checks":[]}`,
+		"comparison/comparison.json":     `{"base":"opaque-base","candidate":"opaque-candidate","changes":[]}`,
+		"comparison/full.diff":           "diff --git a/input.txt b/input.txt\n-before\n+after\n",
+		"comparison/base/input.txt":      "before\n",
+		"comparison/candidate/input.txt": "after\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(materials, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true}); err != nil {
+		t.Fatal(err)
+	}
+	call := func(arguments map[string]any) map[string]any {
+		t.Helper()
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "workspace", "arguments": arguments}})
+		var output, errout bytes.Buffer
+		if code := NativeTools(directory, bytes.NewReader(request), &output, &errout); code != 0 {
+			t.Fatalf("native tools %d: %s", code, errout.String())
+		}
+		var response map[string]any
+		if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		result := objectOrEmpty(response["result"])
+		if result["isError"] != false {
+			t.Fatalf("material read failed: %v", result)
+		}
+		var value map[string]any
+		if err := json.Unmarshal([]byte(textOf(getOf(listOf(result["content"])[0], "text"))), &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	for name, body := range files {
+		listing, entry := any(nil), any(nil)
+		parts := append([]string{".formal-gates-input", "operation"}, strings.Split(name, "/")...)
+		for _, part := range parts {
+			args := map[string]any{"action": "list"}
+			if listing != nil {
+				args["listing"], args["entry"] = listing, entry
+			}
+			value := call(args)
+			listing, entry = value["listing"], nil
+			for _, choice := range listOf(value["entries"]) {
+				if getOf(choice, "name") == part {
+					entry = getOf(choice, "entry")
+				}
+			}
+			if entry == nil {
+				t.Fatalf("original listing omitted %s", part)
+			}
+		}
+		read := call(map[string]any{"action": "read", "listing": listing, "entry": entry})
+		var content strings.Builder
+		for _, line := range listOf(read["lines"]) {
+			content.WriteString(textOf(line))
+		}
+		if content.String() != body {
+			t.Fatalf("material %s changed: %q != %q", name, content.String(), body)
+		}
+	}
+	if err := verifyNativeToolEvidence(directory); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func nativeToolAdmission(directory string, request map[string]any) (func(), error) {
 	if getOf(getOf(request, "engine"), "workerMaterial") == nil {
 		return nil, fmt.Errorf("missing original material reference")

@@ -1451,7 +1451,7 @@ func encodeSchemaForPrompt(value any, out *strings.Builder) error {
 // zcodeExecute runs ZCode's app-server sequence for one request
 // (native_zcode.execute): parse the request, establish the session, prepare
 // the turn, send it, wait it out, settle the evidence.
-func zcodeExecute(request any, directory string, probe bool) (map[string]any, error) {
+func zcodeExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
 	directory = resolveNativePath(directory)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err

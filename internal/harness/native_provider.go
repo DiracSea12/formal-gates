@@ -12,7 +12,7 @@ type nativeImplementation struct {
 	verifySource    func(directory string, source any) error
 	verifyStart     func(request, acknowledgement any, identity string) error
 	reconcile       func(directory string, process any) (map[string]any, error)
-	execute         func(request any, directory string, probe bool) (map[string]any, error)
+	execute         func(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error)
 }
 
 // Ordered entries own both routing and unsupported-host diagnostics.

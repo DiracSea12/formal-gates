@@ -25,6 +25,13 @@ func admitExecution(directory string, request map[string]any, admissions []Execu
 // RunCommand keeps the temporary Python runner behind a Go-owned boundary.
 // Ordinary Go commands do not need Python installed.
 func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+	if len(args) > 0 && args[0] == "codex-tool-permission" {
+		if len(args) != 2 {
+			fmt.Fprintln(errout, "harness codex-tool-permission requires the original job directory")
+			return 2
+		}
+		return CodexToolPermission(args[1], in, out, errout, admissions...)
+	}
 	if len(args) > 0 && args[0] == "cursor-tool-permission" {
 		if len(args) != 2 {
 			fmt.Fprintln(errout, "harness cursor-tool-permission requires the original job directory")

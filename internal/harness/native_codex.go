@@ -6,6 +6,7 @@ package harness
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +14,93 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
+
+// Codex reads session hooks from its original config overrides. The thread's
+// bypass_hook_trust enables these program-owned hooks without a trust store.
+func codexToolArguments(directory string) ([]string, error) {
+	server, err := nativeToolServer(directory)
+	if err != nil {
+		return nil, err
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	command := quote(textOf(server["command"])) + " harness codex-tool-permission " + quote(directory)
+	return []string{"-c", `hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`}, nil
+}
+
+func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+	var input struct {
+		Event string `json:"hook_event_name"`
+		Tool  string `json:"tool_name"`
+		Cwd   string `json:"cwd"`
+	}
+	if err := json.NewDecoder(in).Decode(&input); err != nil {
+		fmt.Fprintln(errout, err)
+		return 2
+	}
+	tools, err := newNativeWorkspaceTools(directory, admissions...)
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 2
+	}
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 2
+	}
+	release, err := admitExecution(directory, objectOrEmpty(request), admissions)
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 2
+	}
+	if release != nil {
+		defer release()
+	}
+	output := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Use the managed workspace interface instead of " + input.Tool}}
+	if getOf(request, "provider") == "codex" && input.Event == "PreToolUse" && resolveNativePath(input.Cwd) == tools.workspace && (input.Tool == nativeWorkspaceTool || input.Tool == "exec" || input.Tool == "wait") {
+		output = map[string]any{}
+	}
+	if err := json.NewEncoder(out).Encode(output); err != nil {
+		fmt.Fprintln(errout, err)
+		return 2
+	}
+	return 0
+}
+
+func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn string) (*nativeReply, error) {
+	callID, _ := getOf(params, "callId").(string)
+	namespace := getOf(params, "namespace")
+	if getOf(params, "threadId") != thread || getOf(params, "turnId") != turn || callID == "" || getOf(params, "tool") != nativeWorkspaceTool || (namespace != nil && namespace != "") {
+		return nil, &blockedError{message: "CODEX_BINDING: dynamic tool differs from original thread/turn/registration"}
+	}
+	raw, err := json.Marshal(getOf(params, "arguments"))
+	if err != nil {
+		return nil, err
+	}
+	value, callErr := tools.call(raw)
+	content := ""
+	if callErr != nil {
+		content = callErr.Error()
+	} else {
+		body, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		content = string(body)
+	}
+	result := map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": content}}, "success": callErr == nil}
+	request, err := json.Marshal(map[string]any{"method": "item/tool/call", "params": params})
+	if err != nil {
+		return nil, err
+	}
+	if err := tools.recordCall(request, result); err != nil {
+		return nil, err
+	}
+	return &nativeReply{payload: map[string]any{"result": result}, status: "tool-result"}, nil
+}
 
 func codexCaptureBinding() (map[string]any, error) {
 	executable, err := exec.LookPath("codex")
@@ -247,7 +332,7 @@ func codexCheckConfiguration(request, configuration any, thread string) error {
 	return nil
 }
 
-func codexExecute(request any, directory string, probe bool) (map[string]any, error) {
+func codexExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
@@ -277,12 +362,16 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	}
 	defer events.Close()
 	thread, turn := "", ""
+	var tools *nativeWorkspaceTools
 	var terminal any
 	var recordErr error
 	hooks := nativeHooks{transportPrefix: "CODEX_NATIVE", requestPrefix: "CODEX_RPC", bounded: true,
 		identify: func(c *nativeClient) any { return c.nextCounter() },
 		observes: codexInteractionObserved,
 		respond: func(method string, params any) (*nativeReply, error) {
+			if method == "item/tool/call" && tools != nil {
+				return codexWorkspaceReply(tools, params, thread, turn)
+			}
 			return nil, &blockedError{message: "CODEX_INTERACTION: unsupported native request " + method + ": " + textOf(params)}
 		},
 		received: func(message any) {
@@ -298,7 +387,11 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 			}
 		},
 	}
-	client, err := newNativeClientWithEnv(hooks, []string{executable, "app-server", "--stdio"}, workspace, directory, environment)
+	arguments, err := codexToolArguments(directory)
+	if err != nil {
+		return nil, err
+	}
+	client, err := newNativeClientWithEnv(hooks, append([]string{executable, "app-server", "--stdio"}, arguments...), workspace, directory, environment)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +417,11 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	params := map[string]any{"cwd": workspace}
+	tools, err = newNativeWorkspaceTools(directory, admissions...)
+	if err != nil {
+		return nil, err
+	}
+	params := map[string]any{"cwd": workspace, "config": map[string]any{"bypass_hook_trust": true, "features.shell_tool": false, "features.unified_exec": false, "tools.view_image": false, "web_search": "disabled"}}
 	if readOnly {
 		params["sandbox"] = "read-only"
 	}
@@ -340,6 +437,7 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 		params["excludeTurns"] = true
 	} else {
 		params["ephemeral"] = false
+		params["dynamicTools"] = []any{nativeWorkspaceToolSchema(readOnly)}
 	}
 	opened, err := client.request(method, params)
 	if err != nil {
@@ -351,7 +449,7 @@ func codexExecute(request any, directory string, probe bool) (map[string]any, er
 		return nil, &blockedError{message: "CODEX_BINDING: resumed native thread identity differs or is missing"}
 	}
 	selection := map[string]any{"model": getOf(opened, "model"), "reasoning_effort": getOf(opened, "reasoningEffort")}
-	nativeSource := map[string]any{"threadId": thread, "workspace": workspace, "thread": nativeThread, "configuration": opened, "selection": selection}
+	nativeSource := map[string]any{"threadId": thread, "workspace": workspace, "thread": nativeThread, "configuration": opened, "selection": selection, "thread_request": params}
 	if err = writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{"identity": thread, "workspace": workspace, "selection": selection, "acknowledgement": opened}); err != nil {
 		return nil, err
 	}

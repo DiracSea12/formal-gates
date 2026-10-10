@@ -183,6 +183,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	s.request["binding"] = binding
 	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), map[string]any{"interruptionReason": "The local peer needs an explicit user decision"}).(map[string]any)
 	s.peer.StrictSchema = true
+	s.runtime = filepath.Join(admission.Target, "bin", "formal-gates")
 	s.save(t)
 	return f, ref, s, binary
 }
