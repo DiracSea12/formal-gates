@@ -601,12 +601,19 @@ func completeWaivedCandidate(d *validationDriver) {
 	decideValidation(d, ask, "waive", ask.Validation.Obligations...)
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.qa.execution")
-	report := executionFor(in)
-	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
+	for id, in := range d.run.ValidationInputs {
+		if in.Handler == "engine.qa.execution" {
+			report := executionFor(in)
+			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
+		}
+	}
 	d.reopen()
 	d.drive()
-	if !d.run.NotGuaranteed || d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if !snapshot.State.FinalValidationComplete(d.f.definition) || !d.run.NotGuaranteed || d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
 		d.t.Fatal("waived candidate did not complete required validation")
 	}
 }
@@ -648,6 +655,12 @@ func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) 
 				d.drive()
 			}
 			if change == "qa-redo" {
+				_, scopeInput := d.action("engine.validation.observation")
+				if len(scopeInput.Observation.Scopes) != 1 || scopeInput.Observation.Scopes[0].Mode != coverage.ReviewBlackbox {
+					t.Fatal("QA redo did not issue its original blackbox scope judgment")
+				}
+				scope := scopeInput.Observation.Scopes[0]
+				d.recordExecutionScope(scope.Mode, scope.ApprovedCases...)
 				id, in := d.action("engine.qa.execution")
 				report := executionFor(in)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})

@@ -79,14 +79,16 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-	for i := 0; i < 2; i++ {
-		id, in = d.action("engine.qa.execution")
-		r := executionFor(in)
-		d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
-		d.drive()
+	id, in = d.action("engine.qa.execution")
+	r := executionFor(in)
+	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
 	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	if current.Status != "COMPLETE" {
+	if !snapshot.State.FinalValidationComplete(d.f.definition) || current.Status != "COMPLETE" || current.Counted {
 		t.Fatalf("resolved baseline not complete: %s", current.Status)
 	}
 	unlockRouteByRequirementRedo(d)

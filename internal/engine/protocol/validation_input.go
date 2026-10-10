@@ -96,7 +96,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	}
 	for i := len(s.RecoveryRecords) - 1; i >= 0; i-- {
 		record := s.RecoveryRecords[i]
-		if record.Task == pending.Task && (record.RequestID != "" || s.RejectedResults[record.ActionID].Payload.Outcome == OutcomeRuntimeError) {
+		rejected := s.RejectedResults[record.ActionID]
+		previousRejection := record.ActionID == s.Attempts[pending.Task].PreviousAction && record.AttemptID == rejected.AttemptID && rejected.Task == pending.Task && rejected.Status == "REJECTED_INVALID_RESULT" && s.DispatchBindings[record.ActionID] == binding
+		if record.Task == pending.Task && (record.RequestID != "" || rejected.Payload.Outcome == OutcomeRuntimeError || previousRejection) {
 			input.Interruption = &record
 			break
 		}

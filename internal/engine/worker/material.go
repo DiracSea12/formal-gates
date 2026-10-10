@@ -188,6 +188,12 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				validation[name] = field
 			}
 		}
+		if recovery := input.Validation.Interruption; recovery != nil {
+			validation["interruption"], err = json.Marshal(map[string]any{"class": recovery.Class, "interruptionReason": recovery.InterruptionReason, "detail": recovery.Detail})
+			if err != nil {
+				return Material{}, err
+			}
+		}
 		if input.Validation.Development != nil && validation["development"] != nil {
 			development := input.Validation.Development
 			dependencies := make(map[string]any, len(development.Dependencies))

@@ -9,6 +9,34 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
+func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
+	for _, changed := range []string{"none", "task", "binding", "previous", "attempt"} {
+		t.Run(changed, func(t *testing.T) {
+			key := runtime.TaskKey{Node: "qa", Step: "design", Scope: "current-duty"}
+			pending := PendingAction{ActionID: "retry", Task: key, AttemptID: "current-attempt"}
+			binding := WorkBinding{Task: key, Generation: 2, RequirementRevision: "confirmed"}
+			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design"}}}}
+			state := &State{DispatchBindings: map[string]WorkBinding{"retry": binding, "rejected": binding}, Attempts: map[runtime.TaskKey]Attempt{key: {PreviousAction: "rejected"}}, RejectedResults: map[string]RejectedResult{"rejected": {ActionID: "rejected", Task: key, AttemptID: "original-attempt", Status: "REJECTED_INVALID_RESULT", Reason: "original semantic defect", Payload: WorkerResult{Outcome: OutcomePass}}}, RecoveryRecords: []RecoveryRecord{{ActionID: "rejected", Task: key, AttemptID: "original-attempt", Detail: "original semantic defect"}}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
+			switch changed {
+			case "task":
+				state.RecoveryRecords[0].Task.Scope = "another-duty"
+			case "binding":
+				previous := binding
+				previous.Generation = 1
+				state.DispatchBindings["rejected"] = previous
+			case "previous":
+				state.Attempts[key] = Attempt{PreviousAction: "another-execution"}
+			case "attempt":
+				state.RecoveryRecords[0].AttemptID = "another-attempt"
+			}
+			input := state.validationInput(pending, cd)
+			if (input.Interruption != nil) != (changed == "none") {
+				t.Fatal("rejection feedback crossed its original binding", input.Interruption)
+			}
+		})
+	}
+}
+
 func TestValidationInputIssuesReviewScopeFromBaseline(t *testing.T) {
 	key := runtime.TaskKey{Node: "qa", Step: "review", Scope: "1:BLACKBOX:case-version"}
 	pending := PendingAction{ActionID: "review-action", Task: key}

@@ -194,14 +194,16 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-	for i := 0; i < 2; i++ {
-		action, input = d.action("engine.qa.execution")
-		execution := executionFor(input)
-		d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution}))
-		d.drive()
+	action, input = d.action("engine.qa.execution")
+	execution := executionFor(input)
+	d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution}))
+	d.drive()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
 	completed := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
-	if completed.Status != "COMPLETE" || completed.Counted {
+	if !snapshot.State.FinalValidationComplete(d.f.definition) || completed.Status != "COMPLETE" || completed.Counted {
 		t.Fatal("setup requires a completed pure P2 candidate")
 	}
 	correction := d.run.Validation.Findings[finding].History[0]

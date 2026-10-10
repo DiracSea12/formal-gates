@@ -16,6 +16,34 @@ import (
 	"formal-gates/internal/requirement"
 )
 
+func TestInterruptionPromptKeepsOnlySemanticFeedback(t *testing.T) {
+	input := semanticInput()
+	input.Pending.AttemptID = "current-attempt"
+	input.RequirementDocument.Content = "Confirmed requirement"
+	input.Validation.Interruption = &protocol.RecoveryRecord{ActionID: "private-action", AttemptID: "private-attempt", RequestID: "private-request", Revision: 93, Action: protocol.RecoveryAgent, Detail: "The current point has no boundary case", InterruptionReason: "The source tool exited before returning evidence"}
+	before, _ := json.Marshal(input)
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(material.Prompt, input.Validation.Interruption.Detail) || !strings.Contains(material.Prompt, input.Validation.Interruption.InterruptionReason) {
+		t.Fatal("semantic interruption evidence was omitted")
+	}
+	for _, identity := range []string{"private-action", "private-attempt", "private-request", `"revision": 93`, `"action": "AGENT"`} {
+		if strings.Contains(material.Prompt, identity) {
+			t.Fatal("prompt exposed recovery mechanics", identity)
+		}
+	}
+	after, _ := json.Marshal(material.Input)
+	if !bytes.Equal(before, after) {
+		t.Fatal("prompt projection changed original input")
+	}
+}
+
 func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
 	if err != nil {

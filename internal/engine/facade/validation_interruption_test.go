@@ -1,11 +1,66 @@
 package facade
 
 import (
+	"bytes"
+	"encoding/json"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
+	d := newValidationDriver(t, "blackbox")
+	id, input := d.action("engine.qa.design")
+	for attempt := 0; attempt < 2; attempt++ {
+		manifest := simpleManifest(input)
+		manifest.Edges = nil
+		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+		rejected := driverState(t, d).RejectedResults[id]
+		if rejected.Status != "REJECTED_INVALID_RESULT" || rejected.Payload.Outcome != protocol.OutcomePass || rejected.Reason == "" {
+			t.Fatal("fixture did not produce an original semantic rejection", rejected)
+		}
+		if attempt == 1 {
+			decideValidation(d, d.validationAsk("RETRY"), "approve")
+		}
+		d.drive()
+		previous := id
+		id, input = d.action("engine.qa.design")
+		state := driverState(t, d)
+		if state.Attempts[input.Binding.Task].PreviousAction != previous || input.Interruption == nil || input.Interruption.ActionID != previous || !strings.Contains(input.Interruption.Detail, rejected.Reason) {
+			t.Fatal("retry lost its own rejection feedback", input.Interruption)
+		}
+		refs, err := d.f.workerMaterials(state, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := refs[id]
+		body, err := os.ReadFile(ref.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var material worker.Material
+		if err := json.Unmarshal(body, &material); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(material.Input.Validation.Interruption, input.Interruption) || !strings.Contains(material.Prompt, rejected.Reason) {
+			t.Fatal("material lost original retry feedback")
+		}
+		d.reopen()
+		d.drive()
+		reopened, err := d.f.workerMaterials(driverState(t, d), true)
+		if err != nil || reopened[id] != ref {
+			t.Fatal("reopen changed original retry material", err)
+		}
+		after, err := os.ReadFile(ref.Path)
+		if err != nil || !bytes.Equal(body, after) {
+			t.Fatal("reopen overwrote original retry material", err)
+		}
+	}
+}
 
 func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 	for _, held := range []bool{false, true} {
