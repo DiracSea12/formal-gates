@@ -483,7 +483,7 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if supplied != nil && *supplied != preview.Confirmation {
+	if supplied != nil && (supplied.ReviewActionID != "" || supplied.Digest != "" || supplied.Proposal == nil) && *supplied != preview.Confirmation {
 		return 1, fmt.Errorf("supplied development plan confirmation differs from its exact preview")
 	}
 	if draft.Topology != nil {

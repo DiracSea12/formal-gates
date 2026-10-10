@@ -50,7 +50,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	master := nativeMasterAt(t, root, base, original)
 	intake := driverState(t, master).IntakeConfirmationReceipt
-	passPreDevelopmentReviews(t, master, commandPlan())
+	passPreDevelopmentReviews(t, master, splitCommandPlan())
 	document := validationDocument + "\n"
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
@@ -461,7 +461,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := nativeMasterAt(t, root, base, nil)
-	passPreDevelopmentReviews(t, d, commandPlan())
+	passPreDevelopmentReviews(t, d, splitCommandPlan())
 
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	prepared := prepareChildFrontier(t, d)

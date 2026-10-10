@@ -64,7 +64,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		if input.Validation.Observation == nil {
 			return nil, fmt.Errorf("semantic worker lacks current issued duties")
 		}
-		findings, scopes, impacts := []any{}, []any{}, []any{}
+		findings, scopes, impacts, suggestions := []any{}, []any{}, []any{}, []any{}
 		for _, source := range input.Validation.Observation.Findings {
 			item, err := resultTypeSchema(reflect.TypeOf(FindingJudgment{}))
 			if err != nil {
@@ -100,7 +100,30 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			item["properties"].(map[string]any)["decision"] = map[string]any{"type": "string", "enum": []string{"INHERIT", "RERUN"}}
 			impacts = append(impacts, item)
 		}
-		for name, items := range map[string][]any{"findings": findings, "scopes": scopes, "gateImpacts": impacts} {
+		for _, source := range input.Validation.Observation.Suggestions {
+			item, err := resultTypeSchema(reflect.TypeOf(SuggestionJudgment{}))
+			if err != nil {
+				return nil, err
+			}
+			item["description"] = "Judge only this issued optional QA suggestion: " + source.Suggestion.ID
+			properties := item["properties"].(map[string]any)
+			properties["decision"] = map[string]any{"type": "string", "enum": []string{"ACCEPT", "DEFER", "DECLINE"}}
+			cases := []string{}
+			for _, entry := range source.Manifest.Cases {
+				cases = append(cases, entry.CaseID)
+			}
+			properties["affectedCases"].(map[string]any)["items"] = map[string]any{"type": "string", "enum": cases}
+			suggestions = append(suggestions, item)
+		}
+		if len(suggestions) == 0 {
+			delete(fields, "suggestions")
+		} else {
+			body["required"] = append(body["required"].([]any), "suggestions")
+		}
+		for name, items := range map[string][]any{"findings": findings, "scopes": scopes, "gateImpacts": impacts, "suggestions": suggestions} {
+			if name == "suggestions" && len(items) == 0 {
+				continue
+			}
 			fields[name] = map[string]any{"type": "array", "prefixItems": items, "items": false, "minItems": len(items), "maxItems": len(items)}
 		}
 		return body, nil

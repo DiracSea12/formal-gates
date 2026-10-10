@@ -982,6 +982,12 @@ func canaryLocalPlan(split bool) *protocol.GranularityReview {
 	plan := &protocol.GranularityReview{Reason: "independent declared artifacts", VerificationTier: "FINAL"}
 	if split {
 		plan.Batches = []protocol.DevelopmentBatch{batch("uppercase", "uppercase.go", "UpperWord returns Unicode uppercase including empty input"), batch("word-size", "size.go", "WordSize returns UTF-8 byte length including empty input")}
+		for i := range plan.Batches {
+			plan.Batches[i].Owner = plan.Batches[i].ID
+		}
+		integrated := batch("integration", "main.go", "The integrated command satisfies the confirmed acceptance conditions")
+		integrated.Owner = "master-merge"
+		plan.Batches = append(plan.Batches, integrated)
 	} else {
 		plan.Batches = []protocol.DevelopmentBatch{batch("usage", "analytics.go", "usage prints the byte count and main invokes it")}
 	}

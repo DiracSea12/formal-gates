@@ -21,6 +21,7 @@ type GranularityReview struct {
 	CheckpointReason string             `json:"checkpointReason,omitempty"`
 }
 type DevelopmentBatch struct {
+	Owner         string                 `json:"owner,omitempty"`
 	Route         *RouteDecision         `json:"route,omitempty"`
 	ID            string                 `json:"id"`
 	Subtasks      []DevelopmentSubtask   `json:"subtasks"`
@@ -89,12 +90,10 @@ func (s *State) DevelopmentStarted() bool {
 type DevelopmentPlanConfirmation struct {
 	ReviewActionID string `json:"reviewActionId"`
 	Digest         string `json:"digest"`
-	// Proposal 是 child run 的片内开发计划内联提案：child 的整体粒度审随
-	// master 继承、无自身 readiness 候选可引用，片内计划随路线决定一并产
-	// 生并经同一次用户决定确认（ADR-002 决策 1「显式批次计划在拆分决定
-	// 与路线确认时一并产生、经同一次用户决定确认并留痕」）。携带
-	// Proposal 时 ReviewActionID 必空、Digest 必等于提案内容摘要；普通
-	// run 不携带（计划经 ReviewActionID 引用 readiness 提案）。
+	// Proposal carries the child's inline execution contract, projected from
+	// the confirmed master's explicit owners or supplied for route confirmation.
+	// Children inherit readiness and have no local review candidate to reference.
+	// ReviewActionID is empty and Digest binds the exact proposal contents.
 	Proposal *GranularityReview `json:"proposal,omitempty"`
 }
 
@@ -117,7 +116,7 @@ func GranularityVerificationTiers() []string { return []string{"", "FINAL", "CHE
 
 // GranularityResultContract describes the existing proposal admission rules.
 func GranularityResultContract() string {
-	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. Check purpose is empty, FULL_BUILD or FULL_TESTS. The confirmed project plan requires at least one FULL_BUILD and one FULL_TESTS command covering the complete project; purpose is an explicit approved meaning, never inferred from command text. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
+	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. Check purpose is empty, FULL_BUILD or FULL_TESTS. The confirmed project plan requires at least one FULL_BUILD and one FULL_TESTS command covering the complete project; purpose is an explicit approved meaning, never inferred from command text. A proposed split assigns every batch an explicit owner naming a proposed slice or master-merge. These proposed slice identifiers are displayed in the original readiness plan and must match the topology identifiers the user confirms; never guess a future topology identifier. Each slice's batches must form a complete independently executable plan, with its own FULL_BUILD and FULL_TESTS checks and no dependencies on another owner. master-merge batches separately carry complete integrated project checks. Omit owner for an unsplit plan. The program projects the original batches by owner; it never guesses ownership from names, paths or commands. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
 }
 
 // ValidateGranularity checks the shared development-plan contract for readiness
@@ -134,6 +133,9 @@ func ValidateGranularity(p *GranularityReview) error {
 	for i, b := range p.Batches {
 		if b.ID == "" {
 			return validationError("batch ID is required")
+		}
+		if b.Owner != "" && !validSliceID(b.Owner) {
+			return validationError("batch owner must name a slice or the master merge scope")
 		}
 		if _, ok := ids[b.ID]; ok {
 			return validationError("duplicate batch ID")
@@ -287,8 +289,7 @@ func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) 
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
 	id, p := s.readinessProposal()
 	if s.SliceChild != nil {
-		// child 的片内计划取自决定载荷的内联提案（宿主从 master 继承的整
-		// 体粒度审派生），无自身 readiness 候选。
+		// Child route confirmation carries its exact inline proposal.
 		if route.DevelopmentPlan == nil {
 			return nil, validationError("a slice child route must carry its slice development plan")
 		}
@@ -297,7 +298,11 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 	if err := ValidateGranularity(p); err != nil {
 		return nil, err
 	}
-	if err := ValidateProjectChecks(p); err != nil {
+	checks := p
+	if s.mergeMaster() {
+		checks = masterDevelopmentPlan(p)
+	}
+	if err := ValidateProjectChecks(checks); err != nil {
 		return nil, err
 	}
 	preview := &DevelopmentPlanPreview{Proposal: *p}
@@ -340,7 +345,83 @@ func (s *State) splitPlanPreview(cd *compiler.CompiledDefinition, topology Topol
 	projected := *s
 	projected.Topology = binding
 	projected.RouteMode = routeModeMerge
+	_, proposal := projected.readinessProposal()
+	if err := projected.validateSplitPlan(proposal); err != nil {
+		return nil, err
+	}
 	return projected.developmentPlanPreview(cd, RouteDecision{Mode: routeModeMerge, Gates: mergeRouteGates()})
+}
+
+// SliceDevelopmentPlan projects only the original confirmed master's ownership.
+// Route confirmation remains the child's execution-contract authority.
+func (s *State) SliceDevelopmentPlan(sliceID string) (*GranularityReview, error) {
+	_, proposal, _ := s.confirmedDevelopmentPlan()
+	return s.sliceDevelopmentPlan(proposal, sliceID)
+}
+
+func (s *State) sliceDevelopmentPlan(proposal *GranularityReview, owner string) (*GranularityReview, error) {
+	if s.Topology == nil || !slices.Contains(s.Topology.Slices, owner) || proposal == nil {
+		return nil, validationError("slice development plan needs its confirmed topology and master proposal")
+	}
+	projected := *proposal
+	projected.Batches = nil
+	selected := map[string]bool{}
+	for _, batch := range proposal.Batches {
+		if batch.Owner == owner {
+			projected.Batches = append(projected.Batches, batch)
+			selected[batch.ID] = true
+		}
+	}
+	projected.CheckpointGroups = nil
+	for _, group := range proposal.CheckpointGroups {
+		var members []string
+		for _, id := range group {
+			if selected[id] {
+				members = append(members, id)
+			}
+		}
+		if len(members) != 0 {
+			projected.CheckpointGroups = append(projected.CheckpointGroups, members)
+		}
+	}
+	if err := ValidateGranularity(&projected); err != nil {
+		return nil, err
+	}
+	if err := ValidateProjectChecks(&projected); err != nil {
+		return nil, err
+	}
+	return &projected, nil
+}
+
+func (s *State) validateSplitPlan(proposal *GranularityReview) error {
+	if proposal == nil {
+		return validationError("split topology requires the readiness development plan")
+	}
+	for _, batch := range proposal.Batches {
+		if batch.Owner != masterMergeOwner && !slices.Contains(s.Topology.Slices, batch.Owner) {
+			return validationError("split batch requires an explicit confirmed owner: " + batch.ID)
+		}
+	}
+	for _, owner := range s.Topology.Slices {
+		if _, err := s.sliceDevelopmentPlan(proposal, owner); err != nil {
+			return validationError(fmt.Sprintf("slice %s: %v", owner, err))
+		}
+	}
+	return ValidateProjectChecks(masterDevelopmentPlan(proposal))
+}
+
+func masterDevelopmentPlan(proposal *GranularityReview) *GranularityReview {
+	if proposal == nil || !slices.ContainsFunc(proposal.Batches, func(batch DevelopmentBatch) bool { return batch.Owner != "" }) {
+		return proposal
+	}
+	projected := *proposal
+	projected.Batches = nil
+	for _, batch := range proposal.Batches {
+		if batch.Owner == masterMergeOwner {
+			projected.Batches = append(projected.Batches, batch)
+		}
+	}
+	return &projected
 }
 
 func (e *Engine) DevelopmentPlan(route RouteDecision, topology ...TopologyDecision) (*DevelopmentPlanPreview, error) {
@@ -834,6 +915,9 @@ func ValidateProjectChecks(p *GranularityReview) error {
 
 func (s *State) fullProjectChecks() []DevelopmentCheck {
 	_, p, _ := s.confirmedDevelopmentPlan()
+	if s.mergeMaster() {
+		p = masterDevelopmentPlan(p)
+	}
 	if p == nil {
 		return nil
 	}

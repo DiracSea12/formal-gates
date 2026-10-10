@@ -21,7 +21,7 @@ import (
 func splitMasterDriver(t *testing.T) *validationDriver {
 	t.Helper()
 	d := nativeMasterDriver(t)
-	passPreDevelopmentReviews(t, d, commandPlan())
+	passPreDevelopmentReviews(t, d, splitCommandPlan())
 	d.drive()
 	return d
 }

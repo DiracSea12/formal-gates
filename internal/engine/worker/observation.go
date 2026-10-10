@@ -9,9 +9,15 @@ import (
 )
 
 type ObservationJudgments struct {
-	Findings    []FindingJudgment `json:"findings"`
-	Scopes      []ScopeJudgment   `json:"scopes"`
-	GateImpacts []ImpactJudgment  `json:"gateImpacts"`
+	Findings    []FindingJudgment    `json:"findings"`
+	Scopes      []ScopeJudgment      `json:"scopes"`
+	GateImpacts []ImpactJudgment     `json:"gateImpacts"`
+	Suggestions []SuggestionJudgment `json:"suggestions,omitempty"`
+}
+type SuggestionJudgment struct {
+	Decision      string   `json:"decision"`
+	Reason        string   `json:"reason"`
+	AffectedCases []string `json:"affectedCases"`
 }
 type FindingJudgment struct {
 	Decision          string                     `json:"decision"`
@@ -36,7 +42,7 @@ type ImpactJudgment struct {
 }
 
 func assembleObservations(input *protocol.ObservationInput, judgments *ObservationJudgments) ([]protocol.OperatorObservationPayload, error) {
-	if input == nil || judgments.Findings == nil || judgments.Scopes == nil || judgments.GateImpacts == nil || len(judgments.Findings) != len(input.Findings) || len(judgments.Scopes) != len(input.Scopes) || len(judgments.GateImpacts) != len(input.GateImpacts) {
+	if input == nil || judgments.Findings == nil || judgments.Scopes == nil || judgments.GateImpacts == nil || len(judgments.Findings) != len(input.Findings) || len(judgments.Scopes) != len(input.Scopes) || len(judgments.GateImpacts) != len(input.GateImpacts) || len(judgments.Suggestions) != len(input.Suggestions) {
 		return nil, fmt.Errorf("semantic judgment must cover exactly every issued duty")
 	}
 	observations := []protocol.OperatorObservationPayload{}
@@ -79,6 +85,10 @@ func assembleObservations(input *protocol.ObservationInput, judgments *Observati
 	for index, source := range input.GateImpacts {
 		value := judgments.GateImpacts[index]
 		appendObservation(protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: source.Gate, Decision: value.Decision, Reason: value.Reason})
+	}
+	for index, source := range input.Suggestions {
+		value := judgments.Suggestions[index]
+		appendObservation(protocol.ValidationObservation{Kind: "SUGGESTION", Mode: source.Mode, SuggestionID: source.Suggestion.ID, Decision: value.Decision, Reason: value.Reason, AffectedCases: value.AffectedCases})
 	}
 	return observations, nil
 }

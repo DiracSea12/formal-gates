@@ -152,7 +152,10 @@ spawn、result、lifecycle 和 HostAction receipt 绑定同一 action、provider
 已释放的分片沿各自原 run 消费同一条程序路径，父流程收取原分片收据，合并后集中 QA。
 子流程的实际 Ask 连同原 requestId、选项和原因展示在父输出 children 中，用户仍决定
 子流程路线或实际无法推进的处置。技术准备审的已接受原计划直接展示在 review.readinessProposal，
-确认时审阅该完整计划及原 revision，不重新抄写计划摘要。
+确认时审阅该完整计划及原 revision，不重新抄写计划摘要。拆分计划的 batch.owner
+明确提出分片标识或主线合并职责；拓扑确认采用这些原标识，程序逐片验证其完整检查和
+片内依赖，再从原已确认计划投影 child 的路线确认载荷。子计划摘要与确认字段由程序
+产生，主线完整验证只采用主线职责的检查，child 不新增技术审或 QA。
 
 ## 开发之前
 

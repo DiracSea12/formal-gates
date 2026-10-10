@@ -4,9 +4,71 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func ownedDevelopmentPlan() *GranularityReview {
+	plan := plannedReviewEvidence(review.StartReadiness, "ready", "", "PASS", "complete", nil).GranularityReview
+	first := plan.Batches[0]
+	plan.Batches = nil
+	for _, owner := range []string{"core", "tooling", masterMergeOwner} {
+		batch := first
+		batch.ID, batch.Owner = owner, owner
+		batch.Subtasks = []DevelopmentSubtask{{ID: owner, Description: "Deliver the confirmed responsibility of " + owner}}
+		batch.Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Command: "build " + owner}, {ID: "test", Purpose: CheckFullTests, Command: "test " + owner}}
+		plan.Batches = append(plan.Batches, batch)
+	}
+	return plan
+}
+
+func TestSplitPlansPreserveExplicitOwnersAndCompleteChecks(t *testing.T) {
+	plan := ownedDevelopmentPlan()
+	state := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"accepted": {Review: &ReviewResultEvidence{GranularityReview: plan}}, "unconfirmed": {Review: &ReviewResultEvidence{GranularityReview: ownedDevelopmentPlan()}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "accepted"}}}}}}
+	state.Results["unconfirmed"].Review.GranularityReview.Batches[0].Checks[1].Command = "unconfirmed command"
+	if err := state.validateSplitPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := state.SliceDevelopmentPlan("core")
+	if err != nil || len(projection.Batches) != 1 || !reflect.DeepEqual(projection.Batches[0], plan.Batches[0]) {
+		t.Fatal("slice projection did not preserve the confirmed creator's exact contract", projection, err)
+	}
+	checks := state.fullProjectChecks()
+	if len(checks) != 2 || checks[0].Command != plan.Batches[2].Checks[0].Command {
+		t.Fatal("master complete verification included child-purpose commands")
+	}
+	state.RouteMode, state.Topology = "full", &TopologyBinding{Decision: "no-split"}
+	if len(state.fullProjectChecks()) != 6 {
+		t.Fatal("unsplit project lost approved commands because a proposal carried owners")
+	}
+}
+
+func TestSplitPlansRejectMissingOrCrossOwnerContracts(t *testing.T) {
+	for _, input := range []struct {
+		name   string
+		change func(*GranularityReview)
+	}{
+		{"missing-owner", func(p *GranularityReview) { p.Batches[0].Owner = "" }},
+		{"unknown-owner", func(p *GranularityReview) { p.Batches[0].Owner = "other" }},
+		{"missing-slice-tests", func(p *GranularityReview) { p.Batches[0].Checks[1].Purpose = "" }},
+		{"missing-master-tests", func(p *GranularityReview) { p.Batches[2].Checks[1].Purpose = "" }},
+		{"cross-owner-dependency", func(p *GranularityReview) { p.Batches[1].DependsOn = []string{p.Batches[0].ID} }},
+		{"insufficient-checkpoint-groups", func(p *GranularityReview) {
+			p.VerificationTier, p.CheckpointReason = "CHECKPOINT", "independent deliveries"
+			p.CheckpointGroups = [][]string{{"core"}, {"tooling", masterMergeOwner}}
+		}},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			plan := ownedDevelopmentPlan()
+			input.change(plan)
+			state := State{Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}}
+			if err := state.validateSplitPlan(plan); err == nil {
+				t.Fatal("incomplete owner contract accepted for split confirmation")
+			}
+		})
+	}
+}
 
 func TestProjectVerificationPurposesRequireApprovedMeaning(t *testing.T) {
 	base := plannedReviewEvidence(review.StartReadiness, "readiness", "", "PASS", "complete verification", nil).GranularityReview

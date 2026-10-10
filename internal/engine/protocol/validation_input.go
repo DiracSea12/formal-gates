@@ -97,6 +97,13 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	}
 	if role == "engine.validation.observation" {
 		input.Observation = s.validationObservationInput()
+		if input.Observation != nil {
+			for i := range input.Observation.Suggestions {
+				suggestion := &input.Observation.Suggestions[i]
+				resource := s.taskResource(s.Validation.Sets[suggestion.Mode].DesignTask, cd)
+				suggestion.Workspace = &resource
+			}
+		}
 		return input
 	}
 	if role == "engine.gate" {

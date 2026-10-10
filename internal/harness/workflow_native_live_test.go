@@ -312,7 +312,7 @@ func runAutomaticNativeFlow(t *testing.T, packageRoot, provider, topology string
 	c.initFixtureRepository(filepath.Join(home, "repositories"))
 	plan := "单一内聚开发批次实现两函数，公开命令是唯一交付物；不拆分。最终由 engine 签发黑盒、白盒和所选质量门。"
 	if split {
-		plan = "两个独立开发批次分别只修改 app.py 的 upper_word 与 size.py 的 word_size。两个既有函数签名及 CLI 接线不变，彼此无实现依赖；uppercase 片承担 AC-001，word-size 片承担 AC-002，master-merge 承担组合 AC-003 和 flag AC-004。child 不执行普通黑盒/白盒 QA，合并后由主线集中执行 MERGE QA 和适用门。"
+		plan = "两个独立开发批次分别只修改 app.py 的 upper_word 与 size.py 的 word_size。两个既有函数签名及 CLI 接线不变，彼此无实现依赖；app.py 所在片承担 AC-001，size.py 所在片承担 AC-002，分片标识由原技术准备审提出，master-merge 承担组合 AC-003 和 flag AC-004。各片的原函数检查须明确承担该片完整测试，使用 FULL_TESTS；完整构建检查使用 FULL_BUILD。child 不执行普通黑盒/白盒 QA，合并后由主线集中执行 MERGE QA 和适用门。"
 	}
 	c.doc = []byte(fmt.Sprintf(nativeCommandRequirement, plan))
 	for name, body := range map[string]string{"app.py": nativeCommandSource, "size.py": "def word_size(word):\n    return 0\n", "requirements.md": string(c.doc), ".gitignore": ".gates/\n.zcode/\nAGENTS.md\n__pycache__/\n"} {
@@ -486,7 +486,7 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 	case protocol.ControlConfirmTopology:
 		topology := &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command and its two existing functions"}
 		if f.split {
-			topology = canarySplitTopologyPointer()
+			topology = f.splitTopology(run.Review.ReadinessProposal)
 		}
 		payload.Topology, choice = topology, protocol.AskOptionID(topology.Decision)
 	case protocol.ControlSelectRoute:
@@ -500,37 +500,13 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 					slice = name
 				}
 			}
-			if slice == "word-size" {
+			if master.Review.Topology != nil && slice == master.Review.Topology.ACOwners["AC-002"] {
 				route.Mode = "custom"
 				if !slices.Contains(route.Gates, "implementation-quality-gate") {
 					f.t.Fatal("declared custom gate is absent from original route candidates")
 				}
 				route.Selected = []string{"implementation-quality-gate"}
 			}
-			if master.Review.ReadinessProposal == nil {
-				f.t.Fatal("child lost the original accepted master proposal")
-			}
-			proposal := *master.Review.ReadinessProposal
-			proposal.Batches = nil
-			artifact := map[string]string{"uppercase": "app.py", "word-size": "size.py"}[slice]
-			for _, batch := range master.Review.ReadinessProposal.Batches {
-				if slices.Contains(batch.Artifacts, artifact) {
-					proposal.Batches = append(proposal.Batches, batch)
-				}
-			}
-			if len(proposal.Batches) != 1 {
-				f.t.Fatal("original accepted master plan does not assign one batch to this declared slice")
-			}
-			route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: &proposal}
-			owner, err := facade.Open(f.project, run.RunID)
-			if err != nil {
-				f.t.Fatal(err)
-			}
-			preview, err := owner.DevelopmentPlan(*route)
-			if err != nil {
-				f.t.Fatal(err)
-			}
-			route.DevelopmentPlan = &preview.Confirmation
 		}
 		payload.Route, choice = route, protocol.AskOptionID(route.Mode)
 	default:
@@ -566,10 +542,29 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 	f.requireUnblocked(response)
 }
 
-func canarySplitTopologyPointer() *protocol.TopologyDecision {
-	topology := canarySplitTopology()
-	topology.ACOwners = append(topology.ACOwners, protocol.ACOwner{AC: "AC-004", Owner: "master-merge"})
-	return &topology
+func (f *automaticNativeFlow) splitTopology(plan *protocol.GranularityReview) *protocol.TopologyDecision {
+	f.t.Helper()
+	if plan == nil {
+		f.t.Fatal("original readiness proposal is required for topology confirmation")
+	}
+	owners := map[string]string{}
+	for _, batch := range plan.Batches {
+		if batch.Owner == "master-merge" {
+			continue
+		}
+		for _, path := range batch.Artifacts {
+			if path == "app.py" || path == "size.py" {
+				if batch.Owner == "" || owners[path] != "" && owners[path] != batch.Owner {
+					f.t.Fatal("original proposed ownership is missing or ambiguous", path)
+				}
+				owners[path] = batch.Owner
+			}
+		}
+	}
+	if owners["app.py"] == "" || owners["size.py"] == "" || owners["app.py"] == owners["size.py"] {
+		f.t.Fatal("original plan does not propose the confirmed two independent function owners")
+	}
+	return &protocol.TopologyDecision{Decision: "split", SplitCount: 2, Slices: []string{owners["app.py"], owners["size.py"]}, Parallel: "independent functions and concurrent merge case preparation", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: owners["app.py"]}, {AC: "AC-002", Owner: owners["size.py"]}, {AC: "AC-003", Owner: "master-merge"}, {AC: "AC-004", Owner: "master-merge"}}}
 }
 
 func (f *automaticNativeFlow) assertTerminal(base string) {

@@ -18,6 +18,14 @@ type ObservationInput struct {
 	Problems    []ValidationProblem          `json:"problems,omitempty"`
 	Scopes      []ObservationScope           `json:"scopes,omitempty"`
 	GateImpacts []ObservationGateImpact      `json:"gateImpacts,omitempty"`
+	Suggestions []ObservationSuggestion      `json:"suggestions,omitempty"`
+}
+type ObservationSuggestion struct {
+	Mode       coverage.ReviewKind         `json:"mode"`
+	Suggestion QASuggestion                `json:"suggestion"`
+	Manifest   coverage.AcceptanceManifest `json:"manifest"`
+	Review     coverage.ReviewResult       `json:"review"`
+	Workspace  *NativeResource             `json:"workspace,omitempty"`
 }
 type ObservationFinding struct {
 	Finding     ValidationFinding          `json:"finding"`
@@ -44,8 +52,31 @@ func (s *State) validationObservationInput() *ObservationInput {
 	if s.Validation == nil || s.requirementChangePending() || s.abortRequested() {
 		return nil
 	}
+	suggestions := &ObservationInput{}
+	approved := true
+	for _, mode := range s.validationKinds() {
+		if s.caseSetWaiver(mode) != "" {
+			continue
+		}
+		set := s.Validation.Sets[mode]
+		if set == nil || set.Review == nil || set.Review.Verdict() != coverage.StatusPass {
+			approved = false
+			break
+		}
+		for _, suggestion := range set.Suggestions {
+			if suggestion.Decision == "" {
+				suggestions.Suggestions = append(suggestions.Suggestions, ObservationSuggestion{Mode: mode, Suggestion: suggestion, Manifest: set.Manifest, Review: *set.Review})
+			}
+		}
+	}
+	if approved && len(suggestions.Suggestions) > 0 {
+		return suggestions
+	}
 	wave := s.currentValidationWave()
-	if wave == nil || wave.Generation != s.Validation.Generation || wave.RouteDigest != s.validationRouteDigest() {
+	if wave == nil {
+		return nil
+	}
+	if wave.Generation != s.Validation.Generation || wave.RouteDigest != s.validationRouteDigest() {
 		return nil
 	}
 	input := &ObservationInput{WaveID: wave.ID, Candidate: wave.Candidate}
@@ -130,7 +161,7 @@ func (e *Engine) acceptWorkerObservations(s *State, record WorkerResult, nextRev
 	if input == nil || s.sourceValidationTask(record.Validation.Binding.Task) != observationTask(e.cfg.Definition, input) {
 		return validationError("semantic observation differs from the current frozen duties")
 	}
-	expected := len(input.Scopes) + len(input.GateImpacts)
+	expected := len(input.Scopes) + len(input.GateImpacts) + len(input.Suggestions)
 	if len(input.Findings) > 0 {
 		expected++
 	}
@@ -166,6 +197,11 @@ func (e *Engine) acceptWorkerObservations(s *State, record WorkerResult, nextRev
 			key += ":" + o.Gate
 			if !slices.ContainsFunc(input.GateImpacts, func(v ObservationGateImpact) bool { return v.Gate == o.Gate }) {
 				return validationError("gate impact was not issued")
+			}
+		case "SUGGESTION":
+			key += ":" + string(o.Mode) + ":" + o.SuggestionID
+			if !slices.ContainsFunc(input.Suggestions, func(v ObservationSuggestion) bool { return v.Mode == o.Mode && v.Suggestion.ID == o.SuggestionID }) {
+				return validationError("QA suggestion was not issued")
 			}
 		default:
 			return validationError("semantic worker cannot authorize this observation kind")

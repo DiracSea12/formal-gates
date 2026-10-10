@@ -444,10 +444,13 @@ func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *p
 
 // passPreDevelopmentReviews 完成两条开发前审查系列的 PASS 轮（产品审→
 // start-readiness，后者携结构化粒度计划），驱动至拓扑确认起点。
-func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol.GranularityReview) {
+func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol.GranularityReview, actions ...review.Action) {
 	t.Helper()
 	revision := d.revision
-	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
+	if len(actions) == 0 {
+		actions = []review.Action{review.ProductReview, review.StartReadiness}
+	}
+	for _, action := range actions {
 		id := ""
 		for key, pending := range d.run.PendingActions {
 			if pending.ReviewSeries == action {

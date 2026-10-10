@@ -32,7 +32,7 @@ func receiptMaster(t *testing.T, owner ...OwnerBinding) *validationDriver {
 	t.Helper()
 	d := nativeMasterDriver(t)
 	meterReceiptDispatches(d, 3, 9, 4)
-	passPreDevelopmentReviews(t, d, commandPlan())
+	passPreDevelopmentReviews(t, d, splitCommandPlan())
 
 	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	if len(owner) != 0 {

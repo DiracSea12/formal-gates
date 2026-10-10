@@ -459,6 +459,9 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		}
 		for _, binding := range state.DispatchBindings {
 			if state.sourceValidationTask(binding.Task) == source {
+				if binding.WaveID == "" && binding.RouteScope != "" {
+					return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: binding.RouteScope}}, maxAttempts, true
+				}
 				if wave := state.validationWave(binding.WaveID); wave != nil && wave.Candidate.Identity == binding.Candidate {
 					return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
 				}

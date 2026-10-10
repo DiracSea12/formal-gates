@@ -45,7 +45,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		t.Fatal(err)
 	}
 	master := nativeMasterAt(t, root, base, nil)
-	passPreDevelopmentReviews(t, master, commandPlan())
+	passPreDevelopmentReviews(t, master, splitCommandPlan("parser", "command", "tooling"))
 
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})

@@ -201,6 +201,9 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		return s.taskResource(set.DesignTask, cd)
 	case "engine.validation.observation":
 		if input := s.validationObservationInput(); input != nil {
+			if len(input.Suggestions) > 0 {
+				return s.taskResource(s.Validation.Sets[input.Suggestions[0].Mode].DesignTask, cd)
+			}
 			ids := []string{}
 			for id, r := range s.NativeResources {
 				if r.Role == "candidate" && r.Identity == input.Candidate.Identity && r.Status == "READY" && s.resourceUsable(id) {

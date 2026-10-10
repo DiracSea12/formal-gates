@@ -10,6 +10,7 @@ import (
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 	"os"
@@ -678,7 +679,7 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:topology", ImpactDigest: "sha256:affected-slice", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoTopology: true, Children: choices, Impact: &protocol.RequirementImpact{ChangedItems: []string{"affected slice boundary"}, TransitiveImpacts: []string{"replacement route"}, CarryReasons: []string{"core evidence and ownership unchanged"}}}
+	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:topology", ImpactDigest: "sha256:affected-slice", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, RedoTopology: true, Children: choices, Impact: &protocol.RequirementImpact{ChangedItems: []string{"affected slice boundary"}, TransitiveImpacts: []string{"replacement route"}, CarryReasons: []string{"core evidence and ownership unchanged"}}}
 	for _, work := range master.run.RequirementWork {
 		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master obligation"})
 	}
@@ -688,8 +689,15 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 	}
 	master.submit(request)
 	ask := master.run.PendingRequirementAsk
-	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route"}}})
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoStartReadiness: pkg.RedoStartReadiness, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route and its development plan"}}})
 	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	master.revision = revision
+	master.drive()
+	passPreDevelopmentReviews(t, master, splitCommandPlan("lane-core", "lane-io"), review.StartReadiness)
+	current := driverState(t, master)
+	if !reflect.DeepEqual(current.ReviewSeries.ProductReview, before.ReviewSeries.ProductReview) || current.ReviewSeries.StartReadiness.Completed != before.ReviewSeries.StartReadiness.Completed+1 {
+		t.Fatal("owner plan revision reran product review or omitted the explicitly authorized fresh technical review")
+	}
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
 	topology.Slices[1] = "lane-io"
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})

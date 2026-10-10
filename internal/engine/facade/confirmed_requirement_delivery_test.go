@@ -39,7 +39,7 @@ func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validation
 		t.Fatal(err)
 	}
 	d := nativeMasterAt(t, root, base, nil)
-	passPreDevelopmentReviews(t, d, commandPlan())
+	passPreDevelopmentReviews(t, d, splitCommandPlan())
 	originalIntake := driverState(t, d).IntakeConfirmationReceipt
 	if currentDocument != validationDocument {
 		if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(currentDocument), 0600); err != nil {

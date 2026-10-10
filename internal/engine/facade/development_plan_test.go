@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +19,21 @@ func commandPlan() *protocol.GranularityReview {
 }
 func commandCompletion() *protocol.DevelopmentCompletion {
 	return &protocol.DevelopmentCompletion{DoD: map[string]string{"input-contract": "Implemented valid and invalid public command outcomes"}, Handoff: "Implementation paths and build/test evidence are attached in this result"}
+}
+
+func splitCommandPlan(owners ...string) *protocol.GranularityReview {
+	if len(owners) == 0 {
+		owners = []string{"lane-core", "lane-tooling"}
+	}
+	plan := commandPlan()
+	plan.Batches[0].Owner = owners[0]
+	for _, owner := range append(owners[1:], "master-merge") {
+		batch := commandPlan().Batches[0]
+		batch.Owner, batch.ID = owner, owner
+		batch.Subtasks = []protocol.DevelopmentSubtask{{ID: owner, Description: "Verify the documented command contract in this ownership scope"}}
+		plan.Batches = append(plan.Batches, batch)
+	}
+	return plan
 }
 func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 	d.t.Helper()
@@ -532,7 +548,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 
 func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
 	d := nativeMasterDriver(t)
-	passPreDevelopmentReviews(t, d, commandPlan())
+	passPreDevelopmentReviews(t, d, splitCommandPlan())
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
 	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
 	if err != nil {
@@ -593,5 +609,90 @@ func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || string(saved) != string(after) {
 		t.Fatal("duplicate split confirmation rewrote state", err)
+	}
+}
+
+func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
+	master := splitMaster(t)
+	master.drive()
+	parent := driverState(t, master)
+	child, err := Open(master.f.root, parent.SliceChildren["lane-core"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := child.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
+	driver.drive()
+	route := protocol.RouteDecision{Mode: "full", Gates: []string{"gate.quality"}}
+	before, err := os.ReadFile(filepath.Join(child.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := child.DevelopmentPlan(route)
+	if err != nil || len(preview.Proposal.Batches) != 1 || !reflect.DeepEqual(preview.Proposal.Batches[0], splitCommandPlan().Batches[0]) {
+		t.Fatal("released child did not project its confirmed creator contract", preview, err)
+	}
+	after, err := os.ReadFile(filepath.Join(child.stateDir, "state.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("read-only automatic slice preview changed authority", err)
+	}
+	route.DevelopmentPlan = &preview.Confirmation
+	driver.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &route})
+	driver.drive()
+	driver.reopen()
+	id, input := planBatchAction(driver, "command")
+	if id == "" || input.Development == nil || !reflect.DeepEqual(input.Development.Batch, preview.Proposal.Batches[0]) {
+		t.Fatal("normal execution and reopen lost the exact automatically projected slice plan")
+	}
+}
+
+func TestSplitPlanPreviewRejectsUnreadySliceWithoutWrites(t *testing.T) {
+	master := nativeMasterDriver(t)
+	plan := splitCommandPlan()
+	plan.Batches[0].Checks[1].Purpose = ""
+	passPreDevelopmentReviews(t, master, plan)
+	path := filepath.Join(master.f.stateDir, "state.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = master.f.DevelopmentPlan(protocol.RouteDecision{}, *splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}))
+	if err == nil || !strings.Contains(err.Error(), protocol.CheckFullTests) {
+		t.Fatal("incomplete slice verification passed prospective split admission", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) || len(driverState(t, master).SliceChildren) != 0 {
+		t.Fatal("rejected split preview wrote authority or released children", err)
+	}
+	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(request)
+	var token string
+	for _, ask := range master.run.PendingAsks {
+		if ask.RequestID == string(request.ID) {
+			token = ask.Token
+		}
+	}
+	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
+	topology.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{ReviewActionID: "readiness", Digest: "sha256:unconfirmed"}
+	event, err := protocol.NewReviewDecideEvent(master.eventID(), protocol.RequestID(request.ID), token, "split", protocol.ReviewDecisionPayload{Topology: topology})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := master.f.Submit(event); err == nil || !strings.Contains(err.Error(), protocol.CheckFullTests) {
+		t.Fatal("direct split decision bypassed complete slice verification", err)
+	}
+	after, err = os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("rejected direct split decision changed authority", err)
 	}
 }

@@ -625,7 +625,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 		for _, lost := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
 				master, runner := startNativeProviderDriver(t, name)
-				passPreDevelopmentReviews(t, master, commandPlan())
+				passPreDevelopmentReviews(t, master, splitCommandPlan("core", "tooling"))
 
 				topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 2, Parallel: "independent command modules"}
 				master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})

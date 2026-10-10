@@ -2388,6 +2388,30 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 
 // DevelopmentPlan projects the exact proposal and bindings for route confirmation.
 func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...protocol.TopologyDecision) (*protocol.DevelopmentPlanPreview, error) {
+	if len(topology) == 0 && route.DevelopmentPlan == nil {
+		snapshot, err := f.engine.Load()
+		if err != nil {
+			return nil, err
+		}
+		if child := snapshot.State.SliceChild; child != nil {
+			parent, err := Open(f.root, child.MasterRunID)
+			if err != nil {
+				return nil, err
+			}
+			origin, err := parent.engine.Load()
+			if err != nil {
+				return nil, err
+			}
+			if origin.State.SliceChildren[child.SliceID] != f.runID {
+				return nil, fmt.Errorf("slice plan belongs to another parent release")
+			}
+			proposal, err := origin.State.SliceDevelopmentPlan(child.SliceID)
+			if err != nil {
+				return nil, err
+			}
+			route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: proposal}
+		}
+	}
 	return f.engine.DevelopmentPlan(route, topology...)
 }
 

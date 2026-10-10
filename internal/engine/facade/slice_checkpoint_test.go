@@ -29,7 +29,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 	t.Helper()
 	master := nativeMasterDriver(t)
 	base := master.run.BaseSnapshot
-	passPreDevelopmentReviews(t, master, commandPlan())
+	passPreDevelopmentReviews(t, master, splitCommandPlan())
 
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	options := sliceChildStart(master, "child", "lane-core", sliceChildReceipt(master.revision))
