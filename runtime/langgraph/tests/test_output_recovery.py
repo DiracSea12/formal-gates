@@ -144,29 +144,26 @@ class NativeInteractionProjection(unittest.TestCase):
         self.assertEqual(projection['status'], 'WAITING_USER')
         self.assertEqual(projection['interrupts'], [])
         self.assertEqual(projection['native_interactions'],
-                         [{'job': 'active-job', 'request_id': 'req-1',
-                           'method': 'interaction/requestPermission',
-                           'summary': 'Bash: run a tool',
-                           'options': [{'optionId': 'allow_once', 'kind': 'allow_once'}]}])
+                         [{'question': 1, 'summary': 'Bash: run a tool',
+                           'options': [{'choice': 1, 'label': 'allow_once'}]}])
 
-    def test_pending_body_is_carried_through_verbatim(self):
-        # The projection passes the saved record through instead of clipping
-        # it to the fixed fields: the permission's toolName/input and the
-        # userInput's prompt/questions stay visible, per-question options
-        # included, in the order the file holds them.
+    def test_pending_view_keeps_semantic_operation_and_numeric_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             job = root / 'jobs' / 'active-job'; job.mkdir(parents=True)
             atomic(job / 'interaction-pending.json', [self.PERMISSION, self.QUESTIONS])
             projection = self.projected(root)
         permission, questions = projection['native_interactions']
-        self.assertEqual(permission['toolName'], 'Bash')
-        self.assertEqual(permission['input'], {'command': 'printf hello > result.txt'})
-        self.assertEqual(questions['prompt'], 'Pick the next step')
-        self.assertEqual([q['question'] for q in questions['questions']],
-                         ['Which keeper?', 'Add a note?'])
+        self.assertEqual(permission['operation'], {'toolName': 'Bash', 'input': {'command': 'printf hello > result.txt'}})
+        self.assertEqual([q['text'] for q in questions['questions']], ['Which keeper?', 'Add a note?'])
         self.assertEqual(questions['questions'][0]['options'],
-                         [{'label': 'ship'}, {'label': 'hold'}])
+                         [{'choice': 1, 'label': 'ship', 'description': None},
+                          {'choice': 2, 'label': 'hold', 'description': None}])
+        for view in projection['native_interactions']:
+            self.assertNotIn('request_id', view)
+            self.assertNotIn('job', view)
+            self.assertNotIn('connection', view)
+            self.assertNotIn('method', view)
 
     def test_without_pending_records_the_projection_is_unchanged(self):
         # No open hold: a job directory whose holds are all resolved projects
@@ -196,8 +193,7 @@ class NativeInteractionProjection(unittest.TestCase):
             projection = self.projected(root, paused=True)
         self.assertEqual(projection['status'], 'WAITING_USER')
         self.assertEqual(len(projection['interrupts']), 1)
-        self.assertEqual([item['job'] for item in projection['native_interactions']],
-                         ['active-job'])
+        self.assertEqual([item['question'] for item in projection['native_interactions']], [1])
 
 
 class TransportAdoption(unittest.TestCase):

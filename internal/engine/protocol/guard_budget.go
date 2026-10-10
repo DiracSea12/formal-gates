@@ -744,17 +744,12 @@ func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision
 		return nil
 	}
 	if attempt.MaxAttempts > 0 {
-		inFlight := 0
-		for _, intent := range s.PendingHostActions {
-			if intent.Operation == HostActionResumeAgent && intent.Resume != nil && intent.Resume.WorkerActionID == workerActionID {
-				inFlight++
-			}
-		}
-		if attempt.Attempts+inFlight+1 >= attempt.MaxAttempts {
+		inFlight, blocked := s.effectRetryBudget(attempt)
+		if blocked {
 			s.ensureDispatchBudgetAsk(pending.Task.String(), nextRevision)
 			return &RejectedError{
 				Code: CodeGuardAllowanceBlocked,
-				Detail: fmt.Sprintf("execution of %s consumed its finite retry budget (%d executions recorded, %d resume in flight, max %d); continue only via a budget disposition authorization",
+				Detail: fmt.Sprintf("execution of %s consumed its finite retry budget (%d executions recorded, %d resume in flight, max %d); use the current typed budget disposition",
 					pending.Task.String(), attempt.Attempts, inFlight, attempt.MaxAttempts),
 			}
 		}
@@ -767,6 +762,17 @@ func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision
 		}
 	}
 	return nil
+}
+
+// effectRetryBudget derives the finite effect boundary from the original attempt
+// and already signed resume intents; offers and execution admission share it.
+func (s *State) effectRetryBudget(attempt Attempt) (inFlight int, blocked bool) {
+	for _, intent := range s.PendingHostActions {
+		if intent.Operation == HostActionResumeAgent && intent.Resume != nil && intent.Resume.WorkerActionID == attempt.ActionID {
+			inFlight++
+		}
+	}
+	return inFlight, attempt.MaxAttempts > 0 && attempt.Attempts+inFlight+1 >= attempt.MaxAttempts
 }
 
 // guardIssuanceGate 返回签发漏斗的 guard 判断（issueInto 在任何落账变更前调

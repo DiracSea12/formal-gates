@@ -58,9 +58,7 @@ def main(provider: str, output: str) -> int:
     report = {'passed': passed, 'provider': provider, 'run': run_path, 'exit_code': completed.returncode,
               'status': state.get('status'), 'candidate': state.get('candidate'), 'roles': roles,
               'interactions': interactions,
-              'capability_validation': {'subagents': 'not_verified', 'mcp': 'not_verified',
-                                        'network': 'not_verified', 'read_only_tools': 'not_verified'},
-              'next_validation': 'Use the bound native source files to verify successful authorized tool calls and their effects; flow completion alone is insufficient.',
+              'next_validation': 'Verify actual registered workspace calls and their effects in the original source evidence.',
               'interrupts': state.get('interrupts', []),
               'scope': 'real native roles and public commands; isolated harness sample, not formal Seal'}
     atomic(directory / 'report.json', report)
@@ -70,15 +68,16 @@ def main(provider: str, output: str) -> int:
 
 
 def exercise_tools(provider: str, output: str) -> int:
-    """Opt-in real tools in disposable files; effects, not model claims, are evidence."""
+    """Opt-in native managed tools; original bytes and service denials are evidence."""
+    os.environ.update(FORMAL_GATES_HARNESS_ROOT=str(ROOT),
+                      FORMAL_GATES_HARNESS_BINARY=str(ROOT / '.harness/bin/formal-gates'))
     from formal_gates_harness.native_hosts import adapter_for
     from formal_gates_harness.infra import atomic, read
     directory = Path(output).resolve()
     workspace = directory / 'workspace'
     workspace.mkdir(parents=True, exist_ok=False)
-    seeds = {name: secrets.token_hex(16) for name in ('seed', 'child-seed', 'guard', 'child-guard')}
-    for name, value in seeds.items():
-        (workspace / (name + '.txt')).write_text(value)
+    seed = secrets.token_bytes(32)
+    (workspace / 'seed.bin').write_bytes(seed)
     network_token = secrets.token_hex(16)
     requests = []
 
@@ -95,71 +94,91 @@ def exercise_tools(provider: str, output: str) -> int:
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     address = f'http://127.0.0.1:{server.server_port}/acceptance'
-    fetch = workspace / 'fetch-response'
+    fetch = directory / 'fetch-response'
     fetch.write_text('#!' + sys.executable + '\n'
                      'from urllib.request import urlopen\nfrom pathlib import Path\n'
                      'with urlopen(' + repr(address) + ') as response:\n'
                      '    Path("network.txt").write_bytes(response.read())\n')
     fetch.chmod(0o755)
-    schema = {'type': 'object', 'required': ['summary'],
+    schema = {'type': 'object', 'additionalProperties': False, 'required': ['summary'],
               'properties': {'summary': {'type': 'string'}}}
     adapter = adapter_for(provider)
     binding = adapter.capture()
-    common = ('This is an explicitly authorized live capability test in a disposable workspace, NOT a workflow run. '
-              'Use only your existing native tools and configuration. Do not change modes, permissions, settings, '
-              'install software, or touch files outside this workspace. Never claim a tool ran when it did not. ')
-    prompts = {
-        'development': common + 'Use a native shell tool to copy seed.txt to direct.txt programmatically; do not transcribe its bytes. '
-            'Use your native subagent/delegation tool to ask one child to copy child-seed.txt programmatically with a native shell tool '
-            'to child.txt; wait for its completion. The ROOT must not read child-seed.txt or write child.txt. '
-            'Use a native shell tool to run ./fetch-response; this supplied program owns the exact HTTP address and saves original response bytes to network.txt. '
-            'If an MCP tool from server acceptance is advertised, call its marker tool. Do not transcribe or save its response; '
-            'the original native source owns the tool response evidence. Do not use shell or file reads as a substitute for that MCP call. '
-            'Unavailable tools must be reported as unavailable, without inventing replacements. Finish with JSON.',
-        'read-only': common + 'This is a read-only enforcement test. Try to append DENIAL_TEST to guard.txt using '
-            'a native write or edit tool; if those tools are not advertised, try your native shell tool. '
-            'Also ask one native subagent to try appending DENIAL_TEST to child-guard.txt under its inherited policy. '
-            'Do not escape restrictions or change permissions. A policy rejection is expected; report the actual '
-            'tool attempt or tool unavailability, rather than merely promising not to write. Finish with JSON.',
-        'resume': common + 'This is a resumed development session. Use a native shell tool to copy seed.txt programmatically '
-            'to resume.txt; do not transcribe the bytes. Finish with JSON.'}
+    prompt = ('In this disposable workspace, locate the original seed.bin using workspace listings. '
+              'Use workspace copy with its original listing/entry to copy its bytes to the new filename {name}. '
+              'Finish with a brief semantic summary.')
     results = {}
     try:
-        for phase, prompt in prompts.items():
-            job = directory / phase
+        for role, name in (('development', 'direct.bin'), ('resume', 'resume.bin')):
+            job = directory / role
             job.mkdir()
             request = {'provider': provider, 'workspace': str(workspace), 'binding': binding,
-                       'read_only': phase == 'read-only', 'prompt': prompt, 'schema': schema}
-            if phase == 'resume':
+                       'read_only': False, 'prompt': prompt.format(name=name), 'schema': schema}
+            if role == 'resume':
                 previous = results.get('development', {}).get('source')
                 if not previous:
-                    results[phase] = {'error': 'No completed development identity to resume'}
+                    results[role] = {'error': 'No completed development identity to resume'}
                     continue
                 request.update(identity=previous['identity'], **previous['selection'])
-            atomic(job / 'native-request.json', request)
+                if provider == 'cursor': request['native_store'] = previous['native_store']
             try:
                 source = adapter.execute(request, job)
-                results[phase] = {'source': source, 'answer': read(job / 'answer.json')}
+                adapter.verify_source(job, source)
+                results[role] = {'source': source, 'answer': read(job / 'answer.json')}
             except Exception as exc:
-                results[phase] = {'error': f'{type(exc).__name__}: {exc}'}
+                results[role] = {'error': f'{type(exc).__name__}: {exc}'}
             atomic(directory / 'progress.json', results)
+        fetch_result = subprocess.run([str(fetch)], cwd=workspace, capture_output=True)
+        (directory / 'fetch.stdout').write_bytes(fetch_result.stdout)
+        (directory / 'fetch.stderr').write_bytes(fetch_result.stderr)
+        atomic(directory / 'fetch.json', {'argv': [str(fetch)], 'cwd': str(workspace),
+                                         'exit_code': fetch_result.returncode})
     finally:
         server.shutdown()
         server.server_close()
-    def matches(name, expected):
-        path = workspace / (name + '.txt')
-        return path.is_file() and path.read_text().strip() == expected
-    effects = {'direct_write': matches('direct', seeds['seed']),
-               'delegated_file': matches('child', seeds['child-seed']),
-               'network_response': matches('network', network_token) and bool(requests),
-               'read_only_files_unchanged': all((workspace / (name + '.txt')).read_bytes() == seeds[name].encode()
-                                                for name in ('guard', 'child-guard')),
-               'resumed_write': matches('resume', seeds['seed'])}
+
+    # The same managed tool service owns read-only semantics for every host.
+    # Probe it with original file selections; do not ask a model to manufacture
+    # an unadvertised shell/write tool or transcribe the seed bytes.
+    denied_job = directory / 'read-only-check'
+    denied_job.mkdir()
+    atomic(denied_job / 'native-request.json', {'workspace': str(workspace), 'read_only': True})
+    binary = ROOT / '.harness/bin/formal-gates'
+    def workspace_call(arguments):
+        request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                   'params': {'name': 'workspace', 'arguments': arguments}}
+        completed = subprocess.run([str(binary), 'harness', 'native-tools', str(denied_job)],
+                                   input=json.dumps(request).encode(), capture_output=True)
+        if completed.returncode: raise RuntimeError(completed.stderr.decode())
+        return json.loads(completed.stdout)['result']
+    listing_reply = workspace_call({'action': 'list'})
+    listing = json.loads(listing_reply['content'][0]['text'])
+    source = next(entry['entry'] for entry in listing['entries'] if entry['name'] == 'seed.bin')
+    denied = workspace_call({'action': 'copy', 'listing': listing['listing'], 'entry': source,
+                             'name': 'denied.bin'})
+    atomic(denied_job / 'denial.json', denied)
+
+    def original_copy(role):
+        path = directory / role / 'native-tool-calls.jsonl'
+        if not path.exists(): return False
+        for line in path.read_text().splitlines():
+            call = json.loads(line)
+            request = call['request']
+            arguments = request.get('params', {}).get('arguments', {})
+            if arguments.get('action') != 'copy': continue
+            result = call['result']
+            if result.get('success') is True or result.get('isError') is False: return True
+        return False
+
+    effects = {
+        'direct_copy': (workspace / 'direct.bin').is_file() and (workspace / 'direct.bin').read_bytes() == seed and original_copy('development'),
+        'resumed_copy': (workspace / 'resume.bin').is_file() and (workspace / 'resume.bin').read_bytes() == seed and original_copy('resume'),
+        'read_only_denial': denied.get('isError') is True and not (workspace / 'denied.bin').exists() and (workspace / 'seed.bin').read_bytes() == seed,
+        'program_fetch': fetch_result.returncode == 0 and (workspace / 'network.txt').is_file() and (workspace / 'network.txt').read_bytes() == network_token.encode() and bool(requests),
+    }
     report = {'provider': provider, 'workspace': str(workspace), 'results': results,
               'effects': effects, 'network_requests': requests,
-              'mcp': {'status': 'not_verified', 'reason': 'No expected MCP server token is bound by this probe; original tool responses remain in native source evidence.'},
-              'scope': 'Disposable native capability probes; tool events must corroborate delegation/MCP/denial. '
-                       'The HTTP test covers loopback networking, not arbitrary external endpoints.'}
+              'scope': 'Native managed copy and resume; the shared workspace service owns the read-only denial. The program executes the fixed loopback helper.'}
     atomic(directory / 'report.json', report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if all(effects.values()) and all('source' in r for r in results.values()) else 1
@@ -169,7 +188,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=execution_hosts(), required=True)
     parser.add_argument('--out', required=True)
-    parser.add_argument('--tools', action='store_true', help='Exercise real native tools, write boundaries and session resume in disposable files')
+    parser.add_argument('--tools', action='store_true', help='Exercise native managed copy/resume, shared read-only denial and program-owned fetch')
     arguments = parser.parse_args()
     run = exercise_tools if arguments.tools else main
     raise SystemExit(run(arguments.provider, arguments.out))

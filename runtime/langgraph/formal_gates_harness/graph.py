@@ -115,7 +115,7 @@ class Flow:
                  checks=self.spec["checks"], gates=self.spec["gates"], project=self.spec["project"], base=self.spec["base"])
         return {"approval": self.revision}
     def pre_review(self, role: str, field: str, state: State):
-        feedback = evidence_feedback(self.store, state["product"], "prior-product-review") if role == "technical-review" and state.get("product") else None
+        feedback = None
         index = 0
         while True:
             ref, result = self.invoke_worker(role, {**state, "round": index}, self.baseline(), feedback)

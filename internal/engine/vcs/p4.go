@@ -337,7 +337,7 @@ func (p *Provider) p4ChangedPaths() ([]string, error) {
 			}
 			logical = filepath.ToSlash(relative)
 		}
-		if !isRuntimeStatusPath(logical) || record["change"] != "" {
+		if !p.isRuntimeStatusPath(logical) || record["change"] != "" {
 			paths = append(paths, logical)
 		}
 	}

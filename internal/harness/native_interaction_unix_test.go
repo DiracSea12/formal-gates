@@ -140,7 +140,7 @@ func TestInteractionDSHAnswerContinuesSameTurn(t *testing.T) {
 	code, errout, directory := runDSHWithAnswerer(t,
 		dshPermissionSteps(`"outcome":"selected"`), "41",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "41", "--option", "allow-once"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)
@@ -172,7 +172,7 @@ func TestInteractionDSHRejectOption(t *testing.T) {
 	code, _, directory := runDSHWithAnswerer(t,
 		dshPermissionSteps(`"optionId":"reject-once"`), "41",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "41", "--option", "reject-once"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 2}, errout)
 		})
 	if code != 0 {
 		t.Fatalf("code = %d", code)
@@ -188,7 +188,7 @@ func TestInteractionDSHCancel(t *testing.T) {
 	code, _, directory := runDSHWithAnswerer(t,
 		dshPermissionSteps(`"outcome":"cancelled"`), "41",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "41", "--cancel"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Cancel: true}, errout)
 		})
 	if code != 0 {
 		t.Fatalf("code = %d", code)
@@ -210,7 +210,7 @@ func TestInteractionDSHDualRequest(t *testing.T) {
 		defer close(done)
 		answerWhenPending(t, scenario.directory, "42", func(errout *bytes.Buffer) int {
 			// Both are pending by now; answer A only.
-			return NativeRespond([]string{"--job", scenario.directory, "--request", "41", "--option", "allow-once"}, errout)
+			return confirmHeldQuestion(t, scenario.directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	}()
 	var errout strings.Builder
@@ -262,7 +262,7 @@ func TestInteractionDSHJobRefusesBadAnswers(t *testing.T) {
 		handAnswer(t, scenario.directory, `{"request_id": "41", "option": "made-up", "cancel": false}`)
 		waitStatusContent(t, scenario.directory, "answer-refused-invalid-choice")
 		var errout bytes.Buffer
-		if code := NativeRespond([]string{"--job", scenario.directory, "--request", "41", "--option", "allow-once"}, &errout); code != 0 {
+		if code := confirmHeldQuestion(t, scenario.directory, 1, nativeSelection{Choice: 1}, &errout); code != 0 {
 			t.Errorf("correct answer refused: %d %s", code, errout.String())
 		}
 	}()
@@ -298,7 +298,7 @@ func TestInteractionDSHMetadataMustNotConfirm(t *testing.T) {
 	steps = append(steps[:3:3], append(extra, steps[3:]...)...)
 	code, _, directory := runDSHWithAnswerer(t, steps, "41",
 		func(directory string, errout *bytes.Buffer) int {
-			code := NativeRespond([]string{"--job", directory, "--request", "41", "--option", "allow-once"}, errout)
+			code := confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 			// The trace records routing only, so the first session/update line
 			// is the metadata one by the script's order.
 			for deadline := time.Now().Add(30 * time.Second); ; {
@@ -395,7 +395,7 @@ func TestInteractionZcodePermissionAnswer(t *testing.T) {
 		`"decision":"allow"`)
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)
@@ -424,7 +424,7 @@ func TestInteractionZcodePermissionCancel(t *testing.T) {
 		`"code":-32021`)
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "req-1", "--cancel"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Cancel: true}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)
@@ -443,12 +443,26 @@ func TestInteractionZcodePermissionCancel(t *testing.T) {
 // answer is the accept action with the chosen value as the single question's
 // answer content, and cancel is the protocol's first-class cancel action.
 func TestInteractionZcodeUserInput(t *testing.T) {
+	t.Run("free text", func(t *testing.T) {
+		frame := zcodeUserInputFrame("server-9", "ui-1", "Explain the choice")
+		frame = strings.Replace(frame, `[{"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}]`, `[]`, 1)
+		steps := zcodeInteractionSteps(frame, `"action":"accept"`)
+		code, errors, scenario := runZcodeWithAnswerer(t, steps, "ui-1", func(directory string, errout *bytes.Buffer) int {
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Responses: []nativeQuestionResponse{{Text: "Original explanation"}}}, errout)
+		})
+		if code != 0 || errors != "" {
+			t.Fatal(code, errors)
+		}
+		if !strings.Contains(readTestFile(t, scenario.echoPath), `{"id":"server-9","result":{"action":"accept","content":{"answer":"Original explanation"}}}`) {
+			t.Fatal("free text did not preserve the native reply shape")
+		}
+	})
 	t.Run("option accept", func(t *testing.T) {
 		steps := zcodeInteractionSteps(zcodeUserInputFrame("server-9", "ui-1", "Proceed?"),
 			`"action":"accept"`)
 		code, errout, scenario := runZcodeWithAnswerer(t, steps, "ui-1",
 			func(directory string, errout *bytes.Buffer) int {
-				return NativeRespond([]string{"--job", directory, "--request", "ui-1", "--option", "yes"}, errout)
+				return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 			})
 		if code != 0 || errout != "" {
 			t.Fatalf("code = %d stderr = %q", code, errout)
@@ -467,7 +481,7 @@ func TestInteractionZcodeUserInput(t *testing.T) {
 			`"action":"cancel"`)
 		code, errout, scenario := runZcodeWithAnswerer(t, steps, "ui-1",
 			func(directory string, errout *bytes.Buffer) int {
-				return NativeRespond([]string{"--job", directory, "--request", "ui-1", "--cancel"}, errout)
+				return confirmHeldQuestion(t, directory, 1, nativeSelection{Cancel: true}, errout)
 			})
 		if code != 0 || errout != "" {
 			t.Fatalf("code = %d stderr = %q", code, errout)
@@ -500,7 +514,7 @@ func TestInteractionZcodeReannounceReAimsFrame(t *testing.T) {
 	}
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
-			return NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)
@@ -541,7 +555,7 @@ func TestInteractionZcodeDualRequest(t *testing.T) {
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "b-2",
 		func(directory string, errout *bytes.Buffer) int {
 			// Both are pending by now; answer A only.
-			return NativeRespond([]string{"--job", directory, "--request", "a-1", "--option", "allow_once"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)
@@ -581,7 +595,7 @@ func TestInteractionZcodeWaitsForUserAndTerminal(t *testing.T) {
 		answerWhenPending(t, scenario.directory, "req-1", func(errout *bytes.Buffer) int {
 			// The host resumes only after this explicit user answer.
 			time.Sleep(100 * time.Millisecond)
-			return NativeRespond([]string{"--job", scenario.directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			return confirmHeldQuestion(t, scenario.directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	}()
 	var errout strings.Builder
@@ -621,7 +635,7 @@ func TestInteractionZcodeUnrelatedTrafficMustNotConfirm(t *testing.T) {
 	}
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
-			code := NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			code := confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 			// Wait until the transport has consumed both unrelated lines, then
 			// stay inside the two-second window they bought: the decision must
 			// still be delivered, not observed.
@@ -682,7 +696,7 @@ func TestInteractionZcodeReceiptConfirms(t *testing.T) {
 	}
 	code, errout, _ := runZcodeWithAnswerer(t, steps, "req-1",
 		func(directory string, errout *bytes.Buffer) int {
-			code := NativeRespond([]string{"--job", directory, "--request", "req-1", "--option", "allow_once"}, errout)
+			code := confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 			events := filepath.Join(directory, "native-events.jsonl")
 			for deadline := time.Now().Add(30 * time.Second); ; {
 				if body, err := os.ReadFile(events); err == nil &&
@@ -718,9 +732,12 @@ func TestInteractionZcodeQuestionBodyShown(t *testing.T) {
 	code, errout, scenario := runZcodeWithAnswerer(t, steps, "ui-1",
 		func(directory string, errout *bytes.Buffer) int {
 			var out bytes.Buffer
-			if code := NativeShow([]string{"--job", directory}, &out, errout); code != 0 {
-				t.Fatalf("native-show exited %d: %s", code, errout.String())
+			view := nativeQuestionView(pendingStatus(t, directory, "ui-1"), 1)
+			body, err := CanonicalJSON(view)
+			if err != nil {
+				t.Fatal(err)
 			}
+			out.Write(body)
 			if !strings.Contains(out.String(), "Which database should be used?") {
 				t.Fatalf("the actual question must be visible: %s", out.String())
 			}
@@ -742,7 +759,7 @@ func TestInteractionZcodeQuestionBodyShown(t *testing.T) {
 			if textOf(record["prompt"]) != "Pick one" {
 				t.Fatalf("prompt = %v", record["prompt"])
 			}
-			return NativeRespond([]string{"--job", directory, "--request", "ui-1", "--option", "yes"}, errout)
+			return confirmHeldQuestion(t, directory, 1, nativeSelection{Choice: 1}, errout)
 		})
 	if code != 0 || errout != "" {
 		t.Fatalf("code = %d stderr = %q", code, errout)

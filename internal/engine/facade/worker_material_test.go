@@ -271,7 +271,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 					}
 				}
 			}
-			accepted, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeResultEvidence)
+			accepted, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -300,7 +300,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 				t.Fatal("raw evidence digest or lifecycle correlation was rewritten")
 			}
 			before := readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))
-			repeated, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeResultEvidence)
+			repeated, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || !reflect.DeepEqual(repeated, accepted) || !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
 				t.Fatalf("normal repeated native result bypassed core idempotence: %v", err)
 			}
@@ -308,16 +308,16 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			repeated, _, err = reopened.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeResultEvidence)
+			repeated, _, err = reopened.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || !reflect.DeepEqual(repeated, accepted) || !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
 				t.Fatalf("lost-response/reopen native result changed state: %v", err)
 			}
-			duplicate, _, err := reopened.SubmitWorkerResult("worker-result-other-id", ref, directory, source, harness.NativeResultEvidence)
+			duplicate, _, err := reopened.SubmitWorkerResult("worker-result-other-id", ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || duplicate.Status != "DUPLICATE" {
 				t.Fatalf("same native payload with a different event ID bypassed core duplicate admission: %+v %v", duplicate, err)
 			}
 			duplicateState := readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))
-			replay, _, err := reopened.SubmitWorkerResult("worker-result-other-id", ref, directory, source, harness.NativeResultEvidence)
+			replay, _, err := reopened.SubmitWorkerResult("worker-result-other-id", ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || !reflect.DeepEqual(replay, duplicate) || !bytes.Equal(duplicateState, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
 				t.Fatalf("duplicate event replay did not retain its core record: %+v %v", replay, err)
 			}

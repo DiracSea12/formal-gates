@@ -74,6 +74,36 @@ func TestWorkflowPrecheckIsReadOnlyAndShowsExactConfirmationContent(t *testing.T
 	}
 }
 
+func TestWorkflowPrecheckAssignsMissingIdentitiesWithoutChangingMaterial(t *testing.T) {
+	root := t.TempDir()
+	body := strings.ReplaceAll(strings.ReplaceAll(cliStructuredRequirement("Implement the documented behavior."), "REQ-001：", ""), "AC-001：", "")
+	path := filepath.Join(root, "requirements.md")
+	mustWriteCLI(t, path, body)
+	var out, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "requirements.md"}, IO{Stdout: &out, Stderr: &stderr})
+	if code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var preview facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	document := preview.RequirementDocument
+	if document == nil || len(document.Requirements) != 1 || document.Requirements[0].ID != "REQ-001" || len(document.Requirements[0].AcceptanceConditions) != 1 || document.Requirements[0].AcceptanceConditions[0].ID != "AC-001" {
+		t.Fatalf("precheck did not assign the semantic source identities: %+v", document)
+	}
+	if preview.Content != body || document.Content != body || preview.Revision != document.ContentDigest || preview.IntakeCandidate.RequirementRevision != preview.Revision {
+		t.Fatal("assigned identities changed the original confirmation content/binding")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != body {
+		t.Fatal("precheck rewrote the source material", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
+		t.Fatal("precheck started a run or wrote runtime state")
+	}
+}
+
 func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
 	root := t.TempDir()
 	for path, content := range map[string]string{"request.md": "# Actual request\n", "design.md": "# Actual solution\n", "reference.md": "# Selected reference\n"} {

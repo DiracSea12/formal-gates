@@ -211,7 +211,7 @@ func TestReviewFaceBindsSuccessiveCorrectionsToEachFinding(t *testing.T) {
 			updated.EffectiveDecisionID == "" || updated.EffectiveDecisionID == first.EffectiveDecisionID {
 			t.Fatalf("correction did not replace the projected decision: %+v", updated)
 		}
-		if untouched := product.Candidates[0].Findings[1]; untouched != second {
+		if untouched := product.Candidates[0].Findings[1]; !reflect.DeepEqual(untouched, second) {
 			t.Fatalf("correction changed the other finding: got %+v, want %+v", untouched, second)
 		}
 		if product.EffectiveStatus != "FAIL" {

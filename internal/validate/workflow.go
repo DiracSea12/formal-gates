@@ -51,21 +51,21 @@ func verifyRegistryBindingRecord(record RegistryRecord, root, packageRoot string
 	return nil
 }
 
-func verifyRegisteredTargetIdentity(record RegistryRecord) error {
+func verifyRegisteredTargetIdentity(record RegistryRecord) (PackageReceiptReport, error) {
 	if err := assertInstallSource(record.Target); err != nil {
-		return fmt.Errorf("UNREGISTERED_INSTALL: registered target is not an installed artifact: %w", err)
+		return PackageReceiptReport{}, fmt.Errorf("UNREGISTERED_INSTALL: registered target is not an installed artifact: %w", err)
 	}
 	if strings.TrimSpace(record.InstalledDigest) == "" {
-		return nil
+		return PackageReceiptReport{}, nil
 	}
 	receipt, err := PackageReceipt(record.Target)
 	if err != nil {
-		return fmt.Errorf("UNREGISTERED_INSTALL: registered target identity cannot be read: %w", err)
+		return receipt, fmt.Errorf("UNREGISTERED_INSTALL: registered target identity cannot be read: %w", err)
 	}
 	if receipt.Digest != record.InstalledDigest {
-		return fmt.Errorf("UNREGISTERED_INSTALL: registered target digest is stale")
+		return receipt, fmt.Errorf("UNREGISTERED_INSTALL: registered target digest is stale")
 	}
-	return nil
+	return receipt, nil
 }
 
 func validateSemanticResult(interruptionReason string, findings []FindingInput) (string, []Finding, error) {

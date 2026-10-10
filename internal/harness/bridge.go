@@ -289,6 +289,22 @@ func Bridge(in io.Reader, out io.Writer) int {
 }
 func dispatch(e envelope) (any, error) {
 	switch e.Operation {
+	case "native-questions":
+		var q struct {
+			Run string `json:"run"`
+		}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		questions, err := nativeRunQuestions(q.Run)
+		if err != nil {
+			return nil, err
+		}
+		views := []any{}
+		for i, question := range questions {
+			views = append(views, nativeQuestionView(question.Record, i+1))
+		}
+		return views, nil
 	case "host-descriptors":
 		var q struct{}
 		if err := StrictDecode(e.Payload, &q); err != nil {
@@ -319,14 +335,24 @@ func dispatch(e envelope) (any, error) {
 		return map[string]any{"spec": q, "revision": Digest(q)}, nil
 	case "validate-worker":
 		var q struct {
-			Role   string         `json:"role"`
-			Result WorkerJudgment `json:"result"`
-			Checks []Check        `json:"checks"`
+			Role            string         `json:"role"`
+			Result          WorkerJudgment `json:"result"`
+			Checks          []Check        `json:"checks"`
+			NativeDirectory string         `json:"nativeDirectory,omitempty"`
+			NativeSource    map[string]any `json:"nativeSource,omitempty"`
 		}
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		result, err := workerJudgmentResult(q.Role, q.Result, q.Checks)
+		var facts []nativeToolFact
+		if q.NativeDirectory != "" || q.NativeSource != nil {
+			var err error
+			facts, err = nativeResultToolFacts(q.NativeDirectory, q.NativeSource, q.Result)
+			if err != nil {
+				return nil, err
+			}
+		}
+		result, err := workerJudgmentResult(q.Role, q.Result, q.Checks, facts...)
 		if err != nil {
 			return nil, err
 		}

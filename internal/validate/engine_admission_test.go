@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -119,7 +120,7 @@ func TestEngineAdmissionNormalizesRegisteredHostAliases(t *testing.T) {
 					t.Fatalf("host %q: admission=%+v err=%v", record.Host, admission, err)
 				}
 				byRecord, err := ResolveEngineAdmissionByRecord(record.ID)
-				if err != nil || byRecord != admission {
+				if err != nil || !reflect.DeepEqual(byRecord, admission) {
 					t.Fatalf("exact record changed admission: %+v != %+v, err=%v", byRecord, admission, err)
 				}
 			})

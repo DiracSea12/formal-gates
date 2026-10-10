@@ -129,7 +129,7 @@ func (p *Provider) svnChangedPaths() ([]string, error) {
 	for _, target := range status.Targets {
 		for _, entry := range target.Entries {
 			state := entry.Status
-			if (state.Item == "unversioned" || state.Item == "ignored") && isRuntimeStatusPath(p.svnPath(entry.Path)) {
+			if (state.Item == "unversioned" || state.Item == "ignored") && p.isRuntimeStatusPath(p.svnPath(entry.Path)) {
 				continue
 			}
 			if state.Item != "normal" && state.Item != "none" || state.Props != "normal" && state.Props != "none" && state.Props != "" || state.Switched || state.TreeConflict {
@@ -542,7 +542,7 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 	for _, target := range status.Targets {
 		for _, entry := range target.Entries {
 			if entry.Status.Item == "unversioned" || entry.Status.Item == "ignored" || entry.Status.Item == "missing" {
-				if isRuntimeStatusPath(p.svnPath(entry.Path)) {
+				if p.isRuntimeStatusPath(p.svnPath(entry.Path)) {
 					continue
 				}
 				leaves, err := p.untrackedPaths(p.svnPath(entry.Path))
@@ -684,7 +684,7 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 			if node.Status.Item == "conflicted" || node.Status.Props == "conflicted" || node.Status.TreeConflict {
 				conflicts[key] = node.Status.Item + ":" + node.Status.Props
 			}
-			if (node.Status.Item == "unversioned" || node.Status.Item == "ignored") && !isRuntimeStatusPath(key) {
+			if (node.Status.Item == "unversioned" || node.Status.Item == "ignored") && !p.isRuntimeStatusPath(key) {
 				body, err := workingBytes(materialPath(p.root, key))
 				if err == nil {
 					values[key] = nativeEntry{Kind: "file", Content: body}

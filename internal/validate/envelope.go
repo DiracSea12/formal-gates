@@ -584,7 +584,7 @@ func admitRegistryDoc(path, recordID string, doc RegistryDocument, now string, r
 		receipt.CanonicalPaths = record.CanonicalPaths
 		if strings.EqualFold(record.Status, "active") && validAdmissionRegistryRecord(record) {
 			if strings.TrimSpace(record.InstalledDigest) != "" {
-				if identityErr := verifyRegisteredTargetIdentity(record); identityErr != nil {
+				if _, identityErr := verifyRegisteredTargetIdentity(record); identityErr != nil {
 					receipt.Code = "UNREGISTERED_INSTALL"
 					receipt.Reason = identityErr.Error()
 					return receipt, writeAdmissionReceipt(path, receipt)

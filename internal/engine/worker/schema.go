@@ -242,6 +242,9 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 }
 
 func resultTypeSchema(value reflect.Type) (map[string]any, error) {
+	if value == reflect.TypeOf(Location{}) {
+		return LocationSchema(true), nil
+	}
 	var literals []string
 	switch value {
 	case reflect.TypeOf(coverage.OperationKind("")):

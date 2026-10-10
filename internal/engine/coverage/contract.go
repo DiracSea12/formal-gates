@@ -151,12 +151,6 @@ func ExecutionStatuses() []string {
 	return []string{string(ExecutedPass), string(ExecutedFail), string(ExecutedPending), string(ExecutedUnknown), string(AuthorizedSkip)}
 }
 
-// QAResultContract describes the same binding and record-shape requirements
-// consumed by design, review and execution validators.
-func QAResultContract() string {
-	return "Return semantic results only in the supplied schema. Cases use scenario SUCCESS, FAILURE, MISUSE or BOUNDARY; put narrative details in steps/oracle. Case and shared-step IDs are program-assigned references; each case has an oracle. BLACKBOX/MERGE require publicEntry/preconditions/steps and omit testRef; WHITEBOX requires a unique testRef and omits those public-entry fields. Do not modify confirmed sources, acceptance points or approved cases. Design retainCases and retainSharedSteps explicitly select issued entries to preserve without copying their body, operations or files. Retain selections use unique 1-based issued-list positions. Cases/sharedSteps contain only newly authored entries without IDs. An entry absent from both its retain list and authored list is deleted. Original coverage survives for retained entries. Coverage follows issued point order and selects 1-based case positions, retained first then new; [] clears relations and null retains original relations for remaining cases. Source relations and case mode are assembled from the issued input. Each point needs a FAILURE/MISUSE/BOUNDARY case for a complete design. Review source and point decisions independently with real PASS/FAIL and reasons; decisions follow issued source/point order and non-inherited case/shared order; inherited judgments are assembled without model placeholders. Never infer aggregate PASS from another layer. Execution reports an ordered array of oracle comparisons and EXECUTED_PASS/EXECUTED_FAIL for the issued pending required execution facts; null keeps an unfinished comparison. Procedures, observations and tool/environment identities come from original native receipts. Completed evidence is context; bindings, whitelist edges, inherited observations and partitions are assembled by the program. Workers cannot grant skip, user disposition or approval. Suggestions use P2/P3 with message and reason."
-}
-
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {

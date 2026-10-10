@@ -347,6 +347,7 @@ func workflowFlag(args []string, name, fallback string) string {
 
 func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow start", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "current engine run id")
 	vcs := fs.String("vcs", "", "external VCS name")
@@ -403,12 +404,16 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if transcript != "" && ownerProvider != "" {
 		owner.Transcript, owner.Provider = transcript, ownerProvider
 	}
-	_, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcs, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
-	return printValue(streams.Stdout, run, err)
+	_, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcs, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, PackageRoot: *pkg, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	if *machine {
+		return printValue(streams.Stdout, run, err)
+	}
+	return printValue(streams.Stdout, workflowRunView(run), err)
 }
 
 func runWorkflowShow(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow show", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -422,11 +427,15 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 		return 1, fmt.Errorf("UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	run, err := f.Show()
-	return printValue(streams.Stdout, run, err)
+	if *machine {
+		return printValue(streams.Stdout, run, err)
+	}
+	return printValue(streams.Stdout, workflowRunView(run), err)
 }
 
 func runWorkflowStatus(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow status", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -440,11 +449,15 @@ func runWorkflowStatus(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	run, err := f.Status()
-	return printValue(streams.Stdout, run, err)
+	if *machine {
+		return printValue(streams.Stdout, run, err)
+	}
+	return printValue(streams.Stdout, workflowRunView(run), err)
 }
 
 func runWorkflowNext(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow next", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	draftPath := fs.String("decision", "", "semantic control choices JSON; - reads stdin")
@@ -463,22 +476,35 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 		if *saveCandidate != "" {
 			return 1, fmt.Errorf("--save-candidate requires --decision")
 		}
-		next, err := f.Next()
-		return printValue(streams.Stdout, next, err)
+		if *machine {
+			next, err := f.Next()
+			return printValue(streams.Stdout, next, err)
+		}
+		run, err := f.Show()
+		return printValue(streams.Stdout, workflowRunView(run), err)
 	}
 	var input facade.ControlInput
 	if err := readWorkflowInput(*draftPath, streams.Stdin, &input); err != nil {
 		return 1, err
 	}
 	candidate, err := f.PrepareControl(input)
-	if err == nil && *saveCandidate != "" {
-		err = saveWorkflowCandidate(*saveCandidate, candidate)
+	if err != nil {
+		return 1, err
 	}
-	return printValue(streams.Stdout, candidate, err)
+	if *saveCandidate != "" {
+		if err := saveWorkflowCandidate(*saveCandidate, candidate); err != nil {
+			return 1, err
+		}
+	}
+	if *machine {
+		return printValue(streams.Stdout, candidate, err)
+	}
+	return printValue(streams.Stdout, workflowConfirmationView(candidate), err)
 }
 
 func runWorkflowDrive(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow drive", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	singleStep := fs.Bool("single-step", false, "diagnostic: advance engine facts without consuming native workers")
@@ -494,14 +520,18 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	}
 	if *singleStep {
 		run, err := f.Drive()
-		return printValue(streams.Stdout, run, err)
+		if *machine {
+			return printValue(streams.Stdout, run, err)
+		}
+		return printValue(streams.Stdout, workflowRunView(run), err)
 	}
 	value, executionErr := consumeWorkflow(streams, f, *root, *runID)
-	return printWorkflowConsumption(streams, value, executionErr)
+	return printWorkflowView(streams, value, *machine, executionErr)
 }
 
 func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow submit", streams)
+	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	materialPath := fs.String("worker-material", "", "issued material reference JSON file")
@@ -533,11 +563,14 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		eventID := protocol.EventID("worker-result:" + material.Digest + ":" + sourceDigest)
-		acceptance, run, err := f.SubmitWorkerResult(eventID, material, *nativeDirectory, source, harness.NativeResultEvidence)
+		acceptance, run, err := f.SubmitWorkerResult(eventID, material, *nativeDirectory, source, harness.NativeWorkerResultEvidence)
 		if err != nil {
 			return 1, err
 		}
-		return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
+		if *machine {
+			return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
+		}
+		return printJSON(streams.Stdout, workflowConsumptionView(workflowConsumption{Run: run, Acceptance: &acceptance}))
 	}
 	var event protocol.Event
 	var saved *facade.ControlCandidate
@@ -575,9 +608,12 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if !*singleStep && workflowControlEvent(event) {
 		value, executionErr := consumeWorkflow(streams, f, *root, *runID)
 		value.Acceptance = &acceptance
-		return printWorkflowConsumption(streams, value, executionErr)
+		return printWorkflowView(streams, value, *machine, executionErr)
 	}
-	return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
+	if *machine {
+		return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
+	}
+	return printJSON(streams.Stdout, workflowConsumptionView(workflowConsumption{Run: run, Acceptance: &acceptance}))
 }
 
 func runWorkflowDiagnose(args []string, streams IO) (int, error) {
@@ -622,8 +658,8 @@ const standalonePromptSeparator = "---------------------------------------------
 
 // runGate handles the standalone gate commands: gate run assembles and
 // prints one detached review prompt per gate id, and gate report validates and
-// displays a reviewer result. Neither touches run state, persists anything, or
-// consumes review-round limits.
+// displays a reviewer result from the original captured context. Neither touches
+// run state or consumes review-round limits.
 func runGate(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("gate subcommand is required (e.g. gate run <ids...>|report)")
@@ -642,6 +678,7 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		vcs := fs.String("vcs", "git", "external VCS name")
 		scope := fs.String("scope", "", "optional logical review scope")
+		contextPath := fs.String("save-context", "", "save original review comparison and numeric location evidence; defaults to a temporary file")
 		ids, code, err, done := parseFlagSetAllowPositional(fs, args, streams.Stdout)
 		if done {
 			return code, err
@@ -658,26 +695,57 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		prompts := make([]string, 0, len(ids))
 		for _, id := range ids {
-			prompt, err := validate.ComposeStandaloneGatePrompt(catalog, id, *root, *vcs, *scope)
+			if _, ok := catalog.Gate(id); !ok {
+				return 1, fmt.Errorf("unknown discovered gate %q", id)
+			}
+		}
+		reviewContext, err := validate.CaptureStandaloneGateContext(*root, *vcs, *scope)
+		if err != nil {
+			return 1, err
+		}
+		if *contextPath == "" {
+			file, err := os.CreateTemp("", "formal-gates-review-*.json")
 			if err != nil {
 				return 1, err
 			}
+			*contextPath = file.Name()
+			if err := file.Close(); err != nil {
+				return 1, err
+			}
+		}
+		if err := saveWorkflowCandidate(*contextPath, reviewContext); err != nil {
+			return 1, err
+		}
+		prompts := make([]string, 0, len(ids))
+		for _, id := range ids {
+			prompt, err := validate.ComposeStandaloneGatePrompt(catalog, id, reviewContext)
+			if err != nil {
+				return 1, err
+			}
+			prompt = strings.Replace(prompt, "[Current change]\n", "[Current change]\nOriginal report context (program evidence): "+*contextPath+"\n", 1)
 			prompts = append(prompts, prompt)
 		}
 		fmt.Fprint(streams.Stdout, strings.Join(prompts, "\n\n"+standalonePromptSeparator+"\n\n"))
 		return 0, nil
 	case "report":
 		fs := newFlagSet("gate report", streams)
+		contextPath := fs.String("context", "", "original review context file saved by gate run")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
+		}
+		if *contextPath == "" {
+			return 1, fmt.Errorf("gate report requires the original --context from gate run")
+		}
+		var reviewContext validate.StandaloneGateContext
+		if err := readJSONFileInto(*contextPath, &reviewContext); err != nil {
+			return 1, err
 		}
 		payload, err := io.ReadAll(streams.Stdin)
 		if err != nil {
 			return 1, err
 		}
-		result, err := validate.ValidateStandaloneGateResult(payload)
+		result, err := validate.ValidateStandaloneGateResult(payload, reviewContext)
 		if err != nil {
 			return 1, err
 		}
@@ -965,7 +1033,7 @@ func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
 		request.AdmissionGeneration != admission.Generation || request.AdmissionLease != admission.Lease || request.AdmissionToken != admission.Token {
 		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current admitted launcher")
 	}
-	f, err := facade.Open(root, runID)
+	f, err := facade.Open(root, runID, admission.RuntimeFiles)
 	if err != nil {
 		return nil, true, err
 	}

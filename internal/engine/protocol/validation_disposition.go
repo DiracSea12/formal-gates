@@ -21,7 +21,7 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 	}
 	switch r.Kind {
 	case KindDispatchBudgetDisposition:
-		return r, dispatchBudgetOptions()
+		return r, s.dispatchBudgetOptions(r.Target)
 	case "QA_REVIEW":
 		options[0].Label = "Fresh review of this case-set"
 		options = append(options, AskOption{ID: "redesign", Label: "Redesign and review once"})

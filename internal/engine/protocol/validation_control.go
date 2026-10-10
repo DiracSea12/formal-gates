@@ -89,17 +89,22 @@ func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
 	case "REPAIR":
 		detail = s.repairAskDetail(r)
 	case KindDispatchBudgetDisposition:
-		// 预算处置摘要：绑定 basis digest 与额度/owner/token cap 三面（各自
+		// 预算处置摘要：绑定目标执行的有限 retry 事实与额度/owner/token cap 三面（各自
 		// 来源独立判定）；state revision 绑定由 Ask 自身的 StateRevision 与
 		// DECIDE 三方相等校验持有，不进内容摘要。
 		engineAllowance, ownerCost, tokenCap := s.allowanceFaces()
+		attempt, _ := s.dispatchBudgetAttempt(r.Target)
+		inFlight, _ := s.effectRetryBudget(attempt)
 		detail = struct {
 			Kind                       string
 			Target                     string
 			BasisDigest                string
 			EngineAllowance, OwnerCost string
 			TokenCap                   string
-		}{r.Kind, r.Target, s.Guard.AllowanceSummary(), engineAllowance, ownerCost, tokenCap}
+			ActionID, AttemptID        string
+			Attempts, MaxAttempts      int
+			ResumeInFlight             int
+		}{r.Kind, r.Target, s.Guard.AllowanceSummary(), engineAllowance, ownerCost, tokenCap, attempt.ActionID, attempt.ID, attempt.Attempts, attempt.MaxAttempts, inFlight}
 	default:
 		detail = s.Validation
 	}
@@ -426,9 +431,13 @@ func (e *Engine) acceptValidationDecision(s *State, ask PendingAsk, p *DecidePay
 	}
 	switch r.Kind {
 	case KindDispatchBudgetDisposition:
-		// 固定四选项（decline/abort 已在通用分支处理）：continue＝一次有限
-		// 继续授权（budgetContinueGranted 从本决定账目推导，不累积）；retry＝
-		// 目标逻辑动作一次性追加一个 retry slot；skip＝仅留痕不解锁。
+		allowed := false
+		for _, option := range s.dispatchBudgetOptions(r.Target) {
+			allowed = allowed || option.ID == p.Choice
+		}
+		if !allowed {
+			return validationError("budget choice does not apply to the current boundary")
+		}
 		switch p.Choice {
 		case "continue", "skip":
 			return nil

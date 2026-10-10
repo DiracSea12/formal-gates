@@ -489,6 +489,13 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 		if len(questions) != 1 {
 			return nil, &blockedError{message: "ZCODE_INTERACTION: an option answer needs exactly one question; cancel otherwise"}
 		}
+		if choice.Answers != nil {
+			answer, ok := getOf(choice.Answers, "answer").(string)
+			if !ok || answer == "" || len(listOf(getOf(questions[0], "options"))) != 0 {
+				return nil, &blockedError{message: "ZCODE_INTERACTION: free text requires an original open question"}
+			}
+			return map[string]any{"result": map[string]any{"action": "accept", "content": map[string]any{"answer": answer}}}, nil
+		}
 		for _, option := range listOf(getOf(questions[0], "options")) {
 			if valuesEqual(getOf(option, "value"), choice.OptionID) {
 				return map[string]any{"result": map[string]any{

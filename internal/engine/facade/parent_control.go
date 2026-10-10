@@ -38,7 +38,7 @@ func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
 		}
 		return u, nil
 	}
-	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID)
+	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID, f.runtimeFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, err
 		return out, nil
 	}
 	for _, plan := range snap.State.ChildCreation.Children {
-		child, err := Open(f.root, plan.RunID)
+		child, err := Open(f.root, plan.RunID, f.runtimeFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +187,7 @@ func (f *Facade) syncReleasedChildren() error {
 		if !established {
 			continue
 		}
-		child, err := Open(f.root, plan.RunID)
+		child, err := Open(f.root, plan.RunID, f.runtimeFiles)
 		if err != nil {
 			return err
 		}
@@ -235,7 +235,7 @@ func (f *Facade) recordChildReset() error {
 	if snap.State.SliceChild == nil {
 		return nil
 	}
-	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID)
+	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID, f.runtimeFiles)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (f *Facade) recordChildReset() error {
 
 func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 	for _, id := range preview.Children {
-		child, err := Open(f.root, id)
+		child, err := Open(f.root, id, f.runtimeFiles)
 		if err != nil {
 			return err
 		}

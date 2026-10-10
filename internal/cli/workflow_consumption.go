@@ -94,120 +94,123 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 			return result, driveErr
 		}
 		result.Run = run
-		childIDs := make([]string, 0, len(run.SliceChildren))
-		for _, id := range run.SliceChildren {
-			childIDs = append(childIDs, id)
-		}
-		sort.Strings(childIDs)
-		for _, id := range childIDs {
-			key := "child:" + id
-			if active[key] {
-				continue
-			}
-			child, err := facade.Open(root, id)
-			if err != nil {
-				return result, err
-			}
-			current, err := child.Show()
-			if err != nil {
-				return result, err
-			}
-			if result.Children == nil {
-				result.Children = map[string]workflowConsumption{}
-			}
-			observed := result.Children[id]
-			observed.Run = current
-			result.Children[id] = observed
-			if current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 || observed.Boundary == "BLOCKED" {
-				continue
-			}
-			active[key] = true
-			go func() {
-				childStreams := streams
-				childStreams.Context = ctx
-				consumed, err := consumeWorkflow(childStreams, child, root, id)
-				done <- completion{key: key, action: id, err: err, child: &consumed}
-			}()
-		}
-		resumes := map[string]protocol.HostActionIntent{}
-		checksPending := false
-		for _, intent := range run.AdapterIntents {
-			checksPending = checksPending || intent.Adapter != nil && intent.Adapter.Operation == "op.check"
-			if intent.Resume != nil {
-				resumes[intent.Resume.WorkerActionID] = intent
-			}
-			if intent.Terminate != nil && result.Blocked[intent.ActionID] == "" {
-				if err := terminateWorkflowWorker(ctx, f, intent); err != nil {
-					result.Blocked[intent.ActionID] = err.Error()
-				}
-			}
-		}
-		ids := make([]string, 0, len(run.WorkerMaterials))
-		for id := range run.WorkerMaterials {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			ref, resume := run.WorkerMaterials[id], resumes[id]
-			waiting := false
-			for _, record := range run.RecoveryRecords {
-				if record.ActionID == id && record.AttemptID == ref.AttemptID {
-					for _, ask := range run.PendingAsks {
-						if ask.RequestID == record.RequestID {
-							waiting = true
-						}
-					}
-				}
-			}
-			if waiting {
-				continue
-			}
-			key := ref.ActionID + ":" + ref.AttemptID
-			if active[key] || result.Blocked[id] != "" {
-				continue
-			}
-			active[key] = true
-			go func() {
-				executionErr := executeWorkflowWorker(ctx, f, ref, resume)
-				done <- completion{key: key, action: id, err: executionErr}
-			}()
-		}
-		if len(active) == 0 {
-			if run.Status == "COMPLETE" || run.Status == "ABORTED" || run.Status == "SLICE_READY" {
+		if run.Status == "COMPLETE" || run.Status == "ABORTED" || run.Status == "SLICE_READY" {
+			if len(active) == 0 {
 				result.Boundary = run.Status
 				return result, nil
 			}
-			if len(result.Blocked) > 0 {
-				result.Boundary = "BLOCKED"
-				return result, nil
+		} else {
+			childIDs := make([]string, 0, len(run.SliceChildren))
+			for _, id := range run.SliceChildren {
+				childIDs = append(childIDs, id)
 			}
-			for _, child := range result.Children {
-				if len(child.Run.PendingAsks) != 0 {
-					result.Boundary = string(decision.KindAsk)
-					return result, nil
+			sort.Strings(childIDs)
+			for _, id := range childIDs {
+				key := "child:" + id
+				if active[key] {
+					continue
 				}
-				if child.Boundary == "BLOCKED" {
+				child, err := facade.Open(root, id)
+				if err != nil {
+					return result, err
+				}
+				current, err := child.Show()
+				if err != nil {
+					return result, err
+				}
+				if result.Children == nil {
+					result.Children = map[string]workflowConsumption{}
+				}
+				observed := result.Children[id]
+				observed.Run = current
+				result.Children[id] = observed
+				if current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 || observed.Boundary == "BLOCKED" {
+					continue
+				}
+				active[key] = true
+				go func() {
+					childStreams := streams
+					childStreams.Context = ctx
+					consumed, err := consumeWorkflow(childStreams, child, root, id)
+					done <- completion{key: key, action: id, err: err, child: &consumed}
+				}()
+			}
+			resumes := map[string]protocol.HostActionIntent{}
+			checksPending := false
+			for _, intent := range run.AdapterIntents {
+				checksPending = checksPending || intent.Adapter != nil && intent.Adapter.Operation == "op.check"
+				if intent.Resume != nil {
+					resumes[intent.Resume.WorkerActionID] = intent
+				}
+				if intent.Terminate != nil && result.Blocked[intent.ActionID] == "" {
+					if err := terminateWorkflowWorker(ctx, f, intent); err != nil {
+						result.Blocked[intent.ActionID] = err.Error()
+					}
+				}
+			}
+			ids := make([]string, 0, len(run.WorkerMaterials))
+			for id := range run.WorkerMaterials {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				ref, resume := run.WorkerMaterials[id], resumes[id]
+				waiting := false
+				for _, record := range run.RecoveryRecords {
+					if record.ActionID == id && record.AttemptID == ref.AttemptID {
+						for _, ask := range run.PendingAsks {
+							if ask.RequestID == record.RequestID {
+								waiting = true
+							}
+						}
+					}
+				}
+				if waiting {
+					continue
+				}
+				key := ref.ActionID + ":" + ref.AttemptID
+				if active[key] || result.Blocked[id] != "" {
+					continue
+				}
+				active[key] = true
+				go func() {
+					executionErr := executeWorkflowWorker(ctx, f, ref, resume)
+					done <- completion{key: key, action: id, err: executionErr}
+				}()
+			}
+			if len(active) == 0 {
+				if len(result.Blocked) > 0 {
 					result.Boundary = "BLOCKED"
 					return result, nil
 				}
-			}
-			if requested, err := f.RequestWorkflowChoice(); err != nil {
-				return result, err
-			} else if requested {
-				advance = true
-				continue
-			}
-			if run.Next.Kind == decision.KindAsk {
-				result.Boundary = string(run.Next.Kind)
-				return result, nil
-			}
-			if run.Next.Kind == decision.KindOperator && !checksPending {
-				result.Boundary = "BLOCKED"
-				return result, nil
-			}
-			if len(run.AdapterIntents) == 0 {
-				result.Boundary = string(run.Next.Kind)
-				return result, nil
+				for _, child := range result.Children {
+					if len(child.Run.PendingAsks) != 0 {
+						result.Boundary = string(decision.KindAsk)
+						return result, nil
+					}
+					if child.Boundary == "BLOCKED" {
+						result.Boundary = "BLOCKED"
+						return result, nil
+					}
+				}
+				if requested, err := f.RequestWorkflowChoice(); err != nil {
+					return result, err
+				} else if requested {
+					advance = true
+					continue
+				}
+				if run.Next.Kind == decision.KindAsk {
+					result.Boundary = string(run.Next.Kind)
+					return result, nil
+				}
+				if run.Next.Kind == decision.KindOperator && !checksPending {
+					result.Boundary = "BLOCKED"
+					return result, nil
+				}
+				if len(run.AdapterIntents) == 0 {
+					result.Boundary = string(run.Next.Kind)
+					return result, nil
+				}
 			}
 		}
 		select {
@@ -360,7 +363,7 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 		return err
 	}
 
-	_, _, err = f.SubmitWorkerResult(protocol.EventID("native-result:"+key), ref, directory, source, harness.NativeResultEvidence)
+	_, _, err = f.SubmitWorkerResult(protocol.EventID("native-result:"+key), ref, directory, source, harness.NativeWorkerResultEvidence)
 	return err
 }
 

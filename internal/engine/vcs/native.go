@@ -330,7 +330,7 @@ func materialPath(root, path string) string {
 
 // Native status may report an unversioned directory without enumerating its
 // children. Keep delivery leaves and empty directories while skipping only the
-// engine's existing runtime exclusions.
+// registered tool inventory and existing runtime exclusions.
 func (p *Provider) untrackedPaths(relative string) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(materialPath(p.root, relative), func(path string, entry os.DirEntry, err error) error {
@@ -342,7 +342,7 @@ func (p *Provider) untrackedPaths(relative string) ([]string, error) {
 			return e
 		}
 		key = filepath.ToSlash(key)
-		if isRuntimeStatusPath(key) {
+		if p.isRuntimeStatusPath(key) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -356,7 +356,7 @@ func (p *Provider) untrackedPaths(relative string) ([]string, error) {
 		if e != nil {
 			return e
 		}
-		if len(children) == 0 {
+		if len(children) == 0 && !p.isEmptyRuntimeDirectory(key) {
 			paths = append(paths, key)
 		}
 		return nil

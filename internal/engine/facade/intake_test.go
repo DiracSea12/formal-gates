@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/protocol"
 )
 
 func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t *testing.T) {
@@ -108,5 +109,43 @@ func TestPreparedIntakeRegularStartBindsPrecheckedDocument(t *testing.T) {
 	_, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "prepared-regular", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "regular-intake-runtime", "sha256:package", DefaultProvider)})
 	if err != nil || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
 		t.Fatalf("regular Start did not accept its prechecked candidate: %+v %v", run, err)
+	}
+}
+
+func TestPreparedIntakeStartReusesGeneratedSourceIdentities(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	content := strings.ReplaceAll(strings.ReplaceAll(validationDocument, "REQ-001：", ""), "AC-001：", "")
+	path := filepath.Join(root, "requirements.md")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := PrepareIntake(root, "requirements.md", "", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := preview.RequirementDocument
+	if document == nil || document.Requirements[0].ID != "REQ-001" || document.Requirements[0].AcceptanceConditions[0].ID != "AC-001" || document.Content != content {
+		t.Fatalf("precheck source projection: %+v", document)
+	}
+	// The fixture confirms this exact displayed material before Start.
+	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "semantic-intake", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "semantic-intake-runtime", "sha256:package", DefaultProvider)})
+	if err != nil || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
+		t.Fatalf("confirmed semantic material failed original Start: %+v %v", run, err)
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil || !reflect.DeepEqual(snapshot.State.RequirementGuarantee, protocol.NewGuaranteeActivation(preview.Revision, preview.IntakeCandidate.SolutionRevision, *document)) {
+		t.Fatal("Start reparsing changed the confirmed identities or content", err)
+	}
+	if _, err = f.Drive(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = f.engine.Load()
+	if err != nil || snapshot.State.Validation == nil || !reflect.DeepEqual(snapshot.State.Validation.Document, *document) {
+		t.Fatal("first drive did not preserve the prechecked source projection", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != content {
+		t.Fatal("Start rewrote the confirmed material", err)
 	}
 }

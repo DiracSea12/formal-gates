@@ -1,138 +1,197 @@
 package harness
 
-// The interaction CLI: native-respond's validation ladder (pending 现存、
-// 选项合法、一票防重) and native-show's read-only listing. Pure filesystem:
-// no host process is involved.
-
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// readCLIFile reads one file the CLI tests inspect (readTestFile is behind
-// the unix build tag).
 func readCLIFile(t *testing.T, path string) string {
 	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	b, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
 	}
-	return string(body)
+	return string(b)
 }
-
-// writePendingsFile lands one interaction-pending.json for the CLI tests.
 func writePendingsFile(t *testing.T, directory string, records ...string) {
 	t.Helper()
 	list := []any{}
 	for _, body := range records {
 		list = append(list, decodeTestJSON(t, body))
 	}
-	if err := writeAtomicJSON(filepath.Join(directory, "interaction-pending.json"), list); err != nil {
+	if err := writeAtomicJSON(nativePendingPath(directory), list); err != nil {
 		t.Fatal(err)
 	}
 }
 
-const cliPendingPermission = `{"connection": 1, "method": "session/request_permission", "options": [` +
-	`{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},` +
-	`{"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}],` +
-	`"request_id": "41", "status": "pending", "summary": "permission for tool call call-9", "updated_at": "2026-09-20T10:00:00Z"}`
+const cliPendingPermission = `{"connection":1,"method":"session/request_permission","options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}],"request_id":"41","status":"pending","summary":"permission for tool call call-9","updated_at":"2026-09-20T10:00:00Z"}`
 
-// respondCLI runs NativeRespond and returns its exit code plus stderr.
 func respondCLI(t *testing.T, args ...string) (int, string) {
 	t.Helper()
-	var errout bytes.Buffer
-	code := NativeRespond(args, &errout)
-	return code, errout.String()
+	var errors bytes.Buffer
+	code := NativeRespond(args, &errors)
+	return code, errors.String()
 }
-
-// TestNativeRespondWritesAnswer pins the happy path: a pending request and a
-// host-offered option produce exactly the canonical answer file.
-func TestNativeRespondWritesAnswer(t *testing.T) {
-	directory := t.TempDir()
-	writePendingsFile(t, directory, cliPendingPermission)
-	code, errout := respondCLI(t, "--job", directory, "--request", "41", "--option", "allow-once")
-	if code != 0 || errout != "" {
-		t.Fatalf("code = %d stderr = %q", code, errout)
+func prepareHeldTest(t *testing.T, directory string, position int, selection nativeSelection) (nativeAnswerCandidate, error) {
+	t.Helper()
+	records, err := readNativePendings(directory)
+	if err != nil {
+		return nativeAnswerCandidate{}, err
 	}
-	body := readCLIFile(t, filepath.Join(directory, "interaction-answer.json"))
-	value := decodeTestJSON(t, body)
-	record := objectOrEmpty(value)
-	if textOf(record["request_id"]) != "41" || textOf(record["option"]) != "allow-once" ||
-		getOf(record, "cancel") != false || textOf(record["written_at"]) == "" {
-		t.Fatalf("answer = %s", body)
-	}
-}
-
-// TestNativeRespondCancel pins the cancel answer: no option member at all.
-func TestNativeRespondCancel(t *testing.T) {
-	directory := t.TempDir()
-	writePendingsFile(t, directory, cliPendingPermission)
-	code, errout := respondCLI(t, "--job", directory, "--request", "41", "--cancel")
-	if code != 0 || errout != "" {
-		t.Fatalf("code = %d stderr = %q", code, errout)
-	}
-	record := objectOrEmpty(decodeTestJSON(t,
-		readCLIFile(t, filepath.Join(directory, "interaction-answer.json"))))
-	if getOf(record, "cancel") != true {
-		t.Fatalf("answer = %v", record)
-	}
-	if _, present := entryOf(record, "option"); present {
-		t.Fatalf("a cancel answer carries no option: %v", record)
-	}
-}
-
-// TestNativeRespondValidation pins the refusal ladder: unknown request id,
-// non-pending status, an option the host never offered, a missing pending
-// file, an unconsumed previous answer, and the usage errors.
-func TestNativeRespondValidation(t *testing.T) {
-	directory := t.TempDir()
-	writePendingsFile(t, directory, cliPendingPermission,
-		`{"connection": 1, "method": "session/request_permission", "options": [], "request_id": "42", "status": "invalidated", "summary": "gone", "updated_at": "2026-09-20T10:00:00Z"}`)
-
-	if code, errout := respondCLI(t, "--job", directory, "--request", "999", "--option", "allow-once"); code != 1 ||
-		!strings.Contains(errout, "no pending interaction with request id 999") {
-		t.Fatalf("unknown id: %d %q", code, errout)
-	}
-	if code, _ := respondCLI(t, "--job", directory, "--request", "42", "--option", "allow-once"); code != 1 {
-		t.Fatalf("non-pending request must be refused, got %d", code)
-	}
-	code, errout := respondCLI(t, "--job", directory, "--request", "41", "--option", "allow-always")
-	if code != 1 || !strings.Contains(errout, "not one the host offered") ||
-		!strings.Contains(errout, "allow-once, reject-once") {
-		t.Fatalf("non-host option: %d %q", code, errout)
-	}
-	empty := t.TempDir()
-	if code, _ := respondCLI(t, "--job", empty, "--request", "41", "--option", "allow-once"); code != 1 {
-		t.Fatalf("missing pending file must be refused, got %d", code)
-	}
-	if code, _ := respondCLI(t, "--job", filepath.Join(directory, "absent"), "--request", "41", "--cancel"); code != 1 {
-		t.Fatalf("missing job directory must be refused, got %d", code)
-	}
-
-	// One answer at a time: an unconsumed answer file blocks the next vote.
-	if code, _ := respondCLI(t, "--job", directory, "--request", "41", "--option", "reject-once"); code != 0 {
-		t.Fatal("first answer must land")
-	}
-	code, errout = respondCLI(t, "--job", directory, "--request", "41", "--option", "reject-once")
-	if code != 1 || !strings.Contains(errout, "has not consumed the previous answer") {
-		t.Fatalf("double vote: %d %q", code, errout)
-	}
-
-	// Usage errors exit 2.
-	for _, args := range [][]string{
-		{},
-		{"--job", directory},
-		{"--request", "41", "--option", "allow-once"},
-		{"--job", directory, "--request", "41"},
-		{"--job", directory, "--request", "41", "--option", "allow-once", "--cancel"},
-		{"--job", directory, "--request", "41", "--cancel", "--extra"},
-	} {
-		if code, _ := respondCLI(t, args...); code != 2 {
-			t.Fatalf("args %v: exit %d, want 2", args, code)
+	pending := []map[string]any{}
+	for _, raw := range records {
+		record := objectOrEmpty(raw)
+		if record["status"] == "pending" {
+			pending = append(pending, record)
 		}
+	}
+	if position < 1 || position > len(pending) {
+		return nativeAnswerCandidate{}, fmt.Errorf("select a current pending question")
+	}
+	return prepareNativeAnswer(nativeHeldQuestion{directory, pending[position-1]}, selection)
+}
+func confirmHeldQuestion(t *testing.T, directory string, position int, selection nativeSelection, errout *bytes.Buffer) int {
+	t.Helper()
+	candidate, err := prepareHeldTest(t, directory, position, selection)
+	if err != nil {
+		errout.WriteString(err.Error())
+		return 1
+	}
+	path := filepath.Join(directory, "decision.json")
+	if err := writeAtomicJSON(path, candidate); err != nil {
+		t.Fatal(err)
+	}
+	return NativeRespond([]string{"--decision-file", path}, errout)
+}
+func TestNativeRespondPreparesAndConfirmsOriginalAnswer(t *testing.T) {
+	run := t.TempDir()
+	job := filepath.Join(run, "jobs", "original")
+	if err := os.MkdirAll(job, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writePendingsFile(t, job, cliPendingPermission)
+	file := filepath.Join(run, "decision.json")
+	if code, errors := respondCLI(t, "--run", run, "--question", "1", "--choice", "1", "--save-decision", file); code != 0 {
+		t.Fatal(code, errors)
+	}
+	if _, err := os.Stat(nativeAnswerPath(job)); !os.IsNotExist(err) {
+		t.Fatal("preparation delivered a vote")
+	}
+	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+		t.Fatal(code, errors)
+	}
+	answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+	if answer["request_id"] != "41" || answer["option"] != "allow-once" || answer["cancel"] != false || answer["written_at"] == nil {
+		t.Fatal(answer)
+	}
+	if code, errors := respondCLI(t, "--decision-file", file); code != 1 || !strings.Contains(errors, "previous answer") {
+		t.Fatal("duplicate vote", code, errors)
+	}
+}
+func TestNativeRespondCancelAndChangedQuestion(t *testing.T) {
+	job := t.TempDir()
+	writePendingsFile(t, job, cliPendingPermission)
+	candidate, err := prepareHeldTest(t, job, 1, nativeSelection{Cancel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, _ := readNativePendings(job)
+	record := objectOrEmpty(records[0])
+	record["updated_at"] = "later reannouncement"
+	if err := writeAtomicJSON(nativePendingPath(job), records); err != nil {
+		t.Fatal(err)
+	}
+	if err := submitNativeAnswer(candidate); err != nil {
+		t.Fatal("reannouncement lost original binding", err)
+	}
+	answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+	if answer["cancel"] != true || answer["option"] != nil {
+		t.Fatal(answer)
+	}
+	if err := os.Remove(nativeAnswerPath(job)); err != nil {
+		t.Fatal(err)
+	}
+	record["connection"] = 2
+	if err := writeAtomicJSON(nativePendingPath(job), records); err != nil {
+		t.Fatal(err)
+	}
+	if err := submitNativeAnswer(candidate); err == nil {
+		t.Fatal("different connection accepted")
+	}
+}
+func TestNativeRespondSelectsOnlyDisplayedOptions(t *testing.T) {
+	job := t.TempDir()
+	writePendingsFile(t, job, cliPendingPermission)
+	for _, selection := range []nativeSelection{{Choice: 3}, {Choice: 1, Cancel: true}, {}} {
+		if _, err := prepareHeldTest(t, job, 1, selection); err == nil {
+			t.Fatal(selection)
+		}
+	}
+	if _, err := prepareHeldTest(t, job, 2, nativeSelection{Choice: 1}); err == nil {
+		t.Fatal("unknown question accepted")
+	}
+	for _, args := range [][]string{{}, {"--request", "41"}, {"--option", "allow-once"}, {"--answers", `{"known-id":"choice"}`}, {"--job", job}, {"--decision-file", "x", "--choice", "1"}} {
+		if code, _ := respondCLI(t, args...); code != 2 {
+			t.Fatal(args, code)
+		}
+	}
+}
+func TestNativeShowUsesSemanticQuestionNumbers(t *testing.T) {
+	run := t.TempDir()
+	job := filepath.Join(run, "jobs", "original")
+	if err := os.MkdirAll(job, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writePendingsFile(t, job, cliPendingPermission)
+	var output, errors bytes.Buffer
+	if code := NativeShow([]string{"--run", run}, &output, &errors); code != 0 {
+		t.Fatal(code, &errors)
+	}
+	if strings.Contains(output.String(), "request_id") || strings.Contains(output.String(), "allow-once") || strings.Contains(output.String(), "call-9") || !strings.Contains(output.String(), "Allow once") {
+		t.Fatal(output.String())
+	}
+	if _, err := os.Stat(nativeAnswerPath(job)); !os.IsNotExist(err) {
+		t.Fatal("show wrote an answer")
+	}
+}
+
+func TestNativeFormEnumsUseOriginalFieldAndOptionValues(t *testing.T) {
+	record := map[string]any{"request_id": "original", "method": "mcpServer/elicitation/request", "mode": "form", "options": []any{map[string]any{"value": "accept"}}, "requestedSchema": map[string]any{"properties": map[string]any{"original-field": map[string]any{"type": "string", "title": "Choose a color", "enum": []any{"red", "blue"}}}}}
+	answer, err := assembleNativeAnswer(record, nativeSelection{Choice: 1, Values: []any{map[string]any{"choice": 2}}})
+	if err != nil || !valuesEqual(answer["answers"], map[string]any{"original-field": "blue"}) {
+		t.Fatal(answer, err)
+	}
+	if _, err := assembleNativeAnswer(record, nativeSelection{Choice: 1, Values: []any{"blue"}}); err == nil {
+		t.Fatal("raw known form value accepted")
+	}
+	view := nativeQuestionView(record, 1)
+	field := objectOrEmpty(listOf(view["fields"])[0])
+	if field["label"] != "Choose a color" || !valuesEqual(field["options"], []any{map[string]any{"choice": 1, "label": "red"}, map[string]any{"choice": 2, "label": "blue"}}) {
+		t.Fatal("form choices were not displayed", view)
+	}
+	run := t.TempDir()
+	job := filepath.Join(run, "jobs", "original")
+	if err := os.MkdirAll(job, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record["status"], record["connection"] = "pending", 1
+	if err := writeAtomicJSON(nativePendingPath(job), []any{record}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(run, "decision.json")
+	if code, errors := respondCLI(t, "--run", run, "--choice", "1", "--values", `[{"choice":2}]`, "--save-decision", file); code != 0 {
+		t.Fatal(code, errors)
+	}
+	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+		t.Fatal(code, errors)
+	}
+	confirmed := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+	if !valuesEqual(confirmed["answers"], map[string]any{"original-field": "blue"}) {
+		t.Fatal("numeric form transport lost original value", confirmed)
 	}
 }
 
@@ -254,7 +313,7 @@ func TestInteractionReplyBuilders(t *testing.T) {
 // user-input request as pure spec functions: the summary is the question text
 // (the generic prompt only titles it), a multi-question request keeps every
 // question verbatim with its own options, and such a hold offers no single
-// option list for --option to answer with.
+// option list for a single numeric choice.
 func TestInteractionUserInputPresentation(t *testing.T) {
 	params := objectOrEmpty(decodeTestJSON(t, `{"requestId": "ui-2", "prompt": "Pick two", "questions": [`+
 		`{"question": "First?", "header": "A", "options": [{"value": "1", "label": "One"}]},`+
@@ -272,49 +331,5 @@ func TestInteractionUserInputPresentation(t *testing.T) {
 	empty := map[string]any{}
 	if got := zcodeUserInputInteraction.summary(empty); got != "user input request" {
 		t.Fatalf("empty summary = %q", got)
-	}
-}
-
-// TestNativePendingOffers pins the host-shape-agnostic option membership the
-// CLI validates with: optionId (ACP/ZCode permissions) and value (ZCode
-// question options).
-func TestNativePendingOffers(t *testing.T) {
-	options := []any{
-		map[string]any{"optionId": "allow-once", "kind": "allow_once"},
-		map[string]any{"value": "yes", "label": "Yes"},
-	}
-	if !nativePendingOffers(options, "allow-once") || !nativePendingOffers(options, "yes") {
-		t.Fatal("both host spellings must match")
-	}
-	if nativePendingOffers(options, "nope") || nativePendingOffers(nil, "allow-once") {
-		t.Fatal("nothing else may match")
-	}
-}
-
-// TestNativeShowListsPendings pins the read-only listing: the records
-// verbatim, an empty list when nothing was held, and nothing written.
-func TestNativeShowListsPendings(t *testing.T) {
-	directory := t.TempDir()
-	var out, errout bytes.Buffer
-	if code := NativeShow([]string{"--job", directory}, &out, &errout); code != 0 || out.String() != "[]\n" {
-		t.Fatalf("empty: %d %q %q", code, out.String(), errout.String())
-	}
-	writePendingsFile(t, directory, cliPendingPermission)
-	out.Reset()
-	if code := NativeShow([]string{"--job", directory}, &out, &errout); code != 0 {
-		t.Fatalf("code = %d", code)
-	}
-	want := mustCanonical(t, []any{decodeTestJSON(t, cliPendingPermission)}) + "\n"
-	if out.String() != want {
-		t.Fatalf("listing:\n got %q\nwant %q", out.String(), want)
-	}
-	if _, statErr := os.Stat(filepath.Join(directory, "interaction-answer.json")); !os.IsNotExist(statErr) {
-		t.Fatal("native-show must never write an answer")
-	}
-	if code := NativeShow([]string{"--job", filepath.Join(directory, "absent")}, &out, &errout); code != 1 {
-		t.Fatalf("missing directory: %d", code)
-	}
-	if code := NativeShow([]string{}, &out, &errout); code != 2 {
-		t.Fatalf("usage: %d", code)
 	}
 }

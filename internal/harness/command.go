@@ -67,11 +67,9 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions .
 		return RunNative(args[1], errout, admissions...)
 	}
 	if len(args) > 0 && args[0] == "native-respond" {
-		// Answer one held native interaction from the user's own shell.
 		return NativeRespond(args[1:], errout)
 	}
 	if len(args) > 0 && args[0] == "native-show" {
-		// Read-only listing of a job's held native interactions.
 		return NativeShow(args[1:], out, errout)
 	}
 	exe, e := os.Executable()

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/worker"
 	"io"
 	"path"
 	"strings"
@@ -263,9 +264,9 @@ func StrictDecode(b []byte, dst any) error {
 }
 
 type FindingJudgment struct {
-	Severity string   `json:"severity"`
-	Message  string   `json:"message"`
-	Paths    []string `json:"paths"`
+	Severity  string           `json:"severity"`
+	Message   string           `json:"message"`
+	Locations []nativeLocation `json:"locations"`
 }
 
 // WorkerJudgment carries authored role evidence; finding and approved check
@@ -278,7 +279,7 @@ type WorkerJudgment struct {
 	CheckReviews       []string          `json:"check_reviews"`
 }
 
-func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) (WorkerResult, error) {
+func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check, facts ...nativeToolFact) (WorkerResult, error) {
 	if judgment.InterruptionReason == "" && (strings.TrimSpace(judgment.Summary) == "" || judgment.RemainingWork == "" && judgment.CheckReviews == nil) {
 		return WorkerResult{}, fmt.Errorf("completed worker requires semantic summary and ordered check reviews")
 	}
@@ -321,12 +322,21 @@ func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) 
 	if judgment.Findings != nil {
 		result.Findings = make([]Finding, len(judgment.Findings))
 		for i, finding := range judgment.Findings {
+			paths, err := nativeLocationPaths(finding.Locations, facts)
+			if err != nil {
+				return WorkerResult{}, err
+			}
+			evidence := struct {
+				Severity string   `json:"severity"`
+				Message  string   `json:"message"`
+				Paths    []string `json:"paths"`
+			}{finding.Severity, finding.Message, paths}
 			id := Digest(struct {
 				Role, Status, Summary string
 				Ordinal               int
-				Finding               FindingJudgment
-			}{role, status, judgment.Summary, i, finding})
-			result.Findings[i] = Finding{ID: id, Severity: finding.Severity, Message: finding.Message, Paths: finding.Paths}
+				Finding               any
+			}{role, status, judgment.Summary, i, evidence})
+			result.Findings[i] = Finding{ID: id, Severity: finding.Severity, Message: finding.Message, Paths: paths}
 		}
 	}
 	if len(judgment.CheckReviews) != 0 && len(judgment.CheckReviews) != len(checks) {
@@ -348,7 +358,8 @@ func workerJudgmentResult(role string, judgment WorkerJudgment, checks []Check) 
 func WorkerSchema(checks ...Check) map[string]any {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	arr := func(item any) map[string]any { return map[string]any{"type": "array", "items": item} }
-	finding := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"severity", "message", "paths"}, "properties": map[string]any{"severity": map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}, "message": str(), "paths": arr(str())}}
+	location := worker.LocationSchema(false)
+	finding := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"severity", "message", "locations"}, "properties": map[string]any{"severity": map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}, "message": str(), "locations": arr(location)}}
 	reviews := []any{}
 	for _, check := range checks {
 		reviews = append(reviews, map[string]any{"type": "string", "minLength": 1, "description": "Assess the approved check: " + strings.Join(check.Argv, " ")})

@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/requirement"
 )
 
 // Interruption reports an inability to complete the issued semantic duty. Native
@@ -115,7 +116,7 @@ type Finding struct {
 	DeferralImpact    string                     `json:"deferralImpact,omitempty"`
 	Verification      review.FindingVerification `json:"verification,omitempty"`
 	Message           string                     `json:"message"`
-	Locations         []string                   `json:"locations,omitempty"`
+	Locations         []Location                 `json:"locations,omitempty"`
 }
 type Development struct {
 	RemainingWork string      `json:"-"`
@@ -237,6 +238,10 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 // DecodeResultWithPaths assembles the native terminal's captured VCS changes.
 // The caller supplies the original source-bound facts, including on recovery.
 func DecodeResultWithPaths(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string, paths []string) (protocol.Event, error) {
+	return DecodeResultWithFacts(input, eventID, raw, originalDigest, paths, nil)
+}
+
+func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string, paths []string, locationFacts []LocationFact) (protocol.Event, error) {
 	value, interruption, err := decodeRoleBody(input, raw)
 	if err != nil {
 		return protocol.Event{}, err
@@ -258,7 +263,11 @@ func DecodeResultWithPaths(input protocol.WorkerInput, eventID protocol.EventID,
 			return protocol.Event{}, fmt.Errorf("worker review result has wrong role")
 		}
 		r := value.Review
-		body := protocol.ReviewResultEvidence{GranularityReview: value.Granularity, Status: findingStatus(r.Findings), Message: r.Message, Findings: findings(r.Findings)}
+		items, err := findings(r.Findings, locationFacts, input.RequirementDocument)
+		if err != nil {
+			return protocol.Event{}, err
+		}
+		body := protocol.ReviewResultEvidence{GranularityReview: value.Granularity, Status: findingStatus(r.Findings), Message: r.Message, Findings: items}
 		body.Action, body.DispatchID, body.RequirementRevision, body.AuthorizationID = input.Review.Action, input.Pending.ActionID, input.Review.RequirementRevision, input.Review.AuthorizationID
 		checks := review.RequiredVerificationChecks()
 		if len(value.Review.Verification) != len(checks) {
@@ -290,7 +299,11 @@ func DecodeResultWithPaths(input protocol.WorkerInput, eventID protocol.EventID,
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
-		body := protocol.ValidationResult{Status: v.Status, GranularityReview: value.Granularity, Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: findings(v.Findings)}
+		items, err := findings(v.Findings, locationFacts, input.RequirementDocument)
+		if err != nil {
+			return protocol.Event{}, err
+		}
+		body := protocol.ValidationResult{Status: v.Status, GranularityReview: value.Granularity, Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: items}
 		body.Binding = issued.Binding
 		if body.Development != nil {
 			batch := completionBatch(input)
@@ -795,15 +808,19 @@ func decisions(values []*Decision, ids []string, inherited []coverage.ReviewDeci
 	return result, nil
 }
 
-func findings(values []Finding) []review.Finding {
+func findings(values []Finding, facts []LocationFact, document requirement.FrozenRequirementProjection) ([]review.Finding, error) {
 	if values == nil {
-		return nil
+		return nil, nil
 	}
 	result := make([]review.Finding, 0, len(values))
 	for _, item := range values {
-		result = append(result, review.Finding{Severity: item.Severity, SeverityRationale: item.SeverityRationale, Category: item.Category, Requirement: item.Requirement, NormalPath: item.NormalPath, ActualError: item.ActualError, DeferralImpact: item.DeferralImpact, Verification: item.Verification, Message: item.Message, Locations: slices.Clone(item.Locations)})
+		locations, err := LocationPaths(item.Locations, facts, document)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, review.Finding{Severity: item.Severity, SeverityRationale: item.SeverityRationale, Category: item.Category, Requirement: item.Requirement, NormalPath: item.NormalPath, ActualError: item.ActualError, DeferralImpact: item.DeferralImpact, Verification: item.Verification, Message: item.Message, Locations: locations})
 	}
-	return result
+	return result, nil
 }
 
 func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {

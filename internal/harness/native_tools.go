@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/requirement"
 )
 
 const nativeWorkspaceTool = "workspace"
@@ -37,6 +38,7 @@ type nativeWorkspaceTools struct {
 	facts                                                 []nativeToolFact
 	admissions                                            []ExecutionAdmission
 	material                                              *worker.Material
+	materials                                             string
 }
 
 type nativeToolContext struct {
@@ -44,6 +46,16 @@ type nativeToolContext struct {
 	Workspace     string           `json:"workspace"`
 	RequestDigest string           `json:"requestDigest"`
 	Facts         []nativeToolFact `json:"facts"`
+}
+
+type nativeLocation = worker.Location
+
+func nativeLocationPaths(locations []nativeLocation, facts []nativeToolFact) ([]string, error) {
+	sources := make([]worker.LocationFact, 0, len(facts))
+	for _, fact := range facts {
+		sources = append(sources, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
+	}
+	return worker.LocationPaths(locations, sources, requirement.FrozenRequirementProjection{})
 }
 
 func verifyNativeToolFact(fact nativeToolFact, directory, action, workspace string) error {
@@ -91,6 +103,16 @@ func newNativeWorkspaceTools(directory string, admissions ...ExecutionAdmission)
 		return nil, err
 	}
 	t := &nativeWorkspaceTools{directory: directory, workspace: resolveNativePath(workspace), readOnly: readOnly, requestDigest: textOf(proof["sha256"]), evidence: filepath.Join(directory, "tool-facts.jsonl")}
+	if materials, _ := getOf(request, "materials").(string); materials != "" {
+		if !filepath.IsAbs(materials) {
+			return nil, fmt.Errorf("current materials require their original absolute directory")
+		}
+		t.materials = resolveNativePath(materials)
+		relative, err := filepath.Rel(t.workspace, t.materials)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("current materials must belong to their issued workspace")
+		}
+	}
 	t.admissions = admissions
 	if getOf(request, "engine") != nil {
 		materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
@@ -262,18 +284,41 @@ func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, e
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("target resolves outside the issued workspace")
 	}
+	if t.materials != "" {
+		parent := filepath.Dir(t.materials)
+		inside, _ := filepath.Rel(parent, resolved)
+		current, _ := filepath.Rel(t.materials, resolved)
+		if inside != "." && inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator)) && (current == ".." || strings.HasPrefix(current, ".."+string(filepath.Separator))) {
+			return "", fmt.Errorf("only the current role materials are available")
+		}
+	}
 	return resolved, nil
 }
 
+func (t *nativeWorkspaceTools) writable(path string) error {
+	if t.readOnly {
+		return fmt.Errorf("issued action is read-only")
+	}
+	if t.materials != "" {
+		relative, _ := filepath.Rel(filepath.Dir(t.materials), path)
+		if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("current task materials are read-only")
+		}
+	}
+	return nil
+}
+
 type nativeWorkspaceArguments struct {
-	Action  string `json:"action"`
-	Listing int    `json:"listing,omitempty"`
-	Entry   int    `json:"entry,omitempty"`
-	Read    int    `json:"read,omitempty"`
-	From    int    `json:"from,omitempty"`
-	To      int    `json:"to,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Content string `json:"content,omitempty"`
+	Action        string `json:"action"`
+	Listing       int    `json:"listing,omitempty"`
+	Entry         int    `json:"entry,omitempty"`
+	Read          int    `json:"read,omitempty"`
+	From          int    `json:"from,omitempty"`
+	To            int    `json:"to,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Content       string `json:"content,omitempty"`
+	TargetListing int    `json:"targetListing,omitempty"`
+	TargetEntry   int    `json:"targetEntry,omitempty"`
 }
 
 func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
@@ -366,6 +411,9 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		paths := make([]string, 0, len(entries))
 		choices := make([]any, 0, len(entries))
 		for _, entry := range entries {
+			if t.materials != "" && path == filepath.Dir(t.materials) && entry.Name() != filepath.Base(t.materials) {
+				continue
+			}
 			paths = append(paths, filepath.Join(relative, entry.Name()))
 			choices = append(choices, map[string]any{"entry": len(paths), "name": entry.Name(), "directory": entry.IsDir()})
 		}
@@ -399,6 +447,9 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		}
 		path, err := t.path(fact.Paths[0], true)
 		if err != nil {
+			return nil, err
+		}
+		if err := t.writable(path); err != nil {
 			return nil, err
 		}
 		body, err := os.ReadFile(path)
@@ -447,6 +498,9 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := t.writable(path); err != nil {
+			return nil, err
+		}
 		if a.Action == "mkdir" {
 			return map[string]any{"created": true}, os.Mkdir(path, 0755)
 		}
@@ -460,12 +514,90 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"written": true}, closeErr
+	case "copy", "move":
+		if t.readOnly {
+			return nil, fmt.Errorf("issued action is read-only")
+		}
+		if a.Listing == 0 {
+			return nil, fmt.Errorf("file transfer selects an original published entry")
+		}
+		if a.Content != "" || a.Name == "" || filepath.Base(a.Name) != a.Name || a.Name == "." || a.Name == ".." {
+			return nil, fmt.Errorf("file transfer supplies only a new filename and original selections")
+		}
+		targetRelative := "."
+		if a.TargetListing != 0 {
+			fact, err := t.fact(a.TargetListing, "listing")
+			if err != nil {
+				return nil, err
+			}
+			if a.TargetEntry < 1 || a.TargetEntry > len(fact.Paths) {
+				return nil, fmt.Errorf("target selects an entry from the original listing")
+			}
+			targetRelative = fact.Paths[a.TargetEntry-1]
+		} else if a.TargetEntry != 0 {
+			return nil, fmt.Errorf("target entry requires its original listing")
+		}
+		targetDirectory, err := t.path(targetRelative, true)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(targetDirectory)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("target must be a workspace directory")
+		}
+		target, err := t.path(filepath.Join(targetRelative, a.Name), false)
+		if err != nil {
+			return nil, err
+		}
+		if err := t.writable(target); err != nil {
+			return nil, err
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("target already exists")
+		}
+		source, err := t.path(relative, a.Action == "copy")
+		if err != nil {
+			return nil, err
+		}
+		info, err = os.Lstat(source)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() && !(a.Action == "move" && info.Mode()&os.ModeSymlink != 0) {
+			return nil, fmt.Errorf("file transfer selects a file, not a directory")
+		}
+		if a.Action == "move" {
+			if err := t.writable(source); err != nil {
+				return nil, err
+			}
+			return map[string]any{"moved": true}, os.Rename(source, target)
+		}
+		body, err := os.ReadFile(source)
+		if err != nil {
+			return nil, err
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			return nil, err
+		}
+		_, err = file.Write(body)
+		closeErr := file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"copied": true}, closeErr
 	case "remove":
 		if t.readOnly || a.Listing == 0 {
 			return nil, fmt.Errorf("removal requires a writable action and published entry")
 		}
 		path, err := t.path(relative, false)
 		if err != nil {
+			return nil, err
+		}
+		if err := t.writable(path); err != nil {
 			return nil, err
 		}
 		return map[string]any{"removed": true}, os.Remove(path)
@@ -477,9 +609,9 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 func nativeWorkspaceToolSchema(readOnly bool) map[string]any {
 	actions := []any{"list", "read", "comparison"}
 	if !readOnly {
-		actions = append(actions, "replace", "create", "mkdir", "remove")
+		actions = append(actions, "replace", "create", "mkdir", "remove", "copy", "move")
 	}
-	return map[string]any{"name": nativeWorkspaceTool, "description": "Inspect the issued workspace. Existing targets select the original listing and entry numbers. Replace selects an original read and its one-based line range; an empty file uses from=1,to=0. Supply only new content. New filenames are semantic creation in the selected directory. Comparison reads only the original issued versions. Published numbers remain bound across continuation and resume.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": actions}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}, "read": map[string]any{"type": "integer", "minimum": 1}, "from": map[string]any{"type": "integer", "minimum": 1}, "to": map[string]any{"type": "integer", "minimum": 0}, "name": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []any{"action"}, "additionalProperties": false}}
+	return map[string]any{"name": nativeWorkspaceTool, "description": "Select existing files by original listing and entry numbers. Replace selects an original read and one-based line range (empty: from=1,to=0) and supplies new content. Copy/move select the source listing/entry, a target directory listing/entry (omit for workspace root), and a new filename; the program transfers original bytes. Comparison uses issued versions. Numbers remain bound across continuation and resume.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": actions}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}, "read": map[string]any{"type": "integer", "minimum": 1}, "from": map[string]any{"type": "integer", "minimum": 1}, "to": map[string]any{"type": "integer", "minimum": 0}, "targetListing": map[string]any{"type": "integer", "minimum": 1}, "targetEntry": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []any{"action"}, "additionalProperties": false}}
 }
 
 // NativeTools serves only MCP's handshake, discovery and tool-call methods.

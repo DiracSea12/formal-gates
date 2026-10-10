@@ -422,6 +422,9 @@ func (f *automaticNativeFlow) save(name string, value any) {
 
 func (f *automaticNativeFlow) command(input []byte, args ...string) []byte {
 	f.t.Helper()
+	if len(args) > 1 && args[0] == "workflow" && slices.Contains([]string{"start", "show", "status", "next", "drive", "submit"}, args[1]) {
+		args = append(args, "--machine")
+	}
 	cmd := exec.Command(f.binary, args...)
 	cmd.Dir, cmd.Env, cmd.Stdin = f.project, append(os.Environ(), "PWD="+f.project), bytes.NewReader(input)
 	started := time.Now()
@@ -665,9 +668,30 @@ func (f *automaticNativeFlow) assertNativeSources() {
 	jobs, handlers := 0, map[string]bool{}
 	usages := map[string]cost.Usage{}
 	turns := map[string]int64{}
+	unavailable := map[string]bool{}
+	type nativeRequest struct {
+		Engine struct {
+			RunID          string                `json:"runId"`
+			WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
+		} `json:"engine"`
+	}
 	if err := filepath.WalkDir(filepath.Join(f.project, facade.EngineNamespace), func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || entry.Name() != "source.json" {
+		if err != nil || entry.IsDir() {
 			return err
+		}
+		if entry.Name() == "native-request.json" {
+			directory := filepath.Dir(path)
+			if _, err := os.Stat(filepath.Join(directory, "source.json")); os.IsNotExist(err) {
+				if _, err := os.Stat(filepath.Join(directory, "native-error.json")); err != nil {
+					return err
+				}
+				var request nativeRequest
+				f.decode(readTestFileBytes(f.t, path), &request)
+				unavailable[request.Engine.RunID+"/"+request.Engine.WorkerMaterial.ActionID] = true
+			}
+		}
+		if entry.Name() != "source.json" {
+			return nil
 		}
 		directory := filepath.Dir(path)
 		if _, err := os.Stat(filepath.Join(directory, "native-request.json")); os.IsNotExist(err) {
@@ -685,12 +709,7 @@ func (f *automaticNativeFlow) assertNativeSources() {
 		if NativeJobAlive(directory) {
 			return fmt.Errorf("native job remains alive at terminal: %s", directory)
 		}
-		var request struct {
-			Engine struct {
-				RunID          string                `json:"runId"`
-				WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
-			} `json:"engine"`
-		}
+		var request nativeRequest
 		f.decode(readTestFileBytes(f.t, filepath.Join(directory, "native-request.json")), &request)
 		var material worker.Material
 		f.decode(readTestFileBytes(f.t, request.Engine.WorkerMaterial.Path), &material)
@@ -757,7 +776,8 @@ func (f *automaticNativeFlow) assertNativeSources() {
 			f.t.Fatal("actual native source has no original cost ledger", dispatch)
 		}
 		entry := ledger.Dispatches[actionID]
-		if entry.Source != cost.SourceTranscript || entry.InputCacheHitTokens != usage.InputCacheHitTokens || entry.InputCacheMissTokens != usage.InputCacheMissTokens || entry.OutputTokens != usage.OutputTokens {
+		sourceMatches := entry.Source == cost.SourceTranscript || entry.Source == cost.SourceUnavailable && unavailable[dispatch] && entry.Reason != ""
+		if !sourceMatches || entry.InputCacheHitTokens != usage.InputCacheHitTokens || entry.InputCacheMissTokens != usage.InputCacheMissTokens || entry.OutputTokens != usage.OutputTokens {
 			f.t.Fatal("original cost differs from deduplicated actual native provider turns", dispatch, entry, usage)
 		}
 	}
@@ -765,5 +785,5 @@ func (f *automaticNativeFlow) assertNativeSources() {
 	for _, count := range turns {
 		requests += count
 	}
-	f.save("native-model-proof.json", map[string]any{"completedNativeJobs": jobs, "verifiedNativeTurns": len(turns), "verifiedBackendRequests": requests, "actualHandlers": handlers, "originalCostMatchesVerifiedSources": true, "cost": f.run.Cost})
+	f.save("native-model-proof.json", map[string]any{"completedNativeJobs": jobs, "verifiedNativeTurns": len(turns), "verifiedBackendRequests": requests, "actualHandlers": handlers, "originalCostMatchesVerifiedSources": true, "unavailableCostDispatches": unavailable, "cost": f.run.Cost})
 }

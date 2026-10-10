@@ -102,11 +102,7 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 	}
 	paths := append(nulPaths(tracked), nulPaths(staged)...)
 	for _, path := range nulPaths(untracked) {
-		runtime := false
-		for _, dir := range runtimeStatusDirs {
-			runtime = runtime || strings.HasPrefix(path, dir)
-		}
-		if !runtime {
+		if !p.isRuntimeStatusPath(path) {
 			paths = append(paths, path)
 		}
 	}

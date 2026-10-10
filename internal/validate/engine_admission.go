@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
 )
 
@@ -23,6 +24,7 @@ type EngineAdmission struct {
 	Generation    uint64
 	Lease         string
 	Token         string
+	RuntimeFiles  vcs.RuntimeFiles
 }
 
 // ResolveEngineAdmission reads the existing install registry and resolves the
@@ -148,7 +150,8 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if autoResolve {
 		packageAbs = record.Target
 	}
-	if identityErr := verifyRegisteredTargetIdentity(record); identityErr != nil {
+	installed, identityErr := verifyRegisteredTargetIdentity(record)
+	if identityErr != nil {
 		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: candidate target identity cannot be verified: %w", identityErr)
 	}
 	if root != "" {
@@ -170,7 +173,17 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if err != nil {
 		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: registry host cannot be resolved: %w", err)
 	}
-	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token}, nil
+	runtimeFiles := vcs.RuntimeFiles{}
+	for _, entry := range installed.Entries {
+		runtimeFiles.Files = append(runtimeFiles.Files, entry.RealPath)
+	}
+	if len(installed.Entries) != 0 {
+		runtimeFiles.Files = append(runtimeFiles.Files, canonicalRegistryPath(record.LauncherPath))
+	}
+	if record.ResourceRoot != "" {
+		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot)}
+	}
+	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token, RuntimeFiles: runtimeFiles}, nil
 }
 
 // admissionRecordRootMatch reports whether a record can serve root.  Global

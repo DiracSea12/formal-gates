@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -260,7 +261,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err != nil {
 		return err
 	}
-	if admission != bound {
+	if !reflect.DeepEqual(admission, bound) {
 		return fmt.Errorf("portable workflow installation does not match its root and package")
 	}
 	document := "# Canary requirement\n\n## 需求点\n\n### REQ-001：Confirmed behavior\n\n#### 要求\n\nThe installed workflow must complete its verified route.\n\n#### 验收条件\n\n- AC-001：The installed workflow reaches Seal through the public runtime.\n\n#### 来源\n\nPortable canary contract.\n"
@@ -279,7 +280,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	f, run, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, PackageRoot: packageRoot, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, PackageRoot: packageRoot, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		return err
 	}

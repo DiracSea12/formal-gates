@@ -161,28 +161,9 @@ def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, re
                 'state_migrated': False, 'model_calls': 0}
 
 def native_pending_interactions(store):
-    """Run-level read-only listing of held native interactions.
+    """Display current semantic SDK questions; the native owner retains bindings."""
+    return store.bridge.call('native-questions', {'run': str(store.directory)})
 
-    Each job directory's interaction-pending.json is scanned and only records
-    still pending are open questions; delivered, observed and invalidated
-    holds are evidence. Nothing is written and no graph interrupt is
-    fabricated: the operator answers through native-respond while the graph
-    keeps its own pause semantics.
-    """
-    collected=[]
-    for path in sorted((store.directory/'jobs').glob('*/interaction-pending.json')):
-        records=read(path)
-        if not isinstance(records,list):continue
-        for record in records:
-            if isinstance(record,dict) and record.get('status')=='pending':
-                # Body keys (toolName/input/toolCall/prompt/questions) are the Go-side
-                # adapter's choice; the saved record is passed through verbatim, minus
-                # the lifecycle bookkeeping, instead of being re-listed here.
-                projected={key:value for key,value in record.items()
-                           if key not in ('status','connection','updated_at')}
-                projected['job']=path.parent.name
-                collected.append(projected)
-    return collected
 
 def status_projection(store,app,config):
     snapshot=app.get_state(config,subgraphs=True);state=snapshot.values or {};pending=[]

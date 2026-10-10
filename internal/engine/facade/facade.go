@@ -206,12 +206,13 @@ type ReviewCandidateFace struct {
 // 裁决的稳定身份，severity 为有效严重度；EffectiveDecisionID 是后续纠正
 // 必须 supersede 的当前决定身份，空值表示未裁决。
 type ReviewFindingFace struct {
-	ID                  string `json:"id"`
-	Digest              string `json:"digest"`
-	Severity            string `json:"severity"`
-	Message             string `json:"message"`
-	EffectiveDecision   string `json:"effectiveDecision,omitempty"`
-	EffectiveDecisionID string `json:"effectiveDecisionId,omitempty"`
+	Evidence            review.Finding `json:"evidence"`
+	ID                  string         `json:"id"`
+	Digest              string         `json:"digest"`
+	Severity            string         `json:"severity"`
+	Message             string         `json:"message"`
+	EffectiveDecision   string         `json:"effectiveDecision,omitempty"`
+	EffectiveDecisionID string         `json:"effectiveDecisionId,omitempty"`
 }
 
 // ReviewActionFace 是单个审查动作的账本公开面：completed/base/extra(授
@@ -316,6 +317,7 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 		for _, finding := range candidate.Findings {
 			decision, severity, decisionID := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
 			findings = append(findings, ReviewFindingFace{
+				Evidence:            finding,
 				ID:                  finding.ID,
 				Digest:              finding.Digest,
 				Severity:            severity,
@@ -411,7 +413,8 @@ type StartOptions struct {
 	Owner OwnerBinding
 	// VCSRunner 注入 regular 路线快照校验用的 Git 命令 runner（测试替身；
 	// nil＝生产 exec）。lightweight 不消费它。
-	VCSRunner vcs.Runner
+	VCSRunner    vcs.Runner
+	RuntimeFiles vcs.RuntimeFiles
 }
 
 // Admission is a launcher-derived runtime binding.  It is intentionally
@@ -443,8 +446,9 @@ type Facade struct {
 	// vcsRunner 是注入的 Git 命令 runner（测试替身）；vcs 是绑定 run 根的
 	// provider，regular 路线启动校验、终态快照边界与登记制共用。lightweight
 	// 不引入 VCS 依赖，两者为 nil。
-	vcsRunner vcs.Runner
-	vcs       *vcs.Provider
+	vcsRunner    vcs.Runner
+	vcs          *vcs.Provider
+	runtimeFiles vcs.RuntimeFiles
 }
 
 // Start creates an engine candidate run after validating the complete typed
@@ -508,7 +512,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		nativeRoot = root
 	}
 	if req.Route == "regular" && sliceStart == nil {
-		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
+		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).WithRuntimeFiles(options.RuntimeFiles).At(nativeRoot, req.NativeHandle)
 		current, err := vcsProvider.Resolve()
 		if err != nil {
 			return nil, Run{}, err
@@ -700,11 +704,11 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		if err != nil {
 			return nil, Run{}, err
 		}
-		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).At(nativeRoot, req.NativeHandle)
+		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).WithRuntimeFiles(options.RuntimeFiles).At(nativeRoot, req.NativeHandle)
 	} else if err := initializeRun(eng, root, req, initialSnapshot, nil, options.Owner, tokenCap, admission, cd); err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider}
+	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider, runtimeFiles: options.RuntimeFiles}
 	run, err := f.project()
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
@@ -762,7 +766,11 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialS
 
 // Open loads an existing engine run and validates all six identity fields
 // before exposing a writer.  No fallback to the legacy namespace occurs.
-func Open(root, runID string) (*Facade, error) {
+func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) {
+	runtimeFiles := vcs.RuntimeFiles{}
+	if len(inventories) != 0 {
+		runtimeFiles = inventories[0]
+	}
 	root, err := filepath.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return nil, err
@@ -845,7 +853,11 @@ func Open(root, runID string) (*Facade, error) {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	return &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(root, nativeRoot, req)}, nil
+	f := &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(root, nativeRoot, req), runtimeFiles: runtimeFiles}
+	if f.vcs != nil {
+		f.vcs.WithRuntimeFiles(runtimeFiles)
+	}
+	return f, nil
 }
 
 // Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
@@ -1571,7 +1583,7 @@ func (f *Facade) project() (Run, error) {
 	if snap.State.SliceChild != nil {
 		run.MasterRunID = snap.State.SliceChild.MasterRunID
 		run.ParentRequirement = snap.State.SliceChild.ParentChange
-		parent, err := Open(f.root, run.MasterRunID)
+		parent, err := Open(f.root, run.MasterRunID, f.runtimeFiles)
 		if err != nil {
 			return Run{}, err
 		}
@@ -2394,7 +2406,7 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...proto
 			return nil, err
 		}
 		if child := snapshot.State.SliceChild; child != nil {
-			parent, err := Open(f.root, child.MasterRunID)
+			parent, err := Open(f.root, child.MasterRunID, f.runtimeFiles)
 			if err != nil {
 				return nil, err
 			}

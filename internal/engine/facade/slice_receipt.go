@@ -8,7 +8,7 @@ import (
 // handoffSliceReceipt runs after the child checkpoint/publisher has released
 // its store, owner and promotion locks. The master acceptance owns its run lock.
 func (f *Facade) handoffSliceReceipt(receipt protocol.SliceReceipt) error {
-	master, err := Open(f.root, receipt.Receipt.MasterRunID)
+	master, err := Open(f.root, receipt.Receipt.MasterRunID, f.runtimeFiles)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
 		if childID == "" {
 			continue
 		}
-		child, err := Open(f.root, childID)
+		child, err := Open(f.root, childID, f.runtimeFiles)
 		if err != nil {
 			return err
 		}

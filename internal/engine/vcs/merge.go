@@ -115,7 +115,7 @@ func (p *Provider) WorkingChanges() ([]string, error) {
 	}
 	paths := nulPaths(out)
 	for _, path := range nulPaths(untracked) {
-		if !isRuntimeStatusPath(path) {
+		if !p.isRuntimeStatusPath(path) {
 			paths = append(paths, path)
 		}
 	}

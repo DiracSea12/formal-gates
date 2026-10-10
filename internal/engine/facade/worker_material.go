@@ -519,7 +519,7 @@ func (f *Facade) registerIntakeRequirement() error {
 // SubmitWorkerResult consumes the source-verified native answer and uses the
 // existing Submit transaction. The original spawn correlation owns session
 // correlation; native source verifies the separate host session identity.
-func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMaterial, directory string, source map[string]any, verifyNative func(string, string, map[string]any) ([]byte, string, string, error)) (protocol.Acceptance, Run, error) {
+func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMaterial, directory string, source map[string]any, verifyNative func(string, string, map[string]any) (worker.ResultSource, error)) (protocol.Acceptance, Run, error) {
 	if verifyNative == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native source verification is required")
 	}
@@ -561,11 +561,11 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	if request.Prompt != value.Prompt || filepath.Clean(request.Workspace) != filepath.Clean(workspace) || request.ReadOnly != value.ReadOnly {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native invocation differs from issued worker material")
 	}
-	answer, digest, nativeSession, err := verifyNative(provider, directory, source)
+	evidence, err := verifyNative(provider, directory, source)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
-	if nativeSession == "" {
+	if evidence.Identity == "" {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native result session proof is missing")
 	}
 	var paths []string
@@ -582,14 +582,14 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 		}
 		paths = captured.Paths
 	}
-	event, err := worker.DecodeResultWithPaths(value.Input, eventID, answer, digest, paths)
+	event, err := worker.DecodeResultWithFacts(value.Input, eventID, evidence.Answer, evidence.Digest, paths, evidence.LocationFacts)
 	if err != nil {
-		event, err = worker.InvalidResult(value.Input, eventID, digest, err.Error())
+		event, err = worker.InvalidResult(value.Input, eventID, evidence.Digest, err.Error())
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
 	}
-	// The verified original request's exact prompt carries run/action/attempt.
+	// The verified original material retains the run/action/attempt binding.
 	// Submit alone owns current, terminal, duplicate and obsolete-result admission.
 	// The native session proof is distinct from the ledger's spawn correlation.
 	return f.Submit(event)

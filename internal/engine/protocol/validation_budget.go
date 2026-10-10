@@ -8,8 +8,8 @@ import (
 )
 
 // KindDispatchBudgetDisposition 是派发预算边界的唯一 typed control
-// （额度或 retry 耗尽、token cap 到达后返回 typed Ask；固定四选项
-// 有限继续/重试/跳过/abort，不新增生命周期或公开旁路）。经 ControlValidation
+// （额度或 retry 耗尽、token cap 到达后返回适用于当前边界的 typed Ask，
+// 不新增生命周期或公开旁路）。经 ControlValidation
 // 的既有 Ask/DECIDE 机制落账与授权，不是新的 ControlKind。
 const KindDispatchBudgetDisposition = "DISPATCH_BUDGET_DISPOSITION"
 
@@ -17,17 +17,40 @@ const KindDispatchBudgetDisposition = "DISPATCH_BUDGET_DISPOSITION"
 // 的 run 级 Ask 目标身份；「retry」选项需要逻辑动作目标，对其拒绝。
 const budgetDispositionTarget = "engine-dispatch-budget"
 
-// dispatchBudgetOptions 是预算处置 Ask 的固定四选项（不接受自由数字，也不能
-// 预先累积）：continue 固定解锁当前 canonical Ready batch 一次（仍按既有
-// admission capacity 裁剪）；retry 固定增加目标逻辑动作的一个 retry slot；
-// skip 只留痕不解锁；abort 经通用 abort 分支终止 run。
-func dispatchBudgetOptions() []AskOption {
-	return []AskOption{
-		{ID: "continue", Label: "Unlock the current Ready batch once"},
-		{ID: "retry", Label: "Add one retry slot to the boundary action"},
-		{ID: "skip", Label: "Keep the boundary blocked"},
-		{ID: "abort", Label: "Abort this run"},
+// dispatchBudgetOptions retains each choice's bounded semantics. A finite retry
+// boundary requires its single extension; continue unlocks the current canonical
+// Ready batch once within admission capacity and cannot change the retry policy.
+func (s *State) dispatchBudgetOptions(target string) []AskOption {
+	attempt, known := s.dispatchBudgetAttempt(target)
+	retryBlocked := false
+	if known && attempt.MaxAttempts > 0 {
+		_, _, owed := s.workerActionTarget(attempt.ActionID)
+		if owed {
+			_, retryBlocked = s.effectRetryBudget(attempt)
+		} else {
+			retryBlocked = attempt.Attempts >= attempt.MaxAttempts
+		}
 	}
+	var options []AskOption
+	if !retryBlocked {
+		options = append(options, AskOption{ID: "continue", Label: "Unlock the current Ready batch once"})
+	}
+	if retryBlocked && !s.retryExtensionGranted(target) {
+		options = append(options, AskOption{ID: "retry", Label: "Add one retry slot to the boundary action"})
+	}
+	return append(options, AskOption{ID: "skip", Label: "Keep the boundary blocked"}, AskOption{ID: "abort", Label: "Abort this run"})
+}
+
+func (s *State) dispatchBudgetAttempt(target string) (Attempt, bool) {
+	var task runtime.TaskKey
+	if task.UnmarshalText([]byte(target)) != nil {
+		return Attempt{}, false
+	}
+	if attempt, ok := s.Attempts[task]; ok {
+		return attempt, true
+	}
+	attempt, ok := s.EndedAttempts[task]
+	return attempt, ok
 }
 
 // ensureDispatchBudgetAsk 落账预算处置 Ask（幂等：同 kind/target 且摘要未变时

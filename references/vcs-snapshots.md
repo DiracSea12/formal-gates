@@ -1,7 +1,7 @@
 # 原生 VCS 与候选身份
 
-正式流程由 VCS adapter 持有 Git/SVN/P4 操作，代理只编辑授权内容并返回声明式路径
-manifest、语义说明和 typed result；不能自行拼接 VCS 写命令或决定执行顺序。
+正式流程由 VCS adapter 持有 Git/SVN/P4 操作，代理只编辑授权内容并返回语义结果；原生差异与登记范围由程序取得，
+不要求模型重列精确路径或决定执行顺序。
 完整公共调用合同见 [正式流程](formal-flow.md)。
 
 adapter 负责 provider/root 探测、status/diff/untracked、base/current/ancestry、工作区

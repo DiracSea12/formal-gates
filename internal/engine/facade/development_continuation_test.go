@@ -113,8 +113,10 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	if err != nil || !strings.Contains(string(stdout), "build: actual source check") {
 		t.Fatalf("original failed stdout: %s %v", stdout, err)
 	}
-	if !strings.Contains(material.Prompt, "original workspace and native session") {
-		t.Fatal("material does not keep batch continuation in original session")
+	var contextInput protocol.WorkerInput
+	contextJSON := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
+	if err := json.Unmarshal([]byte(contextJSON), &contextInput); err != nil || !reflect.DeepEqual(contextInput.Validation.Development, feedback) || contextInput.Validation.Workspace.Path != input.Workspace.Path {
+		t.Fatal("material lost original continuation feedback or workspace", err)
 	}
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// incomplete change\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -226,12 +228,12 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 	sum := sha256.Sum256(answer)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 	eventID := d.eventID()
-	verify := func(provider, path string, source map[string]any) ([]byte, string, string, error) {
+	verify := func(provider, path string, source map[string]any) (worker.ResultSource, error) {
 		descriptor, err := host.Lookup(d.host())
 		if err != nil || provider != descriptor.InstallName || path != directory || source["session"] != "fixture-native-session" || session != source["session"] {
 			t.Fatal("semantic fixture changed native session/provider/source")
 		}
-		return answer, digest, session, nil
+		return worker.ResultSource{Answer: answer, Digest: digest, Identity: session}, nil
 	}
 	resource := material.Input.Validation.Workspace
 	paths, err := vcs.NewNative(resource.Path, material.Input.VCS, nil).At(resource.Path, resource.Handle).ChangedPaths()

@@ -1,0 +1,179 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+)
+
+// Workflow views present current semantic duties; engine projections remain
+// complete for program consumers and saved confirmation candidates.
+func workflowRunView(run facade.Run) map[string]any {
+	next := map[string]any{"kind": run.Next.Kind}
+	if run.Next.Kind == decision.KindReady || run.Next.Kind == decision.KindHostAction {
+		next["action"] = "drive"
+	}
+	if run.Next.Wait != nil {
+		next["reason"] = run.Next.Wait.Reason
+	}
+	if run.Next.Operator != nil {
+		reasons := []string{}
+		for _, fact := range run.Next.Operator.Facts {
+			reasons = append(reasons, fact.Value)
+		}
+		next["facts"] = reasons
+	}
+	view := map[string]any{"runId": run.RunID, "status": run.Status, "route": run.Route, "revision": run.Revision, "next": next, "unverified": run.Unverified}
+	if run.SummaryPath != "" {
+		view["summaryPath"] = run.SummaryPath
+	}
+	view["availableActions"] = run.AvailableActions
+	questions := []map[string]any{}
+	for index, ask := range run.PendingAsks {
+		options := []map[string]any{}
+		for _, option := range ask.Options {
+			choice := string(option.ID)
+			if ask.Control == protocol.ControlReviewFindingDecision {
+				choice, _, _ = strings.Cut(choice, ":")
+			}
+			options = append(options, map[string]any{"choice": choice, "label": option.Label})
+		}
+		question := map[string]any{"ask": index + 1, "control": ask.Control, "options": options}
+		if len(ask.RouteGates) != 0 {
+			question["gates"] = numberedChoices(ask.RouteGates)
+		}
+		if ask.Validation != nil {
+			v := ask.Validation
+			question["validation"] = map[string]any{"kind": v.Kind, "mode": v.Mode, "category": v.Category, "affectedCases": v.AffectedCases, "obligations": numberedChoices(v.Obligations), "remedies": v.Remedies, "summary": v.Summary}
+		}
+		if ask.RoundGrant != nil {
+			question["review"] = map[string]any{"action": ask.RoundGrant.Action, "completed": ask.RoundGrant.Completed, "automaticLimit": ask.RoundGrant.AutomaticLimit}
+		}
+		if ask.Control == protocol.ControlReviewFindingDecision {
+			question["reviews"] = workflowReviewChoices(run.Review)
+		}
+		if ask.Control == protocol.ControlConfirmTopology {
+			question["proposal"] = run.Review.ReadinessProposal
+		}
+		questions = append(questions, question)
+	}
+	view["questions"] = questions
+	if run.PendingRequirementAsk != nil {
+		work := []map[string]any{}
+		for index, item := range run.RequirementWork {
+			work = append(work, map[string]any{"work": index + 1, "task": item.Task, "requirementRevision": item.RequirementRevision})
+		}
+		view["requirementWork"] = work
+	}
+	return view
+}
+
+func numberedChoices(values []string) []map[string]any {
+	choices := []map[string]any{}
+	for index, value := range values {
+		choices = append(choices, map[string]any{"number": index + 1, "label": value})
+	}
+	return choices
+}
+
+func workflowReviewChoices(review facade.ReviewFace) []map[string]any {
+	choices := []map[string]any{}
+	for actionIndex, action := range review.Actions {
+		for candidateIndex, candidate := range action.Candidates {
+			if candidate.Excluded {
+				continue
+			}
+			findings := []map[string]any{}
+			for findingIndex, finding := range candidate.Findings {
+				if finding.EffectiveDecision != "" {
+					continue
+				}
+				f := finding.Evidence
+				findings = append(findings, map[string]any{"finding": findingIndex + 1, "severity": finding.Severity, "message": finding.Message, "severityRationale": f.SeverityRationale, "category": f.Category, "requirement": f.Requirement, "normalPath": f.NormalPath, "actualError": f.ActualError, "deferralImpact": f.DeferralImpact, "locations": f.Locations, "verification": f.Verification})
+			}
+			if len(findings) != 0 {
+				choices = append(choices, map[string]any{"review": actionIndex + 1, "action": action.Action, "candidate": candidateIndex + 1, "requirementRevision": candidate.RequirementRevision, "findings": findings})
+			}
+		}
+	}
+	return choices
+}
+
+func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any {
+	run := workflowRunView(candidate.Run)
+	questions := []map[string]any{}
+	if candidate.Event.Decide != nil {
+		for index, ask := range candidate.Run.PendingAsks {
+			if ask.RequestID == string(candidate.Event.Decide.Request) {
+				questions = append(questions, run["questions"].([]map[string]any)[index])
+				break
+			}
+		}
+	}
+	run["questions"] = questions
+	view := map[string]any{"input": candidate.Input, "run": run}
+	if candidate.DevelopmentPlan != nil {
+		view["proposal"] = candidate.DevelopmentPlan.Proposal
+		view["planDigest"] = candidate.DevelopmentPlan.Confirmation.Digest
+	}
+	if candidate.Intake != nil {
+		view["materials"], view["revision"] = candidate.Intake.Materials, candidate.Intake.Revision
+	}
+	if candidate.Reset != nil {
+		view["reset"] = candidate.Reset
+	}
+	return view
+}
+
+func workflowConsumptionView(value workflowConsumption) map[string]any {
+	view := map[string]any{"run": workflowRunView(value.Run), "boundary": value.Boundary, "progress": value.Progress}
+	if value.Acceptance != nil {
+		view["acceptance"] = map[string]any{"status": value.Acceptance.Status, "revision": value.Acceptance.Revision}
+	}
+	keys := []string{}
+	for key := range value.Blocked {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	blocked := []string{}
+	for _, key := range keys {
+		blocked = append(blocked, value.Blocked[key])
+	}
+	view["blocked"] = blocked
+	children := []map[string]any{}
+	keys = keys[:0]
+	for key := range value.Children {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for index, key := range keys {
+		child := workflowConsumptionView(value.Children[key])
+		child["child"] = index + 1
+		children = append(children, child)
+	}
+	view["children"] = children
+	return view
+}
+
+func printWorkflowView(streams IO, value workflowConsumption, machine bool, executionErr error) (int, error) {
+	if machine {
+		return printWorkflowConsumption(streams, value, executionErr)
+	}
+	if code, err := printJSON(streams.Stdout, workflowConsumptionView(value)); err != nil {
+		return code, err
+	}
+	if executionErr != nil {
+		fmt.Fprintln(streams.Stderr, executionErr)
+		if errors.Is(executionErr, context.Canceled) {
+			return 130, nil
+		}
+		return 1, nil
+	}
+	return 0, nil
+}

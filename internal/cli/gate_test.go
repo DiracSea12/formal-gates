@@ -2,16 +2,42 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/validate"
 )
 
 // TestCLIGateRunAndReportStandalone covers detached CLI commands: gate
 // run assembles the standalone prompt (no requirement or dispatch block) and gate
-// report validates and displays a reviewer result without persisting anything.
+// report resolves the original numeric source positions without changing run state.
 func TestCLIGateRunAndReportStandalone(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
-	prompt := runCLI(t, "gate", "run", "--root", root, "--package-root", pkg, "--vcs", "git", "quality")
+	context := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(filepath.Join(root, "example.txt"), []byte("first line\nsecond line\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prompt := runCLI(t, "gate", "run", "--root", root, "--package-root", pkg, "--vcs", "git", "--save-context", context, "quality")
+	if strings.Contains(prompt, "first line") || strings.Contains(prompt, "second line") || !strings.Contains(prompt, `"read": 1`) || !strings.Contains(prompt, `"path": "example.txt"`) || !strings.Contains(prompt, context) {
+		t.Fatal("gate task repeated source content or lost original location/context indexes", prompt)
+	}
+	data, err := os.ReadFile(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original validate.StandaloneGateContext
+	if err := json.Unmarshal(data, &original); err != nil || len(original.LocationFacts) != 1 || original.LocationFacts[0].Paths[0] != "example.txt" || original.LocationFacts[0].Content != "first line\nsecond line\n" {
+		t.Fatal("gate run did not persist its exact original source context", err)
+	}
+	if err := os.Remove(filepath.Join(root, "example.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "earlier.txt"), []byte("replacement source\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, block := range []string{"[Shared reviewer contract]", "[Gate: quality]", "[Current change]", "[Result contract]"} {
 		if !strings.Contains(prompt, block) {
 			t.Fatalf("gate run prompt missing %s: %s", block, prompt)
@@ -28,13 +54,13 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 
 	for _, sample := range []struct{ status, body, message string }{
 		{"PASS", `{"findings":[]}`, ""},
-		{"FAIL", `{"findings":[{"severity":"P1","message":"blocker","locations":["internal/cli/cli.go:1"]}]}`, "blocker"},
+		{"FAIL", `{"findings":[{"severity":"P1","message":"blocker","locations":[{"read":1,"line":2}]}]}`, "blocker"},
 		{"RUNTIME_ERROR", `{"interruptionReason":"Native VCS unavailable"}`, "Native VCS unavailable"},
 	} {
 		t.Run(sample.status, func(t *testing.T) {
 			stdout.Reset()
 			stderr.Reset()
-			if code := Run("formal-gates", []string{"gate", "report"}, IO{Stdin: strings.NewReader(sample.body), Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			if code := Run("formal-gates", []string{"gate", "report", "--context", context}, IO{Stdin: strings.NewReader(sample.body), Stdout: &stdout, Stderr: &stderr}); code != 0 {
 				t.Fatalf("gate report rejected a valid %s result: %s", sample.status, stderr.String())
 			}
 			for _, want := range []string{"脱离 run 的快速检查", "status: " + sample.status, sample.message} {
@@ -42,6 +68,16 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 					t.Fatalf("gate report display missing %q: %s", want, stdout.String())
 				}
 			}
+			if sample.status == "FAIL" && !strings.Contains(stdout.String(), "example.txt:2") {
+				t.Fatal("gate report rediscovered or rebound the original source", stdout.String())
+			}
 		})
+	}
+	for _, body := range []string{`{"findings":[{"severity":"P3","message":"position","locations":["example.txt:2"]}]}`, `{"findings":[{"severity":"P3","message":"position","locations":[{"read":2}]}]}`} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := Run("formal-gates", []string{"gate", "report", "--context", context}, IO{Stdin: strings.NewReader(body), Stdout: &stdout, Stderr: &stderr}); code == 0 {
+			t.Fatal("gate report accepted a copied or unpublished position")
+		}
 	}
 }

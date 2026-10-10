@@ -1,4 +1,4 @@
-// Package requirement parses the confirmed finite REQ/AC document.
+// Package requirement parses the confirmed finite requirement document.
 package requirement
 
 import (
@@ -72,7 +72,9 @@ type parsedRequirement struct {
 }
 
 // ParseRequirementProjection performs the deterministic, fence-aware precheck
-// and returns the exact finite REQ/AC projection from the single 需求点 section.
+// and returns the finite REQ/AC projection from the single 需求点 section.
+// Explicit source IDs are preserved; missing IDs are assigned in document order
+// without changing the source content or its confirmation digest.
 // It intentionally makes no semantic judgment about the prose.
 func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProjection, error) {
 	if !utf8.Valid(data) {
@@ -124,7 +126,7 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 			addIssue(current.fieldLines["来源"], reqID, "来源 field must contain non-empty prose")
 		}
 		if current.fieldLines["验收条件"] != 0 && len(current.requirement.AcceptanceConditions) == 0 {
-			addIssue(current.fieldLines["验收条件"], reqID, "验收条件 must contain at least one direct - AC-nnn：... list item")
+			addIssue(current.fieldLines["验收条件"], reqID, "验收条件 must contain at least one non-empty direct list item")
 		}
 		current.requirement.Requirement = requirementText
 		current.requirement.Source = sourceText
@@ -171,22 +173,25 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 			}
 			finishRequirement(lineNo)
 			match := requirementIDPattern.FindStringSubmatch(heading)
-			if match == nil || strings.TrimSpace(match[2]) == "" {
+			if heading == "" || strings.HasPrefix(heading, "REQ-") && (match == nil || strings.TrimSpace(match[2]) == "") {
 				reqID := ""
 				if identity := requirementIdentityPattern.FindStringSubmatch(heading); identity != nil {
 					reqID = identity[1]
 				}
-				addIssue(lineNo, reqID, "every direct ### heading in ## 需求点 must match REQ-[0-9]{3,}：non-empty title")
+				addIssue(lineNo, reqID, "every direct ### heading in ## 需求点 needs a non-empty title; explicit IDs must match REQ-[0-9]{3,}：title")
 				continue
 			}
-			reqID := match[1]
-			if prior := reqIDs[reqID]; prior != 0 {
-				addIssue(lineNo, reqID, fmt.Sprintf("duplicate REQ ID (first declared at line %d)", prior))
-			} else {
-				reqIDs[reqID] = lineNo
+			reqID, title := "", heading
+			if match != nil {
+				reqID, title = match[1], strings.TrimSpace(match[2])
+				if prior := reqIDs[reqID]; prior != 0 {
+					addIssue(lineNo, reqID, fmt.Sprintf("duplicate REQ ID (first declared at line %d)", prior))
+				} else {
+					reqIDs[reqID] = lineNo
+				}
 			}
 			current = &parsedRequirement{
-				requirement: FrozenRequirement{ID: reqID, Title: strings.TrimSpace(match[2])},
+				requirement: FrozenRequirement{ID: reqID, Title: title},
 				fieldLines:  map[string]int{},
 				fieldText:   map[string][]string{},
 			}
@@ -224,8 +229,8 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 			} else {
 				trimmedList := strings.TrimSpace(listText)
 				match := acceptancePattern.FindStringSubmatch(trimmedList)
-				if match == nil || strings.TrimSpace(match[2]) == "" {
-					rule := "every direct list item in 验收条件 must match - AC-[0-9]{3,}：non-empty condition"
+				if trimmedList == "" || looksLikeAC && (match == nil || strings.TrimSpace(match[2]) == "") {
+					rule := "every direct list item in 验收条件 needs a non-empty condition; explicit IDs must match AC-[0-9]{3,}：condition"
 					if parts := acceptancePartsPattern.FindStringSubmatch(trimmedList); parts != nil {
 						switch {
 						case len(parts[1]) < 3:
@@ -236,13 +241,16 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 					}
 					addIssue(lineNo, current.requirement.ID, rule)
 				} else {
-					acID := match[1]
-					if prior := acIDs[acID]; prior != 0 {
-						addIssue(lineNo, current.requirement.ID, fmt.Sprintf("duplicate AC ID %s (first declared at line %d)", acID, prior))
-					} else {
-						acIDs[acID] = lineNo
+					acID, text := "", trimmedList
+					if match != nil {
+						acID, text = match[1], strings.TrimSpace(match[2])
+						if prior := acIDs[acID]; prior != 0 {
+							addIssue(lineNo, current.requirement.ID, fmt.Sprintf("duplicate AC ID %s (first declared at line %d)", acID, prior))
+						} else {
+							acIDs[acID] = lineNo
+						}
 					}
-					current.requirement.AcceptanceConditions = append(current.requirement.AcceptanceConditions, FrozenAcceptanceCondition{ID: acID, Text: strings.TrimSpace(match[2]), Line: lineNo})
+					current.requirement.AcceptanceConditions = append(current.requirement.AcceptanceConditions, FrozenAcceptanceCondition{ID: acID, Text: text, Line: lineNo})
 				}
 			}
 			continue
@@ -261,6 +269,26 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 	if len(issues) != 0 {
 		sort.SliceStable(issues, func(i, j int) bool { return issues[i].Line < issues[j].Line })
 		return FrozenRequirementProjection{}, &RequirementPrecheckError{Issues: issues}
+	}
+	nextRequirement, nextAcceptance := 1, 1
+	for i := range requirements {
+		if requirements[i].ID == "" {
+			for reqIDs[fmt.Sprintf("REQ-%03d", nextRequirement)] != 0 {
+				nextRequirement++
+			}
+			requirements[i].ID = fmt.Sprintf("REQ-%03d", nextRequirement)
+			nextRequirement++
+		}
+		for j := range requirements[i].AcceptanceConditions {
+			condition := &requirements[i].AcceptanceConditions[j]
+			if condition.ID == "" {
+				for acIDs[fmt.Sprintf("AC-%03d", nextAcceptance)] != 0 {
+					nextAcceptance++
+				}
+				condition.ID = fmt.Sprintf("AC-%03d", nextAcceptance)
+				nextAcceptance++
+			}
+		}
 	}
 	sum := sha256.Sum256([]byte(normalized))
 	return FrozenRequirementProjection{Path: filepath.ToSlash(path), ContentDigest: hex.EncodeToString(sum[:]), Content: normalized, Requirements: requirements}, nil

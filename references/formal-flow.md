@@ -1,6 +1,7 @@
 # 正式流程公共合同
 
-流程顺序由 [SKILL.md](../SKILL.md) 持有。本文件唯一持有当前 workflow 的调用形式、
+本文件供用户查阅公共入口和维护者核对程序行为；角色任务由程序签发材料限定，文档不授予手工编排权限。
+流程顺序由 engine/CLI 持有，[SKILL.md](../SKILL.md) 只约束受理和用户决定。本文件持有当前 workflow 的调用形式、
 受理收据字段和步骤级执行边界。使用已登记安装的固定 launcher；候选隔离验证必须绑定
 实际候选副本，不能借用全局 binary 或可变源码目录。
 
@@ -39,7 +40,7 @@ UTF-8 Markdown 文件；不要求用户原始输入采用固定模板。
 
 ## 需求点
 
-### REQ-001：归档已完成任务
+### 归档已完成任务
 
 #### 要求
 
@@ -47,14 +48,17 @@ UTF-8 Markdown 文件；不要求用户原始输入采用固定模板。
 
 #### 验收条件
 
-- AC-001：已完成任务能从归档列表读取，未完成任务仍在当前列表。
+- 已完成任务能从归档列表读取，未完成任务仍在当前列表。
 
 #### 来源
 
 用户明确要求。
 ```
 
-REQ/AC 身份唯一，直接字段顺序为要求→验收条件→来源；全部改变产品/流程行为或
+需求标题与验收条目只写内容，不分配编号。程序按正式章节中的需求块和验收条目顺序
+生成唯一 REQ/AC 身份并在 `requirementDocument` 投影中携带；用户或外部材料已提供的
+REQ/AC 身份原样保留，生成编号跳过这些身份。原文件正文与精确 revision 不因分配编号
+改变，需求与其验收条目的关联由原章节层级确定。直接字段顺序为要求→验收条件→来源；全部改变产品/流程行为或
 需要 QA 保证的义务须进入需求点。纯实现位置、代码边界与未来迁移约束留在方案正文，
 由技术审、diff 和实现质量门验证，不伪装为 QA 的 AC。
 
@@ -111,11 +115,15 @@ formal-gates workflow next --root <repo> --run-id <id>
 formal-gates workflow submit --root <repo> --run-id <id> < <request-choices.json>
 formal-gates workflow next --root <repo> --run-id <id> --decision <choices.json> \
   --save-candidate <confirmation.json>
-# 展示程序返回的完整对象，获得用户明确确认后：
+# 展示程序返回的当前确认内容，获得用户明确确认后：
 formal-gates workflow submit --root <repo> --run-id <id> --confirmation <confirmation.json>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
+
+start/show/status/next/drive/submit 默认展示当前语义问题、短选择、必要确认材料及实际执行边界，
+不输出内部派发材料或 adapter 指令。程序调用者需要完整原投影时显式使用 `--machine`；
+`--save-candidate` 文件仍保存完整原对象，默认展示不改变其接纳绑定。precheck 的完整材料与 revision 输出不裁减。
 
 regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
 单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。未选 mode 时先取得用户选择，
@@ -125,7 +133,7 @@ lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/�
 `submit` 的 stdin 只接真实语义请求，`request` 选择当前控制类型；程序创建 REQUEST
 Ask，不直接授权。决定使用 `next --decision --save-candidate`：`ask` 是 show 中当前
 未决 Ask 的一基序号，`choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
-Event、原 request/token、当前 revision 和展示材料。确认后 `submit --confirmation`
+Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation`
 接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
@@ -184,7 +192,7 @@ P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成�
 变更包；meaning-preserved 保留适用 PASS，meaning-changed 明示失效、回退和容量后授权。
 用户主动变化以 ImpactSet 逐项决定重走/续用，UNKNOWN 按受影响建议处理。
 
-技术审形成 `granularity_review`：Batch→Subtask、依赖、接口、状态边界、DoD、验证、
+技术审形成 `granularityReview`：Batch→Subtask、依赖、接口、状态边界、DoD、验证、
 恢复与交接。用户确认计划与精确 split 拓扑或 no-split 理由之后，选择 full/custom。
 Batch 是现有任务的分组，不新增生命周期；一个 Batch 使用一个新开发会话，Subtask
 不能独立派发。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
@@ -195,8 +203,8 @@ Batch 是现有任务的分组，不新增生命周期；一个 Batch 使用一�
 设计失败沿原动作的有限 attempt/语义轮或 typed Ask 及时处理。黑盒未 PASS 不挡开发，
 但挡最终候选。批内正常返回、重试和恢复沿用原身份，替换必须有恢复失败事实和签发。
 
-开发者返回声明式交付路径 manifest、语义说明和 typed result。adapter 校验范围与
-postcondition 后执行 track→commit→snapshot；代理不自行决定 VCS 写顺序。白盒独立
+开发者返回语义完成情况；程序捕获原生差异并校验范围与 postcondition，
+adapter 执行 track→commit→snapshot。白盒独立
 审查覆盖并编写/复用测试，只有测试变化推进快照。全部 FROZEN case-set 和交付文件在
 ValidationCandidate 冻结前纳入其身份；Git 多提交压缩在最后必需验证前完成，Seal 不
 追加文件或产生新候选。详见 [VCS 边界](vcs-snapshots.md)。
@@ -247,11 +255,3 @@ usage；不可计量 token 显示 null 并保留 reason，不能用零代替。g
 Codex 原生 response ID 去重，任务墙钟包含工具等待、不含 turn 间空闲。owner 终态区间
 差值只报告，不参与 in-flight guard；多 run 区间重叠或基线不可靠时不猜数字。child
 cost 按 childRunID/dispatchID 汇总，保留主线与 child 原 owner 来源。
-
-### 拆分计划确认的程序预览
-
-拓扑、路线和其他决定使用同一 `workflow next --decision <语义选择.json> --save-candidate
-<确认文件.json>`。程序读取当前 readiness 提案、已确认需求、完整路线目录和原 Ask，
-返回完整计划及其精确绑定，同时保存完整确认事件。展示该对象并取得用户确认之后，
-`workflow submit --confirmation <确认文件.json>` 沿原 typed 接纳继续；不从输出中抄取
-载荷，也不把 readiness PASS 当作执行批准。child 沿同一入口消费父级原确认计划。

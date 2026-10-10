@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -48,11 +49,12 @@ func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]b
 
 // Provider 绑定一个工作区根并提供该工作区的快照操作。零值不可用；New 构造。
 type Provider struct {
-	root       string
-	configRoot string
-	name       string
-	handle     WorkspaceHandle
-	runner     Runner
+	root         string
+	configRoot   string
+	name         string
+	handle       WorkspaceHandle
+	runner       Runner
+	runtimeFiles RuntimeFiles
 }
 
 // New 返回绑定 root 的 Git provider；runner 为 nil 时用 exec。
@@ -88,7 +90,7 @@ func (p *Provider) Status() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
 	}
-	return excludeRuntimeUntracked(pending), nil
+	return p.excludeRuntimeUntracked(pending), nil
 }
 
 // VerifyReady 要求工作区无未提交内容（含未跟踪交付文件）；非空即拒绝。
@@ -118,7 +120,7 @@ func (p *Provider) StagedOnly() (bool, error) {
 		return false, fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
 	}
 	staged := false
-	for _, line := range strings.Split(excludeRuntimeUntracked(pending), "\n") {
+	for _, line := range strings.Split(p.excludeRuntimeUntracked(pending), "\n") {
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "## ") {
 			continue
 		}
@@ -326,13 +328,13 @@ func (p *Provider) verifyRoot() error {
 
 // excludeRuntimeUntracked 移除 porcelain 输出中位于保留运行期目录下的
 // "?? <path>" 行；其余行（含运行期路径被跟踪后的修改）原样保留。
-func excludeRuntimeUntracked(status string) string {
+func (p *Provider) excludeRuntimeUntracked(status string) string {
 	lines := strings.Split(status, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if strings.HasPrefix(line, "?? ") {
 			path := normalizeStatusPath(strings.TrimSpace(line[3:]))
-			if isRuntimeStatusPath(path) {
+			if p.isRuntimeStatusPath(path) {
 				continue
 			}
 		}
@@ -355,6 +357,26 @@ func isRuntimeStatusPath(path string) bool {
 		}
 	}
 	return false
+}
+
+// RuntimeFiles carries the verified installed inventory and installer-created
+// empty resource directories. It grants no exclusion to their other descendants.
+type RuntimeFiles struct {
+	Files            []string
+	EmptyDirectories []string
+}
+
+func (p *Provider) WithRuntimeFiles(files RuntimeFiles) *Provider {
+	p.runtimeFiles = files
+	return p
+}
+
+func (p *Provider) isRuntimeStatusPath(path string) bool {
+	return isRuntimeStatusPath(path) || slices.Contains(p.runtimeFiles.Files, canonicalPath(materialPath(p.root, path)))
+}
+
+func (p *Provider) isEmptyRuntimeDirectory(path string) bool {
+	return slices.Contains(p.runtimeFiles.EmptyDirectories, canonicalPath(materialPath(p.root, path)))
 }
 
 // SamePath compares native directory identity, including a missing leaf whose

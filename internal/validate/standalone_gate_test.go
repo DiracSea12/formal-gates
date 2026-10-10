@@ -21,7 +21,11 @@ func TestComposeStandaloneGatePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := ComposeStandaloneGatePrompt(catalog, "quality", root, "git", "")
+	context, err := CaptureStandaloneGateContext(root, "git", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := ComposeStandaloneGatePrompt(catalog, "quality", context)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,13 +50,14 @@ func TestComposeStandaloneGatePrompt(t *testing.T) {
 	if !strings.Contains(prompt, "[Shared reviewer contract]") {
 		t.Fatalf("standalone prompt must reuse the shared reviewer contract: %s", prompt)
 	}
-	if _, err := ComposeStandaloneGatePrompt(catalog, "missing", root, "git", ""); err == nil {
+	if _, err := ComposeStandaloneGatePrompt(catalog, "missing", context); err == nil {
 		t.Fatal("unknown standalone gate was accepted")
 	}
-	if _, err := ComposeStandaloneGatePrompt(catalog, "quality", root, "mercurial", ""); err == nil {
+	if _, err := CaptureStandaloneGateContext(root, "mercurial", ""); err == nil {
 		t.Fatal("unsupported standalone VCS was accepted")
 	}
-	scoped, err := ComposeStandaloneGatePrompt(catalog, "quality", root, "git", "internal/cli")
+	context.Scope = "internal/cli"
+	scoped, err := ComposeStandaloneGatePrompt(catalog, "quality", context)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +82,7 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 		{"bad json", `{`, "", "not valid JSON"},
 		{"trailing object", `{"findings":[]} {}`, "", "one JSON object"},
 	} {
-		result, err := ValidateStandaloneGateResult([]byte(item.raw))
+		result, err := ValidateStandaloneGateResult([]byte(item.raw), StandaloneGateContext{})
 		if item.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), item.wantErr) {
 				t.Fatalf("%s: want %q, got %v", item.name, item.wantErr, err)

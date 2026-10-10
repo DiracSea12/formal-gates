@@ -125,6 +125,114 @@ func TestNativeWorkspaceReadsProgramSuppliedTaskMaterials(t *testing.T) {
 	}
 }
 
+func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	body := []byte{0xff, 0, '\n', 0xfe}
+	if err := os.WriteFile(filepath.Join(workspace, "original.bin"), body, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "destination"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := callWorkspace(t, tools, `{"action":"list"}`)
+	if list["listing"] != 1 {
+		t.Fatal(list)
+	}
+	copy := json.RawMessage(`{"action":"copy","listing":1,"entry":2,"targetListing":1,"targetEntry":1,"name":"copy.bin"}`)
+	if _, err := tools.call(copy); err != nil {
+		t.Fatal(err)
+	}
+	if copied, err := os.ReadFile(filepath.Join(workspace, "destination", "copy.bin")); err != nil || !bytes.Equal(copied, body) {
+		t.Fatalf("copied original bytes: %x %v", copied, err)
+	}
+	if _, err := tools.call(copy); err == nil {
+		t.Fatal("repeated copy overwrote its existing target")
+	}
+	continued := filepath.Join(filepath.Dir(directory), "continued")
+	if err := os.Mkdir(continued, 0700); err != nil {
+		t.Fatal(err)
+	}
+	request, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(continued, "native-request.json"), request, 0600); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := newNativeWorkspaceTools(continued, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callWorkspace(t, resumed, `{"action":"move","listing":1,"entry":2,"targetListing":1,"targetEntry":1,"name":"moved.bin"}`)
+	if moved, err := os.ReadFile(filepath.Join(workspace, "destination", "moved.bin")); err != nil || !bytes.Equal(moved, body) {
+		t.Fatalf("moved original bytes: %x %v", moved, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "original.bin")); !os.IsNotExist(err) {
+		t.Fatal("move left its original source", err)
+	}
+	if _, err := resumed.call(json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"directory-copy"}`)); err == nil {
+		t.Fatal("file transfer recursively copied a directory")
+	}
+	if _, err := resumed.call(json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"written.bin","content":"model bytes"}`)); err == nil {
+		t.Fatal("file transfer accepted model-supplied bytes")
+	}
+}
+
+func TestNativeWorkspaceShowsOnlyCurrentReadOnlyMaterials(t *testing.T) {
+	workspace, directory := t.TempDir(), t.TempDir()
+	parent := filepath.Join(workspace, ".formal-gates-input")
+	current := filepath.Join(parent, "current")
+	other := filepath.Join(parent, "other-role")
+	for _, path := range []string{current, other} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "task.json"), []byte("original task\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": false, "materials": current}); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callWorkspace(t, tools, `{"action":"list"}`)
+	listed := callWorkspace(t, tools, `{"action":"list","listing":1,"entry":1}`)
+	if !valuesEqual(listed["entries"], []any{map[string]any{"entry": 1, "name": "current", "directory": true}}) {
+		t.Fatal("other role materials were visible", listed)
+	}
+	if _, err := tools.path(".formal-gates-input/other-role/task.json", true); err == nil {
+		t.Fatal("other role materials could be read")
+	}
+	callWorkspace(t, tools, `{"action":"list","listing":2,"entry":1}`)
+	read := callWorkspace(t, tools, `{"action":"read","listing":3,"entry":1}`)
+	if strings.Join(read["lines"].([]string), "") != "original task\n" {
+		t.Fatal("current task was unavailable", read)
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"replace","read":4,"from":1,"to":1,"content":"changed"}`)); err == nil {
+		t.Fatal("writable developer altered current task materials")
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"move","listing":3,"entry":1,"name":"moved-task.json"}`)); err == nil {
+		t.Fatal("move removed current task materials")
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"create","listing":2,"entry":1,"name":"extra","content":"changed"}`)); err == nil {
+		t.Fatal("create changed current task materials")
+	}
+	callWorkspace(t, tools, `{"action":"create","name":"app.go","content":"authored code\n"}`)
+	if body, err := os.ReadFile(filepath.Join(current, "task.json")); err != nil || string(body) != "original task\n" {
+		t.Fatal("read-only task bytes changed", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(workspace, "app.go")); err != nil || string(body) != "authored code\n" {
+		t.Fatal("production source was blocked", err)
+	}
+}
+
 func nativeToolAdmission(directory string, request map[string]any) (func(), error) {
 	if getOf(getOf(request, "engine"), "workerMaterial") == nil {
 		return nil, fmt.Errorf("missing original material reference")
@@ -260,12 +368,21 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(readDirectory, "native-request.json"), request); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(readWorkspace, "input.txt"), []byte("original\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	readTools, err := newNativeWorkspaceTools(readDirectory, nativeToolAdmission)
 	if err != nil {
 		t.Fatal(err)
 	}
+	callWorkspace(t, readTools, `{"action":"list"}`)
 	if _, err := readTools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"unauthorized"}`)); err == nil {
 		t.Fatal("read-only action wrote a file")
+	}
+	for _, action := range []string{"copy", "move"} {
+		if _, err := readTools.call(json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil {
+			t.Fatalf("read-only action allowed %s", action)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(readWorkspace, "extra.txt")); !os.IsNotExist(err) {
 		t.Fatalf("read-only side effect: %v", err)
@@ -275,6 +392,11 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 	}
 	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"late"}`)); err == nil || !strings.Contains(err.Error(), "withdrawn") {
 		t.Fatalf("withdrawn action bypassed original admission: %v", err)
+	}
+	for _, action := range []string{"copy", "move"} {
+		if _, err := tools.call(json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil || !strings.Contains(err.Error(), "withdrawn") {
+			t.Fatalf("withdrawn action allowed %s: %v", action, err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "extra.txt")); !os.IsNotExist(err) {
 		t.Fatalf("withdrawn action side effect: %v", err)

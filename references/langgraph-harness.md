@@ -1,238 +1,107 @@
-# LangGraph 开发驱动（harness-v1）
+# LangGraph 开发驱动
 
-harness 使用 LangGraph 编排开发期角色，用 Go 校验规格、角色结果和完成资格。
-它不是新的正式流程引擎，也不安装、替换或自动启动 formal-gates 正式流程。
-`HARNESS_COMPLETE` 是原生开发流水线的结果；`DEMO_COMPLETE` 是确定性夹具结果。
-两者只报告该次 harness 的实际验证结果。
+harness-v1 用 LangGraph 推进开发角色，Go 接纳语义结果和完成资格。`HARNESS_COMPLETE`
+报告原生运行结果，`DEMO_COMPLETE` 报告确定性夹具结果；harness 不安装或启动正式 engine。
 
-## 设置与宿主选择
+## 准备与启动
 
 ```sh
 ./scripts/harness setup
 ./scripts/harness hosts
 ./scripts/harness doctor --provider dsh
-./scripts/harness doctor --provider zcode
 ```
 
-setup 仅使用 `runtime/langgraph/requirements.lock` 建立本工作树的 `.harness/venv`，
-并构建 `.harness/bin/formal-gates`。不升级锁定依赖，不覆盖历史环境，不安装到全局。
-`FORMAL_GATES_HARNESS_ROOT` 和 `FORMAL_GATES_HARNESS_BINARY` 由开发入口绑定。
+setup 建立本工作树的锁定环境并构建 Go 驱动。原生调用显式选择 `--provider`，也可由
+`FORMAL_GATES_HARNESS_PROVIDER` 提供；已有 run 使用其原宿主绑定。doctor 不调用模型，
+仅报告当前接入能力。
 
-原生 `doctor`、`start`、`demo --native` 必须选择宿主：显式 `--provider` 优先于
-`FORMAL_GATES_HARNESS_PROVIDER`。二者均未提供时，列出执行适配器并退出，不创建半成品 run。
-没有默认原生宿主。普通 fixture demo 不需要宿主，也不读取该环境变量来选择执行器。
-现有 run 的恢复始终使用 manifest 中绑定的 provider，不受当前环境变量影响。
-
-`hosts` 区分执行适配器与已有安装集成；安装列表中的宿主不一定能够执行角色。
-新增执行适配器不需要加入 Go 安装目录。DSH、ZCode 是当前注册项，不是图中的特殊分支。
-
-## 原生工具与检查归属
-
-所有角色通过程序注册的 `workspace` 工具读取任务工作区。既有目标使用程序发布的目录、
-条目与读取编号；替换按原读取的行范围定位，只提供新内容。物理路径、原文件内容和
-版本绑定由程序持有。开发与返修可以创作已批准范围内的代码；只读角色的工具契约
-不提供写操作，执行端也核对同一 `read_only` 约束。
-
-需求、审查准则、`task.json`、比较清单、完整 diff 与两端原文件内容由程序写入
-工作区的 `.formal-gates-input/<operation>/`。目录读取包含点目录，这些材料可以通过
-同一 `workspace` 的目录与读取编号访问。普通任务不需要正式 engine 的 Material，
-也不需要模型填写比较版本或重写材料。新建、续做与恢复使用同一工具服务和原输入。
-
-批准的检查 argv 由图的检查节点在一次性候选克隆中直接执行、收取原 stdout/stderr
-与退出码。模型评估检查的覆盖和结果，不代替程序抄命令、启动检查或收据。
-角色不得修改批准检查、任务材料或流程状态，也不得代替用户确认、提交或推送。
-
-宿主适配只负责原注册、权限与协议回显。DSH 用原 profile 接入受管工作区工具；
-ZCode 用原 MCP 注册与 toolAllowlist；Claude 用原 MCP 配置与工具约束；Cursor 用
-每任务私有插件和原工具权限钩子；Codex 用原 dynamicTools 与 PreToolUse。
-账号、模型与原生会话身份仍由对应宿主持有。各平台能力以实际接口和验证为准，
-不把连接成功视为所有工具与权限已验证。
-
-ZCode 新建开发与返修会话在首个 turn 前通过原 `session/setMode` 声明无人值守
-上下文的自动模式（`yolo`），回读并记入 `tool-policy.json` 与 `native-source.json`。
-恢复会话保持原模式；只读会话与探针不设置该模式。失败、权限询问或等待不会触发
-免审批回退。模型身份绑定精确 provider/model，不静默切换模型或修改全局选择。
-
-协议允许回退的请求返回宿主定义的回退结果，随后继续消费正常响应。需要用户决定但
-无头接入无法处理的交互进入现有 runtime 阻塞边界，不替用户批准或拒绝。
-`session/requestRuntimePreferences` 使用宿主明确支持的不支持响应选择原生默认回退。
-官方 MCP 认证没有可用桌面认证端口时返回 `official_auth_unavailable`；这不是认证成功，
-不会伪造认证头、借用其他工具的凭据或静默关闭插件。协议诊断只保存路由元数据；
-角色完成内容、原生事件和输入绑定继续使用既有证据文件。
-
-ZCode app-server 自身不持有 provider 注册表。账号 provider 配置由**启动它的一方**在
-provider/model 就绪后经 `provider/updateAccountConfig`（client → agent 方法）交付，因此启动方必须
-①把 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` **成对**命名
-（只给前者时宿主会重算它自己的 active 目录，启动方就无从得知 revision），②令
-`basedOnZCodeBuiltinRevision` **逐字**等于
-`zcode-builtin:<catalogue revision>:sha256(realpath(activeCatalogue))`——哈希取**解析后的路径**、
-不取内容；不相等时交付被静默丢弃，回执仍是 `received`，无法从应答推断。
-
-同一模式下每次模型请求前，宿主还会反向调用 `interaction/requestProviderRuntimeHeaders`
-（端口 `createProviderRuntimeHeadersPort` 的 `shouldRefreshBeforeModelRequest()` 恒为 true），
-应答必须是以 `headersApplied` 为判别键的严格联合。该项**不属于用户决定**，故不走上一段的阻塞边界：
-传输从宿主自己的开通索引（`~/.zcode/v2/credentials.json` 的**键名**）取该 provider 的凭据值，用宿主
-自己的密码（`sha256(固定回退串)`，aes-256-gcm，**不涉钥匙串、不需用户决定**）解密后应答；没有凭据的
-provider 报 `headersApplied: false` 而不编造。凭据值不写入任何证据文件，`Client.answer` 只记方法与状态。
-
-`tui`／`--prompt`／CLI `login` 走的是**另一套互斥**的账号来源（由 `skipUserConfig` 选中）：本进程自读
-凭据库、不需要 client，且拒绝宿主投递。它的开通判定要求凭据库同时存在
-`account-provider:<id>:identity` 与 `…:api-key` 两条记录，前者只有 standalone 的 `login` 会写。
-另：`--help`／`--version` 会**跳过** provider 运行时准备，拿它们当宿主健康探针会得到假阴性；
-CLI 没有 `zcode` 命令，只能以
-`node <ZCode.app>/Contents/Resources/glm/zcode.cjs <command>` 调用。
-
-`doctor` 不发送模型任务，仅检查当前原生接入。仅在 probe 中关闭自动标题生成，
-不会将该设置带入正常开发会话。连接成功不证明 MCP 认证、网络访问、子代理执行或
-真实只读工具行为均已通过；报告中的 `not_verified` 必须保留这一含义。
-各平台限制以实际接口和验证为准，不宣称强度一致。
-
-## 演示与真实任务
-
-免费夹具演示：
-
-```sh
-./scripts/harness demo --approve-sample
-```
-
-以下原生演示会发送模型任务，需另行授权费用与相关工具操作：
-
-```sh
-./scripts/harness demo --native --provider dsh --approve-sample
-./scripts/harness demo --native --provider zcode --approve-sample
-```
-
-`--approve-sample` 只批准该命令创建的隔离样例需求与计划，不能越过 runtime 阻塞、
-失败门审或批准其他已有任务。
-
-真实任务先准备需求 Markdown 和检查 JSON。检查是 argv 数组，不是拼接的 shell 字符串：
+真实任务使用需求 Markdown 和原创检查配方；检查由程序执行：
 
 ```json
 [{"id":"unit","argv":["python3","-m","unittest","discover"],"dependencies":["src","tests"]}]
 ```
 
 ```sh
-./scripts/harness start --provider dsh --project /absolute/project   --requirement /absolute/requirement.md --checks /absolute/checks.json
+./scripts/harness start --provider dsh --project /absolute/project \
+  --requirement /absolute/requirement.md --checks /absolute/checks.json
 ./scripts/harness show --run /absolute/run
 ./scripts/harness respond --run /absolute/run --decision approve --save-decision /absolute/decision.json
-# 查看该候选并明确确认后：
 ./scripts/harness respond --run /absolute/run --decision-file /absolute/decision.json
 ```
 
-需要干净的本地 Git 仓库。需求确认与计划确认分别绑定当前 revision 和 interrupt ID。
-角色会话、候选、检查输入和已完成操作均有稳定身份；错误回复不会成为批准。
-用户确认的检查 argv 在既有一次性克隆中以当前用户权限直接运行，不依赖任何模型宿主 CLI。
-克隆是内容隔离副本，不是操作系统安全沙箱；命令具有当前用户的文件和网络权限。
-因此必须审查并批准实际命令与被执行的候选代码。
+展示当前需求或计划后取得用户决定，程序生成完整候选；确认后提交原文件。
+图持有顺序、派发、轮次、检查、恢复和终态。完成依赖原生证据与批准检查的实际结果。
+fixture 演示不调用模型：
 
-检查仍保留 job 监督、输入输出、真实退出码、证据绑定、依赖复用判定和执行后 HEAD/
-已跟踪文件核对。切换角色宿主不改变这条检查路径。
+```sh
+./scripts/harness demo --approve-sample
+```
 
-门审材料位于 `.formal-gates-input/<operation>/comparison/`，包含完整 binary-capable diff、
-变更清单及变更文件在基线和候选中的原始内容。删除、重命名和符号链接目标文本均可读取；
-Gitlink 仅给出对象身份并明确不包含嵌套仓库。材料绑定同一次 base/candidate，重试不改写
-已有不同内容，后续证据核验会发现材料变动。这些输入不纳入交付候选。
+## 角色材料与工具
 
-## 恢复、接管与完成资格
+角色通过 `workspace` 的目录、条目和读取编号访问原文件。`.formal-gates-input` 只展示
+当前角色的需求、任务、审查准则及必要反馈；材料只读。门审材料含完整比较及两端原内容。
+任务的身份、版本、物理路径和原生收据由程序持有。
+
+替换使用原读取编号和行范围，只提供新内容。复制/移动使用原来源 listing/entry、目标
+目录 targetListing/targetEntry 和原创新文件名；省略目标目录时使用工作区根。程序处理
+原文件字节或原生重命名，仅处理文件，不递归复制目录。工具沿用原执行接纳和只读约束。
+
+角色返回语义判断。finding 的 `locations` 只选原 read 或 listing/entry 数字；Go 验真
+同一原生 source 中的工具证据后装配实际路径。QA 按批准顺序给出覆盖与 oracle 证据。
+未完成工作用 `remainingWork`，运行时受阻用 `interruptionReason`；状态与结果身份由程序生成。
+
+DSH 使用原 profile，ZCode 使用 MCP 与 toolAllowlist，Claude 使用 MCP 工具配置，
+Cursor 使用每任务插件与权限钩子，Codex 使用 dynamicTools 与原工具钩子。各适配器只
+处理原生注册、会话、模型选择、执行和证据传输。实际能力以本次接入及验证为准。
+
+## 原生交互与恢复
+
+需要用户回答的原生 SDK 交互展示问题和数字选项。原请求、选项、问题身份与完整协议
+载荷保存在 pending 证据中；程序按当前选择装配候选，确认前不送出答案：
+
+```sh
+./scripts/harness native-show --run /absolute/run
+./scripts/harness native-respond --run /absolute/run --question 1 --choice 1 \
+  --save-decision /absolute/native-decision.json
+./scripts/harness native-respond --decision-file /absolute/native-decision.json
+```
+
+多问的 `--responses` 按展示顺序提供数字选择或真正自由文字：
+
+```json
+[{"choices":[1]},{"text":"说明内容"}]
+```
+
+表单的 `--values` 按展示字段顺序提供原创值，枚举字段使用 `{"choice":1}` 数字选择；
+`--cancel` 取消当前问题。提交校验原
+pending 的完整绑定，再由原 SDK reply 构造器回传。陈旧候选不重新绑定到其他问题。
 
 ```sh
 ./scripts/harness resume --run /absolute/run
 ./scripts/harness respond --run /absolute/run --decision retry --save-decision /absolute/retry.json
 ./scripts/harness respond --run /absolute/run --decision-file /absolute/retry.json
-./scripts/harness respond --run /absolute/run --decision restart-session --save-decision /absolute/restart.json
-./scripts/harness respond --run /absolute/run --decision-file /absolute/restart.json
-./scripts/harness cancel --run /absolute/run --confirm
 ```
 
-以当前 interrupt 返回的 choices 为准。`CONTINUE` 继续同一角色语义；`retry` 不擅自丢弃
-原会话。原生明确返回会话不存在时只提供 `restart-session` 或 `abort`，不重试已知无效身份。
-`restart-session` 沿用任务、工作区、有效证据和部分成果，只替换执行会话；不重建 run、
-不改写批准范围、不重放已完成副作用。接管材料是有绑定的证据，不是新的控制指令。
-会话关闭不等于删除宿主历史。
+恢复读取原执行事实并沿同一接纳路径继续；会话确实不可恢复时，当前问题提供
+`restart-session` 或 `abort`。新会话使用程序保存的原任务、部分成果与必要交接材料。
+`cancel --confirm` 只通知原 owned jobs，后续 resume 观察实际结果。
 
-job 已存在但缺少真实退出回执时不会盲目重复启动。已完成输出的格式恢复必须使用原生完成
-证据，不能把连接关闭、真实轮次失败或缺失内容洗成成功。模型结果必须通过 Go 结果合同；
-运行问题是 BLOCKED，不是 PASS。P0/P1 阻塞，P2 必须返修，P3 建议不自动升级为阻塞。
-返修额度耗尽由用户决定是否继续，不能自动授予完成资格。
+## 归档与验证
 
-结果框架判定（最终消息里是否存在唯一、无歧义的结果对象）由 Go 的
-`internal/harness.FrameResult` 拥有，经 `frame-result` 桥接操作调用；`native_result.py`
-只做输入输出转换，并把 Go 的类型化拒绝逐字翻译回 `RuntimeBlocked`。拒绝原因属于可观测
-行为，两侧保持一致。
+终态 run 可 `archive`，核验归档后通过 `prune --confirm` 清理；活动或未知 job 不清理。
+`.harness/` 承载本地环境和私有证据，不进入发布包。
 
-首次检查点前中断可由原 `resume` 入口恢复；`show` 不为未启动 run 伪造检查点。
-终态不接受新答复；失败答复返回非零退出码。数据库、证据与运行时身份不匹配时保留原现场，
-不手工修改 state 或迁移旧运行。
-
-`adopt-transport` 仅用于已保全原运行时、无活动 job、处于可接管 runtime 边界的显式开发修复：
+真实模型验证需当次授权：
 
 ```sh
-./scripts/harness adopt-transport --run /absolute/run --snapshot /absolute/preserved-runtime --reason "Reviewed transport fix" --save-decision /absolute/adoption.json
-# 查看实际源/目标身份和变更并明确确认后：
-./scripts/harness adopt-transport --run /absolute/run --decision-file /absolute/adoption.json
+.harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider dsh --out /absolute/new-validation
+.harness/venv/bin/python runtime/langgraph/tests/native_multihost.py --provider dsh --tools --out /absolute/new-tools
 ```
 
-可接管文件由绑定适配器声明，另含既有共享 CLI/worker 范围；图、Go binary、依赖锁和
-审查政策必须不变。遍历包含包内子目录，不能漏掉移动的执行代码。该入口不是跨命名、
-跨权限语义或跨工作流版本迁移通道。历史 run 使用各自绑定的旧运行时；本版本只服务新 run。
-保存快照并不等于已经验证旧 run 续跑成功。
+`--tools` 核查原生受管 copy 的实际调用、原字节、原会话 resume，以及同一工具服务的
+只读拒绝。固定回环 fetch helper 由程序执行，保存真实过程与响应；模型不抄 endpoint
+或脚本命令。它不声明任意 shell、子代理或外网能力。
 
-## 归档与本地数据
-
-```sh
-./scripts/harness archive --run /absolute/run --output /absolute/archive/run.zip
-./scripts/harness archive-show --archive /absolute/archive/run.zip
-./scripts/harness prune --run /absolute/run --archive /absolute/archive/run.zip
-./scripts/harness prune --run /absolute/run --archive /absolute/archive/run.zip --confirm
-```
-
-只处理 `HARNESS_COMPLETE`、`DEMO_COMPLETE`、`ABORTED`。先完整归档并核验，再预览和显式确认；
-不后台删除、不清理活动/暂停/未知 job。归档目标不得位于 run 内，已有目标不覆盖。
-独立归档核验不依赖原图运行时；原现场保留最小可见状态。
-
-`.harness/` 是本地环境与私有证据，不纳入版本管理或不可变发布包。旧私有目录原位保留，
-通过工作树的本地 Git 排除规则继续保护。源码仓库的打包收集遵守 Git 对未跟踪本地内容的
-排除；已跟踪文件不会仅因忽略规则而消失。导出包中的真实资源仍拒绝符号链接。
-不重命名历史 run、manifest、证据、检查点、旧 binary、旧虚拟环境或接管回执。
-
-## 验证与扩展
-
-```sh
-go test ./internal/...
-go test ./cmd/...
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/runtime/langgraph"   TMPDIR="$(python3 -c 'from pathlib import Path; import tempfile; print(Path(tempfile.gettempdir()).resolve())')"   .harness/venv/bin/python -m unittest discover -s runtime/langgraph/tests -v
-./scripts/harness demo --approve-sample
-./scripts/harness doctor --provider dsh
-./scripts/harness doctor --provider zcode
-```
-
-macOS 上使用解析符号链接后的 TMPDIR，避免临时路径别名影响接管测试的身份比较。
-上述 Go/Python/fixture 不调用模型。真实原生验证仍使用现有 opt-in 入口：
-
-```sh
-.harness/venv/bin/python runtime/langgraph/tests/native_multihost.py   --provider dsh --out /absolute/new-validation-directory
-.harness/venv/bin/python runtime/langgraph/tests/native_multihost.py   --provider dsh --tools --out /absolute/new-tools-directory
-```
-
-`--tools` 使用独立临时业务目录和随机标记，实际尝试原生写入、子代理写入、回环 HTTP 访问、
-只读写入拒绝及开发会话恢复。只读哨兵按字节核对；仍须结合原生事件证明子代理和拒绝确实发生，
-不能把文件未变化或模型自述当成工具验收。回环 HTTP 不代表外网访问已通过。
-该入口不自动批准原生权限、不设置免审批模式；遇到无头端口无法处理的交互如实记录阻塞。
-测试 MCP 必须先通过宿主自己的配置接入，并以服务端调用记录和原生对照验证，入口不会伪造或代装 MCP。
-
-原生样例的终态、角色数量和证据通过，不等于子代理、MCP、网络能力实际调用通过。
-深验必须对照同一宿主、同一配置、同一原生接入方式的基线，核对真实工具成功事件、
-根角色完成证据和只读行为；不得为测试强行打开宿主本来关闭的能力。未执行的真实模型
-和相关工具验证必须明确标注，不能以模拟测试、口头声称或 doctor 结果替代。
-
-添加宿主须实现薄适配器并在 `native_hosts.py` 注册。适配器解释自己的
-`binding.launch`，实现启动绑定、执行、完成证据校验/恢复，并声明必要的传输文件。
-共享图、Go 业务结果合同不需要增加宿主分支。安装、别名和展示继续由原有安装目录负责。
-
-普通 engine 业务节点的扩展边界见 [正式流程](formal-flow.md) 与
-[typed authoring ADR](../refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md)：
-实现、注册并接入编译定义，使用同一提交与恢复路径；不提供任意动态节点/控制语义插件 SDK。
-原生适配器返回原始证据，由 owning engine 统一校验输入身份、完成事实与 UNKNOWN 对账。
-
-真实模型调用按当前用户授权执行。无额度或未确认额度的宿主如实记 skip/未执行，
-不能用其他宿主结果、模拟或 doctor 替代该宿主 canary。
+未执行的宿主实机验证保留未验证状态。模拟测试、doctor 和其他宿主结果不能替代实际
+宿主证据。宿主扩展在 `native_hosts.py` 注册薄适配器，复用同一工具、结果和恢复归属。

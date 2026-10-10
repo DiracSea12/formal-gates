@@ -43,12 +43,12 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		req.NativeHandle = parent.NativeResources[plan.ResourceID].Handle
 		req.VCS = parent.NativeVCS()
 		req.RunID, req.MasterRunID, req.SliceID = plan.RunID, parent.RunID, plan.SliceID
-		child, _, err = startRun(StartOptions{Root: f.root, Request: req, Admission: &f.admission, Capacity: f.capacity, VCSRunner: f.vcsRunner, Owner: owner}, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
+		child, _, err = startRun(StartOptions{Root: f.root, Request: req, Admission: &f.admission, Capacity: f.capacity, VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		child, err = Open(f.root, plan.RunID)
+		child, err = Open(f.root, plan.RunID, f.runtimeFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -493,7 +493,7 @@ func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
 		if slices.ContainsFunc(parent.ChildCreation.Children, func(c protocol.ChildPreparation) bool { return c.RunID == old.RunID }) {
 			continue
 		}
-		child, err := Open(f.root, old.RunID)
+		child, err := Open(f.root, old.RunID, f.runtimeFiles)
 		if err != nil {
 			return false, err
 		}
