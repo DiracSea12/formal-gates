@@ -5,6 +5,7 @@ import (
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/requirement"
+	"maps"
 )
 
 // WorkerExecutionIdentity admits a current worker or its signed resume. Job
@@ -50,8 +51,16 @@ type WorkerInput struct {
 	Pending                  PendingAction                           `json:"pending"`
 	Handler                  string                                  `json:"handler"`
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
+	Scope                    *WorkerScope                            `json:"scope,omitempty"`
 	Review                   *WorkerReviewInput                      `json:"review,omitempty"`
 	Validation               *ValidationInput                        `json:"validation,omitempty"`
+}
+
+// WorkerScope carries confirmed child responsibilities without narrowing the
+// complete requirement or the review of regressions caused by its changes.
+type WorkerScope struct {
+	Owner            string            `json:"owner"`
+	AcceptanceOwners map[string]string `json:"acceptanceOwners"`
 }
 
 type WorkerReviewInput struct {
@@ -78,6 +87,9 @@ func (s *State) WorkerInputs(cd *compiler.CompiledDefinition) map[string]WorkerI
 			continue
 		}
 		input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
+		if s.SliceChild != nil {
+			input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
+		}
 		if value, ok := validation[id]; ok {
 			input.Handler = value.Handler
 			input.Validation = &value

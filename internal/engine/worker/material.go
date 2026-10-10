@@ -139,6 +139,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	document := input.RequirementDocument
 	document.Content = ""
 	contextValue := map[string]any{"requirementDocument": document}
+	if input.Scope != nil {
+		contextValue["scope"] = input.Scope
+		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
+	}
 	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		contextValue["availableRouteCandidates"] = input.AvailableRouteCandidates

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +45,62 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 			}
 			if !strings.Contains(material.Prompt, "Issued identities, bindings") || !strings.Contains(material.Prompt, "Do not return status, paths") {
 				t.Fatal("action material lost program ownership of mechanical facts")
+			}
+		})
+	}
+}
+
+func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, handler := range []string{"engine.development.batch", "engine.gate", "engine.validation.observation", "engine.repair", "engine.repair.verify"} {
+		t.Run(handler, func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = handler
+			input.Pending.AttemptID = "attempt"
+			input.RequirementDocument.Content = "Complete confirmed requirement, including sibling and merge obligations."
+			input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
+			if handler == "engine.gate" {
+				input.Validation.Gate = &protocol.GateInput{Gate: "implementation-quality-gate"}
+			}
+			if handler == "engine.validation.observation" {
+				input.Validation.Observation = &protocol.ObservationInput{}
+			}
+			if handler == "engine.repair" || handler == "engine.repair.verify" {
+				input.Validation.Repair = &protocol.RepairInput{}
+			}
+			if handler == "engine.repair" {
+				input.AvailableRouteCandidates = catalog.RouteCandidates()
+				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
+			}
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(material.Prompt, input.RequirementDocument.Content) != 1 || !strings.Contains(material.Prompt, "another owner's unfinished work is not a defect of this child") {
+				t.Fatal("child lost the whole requirement or its review boundary")
+			}
+			actionInput := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
+			var projection protocol.WorkerInput
+			if err := json.Unmarshal([]byte(actionInput), &projection); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(projection.Scope, input.Scope) || !reflect.DeepEqual(material.Input, input) {
+				t.Fatal("material changed responsibility facts or issued input")
+			}
+			stored, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recovered protocol.WorkerInput
+			if err := json.Unmarshal(stored, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := Render(recovered, catalog)
+			if err != nil || !reflect.DeepEqual(material, replay) {
+				t.Fatalf("recovery changed role materials: %v", err)
 			}
 		})
 	}
