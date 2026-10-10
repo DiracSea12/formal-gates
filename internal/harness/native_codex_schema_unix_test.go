@@ -204,6 +204,67 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 	}
 }
 
+func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"small-repair", "single-completion", "split-plan"} {
+		t.Run(name, func(t *testing.T) {
+			result := worker.Repair{Paths: []string{"command.py"}, Summary: "Implemented the confirmed command", AffectedCases: []string{"normal-input"}}
+			if name != "small-repair" {
+				plan := canaryLocalPlan(false)
+				if name == "split-plan" {
+					plan = canaryLocalPlan(true)
+					result.Paths, result.Summary, result.AffectedCases = nil, "", nil
+				} else {
+					result.Completion = &protocol.DevelopmentCompletion{DoD: map[string]string{plan.Batches[0].DoD[0].ID: "Implemented"}, Handoff: "Ready for approved checks"}
+				}
+				encoded, err := json.Marshal(canarySemanticPlan(plan))
+				if err != nil {
+					t.Fatal(err)
+				}
+				result.GranularityReview = &worker.Granularity{}
+				if err := json.Unmarshal(encoded, result.GranularityReview); err != nil {
+					t.Fatal(err)
+				}
+			}
+			domain := codexPlain(t, result).(map[string]any)
+			s := newCodexScenario(t)
+			s.request["schema"], s.peer.StrictSchema = schema, true
+			s.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+			source, err := s.execute(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			answer, err := readJSONFile(filepath.Join(s.directory, "answer.json"))
+			if err != nil || !valuesEqual(answer, domain) {
+				t.Fatalf("native repair altered its semantic branch: %v %v", answer, err)
+			}
+			raw, _ := json.Marshal(answer)
+			if _, err := worker.DecodeResult(input, "result", raw, "original-native-output"); err != nil {
+				t.Fatalf("normalized repair no longer satisfies the domain contract: %v", err)
+			}
+			if err := codexVerifySource(s.directory, source); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
+			if err != nil || !valuesEqual(recovered, source) {
+				t.Fatalf("native repair recovery changed source: %v %v", recovered, err)
+			}
+			after, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("repair recovery rewrote the native original output")
+			}
+		})
+	}
+}
+
 func TestCodexNativeDuplicateDictionaryKeepsRawEvidence(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["schema"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"dod"}, "properties": map[string]any{"dod": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}}}

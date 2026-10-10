@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -34,6 +35,21 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 			partial["properties"].(map[string]any)[field] = map[string]any{"type": "string", "minLength": 1}
 		}
 		alternatives = append(alternatives, partial)
+	}
+	if input.Handler == "engine.repair" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+		fields := body["properties"].(map[string]any)
+		completed := maps.Clone(body)
+		completedFields := maps.Clone(fields)
+		completed["properties"] = completedFields
+		completed["required"] = append(slices.Clone(body["required"].([]any)), "granularityReview", "completion")
+		plan := maps.Clone(fields["granularityReview"].(map[string]any))
+		planFields := maps.Clone(plan["properties"].(map[string]any))
+		batches := maps.Clone(planFields["batches"].(map[string]any))
+		batches["minItems"], batches["maxItems"] = 1, 1
+		planFields["batches"], plan["properties"] = batches, planFields
+		completedFields["granularityReview"] = plan
+		delete(fields, "completion")
+		alternatives = append(alternatives, completed)
 	}
 	return map[string]any{"anyOf": alternatives}, nil
 }

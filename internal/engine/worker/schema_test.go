@@ -5,6 +5,7 @@ import (
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -255,12 +256,73 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 						t.Fatalf("repair output instruction missing %q", rule)
 					}
 				}
-				completion := development["completion"].(map[string]any)["properties"].(map[string]any)
+				if development["completion"] != nil {
+					t.Fatal("unplanned repair exposed completion without a batch")
+				}
+				proposed := schema["anyOf"].([]any)[3].(map[string]any)["properties"].(map[string]any)
+				completion := proposed["completion"].(map[string]any)["properties"].(map[string]any)
 				if _, ok := completion["dod"].(map[string]any)["additionalProperties"].(map[string]any); !ok {
 					t.Fatal("single proposed repair batch cannot supply authored DoD evidence")
 				}
 			} else if development["completion"] != nil {
 				t.Fatal("non-batch duty exposed unused completion claims")
+			}
+		})
+	}
+}
+
+func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branches := schema["anyOf"].([]any)
+	if len(branches) != 4 {
+		t.Fatalf("repair lost a semantic alternative: %v", schema)
+	}
+	for _, branch := range branches {
+		body := branch.(map[string]any)
+		fields := body["properties"].(map[string]any)
+		if fields["completion"] == nil {
+			continue
+		}
+		for _, name := range []string{"granularityReview", "completion"} {
+			if !slices.Contains(body["required"].([]any), any(name)) {
+				t.Fatalf("completion alternative does not require %s", name)
+			}
+		}
+		batches := fields["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)
+		if batches["minItems"] != 1 || batches["maxItems"] != 1 {
+			t.Fatal("completion alternative permits a missing or multiple-batch proposal")
+		}
+	}
+	batch := Batch{DevelopmentBatch: protocol.DevelopmentBatch{ID: "command"}}
+	for _, scenario := range []string{"small-repair", "single-proposal", "split-plan", "unplanned-completion", "split-completion"} {
+		t.Run(scenario, func(t *testing.T) {
+			result := Repair{Paths: []string{"command.py"}, Summary: "Implemented the confirmed command", AffectedCases: []string{"normal-input"}}
+			if scenario != "small-repair" && scenario != "unplanned-completion" {
+				result.GranularityReview = &Granularity{Reason: "One command boundary", VerificationTier: "FINAL", Batches: []Batch{batch}}
+			}
+			if scenario == "split-plan" || scenario == "split-completion" {
+				result.GranularityReview.Batches = append(result.GranularityReview.Batches, Batch{DevelopmentBatch: protocol.DevelopmentBatch{ID: "output"}})
+			}
+			if scenario == "split-plan" {
+				result.Paths, result.Summary, result.AffectedCases = nil, "", nil
+			} else if scenario != "small-repair" {
+				result.Completion = &protocol.DevelopmentCompletion{DoD: map[string]string{"normal-input": "Implemented"}, Handoff: "Ready for approved checks"}
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, err := DecodeResult(input, "result", raw, "original-native-output")
+			invalid := scenario == "unplanned-completion" || scenario == "split-completion"
+			if (err != nil) != invalid {
+				t.Fatalf("repair completion boundary changed: %v", err)
+			}
+			if !invalid && (event.Result.PayloadDigest != "original-native-output" || event.Result.Validation.Binding != input.Validation.Binding) {
+				t.Fatal("repair lost its original source or issued identity")
 			}
 		})
 	}
