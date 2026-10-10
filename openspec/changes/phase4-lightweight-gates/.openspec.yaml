@@ -1,3 +1,0 @@
-schema: spec-driven
-created: 2026-07-23
-goal: Reduce formal-gates workflow weight while making independent reviewer gates prompt-file driven.

@@ -31,8 +31,7 @@ const (
 
 // SliceChildBinding 是 child run 状态上的继承事实：分片身份（master run 与
 // 分片名）加上继承结论绑定的需求 revision。产品审/技术审的整体结论来源就
-// 是 MasterRunID——child 不自行增加审查轮次（incremental-seal-plan：split
-// child 继承 master 的整体产品/技术审，不自行增加 series）。
+// 是 MasterRunID——child 继承 master 的整体产品/技术审，不自行增加 series。
 type SliceChildBinding struct {
 	MasterRunID         string                      `json:"masterRunId"`
 	SliceID             string                      `json:"sliceId"`

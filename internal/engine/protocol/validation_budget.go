@@ -8,7 +8,7 @@ import (
 )
 
 // KindDispatchBudgetDisposition 是派发预算边界的唯一 typed control
-// （stage-3-5b：额度或 retry 耗尽、token cap 到达后返回 typed Ask；固定四选项
+// （额度或 retry 耗尽、token cap 到达后返回 typed Ask；固定四选项
 // 有限继续/重试/跳过/abort，不新增生命周期或公开旁路）。经 ControlValidation
 // 的既有 Ask/DECIDE 机制落账与授权，不是新的 ControlKind。
 const KindDispatchBudgetDisposition = "DISPATCH_BUDGET_DISPOSITION"

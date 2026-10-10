@@ -239,8 +239,8 @@ type RoundGrantDecision struct {
 
 // TopologyDecision 是 CONFIRM_TOPOLOGY 的精确拓扑决定：no-split 必带
 // 理由 note；split 必带 SplitCount≥2、与之一致的 Slices 与并行度
-// （incremental-seal-plan §2.3：矩阵 start 行不声明拆分意向，绑定唯一
-// 发生在此处）。ACOwners 是 split 的验收条件主责声明列表——载荷以列表
+// start 不声明拆分意向，绑定唯一发生在此处。ACOwners 是 split 的验收条件
+// 主责声明列表——载荷以列表
 // 形态携带使重复声明可区分拒绝，绑定点归一为 map 后落账。
 type TopologyDecision struct {
 	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`

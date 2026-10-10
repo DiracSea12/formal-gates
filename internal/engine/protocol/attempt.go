@@ -156,11 +156,8 @@ func (s *State) validationGrantUsed(kind, choice, target string) bool {
 	return false
 }
 
-// retryExtensionGranted 报告一个逻辑任务的一次追加工期是否已被授予：RETRY
-// approve 与 DISPATCH_BUDGET_DISPOSITION retry 两个入口授出的是同一逻辑任务
-// 的同一个 retry slot——任一通道已落决定即已授予（stage-3-5b:169-173
-// 「『重试』固定增加当前逻辑动作的一个 retry slot……不能预先累积」；约束对
-// 象是逻辑任务，不是 Ask 名称）。两个扩展入口都只查本谓词。
+// retryExtensionGranted reports whether one extra retry slot has been granted
+// for this logical task. Either control consumes the same one-time extension.
 func (s *State) retryExtensionGranted(target string) bool {
 	return s.validationGrantUsed("RETRY", "approve", target) ||
 		s.validationGrantUsed(KindDispatchBudgetDisposition, "retry", target)

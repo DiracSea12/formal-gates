@@ -6,7 +6,7 @@
 
 ## 背景
 
-原方案的 StepSpec 是一个同时承载拓扑依赖、前后置条件、双维权限、I/O schema、重试/超时、幂等、副作用/receipt、中断、并行/join、失败分类、定义版本与 agent/host 理由的扁平万能结构（约 20 个公共字段加一个条件必填 reason）。它对本项目——流程封闭、节点由项目自控、无用户自定义工作流——构成框架级过度设计：多数步骤只使用少数字段，其余为空值/默认值；合法组合要靠编译器逐项排除；新增一种步骤类型需同时修改定义结构、编译器、序列化、运行时与测试。另一极端（完全删除定义编译器与定义制品、只留具体 handler 加裸表）则丢失全局图不变量（可达性、循环、join 覆盖、版本绑定）的机械保证，且与阶段 0 已交付的定义身份契约（`definitions/workflow.json` + 字节摘要 + 版本信封）不兼容。
+原方案的 StepSpec 是一个同时承载拓扑依赖、前后置条件、双维权限、I/O schema、重试/超时、幂等、副作用/receipt、中断、并行/join、失败分类、定义版本与 agent/host 理由的扁平万能结构（约 20 个公共字段加一个条件必填 reason）。它对本项目——流程封闭、节点由项目自控、无用户自定义工作流——构成框架级过度设计：多数步骤只使用少数字段，其余为空值/默认值；合法组合要靠编译器逐项排除；新增一种步骤类型需同时修改定义结构、编译器、序列化、运行时与测试。另一极端（完全删除定义编译器与定义制品、只留具体 handler 加裸表）则丢失全局图不变量（可达性、循环、join 覆盖、版本绑定）的机械保证，且与定义身份契约（`definitions/workflow.json` + 字节摘要 + 版本信封）不兼容。
 
 ## 决策
 
@@ -29,11 +29,11 @@
 9. **锁步激活**：executable definition 只有在同一候选包 registry 能完整、唯一解析其全部 ID 时才能激活。分层边界：源码开发层允许暂时存在未完整实现的 diagnostic-only 定义（可输出诊断、不可执行、不可签发 Ready/HostAction、不可进入 promotion），与 `MISSING_ENGINE_ADAPTER` 原则一致；候选激活层严格 definition + binary registry 锁步；正式运行层精确版本与双摘要绑定。
 10. **八类拒绝结果全保留**：不可达 step/非法循环、无类型 I/O、自然语言-only pre/postcondition、无幂等/reconcile 的副作用、无 request/schema 的 human wait、无 join/failure policy 的并行组、缺合法 reason 的 AGENT/HOST、未绑定 definition version——以 enforcement matrix 标注主要拦截层（封闭类型/constructor、closed-world compiler、runtime loader）与二次防线；需求不因实现分层而减少约束。
 
-## 增补（2026-08-22，阶段 1 封板后补漏）
+## 编译制品与节点映射
 
 两项增补不改变已冻结的决策，只补齐落地对照与封闭面：
 
-1. **NodeExecutionPlan 落地对照**：master-requirements §5 与 final-implementation-draft §3.2 的"每个节点编译为有序 `NodeExecutionPlan`"由 `CompiledDefinition` 直接落地，不设独立结构——制品步骤按 (nodeId, ordinal) 稳定排序（ordinal 由确定性 Kahn 拓扑序全局唯一派生），某节点的 NodeExecutionPlan 即其步骤按 ordinal 的有序子序列，节点内机械顺序、前后置条件与 fan-out/join 语义全部由该子序列承载。与拍平 StepSpec 被拒同理，不为"节点"再投影出第二套并行结构。阶段 3 真实业务节点迁入时沿用本对照，不新增节点级重写层。
+1. **NodeExecutionPlan 落地对照**：master-requirements §5 与 final-implementation-draft §3.2 的"每个节点编译为有序 `NodeExecutionPlan`"由 `CompiledDefinition` 直接落地，不设独立结构——制品步骤按 (nodeId, ordinal) 稳定排序（ordinal 由确定性 Kahn 拓扑序全局唯一派生），某节点的 NodeExecutionPlan 即其步骤按 ordinal 的有序子序列，节点内机械顺序、前后置条件与 fan-out/join 语义全部由该子序列承载。与拍平 StepSpec 被拒同理，不为"节点"再投影出第二套并行结构。新增业务节点沿用本对照，不新增节点级重写层。
 2. **registry 槽位扩至七类**：AskKindID（human ask 的合法类型，如 `decision`）加入封闭 registry，与 OperationID 同纪律（独立命名类型、单一命名空间、缺失走 MISSING_ENGINE_ADAPTER 路由）。此前 authoring 注释承诺的"由 compiler 对注册表校验"自本增补起生效。同步补齐 compiled IR 二次防线对 agent 步 postconditions 非空（worker result 合同）的复核，enforcement matrix 的 constructor 主拦项至此全部有 compiler 层二次防线。
 
 ## 已拒绝的替代方案
@@ -43,7 +43,7 @@
 - 完全删除定义编译器与定义制品（裸 handler 表）；
 - 为架构对照而实现两套完整内核。
 
-## 阶段 1 落地要求（摘要）
+## 定义实现约束
 
 - 开工前先做六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小型 compiler spike，确认 compiled IR、registry 与 canonical encoder 边界；spike 不进入 production。
 - 独立验收测试（除既有 golden/property 外）：
@@ -64,4 +64,3 @@
 - “砍掉定义编译器，Go 编译器可免费替代”——局部不变量可交给类型系统，全局图性质不可；
 - “阶段 0 的 `future.go` 证明定义必须以数据为 authoring source”——它只证明最终必须存在可序列化、可摘要、可版本绑定的定义制品；
 - 3–5k / 4–6k / 5–8k 等行数估计——无 WBS 依据，仅为对话中的体量比较，不构成任何验收或决策依据；
-- “以 `REQUEST_REQUIREMENT_CHANGE` 事件登记本次变更”——该 typed 事件属于未来 engine 公共面；本次变更按当前冻结 stable driver 的既有需求变更流程登记。

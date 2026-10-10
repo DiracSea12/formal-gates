@@ -962,10 +962,10 @@ func TestBootstrapScriptsDelegateToNativeTransactionOwner(t *testing.T) {
 	}
 }
 
-func TestPrecedenceInventoryAndStableDocsStayWithinStableSurface(t *testing.T) {
+func TestCurrentAuthorityInventoryAndPublicDocs(t *testing.T) {
 	root := e2eRepoRoot(t)
 	inventory := e2eReadFile(t, filepath.Join(root, "references", "requirements-precedence.md"))
-	for _, required := range []string{"current-authority", "orthogonal", "historical", "superseded", "orchestration-pipeline-engine", "stage-0"} {
+	for _, required := range []string{"current-authority", "orchestration-pipeline-engine/master-requirements.md", "final-implementation-draft.md", "adr-001-typed-authoring-compiled-canonical-definitions.md", "adr-002-development-batching-and-verification-tiers.md", "references/formal-flow.md", "references/install-and-hooks.md", "references/qa-operations.md"} {
 		if !strings.Contains(inventory, required) {
 			t.Fatalf("precedence inventory is missing classification %q", required)
 		}
@@ -983,9 +983,9 @@ func TestPrecedenceInventoryAndStableDocsStayWithinStableSurface(t *testing.T) {
 	}
 	for _, rel := range stableFiles {
 		content := e2eReadFile(t, filepath.Join(root, filepath.FromSlash(rel)))
-		for _, futurePublicSurface := range []string{"workflow drive", "workflow submit", "drive/submit", "`drive`", "`submit`"} {
-			if strings.Contains(strings.ToLower(content), futurePublicSurface) {
-				t.Fatalf("stable document %s exposes future public surface %q", rel, futurePublicSurface)
+		for _, retiredPublicSurface := range []string{"workflow prepare-action", "workflow prepare-gate", "workflow record-action", "workflow record-gate", "workflow qa-worktree", "workflow cleanup", "workflow resume --adopt-external"} {
+			if strings.Contains(strings.ToLower(content), retiredPublicSurface) {
+				t.Fatalf("current document %s exposes retired public surface %q", rel, retiredPublicSurface)
 			}
 		}
 	}

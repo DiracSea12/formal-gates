@@ -1,7 +1,7 @@
 """Fixed sample corpus for the result-framing replacement unit.
 
 Shared by the differential test (reference implementation vs the Go bridge).
-Per plan section 12.2 the corpus deliberately includes Unicode, empty
+The result-parser corpus deliberately includes Unicode, empty
 collections and refusal cases, so that equivalent behaviour is checked on the
 inputs where cross-language libraries tend to diverge.
 """

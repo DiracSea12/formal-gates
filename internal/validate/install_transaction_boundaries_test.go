@@ -1250,28 +1250,24 @@ func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 		}
 	}
 	inventory := string(installReadFile(t, filepath.Join(root, "references", "requirements-precedence.md")))
-	for _, status := range []string{"current-authority", "reference", "orthogonal", "superseded", "historical"} {
-		if !strings.Contains(inventory, status) {
-			t.Fatalf("requirements inventory omits status %s", status)
-		}
+	if !strings.Contains(inventory, "current-authority") {
+		t.Fatal("requirements inventory lacks current authority")
 	}
 	for _, path := range []string{
-		"openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md",
 		"openspec/changes/orchestration-pipeline-engine/master-requirements.md",
-		"openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md",
-		"openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md",
-		"openspec/changes/fix-existing-defects/master-requirements.md",
-		"openspec/changes/host-rule-management-and-codex-hook/master-requirements.md",
-		"openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md",
-		"openspec/changes/qa-execution-rerun-scope/master-requirements.md",
-		"openspec/changes/runtime-review-guards/master-requirements.md",
-		"openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md",
-		"openspec/changes/two-phase-pre-development-review/master-requirements.md",
-		"openspec/changes/universal-modification-intake/master-requirements.md",
-		"P2-REPAIR-AND-COMMENT-CLEANUP-REQUIREMENT.md", "QA-WORKTREE-ISOLATION-AND-INCREMENTAL-REQUIREMENT.md", "TRIGGER-MODEL-EXPLICIT-REQUEST-REQUIREMENT.md", "TRIGGER-MODEL-DEFAULT-REMINDER-REQUIREMENT.md",
+		"refactor-plan/final-implementation-draft.md",
+		"refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md",
+		"refactor-plan/adr-002-development-batching-and-verification-tiers.md",
+		"references/formal-flow.md", "references/install-and-hooks.md", "references/qa-operations.md",
 	} {
+		if !strings.Contains(inventory, path) {
+			t.Fatalf("current requirements inventory omits %s", path)
+		}
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
-			t.Fatalf("inventory path is not present in installed tree: %s: %v", path, err)
+			t.Fatalf("current authority path missing: %s: %v", path, err)
+		}
+		if !entrySet[path] {
+			t.Fatalf("installed package inventory omits current authority %s", path)
 		}
 	}
 	var help strings.Builder

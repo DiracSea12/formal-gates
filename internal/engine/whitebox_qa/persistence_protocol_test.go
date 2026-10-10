@@ -425,7 +425,7 @@ func TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 	}
 }
 
-// Constructing the phase-2 engine with an explicit isolated project root must
+// Constructing the persistent engine with an explicit isolated project root must
 // leave host, resource, and stable namespaces untouched. The only durable file
 // is the engine state selected by the test-only fixture.
 func TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot(t *testing.T) {

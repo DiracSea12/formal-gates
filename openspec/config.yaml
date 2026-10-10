@@ -5,9 +5,10 @@ context: |
   Tech stack: Go CLI plus Markdown prompt files.
   Domain: lightweight independent AI review orchestration.
   Independent gates come only from package-local gates/*.md. Shared review
-  rules come only from prompts/reviewer-base.md. SKILL.md is the sole workflow
-  order owner. The external VCS owns snapshots and diffs; formal-gates does not
-  implement version control or retain an evidence graph.
+  rules come only from prompts/reviewer-base.md. The engine is the sole workflow
+  authority; current requirements, SKILL.md and references/formal-flow.md describe
+  that contract. Native VCS adapters invoke the selected external VCS and own its
+  signed execution receipts; no separate version-control or evidence graph is built.
   Guarantee documented normal use and common operator mistakes only. Do not
   add adversarial hardening, compatibility paths, or framework layers unless a
   confirmed requirement needs them.

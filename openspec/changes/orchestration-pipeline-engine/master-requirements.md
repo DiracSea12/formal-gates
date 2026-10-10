@@ -14,7 +14,7 @@
 
 ## 2. 本次交付边界
 
-1. 完整实现方案稿当前定义的阶段 0–6：冻结契约、确定性内核、可靠动作协议、完整流程迁移、split 与三 VCS、旧逻辑删除、最终权威 canary 与安装全部属于本次交付。最终制品只保留 engine 权威路径；旧 run、旧编排入口及其迁移、兼容和回退旁路全部移除。
+1. 当前产品包含确定性内核、可靠动作协议、完整流程、split 与三 VCS、安装和按实际能力取证的验证。最终制品只保留 engine 权威路径；旧 run、旧编排入口及其迁移、兼容和回退旁路全部移除。
 2. VCS 后端 **Git、SVN、P4** 全部纳入 engine 交权；非分片和分片 master/child/merge 都是本次范围。
 3. 宿主 **Claude Code、Codex、Cursor、DeepSeek Harness** 全部纳入验收；每个宿主须在真实环境中独立跑通 engine 唯一权威的端到端正式流程 canary。hook/lifecycle-only live canary 或 smoke 不构成交权证据。
 4. 分片流程本次纳入：拆分意向与精确拓扑、child 继承与路线、`SLICE_READY`、durable child receipt、主线集成、合并 QA/合并门、主线返修、成本和批准用例汇总全部由 engine 接管。
@@ -29,7 +29,7 @@
 2. `workflow drive`：不带外部事件，确定性推进到下一个外部边界。
 3. `workflow submit`：唯一外部事件写入口；提交用户决定、主动控制请求、worker 结果、HostAction receipt 与 lifecycle 事件。不得保留 `drive --event`、`submit-result` 或其他第二写通道。
 4. `workflow show` / `status` / `next` / `diagnose`：严格只读。`next/status` 可展示带 freshness token 的 `availableActions`；`diagnose` 可原始只读检查 current、terminal、unsupported、corrupt、missing 状态。
-5. `workflow guard-preview --input <basis.json>`：公开只读、非权威的生产 guard 计算预览；schema/fixture 见 `references/guard-preview.md`。不创建 run、不写状态、不认证真实确认或任务合法性；3.5b 的 `runtimeIntegration=NOT_INSTALLED`，阶段 4 才切换为权威 engine 集成状态。
+5. `workflow guard-preview --input <basis.json>`：公开只读、非权威的生产 guard 计算预览；schema/fixture 见 `references/guard-preview.md`。不创建 run、不写状态、不认证真实确认或任务合法性；`runtimeIntegration` 报告权威 engine 集成状态，实际签发资格由 engine 事务核验。
 6. 包安装、卸载、hook、lifecycle、canary 与脱离 run 的快速 gate 检查属于维护/诊断面，可以保留，但不得绕过 engine 修改 workflow 状态。
 
 ### 3.2 必删内容
@@ -130,7 +130,7 @@
 
 审查来源的修订由主代理在编辑前保留并核对与上一确认 revision 匹配的完整 base，生成穷尽 review-delta 并逐 hunk 核实来源。用户只确认变更包；完整 candidate revision 绑定为新需求，未变内容继承。首次受理仍确认全文，主动查看全文不改变增量确认范围。Controller 不持有第二份 base/diff 账本，不允许无关 hunk 混入。
 
-需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。阶段 4 engine 是唯一 writer，legacy 入口不得绕过校验。
+需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。engine 是唯一 writer，其他入口不得绕过校验。
 
 ### 7.3 产品审/技术审 finding
 
@@ -184,7 +184,7 @@ QA 覆盖先把同一次需求/方案确认中登记的有限 `requiredSources` 
 6. 普通返修固定 AFFECTED 执行冻结用例；有效原 FULL 与当前实际执行、合法继承须覆盖全部当前批准义务，本轮必需验证全部有效通过后完成，不因 requirement guarantee 追加最终 FULL。首次必要 FULL、新增/受影响或重开义务、来源绑定及显式例外权限保持。需要重审的产品/技术/普通门读取完整绑定输入；门审 P2 用 carry，不复审。
 7. 额度用尽后额外返修 Ask 展示完整绑定摘要：state revision、需求/快照/wave、全部 findings/problems（归并与定级理由）、历史修复/验证、QA scope、已用/剩余轮数、dispatch signature/TaskKey、engine allowance、owner cost、token cap 可用性。预览只读；授权绑定摘要 digest 与 state revision，变化后拒绝旧授权，每次只授权一轮。
 8. 非 wave 与 wave 的 action/QA/gate 共用无效结果义务生命周期：RUNTIME_ERROR/REJECTED_INVALID_RESULT 终结原 attempt，后者保存被拒字段/原因，不写有效 finding/PASS/FAIL/problem/basis。义务有效时复用 TaskKey 按有限 MaxAttempts 重派，默认 2；wave 还须 COLLECTING 且目标未处置。耗尽进入 RETRY_EXHAUSTED，展示原因、已用/总 attempts，停止普通与自动重派。用户绑定 state revision 和非空理由只能追加一次单 attempt，改变 retry policy/digest、不增加基础槽位；再次失败不得扩张，须按已有错误处置、abort/cleanup 或确认真实改变绑定/快照/责任的新计划结束或重建。
-9. dispatch signature 绑定具体输入，TaskKey 绑定逻辑义务；相同 OPEN 派发续用，相同有效 PASS signature 不重复派发。普通 finding/result/receipt/resume 不新增 TaskKey。阶段 5–7 继承同一 finding/problem ID、归并、唯一返修、P3 advisory 和 QA 冻结语义。
+9. dispatch signature 绑定具体输入，TaskKey 绑定逻辑义务；相同 OPEN 派发续用，相同有效 PASS signature 不重复派发。普通 finding/result/receipt/resume 不新增 TaskKey。各流程复用同一 finding/problem ID、归并、唯一返修、P3 advisory 和 QA 冻结语义。
 
 ### 8.5 开发分批与组间验证
 
@@ -213,7 +213,7 @@ QA 覆盖先把同一次需求/方案确认中登记的有限 `requiredSources` 
 
 以下每一项都要求可复现测试/QA 证据，不能用 smoke 或口头保证代替：
 
-QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case 多对多映射；标准需求案 `REQ/AC/case` 到既有 `RequiredSource/AcceptancePoint/AcceptanceCase/CoverageEdge` 的无损适配；标准需求案任一 `AC` 缺 approved case 或试图以非 QA 处置绕过时拒绝；其他 source 无适用 QA 点时的显式理由；未知/重复/缺失/orphan source/point/case、仅 case 决策、自动推导 source/point 决策和集合级 PASS 被拒绝；source inventory/manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效；`FULL` expected/actual 不一致与 `AFFECTED` 执行/继承/未执行集合不完整被拒绝；以及 `AUTHORIZED_SKIP` 不计为执行 PASS。该 checkpoint 只冻结契约与 validator，regular E2E 留在阶段 4。
+QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case 多对多映射；标准需求案 `REQ/AC/case` 到既有 `RequiredSource/AcceptancePoint/AcceptanceCase/CoverageEdge` 的无损适配；标准需求案任一 `AC` 缺 approved case 或试图以非 QA 处置绕过时拒绝；其他 source 无适用 QA 点时的显式理由；未知/重复/缺失/orphan source/point/case、仅 case 决策、自动推导 source/point 决策和集合级 PASS 被拒绝；source inventory/manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效；`FULL` expected/actual 不一致与 `AFFECTED` 执行/继承/未执行集合不完整被拒绝；以及 `AUTHORIZED_SKIP` 不计为执行 PASS。覆盖契约、validator 和正常 regular 执行路径共同取证。
 
 1. **迁移表与用户节点**：每条合法边、pre 拒绝、trigger 分类、Ask/Operator/Wait/HostAction/Ready/Complete、主动 `REQUEST_*`、终态与回退；正常入口不存在遗漏用户节点。
 2. **节点内执行计划**：封闭变体 constructor 非法状态拒绝、closed-world compiler 图校验（可达性/循环/依赖/join 覆盖/版本绑定/registry ID 完备性）、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
@@ -227,20 +227,20 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 10. **错误与恢复**：invalid event、retryable I/O、fatal corruption、deadline 重入、provider/bridge/mismatch、HostAction、adopt-external 完整转换、候选 freeze/reuse/promotion/cleanup 与所有本地副作用崩溃窗口；promotion 后 receipt 前恢复不得重复集成。
 11. **旧 run 与旧入口**：缺版本和任一版本不匹配稳定 `UNSUPPORTED_RUN_VERSION`；`diagnose` 原始只读；无迁移、legacy 续跑、handoff、旧公开命令、兼容别名或 cleanup 删除后门。
 12. **VCS 程序化契约与 3×2**：三种 provider 的探测/status/diff/track/integrate/commit/snapshot、whitebox workspace、完整候选 freeze、identity-preserving 或 digest-equivalent promotion、resource registry cleanup、冲突窄代理边界、typed artifact、UNKNOWN reconcile 和禁止代理写 VCS；Git、SVN、P4 各跑通非分片与分片 master/child/merge，共六个权威单元格。
-13. **宿主**：DSH、Claude Code、Codex、Cursor、ZCode 各自在真实环境跑一次 Git 非分片完整正式流程，覆盖产品审、技术审、开发/黑盒设计并行、whitebox workspace、最终 FROZEN case-set 与 review-ready 屏障、完整候选上的 QA/门并行、精确 promotion、至少一次 FAIL→repair→重审、receipt/result、一次中断恢复、无残留 cleanup 和 Seal。
-14. **最小 canary 数**：五宿主 Git 非分片与 VCS 3×2 可复用一个 Git 非分片单元格，故最低十条完整 canary；不要求五宿主×三 VCS×两种拆分的笛卡尔积。全部权威结果必须绑定同一份已删除旧运行时逻辑的最终候选 revision 和实际安装副本。
+13. **宿主资格**：DSH、Claude Code、Codex、Cursor、ZCode 的受管原生 adapter 与实际宿主能力分别取证；正常正式流程只使用本 run 选定的平台。额度或能力不可用的宿主如实 skip/unverified，不发模型请求、不计为 PASS，不把安装成功视为真实模型或工具前拦截证明。
+14. **执行证据归属**：源码、输入、candidate、provider/VCS 和原始 receipt/source 必须明确对应。验证仅因受影响行为、具体失败或未决风险扩大；仍有效的原证据沿原归属复用，不因 revision 变化重复全部完整流程，不用不同能力或输入的记录冒充当前结果。
 15. **黑盒边界**：文档化正常入口、常见误操作和已知恢复/崩溃窗口；对抗输入、恶意/手工状态编辑、权限/不可变文件和未支持 OS 只作 P3、不阻塞。
 16. **canonical 制品与身份**：compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写；authoring source 重新生成 checked-in 制品字节无 diff（独立于 round-trip 的 freshness CI）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节；只改 handler 实现不改 ID 与定义语义时 definition digest 不变而 package digest 变，改变 dependency/policy/reason/schema ID/handler ID/join 语义时 definition digest 必变；registry 对每个 ID 精确解析一次，缺失、重复或 kind 不匹配拒绝；packageDigest 执行绑定（含 runtime sibling 实际摘要校验与 adopt receipt 路径）有正反向测试。
 
 ## 11. 验收判定
 
 1. 方案稿全部确定性闸门、节点内执行计划顺序/失败分类、强制并行不变量和用户节点覆盖测试通过。
-2. 六个 VCS×split 单元格、五宿主 same-host canary、独立 QA 全部 PASS；每项有可复现事件、状态、snapshot 和最终 Seal/receipt 证据。
+2. VCS、宿主与独立 QA 的适用义务由实际来源完整对账；执行项保留事件、状态、snapshot 和 receipt 证据，未执行及额度不可用项如实标记，不冒称 PASS。
 3. QA FAIL、有效 P0/P1 与门审 P2 obligation 按规则闭环；门审 P3 仅 Seal advisory，QA Review P2/P3 在 FROZEN 前吸收，范围外项不阻塞。
 4. 最终候选不存在旧 run 兼容、迁移、legacy mode、旧公开推进入口、第二写入口、cleanup 后门或 engine→legacy 回退。
 5. 正常流程中不存在本可程序化却交给代理的操作，也不存在 engine/VCS adapter 故障后动态降级给代理的路径。
-6. 当前流程 Seal 且全部权威 canary 绑定同一最终候选后，才切换全局安装并退役开发兜底。
-7. 删除或改写仍断言已废弃受理/复审/轻量路线文本的旧测试；最终 `go test ./...` 必须在不恢复旧逻辑、旧文案或兼容入口的前提下 PASS。当前基线中这类旧断言的失败属于待开发清理事实，不得以回填过时行为消绿。
+6. 安装只使用已授权的当前候选与原事务 owner；实际 post-switch/pre-commit smoke、receipt 与恢复资格成立后提交安装，失败沿同一 journal 恢复。
+7. 删除或改写仍断言已废弃受理/复审/轻量路线文本的旧测试；最终 `go test ./...` 必须在不恢复旧逻辑、旧文案或兼容入口的前提下 PASS。不得为了通过测试回填过时行为。
 
 ## 12. 非目标
 

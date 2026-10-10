@@ -6,7 +6,7 @@
 
 ## 1. 最终形态
 
-formal-gates 从“主代理阅读流程规范并选择下一条命令”改成“Go 引擎计算完整下一步，主代理只机械搬运或呈现用户决定”。引擎是唯一流程权威，最终交付树不保留旧 run 迁移、旧公开推进命令、兼容别名、legacy mode 或 engine→legacy 回退。
+formal-gates 由 Go 引擎计算完整下一步；程序在本 run 选定平台派发已签发动作、收取原始结果并续做职责，主代理呈现实际用户决定。引擎是唯一流程权威，最终交付树不保留旧 run 迁移、旧公开推进命令、兼容别名、legacy mode 或 engine→legacy 回退。
 
 两项目标等权：流程不能因漏步骤、选错分支或选择性忽略并行任务而卡死；主代理也不再消耗 token 推理下一步。验收采用结构性标准：主代理看不到迁移表和 pre 条件，不选择 Ready 子集，只接收固定、短小的类型化指令。
 
@@ -14,7 +14,7 @@ formal-gates 从“主代理阅读流程规范并选择下一条命令”改成�
 
 - regular 非分片、retained master、child、merge 和 lightweight；
 - Git、SVN、P4 的非分片与分片全流程；
-- Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的真实 adapter 与完整 canary；
+- Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的原生 adapter；每个平台的真实验证资格独立取证，额度与能力限制如实记录；
 - 产品审、技术审、开发、黑盒/白盒 QA、门、修复、需求变化、中断恢复、Seal/Abort；
 - 严格拒绝旧 run；不承诺 Windows/macOS/Linux 支持矩阵，但实现保持可移植。
 
@@ -28,22 +28,23 @@ formal-gates 从“主代理阅读流程规范并选择下一条命令”改成�
 2. `workflow drive`：无外部事件，推进到下一外部边界。
 3. `workflow submit`：唯一外部事件写入口。
 4. `workflow show`、`status`、`next`、`diagnose`：严格只读。
-5. `workflow guard-preview --input <basis.json>`：公开只读、非权威的生产 guard 计算预览（schema/fixture 见 `references/guard-preview.md`），不创建 run、不写状态、不认证真实确认或任务合法性。3.5b 固定 `runtimeIntegration=NOT_INSTALLED`；阶段 4 才从权威 engine 状态呈现运行时集成。
+5. `workflow guard-preview --input <basis.json>`：公开只读、非权威的生产 guard 计算预览（schema/fixture 见 `references/guard-preview.md`），不创建 run、不写状态、不认证真实确认或任务合法性。预览不授予执行资格；实际 issuance guard 使用权威 engine 状态。
 
 安装、卸载、hook、lifecycle、canary 与脱离 run 的快速 gate 检查仍属维护面，但不能写 workflow 状态。`drive --event`、`submit-result`、公开 `cleanup` 及所有旧推进命令全部删除；旧能力若仍需要，只能成为引擎内部 handler。
 
 ### 2.2 主循环
 
 ```text
-start -> drive -> NextResult
-                  | Ready/HostAction: 宿主整批执行 -> submit receipt/result
-                  | Ask:             用户选择       -> submit decision
-                  | Operator:        主代理核实事实 -> submit observation
-                  | Wait:            等新事实       -> drive/submit
-                  | Complete:        结束
-
-每次 submit 接纳事件后立即继续 Decide/SelectIssued，直接返回新的 NextResult。
+start -> drive -> 程序消费当前签发动作与原生结果 -> 继续原任务
+                 | Ask:      呈现用户决定 -> submit decision
+                 | 具体阻塞: 保留原事实，等待必要输入或恢复
+                 | Complete: 结束
 ```
+
+Ready/HostAction 使用当前材料与签发身份执行；语义 Operator 由原角色判断并通过原
+validator 接纳，不能由程序臆断。控制 submit 沿同一消费者继续；worker receipt/result
+使用同一接纳 owner。`--single-step` 仅作为同路径维护诊断，返回后不消费后续原生任务。
+
 
 `NextResult` 是 tagged union，只允许 `Ready`、`HostAction`、`Ask`、`Wait`、`Operator`、`Complete` 六种 Kind。一个 canonical Plan 只能有一个 Kind，对应之外的 payload 必须为空。一个 Ready 可包含多个任务，且必须是整个 IssuedSet。
 
@@ -107,7 +108,7 @@ HOST 不是判断权。它只提供凭据、UI、进程或外部系统能力；H
 | engine handler | `ENGINE` | `ENGINE_LOCAL` / `DURABLE_ACTIVITY` | 只走定义中的 next/failure edge |
 | Ready dispatch transport | `ENGINE` | `HOST_ADAPTER` | `hostBoundaryReason=AGENT_DISPATCH_API`；回 SpawnReceipt，spawn 不属于 HostAction |
 | Ready worker task | `AGENT` | `AGENT_WORKER` | 必须有合法 nonProgrammableReason；回 worker result |
-| Operator | `AGENT` | `AGENT_WORKER` | 当前主代理仅返回 `SEMANTIC_JUDGMENT` typed observation，不替用户授权、不执行 adapter 动作 |
+| Operator | `AGENT` | `AGENT_WORKER` | 语义 worker 只返回 `SEMANTIC_JUDGMENT`；程序按原输入组装 typed observation，不替用户授权、不执行 adapter 动作 |
 | Ask | `HUMAN` | `HOST_ADAPTER` | `hostBoundaryReason=USER_IO_TRANSPORT`，只有 request 中的合法选项 |
 | HostAction | `ENGINE` | `HOST_ADAPTER` | 宿主只执行已签发参数并回 receipt |
 | Wait / Complete | `ENGINE` | `ENGINE_LOCAL` | 只投影状态，不产生隐藏动作 |
@@ -227,11 +228,10 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 
 regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一的正式 UTF-8 Markdown 需求案，不另建草稿或人工维护的覆盖清单；自然语言正文保留，`## 需求点` 下按固定 `REQ → 要求/验收条件/来源` 与唯一 `AC` 结构声明全部必须实现、会改变产品/流程行为或必须进入 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界，预检通过后仍由用户确认当前完整文件和 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，留在方案正文并由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 继续只登记需求后 Seal，不写该正式需求案。
 
-受理确认的 typed `intakeConfirmationReceipt` 以固定 stable driver 已写入的确认状态为权威来源；
-固定 launcher 从该状态和登记的 requirement/solution 工件派生回执并落到 formal run evidence，再按
-原相对路径注入候选 test project。候选 `start` 通过 `--intake-receipt <path>` 或固定 host config
-指针读取，不能自行生成回执、读取 stable run state 或用 runtime/identity/digest 参数替代；旧回执配
-当前工件必须在首写前稳定拒绝。stable driver 不因候选 engine 阶段新增 writer 或公共入口。
+受理 owner 根据确定性预检生成的完整候选与用户对全文/revision 的明确确认，保存 typed
+`intakeConfirmationReceipt`。来源、authority 与 transport 使用当前协议的固定值，程序
+传递原对象与工件绑定，不要求模型手抄 identity/digest。`start` 校验确认来源、当前工件
+与结构一致，旧 receipt 配当前不同工件在首写前拒绝。
 
 若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和 full/custom 路线，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
 
@@ -310,7 +310,7 @@ Controller 按 master/整体 run 和审查动作分别持久化两条独立的 `
 
 审查来源的修订由主代理在编辑前保留并核对与上一确认 revision 匹配的完整 base，生成穷尽 review-delta 并逐 hunk 核实来源。用户只确认变更包；完整 candidate revision 绑定为新需求，未变内容继承。首次受理仍确认全文，主动查看全文不改变增量确认范围。Controller 不持有第二份 base/diff 账本，不允许无关 hunk 混入。
 
-需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。阶段 4 engine 是唯一 writer，legacy 入口不得绕过校验。
+需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。engine 是唯一 writer，其他入口不得绕过校验。
 
 
 ## 6. 强制最大并行
@@ -386,10 +386,8 @@ dispatch signature 绑定具体输入，TaskKey 绑定逻辑义务；相同 OPEN
 signature 不重复派发。guard 基础 source 为 closed-world definition、确认 requirement/
 Batch/route/topology、批准 QA、所选 gate；finding 派生 source 仅来自 adjudication 完成且
 wave 收齐后的有效 obligation/唯一 repair TaskKey。预授权 repair 机械加入，需确认的扩张先
-确认 revision。raw finding、普通 result/receipt/resume 不扩容。3.5b 只纯计算与只读预览；
-阶段 4 才接 State/source bridge/IssueFromPlan/refill/retry/typed Ask，将修复摘要 engine
-allowance 从 UNAVAILABLE 切换为权威 projection，guard-preview 的 runtimeIntegration 改用
-权威 engine 集成状态；owner cost 与 token cap 的 UNAVAILABLE 各按来源/配置独立判断。
+确认 revision。raw finding、普通 result/receipt/resume 不扩容。
+运行时 guard 在 engine 签发事务中核当前 state、已确认义务、attempt 与累计用量；guard-preview 只读呈现，不授予实际执行资格。owner cost 与 token cap 的 UNAVAILABLE 各按来源/配置独立判断。
 
 ### 7.1 完整候选与晚提升
 
@@ -541,110 +539,13 @@ Controller 维护持久化 typed resource registry，登记每个 blackbox/white
 
 Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理登记的临时资源；只有 cleanup receipt 完整且无残留后才提交 SEALED/ABORTED summary/receipt，`show/status/next` 可从 summary 回落，`next` 返回 Complete。活动 run 的 reset/abort 必须由 available action → Ask → submit 授权；不保留公开 cleanup 后门。
 
-## 11. 实施顺序
+## 11. 当前验证资格
 
-### 阶段 0：冻结契约
+产品测试义务由总需求 §10、完成资格由 `references/formal-flow.md` 持有，安装事务由
+`references/install-and-hooks.md` 持有。验证使用实际 candidate、输入、宿主、VCS 和原始
+执行证明；没有执行的能力不得填 PASS，额度不可用的宿主如实 skip。源码修改只重验受影响
+行为，仍有效的原证据沿其原归属复用，不因提交变化无条件重复完整流程。
 
-- 把权威需求、本方案、SKILL 和所有参考文档统一成同一语义。
-- 为最终公共命令面、旧 run 拒绝、用户节点、StepSpec/失败分类、parallel frontier、产品/技术审独立三轮、开发后三轮和 split receipts 建 contract fixtures。
-- 冻结当前正常使用中仍需由内部 handler 承接的业务语义，不冻结旧命令形态或兼容行为。
-- 阶段 0 的分发事务先由冻结 stable driver 调用 `install --bootstrap` 建立 registry；bootstrap 不创建 workflow state。安装、admission bridge、Go installer、Shell/PowerShell 共享同一 native owner，按 `switched -> installed-path post-switch/pre-commit smoke -> atomic runtime/pointer/config+registry commit -> journal committed` 顺序执行，失败由同一 journal 对账并恢复旧 runtime/config/registry。
-
-### 阶段 1：纯决策内核
-
-- 开工前定稿 ADR-001 并完成六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小型 compiler spike，确认 compiled IR、registry 与 canonical encoder 边界；spike 不进入 production。
-- 实现版本 envelope、RunPhase、TaskKey、TaskTransitionTable、Observe/Decide/SelectIssued 和 NextResult 校验。
-- 按 ADR-001 实现封闭类型变体 authoring、closed-world compiler（registry 解析、图不变量、归一化、authority/runner 派生）、单一 canonical encoder、compiler 生成的 `definitions/workflow.json` 与身份常量、eligible-step runtime。
-- canonical 制品验收：authoring source 重新生成 checked-in 制品字节无 diff（独立于 round-trip 的 freshness CI）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节、definition/package digest 分离（只改实现不改 ID 时 definition digest 不变）、语义变化必改变 definition digest、registry 完备性、constructor 非法状态、mutation tests 与复杂度止损规则（新增普通业务节点不得要求修改 compiler core）。
-- 用 golden traces/property tests 覆盖合法边、非法事件、step 顺序/遗漏/重复、非终态无空结果和 canonical Plan 字节稳定。
-- 先以只读 shadow 比较 eligible frontier、完整 fan-out、依赖顺序和最终投影；telemetry 不写权威 state。
-
-### 阶段 2：可靠写入与动作协议
-
-- 实现 file lock、revision CAS、external fingerprint 重验、pendingActions 和 submit 幂等。
-- 实现 SpawnReceipt、worker result、Ask/Operator event、lifecycle event 的统一接纳。
-- 实现 failure-class 路由、UNKNOWN、中断、旧 Attempt、result-before-receipt 和本地 effect 对账，测试 engine 故障不会动态降级为 agent。
-
-### 阶段 3：完整流程迁移
-
-> 本节沿用总方案的能力分层编号；交付顺序以 `incremental-seal-plan.md` 为准。增量计划的
-> “阶段 3”是先证明最小纵向 engine 闭环，本节所述完整流程迁移在该闭环 Seal 后的后续阶段
-> 才执行，不属于当前阶段 3 Batch。
-
-- 迁移 intake、产品/技术审、start-readiness、路线、两阶段需求变化、开发、白盒独立 authoring/完整候选、production-view 并行/reuse、白盒执行、repair、精确 promotion、adopt-external 和 Seal cleanup；同步修改 `gates/implementation-quality-gate.md`、catalog scope 与 README，移除实现质量门的测试代码审查责任，测试质量只由白盒 review 承担；门内维度保持显式命名且互不压制（需求覆盖、实现-需求偏差、架构与耦合、实现正确性与质量并列，架构与耦合不回退为无名段落）。
-- 强制完整 frontier 与自动 refill。
-- 迁移 lightweight 例外、产品/技术审各自的 `PreDevelopmentReviewSeries` 与开发后三轮规则；当前 legacy `internal/validate` 的同语义实现只作过渡，engine 接管后不得保留第二权威计数或旁路授权。
-
-### 阶段 4：split 与三 VCS
-
-- 拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认：`start` 无拆分意向声明，确认前意向可变、确认后不重切。
-- engine 内建 child、map、SLICE_READY、receipt、case/cost 汇总和级联。
-- 实现 Git/SVN/P4 非分片及分片 adapter 的完整机械面和只读 diff artifact。
-- 实现合并 QA 预设计、adapter 主线集成、语义冲突窄 agent 边界、合并双验证和主线返修循环。
-
-### 阶段 5：删除旧逻辑
-
-- 将仍需能力内收为 handler 后，删除所有旧公开推进命令和别名。
-- 删除旧 run decoder/migration、legacy mode、authority handoff、legacy QA、旧 guard/hook 门禁、公开 cleanup 与废弃提醒。
-- 删除或按当前契约重写仍断言旧受理模型、旧复审文案和旧 lightweight 语义的测试；禁止为了让旧测试变绿而恢复已废弃文本或行为。
-- 扫描 CLI 注册表、源代码、文档和测试，证明无第二权威路径。
-
-### 阶段 6：最终 canary 与安装
-
-- 从清理完成的同一最终 candidate revision 构建隔离安装副本。
-- 完成全部权威 canary；中途修复会产生新 revision 时，所有最终证据统一重跑，不拼接旧候选结果。
-- 当前稳定安装继续驱动本次 `orch-engine-003`，只作为开发期外部兜底。
-- 当前 run Seal 且最终候选全量 PASS 后，才安装最新版到全局并退役稳定兜底。
-
-## 12. 测试与 canary 矩阵
-
-### 12.1 自动测试
-
-1. 每条迁移边、pre 拒绝、Ask/Operator/Wait/Ready/HostAction/Complete。
-2. 八类非法定义按 enforcement matrix 拒绝：constructor/变体层（untyped I/O、非法 reason、自然语言-only pre/postcondition、无幂等/reconcile 副作用、无 request/schema human wait）、closed-world compiler 层（非法图/不可达/循环、join/failure 覆盖、版本绑定、registry ID 完备性）；compiler 生成的 canonical 制品通过 freshness（重新生成无 diff）、assembly-order、round-trip 与跨进程确定性测试，definition/package digest 分离且语义变化必变 definition digest。
-3. runtime 拒绝 step 乱序/遗漏/重复；崩溃只恢复未完成边界，不重放已完成副作用；原子纯 handler 不被过度拆分。
-4. 每个 FailureClass 只走声明边，engine/adapter 故障不动态降级 agent；AGENT 只出现于三种合法 nonProgrammableReason；最终本次范围内定义不存在 `MISSING_ENGINE_ADAPTER`。
-5. stable TaskKey、完整 expected set、`min(C,N)`、自动 refill、分支失败不压兄弟任务。
-6. 同 action/event/request 幂等、不同 digest 拒绝、并发 submit、旧 Attempt 和 result-before-receipt。
-7. 任意非终态节点触发用户需求变化，含 Phase A 权威写屏障/quarantine、确认后 ImpactSet、unknown=affected、Phase B 恢复/refill、增量复审和 wave 不误计。
-8. 产品/技术审 P0–P3 confirm/dismiss、finding/remedy 授权绑定、raw candidate/adjudication/correction/effective status 分层、错误 finding/严重度/裁决的 typed 纠正、原始证据保留和 supersede、全部 blocker 驳回后无空审查直接 PASS、纠正导致的下游精确 stale；P0/P1 新鲜复审、P2/P3 无级别强制复审；两个动作分别只自动完成前三轮，只有有效完整审查计轮，finding 后续裁决不重复/回退计轮、整轮 invalid 才排除，revision/invalidation 不清零，达到上限后 typed Ask 每次只增加一个 action-specific fresh-review TaskKey，split child 不另开 series，并证明该语义轮次与同 TaskKey 的 `MaxAttempts` retry 完全独立。
-9. 三类 pre-wave review、逐条 Operator adjudication/P0/P1 rationale、finding/problem ID 与归并历史、FROZEN/review-ready 屏障、wave 收集与唯一返修、门审 P2 carry 不复审/P3 advisory、QA Review P2/P3 吸收与合法 THAW、非 wave/wave 无效结果/RETRY_EXHAUSTED/一次性追加 attempt、dispatch signature 和完整授权摘要均有可复现测试；阶段 5–7 使用同一语义。
-10. 拓扑绑定唯一时点（start 无拆分意向声明；start-readiness 后确认、确认前可改、确认后不重切）、split map、包含白盒测试的 child 最终 identity、SLICE_READY、durable receipt、child abort、级联、case/cost 汇总、adapter 集成、语义冲突窄 agent 边界、AffectedChildSet 与主线精确补验。
-11. Git/SVN/P4 的 provider/status/diff/track/integrate/commit/snapshot、whitebox workspace、candidate freeze/reuse/promotion、adopt-external、resource cleanup、typed artifacts、错误对账，以及代理无法执行 VCS 写操作。
-12. 版本缺失/不匹配严格拒绝；diagnose 原始只读；终态 summary 回落。
-13. 正常入口与常见误操作黑盒；范围外对抗输入、手工状态编辑、权限/不可变文件和未支持 OS 只作 P3 建议。
-
-### 12.2 确定性崩溃测试
-
-用 fake host/VCS adapter 在每个持久 StepSpec 边界逐点注入：intent 前后、spawn 后 attach 前、result 先于 receipt、submit 成功但响应丢失、临时文件 sync/replace 前后、两个并发 submit、旧 Attempt 迟到、whitebox workspace 创建后登记前、candidate freeze/promotion 后 receipt 前、track/commit/integrate 后 receipt 前、Git squash 后 state 保存前、child SLICE_READY 后 master 集成前、语义冲突编辑后 resolved 校验前、cleanup 每个资源后 registry 提交前、merge QA/门记录前。
-
-### 12.3 权威完整 canary
-
-VCS 六格全部跑通：
-
-| VCS | 非分片 full | 分片 master/child/merge full |
-| --- | --- | --- |
-| Git | 必须 | 必须 |
-| SVN | 必须 | 必须 |
-| P4 | 必须 | 必须 |
-
-五个宿主各自在真实环境跑一次 Git 非分片 full：产品审 → start-readiness → 开发与黑盒设计并行 → 实现 snapshot → whitebox workspace/design/review 与 production-view 黑盒/门并行 → freeze 完整候选 → test-only/view 等价 reuse 或精确重跑 → 白盒执行 → 真实或注入 FAIL → repair/新候选 → 重验 → promotion 中断/恢复 → 无残留 cleanup → Seal。每次保存 provider/bridge、SpawnRequest/Receipt、worker result、revision、candidate/reuse/promotion/cleanup receipt、结果和 Seal 证据。
-
-允许一个宿主 Git 非分片 canary 与 VCS 六格中的 Git 非分片重叠，因此最低是 10 个完整 canary，而不是 30 个笛卡尔积。hook-only、lifecycle-only、lightweight 或 smoke 均不能替代任何完整 canary。
-
-## 13. 完成判定
-
-只有以下条件同时成立才安装最终最新版：
-
-1. 相同 state+observation 的 canonical Plan 字节稳定，非终态无静默死端。
-2. 每个有顺序语义的节点由封闭变体定义编译出的 NodeExecutionPlan/engine handler 机械执行，乱序、遗漏、重复和未声明失败边不可发生；活动 run 的 DefinitionDigest 与 PackageDigest 双绑定经 loader 校验。
-3. 可程序化动作不落入 agent；engine/VCS adapter 故障不动态降级 agent；AGENT/HOST 均有合法、可审计理由。
-4. 并行任务无漏派、无选择性忽略、无容量闲置；未形成完整候选的验证不会被错误标为 eligible，完整候选就绪后全部验证立即并发。
-5. HostAction、本地副作用和所有确定性崩溃窗可恢复或明确进入 Operator。
-6. 用户节点、Operator 核实后处置仍不唯一的 Ask、任意时点需求变化、审查来源规则和三轮规则全部有可复现证据。
-7. Git/SVN/P4 六格与五宿主 canary 全部绑定同一最终 candidate revision/安装副本并 PASS。
-8. 最终树不存在旧 run 兼容、迁移、旧公开入口、双写入口、legacy 回退或 cleanup 后门。
-9. 独立产品审、技术审、QA 和所有选定门按 formal-gates 完成，当前开发 run Seal。
-10. `go test ./...` 在不恢复过时受理/复审/lightweight 断言的前提下全部 PASS；基线中已确认的旧文本断言已删除或改写为当前 engine 契约。
-
-实现中的字段名、包拆分和内部 phase 名称可以在不改变上述可观察语义的前提下由开发者确定；不再存在需要用户补选的产品或路线开放项。
+受管程序 native/supervisor 入口使用当前签发事实执行前核验。宿主裸 Agent/Task、任意
+模型 CLI/API 或 shell/HTTP 入口不因安装成功就获得相同保证；其真实工具前能力必须另有
+实际 payload/拒绝证据，不能冒称所有平台全覆盖。
