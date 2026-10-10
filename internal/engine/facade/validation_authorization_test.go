@@ -1621,3 +1621,82 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	}
 	assertAuthorizationReplay(d, event)
 }
+
+func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+	dev, di := d.action("engine.development.batch")
+	design, qi := d.action("engine.qa.design")
+	manifest := simpleManifest(qi)
+	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
+	id, ri := d.action("engine.qa.review.rationale")
+	approved := approvedReview(manifest)
+	d.business(id, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &approved})
+	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
+	var intent protocol.HostActionIntent
+	for _, value := range d.run.AdapterIntents {
+		if value.Adapter != nil && value.Adapter.Operation == "op.candidate" {
+			intent = value
+		}
+	}
+	if intent.Adapter == nil {
+		t.Fatal("missing original candidate intent")
+	}
+	undeclared := filepath.Join(di.Workspace.Path, "unassociated.data")
+	if err := os.WriteFile(undeclared, []byte("original rejected artifact\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := driverState(t, d)
+	if _, _, err := d.f.nativeEvidence(state, intent, true); err == nil || err.Error() != "candidate contains undeclared change: unassociated.data" {
+		t.Fatal("normal candidate did not reject undeclared change", err)
+	}
+	prefix, err := observeNativePrefix(d.f.vcs.At(di.Workspace.Path, di.Workspace.Handle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	for _, ask := range d.run.PendingAsks {
+		if ask.RequestID == string(request.ID) {
+			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: ask.Token, Choice: "abort"}})
+			break
+		}
+	}
+	if d.run.Status != "ABORTING" {
+		t.Fatal("abort was not accepted", d.run.Status)
+	}
+	d.completeWorkerTerminations()
+	d.reopen()
+	d.drive()
+	if d.run.Status != "ABORTED" || d.run.Termination == nil || len(d.run.Termination.PendingHostActions) != 0 {
+		t.Fatal("abort retained rejected native work", d.run.Status)
+	}
+	terminal := d.run.Termination
+	effect := terminal.ReconciledEffects[intent.ActionID]
+	if effect.Status != "WITHDRAWN" || effect.Resource == nil || effect.Resource.Resource.ID != di.Workspace.ID || !reflect.DeepEqual(effect.Resource.Prefix, &prefix) {
+		t.Fatal("withdrawal lost exact original resource/pending facts", effect)
+	}
+	if terminal.Validation.Candidate != nil || terminal.Validation.DevelopmentSnapshot != "" {
+		t.Fatal("abort accepted the rejected candidate")
+	}
+	if _, exists := terminal.HostActionReceipts[intent.ActionID]; exists {
+		t.Fatal("withdrawal forged a candidate receipt")
+	}
+	for _, resource := range terminal.NativeResources {
+		if resource.Status != "CLEANED" {
+			t.Fatal("resource not cleaned", resource.ID, resource.Status)
+		}
+		if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+			t.Fatal("cleanup retained original workspace", resource.Path, err)
+		}
+	}
+	d.reopen()
+	d.drive()
+	if d.run.Status != "ABORTED" {
+		t.Fatal("repeated recovery changed terminal abort", d.run.Status)
+	}
+}

@@ -140,7 +140,6 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 
 func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIntent) (protocol.ResourceObservation, error) {
 	var resource protocol.NativeResource
-	var allowed []string
 	var integration *protocol.IntegrationParameters
 	var integrationBase string
 	if intent.Adapter.Operation == "op.check" {
@@ -160,7 +159,7 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return protocol.ResourceObservation{}, err
 		}
-		resource, allowed = s.NativeResources[p.WorkspaceID], p.Paths
+		resource = s.NativeResources[p.WorkspaceID]
 		integration, integrationBase = p.Integration, p.Base
 	}
 	if resource.ID == "" || s.NativeResources[resource.ID] != resource {
@@ -216,21 +215,6 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 		}
 		if err := native.IsAncestorOrEqual(resource.Source, prefix.Head); err != nil {
 			return o, err
-		}
-		if intent.Adapter.Operation == "op.candidate" && integration == nil {
-			paths, err := native.ChangedPaths()
-			if err != nil {
-				return o, err
-			}
-			pending, err := native.Pending(integrationBase, "")
-			if err != nil {
-				return o, err
-			}
-			for _, path := range paths {
-				if !slices.Contains(allowed, path) && !slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(allowed) }) {
-					return o, fmt.Errorf("candidate prefix has an undeclared path: %s", path)
-				}
-			}
 		}
 		o.Prefix = &prefix
 	}
