@@ -101,6 +101,13 @@ func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, err
 		return out, nil
 	}
 	for _, plan := range snap.State.ChildCreation.Children {
+		established, err := runDirectoryEstablished(filepath.Join(f.root, EngineNamespace, plan.RunID))
+		if err != nil {
+			return nil, err
+		}
+		if !established {
+			continue
+		}
 		child, err := Open(f.root, plan.RunID, f.runtimeFiles)
 		if err != nil {
 			return nil, err
