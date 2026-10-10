@@ -82,6 +82,54 @@ func TestSemanticObservationUsesOriginalAdmissionAndRecovery(t *testing.T) {
 	}
 }
 
+func TestSemanticObservationProjectsExistingProblemOriginalHistoryAndSource(t *testing.T) {
+	e, s, _, payload := adjudicationWorkerState(t)
+	current := s.Validation.Findings["finding"]
+	original := *current
+	original.ID, original.WaveID = "original-finding", "original-wave"
+	resolution := payload.Validation.Observations[0].Validation.Findings[0]
+	resolution.FindingID, resolution.AcceptedRevision = original.ID, 1
+	resolution.ProblemID = FindingProblemID(original)
+	original.History = []FindingResolution{resolution}
+	target := *s.validationFindingTarget(s.currentValidationWave(), current)
+	target.ResultAction = "original-source-action"
+	s.Validation.Waves = append([]ValidationWave{{ID: original.WaveID, Status: "COMPLETE", Targets: map[string]*ValidationTarget{original.Target: &target}}}, s.Validation.Waves...)
+	s.Validation.Findings[original.ID] = &original
+	s.Validation.Problems[resolution.ProblemID] = &ValidationProblem{ID: resolution.ProblemID, FindingIDs: []string{original.ID}}
+	originalResult := s.Results["original-gate"]
+	originalResult.ActionID, originalResult.PayloadDigest, originalResult.SourceResult = target.ResultAction, "original-source-hash", "original-source-path"
+	validation := *originalResult.Validation
+	validation.Binding = WorkBinding{WaveID: original.WaveID, Task: target.Task}
+	originalResult.Validation = &validation
+	s.Results[target.ResultAction] = originalResult
+	input := s.validationObservationInput()
+	if input == nil || len(input.Findings) != 1 || input.Findings[0].Finding.ID != "finding" || len(input.Problems) != 1 || len(input.Problems[0].Findings) != 1 {
+		t.Fatal("historical evidence changed the current pending duties")
+	}
+	evidence := input.Problems[0].Findings[0]
+	if input.Problems[0].ID != resolution.ProblemID || !reflect.DeepEqual(evidence.Finding, original) || !reflect.DeepEqual(evidence.Target, target) || !reflect.DeepEqual(evidence.Evidence, originalResult) {
+		t.Fatal("existing problem lost its original finding, adjudication, target or source bytes")
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reopened State
+	if err := json.Unmarshal(raw, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(input, reopened.validationObservationInput()) || observationTask(e.cfg.Definition, input) != observationTask(e.cfg.Definition, reopened.validationObservationInput()) {
+		t.Fatal("reopening changed issued evidence or its task identity")
+	}
+	if !reflect.DeepEqual(s.Validation.Problems[resolution.ProblemID], reopened.Validation.Problems[resolution.ProblemID]) || !reflect.DeepEqual(s.Results[target.ResultAction], originalResult) {
+		t.Fatal("read-only projection mutated a problem or original source")
+	}
+	s.archiveDispatchResults(target.ResultAction)
+	if !reflect.DeepEqual(input, s.validationObservationInput()) || len(s.ObsoleteResults[target.ResultAction]) != 1 || !reflect.DeepEqual(s.ObsoleteResults[target.ResultAction][0], originalResult) {
+		t.Fatal("requirement invalidation lost or altered historical problem source")
+	}
+}
+
 func TestSemanticObservationRejectsStaleAndInvalidOriginalJudgments(t *testing.T) {
 	for _, scenario := range []string{"changed-subject", "missing-reproduction", "illegal-kind", "missing-duty", "later-finding"} {
 		t.Run(scenario, func(t *testing.T) {

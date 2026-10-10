@@ -65,7 +65,15 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			return nil, fmt.Errorf("semantic worker lacks current issued duties")
 		}
 		findings, scopes, impacts, suggestions := []any{}, []any{}, []any{}, []any{}
-		for _, source := range input.Validation.Observation.Findings {
+		observation := input.Validation.Observation
+		candidateDescriptions := []string{}
+		for index, source := range observation.Problems {
+			candidateDescriptions = append(candidateDescriptions, fmt.Sprintf("%d = existing problem input.validation.observation.problems[%d] (%s); judge its findings, including their original root-cause history, target, evidence and failedCases", index+1, index, source.ID))
+		}
+		for index, source := range observation.Findings {
+			candidateDescriptions = append(candidateDescriptions, fmt.Sprintf("%d = issued finding input.validation.observation.findings[%d] (%s); judge its finding, target, evidence and failedCases", len(observation.Problems)+index+1, index, source.Finding.ID))
+		}
+		for index, source := range observation.Findings {
 			item, err := resultTypeSchema(reflect.TypeOf(FindingJudgment{}))
 			if err != nil {
 				return nil, err
@@ -73,6 +81,18 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			item["description"] = "Judge only this issued finding: " + source.Finding.ID
 			properties := item["properties"].(map[string]any)
 			properties["decision"] = map[string]any{"type": "string", "enum": []string{"NEW", "SAME_AS", "DISMISSED"}}
+			candidates := []int{}
+			for candidate := 1; candidate <= len(observation.Problems)+len(observation.Findings); candidate++ {
+				if candidate != len(observation.Problems)+index+1 {
+					candidates = append(candidates, candidate)
+				}
+			}
+			if len(candidates) == 0 {
+				delete(properties, "sameAs")
+				properties["decision"] = map[string]any{"type": "string", "enum": []string{"NEW", "DISMISSED"}}
+			} else {
+				properties["sameAs"] = map[string]any{"type": "integer", "enum": candidates, "description": "Select only a candidate number; the program supplies its actual problem ID. A selected issued finding must be judged NEW in this result. Omit unless decision is SAME_AS.\n" + strings.Join(candidateDescriptions, "\n")}
+			}
 			if source.Finding.ExecutionFailure != nil {
 				delete(properties, "severity")
 				delete(properties, "severityRationale")

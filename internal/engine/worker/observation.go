@@ -21,7 +21,7 @@ type SuggestionJudgment struct {
 }
 type FindingJudgment struct {
 	Decision          string                     `json:"decision"`
-	SameAs            string                     `json:"sameAs,omitempty"`
+	SameAs            *int                       `json:"sameAs,omitempty"`
 	Requirement       string                     `json:"requirement"`
 	NormalPath        string                     `json:"normalPath"`
 	Module            string                     `json:"module"`
@@ -56,13 +56,20 @@ func assembleObservations(input *protocol.ObservationInput, judgments *Observati
 			value := judgments.Findings[index]
 			row := protocol.FindingResolution{FindingID: f.ID, Supersedes: len(f.History), Decision: value.Decision, Requirement: value.Requirement, NormalPath: value.NormalPath, Module: value.Module, RootCause: value.RootCause, Consequence: value.Consequence, Severity: value.Severity, SeverityRationale: value.SeverityRationale, Verification: value.Verification, Reason: value.Reason}
 			if value.Decision == "SAME_AS" {
-				row.ProblemID = value.SameAs
-				for index, related := range input.Findings {
-					if related.Finding.ID == value.SameAs && judgments.Findings[index].Decision == "NEW" {
-						row.ProblemID = protocol.FindingProblemID(related.Finding)
-					}
+				if value.SameAs == nil || *value.SameAs < 1 || *value.SameAs > len(input.Problems)+len(input.Findings) {
+					return nil, fmt.Errorf("SAME_AS must select an issued candidate number")
 				}
-			} else if value.SameAs != "" {
+				selected := *value.SameAs - 1
+				if selected < len(input.Problems) {
+					row.ProblemID = input.Problems[selected].ID
+				} else {
+					selected -= len(input.Problems)
+					if selected == index || judgments.Findings[selected].Decision != "NEW" {
+						return nil, fmt.Errorf("SAME_AS must select another issued finding judged NEW")
+					}
+					row.ProblemID = protocol.FindingProblemID(input.Findings[selected].Finding)
+				}
+			} else if value.SameAs != nil {
 				return nil, fmt.Errorf("only SAME_AS can select a related problem")
 			}
 			rows = append(rows, row)

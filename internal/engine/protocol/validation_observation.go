@@ -15,10 +15,14 @@ type ObservationInput struct {
 	WaveID      string                       `json:"waveId"`
 	Candidate   coverage.ValidationCandidate `json:"candidate"`
 	Findings    []ObservationFinding         `json:"findings,omitempty"`
-	Problems    []ValidationProblem          `json:"problems,omitempty"`
+	Problems    []ObservationProblem         `json:"problems,omitempty"`
 	Scopes      []ObservationScope           `json:"scopes,omitempty"`
 	GateImpacts []ObservationGateImpact      `json:"gateImpacts,omitempty"`
 	Suggestions []ObservationSuggestion      `json:"suggestions,omitempty"`
+}
+type ObservationProblem struct {
+	ValidationProblem
+	Findings []ObservationFinding `json:"findings"`
 }
 type ObservationSuggestion struct {
 	Mode       coverage.ReviewKind         `json:"mode"`
@@ -90,8 +94,7 @@ func (s *State) validationObservationInput() *ObservationInput {
 		slices.Sort(ids)
 		for _, id := range ids {
 			f := s.Validation.Findings[id]
-			target := s.validationFindingTarget(wave, f)
-			input.Findings = append(input.Findings, ObservationFinding{Finding: *f, Target: *target, Evidence: s.Results[target.ResultAction], FailedCases: s.executionFailureRecords(f)})
+			input.Findings = append(input.Findings, s.observationFinding(f))
 		}
 		if len(input.Findings) > 0 {
 			ids = ids[:0]
@@ -100,7 +103,11 @@ func (s *State) validationObservationInput() *ObservationInput {
 			}
 			slices.Sort(ids)
 			for _, id := range ids {
-				input.Problems = append(input.Problems, *s.Validation.Problems[id])
+				problem := ObservationProblem{ValidationProblem: *s.Validation.Problems[id]}
+				for _, findingID := range problem.FindingIDs {
+					problem.Findings = append(problem.Findings, s.observationFinding(s.Validation.Findings[findingID]))
+				}
+				input.Problems = append(input.Problems, problem)
 			}
 		}
 	}
@@ -152,6 +159,21 @@ func (s *State) validationObservationInput() *ObservationInput {
 	}
 	return input
 }
+
+func (s *State) observationFinding(f *ValidationFinding) ObservationFinding {
+	target := s.validationFindingTarget(s.validationWave(f.WaveID), f)
+	result, current := s.Results[target.ResultAction]
+	if !current {
+		for _, original := range s.ObsoleteResults[target.ResultAction] {
+			if original.ActionID == target.ResultAction && original.Outcome == OutcomePass && original.Validation != nil && !original.Validation.Checkpoint && original.Validation.Binding.WaveID == f.WaveID && original.Validation.Binding.Task.String() == f.Target {
+				result = original
+				break
+			}
+		}
+	}
+	return ObservationFinding{Finding: *f, Target: *target, Evidence: result, FailedCases: s.executionFailureRecords(f)}
+}
+
 func observationTask(cd *compiler.CompiledDefinition, input *ObservationInput) runtime.TaskKey {
 	return pipelineTask(cd, "engine.validation.observation", input.WaveID+":"+strings.TrimPrefix(digestOfCanonical(input), "sha256:"))
 }
