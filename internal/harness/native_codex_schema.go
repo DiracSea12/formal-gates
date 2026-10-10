@@ -20,11 +20,7 @@ func codexOutputSchema(schema any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	translated := codexStrictSchema(copy)
-	if codexObjectUnion(objectOrEmpty(copy)) {
-		return map[string]any{"type": "object", "additionalProperties": false, "required": []any{"result"}, "properties": map[string]any{"result": translated}}, nil
-	}
-	return translated, nil
+	return codexStrictSchema(copy), nil
 }
 
 func codexStrictSchema(value any) any {
@@ -71,6 +67,9 @@ func codexStrictSchema(value any) any {
 		for i, child := range listOf(schema[key]) {
 			listOf(schema[key])[i] = codexStrictSchema(child)
 		}
+	}
+	if codexObjectUnion(schema) {
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []any{"result"}, "properties": map[string]any{"result": schema}}
 	}
 	return schema
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -113,6 +114,8 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 
 func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 	plan := nativeWorkerGranularityFixture()
+	completedPlan := nativeWorkerGranularityFixture()
+	completedPlan.Batches[0].NewArtifacts = nil
 	batch := protocol.DevelopmentBatch{ID: "issued-batch", DoD: []protocol.DevelopmentCriterion{{ID: "issued-condition", Description: "declared behavior"}}}
 	verification := []string{}
 	for _, name := range review.RequiredVerificationChecks() {
@@ -125,7 +128,7 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 	}{
 		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
 		{"confirmed-batch", protocol.WorkerInput{Handler: "engine.development.batch", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
-		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: plan}},
+		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, err := worker.ResultSchema(sample.input)
@@ -135,6 +138,17 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 			domain := codexPlain(t, sample.domain).(map[string]any)
 			scenario := newCodexScenario(t)
 			scenario.request["schema"] = schema
+			if sample.name == "autonomous-repair" {
+				scenario.request["read_only"] = false
+				scenario.peer.Reverse = []any{
+					map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "list", "tool": "workspace", "arguments": map[string]any{"action": "list"}}},
+					map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "create", "tool": "workspace", "arguments": map[string]any{"action": "create", "name": "app.go", "content": "package app\n"}}},
+				}
+				scenario.peer.Replies = []any{
+					map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"entries":[],"listing":1}`}}},
+					map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"written":true}`}}},
+				}
+			}
 			scenario.peer.StrictSchema = true
 			scenario.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
 			before, _ := json.Marshal(schema)
@@ -159,9 +173,22 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// This protocol peer performs no workspace edit. Delivery paths therefore
-			// remain the observed empty diff rather than a model-authored path list.
-			event, err := worker.DecodeResultWithPaths(sample.input, "native-result", normalized, digest, []string{})
+			paths := []string{}
+			if sample.name == "autonomous-repair" {
+				entries, err := os.ReadDir(scenario.workspace)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						paths = append(paths, entry.Name())
+					}
+				}
+				if !bytes.Equal(readTestFileBytes(t, filepath.Join(scenario.workspace, "app.go")), []byte("package app\n")) {
+					t.Fatal("original workspace tool did not create the reported artifact")
+				}
+			}
+			event, err := worker.DecodeResultWithPaths(sample.input, "native-result", normalized, digest, paths)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -204,7 +231,7 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -214,12 +241,14 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			result := worker.Repair{Summary: "Implemented the confirmed command"}
 			if name != "small-repair" {
 				plan := nativeWorkerGranularityFixture()
+				plan.Batches[0].Checks = []worker.Check{{Reuse: 3}, {Command: "new-local-oracle"}}
 				if name == "split-plan" {
-					second := nativeWorkerGranularityFixture().Batches[0]
-					second.Artifacts = []string{"utility.go"}
+					second := plan.Batches[0]
+					second.NewArtifacts = []string{"utility.go"}
 					plan.Batches = append(plan.Batches, second)
 					result.Summary = ""
 				} else {
+					plan.Batches[0].NewArtifacts = nil
 					result.Completion = &worker.Completion{DoD: []string{"Implemented"}, Handoff: "Ready for approved checks"}
 				}
 				result.GranularityReview = plan
@@ -240,8 +269,18 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := worker.DecodeResultWithPaths(input, "result", normalized, digest, []string{}); err != nil {
+			event, err := worker.DecodeResultWithPaths(input, "result", normalized, digest, []string{})
+			if err != nil {
 				t.Fatalf("normalized repair no longer satisfies the domain contract: %v", err)
+			}
+			if name != "small-repair" {
+				batch := event.Result.Validation.GranularityReview.Batches[0]
+				if !reflect.DeepEqual(batch.Checks[:3], input.ApprovedChecks) || batch.Checks[3].Command != "new-local-oracle" {
+					t.Fatal("native check union changed original approved or authored values")
+				}
+				if name == "single-completion" && len(batch.Artifacts) != 0 {
+					t.Fatal("native repair invented artifacts outside its supplied original facts")
+				}
 			}
 			if err := codexVerifySource(s.directory, source); err != nil {
 				t.Fatal(err)

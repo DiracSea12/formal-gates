@@ -79,7 +79,7 @@ func assembleCompletion(value *Completion, batch *protocol.DevelopmentBatch) (*p
 	}
 	return result, nil
 }
-func DecodeGranularity(input protocol.WorkerInput, value *Granularity) (*protocol.GranularityReview, error) {
+func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []string, facts []LocationFact, completed bool) (*protocol.GranularityReview, error) {
 	if value == nil {
 		return nil, nil
 	}
@@ -96,10 +96,34 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity) (*protoco
 		result.CheckpointGroups = append(result.CheckpointGroups, selected)
 	}
 	for index, item := range value.Batches {
-		batch := protocol.DevelopmentBatch{Deliverable: item.Deliverable, PublicEntry: item.PublicEntry, Artifacts: slices.Clone(item.Artifacts), Interfaces: item.Interfaces, StateBoundary: item.StateBoundary, Risk: item.Risk, Rollback: item.Rollback, Recovery: item.Recovery, Handoff: item.Handoff, ContextCost: item.ContextCost, Spike: item.Spike}
+		batch := protocol.DevelopmentBatch{Deliverable: item.Deliverable, PublicEntry: item.PublicEntry, Interfaces: item.Interfaces, StateBoundary: item.StateBoundary, Risk: item.Risk, Rollback: item.Rollback, Recovery: item.Recovery, Handoff: item.Handoff, ContextCost: item.ContextCost, Spike: item.Spike}
 		batch.ID = ids[index]
 		batch.Route = nil
 		var err error
+		if completed {
+			if len(value.Batches) != 1 || paths == nil || item.Artifacts != nil || item.NewArtifacts != nil {
+				return nil, fmt.Errorf("completed repair artifacts require original single-batch native paths")
+			}
+			batch.Artifacts = slices.Clone(paths)
+		} else {
+			for _, location := range item.Artifacts {
+				if location.Line != 0 || location.RequirementLine != 0 {
+					return nil, fmt.Errorf("artifact selects an original file, not a source line")
+				}
+			}
+			batch.Artifacts, err = LocationPaths(item.Artifacts, facts, input.RequirementDocument)
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range item.NewArtifacts {
+				for _, fact := range facts {
+					if slices.Contains(fact.Paths, name) {
+						return nil, fmt.Errorf("existing artifact requires its original location selection")
+					}
+				}
+				batch.Artifacts = append(batch.Artifacts, name)
+			}
+		}
 		batch.DependsOn, err = selectIDs(item.DependsOn, ids)
 		if err != nil {
 			return nil, err
@@ -120,8 +144,35 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity) (*protoco
 		for i, dod := range item.DoD {
 			batch.DoD = append(batch.DoD, protocol.DevelopmentCriterion{ID: fmt.Sprintf("criterion-%d", i+1), Description: dod.Description})
 		}
+		if input.Handler == "engine.repair" {
+			for _, check := range input.ApprovedChecks {
+				if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests {
+					batch.Checks = append(batch.Checks, check)
+				}
+			}
+		}
 		for i, check := range item.Checks {
-			batch.Checks = append(batch.Checks, protocol.DevelopmentCheck{ID: fmt.Sprintf("check-%d", i+1), Purpose: check.Purpose, Command: check.Command})
+			selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
+			if check.Reuse != 0 {
+				if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" {
+					return nil, fmt.Errorf("check reuse selects only an original approved check")
+				}
+				selected = input.ApprovedChecks[check.Reuse-1]
+			} else {
+				for _, approved := range input.ApprovedChecks {
+					if approved.Command == check.Command {
+						return nil, fmt.Errorf("approved command requires its original check selection")
+					}
+				}
+				if check.Command == "" || input.Handler == "engine.repair" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+					return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
+				}
+			}
+			if !slices.ContainsFunc(batch.Checks, func(existing protocol.DevelopmentCheck) bool {
+				return existing.Purpose == selected.Purpose && existing.Command == selected.Command
+			}) {
+				batch.Checks = append(batch.Checks, selected)
+			}
 		}
 		if item.Route != nil {
 			gates := slices.Clone(input.AvailableRouteCandidates)

@@ -28,6 +28,8 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := report.Targets[0]
+	restore := fixtureRegisteredInvocation(report.Registry, target.TargetPath, target.RegistryRecordID)
+	defer restore()
 	catalog, err := prompts.LoadPromptCatalog(target.TargetPath)
 	if err != nil {
 		t.Fatal(err)

@@ -52,6 +52,7 @@ type WorkerInput struct {
 	Handler                  string                                  `json:"handler"`
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
 	Scope                    *WorkerScope                            `json:"scope,omitempty"`
+	ApprovedChecks           []DevelopmentCheck                      `json:"approvedChecks,omitempty"`
 	Review                   *WorkerReviewInput                      `json:"review,omitempty"`
 	Validation               *ValidationInput                        `json:"validation,omitempty"`
 }
@@ -109,6 +110,20 @@ func (s *State) WorkerInputs(cd *compiler.CompiledDefinition) map[string]WorkerI
 			}
 		} else {
 			continue
+		}
+		if input.Handler == "engine.repair" {
+			input.ApprovedChecks = s.fullProjectChecks()
+			_, plan, _ := s.confirmedDevelopmentPlan()
+			if plan != nil {
+				for _, batch := range plan.Batches {
+					for _, check := range batch.Checks {
+						if check.Purpose == "" {
+							check.ID = batch.ID + ":" + check.ID
+							input.ApprovedChecks = append(input.ApprovedChecks, check)
+						}
+					}
+				}
+			}
 		}
 		values[id] = input
 	}

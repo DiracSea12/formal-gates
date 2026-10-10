@@ -14,7 +14,7 @@ func TestPlanAllocatesIdentitiesAndMapsSemanticChoices(t *testing.T) {
 	value := &Granularity{Reason: "Independent responsibilities", VerificationTier: "CHECKPOINT", CheckpointGroups: [][]int{{1}, {2}}, Batches: []Batch{{Owner: &owner, Subtasks: []Subtask{{Description: "Create public behavior"}}, DoD: []Criterion{{Description: "Public oracle holds"}}, Checks: []Check{{Purpose: protocol.CheckFullTests, Command: "project-tests"}}, Route: &RouteProposal{Mode: "custom", Selected: []int{2}}}, {DependsOn: []int{1}, Subtasks: []Subtask{{Description: "Integrate output"}}}}}
 	input := protocol.WorkerInput{AvailableRouteCandidates: []string{"quality", "diff"}}
 	before, _ := json.Marshal(value)
-	plan, err := DecodeGranularity(input, value)
+	plan, err := DecodeGranularity(input, value, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,12 +26,12 @@ func TestPlanAllocatesIdentitiesAndMapsSemanticChoices(t *testing.T) {
 		t.Fatal("identity assembly mutated semantic output")
 	}
 	value.Batches[1].DependsOn = []int{3}
-	if _, err := DecodeGranularity(input, value); err == nil {
+	if _, err := DecodeGranularity(input, value, nil, nil, false); err == nil {
 		t.Fatal("unknown batch selector accepted")
 	}
 	value.Batches[1].DependsOn = []int{1}
 	value.Batches[0].Route.Selected = []int{3}
-	if _, err := DecodeGranularity(input, value); err == nil {
+	if _, err := DecodeGranularity(input, value, nil, nil, false); err == nil {
 		t.Fatal("unknown gate selector accepted")
 	}
 }
@@ -45,6 +45,25 @@ func TestScopeIncludesMandatoryCasesWithoutModelRepetition(t *testing.T) {
 	}
 	if !reflect.DeepEqual(judgments.Scopes[0].Cases, []int{2}) {
 		t.Fatal("program changed authored selection")
+	}
+}
+
+func TestProposalArtifactsReuseOriginalLocationsAndAuthorOnlyNewNames(t *testing.T) {
+	input := protocol.WorkerInput{}
+	facts := []LocationFact{{Kind: "listing", Paths: []string{"existing/source.ext", "other/source.ext"}}}
+	value := &Granularity{Reason: "One boundary", VerificationTier: "FINAL", Batches: []Batch{{Artifacts: []Location{{Listing: 1, Entry: 2}}, NewArtifacts: []string{"new/source.ext"}, Checks: []Check{{Purpose: protocol.CheckFullTests, Command: "original-project-test"}}}}}
+	plan, err := DecodeGranularity(input, value, nil, facts, false)
+	if err != nil || !reflect.DeepEqual(plan.Batches[0].Artifacts, []string{"other/source.ext", "new/source.ext"}) || plan.Batches[0].Checks[0].Command != "original-project-test" || plan.Batches[0].Checks[0].Purpose != protocol.CheckFullTests {
+		t.Fatalf("proposal lost source selection or original authorship: %v %+v", err, plan)
+	}
+	value.Batches[0].NewArtifacts = []string{"existing/source.ext"}
+	if _, err := DecodeGranularity(input, value, nil, facts, false); err == nil {
+		t.Fatal("known source path was accepted as a new artifact")
+	}
+	value.Batches[0].NewArtifacts = nil
+	value.Batches[0].Artifacts = []Location{{Listing: 1, Entry: 3}}
+	if _, err := DecodeGranularity(input, value, nil, facts, false); err == nil {
+		t.Fatal("unpublished source selection was accepted")
 	}
 }
 

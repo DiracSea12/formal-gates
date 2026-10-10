@@ -270,6 +270,9 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 	_, _, s, binary := engineNativeFixture(t, true)
 	call := func(args ...string) []byte {
 		t.Helper()
+		if args[0] == "workflow" {
+			args = append(args, "--machine")
+		}
 		cmd := exec.Command(binary, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -441,7 +444,7 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 	s.peer.StrictSchema = true
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("invalid semantic routing: %v %s", err, out)
 		}
@@ -569,9 +572,20 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 
 // Setup accepts explicit review/control fixtures without claiming native calls.
 // Only the subsequent developer and gate execute against the actual RPC peer.
-func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario) *protocol.GranularityReview {
+func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario, owners ...string) *protocol.GranularityReview {
 	t.Helper()
 	plan := &protocol.GranularityReview{Reason: "One complete command delivery", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "implementation", Description: "Deliver app.go"}}, Deliverable: "app.go delivery", PublicEntry: "go run app.go", Artifacts: []string{"app.go"}, Interfaces: "Existing command", StateBoundary: "No persistent state", Risk: "Retain command behavior", DoD: []protocol.DevelopmentCriterion{{ID: "delivery", Description: "Deliver the original app.go task"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build -o " + filepath.Join(t.TempDir(), "app") + " app.go"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -count=1 app.go"}}, Rollback: "Restore original app.go", Recovery: "Continue original task", Handoff: "Report original delivery", ContextCost: "One file and its behavior"}}}
+	if len(owners) > 0 {
+		original := plan.Batches[0]
+		plan.Batches = nil
+		for _, owner := range owners {
+			batch := original
+			batch.ID, batch.Owner = owner, owner
+			batch.Artifacts = []string{owner + ".go"}
+			batch.Subtasks = []protocol.DevelopmentSubtask{{ID: owner + "-implementation", Description: "Deliver the confirmed " + owner + " artifact"}}
+			plan.Batches = append(plan.Batches, batch)
+		}
+	}
 	for _, role := range []review.Action{review.ProductReview, review.StartReadiness} {
 		run, err := f.Drive()
 		if err != nil {
@@ -708,7 +722,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine")
 	out, err := cmd.CombinedOutput()
 	if err := os.WriteFile(filepath.Join(s.config, "consumer.json"), out, 0600); err != nil {
 		t.Fatal(err)
@@ -809,7 +823,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -1219,7 +1233,7 @@ func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
 
 func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	f, _, s, binary := engineNativeFixture(t, true)
-	plan := stageNativeReviews(t, f, s)
+	plan := stageNativeReviews(t, f, s, "core", "tooling", "master-merge")
 	run, err := f.Show()
 	if err != nil || !reflect.DeepEqual(run.Review.ReadinessProposal, plan) {
 		t.Fatal("original accepted readiness proposal is not public", err)
@@ -1262,7 +1276,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	s.save(t)
 	call := func() map[string]any {
 		t.Helper()
-		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("automatic released children: %v %s", err, out)
@@ -1295,6 +1309,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	response := call()
 	children := objectOrEmpty(response["children"])
 	if response["boundary"] != "ASK" || len(children) != 2 || nativePeerTurns(t, s) != 1 {
+		t.Logf("original turns=%d parent asks=%s", nativePeerTurns(t, s), textOf(getOf(response["run"], "pendingAsks")))
 		t.Fatalf("children lost their own original route decisions: %s", textOf(response))
 	}
 	run, err = f.Show()
@@ -1309,7 +1324,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	if err != nil || len(childRun.PendingAsks) != 1 || childRun.PendingAsks[0].Control != protocol.ControlSelectRoute {
 		t.Fatal("child did not retain its typed route Ask", err)
 	}
-	childRoute := protocol.RouteDecision{Mode: "custom", Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: plan}}
+	childRoute := protocol.RouteDecision{Mode: "custom", Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected}
 	preview, err = child.DevelopmentPlan(childRoute)
 	if err != nil {
 		t.Fatal(err)

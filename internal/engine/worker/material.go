@@ -146,6 +146,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		contextValue["availableRouteCandidates"] = input.AvailableRouteCandidates
+		if len(input.ApprovedChecks) > 0 {
+			contextValue["approvedChecks"] = input.ApprovedChecks
+		}
 	}
 	if input.Validation != nil {
 		raw, err := json.Marshal(input.Validation)
@@ -199,6 +202,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	blocks = append(blocks, "[Current requirement]\n"+input.RequirementDocument.Content, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
 	if planRole {
+		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL checks are supplied automatically; optional checks reuse a number or author a new local command."
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}
 	blocks = append(blocks, "[Result contract]\n"+instructions+"\nReturn exactly one JSON object matching the supplied semantic schema, using only its direct body or allowed inability/continuation alternative. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted.\n")

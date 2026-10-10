@@ -41,11 +41,19 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
 		completed["properties"] = completedFields
-		completed["required"] = append(slices.Clone(body["required"].([]any)), "granularityReview", "completion")
+		completed["required"] = append(slices.Clone(body["required"].([]any)), "granularityReview", "completion", "summary")
+		completedFields["summary"] = map[string]any{"type": "string", "minLength": 1}
 		plan := maps.Clone(fields["granularityReview"].(map[string]any))
 		planFields := maps.Clone(plan["properties"].(map[string]any))
 		batches := maps.Clone(planFields["batches"].(map[string]any))
 		batches["minItems"], batches["maxItems"] = 1, 1
+		batch := maps.Clone(batches["items"].(map[string]any))
+		batchFields := maps.Clone(batch["properties"].(map[string]any))
+		delete(batchFields, "artifacts")
+		delete(batchFields, "newArtifacts")
+		batch["properties"] = batchFields
+		delete(batch, "anyOf")
+		batches["items"] = batch
 		planFields["batches"], plan["properties"] = batches, planFields
 		completedFields["granularityReview"] = plan
 		delete(fields, "completion")
@@ -70,6 +78,33 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		} else {
 			delete(fields, "affectedCases")
 		}
+	}
+	if plan, ok := fields["granularityReview"].(map[string]any); ok {
+		batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+		properties := batch["properties"].(map[string]any)
+		location := LocationSchema(false)
+		delete(location["properties"].(map[string]any), "line")
+		properties["artifacts"] = map[string]any{"type": "array", "items": location, "minItems": 1}
+		command := map[string]any{"type": "string", "minLength": 1}
+		purpose := map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
+		alternatives := []any{}
+		if len(input.ApprovedChecks) > 0 {
+			ids, commands := []string{}, []string{}
+			for _, check := range input.ApprovedChecks {
+				ids, commands = append(ids, check.ID), append(commands, check.Command)
+			}
+			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
+			command["not"] = map[string]any{"enum": commands}
+			if input.Handler == "engine.repair" {
+				purpose["enum"] = []string{""}
+			}
+		}
+		alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
+		check := alternatives[0]
+		if len(alternatives) > 1 {
+			check = map[string]any{"anyOf": alternatives}
+		}
+		properties["checks"] = map[string]any{"type": "array", "items": check}
 	}
 	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
@@ -120,7 +155,12 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				delete(properties, "severityRationale")
 				delete(properties["verification"].(map[string]any)["properties"].(map[string]any), "severity")
 			} else {
-				properties["severity"] = map[string]any{"type": "string", "enum": []string{"P0", "P1", "P2", "P3"}}
+				properties["severity"] = map[string]any{"type": "string", "minLength": 1, "enum": []string{"P0", "P1", "P2", "P3"}}
+				properties["severityRationale"] = map[string]any{"type": "string", "minLength": 1}
+				item["required"] = append(item["required"].([]any), "severity", "severityRationale")
+				verification := properties["verification"].(map[string]any)
+				verification["properties"].(map[string]any)["severity"] = map[string]any{"type": "string", "minLength": 1}
+				verification["required"] = append(verification["required"].([]any), "severity")
 			}
 			findings = append(findings, item)
 		}
@@ -172,6 +212,10 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 	}
 
 	if batch := completionBatch(input); batch != nil {
+		if input.Handler == "engine.repair" {
+			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
+			body["required"] = append(body["required"].([]any), "summary")
+		}
 		completion := fields["completion"].(map[string]any)["properties"].(map[string]any)
 		items := []any{}
 		for _, criterion := range batch.DoD {
@@ -245,6 +289,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		fields["records"] = comparisonSchema(executionCaseIDs(input.Validation), item, true)
 	}
+
 	return body, nil
 }
 

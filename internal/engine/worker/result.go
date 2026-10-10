@@ -70,12 +70,13 @@ type Batch struct {
 	Subtasks      []Subtask      `json:"subtasks"`
 	Deliverable   string         `json:"deliverable"`
 	PublicEntry   string         `json:"publicEntry"`
-	Artifacts     []string       `json:"artifacts"`
+	Artifacts     []Location     `json:"artifacts,omitempty"`
+	NewArtifacts  []string       `json:"newArtifacts,omitempty"`
 	Interfaces    string         `json:"interfaces"`
 	StateBoundary string         `json:"stateBoundary"`
 	Risk          string         `json:"risk"`
 	DoD           []Criterion    `json:"dod"`
-	Checks        []Check        `json:"checks"`
+	Checks        []Check        `json:"checks,omitempty"`
 	Rollback      string         `json:"rollback"`
 	Recovery      string         `json:"recovery"`
 	Handoff       string         `json:"handoff"`
@@ -89,8 +90,9 @@ type Criterion struct {
 	Description string `json:"description"`
 }
 type Check struct {
+	Reuse   int    `json:"reuse,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
-	Command string `json:"command"`
+	Command string `json:"command,omitempty"`
 }
 type RouteProposal struct {
 	Mode     string `json:"mode"`
@@ -248,6 +250,17 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	}
 	if originalDigest == "" {
 		return protocol.Event{}, fmt.Errorf("verified native original output digest is required")
+	}
+	var proposed *Granularity
+	if value.Review != nil {
+		proposed = value.Review.GranularityReview
+	} else if value.Validation != nil {
+		proposed = value.Validation.GranularityReview
+	}
+	completed := input.Handler == "engine.repair" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
+	if err != nil {
+		return protocol.Event{}, err
 	}
 	payload := protocol.WorkerResultPayload{ActionID: input.Pending.ActionID, Provider: input.Provider, PayloadDigest: originalDigest, Outcome: protocol.OutcomePass}
 	if interruption != "" {
@@ -728,16 +741,20 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	var proposed *Granularity
-	if result.Review != nil {
-		proposed = result.Review.GranularityReview
-	}
-	if result.Validation != nil {
-		proposed = result.Validation.GranularityReview
-	}
-	result.Granularity, err = DecodeGranularity(input, proposed)
-	if err != nil {
-		return result, "", err
+	if input.Handler == "engine.repair" && fields["completion"] != nil && fields["granularityReview"] != nil {
+		var plan struct {
+			Batches []map[string]json.RawMessage `json:"batches"`
+		}
+		if err := json.Unmarshal(fields["granularityReview"], &plan); err != nil {
+			return result, "", err
+		}
+		for _, batch := range plan.Batches {
+			for _, name := range []string{"artifacts", "newArtifacts"} {
+				if _, present := batch[name]; present {
+					return result, "", fmt.Errorf("completed repair artifacts come from original native paths; omit %s", name)
+				}
+			}
+		}
 	}
 	for name := range fields {
 		if schema["properties"].(map[string]any)[name] == nil {

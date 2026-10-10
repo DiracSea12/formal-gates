@@ -31,20 +31,21 @@ import (
 )
 
 type codexPeerInput struct {
-	Workspace     string         `json:"workspace"`
-	Home          string         `json:"home"`
-	Config        string         `json:"config"`
-	ThreadParams  map[string]any `json:"thread_params"`
-	ToolArgument  string         `json:"tool_argument"`
-	TurnParams    map[string]any `json:"turn_params"`
-	Configuration map[string]any `json:"configuration"`
-	Mode          string         `json:"mode"`
-	StrictSchema  bool           `json:"strict_schema,omitempty"`
-	Reverse       []any          `json:"reverse"`
-	Answer        map[string]any `json:"answer,omitempty"`
-	Replies       []any          `json:"replies"`
-	WorkerAction  string         `json:"worker_action,omitempty"`
-	WorkerAttempt string         `json:"worker_attempt,omitempty"`
+	Workspace      string         `json:"workspace"`
+	Home           string         `json:"home"`
+	Config         string         `json:"config"`
+	ThreadParams   map[string]any `json:"thread_params"`
+	ToolArgument   string         `json:"tool_argument"`
+	TurnParams     map[string]any `json:"turn_params"`
+	Configuration  map[string]any `json:"configuration"`
+	Mode           string         `json:"mode"`
+	StrictSchema   bool           `json:"strict_schema,omitempty"`
+	Reverse        []any          `json:"reverse"`
+	Answer         map[string]any `json:"answer,omitempty"`
+	Replies        []any          `json:"replies"`
+	WorkerAction   string         `json:"worker_action,omitempty"`
+	WorkerAttempt  string         `json:"worker_attempt,omitempty"`
+	WorkerMaterial string         `json:"-"`
 }
 
 func codexPeerID(text string) string {
@@ -76,11 +77,39 @@ func TestCodexRPCPeer(t *testing.T) {
 	if err = json.Unmarshal(raw, &peer); err != nil {
 		panic(err)
 	}
-	if args[3] != peer.ToolArgument {
-		panic(fmt.Sprintf("native hook argument differs: %s != %s", args[3], peer.ToolArgument))
-	}
 	cwd, _ := os.Getwd()
 	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision" || peer.Mode == "workflow-invalid-review" || peer.Mode == "workflow-held"
+	if workflow {
+		decodeCommand := func(argument string) string {
+			index := strings.Index(argument, "command=")
+			if index < 0 {
+				panic("native hook command is missing")
+			}
+			var command string
+			if err := json.NewDecoder(strings.NewReader(argument[index+len("command="):])).Decode(&command); err != nil {
+				panic(err)
+			}
+			return command
+		}
+		original, actual := decodeCommand(peer.ToolArgument), decodeCommand(args[3])
+		prefix := " harness codex-tool-permission "
+		originalPrefix, _, ok := strings.Cut(original, prefix)
+		actualPrefix, directory, actualOK := strings.Cut(actual, prefix)
+		if !ok || !actualOK || originalPrefix != actualPrefix || len(directory) < 2 || directory[0] != '\'' || directory[len(directory)-1] != '\'' {
+			panic("native hook executable or command differs")
+		}
+		directory = strings.ReplaceAll(directory[1:len(directory)-1], "'\\''", "'")
+		request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+		if err != nil {
+			panic(err)
+		}
+		if resolveNativePath(textOf(getOf(request, "workspace"))) != resolveNativePath(cwd) {
+			panic("native hook directory belongs to another workspace")
+		}
+		peer.WorkerMaterial = textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+	} else if args[3] != peer.ToolArgument {
+		panic(fmt.Sprintf("native hook argument differs: %s != %s", args[3], peer.ToolArgument))
+	}
 	if (!workflow && resolveNativePath(cwd) != resolveNativePath(peer.Workspace)) || os.Getenv("HOME") != peer.Home {
 		panic("native environment/workspace differs")
 	}
@@ -263,10 +292,28 @@ func TestCodexRPCPeer(t *testing.T) {
 		if err := json.Unmarshal([]byte(prompt[start+len("[Action input]\n"):end]), &input); err != nil {
 			panic(err)
 		}
+		for _, field := range strings.Fields(prompt[end+len("\n\n[Dispatch]"):]) {
+			if strings.HasPrefix(field, "role=") {
+				input.Handler = strings.TrimPrefix(field, "role=")
+				break
+			}
+		}
+		if peer.Mode == "workflow-held" || peer.Mode == "workflow-progress" || peer.Mode == "workflow-invalid-review" {
+			body, err := os.ReadFile(peer.WorkerMaterial)
+			if err != nil {
+				panic(err)
+			}
+			var material worker.Material
+			if err := json.Unmarshal(body, &material); err != nil {
+				panic(err)
+			}
+			check(material.Input.Handler, input.Handler)
+			input.Pending, input.Provider, input.Review = material.Input.Pending, material.Input.Provider, material.Input.Review
+		}
 		if peer.Mode != "workflow-invalid-review" && (input.Validation == nil || input.Validation.Workspace == nil || resolveNativePath(input.Validation.Workspace.Path) != resolveNativePath(cwd)) {
 			panic("native worker workspace differs from original input")
 		}
-		if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider != "codex" {
+		if peer.Mode != "workflow-decision" && (input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider != "codex") {
 			panic("native worker has no original dispatch identity")
 		}
 		domain := map[string]any{"interruptionReason": "The gate peer needs an explicit user decision"}
@@ -274,12 +321,12 @@ func TestCodexRPCPeer(t *testing.T) {
 			if input.Review == nil || input.Handler != "engine.review.worker" {
 				panic("invalid review fixture received another duty")
 			}
-			verification := map[string]any{}
+			verification := []string{}
 			for _, key := range review.RequiredVerificationChecks() {
-				verification[key] = "Checked current " + input.Pending.ActionID + "/" + input.Pending.AttemptID
+				verification = append(verification, "Checked current "+key)
 			}
-			verification[review.RequiredVerificationChecks()[0]] = " "
-			domain = map[string]any{"status": "PASS", "findings": []any{}, "verification": verification}
+			verification[0] = " "
+			domain = map[string]any{"findings": []any{}, "verification": verification}
 		}
 		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch" {
 			check(input.Pending.ActionID, peer.WorkerAction)
@@ -287,11 +334,11 @@ func TestCodexRPCPeer(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
 				panic(err)
 			}
-			dod := map[string]string{}
-			for _, item := range input.Validation.Development.Batch.DoD {
-				dod[item.ID] = "Delivered actual app.go"
+			dod := []string{}
+			for range input.Validation.Development.Batch.DoD {
+				dod = append(dod, "Delivered actual app.go")
 			}
-			domain = map[string]any{"paths": []string{"app.go"}, "summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
+			domain = map[string]any{"summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
 		}
 
 		if input.Handler == "engine.development.batch" && peer.Mode == "workflow-progress" {
@@ -301,7 +348,7 @@ func TestCodexRPCPeer(t *testing.T) {
 				panic("native continuation lost original remaining work")
 			}
 			if len(history) <= 2 {
-				domain = map[string]any{"paths": []string{}, "summary": fmt.Sprintf("Completed part %d of the same task", len(history)), "remainingWork": "Finish the same app.go delivery"}
+				domain = map[string]any{"summary": fmt.Sprintf("Completed part %d of the same task", len(history)), "remainingWork": "Finish the same app.go delivery"}
 			} else {
 				if len(history) != 3 {
 					panic("native worker repeated completed scope")
@@ -309,11 +356,11 @@ func TestCodexRPCPeer(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
 					panic(err)
 				}
-				dod := map[string]string{}
-				for _, item := range input.Validation.Development.Batch.DoD {
-					dod[item.ID] = "The fixture delivered the actual app.go file"
+				dod := []string{}
+				for range input.Validation.Development.Batch.DoD {
+					dod = append(dod, "The fixture delivered the actual app.go file")
 				}
-				domain = map[string]any{"paths": []string{"app.go"}, "summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
+				domain = map[string]any{"summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
 			}
 		}
 		schema, err := worker.ResultSchema(input)

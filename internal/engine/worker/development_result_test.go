@@ -100,6 +100,57 @@ func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
 	}
 }
 
+func TestCompletedRepairPlanUsesNativeArtifactsAndApprovedChecks(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests"}, {ID: "local", Command: "local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	value := Repair{Summary: "Repaired the original behavior", Completion: &Completion{DoD: []string{"Behavior restored"}, Handoff: "Ready for program checks"}, GranularityReview: &Granularity{Reason: "One cohesive repair", VerificationTier: "FINAL", Batches: []Batch{{DoD: []Criterion{{Description: "Behavior restored"}}, Checks: []Check{{Reuse: 3}, {Command: "new-oracle"}}}}}}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"language/source.ext"}
+	original, err := DecodeResultWithFacts(input, "result", raw, "verified-source", paths, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := original.Result.Validation.GranularityReview.Batches[0]
+	if !reflect.DeepEqual(batch.Artifacts, paths) || !reflect.DeepEqual(batch.Checks[:3], input.ApprovedChecks) || batch.Checks[3].Command != "new-oracle" || batch.Checks[3].Purpose != "" {
+		t.Fatalf("native artifacts or approved command identities were changed: %+v", batch)
+	}
+	stored, _ := json.Marshal(input)
+	var recovered protocol.WorkerInput
+	if err := json.Unmarshal(stored, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := DecodeResultWithFacts(recovered, "result", raw, "verified-source", paths, nil)
+	if err != nil || !reflect.DeepEqual(original, replay) {
+		t.Fatalf("recovery changed original repair facts: %v", err)
+	}
+	input.ApprovedChecks = append(input.ApprovedChecks, protocol.DevelopmentCheck{ID: "independent:local", Command: "independent-local-oracle"})
+	value.GranularityReview.Batches[0].Checks = []Check{{Reuse: 3}, {Reuse: 4}}
+	selected, _ := json.Marshal(value)
+	joined, err := DecodeResultWithFacts(input, "joined", selected, "verified-source", paths, nil)
+	if err != nil || !reflect.DeepEqual(joined.Result.Validation.GranularityReview.Batches[0].Checks, input.ApprovedChecks) {
+		t.Fatalf("single repair lost independent original local checks: %v", err)
+	}
+	value.GranularityReview.Batches[0].Checks = []Check{{Reuse: 3}, {Command: "new-oracle"}}
+	for _, field := range []string{"artifacts", "newArtifacts"} {
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		body["granularityReview"].(map[string]any)["batches"].([]any)[0].(map[string]any)[field] = []any{}
+		mixed, _ := json.Marshal(body)
+		if _, err := DecodeResultWithFacts(input, "invalid", mixed, "verified-source", paths, nil); err == nil {
+			t.Fatalf("completed repair accepted an artifact declaration: %s", field)
+		}
+	}
+	value.GranularityReview.Batches[0].Checks = []Check{{Command: "project-build", Purpose: protocol.CheckFullBuild}}
+	raw, _ = json.Marshal(value)
+	if _, err := DecodeResultWithFacts(input, "invalid", raw, "verified-source", paths, nil); err == nil {
+		t.Fatal("copied approved command was accepted as original authorship")
+	}
+}
+
 func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "actual", Command: "false"}}}
 	for _, role := range []string{"engine.development.batch", "engine.repair"} {

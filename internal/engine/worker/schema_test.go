@@ -44,6 +44,68 @@ func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 		}
 	}
 }
+
+func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t *testing.T) {
+	input := observationWorkerInput()
+	input.Validation.Observation.Findings[0].Finding.Raw = &review.Finding{Severity: "P1"}
+	input.Validation.Observation.Findings[1].Finding.ExecutionFailure = &protocol.ExecutionFailure{CaseID: "failed-case"}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "validation-observation"}}}
+	material, err := Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["findings"].(map[string]any)["prefixItems"].([]any)
+	ordinary := findings[0].(map[string]any)
+	properties := ordinary["properties"].(map[string]any)
+	for _, decision := range []string{"NEW", "SAME_AS", "DISMISSED"} {
+		t.Run(decision, func(t *testing.T) {
+			if !slices.Contains(properties["decision"].(map[string]any)["enum"].([]string), decision) {
+				t.Fatal("ordinary decision lost its severity duty")
+			}
+			for _, name := range []string{"severity", "severityRationale"} {
+				if !slices.Contains(ordinary["required"].([]any), any(name)) || properties[name].(map[string]any)["minLength"] != 1 {
+					t.Fatalf("ordinary %s does not require non-empty %s", decision, name)
+				}
+			}
+			verification := properties["verification"].(map[string]any)
+			if !slices.Contains(verification["required"].([]any), any("severity")) || verification["properties"].(map[string]any)["severity"].(map[string]any)["minLength"] != 1 {
+				t.Fatalf("ordinary %s does not require severity verification", decision)
+			}
+		})
+	}
+	if !reflect.DeepEqual(properties["severity"].(map[string]any)["enum"], []string{"P0", "P1", "P2", "P3"}) {
+		t.Fatal("ordinary severity was derived from the source grade")
+	}
+	execution := findings[1].(map[string]any)
+	executionFields := execution["properties"].(map[string]any)
+	for _, name := range []string{"severity", "severityRationale"} {
+		if executionFields[name] != nil || slices.Contains(execution["required"].([]any), any(name)) {
+			t.Fatalf("execution failure exposes %s", name)
+		}
+	}
+	verification := executionFields["verification"].(map[string]any)
+	if verification["properties"].(map[string]any)["severity"] != nil || slices.Contains(verification["required"].([]any), any("severity")) || execution["additionalProperties"] != false || verification["additionalProperties"] != false {
+		t.Fatal("execution failure accepts a severity judgment")
+	}
+	stored, err := json.Marshal(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered Material
+	if err := json.Unmarshal(stored, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := Render(recovered.Input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSchema, _ := json.Marshal(material.ResultSchema)
+	replaySchema, _ := json.Marshal(replay.ResultSchema)
+	if string(originalSchema) != string(replaySchema) {
+		t.Fatal("recovery changed the issued severity duties")
+	}
+}
+
 func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "start-readiness"}}}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
@@ -322,6 +384,94 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 			}
 			if !invalid && (event.Result.PayloadDigest != "original-native-output" || event.Result.Validation.Binding != input.Validation.Binding) {
 				t.Fatal("repair lost its original source or issued identity")
+			}
+		})
+	}
+}
+
+func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branches := schema["anyOf"].([]any)
+	proposal := branches[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	if proposal["artifacts"].(map[string]any)["items"].(map[string]any)["type"] != "object" {
+		t.Fatal("proposal still asks for existing raw paths")
+	}
+	checks := proposal["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
+	if len(checks) != 2 || checks[0].(map[string]any)["properties"].(map[string]any)["reuse"] == nil {
+		t.Fatal("approved commands have no numeric selection")
+	}
+	command := checks[1].(map[string]any)["properties"].(map[string]any)["command"].(map[string]any)
+	if !reflect.DeepEqual(command["not"].(map[string]any)["enum"], []string{"approved-build"}) {
+		t.Fatal("known command can pass as newly authored content")
+	}
+	completed := branches[3].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+	fields := completed["properties"].(map[string]any)
+	if fields["artifacts"] != nil || fields["newArtifacts"] != nil || completed["anyOf"] != nil {
+		t.Fatal("completed repair publishes a duplicate artifact declaration")
+	}
+	input.ApprovedChecks = nil
+	schema, err = ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal = schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	check := proposal["checks"].(map[string]any)["items"].(map[string]any)
+	if check["anyOf"] != nil || check["properties"].(map[string]any)["reuse"] != nil {
+		t.Fatal("empty approved inventory publishes an unusable selection")
+	}
+}
+
+func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	for _, scenario := range []string{"proposed", "issued"} {
+		t.Run(scenario, func(t *testing.T) {
+			if scenario == "issued" {
+				input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "issued", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "approved behavior"}}}}
+			}
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(wire, &schema); err != nil {
+				t.Fatal(err)
+			}
+			completed := false
+			for _, raw := range schema["anyOf"].([]any) {
+				branch := raw.(map[string]any)
+				fields := branch["properties"].(map[string]any)
+				required := branch["required"].([]any)
+				switch {
+				case fields["completion"] != nil:
+					completed = true
+					if !slices.Contains(required, any("summary")) || fields["summary"].(map[string]any)["minLength"] != float64(1) {
+						t.Fatal("repair completion permits an absent or empty summary")
+					}
+				case fields["granularityReview"] != nil:
+					if slices.Contains(required, any("summary")) {
+						t.Fatal("pure repair proposal requires completion summary")
+					}
+				case fields["remainingWork"] != nil:
+					for _, name := range []string{"summary", "remainingWork"} {
+						if !slices.Contains(required, any(name)) || fields[name].(map[string]any)["minLength"] != float64(1) {
+							t.Fatalf("continuation lost required %s", name)
+						}
+					}
+				case fields["interruptionReason"] != nil:
+					if fields["summary"] != nil || !slices.Contains(required, any("interruptionReason")) {
+						t.Fatal("inability requires completion summary")
+					}
+				}
+			}
+			if !completed {
+				t.Fatal("repair completion alternative lost")
 			}
 		})
 	}
