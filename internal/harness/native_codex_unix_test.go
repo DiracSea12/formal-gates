@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
 	"io"
 	"os"
@@ -73,7 +74,7 @@ func TestCodexRPCPeer(t *testing.T) {
 		panic(err)
 	}
 	cwd, _ := os.Getwd()
-	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision"
+	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision" || peer.Mode == "workflow-invalid-review" || peer.Mode == "workflow-held"
 	if (!workflow && resolveNativePath(cwd) != resolveNativePath(peer.Workspace)) || os.Getenv("HOME") != peer.Home {
 		panic("native environment/workspace differs")
 	}
@@ -218,6 +219,19 @@ func TestCodexRPCPeer(t *testing.T) {
 		check(getOf(answered, "result"), peer.Replies[i])
 		emit(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": thread, "turnId": turn, "item": map[string]any{"type": "commandExecution", "id": getOf(params, "itemId"), "command": "echo", "cwd": cwd, "status": "completed", "commandActions": []any{}}, "completedAtMs": 1}})
 	}
+	if peer.Mode == "workflow-held" {
+		if err := os.WriteFile(filepath.Join(peer.Config, "held-turn"), []byte(thread+"\n"+turn), 0600); err != nil {
+			panic(err)
+		}
+		for {
+			if _, err := os.Stat(filepath.Join(peer.Config, "release-turn")); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				panic(err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	status := "completed"
 	if peer.Mode == "wait" {
 		frame = read()
@@ -243,13 +257,37 @@ func TestCodexRPCPeer(t *testing.T) {
 		if err := json.Unmarshal([]byte(prompt[start+len("[Action input]\n"):end]), &input); err != nil {
 			panic(err)
 		}
-		if input.Validation == nil || input.Validation.Workspace == nil || resolveNativePath(input.Validation.Workspace.Path) != resolveNativePath(cwd) {
+		if peer.Mode != "workflow-invalid-review" && (input.Validation == nil || input.Validation.Workspace == nil || resolveNativePath(input.Validation.Workspace.Path) != resolveNativePath(cwd)) {
 			panic("native worker workspace differs from original input")
 		}
 		if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider != "codex" {
 			panic("native worker has no original dispatch identity")
 		}
 		domain := map[string]any{"interruptionReason": "The gate peer needs an explicit user decision"}
+		if peer.Mode == "workflow-invalid-review" {
+			if input.Review == nil || input.Handler != "engine.review.worker" {
+				panic("invalid review fixture received another duty")
+			}
+			verification := map[string]any{}
+			for _, key := range review.RequiredVerificationChecks() {
+				verification[key] = "Checked current " + input.Pending.ActionID + "/" + input.Pending.AttemptID
+			}
+			verification[review.RequiredVerificationChecks()[0]] = " "
+			domain = map[string]any{"status": "PASS", "findings": []any{}, "verification": verification}
+		}
+		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch" {
+			check(input.Pending.ActionID, peer.WorkerAction)
+			check(input.Pending.AttemptID, peer.WorkerAttempt)
+			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
+				panic(err)
+			}
+			dod := map[string]string{}
+			for _, item := range input.Validation.Development.Batch.DoD {
+				dod[item.ID] = "Delivered actual app.go"
+			}
+			domain = map[string]any{"paths": []string{"app.go"}, "summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
+		}
+
 		if input.Handler == "engine.development.batch" && peer.Mode == "workflow-progress" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)

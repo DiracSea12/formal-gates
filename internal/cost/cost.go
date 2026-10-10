@@ -81,7 +81,7 @@ func Record(run *RunCost, dispatchID string, entry DispatchCost) {
 }
 
 // RecordCumulative updates one active dispatch from its original source's
-// cumulative usage. An unavailable continuation preserves the measured prefix.
+// cumulative usage. Incomplete sources retain every measured token lower bound.
 func RecordCumulative(run *RunCost, dispatchID string, entry DispatchCost) {
 	if run == nil {
 		return
@@ -92,8 +92,10 @@ func RecordCumulative(run *RunCost, dispatchID string, entry DispatchCost) {
 		return
 	}
 	if entry.Source == SourceUnavailable {
-		previous.Source, previous.Reason = entry.Source, entry.Reason
-		entry = previous
+		if entry.InputCacheHitTokens < previous.InputCacheHitTokens || entry.InputCacheMissTokens < previous.InputCacheMissTokens || entry.OutputTokens < previous.OutputTokens {
+			previous.Source, previous.Reason = entry.Source, entry.Reason
+			entry = previous
+		}
 	}
 	run.Dispatches[dispatchID] = entry
 	run.addTokens(entry.TotalInputTokens-previous.TotalInputTokens, entry.InputCacheHitTokens-previous.InputCacheHitTokens, entry.InputCacheMissTokens-previous.InputCacheMissTokens, entry.OutputTokens-previous.OutputTokens)

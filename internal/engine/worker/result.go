@@ -170,6 +170,18 @@ type Observation struct {
 	Result     coverage.ExecutionStatus `json:"result"`
 }
 
+// InvalidResult binds program rejection to the original issued input and output.
+func InvalidResult(input protocol.WorkerInput, eventID protocol.EventID, digest, reason string) (protocol.Event, error) {
+	event, err := protocol.NewInvalidWorkerResultEvent(eventID, input.Pending.ActionID, input.Provider, digest, reason)
+	if err != nil {
+		return protocol.Event{}, err
+	}
+	if prior := developmentSource(input); prior != nil {
+		event.Result.SourceResult = prior.Digest
+	}
+	return event, event.Validate()
+}
+
 func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string) (protocol.Event, error) {
 	value, interruption, err := decodeRoleBody(input, raw)
 	if err != nil {

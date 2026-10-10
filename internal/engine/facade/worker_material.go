@@ -197,6 +197,16 @@ func (f *Facade) ObserveWorkerSource(material WorkerMaterial, directory string, 
 	if err != nil {
 		return err
 	}
+	return f.ObserveWorkerTerminal(material, identity)
+}
+
+// ObserveWorkerTerminal records a verified invocation's final identity in the
+// original normalized journal. Result/source validation belongs to the caller.
+func (f *Facade) ObserveWorkerTerminal(material WorkerMaterial, identity string) error {
+	value, err := readWorkerMaterial(material)
+	if err != nil {
+		return err
+	}
 	return f.admission.write(func() error {
 		return lifecycle.ObserveNativeCompletion(f.root, f.runID, material.ActionID, value.Input.Provider, identity)
 	})
@@ -560,7 +570,10 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	}
 	event, err := worker.DecodeResult(value.Input, eventID, answer, digest)
 	if err != nil {
-		return protocol.Acceptance{}, Run{}, err
+		event, err = worker.InvalidResult(value.Input, eventID, digest, err.Error())
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
 	}
 	// The verified original request's exact prompt carries run/action/attempt.
 	// Submit alone owns current, terminal, duplicate and obsolete-result admission.

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -164,7 +162,7 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 			if waiting {
 				continue
 			}
-			key := ref.Digest + ":" + resume.ActionID
+			key := ref.ActionID + ":" + ref.AttemptID
 			if active[key] || result.Blocked[id] != "" {
 				continue
 			}
@@ -309,7 +307,7 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 			if sourceErr == nil {
 				return acceptWorkflowWorker(f, ref, resume, directory, source)
 			}
-			return acceptWorkflowFailure(f, ref, resume, directory, request, sourceErr)
+			return acceptWorkflowFailure(f, ref, resume, directory, request)
 		}
 		if _, err := os.Stat(filepath.Join(directory, "owner")); err == nil && finished == nil && !harness.NativeJobAlive(directory) {
 			return fmt.Errorf("native invocation is UNKNOWN; original job %s needs observation: %w", directory, sourceErr)
@@ -358,6 +356,15 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 			return err
 		}
 	}
+	if err := observeWorkflowResume(f, resume, provider, identity); err != nil {
+		return err
+	}
+
+	_, _, err = f.SubmitWorkerResult(protocol.EventID("native-result:"+key), ref, directory, source, harness.NativeResultEvidence)
+	return err
+}
+
+func observeWorkflowResume(f *facade.Facade, resume protocol.HostActionIntent, provider, identity string) error {
 	if resume.Resume != nil {
 		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("native-resume:"+resume.ActionID), resume.ActionID, protocol.HostActionResumeAgent, provider, nativeIntentCorrelation(resume), resume.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: protocol.LifecycleStart})
 		if err != nil {
@@ -367,31 +374,25 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 			return err
 		}
 	}
-	_, _, err = f.SubmitWorkerResult(protocol.EventID("native-result:"+key), ref, directory, source, harness.NativeResultEvidence)
-	return err
+	return nil
 }
 
-func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent, directory string, request map[string]any, sourceErr error) error {
-	var failure struct {
-		Invoked    bool                   `json:"invoked"`
-		Class      authoring.FailureClass `json:"failure_class"`
-		Error      string                 `json:"error"`
-		Kind       string                 `json:"error_kind"`
-		Identity   string                 `json:"identity"`
-		Method     string                 `json:"method"`
-		NativeCode any                    `json:"native_code"`
+func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent, directory string, request map[string]any) error {
+	body, digest, nativeIdentity, err := harness.NativeFailureEvidence(request["provider"].(string), directory)
+	if err != nil {
+		return fmt.Errorf("native invocation cannot prove a completed failure: %w", err)
 	}
-	path := filepath.Join(directory, "native-error.json")
-	if err := readJSONFileInto(path, &failure); err != nil || !failure.Invoked || !failure.Class.Valid() {
-		return fmt.Errorf("native invocation cannot prove a completed failure: %w", sourceErr)
+	var failure struct {
+		Class authoring.FailureClass `json:"failure_class"`
+		Error string                 `json:"error"`
+	}
+	if err := json.Unmarshal(body, &failure); err != nil {
+		return err
 	}
 	var original worker.Material
 	if err := readJSONFileInto(ref.Path, &original); err != nil {
 		return err
 	}
-	var identity map[string]any
-	_ = readJSONFileInto(filepath.Join(directory, "identity.json"), &identity)
-	nativeIdentity, _ := identity["identity"].(string)
 	provider := original.Input.Provider
 	if nativeIdentity == "" {
 		event, err := protocol.NewSpawnReceiptWithFailureClass(protocol.EventID("native-failed-spawn:"+ref.Digest), ref.ActionID, provider, directory, protocol.SpawnStatusFailed, failure.Class)
@@ -408,12 +409,20 @@ func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume p
 	if _, _, err := f.Submit(spawn); err != nil {
 		return err
 	}
-	body, err := os.ReadFile(path)
+	if err := observeWorkflowResume(f, resume, provider, nativeIdentity); err != nil {
+		return err
+	}
+	if err := f.ObserveWorkerTerminal(ref, nativeIdentity); err != nil {
+		return err
+	}
+	stop, err := protocol.NewLifecycleEventEvent(protocol.EventID("native-failed-stop:"+ref.Digest+":"+resume.ActionID), provider, nativeIdentity, protocol.LifecycleStop)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(body)
-	event, err := protocol.NewWorkerResultEvent(protocol.EventID("native-failure:"+ref.Digest+":"+resume.ActionID), ref.ActionID, provider, protocol.OutcomeRuntimeError, "sha256:"+hex.EncodeToString(sum[:]), failure.Class)
+	if _, _, err := f.Submit(stop); err != nil {
+		return err
+	}
+	event, err := protocol.NewWorkerResultEvent(protocol.EventID("native-failure:"+ref.Digest+":"+resume.ActionID), ref.ActionID, provider, protocol.OutcomeRuntimeError, digest, failure.Class)
 	if err != nil {
 		return err
 	}

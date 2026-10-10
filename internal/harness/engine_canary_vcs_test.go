@@ -76,9 +76,15 @@ func (c *engineCanary) fixtureCommand(dir, command string, input []byte, args ..
 
 // Bootstrap owns only the private repository/server and its initial workspace.
 // Provider owns snapshot, workspace, promotion and cleanup semantics.
-func (c *engineCanary) initFixtureRepository() {
+func (c *engineCanary) initFixtureRepository(repositoryRoot ...string) {
 	c.t.Helper()
 	c.sourceBuildEnv = os.Environ()
+	nativeRoot := func(name string) string {
+		if len(repositoryRoot) == 0 {
+			return c.t.TempDir()
+		}
+		return filepath.Join(repositoryRoot[0], name)
+	}
 	if c.vcs == nil {
 		c.vcs = vcs.NewNative(c.project, "git", nil)
 	}
@@ -105,7 +111,10 @@ func (c *engineCanary) initFixtureRepository() {
 	c.t.Setenv("GOFLAGS", strings.TrimSpace(os.Getenv("GOFLAGS")+" -buildvcs=false"))
 	c.fixtureCommand(c.project, "go", nil, "env", "GOFLAGS")
 	if c.vcs.Name() == "svn" {
-		repository := filepath.Join(c.t.TempDir(), "repository")
+		repository := filepath.Join(nativeRoot("svn"), "repository")
+		if err := os.MkdirAll(filepath.Dir(repository), 0700); err != nil {
+			c.fail("private SVN repository directory: %v", err)
+		}
 		c.fixtureCommand("", "svnadmin", nil, "create", repository)
 		c.fixtureCommand("", "svn", nil, "mkdir", "file://"+repository+"/trunk", "-m", "fixture trunk")
 		c.fixtureCommand("", "svn", nil, "checkout", "file://"+repository+"/trunk", c.project)
@@ -125,13 +134,20 @@ func (c *engineCanary) initFixtureRepository() {
 		c.fail("private p4d log: %v", err)
 	}
 	pidFile := filepath.Join(c.jobs, "p4d.pid")
-	server := exec.Command("p4d", "--pid-file="+pidFile, "-r", c.t.TempDir(), "-p", address)
+	serverRoot := nativeRoot("p4")
+	if err := os.MkdirAll(serverRoot, 0700); err != nil {
+		c.fail("private P4 server directory: %v", err)
+	}
+	server := exec.Command("p4d", "--pid-file="+pidFile, "-r", serverRoot, "-p", address)
 	server.Stdout, server.Stderr = log, log
 	if err := server.Start(); err != nil {
 		log.Close()
 		c.fail("private p4d start: %v", err)
 	}
 	c.t.Cleanup(func() { server.Process.Kill(); server.Wait(); log.Close(); _ = os.Remove(pidFile) })
+	if err := writeAtomicJSON(filepath.Join(c.jobs, "p4d-bootstrap.json"), map[string]any{"argv": server.Args, "pid": server.Process.Pid, "serverRoot": serverRoot, "address": address, "client": "main", "user": "fixture", "workingCopy": c.project}); err != nil {
+		c.fail("private P4 server evidence: %v", err)
+	}
 	ready := false
 	for i := 0; i < 50; i++ {
 		if _, err := (vcs.ExecRunner{}).Run("", "p4", "info"); err == nil {

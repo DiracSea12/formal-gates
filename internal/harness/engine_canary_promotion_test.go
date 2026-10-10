@@ -179,7 +179,7 @@ func (r *canaryPromotionRecovery) recover(c *engineCanary, args []string, comman
 		c.fail("installed command failed after promotion recovery: %v", commandError)
 	}
 	exit, ok := commandError.(*exec.ExitError)
-	if !ok || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL || len(args) < 2 || args[0] != "workflow" || args[1] != "drive" {
+	if !ok || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL || len(args) < 2 || args[0] != "workflow" || args[1] != "drive" && args[1] != "submit" {
 		c.fail("unexpected promotion interruption command/error: %v %v", args, commandError)
 	}
 	if err := json.Unmarshal(data, &window); err != nil {

@@ -276,6 +276,7 @@ type SpawnReceipt struct {
 type WorkerResult struct {
 	SourceResult       string                 `json:"sourceResult,omitempty"`
 	InterruptionReason string                 `json:"interruptionReason,omitempty"`
+	InvalidReason      string                 `json:"invalidReason,omitempty"`
 	Validation         *ValidationResult      `json:"validation,omitempty"`
 	ActionID           string                 `json:"actionId"`
 	Provider           string                 `json:"provider"`

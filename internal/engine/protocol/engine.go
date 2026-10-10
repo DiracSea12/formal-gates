@@ -1778,7 +1778,7 @@ func resultPayloadDigest(payload *WorkerResultPayload) string {
 	return digestOfCanonical(workerResultEventWire{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
+		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, InvalidReason: payload.InvalidReason, FailureClass: string(payload.FailureClass), Review: payload.Review, Validation: payload.Validation,
 	})
 }
 
@@ -1788,7 +1788,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 	return WorkerResult{
 		ActionID: payload.ActionID, Provider: payload.Provider,
 		Outcome: payload.Outcome, PayloadDigest: payload.PayloadDigest,
-		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
+		SourceResult: payload.SourceResult, InterruptionReason: payload.InterruptionReason, InvalidReason: payload.InvalidReason, FailureClass: payload.FailureClass, Review: payload.Review, Validation: payload.Validation,
 		Digest: resultPayloadDigest(payload),
 	}
 }
@@ -1797,7 +1797,7 @@ func workerResultRecord(payload *WorkerResultPayload) WorkerResult {
 func workerResultPayloadOf(record WorkerResult) *WorkerResultPayload {
 	return &WorkerResultPayload{
 		ActionID: record.ActionID, Provider: record.Provider, Outcome: record.Outcome,
-		SourceResult: record.SourceResult, InterruptionReason: record.InterruptionReason, PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
+		SourceResult: record.SourceResult, InterruptionReason: record.InterruptionReason, InvalidReason: record.InvalidReason, PayloadDigest: record.PayloadDigest, FailureClass: record.FailureClass, Review: record.Review, Validation: record.Validation,
 	}
 }
 
@@ -2125,8 +2125,11 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	}
 	pending := state.PendingActions[record.ActionID]
 	key := pending.Task
+	if record.InvalidReason != "" {
+		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", record.InvalidReason, record, nextRevision)
+	}
 	class := record.FailureClass
-	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && (class == "" || class == authoring.FailureTransientEngine) {
+	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && class == authoring.FailureTransientEngine {
 		if record.Validation != nil {
 			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
 				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "runtime progress requires a QA execution checkpoint", record, nextRevision)

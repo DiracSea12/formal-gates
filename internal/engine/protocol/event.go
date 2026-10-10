@@ -194,6 +194,7 @@ const (
 type WorkerResultPayload struct {
 	SourceResult       string `json:"sourceResult,omitempty"`
 	InterruptionReason string
+	InvalidReason      string
 	Validation         *ValidationResult
 	ActionID           string
 	Provider           string
@@ -506,6 +507,16 @@ func NewWorkerResultEvent(id EventID, actionID, provider, outcome, payloadDigest
 	return ev, ev.Validate()
 }
 
+// NewInvalidWorkerResultEvent records program rejection of source-verified
+// semantic output. It preserves successful transport without a business PASS.
+func NewInvalidWorkerResultEvent(id EventID, actionID, provider, digest, reason string) (Event, error) {
+	if strings.TrimSpace(reason) == "" {
+		return Event{}, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "invalid semantic result requires a reason"}
+	}
+	e := Event{ID: id, Kind: KindWorkerResult, Result: &WorkerResultPayload{ActionID: actionID, Provider: provider, Outcome: OutcomePass, PayloadDigest: digest, InvalidReason: reason}}
+	return e, e.Validate()
+}
+
 // NewReviewWorkerResultEvent 构造携带审查证据的 worker result：outcome
 // 固定为 PASS（审查派发完成并产出语义证据；runtime 错误走普通失败结果，
 // 不建 candidate），payload digest 与 evidence 一并纳入 canonical 编码。
@@ -706,6 +717,9 @@ func (e Event) Validate() error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "non-FAILED spawn receipt cannot carry a failure class"}
 		}
 	case KindWorkerResult:
+		if e.Result.InvalidReason != "" && (strings.TrimSpace(e.Result.InvalidReason) == "" || e.Result.Outcome != OutcomePass || e.Result.FailureClass != "" || e.Result.Review != nil || e.Result.Validation != nil || e.Result.InterruptionReason != "") {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "invalid semantic result requires successful transport, a real reason and no completed evidence"}
+		}
 		if e.Result.InterruptionReason != "" && e.Result.Outcome != OutcomeRuntimeError {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "interruption reason requires a runtime error"}
 		}
@@ -879,6 +893,7 @@ type spawnReceiptEventWire struct {
 type workerResultEventWire struct {
 	SourceResult       string                `json:"sourceResult,omitempty"`
 	InterruptionReason string                `json:"interruptionReason,omitempty"`
+	InvalidReason      string                `json:"invalidReason,omitempty"`
 	Validation         *ValidationResult     `json:"validation,omitempty"`
 	ActionID           string                `json:"actionId"`
 	Provider           string                `json:"provider"`
@@ -949,7 +964,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Result = &workerResultEventWire{
 			ActionID: e.Result.ActionID, Provider: e.Result.Provider,
 			Outcome: e.Result.Outcome, PayloadDigest: e.Result.PayloadDigest,
-			SourceResult: e.Result.SourceResult, InterruptionReason: e.Result.InterruptionReason, FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
+			SourceResult: e.Result.SourceResult, InterruptionReason: e.Result.InterruptionReason, InvalidReason: e.Result.InvalidReason, FailureClass: string(e.Result.FailureClass), Review: e.Result.Review, Validation: e.Result.Validation,
 		}
 	}
 	if e.Observation != nil {
@@ -1038,5 +1053,5 @@ func (e Event) WithResetPreview(preview ResetPreview) Event { e.resetPreview = &
 // material template therefore names the actual submit fields rather than Go
 // struct field names; it does not perform business admission.
 func (p WorkerResultPayload) MarshalJSON() ([]byte, error) {
-	return canonicalJSON(workerResultEventWire{SourceResult: p.SourceResult, InterruptionReason: p.InterruptionReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
+	return canonicalJSON(workerResultEventWire{SourceResult: p.SourceResult, InterruptionReason: p.InterruptionReason, InvalidReason: p.InvalidReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
 }

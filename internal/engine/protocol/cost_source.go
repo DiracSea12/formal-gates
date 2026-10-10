@@ -30,8 +30,8 @@ type CostSourceRef struct {
 	Correlation string `json:"correlation,omitempty"`
 }
 
-// ResolvedCostSource 是一次解析结果：State 三值、READY 的精确用量与
-// UNAVAILABLE 的缺源原因。
+// ResolvedCostSource carries exact known usage; UNAVAILABLE also carries the
+// reason that the complete dispatch consumption cannot be measured.
 type ResolvedCostSource struct {
 	State  CostSourceState
 	Usage  cost.Usage
@@ -92,6 +92,8 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 	}
 	if resolved.State == CostSourceReady {
 		entry.Source = cost.SourceTranscript
+	}
+	if resolved.State == CostSourceReady || resolved.State == CostSourceUnavailable {
 		entry.InputCacheHitTokens = resolved.Usage.InputCacheHitTokens
 		entry.InputCacheMissTokens = resolved.Usage.InputCacheMissTokens
 		entry.OutputTokens = resolved.Usage.OutputTokens

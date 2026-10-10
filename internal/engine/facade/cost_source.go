@@ -2,6 +2,7 @@ package facade
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,13 +50,10 @@ func CostSourceBridge(root, runID string, verifier ...func(string, string, map[s
 			return protocol.ResolvedCostSource{State: protocol.CostSourcePending}
 		}
 		paths, managed, sourceErr := nativeCostSourcePaths(root, ref, verification.Identity, verify)
-		if sourceErr != nil {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: sourceErr.Error()}
-		}
 		if managed {
 			usage, parseErr := cost.ParseTranscriptFiles(provider, paths...)
-			if parseErr != nil {
-				return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: parseErr.Error()}
+			if err := errors.Join(sourceErr, parseErr); err != nil {
+				return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Usage: usage, Reason: err.Error()}
 			}
 			return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
 		}
@@ -100,6 +98,7 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 	}
 	paths := []string{}
 	attempt := ""
+	var missing error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -107,7 +106,8 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 		directory := filepath.Join(actionDir, entry.Name())
 		requestBytes, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
 		if err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		var request struct {
 			Provider string `json:"provider"`
@@ -119,23 +119,28 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 			} `json:"engine"`
 		}
 		if err := json.Unmarshal(requestBytes, &request); err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		material := request.Engine.WorkerMaterial
 		if !sameExecutionPath(request.Engine.Root, root) || request.Engine.RunID != ref.RunID || material.ActionID != ref.ActionID || request.Provider != descriptor.InstallName || !sameExecutionPath(filepath.Dir(filepath.Dir(material.Path)), stateDir) || !sameExecutionPath(directory, WorkerExecutionDirectory(material, request.Engine.ResumeActionID)) {
-			return nil, true, fmt.Errorf("native cost request differs from its original run/action/provider/material")
+			missing = errors.Join(missing, fmt.Errorf("native cost request differs from its original run/action/provider/material"))
+			continue
 		}
 		value, err := readWorkerMaterial(material)
 		if err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		if value.Input.RunID != ref.RunID || value.Input.Provider != ref.Provider || attempt != "" && material.AttemptID != attempt {
-			return nil, true, fmt.Errorf("native cost material differs from its original run/attempt/provider")
+			missing = errors.Join(missing, fmt.Errorf("native cost material differs from its original run/attempt/provider"))
+			continue
 		}
 		attempt = material.AttemptID
 		file, err := os.Open(filepath.Join(directory, "source.json"))
 		if err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		var source map[string]any
 		decoder := json.NewDecoder(file)
@@ -143,23 +148,31 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 		err = decoder.Decode(&source)
 		file.Close()
 		if err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		_, _, nativeIdentity, err := verify(descriptor.InstallName, directory, source)
 		if err != nil {
-			return nil, true, err
+			missing = errors.Join(missing, err)
+			continue
 		}
 		if nativeIdentity != identity {
-			return nil, true, fmt.Errorf("native cost source differs from its original lifecycle identity")
+			missing = errors.Join(missing, fmt.Errorf("native cost source differs from its original lifecycle identity"))
+			continue
 		}
 		path, _ := source["transcript"].(string)
 		if path == "" {
-			return nil, true, fmt.Errorf("native completion has no metering stream")
+			missing = errors.Join(missing, fmt.Errorf("native completion has no metering stream"))
+			continue
+		}
+		if _, err := cost.ParseTranscript(ref.Provider, path); err != nil {
+			missing = errors.Join(missing, fmt.Errorf("%s: %w", path, err))
+			continue
 		}
 		paths = append(paths, path)
 	}
-	if len(paths) == 0 {
-		return nil, true, fmt.Errorf("native dispatch has no completed metering source")
+	if len(paths) == 0 && missing == nil {
+		missing = fmt.Errorf("native dispatch has no completed metering source")
 	}
-	return paths, true, nil
+	return paths, true, missing
 }

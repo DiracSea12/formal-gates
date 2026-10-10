@@ -337,7 +337,7 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 				t.Fatal("native prompt did not persist the session context")
 			}
 			identity, err := readJSONFile(filepath.Join(s.directory, "identity.json"))
-			if err != nil || !valuesEqual(identity, map[string]any{"provider": "cursor", "identity": uuid, "native_store": s.peer.Store, "workspace": s.workspace, "selection": source["selection"]}) {
+			if err != nil || !valuesEqual(identity, map[string]any{"provider": "cursor", "identity": uuid, "native_store": s.peer.Store, "workspace": s.workspace, "selection": source["selection"], "acknowledgement": s.peer.Events[0]}) {
 				t.Fatalf("persisted identity %v %v", identity, err)
 			}
 			if err := cursorVerifySource(s.directory, source); err != nil {

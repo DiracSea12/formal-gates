@@ -181,3 +181,40 @@ func TestManagedCostSourceRejectsForeignBindingsAndMissingVerifier(t *testing.T)
 		})
 	}
 }
+
+func TestManagedCostSourcesRetainKnownUsageAcrossUnavailableInvocations(t *testing.T) {
+	for _, unavailableTurn := range []string{"one", "two"} {
+		for _, missing := range []string{"source", "usage"} {
+			t.Run(unavailableTurn+"-"+missing, func(t *testing.T) {
+				root := t.TempDir()
+				known := `{"sessionId":"session","turnId":"known","type":"turn.completed","payload":{"usage":{"source":"provider","modelRequestCount":2,"inputTokens":35830,"cacheReadTokens":15104,"outputTokens":10780}}}`
+				_, unavailable := meteredNativeJob(t, root, "zcode", unavailableTurn, `{"sessionId":"session","turnId":"failed","type":"turn.failed","payload":{}}`, "")
+				if missing == "source" {
+					if err := os.Remove(filepath.Join(unavailable, "source.json")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				knownTurn := "one"
+				if unavailableTurn == knownTurn {
+					knownTurn = "two"
+				}
+				meteredNativeJob(t, root, "zcode", knownTurn, known, "")
+				meteredNativeJob(t, root, "zcode", "replayed", known, "")
+				if err := lifecycle.BindDispatchWithProvider(root, "run", "action", "session", "zcode"); err != nil {
+					t.Fatal(err)
+				}
+				if err := lifecycle.ObserveNativeCompletion(root, "run", "action", "zcode", "session"); err != nil {
+					t.Fatal(err)
+				}
+				bridge := facade.CostSourceBridge(root, "run", harness.NativeResultEvidence)
+				for range 2 {
+					result := bridge(protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: "zcode"})
+					want := cost.Usage{InputCacheHitTokens: 15104, InputCacheMissTokens: 20726, OutputTokens: 10780}
+					if result.State != protocol.CostSourceUnavailable || result.Reason == "" || result.Usage != want {
+						t.Fatalf("unavailable invocation erased or doubled the known original usage: %#v; want %#v", result, want)
+					}
+				}
+			})
+		}
+	}
+}

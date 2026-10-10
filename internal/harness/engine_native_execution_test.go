@@ -7,7 +7,10 @@ package harness
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -302,6 +305,126 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 	call("harness", "native", s.directory)
 	if nativePeerTurns(t, s) != 1 {
 		t.Fatal("lost response observation started another turn")
+	}
+}
+
+func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) {
+	_, ref, s, binary := engineNativeFixture(t, true)
+	s.peer.Mode = "failed"
+	s.save(t)
+	for range 2 {
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		if err != nil {
+			t.Fatalf("failed native observation: %v %s", err, out)
+		}
+		var response struct {
+			Boundary string            `json:"boundary"`
+			Run      facade.Run        `json:"run"`
+			Blocked  map[string]string `json:"blocked"`
+		}
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Boundary != "ASK" || len(response.Blocked) != 0 || nativePeerTurns(t, s) != 1 {
+			t.Fatalf("completed failure did not reach original recovery once: %s", out)
+		}
+		verification, err := lifecycle.VerifyDispatch(s.workspace, "native-execution", ref.ActionID)
+		if err != nil || !verification.StartObserved || !verification.StopObserved {
+			t.Fatalf("original terminal facts absent: %+v %v", verification, err)
+		}
+		body, digest, identity, err := NativeFailureEvidence("codex", s.directory)
+		if err != nil || identity != verification.Identity || len(body) == 0 || digest == "" {
+			t.Fatal("original failed invocation proof lost", err)
+		}
+		entry := response.Run.Cost.Dispatches[ref.ActionID]
+		if entry.Source != "unavailable" || entry.Reason == "" {
+			t.Fatalf("missing failed-call meter misqualified: %+v", entry)
+		}
+		matched := false
+		for _, record := range response.Run.RecoveryRecords {
+			matched = matched || record.ActionID == ref.ActionID && record.Class == authoring.FailureUserActionRequired && record.InterruptionReason != ""
+		}
+		if !matched {
+			t.Fatal("failure class/cause did not reach original recovery owner")
+		}
+	}
+	path := filepath.Join(s.directory, "exit.json")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := NativeFailureEvidence("codex", s.directory); err == nil {
+		t.Fatal("missing terminal receipt became a proved failure")
+	}
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.directory, "stderr.log"), []byte("different evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := NativeFailureEvidence("codex", s.directory); err == nil {
+		t.Fatal("changed stream became a proved failure")
+	}
+}
+
+func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
+	_, ref, s, binary := engineNativeFixture(t, true)
+	s.peer.Mode = "workflow-invalid-review"
+	s.peer.Answer = nil
+	s.peer.StrictSchema = true
+	s.save(t)
+	for range 2 {
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		if err != nil {
+			t.Fatalf("invalid semantic routing: %v %s", err, out)
+		}
+		var response struct {
+			Run      facade.Run        `json:"run"`
+			Boundary string            `json:"boundary"`
+			Blocked  map[string]string `json:"blocked"`
+		}
+		if err := json.Unmarshal(out, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Boundary != "ASK" || len(response.Blocked) != 0 {
+			t.Fatalf("invalid source-verified body remained blocked: %s", out)
+		}
+		rejected := response.Run.RejectedResults[ref.ActionID]
+		if rejected.Status != "REJECTED_INVALID_RESULT" || rejected.AttemptID != ref.AttemptID || !strings.Contains(rejected.Reason, "verification evidence is missing") || rejected.Payload.InvalidReason != rejected.Reason {
+			t.Fatalf("original invalid result reason/attempt lost: %+v", rejected)
+		}
+		exhausted := false
+		for _, attempt := range response.Run.EndedAttempts {
+			exhausted = exhausted || attempt.RetryExhausted && attempt.Attempts == attempt.MaxAttempts
+		}
+		if !exhausted {
+			t.Fatal("original finite invalid-result policy was not exhausted")
+		}
+		invalid := 0
+		for _, result := range response.Run.RejectedResults {
+			if result.Status == "REJECTED_INVALID_RESULT" && strings.Contains(result.Reason, "verification evidence is missing") {
+				invalid++
+			}
+		}
+		if invalid != 2 {
+			t.Fatalf("both original attempts must be rejected: %d", invalid)
+		}
+		decision := false
+		for _, ask := range response.Run.PendingAsks {
+			decision = decision || ask.Control == protocol.ControlValidation && ask.Validation != nil && ask.Validation.Kind == "RETRY"
+		}
+		if !decision {
+			t.Fatal("finite exhaustion did not preserve its typed retry decision")
+		}
+		if nativePeerTurns(t, s) != 2 {
+			t.Fatalf("finite policy did not execute exactly original two attempts: %d", nativePeerTurns(t, s))
+		}
+	}
+	if _, err := NativeJobSource("codex", s.directory); err != nil {
+		t.Fatal("invalid semantic source must remain valid transport", err)
 	}
 }
 
@@ -604,14 +727,174 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	t.Logf("original_action=%s original_attempt=%s native_identity=%s material_count=%d real_turns=%d", ref.ActionID, ref.AttemptID, identity, len(digests), nativePeerTurns(t, s))
 }
 
+func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
+	f, _, s, binary := engineNativeFixture(t, true)
+	ref, input := stageNativeDevelopment(t, f, s)
+	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.request, s.directory, s.workspace = request, directory, input.Validation.Workspace.Path
+	s.request["binding"], err = NativeBinding("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
+	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
+	s.save(t)
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	state := func() protocol.State {
+		t.Helper()
+		var envelope struct {
+			Content protocol.State `json:"content"`
+		}
+		body, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, "native-execution", "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope.Content
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	release := func() {
+		if err := os.WriteFile(filepath.Join(s.config, "release-turn"), nil, 0600); err != nil {
+			t.Error(err)
+		}
+	}
+	defer release()
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("consumer ended before original held turn: %v %s", err, out.Bytes())
+		default:
+		}
+		if state().SpawnReceipts[ref.ActionID].Status == protocol.SpawnStatusSpawned {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	document := canaryRequirementDocument + "\n"
+	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var choices []protocol.RequirementWorkDecision
+	for _, work := range run.RequirementWork {
+		choices = append(choices, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "Formatting preserves this original duty"})
+	}
+	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"same original inputs and obligations"}}
+	pkg := protocol.RequirementDecisionPackage{Impact: impact, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	event, err := protocol.NewRequirementRequestEvent("held-requirement", pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.Submit(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		run, err = f.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ask := run.PendingRequirementAsk
+		if ask == nil {
+			t.Fatal("original requirement ask missing")
+		}
+		_, _, err = f.Submit(protocol.Event{ID: "held-confirmation", Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Impact: impact, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "Explicitly carry every unchanged original duty"}}})
+		if err == nil {
+			break
+		}
+		var rejected *protocol.RejectedError
+		if !errors.As(err, &rejected) || rejected.Code != protocol.CodeStaleFreshness {
+			t.Fatal(err)
+		}
+	}
+	_, run, err = f.Submit(protocol.Event{ID: "held-document", Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried, ok := run.WorkerMaterials[ref.ActionID]
+	if !ok || carried.AttemptID != ref.AttemptID || carried.Digest == ref.Digest {
+		t.Fatal("explicit carry did not preserve logical identity with new material")
+	}
+	// Keep the actual host turn active across foreground polling of the carried input.
+	time.Sleep(300 * time.Millisecond)
+	if !NativeJobAlive(directory) {
+		t.Fatal("original turn ended before carry was exercised")
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("carried consumer: %v %s", err, out.Bytes())
+	}
+	var response struct {
+		Boundary string            `json:"boundary"`
+		Run      facade.Run        `json:"run"`
+		Blocked  map[string]string `json:"blocked"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Boundary != "ASK" || len(response.Blocked) != 0 {
+		t.Fatalf("carried original task blocked: %s", out.Bytes())
+	}
+	entries, err := os.ReadDir(filepath.Dir(directory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("carried live logical duty started another invocation: %d", len(entries))
+	}
+	source, err := NativeJobSource("codex", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := NativeResultEvidence("codex", directory, source); err != nil {
+		t.Fatal(err)
+	}
+	if state().Results[ref.ActionID].Outcome != protocol.OutcomePass {
+		t.Fatal("original carried result not accepted")
+	}
+	if nativePeerTurns(t, s) != 2 {
+		t.Fatalf("original developer plus independent gate turns=%d", nativePeerTurns(t, s))
+	}
+	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if nativePeerTurns(t, s) != 2 {
+		t.Fatal("repeat drive replayed carried native task")
+	}
+	t.Logf("action=%s attempt=%s material_before=%s material_after=%s original_identity=%s", ref.ActionID, ref.AttemptID, ref.Digest, carried.Digest, source["identity"])
+}
+
 func fRoot(ref facade.WorkerMaterial) string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(ref.Path)))))
 }
 
 func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
-	for _, choice := range []string{"resume", "abort"} {
-		t.Run(choice, func(t *testing.T) {
+	for _, scenario := range []struct {
+		name, choice string
+		failed       bool
+	}{{"resume", "resume", false}, {"abort", "abort", false}, {"failed-resume", "resume", true}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			choice := scenario.choice
 			f, _, s, binary := engineNativeFixture(t, true)
+			if scenario.failed {
+				s.peer.Mode = "failed"
+				s.save(t)
+			}
 			call := func(input []byte, args ...string) []byte {
 				t.Helper()
 				cmd := exec.Command(binary, args...)
@@ -673,6 +956,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				}
 				s.request = request
 				s.directory = directory
+				s.peer.Mode = ""
 				s.peer.Answer = codexPeerAnswer(codexPlain(t, request["schema"]), map[string]any{"interruptionReason": "The original resumed task needs another user decision"}).(map[string]any)
 				s.save(t)
 			}

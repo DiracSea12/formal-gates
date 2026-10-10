@@ -155,6 +155,27 @@ func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
 	}
 }
 
+func TestResumedUnavailableDispatchRecordsKnownNativeUsage(t *testing.T) {
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch")
+	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "original invocation has no provider usage"}
+	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
+	e.dispatchCostHeld(s, pending.ActionID)
+	probe.usage = cost.Usage{InputCacheHitTokens: 15104, InputCacheMissTokens: 20726, OutputTokens: 10780}
+	for range 2 {
+		e.dispatchCostHeld(s, pending.ActionID)
+	}
+	entry := s.Cost.Dispatches[pending.ActionID]
+	if entry.Source != cost.SourceUnavailable || entry.Reason != probe.reason || entry.TotalInputTokens != 35830 || entry.InputCacheHitTokens != 15104 || entry.InputCacheMissTokens != 20726 || entry.OutputTokens != 10780 || s.Cost.TotalInputTokens != 35830 || s.Cost.OutputTokens != 10780 {
+		t.Fatalf("resumed measured usage was lost, duplicated or marked complete: %#v", s.Cost)
+	}
+	delete(s.PendingActions, pending.ActionID)
+	probe.usage = cost.Usage{InputCacheHitTokens: 20000, InputCacheMissTokens: 40000, OutputTokens: 16000}
+	e.dispatchCostHeld(s, pending.ActionID)
+	if s.Cost.Dispatches[pending.ActionID] != entry || s.Cost.TotalInputTokens != 35830 || s.Cost.OutputTokens != 10780 {
+		t.Fatal("a completed dispatch changed its frozen accounting")
+	}
+}
+
 func continuationCostResolver(t *testing.T, s *State, pending PendingAction, probe *costSourceProbe) CostSourceResolver {
 	t.Helper()
 	expected := CostSourceRef{RunID: s.RunID, ActionID: pending.ActionID, Provider: s.RunProvider, Correlation: s.SpawnReceipts[pending.ActionID].Correlation}

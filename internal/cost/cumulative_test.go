@@ -63,3 +63,27 @@ func TestUnavailableContinuationRetainsExactMeasuredPrefix(t *testing.T) {
 		t.Fatal("genuine cumulative source did not restore exact accounting")
 	}
 }
+
+func TestUnavailableCumulativeUsageRecordsKnownContinuationOnce(t *testing.T) {
+	run := &RunCost{}
+	entry := DispatchCost{Target: "task", Kind: "action", Source: SourceUnavailable, Reason: "original invocation has no provider usage"}
+	RecordCumulative(run, "active", entry)
+	entry.TotalInputTokens, entry.InputCacheHitTokens, entry.InputCacheMissTokens, entry.OutputTokens = 35830, 15104, 20726, 10780
+	RecordCumulative(run, "active", entry)
+	RecordCumulative(run, "active", entry)
+	if run.Dispatches["active"] != entry || run.TotalInputTokens != 35830 || run.InputCacheHitTokens != 15104 || run.InputCacheMissTokens != 20726 || run.OutputTokens != 10780 {
+		t.Fatalf("known incomplete cumulative usage was lost or duplicated: %#v", run)
+	}
+	unproven := entry
+	unproven.TotalInputTokens, unproven.InputCacheHitTokens, unproven.InputCacheMissTokens, unproven.OutputTokens = 0, 0, 0, 0
+	RecordCumulative(run, "active", unproven)
+	if run.Dispatches["active"] != entry || run.TotalInputTokens != 35830 || run.OutputTokens != 10780 {
+		t.Fatal("an unavailable source erased its exact measured prefix")
+	}
+	regressed := entry
+	regressed.TotalInputTokens, regressed.InputCacheHitTokens, regressed.InputCacheMissTokens, regressed.OutputTokens = 40000, 10000, 30000, 12000
+	RecordCumulative(run, "active", regressed)
+	if run.Dispatches["active"] != entry {
+		t.Fatal("a regressed source fabricated a tuple from different measurements")
+	}
+}
