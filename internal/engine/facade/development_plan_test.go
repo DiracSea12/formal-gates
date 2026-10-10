@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -694,5 +695,65 @@ func TestSplitPlanPreviewRejectsUnreadySliceWithoutWrites(t *testing.T) {
 	after, err = os.ReadFile(path)
 	if err != nil || string(after) != string(before) {
 		t.Fatal("rejected direct split decision changed authority", err)
+	}
+}
+
+func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.T) {
+	master := nativeMasterDriver(t)
+	plan := splitCommandPlan()
+	plan.VerificationTier = "CHECKPOINT"
+	plan.CheckpointReason = "Independent child delivery precedes master integration"
+	plan.CheckpointGroups = [][]string{{plan.Batches[0].ID, plan.Batches[1].ID}, {plan.Batches[2].ID}}
+	original, _ := json.Marshal(plan)
+	passPreDevelopmentReviews(t, master, plan)
+	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master.submit(request)
+	candidate, err := master.f.PrepareControl(ControlInput{Ask: askPosition(t, master.run, protocol.ControlConfirmTopology), Choice: "split", Owners: []int{1}, Parallel: "2"})
+	if err != nil {
+		t.Fatal("public prospective split rejected valid checkpoint master", err)
+	}
+	if candidate.DevelopmentPlan == nil {
+		t.Fatal("public candidate omitted original plan confirmation")
+	}
+	if _, run, err := master.f.SubmitControl(candidate); err != nil {
+		t.Fatal(err)
+	} else {
+		master.run = run
+	}
+	master.drive()
+	parent := driverState(t, master)
+	child, err := Open(master.f.root, parent.SliceChildren["lane-core"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := child.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
+	driver.drive()
+	route := protocol.RouteDecision{Mode: "full", Gates: []string{"gate.quality"}}
+	preview, err := child.DevelopmentPlan(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Proposal.VerificationTier != "FINAL" || preview.Proposal.CheckpointGroups != nil || preview.Proposal.CheckpointReason != "" || !reflect.DeepEqual(preview.Proposal.Batches, []protocol.DevelopmentBatch{plan.Batches[0]}) {
+		t.Fatal("child preview lost derived tier or original obligations")
+	}
+	route.DevelopmentPlan = &preview.Confirmation
+	driver.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &route})
+	driver.drive()
+	driver.reopen()
+	_, input := planBatchAction(driver, plan.Batches[0].ID)
+	if !reflect.DeepEqual(input.Development.Batch, plan.Batches[0]) {
+		t.Fatal("confirmed child/reopen changed original FULL checks, interface or DoD")
+	}
+	source := driverState(t, master).ReadinessProposal()
+	after, _ := json.Marshal(source)
+	if !bytes.Equal(original, after) {
+		t.Fatal("public split projection rewrote master checkpoint plan")
 	}
 }

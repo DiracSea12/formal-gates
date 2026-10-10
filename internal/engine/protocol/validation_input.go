@@ -11,13 +11,14 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
-	Observation         *ObservationInput  `json:"observation,omitempty"`
-	ReviewBase          string             `json:"reviewBase,omitempty"`
-	ReviewArtifact      *CandidateEvidence `json:"reviewArtifact,omitempty"`
-	ExecutionFacts      []ExecutionFact    `json:"executionFacts,omitempty"`
-	ReviewScope         coverage.ScopeMode `json:"reviewScope,omitempty"`
-	AcceptedSuggestions []QASuggestion     `json:"acceptedSuggestions,omitempty"`
-	AffectedCases       []string           `json:"affectedCases,omitempty"`
+	RevisionInstruction *QARevisionInstruction `json:"revisionInstruction,omitempty"`
+	Observation         *ObservationInput      `json:"observation,omitempty"`
+	ReviewBase          string                 `json:"reviewBase,omitempty"`
+	ReviewArtifact      *CandidateEvidence     `json:"reviewArtifact,omitempty"`
+	ExecutionFacts      []ExecutionFact        `json:"executionFacts,omitempty"`
+	ReviewScope         coverage.ScopeMode     `json:"reviewScope,omitempty"`
+	AcceptedSuggestions []QASuggestion         `json:"acceptedSuggestions,omitempty"`
+	AffectedCases       []string               `json:"affectedCases,omitempty"`
 	// RequirementDocument supplies the current confirmed context alongside
 	// the original issued work binding, including explicitly carried work.
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
@@ -40,6 +41,32 @@ type ValidationInput struct {
 	InheritableReviews       []coverage.ReviewDecision               `json:"inheritableReviews,omitempty"`
 	PendingCases             []string                                `json:"pendingCases,omitempty"`
 	Conflict                 *ConflictInput                          `json:"conflict,omitempty"`
+}
+
+// QARevisionInstruction carries the original accepted reopening and its bound
+// request. Decisions and PendingAsks remain the sole stored authority.
+type QARevisionInstruction struct {
+	Decision RecordedDecision  `json:"decision"`
+	Request  ValidationRequest `json:"request"`
+}
+
+func (s *State) qaRevisionInstruction(mode coverage.ReviewKind, binding WorkBinding) *QARevisionInstruction {
+	set := s.Validation.Sets[mode]
+	if s.ResetPending() || set == nil || len(set.AffectedCases) == 0 {
+		return nil
+	}
+	id, _ := s.designReopening(mode)
+	decision, ok := s.Decisions[id]
+	if !ok || decision.Validation == nil {
+		return nil
+	}
+	request := s.PendingAsks[id].Validation
+	if request == nil || request.Binding.Generation != binding.Generation || request.Binding.RequirementRevision != binding.RequirementRevision {
+		return nil
+	}
+	originalRequest := *request
+	originalRequest.Summary = nil
+	return &QARevisionInstruction{Decision: decision, Request: originalRequest}
 }
 
 func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]ValidationInput {
@@ -145,6 +172,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		input.Manifest = set.Manifest
 		if (role == "engine.qa.design" || role == "engine.qa.review.rationale") && len(set.AffectedCases) > 0 {
 			input.AffectedCases = slices.Clone(set.AffectedCases)
+			if s.prewaveDispatchCurrent(pending.ActionID, cd) {
+				input.RevisionInstruction = s.qaRevisionInstruction(mode, binding)
+			}
 			for _, suggestion := range set.Suggestions {
 				if suggestion.Decision == "ACCEPT" {
 					input.AcceptedSuggestions = append(input.AcceptedSuggestions, suggestion)

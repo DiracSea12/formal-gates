@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/json"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -56,7 +58,15 @@ func TestSplitPlansRejectMissingOrCrossOwnerContracts(t *testing.T) {
 		{"cross-owner-dependency", func(p *GranularityReview) { p.Batches[1].DependsOn = []string{p.Batches[0].ID} }},
 		{"insufficient-checkpoint-groups", func(p *GranularityReview) {
 			p.VerificationTier, p.CheckpointReason = "CHECKPOINT", "independent deliveries"
-			p.CheckpointGroups = [][]string{{"core"}, {"tooling", masterMergeOwner}}
+			p.CheckpointGroups = [][]string{{"core", "tooling", masterMergeOwner}}
+		}},
+		{"omitted-checkpoint-batch", func(p *GranularityReview) {
+			p.VerificationTier, p.CheckpointReason = "CHECKPOINT", "independent deliveries"
+			p.CheckpointGroups = [][]string{{"core"}, {"tooling"}}
+		}},
+		{"repeated-checkpoint-batch", func(p *GranularityReview) {
+			p.VerificationTier, p.CheckpointReason = "CHECKPOINT", "independent deliveries"
+			p.CheckpointGroups = [][]string{{"core", "tooling"}, {"core", masterMergeOwner}}
 		}},
 	} {
 		t.Run(input.name, func(t *testing.T) {
@@ -160,5 +170,62 @@ func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
 	w.Counted = s.validationWaveCountable(w)
 	if !w.Counted || s.completedValidationWaves() != 1 {
 		t.Fatal("first integrated validation wave was omitted from repair authorization accounting")
+	}
+}
+
+func TestSliceCheckpointTierFollowsItsFilteredGroups(t *testing.T) {
+	for _, multiple := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single-group", true: "multiple-groups"}[multiple], func(t *testing.T) {
+			plan := ownedDevelopmentPlan()
+			plan.VerificationTier = "CHECKPOINT"
+			plan.CheckpointReason = "Confirm independent child boundaries before master integration"
+			plan.CheckpointGroups = [][]string{{"core", "tooling"}, {masterMergeOwner}}
+			if multiple {
+				next := plan.Batches[0]
+				next.ID = "core-consumer"
+				next.DependsOn = []string{"core"}
+				next.Subtasks = []DevelopmentSubtask{{ID: "consumer", Description: "consume the confirmed core interface"}}
+				plan.Batches = append(plan.Batches, next)
+				plan.CheckpointGroups = [][]string{{"core", "tooling"}, {"core-consumer", masterMergeOwner}}
+			}
+			if err := ValidateGranularity(plan); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := json.Marshal(plan)
+			state := &State{Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}}
+			child, err := state.sliceDevelopmentPlan(plan, "core")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if multiple {
+				if child.VerificationTier != "CHECKPOINT" || child.CheckpointReason != plan.CheckpointReason || !reflect.DeepEqual(child.CheckpointGroups, [][]string{{"core"}, {"core-consumer"}}) {
+					t.Fatal("multi-group child lost original boundaries")
+				}
+			} else if child.VerificationTier != "FINAL" || child.CheckpointGroups != nil || child.CheckpointReason != "" {
+				t.Fatal("single child group retained inapplicable checkpoints")
+			}
+			for i, batch := range child.Batches {
+				original := plan.Batches[0]
+				if i == 1 {
+					original = plan.Batches[3]
+				}
+				if !reflect.DeepEqual(batch, original) {
+					t.Fatal("projection changed owner, dependency, interface, DoD or FULL checks")
+				}
+			}
+			other, err := state.sliceDevelopmentPlan(plan, "tooling")
+			if err != nil || other.VerificationTier != "FINAL" {
+				t.Fatal("mixed master groups did not derive child final", err)
+			}
+			after, _ := json.Marshal(plan)
+			if !bytes.Equal(before, after) {
+				t.Fatal("projection modified the original master proposal")
+			}
+			empty := *plan
+			empty.Batches = []DevelopmentBatch{plan.Batches[2]}
+			if _, err := state.sliceDevelopmentPlan(&empty, "core"); err == nil {
+				t.Fatal("empty filtered slice acquired a valid plan")
+			}
+		})
 	}
 }

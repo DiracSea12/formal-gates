@@ -384,6 +384,11 @@ func (s *State) sliceDevelopmentPlan(proposal *GranularityReview, owner string) 
 			projected.CheckpointGroups = append(projected.CheckpointGroups, members)
 		}
 	}
+	if projected.VerificationTier == "CHECKPOINT" && len(projected.CheckpointGroups) < 2 {
+		projected.VerificationTier = "FINAL"
+		projected.CheckpointGroups = nil
+		projected.CheckpointReason = ""
+	}
 	if err := ValidateGranularity(&projected); err != nil {
 		return nil, err
 	}
@@ -396,6 +401,9 @@ func (s *State) sliceDevelopmentPlan(proposal *GranularityReview, owner string) 
 func (s *State) validateSplitPlan(proposal *GranularityReview) error {
 	if proposal == nil {
 		return validationError("split topology requires the readiness development plan")
+	}
+	if err := ValidateGranularity(proposal); err != nil {
+		return err
 	}
 	for _, batch := range proposal.Batches {
 		if batch.Owner != masterMergeOwner && !slices.Contains(s.Topology.Slices, batch.Owner) {
