@@ -200,7 +200,7 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 // promotionPending 报告 validation 边界是否在等待终态晋升：最终 wave 已
 // COMPLETE 且尚未绑定晋升快照。
 func (s *State) promotionPending(cd *compiler.CompiledDefinition) bool {
-	return s.FinalValidationComplete(cd) && !s.validationDeliveryComplete(cd)
+	return s.FinalValidationComplete(cd) && !s.validationPromotionCurrent()
 }
 
 // AcceptedNativeSnapshot is the physical target accepted by native receipt
@@ -248,9 +248,13 @@ func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
 }
 
 func (s *State) validationDeliveryComplete(cd *compiler.CompiledDefinition) bool {
+	return s.FinalValidationComplete(cd) && s.validationPromotionCurrent()
+}
+
+func (s *State) validationPromotionCurrent() bool {
 	w := s.currentValidationWave()
 	p := s.CandidatePromotion
-	return s.FinalValidationComplete(cd) && p != nil && p.Source == w.Candidate.Identity && p.SourceDigest == w.Candidate.Digest && p.TargetBase == s.BaseSnapshot && (s.NativeRoot == "" || p.TargetRoot == s.NativeRoot) && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == w.Candidate.Digest && !s.nonCleanupNativeDebt()
+	return p != nil && p.Source == w.Candidate.Identity && p.SourceDigest == w.Candidate.Digest && p.TargetBase == s.BaseSnapshot && (s.NativeRoot == "" || p.TargetRoot == s.NativeRoot) && p.Final == s.PromotedSnapshot && p.FinalDigest == s.PromotedDigest && p.FinalDigest == w.Candidate.Digest && !s.nonCleanupNativeDebt()
 }
 
 // CandidatePromotionReceipt binds the observed source and final native trees.

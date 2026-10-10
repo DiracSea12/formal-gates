@@ -78,7 +78,9 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 			if err := s.CompleteStep(step.Header.ID, compiled); err != nil {
 				return fmt.Errorf("protocol: settle step %s: %w", step.Header.ID, err)
 			}
-			view = nil
+			if view != nil {
+				view.Completed = s.Completed
+			}
 			completedSet[step.Header.ID] = true
 			progressed = true
 		}
