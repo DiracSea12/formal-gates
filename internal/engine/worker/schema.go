@@ -84,6 +84,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		properties := batch["properties"].(map[string]any)
 		location := LocationSchema(false)
 		delete(location["properties"].(map[string]any), "line")
+		location["description"] = "Select one original read number or listing/entry numbers for the file. The program supplies its path."
 		properties["artifacts"] = map[string]any{"type": "array", "items": location, "minItems": 1}
 		command := map[string]any{"type": "string", "minLength": 1}
 		purpose := map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}

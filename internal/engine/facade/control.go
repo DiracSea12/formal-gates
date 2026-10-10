@@ -11,6 +11,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/requirement"
 )
 
 // ControlInput contains choices and new semantic content. All positions are
@@ -330,6 +331,35 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 	}
 	if candidate.Event.Request == nil && candidate.Event.Decide == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation contains no program-generated control")
+	}
+	if decision := candidate.Event.Decide; decision != nil && decision.Requirement != nil && decision.Choice == "proceed" {
+		if candidate.Intake == nil || candidate.Intake.Revision != strings.TrimPrefix(decision.Requirement.CandidateRevision, "sha256:") || candidate.Intake.IntakeCandidate.RequirementRevision != candidate.Intake.Revision {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its original complete intake binding")
+		}
+		if err := validateConfirmation(candidate.Intake.IntakeCandidate, DefaultDefinitionSource); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		if candidate.Run.Route == "regular" {
+			if candidate.Intake.RequirementDocument == nil {
+				return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its original full projection")
+			}
+			projection, err := requirement.ParseRequirementProjection(candidate.Intake.IntakeCandidate.RequirementSource, []byte(candidate.Intake.Content))
+			if err != nil || projection.ContentDigest != candidate.Intake.Revision || controlDigest(projection) != controlDigest(candidate.Intake.RequirementDocument) {
+				return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation content differs from its original revision or projection")
+			}
+		}
+		digest, err := IntakeDigest(candidate.Intake.IntakeCandidate)
+		if err != nil || digest != candidate.Intake.IntakeCandidate.Digest {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation intake digest differs")
+		}
+		if _, recorded, err := f.recordedEvent(candidate.Event); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		} else if !recorded {
+			if err := validateArtifactBindings(f.root, candidate.Intake.IntakeCandidate); err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+		}
+		candidate.Event = candidate.Event.WithRequirementDocument(candidate.Intake.Content)
 	}
 	return f.Submit(candidate.Event)
 }

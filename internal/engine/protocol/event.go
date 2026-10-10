@@ -403,17 +403,18 @@ const (
 // Event 是提交事件的 tagged union：除本 kind 对应的一个 payload 外其余
 // 必须为 nil（Validate 强制，形态与 decision.NextResult 一致）。
 type Event struct {
-	resetPreview *ResetPreview
-	ID           EventID
-	Kind         EventKind
-	Request      *RequestPayload
-	Decide       *DecidePayload
-	Task         *TaskPayload
-	Spawn        *SpawnReceiptPayload
-	Result       *WorkerResultPayload
-	Observation  *OperatorObservationPayload
-	HostAction   *HostActionReceiptPayload
-	Lifecycle    *LifecycleEventPayload
+	resetPreview        *ResetPreview
+	requirementDocument string
+	ID                  EventID
+	Kind                EventKind
+	Request             *RequestPayload
+	Decide              *DecidePayload
+	Task                *TaskPayload
+	Spawn               *SpawnReceiptPayload
+	Result              *WorkerResultPayload
+	Observation         *OperatorObservationPayload
+	HostAction          *HostActionReceiptPayload
+	Lifecycle           *LifecycleEventPayload
 }
 
 // NewRequestEvent 构造受限 REQUEST_* 事件：ID 非空、控制类型合法、
@@ -1048,6 +1049,13 @@ func canonicalJSON(v any) ([]byte, error) {
 // WithResetPreview carries facade-observed document registration into the existing
 // request handler. It is engine input, not part of the external event identity.
 func (e Event) WithResetPreview(preview ResetPreview) Event { e.resetPreview = &preview; return e }
+
+// WithRequirementDocument carries the original confirmed material into the
+// decision transaction. Its issued candidate revision binds the content digest.
+func (e Event) WithRequirementDocument(document string) Event {
+	e.requirementDocument = document
+	return e
+}
 
 // MarshalJSON uses the same worker wire as Event.CanonicalBytes. The worker
 // material template therefore names the actual submit fields rather than Go

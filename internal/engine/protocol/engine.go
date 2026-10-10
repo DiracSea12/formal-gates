@@ -1316,7 +1316,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 在落决定前执行确认登记与重走范围变换；非该控制携此载荷一律
 		// schema 拒绝。
 		if ask.Control == ControlRequestRequirementChange || ev.Decide.Requirement != nil {
-			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, expectedFingerprint); err != nil {
+			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, expectedFingerprint, ev.requirementDocument); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}

@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -584,17 +586,21 @@ func (f *automaticNativeFlow) splitOwners(run facade.Run) []int {
 
 func (f *automaticNativeFlow) assertTerminal(base string) {
 	f.t.Helper()
+	if f.revision != f.intake.RequirementRevision || canaryBytesRevision(f.doc) != f.revision {
+		f.t.Fatal("original full intake oracle changed after confirmation")
+	}
 	terminal := f.run.Termination
 	if terminal == nil || !terminal.ResourcesCleaned() || terminal.CandidatePromotion == nil || terminal.Validation == nil || len(terminal.PendingActions) != 0 || len(terminal.PendingHostActions) != 0 {
 		f.t.Fatal("actual terminal has incomplete validation, native responsibility or resource cleanup")
 	}
-	if !terminal.GuaranteeActive() || terminal.IntakeConfirmationReceipt == nil || !canaryValuesEqual(*terminal.IntakeConfirmationReceipt, f.intake) || terminal.RequirementRevision() != f.revision {
+	if !terminal.GuaranteeActive() || terminal.IntakeConfirmationReceipt == nil || !canaryValuesEqual(*terminal.IntakeConfirmationReceipt, f.intake) {
 		f.t.Fatal("actual terminal lost the original confirmed intake")
 	}
+	latestGuarantee := f.assertConfirmedTerminalRequirement(terminal)
 	if f.promotion != nil {
 		f.promotion.assertTerminal(f.engineCanary)
 	}
-	f.assertCanonicalGuarantee(f.run)
+	f.assertCanonicalGuarantee(f.run, latestGuarantee)
 	head, err := f.vcs.Resolve()
 	if err != nil || head != f.run.PromotedSnapshot {
 		f.t.Fatalf("actual final native identity differs: %s %v", head, err)
@@ -661,6 +667,57 @@ func (f *automaticNativeFlow) assertTerminal(base string) {
 		}
 	}
 	f.save("terminal-proof.json", map[string]any{"run": f.run, "actualFinal": head, "nativeTreesEqual": true, "resourcesActuallyAbsent": true, "modelEvidence": "original native jobs and transcripts"})
+}
+
+func (f *automaticNativeFlow) assertConfirmedTerminalRequirement(terminal *protocol.State) *protocol.GuaranteeActivation {
+	f.t.Helper()
+	path := filepath.Join(f.jobs, "carry-proceed-candidate.json")
+	body, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if terminal.RequirementRevision() != f.revision {
+			f.t.Fatal("terminal differs from the original confirmed requirement without a carry confirmation")
+		}
+		return nil
+	}
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var candidate facade.ControlCandidate
+	f.decode(body, &candidate)
+	var participant struct {
+		Authority     string                  `json:"authority"`
+		Decision      string                  `json:"decision"`
+		Displayed     facade.ControlCandidate `json:"displayed"`
+		CandidateFile string                  `json:"candidateFile"`
+	}
+	f.decode(readTestFileBytes(f.t, filepath.Join(f.jobs, "carry-proceed-confirmation.json")), &participant)
+	if participant.Authority != "authorized isolated test participant" || participant.Decision == "" || participant.CandidateFile != path || !canaryValuesEqual(participant.Displayed, candidate) {
+		f.t.Fatal("latest requirement has no independent complete participant confirmation")
+	}
+	decision := candidate.Event.Decide
+	if candidate.Root != f.project || candidate.Run.RunID != terminal.RunID || decision == nil || decision.Choice != "proceed" || decision.Requirement == nil || decision.Requirement.Classification != protocol.RequirementClassificationPreserved || candidate.Intake == nil || candidate.Intake.RequirementDocument == nil {
+		f.t.Fatal("carry candidate does not identify this original preserved requirement confirmation")
+	}
+	record, found := terminal.Events[string(candidate.Event.ID)]
+	acceptance, err := record.Replay(candidate.Event)
+	if !found || err != nil || acceptance.Status != "ACCEPTED" || acceptance.RequestID != string(decision.Request) {
+		f.t.Fatalf("latest candidate has no original accepted event: %v", err)
+	}
+	for _, material := range candidate.Intake.Materials {
+		actual := readTestFileBytes(f.t, filepath.Join(f.project, filepath.FromSlash(material.Path)))
+		content := strings.ReplaceAll(string(actual), "\r\n", "\n")
+		if content != material.Content || fmt.Sprintf("%x", sha256.Sum256([]byte(content))) != material.Revision {
+			f.t.Fatal("latest confirmed full material or exact revision differs from its original file")
+		}
+	}
+	if candidate.Intake.Revision != decision.Requirement.CandidateRevision || terminal.RequirementRevision() != candidate.Intake.Revision || terminal.Validation == nil || !canaryValuesEqual(terminal.Validation.Document, *candidate.Intake.RequirementDocument) {
+		f.t.Fatal("terminal latest requirement differs from the independently confirmed candidate projection")
+	}
+	projection, err := requirement.ParseRequirementProjection(candidate.Intake.RequirementDocument.Path, []byte(candidate.Intake.Content))
+	if err != nil || !canaryValuesEqual(projection, *candidate.Intake.RequirementDocument) {
+		f.t.Fatal("confirmed candidate projection differs from its complete original content", err)
+	}
+	return protocol.NewGuaranteeActivation(candidate.Intake.Revision, f.intake.SolutionRevision, projection)
 }
 
 func (f *automaticNativeFlow) assertNativeSources() {

@@ -435,7 +435,7 @@ func (s *State) retireReviewDispatch(actionID string, mark review.Action, reques
 // （REDO 保留旧证据并登记新任务义务；CARRY 精确绑定续用工作）→ 屏障解除
 // 边界上的隔离账重分类（未勾选 series 携原
 // revision carry）。
-func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, expectedFingerprint string) error {
+func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, expectedFingerprint, document string) error {
 	if ask.Control != ControlRequestRequirementChange {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a requirement decision payload", ask.Control)}
 	}
@@ -616,6 +616,12 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	if err := e.applyRequirementWork(state, payload.WorkDecisions, requestID); err != nil {
 		return err
+	}
+	if document != "" && state.Route == "regular" {
+		observation := &OperatorObservationPayload{Subject: payload.CandidateRevision, Validation: &ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: payload.CandidateRevision, Document: document}}
+		if err := e.acceptValidationObservation(state, observation, nextRevision-1, nextRevision); err != nil {
+			return err
+		}
 	}
 	// 屏障解除边界上的隔离账重分类。
 	return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)

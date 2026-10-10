@@ -2,11 +2,14 @@ package facade
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -143,9 +146,33 @@ func TestRequirementControlBindsOriginalWorkAndCurrentDocument(t *testing.T) {
 	if confirm.Event.Decide.Requirement.BaseRevision != d.revision || confirm.Event.Decide.Requirement.DeltaDigest != pkg.DeltaDigest || confirm.Intake == nil {
 		t.Fatal("confirmation copied or lost original requirement facts")
 	}
-	d.submit(confirm.Event)
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, updated, err := d.f.SubmitControl(confirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.run = updated
 	if d.run.Review.RequirementRevision != pkg.CandidateRevision {
 		t.Fatal("requirement confirmation did not reach original acceptance owner")
+	}
+	after, err := d.f.engine.Load()
+	if err != nil || after.Revision != before.Revision+1 || !reflect.DeepEqual(after.State.Validation.Document, *confirm.Intake.RequirementDocument) || after.State.RequirementGuarantee != nil && after.State.RequirementGuarantee.ManifestDigest == "" || !reflect.DeepEqual(after.State.IntakeConfirmationReceipt, before.State.IntakeConfirmationReceipt) {
+		t.Fatal("one decision transaction did not consume the exact full requirement and preserve intake", err)
+	}
+	reopened, err := Open(d.f.root, d.run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, _, err := reopened.SubmitControl(confirm)
+	if err != nil || !reflect.DeepEqual(accepted, replay) {
+		t.Fatal("original confirmation replay changed acceptance", err)
+	}
+	repeated, err := reopened.engine.Load()
+	if err != nil || !reflect.DeepEqual(after, repeated) {
+		t.Fatal("reopened confirmation replay changed state or document", err)
 	}
 }
 
@@ -173,6 +200,105 @@ func TestControlCandidateRejectsAnotherProjectOrRunWithoutWriting(t *testing.T) 
 		if err != nil || !reflect.DeepEqual(before, after) {
 			t.Fatal("wrong candidate changed the target run", err)
 		}
+	}
+}
+
+func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t *testing.T) {
+	for _, scenario := range []string{"source-changed", string(persistence.FaultIntentBefore), string(persistence.FaultCommitResponseLost)} {
+		t.Run(scenario, func(t *testing.T) {
+			d := plannedValidationDriver(t, nil, commandPlan(), "quality")
+			freeze, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, d.run, err = d.f.SubmitControl(freeze)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := d.f.request()
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(d.f.root, req.IntakeConfirmationReceipt.RequirementSource)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(original, '\n'), 0600); err != nil {
+				t.Fatal(err)
+			}
+			work := make([]WorkChoice, len(d.run.RequirementWork))
+			for i := range work {
+				work[i] = WorkChoice{Disposition: protocol.RequirementWorkCarry, Reason: "Formatting leaves this original duty unchanged"}
+			}
+			update, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Work: work, Impact: protocol.RequirementImpact{ChangedItems: []string{"trailing LF"}, CarryReasons: []string{"same semantic duties"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, d.run, err = d.f.SubmitControl(update)
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmed, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "Confirm the complete displayed original content"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "source-changed" {
+				if err := os.WriteFile(path, append(original, '\n', '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := d.f.SubmitControl(confirmed); err == nil {
+					t.Fatal("confirmation accepted source bytes changed after the preview")
+				}
+				after, err := d.f.engine.Load()
+				if err != nil || !reflect.DeepEqual(before, after) {
+					t.Fatal("changed source wrote confirmation or document", err)
+				}
+				return
+			}
+			once := false
+			store, err := persistence.NewStore(d.f.stateDir, persistence.Config{PackageDigest: d.f.envelope.PackageDigest, DefinitionSource: d.f.envelope.DefinitionSource, InstalledTargetIdentity: d.f.envelope.InstalledTargetIdentity, AcquireAdmission: d.f.admission.acquire, FaultInjector: func(point persistence.FaultPoint) error {
+				if string(point) == scenario && !once {
+					once = true
+					return fmt.Errorf("confirmed document commit interrupted")
+				}
+				return nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, err := protocol.New(store, protocol.Config{NativeRoot: d.f.root, Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(d.f.root, d.f.runID), ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.f.store, d.f.engine = store, engine
+			if _, _, err := d.f.SubmitControl(confirmed); err == nil {
+				t.Fatal("original commit failure did not surface")
+			}
+			reopened, err := Open(d.f.root, d.f.runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, _, err := reopened.SubmitControl(confirmed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := reopened.engine.Load()
+			if err != nil || after.Revision != before.Revision+1 || !reflect.DeepEqual(after.State.Validation.Document, *confirmed.Intake.RequirementDocument) || !reflect.DeepEqual(after.State.IntakeConfirmationReceipt, before.State.IntakeConfirmationReceipt) {
+				t.Fatal("recovery separated original document from its confirmation", err)
+			}
+			if _, err := after.State.Events[string(confirmed.Event.ID)].Replay(confirmed.Event); err != nil {
+				t.Fatal(err)
+			}
+			replay, _, err := reopened.SubmitControl(confirmed)
+			if err != nil || !reflect.DeepEqual(accepted, replay) {
+				t.Fatal("same original confirmation was recorded twice", err)
+			}
+		})
 	}
 }
 

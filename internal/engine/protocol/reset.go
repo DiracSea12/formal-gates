@@ -311,7 +311,11 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 			return validationError("cascaded reset has no local re-registration")
 		}
 		payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, ResetRequestID: d.RequestID, Reason: d.Reset.Reason}
-		if err := e.admitRequirementDecision(s, ask, request, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint); err != nil {
+		document := ""
+		if parent.validationRequirementCurrent() {
+			document = parent.Validation.Document.Content
+		}
+		if err := e.admitRequirementDecision(s, ask, request, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint, document); err != nil {
 			return err
 		}
 		ask.Resolved = true

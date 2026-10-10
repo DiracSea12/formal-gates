@@ -41,7 +41,7 @@ func TestCanaryCanonicalIntakeBindsCompleteDocument(t *testing.T) {
 	}
 }
 
-func (c *engineCanary) assertCanonicalGuarantee(final facade.Run) {
+func (c *engineCanary) assertCanonicalGuarantee(final facade.Run, confirmed ...*protocol.GuaranteeActivation) {
 	c.t.Helper()
 	terminal := final.Termination
 	projection, err := requirement.ParseRequirementProjection("requirements.md", c.doc)
@@ -49,6 +49,9 @@ func (c *engineCanary) assertCanonicalGuarantee(final facade.Run) {
 		c.fail("confirmed terminal document: %v", err)
 	}
 	expected := protocol.NewGuaranteeActivation(c.revision, c.revision, projection)
+	if len(confirmed) > 0 && confirmed[0] != nil {
+		expected = confirmed[0]
+	}
 	receipt := c.confirmedIntake()
 	receipt.Digest, err = facade.IntakeDigest(receipt)
 	if err != nil {

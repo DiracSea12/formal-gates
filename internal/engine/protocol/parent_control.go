@@ -112,7 +112,11 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, FindingDigest: pkg.FindingDigest, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
 				s.SliceChild.ParentChange = authority
 				ask := PendingAsk{Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: &pkg}
-				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint); err != nil {
+				document := ""
+				if parent.validationRequirementCurrent() {
+					document = parent.Validation.Document.Content
+				}
+				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint, document); err != nil {
 					return err
 				}
 				if choice.ReceiptDisposition == RequirementWorkRedo {
