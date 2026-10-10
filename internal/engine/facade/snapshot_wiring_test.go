@@ -1788,52 +1788,55 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	// Hold the original promotion response while qualification consumes its
 	// actual source/check responsibilities through the original receipt owner.
 	advance := func() {
-		unlock, err := d.f.acquireNativeWindow()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer unlock()
 		for {
-			if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
-				t.Fatal(err)
-			}
-			snapshot, err := d.f.engine.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			progress, checking := false, false
-			for _, execute := range []bool{false, true} {
-				for _, intent := range snapshot.State.PendingHostActions {
-					if intent.Adapter == nil {
-						continue
-					}
-					if intent.Adapter.Operation == "op.candidate" {
-						var params protocol.CandidateParameters
-						if err := decodeNativeParams(intent, &params); err != nil {
-							t.Fatal(err)
-						}
-						if params.Stage == "PROMOTION" {
+			progress, checking := func() (progress, checking bool) {
+				unlock, err := d.f.acquireNativeWindow()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer unlock()
+				if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, execute := range []bool{false, true} {
+					for _, intent := range snapshot.State.PendingHostActions {
+						if intent.Adapter == nil {
 							continue
 						}
-					}
-					checking = checking || intent.Adapter.Operation == "op.check" && snapshot.State.NativeActionWritable(intent, d.f.definition)
-					progress, err = d.f.completeNativeIntent(snapshot.State, intent, execute)
-					if err != nil {
-						t.Fatal(err)
+						if intent.Adapter.Operation == "op.candidate" {
+							var params protocol.CandidateParameters
+							if err := decodeNativeParams(intent, &params); err != nil {
+								t.Fatal(err)
+							}
+							if params.Stage == "PROMOTION" {
+								continue
+							}
+						}
+						checking = checking || intent.Adapter.Operation == "op.check" && snapshot.State.NativeActionWritable(intent, d.f.definition)
+						progress, err = d.f.completeNativeIntent(snapshot.State, intent, execute)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if progress {
+							break
+						}
 					}
 					if progress {
 						break
 					}
 				}
-				if progress {
-					break
-				}
-			}
+				return
+			}()
 			if !progress && !checking {
-				d.run, err = d.f.Show()
+				run, err := d.f.Show()
 				if err != nil {
 					t.Fatal(err)
 				}
+				d.run = run
 				return
 			}
 			if !progress {

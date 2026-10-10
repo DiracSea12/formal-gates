@@ -455,7 +455,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	if len(target.Execution.Records) != 1 || target.Execution.Records[0].Result != coverage.ExecutedFail || state.Validation.Waves[0].Status != "COLLECTING" {
 		t.Fatalf("failed case/no-match partition was falsified: %+v", target)
 	}
-	compare.Records = comparisonTupleFixture(issued, map[string]worker.Observation{"unmatched": {Result: coverage.ExecutedFail, Comparison: "claimed execution"}})
+	compare.Records = []*worker.Observation{nil, {Result: coverage.ExecutedFail, Comparison: "claimed unmatched execution"}}
 	raw, _ = json.Marshal(compare)
 	if _, err := worker.DecodeResult(workerInput, d.eventID(), raw, "verified-invalid-comparison"); err == nil {
 		t.Fatal("no-match test became a completed FAIL row")

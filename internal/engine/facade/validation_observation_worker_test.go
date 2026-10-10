@@ -2,6 +2,8 @@ package facade
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -124,6 +126,121 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 				t.Fatal("scope bypassed original complementary inheritance")
 			}
 
+		})
+	}
+}
+
+func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
+	for _, execution := range []string{"unclaimed", "owned", "spawned", "unknown"} {
+		t.Run(execution, func(t *testing.T) {
+			d := gateImpactBoundary(t)
+			id, input := d.action("engine.validation.observation")
+			state := driverState(t, d)
+			original := state.WorkerInputs(d.f.definition)[id]
+			refs, err := d.f.workerMaterials(state, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := refs[id]
+			request, _, directory, err := d.f.WorkerExecutionRequest(ref, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSONAtomic(filepath.Join(directory, "native-request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			if execution == "owned" {
+				release, err := AdmitExecution(directory, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner, err := os.OpenFile(filepath.Join(directory, "owner"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err == nil {
+					err = owner.Close()
+				}
+				release()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if execution == "spawned" {
+				d.receipt(id)
+			} else if execution == "unknown" {
+				receipt, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, d.host(), id, protocol.SpawnStatusUnknown)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(receipt)
+			}
+			scope := input.Observation.Scopes[0]
+			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: input.Observation.WaveID, Validation: &protocol.ValidationObservation{Kind: "EXECUTION_SCOPE", Mode: scope.Mode, AffectedCases: scope.MustExecute, Reason: "Only the failed rejection case changes"}}}
+			accepted := d.submit(event)
+			if accepted.Status != "ACCEPTED" {
+				t.Fatal("original typed scope was rejected", accepted)
+			}
+			state = driverState(t, d)
+			_, pending := state.PendingActions[id]
+			if pending != (execution != "unclaimed") || state.ObsoleteActions[id].AttemptID != ref.AttemptID {
+				t.Fatal("retirement lost actual execution ownership", state.PendingActions, state.ObsoleteActions[id])
+			}
+			if len(state.ObsoleteResults[id]) != 0 || state.Results[id].ActionID != "" {
+				t.Fatal("retirement fabricated worker completion")
+			}
+			if execution == "unclaimed" {
+				if release, err := AdmitExecution(directory, request); err == nil {
+					release()
+					t.Fatal("prepared superseded work passed original launch admission")
+				}
+			} else if execution == "unknown" {
+				for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+					observed, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, "original-worker", edge)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(observed)
+				}
+				if _, _, err := d.f.engine.ReconcileUnknownReceipt(id, emptyFingerprint()); err != nil {
+					t.Fatal(err)
+				}
+				d.run, err = d.f.Show()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if execution == "owned" {
+					d.receipt(id)
+				}
+				d.completeWorkerTerminations()
+			}
+			state = driverState(t, d)
+			if _, pending := state.PendingActions[id]; pending {
+				t.Fatal("observed stop did not retire the original execution")
+			}
+			d.reopen()
+			if repeated := d.submit(event); !reflect.DeepEqual(accepted, repeated) {
+				t.Fatal("reopen replay changed typed acceptance", repeated)
+			}
+			d.drive()
+			_, remaining := d.action("engine.validation.observation")
+			if len(remaining.Observation.Scopes) != 0 || len(remaining.Observation.GateImpacts) != 1 {
+				t.Fatal("partial typed facts lost the remaining issued duty", remaining.Observation)
+			}
+			judgment := worker.ObservationJudgments{Findings: []worker.FindingJudgment{}, Scopes: []worker.ScopeJudgment{{Cases: []int{}, Reason: "Only the original failed case changes"}}, GateImpacts: []worker.ImpactJudgment{{Decision: "INHERIT", Reason: "The independently verified authorization boundary remains unchanged"}}}
+			raw, _ := json.Marshal(judgment)
+			late, err := worker.DecodeResult(original, d.eventID(), raw, "original-observation-output")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := driverState(t, d)
+			if received := d.submit(late); received.Status != "OBSOLETE_RESULT" {
+				t.Fatal("late output bypassed original obsolete admission", received)
+			}
+			after := driverState(t, d)
+			if !reflect.DeepEqual(before.Validation, after.Validation) || len(after.ObsoleteResults[id]) != 1 {
+				t.Fatal("late output changed accepted scope or was lost")
+			}
 		})
 	}
 }

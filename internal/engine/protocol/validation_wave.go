@@ -110,7 +110,13 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 	}
 }
 
-func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) {
+func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool, err error) {
+	defer func() {
+		if err == nil {
+			retired, retireErr := e.retireSupersededObservations(s, nextRevision)
+			changed, err = changed || retired, retireErr
+		}
+	}()
 	if s.abortRequested() {
 		return e.advanceAbort(s, nextRevision)
 	}
@@ -120,7 +126,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 	if !s.parentReviewReady() || s.SliceChild != nil && s.Phase == runtime.PhaseSliceReady {
 		return false, nil
 	}
-	changed := e.ensureRetryAsks(s, nextRevision)
+	changed = e.ensureRetryAsks(s, nextRevision)
 	changed = s.reconcileValidationRemedyAsks(nextRevision) || changed
 	// token cap 到达＝预算边界：落账 DISPATCH_BUDGET_DISPOSITION Ask（零签发由
 	// 签发闸执行、Ask 经本收尾单点）。cap 属派发预算包络——包络未就位（受理

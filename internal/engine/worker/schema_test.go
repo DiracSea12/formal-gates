@@ -186,7 +186,8 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 				}
 			}
 			if role.handler == "engine.qa.design" && role.author {
-				if !strings.Contains(material.Prompt, "associates their test material using case files or referenced shared-step files") || strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
+				fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+				if fields["paths"] != nil || strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
 				}
 			} else if role.handler == "engine.merge.resolve" {
@@ -589,7 +590,7 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 		{CaseID: "prior", Result: coverage.ExecutedPass},
 	}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
-	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "new", Operations: []protocol.ExecutionOperationFact{{Evidence: protocol.CheckEvidence{Tool: "actual-tool", Environment: "actual-environment"}}}}}
+	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "new", Operations: []protocol.ExecutionOperationFact{{Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Execution: *input.Validation.Execution, CaseID: "new", Source: "case:new", Ordinal: 1, Operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"actual-tool", "--negative"}}, Directory: "."}}, Evidence: protocol.CheckEvidence{Tool: "actual-tool", Environment: "actual-environment"}}}}}
 	before, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)

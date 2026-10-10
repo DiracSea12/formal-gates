@@ -219,3 +219,93 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 		})
 	}
 }
+
+func TestMaterialKeepsDevelopmentFeedbackWithoutTransportBindings(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := protocol.WorkerResult{SourceResult: "opaque-source", ActionID: "opaque-action", Provider: "opaque-provider", PayloadDigest: "opaque-payload", Digest: "opaque-digest", Outcome: "FAILED", InterruptionReason: "original execution interruption", InvalidReason: "original result rejection", Validation: &protocol.ValidationResult{Binding: protocol.WorkBinding{WaveID: "opaque-wave"}, Status: "CONTINUE", Development: &protocol.DevelopmentEvidence{Summary: "author text contains actionId and opaque-user-body", RemainingWork: "finish the original behavior", Paths: []string{"app.go"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"criterion": "original evidence"}, Handoff: "original handoff"}}}}
+	for _, handler := range []string{"engine.development.batch", "engine.repair"} {
+		t.Run(handler, func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = handler
+			input.Pending.AttemptID = "attempt"
+			input.RequirementDocument.Content = "Confirmed requirement"
+			input.Validation.Development = &protocol.DevelopmentInput{Result: &result, Dependencies: map[string]protocol.WorkerResult{"batch": result}}
+			if handler == "engine.repair" {
+				input.Validation.Repair = &protocol.RepairInput{Result: &result, MemberResults: []protocol.WorkerResult{result}}
+				input.AvailableRouteCandidates = catalog.RouteCandidates()
+				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
+			}
+			before, _ := json.Marshal(input)
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, transport := range []string{"opaque-source", "opaque-action", "opaque-provider", "opaque-payload", "opaque-digest", "opaque-wave"} {
+				if strings.Contains(material.Prompt, transport) {
+					t.Fatalf("role prompt leaked result transport %s", transport)
+				}
+			}
+			for _, feedback := range []string{"original execution interruption", "original result rejection", "FAILED", "CONTINUE", "author text contains actionId and opaque-user-body", "finish the original behavior", "app.go", "original evidence", "original handoff"} {
+				if !strings.Contains(material.Prompt, feedback) {
+					t.Fatalf("role prompt lost business feedback %s", feedback)
+				}
+			}
+			after, _ := json.Marshal(material.Input)
+			if !bytes.Equal(before, after) {
+				t.Fatal("prompt projection changed original issued API input")
+			}
+			var recovered protocol.WorkerInput
+			if err := json.Unmarshal(before, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			replayed, err := Render(recovered, catalog)
+			if err != nil || !reflect.DeepEqual(material, replayed) {
+				t.Fatalf("recovery changed role prompt or original input: %v", err)
+			}
+		})
+	}
+}
+
+func TestMaterialRestrictsComparisonAndConflictResponsibilities(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, handler := range []string{"engine.repair.verify", "engine.merge.resolve"} {
+		t.Run(handler, func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = handler
+			input.Pending.AttemptID = "attempt"
+			input.RequirementDocument.Content = "Confirmed requirement"
+			input.Validation.Development = nil
+			if handler == "engine.repair.verify" {
+				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "candidate"}, VerificationCases: []string{"case"}}
+			} else {
+				input.Validation.Conflict = &protocol.ConflictInput{}
+			}
+			before, _ := json.Marshal(input)
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, instruction := range []string{"# 开发工作者", "需分块时提出完整", "逐项 DoD 证据与 handoff"} {
+				if strings.Contains(material.Prompt, instruction) {
+					t.Fatalf("role %s received development duties", handler)
+				}
+			}
+			if handler == "engine.repair.verify" && (!material.ReadOnly || !strings.Contains(material.Prompt, "# QA 判据比较")) {
+				t.Fatal("repair comparison lost its existing comparison contract")
+			}
+			if handler == "engine.merge.resolve" && (material.ReadOnly || !strings.Contains(material.Prompt, "Report only the semantic resolution summary")) {
+				t.Fatal("conflict resolver lost its exact current duty")
+			}
+			after, _ := json.Marshal(material.Input)
+			if !bytes.Equal(before, after) {
+				t.Fatal("role instructions changed original issued input")
+			}
+		})
+	}
+}

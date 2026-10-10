@@ -115,8 +115,15 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	}
 	var contextInput protocol.WorkerInput
 	contextJSON := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
-	if err := json.Unmarshal([]byte(contextJSON), &contextInput); err != nil || !reflect.DeepEqual(contextInput.Validation.Development, feedback) || contextInput.Validation.Workspace.Path != input.Workspace.Path {
-		t.Fatal("material lost original continuation feedback or workspace", err)
+	if err := json.Unmarshal([]byte(contextJSON), &contextInput); err != nil {
+		t.Fatal(err)
+	}
+	projected := contextInput.Validation.Development
+	if !reflect.DeepEqual(projected.Batch, feedback.Batch) || !reflect.DeepEqual(projected.Result, feedback.Result) || len(projected.Checks) != 1 || projected.Checks[0].ExitCode != feedback.Checks[0].ExitCode || projected.Checks[0].Stdout != feedback.Checks[0].Stdout || projected.Checks[0].Stderr != feedback.Checks[0].Stderr {
+		t.Fatal("material lost confirmed work or actual check observations")
+	}
+	if contextInput.Validation.Workspace != nil || projected.Checks[0].Directory != "" || strings.Contains(material.Prompt, input.Workspace.Path) {
+		t.Fatal("semantic prompt requires program-owned physical paths")
 	}
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// incomplete change\n"), 0600); err != nil {
 		t.Fatal(err)

@@ -156,6 +156,12 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		}
 		if receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop) {
 			p, retired := s.retireAction(id, "", reason+request)
+			if retired {
+				if err := s.terminalizeTask(p.Task); err != nil {
+					return changed, err
+				}
+				s.routingReleasedCapacity = true
+			}
 			delete(s.EndedAttempts, p.Task)
 			changed = changed || retired
 			continue

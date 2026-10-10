@@ -16,18 +16,11 @@ import (
 // complete for program consumers and saved confirmation candidates.
 func workflowRunView(run facade.Run) map[string]any {
 	next := map[string]any{"kind": run.Next.Kind}
-	if run.Next.Kind == decision.KindReady || run.Next.Kind == decision.KindHostAction {
+	if run.Next.Kind == decision.KindReady || run.Next.Kind == decision.KindHostAction || run.Next.Kind == decision.KindOperator {
 		next["action"] = "drive"
 	}
 	if run.Next.Wait != nil {
 		next["reason"] = run.Next.Wait.Reason
-	}
-	if run.Next.Operator != nil {
-		reasons := []string{}
-		for _, fact := range run.Next.Operator.Facts {
-			reasons = append(reasons, fact.Value)
-		}
-		next["facts"] = reasons
 	}
 	view := map[string]any{"runId": run.RunID, "status": run.Status, "route": run.Route, "revision": run.Revision, "next": next, "unverified": run.Unverified}
 	if run.SummaryPath != "" {

@@ -45,7 +45,9 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 		t.Fatal(err)
 	}
 	master := nativeMasterAt(t, root, base, nil)
-	passPreDevelopmentReviews(t, master, splitCommandPlan("parser", "command", "tooling"))
+	plan := splitCommandPlan("parser", "command", "tooling")
+	plan.Batches[0].ID = plan.Batches[0].Owner
+	passPreDevelopmentReviews(t, master, plan)
 
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
@@ -407,7 +409,7 @@ func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 
 func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	master, children := mainlineReady(t, "", false)
-	engine, err := protocol.New(master.f.store, protocol.Config{NativeRoot: master.f.root, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 3, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission)}, nil)
+	engine, err := protocol.New(master.f.store, protocol.Config{NativeRoot: master.f.root, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 3, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission), WorkerExecution: workerExecutionBridge(master.f.root, master.f.runID)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +421,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	}
 	completed := 0
 	var failedCase string
-	for len(master.run.ValidationInputs) > 0 {
+	for master.run.Validation.Waves[0].Status == "COLLECTING" {
 		var id string
 		var input protocol.ValidationInput
 		for action, in := range master.run.ValidationInputs {
@@ -427,8 +429,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			break
 		}
 		result := mainlineResult(input)
-		target := master.run.Validation.Waves[0].Targets[input.Binding.Task.String()]
-		if target.SliceID == "" && input.Handler == "engine.gate" {
+		if input.Handler == "engine.gate" && master.run.Validation.Waves[0].Targets[input.Binding.Task.String()].SliceID == "" {
 			result.Status = "FAIL"
 			result.Findings = []review.Finding{{Severity: "P2", Message: "Combined command output differs from the confirmed oracle"}}
 		}

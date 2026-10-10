@@ -222,3 +222,20 @@ func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowOperatorViewLeavesInternalFactsToDrive(t *testing.T) {
+	run := facade.Run{RunID: "run", Revision: 12, Next: decision.NextResult{Kind: decision.KindOperator, Operator: &decision.OperatorPayload{Facts: []decision.Fact{{Value: "submit EXECUTION_SCOPE observation for original-wave"}, {Value: "native effect is UNKNOWN; observe and submit its typed completion evidence"}}}}}
+	original, _ := json.Marshal(run)
+	view := workflowRunView(run)
+	next := view["next"].(map[string]any)
+	if next["action"] != "drive" || next["kind"] != decision.KindOperator {
+		t.Fatal("operator boundary lost its program-owned continuation", next)
+	}
+	if _, exists := next["facts"]; exists {
+		t.Fatal("main-agent view instructs internal observation submission")
+	}
+	after, _ := json.Marshal(run)
+	if !bytes.Equal(original, after) {
+		t.Fatal("display changed authoritative operator facts")
+	}
+}

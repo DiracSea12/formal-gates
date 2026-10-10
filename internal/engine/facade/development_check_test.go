@@ -61,13 +61,17 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 	}
 	state := driverState(t, d)
 	t.Cleanup(func() {
-		// The fixture may launch sibling checks while preparing its source.
-		// Observe their original receipts before removing their owned workspace.
-		for _, intent := range state.PendingHostActions {
-			if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
+		checks := filepath.Join(d.f.stateDir, "checks")
+		entries, err := os.ReadDir(checks)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
 				continue
 			}
-			directory := filepath.Join(d.f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
+			directory := filepath.Join(checks, entry.Name())
 			if _, err := os.Stat(filepath.Join(directory, "request.json")); err != nil {
 				continue
 			}

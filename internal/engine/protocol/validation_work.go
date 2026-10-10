@@ -2,12 +2,72 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 )
+
+func (e *Engine) retireSupersededObservations(s *State, nextRevision uint64) (bool, error) {
+	if s.abortRequested() || s.resetPending() || s.requirementChangePending() || !s.parentReviewReady() {
+		return false, nil
+	}
+	ids := make([]string, 0, len(s.PendingActions))
+	for id := range s.PendingActions {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	changed := false
+	for _, id := range ids {
+		pending := s.PendingActions[id]
+		attempt := s.Attempts[pending.Task]
+		if attempt.Work == nil || s.validationRole(pending.Task, e.cfg.Definition) != "engine.validation.observation" || s.validationWorkOwed(*attempt.Work, e.cfg.Definition) {
+			continue
+		}
+		_, spawned := s.SpawnReceipts[id]
+		_, staged := s.StagedResults[id]
+		var observed *SpawnReceiptPayload
+		if !spawned && !staged && e.cfg.WorkerExecution != nil {
+			var err error
+			observed, err = e.cfg.WorkerExecution(pending, attempt)
+			if err != nil {
+				return changed, err
+			}
+		}
+		if observed != nil && observed.Status == SpawnStatusSpawned {
+			event, err := NewSpawnReceiptEvent(EventID("native-spawn:"+id), observed.ActionID, observed.Provider, observed.Correlation, observed.Status)
+			if err != nil {
+				return changed, err
+			}
+			digest, err := event.Digest()
+			if err != nil {
+				return changed, err
+			}
+			accepted, _, _, err := e.admit(event, digest, s, nextRevision-1, nextRevision, "")
+			if err != nil {
+				return changed, err
+			}
+			s.Events[string(event.ID)] = EventRecord{Digest: digest, Acceptance: accepted}
+			spawned, changed = true, true
+		}
+		const reason = "observation responsibility was superseded"
+		if !spawned && !staged && observed == nil {
+			s.retireAction(id, "", reason)
+			if err := s.terminalizeTask(pending.Task); err != nil {
+				return changed, err
+			}
+			delete(s.EndedAttempts, pending.Task)
+			s.routingReleasedCapacity = true
+			changed = true
+		} else if _, obsolete := s.ObsoleteActions[id]; !obsolete {
+			s.ObsoleteActions[id] = ObsoleteAction{ActionID: id, Task: pending.Task, AttemptID: attempt.ID, Reason: reason, Bindings: attempt.Bindings, Plan: attempt.Plan}
+			changed = true
+		}
+	}
+	return changed, nil
+}
 
 // prewaveScope identifies the actual requested design inputs and the explicit
 // reopening responsibility. Reading or driving the same facts preserves it.

@@ -79,6 +79,7 @@ func TestCodexRPCPeer(t *testing.T) {
 	}
 	cwd, _ := os.Getwd()
 	workflow := peer.Mode == "workflow-progress" || peer.Mode == "workflow-decision" || peer.Mode == "workflow-invalid-review" || peer.Mode == "workflow-held"
+	var workflowRequest map[string]any
 	if workflow {
 		decodeCommand := func(argument string) string {
 			index := strings.Index(argument, "command=")
@@ -107,6 +108,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			panic("native hook directory belongs to another workspace")
 		}
 		peer.WorkerMaterial = textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+		workflowRequest = objectOrEmpty(request)
 	} else if args[3] != peer.ToolArgument {
 		panic(fmt.Sprintf("native hook argument differs: %s != %s", args[3], peer.ToolArgument))
 	}
@@ -283,33 +285,32 @@ func TestCodexRPCPeer(t *testing.T) {
 		answer = peer.Answer
 	}
 	if workflow {
-		start := strings.Index(prompt, "[Action input]\n")
-		end := strings.Index(prompt, "\n\n[Dispatch]")
-		if start < 0 || end <= start {
-			panic("native prompt has no original worker input")
-		}
-		var input protocol.WorkerInput
-		if err := json.Unmarshal([]byte(prompt[start+len("[Action input]\n"):end]), &input); err != nil {
+		body, err := os.ReadFile(peer.WorkerMaterial)
+		if err != nil {
 			panic(err)
 		}
-		for _, field := range strings.Fields(prompt[end+len("\n\n[Dispatch]"):]) {
-			if strings.HasPrefix(field, "role=") {
-				input.Handler = strings.TrimPrefix(field, "role=")
-				break
-			}
+		var material worker.Material
+		if err := json.Unmarshal(body, &material); err != nil {
+			panic(err)
 		}
-		if peer.Mode == "workflow-held" || peer.Mode == "workflow-progress" || peer.Mode == "workflow-invalid-review" {
-			body, err := os.ReadFile(peer.WorkerMaterial)
-			if err != nil {
-				panic(err)
-			}
-			var material worker.Material
-			if err := json.Unmarshal(body, &material); err != nil {
-				panic(err)
-			}
-			check(material.Input.Handler, input.Handler)
-			input.Pending, input.Provider, input.Review = material.Input.Pending, material.Input.Provider, material.Input.Review
+		input := material.Input
+		check(material.Prompt, workflowRequest["prompt"])
+		check(material.ResultSchema, workflowRequest["schema"])
+		check(material.ReadOnly, workflowRequest["read_only"])
+		ref := getOf(getOf(workflowRequest, "engine"), "workerMaterial")
+		check(input.Pending.ActionID, getOf(ref, "actionId"))
+		check(input.Pending.AttemptID, getOf(ref, "attemptId"))
+		check(material.ReadOnly, getOf(ref, "readOnly"))
+		var sandbox any
+		if material.ReadOnly {
+			sandbox = "read-only"
 		}
+		check(peer.ThreadParams["sandbox"], sandbox)
+		wire, err := codexTurnParameters(workflowRequest, thread)
+		if err != nil {
+			panic(err)
+		}
+		check(expected, wire)
 		if peer.Mode != "workflow-invalid-review" && (input.Validation == nil || input.Validation.Workspace == nil || resolveNativePath(input.Validation.Workspace.Path) != resolveNativePath(cwd)) {
 			panic("native worker workspace differs from original input")
 		}
@@ -363,11 +364,7 @@ func TestCodexRPCPeer(t *testing.T) {
 				domain = map[string]any{"summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
 			}
 		}
-		schema, err := worker.ResultSchema(input)
-		if err != nil {
-			panic(err)
-		}
-		plain, err := json.Marshal(schema)
+		plain, err := json.Marshal(material.ResultSchema)
 		if err != nil {
 			panic(err)
 		}

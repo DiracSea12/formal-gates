@@ -52,6 +52,9 @@ type Config struct {
 	InternalSteps        map[authoring.HandlerID]InternalStep
 	CostSource           CostSourceResolver
 	ClaimDispatch        DispatchClaim
+	// WorkerExecution reads the native owner's execution facts under its
+	// existing admission window. A nil payload means no execution was claimed.
+	WorkerExecution func(PendingAction, Attempt) (*SpawnReceiptPayload, error)
 }
 
 // Engine 是提交协议内核：每个方法一次完整的「读 state → 变更 →
@@ -321,10 +324,10 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 		state.routingReleasedCapacity = false
 		return nil, nil
 	}
-	if _, err := e.stopControlledWorkers(state, "requirement-change", "Requirement work superseded: ", nextRevision, false); err != nil {
+	if _, err := e.advanceValidation(state, nextRevision); err != nil {
 		return nil, err
 	}
-	if _, err := e.advanceValidation(state, nextRevision); err != nil {
+	if _, err := e.stopControlledWorkers(state, "superseded-work", "Worker responsibility superseded: ", nextRevision, false); err != nil {
 		return nil, err
 	}
 	e.reconcileReviewGrantAsks(state)

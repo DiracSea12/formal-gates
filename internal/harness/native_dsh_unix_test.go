@@ -157,6 +157,9 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 		"identity":  "s-1",
 		"workspace": scenario.workspace,
 		"selection": map[string]any{"model": nil, "reasoning_effort": "high"},
+		"acknowledgement": map[string]any{"sessionId": "s-1", "configOptions": []any{
+			map[string]any{"id": "model"}, map[string]any{"id": "reasoning_effort", "currentValue": "high"},
+		}},
 	}) {
 		t.Fatalf("identity.json = %v", identityRecord)
 	}

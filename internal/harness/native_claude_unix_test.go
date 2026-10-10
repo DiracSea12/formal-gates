@@ -155,13 +155,16 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 	return scenario
 }
 
-func (s *claudeScenario) save(t *testing.T) {
+func (s *claudeScenario) save(t *testing.T, toolExecutable ...string) {
 	t.Helper()
 	schema := mustCanonical(t, s.request["schema"])
 	s.peer.Args = []string{"-p", textOf(s.request["prompt"]), "--output-format", "stream-json", "--verbose", "--include-hook-events", "--json-schema", schema}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(toolExecutable) != 0 {
+		executable = toolExecutable[0]
 	}
 	mcpConfig := mustCanonical(t, map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": executable, "args": []any{"harness", "native-tools", s.directory}}}})
 	s.peer.Args = append(s.peer.Args, "--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig)
@@ -353,7 +356,7 @@ func TestClaudeOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				s.peer.Events = s.peer.Events[:1]
 				s.peer.Wait = true
 			}
-			s.save(t)
+			s.save(t, bin)
 			writeRequest(t, s.directory, map[string]any{"kind": "native", "argv": []string{bin, "harness", "native", s.directory}, "cwd": s.workspace, "stdin": ""})
 			command := exec.Command(bin, "harness", "supervise", s.directory)
 			command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

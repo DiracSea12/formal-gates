@@ -20,6 +20,77 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
+// NativeStartVerifier is installed by the native command assembly. It retains
+// the provider's acknowledgement validation without workflow state.
+var NativeStartVerifier func(string, string) (string, error)
+
+// workerExecutionBridge reads jobs claimed under AdmitExecution's native
+// window. Prepared requests without an owner cannot execute after retirement:
+// their original admission still requires the current worker input.
+func workerExecutionBridge(root, runID string) func(protocol.PendingAction, protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+	stateDir := filepath.Join(root, EngineNamespace, runID)
+	return func(pending protocol.PendingAction, attempt protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+		entries, err := os.ReadDir(workerActionDirectory(stateDir, pending.ActionID))
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			directory := filepath.Join(workerActionDirectory(stateDir, pending.ActionID), entry.Name())
+			if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+			body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+			if err != nil {
+				return nil, err
+			}
+			var request struct {
+				Provider string `json:"provider"`
+				Engine   struct {
+					Root           string         `json:"root"`
+					RunID          string         `json:"runId"`
+					WorkerMaterial WorkerMaterial `json:"workerMaterial"`
+					ResumeActionID string         `json:"resumeActionId"`
+				} `json:"engine"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				return nil, err
+			}
+			ref := request.Engine.WorkerMaterial
+			material, err := readWorkerMaterial(ref)
+			if err != nil {
+				return nil, err
+			}
+			provider := material.Input.Provider
+			if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
+				provider = descriptor.InstallName
+			}
+			if !sameExecutionPath(request.Engine.Root, root) || request.Engine.RunID != runID || ref.ActionID != pending.ActionID || ref.AttemptID != attempt.ID || material.Input.RunID != runID || request.Provider != provider || !sameExecutionPath(filepath.Dir(filepath.Dir(ref.Path)), stateDir) || !sameExecutionPath(directory, WorkerExecutionDirectory(ref, request.Engine.ResumeActionID)) {
+				return nil, fmt.Errorf("native worker owner differs from its original run/action/attempt/material")
+			}
+			fact := &protocol.SpawnReceiptPayload{ActionID: pending.ActionID, Provider: material.Input.Provider, Correlation: directory, Status: protocol.SpawnStatusUnknown}
+			if _, err := os.Stat(filepath.Join(directory, "identity.json")); err == nil && NativeStartVerifier != nil {
+				identity, err := NativeStartVerifier(provider, directory)
+				if err != nil {
+					return nil, err
+				}
+				fact.Correlation, fact.Status = identity, protocol.SpawnStatusSpawned
+			} else if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			return fact, nil
+		}
+		return nil, nil
+	}
+}
+
 // AdmitExecution is the native/supervisor command's pre-launch integration.
 // A nil release identifies independent harness work, outside an engine run.
 // A non-nil release holds the existing native window through job ownership.

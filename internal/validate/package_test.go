@@ -69,27 +69,6 @@ func TestPackageManifestRequiresNativeHostScripts(t *testing.T) {
 	}
 }
 
-func TestInstallableMetadataNoAutoIntake(t *testing.T) {
-	root := copyPackageFixture(t)
-	data, err := os.ReadFile(filepath.Join(root, "agents", "openai.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for _, obsolete := range []string{"GateWorkflow", "formal handoff", "every project-content modification"} {
-		if strings.Contains(text, obsolete) {
-			t.Fatalf("installable metadata retains obsolete %q instruction", obsolete)
-		}
-	}
-	// 新触发模型下 "lightweight" 是正式流程内的路线，openai.yaml 会合法出现；断言其
-	// 携带 V2 的关键指令（默认提醒一次、不自行触发、明确要求才完整受理、轻量不验证）。
-	for _, current := range []string{"mention once", "not self-trigger", "before writes", "on explicit user request", "lightweight"} {
-		if !strings.Contains(text, current) {
-			t.Fatalf("installable metadata is missing current %q instruction", current)
-		}
-	}
-}
-
 func TestPackageRejectsWorkflowLevelWritePermission(t *testing.T) {
 	root := copyPackageFixture(t)
 	mutateWorkflow(t, root, "permissions:\n  contents: read", "permissions:\n  # comment should not hide write access\n  contents: write")

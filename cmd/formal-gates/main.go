@@ -10,6 +10,7 @@ import (
 
 func main() {
 	facade.NativeSourceVerifier = harness.NativeResultEvidence
+	facade.NativeStartVerifier = harness.NativeStartEvidence
 	if len(os.Args) > 1 && os.Args[1] == "harness" {
 		os.Exit(harness.RunCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, facade.AdmitExecution))
 	}

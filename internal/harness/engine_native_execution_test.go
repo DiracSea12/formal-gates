@@ -317,7 +317,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	s.peer.Mode = "bad_json"
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("failed native observation: %v %s", err, out)
 		}
@@ -395,7 +395,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	}
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("resumed original failed native observation: %v %s", err, out)
 		}
@@ -547,7 +547,7 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), request); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("blocked native response: %v %s", err, out)
@@ -696,6 +696,181 @@ func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (f
 	}
 	t.Fatal("fixture did not issue original developer")
 	return facade.WorkerMaterial{}, protocol.WorkerInput{}
+}
+
+func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
+	f, _, s, binary := engineNativeFixture(t, true)
+	development, original := stageNativeDevelopment(t, f, s)
+	root := fRoot(development)
+	submit := func(event protocol.Event) {
+		t.Helper()
+		if _, _, err := f.Submit(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawn, err := protocol.NewSpawnReceiptEvent("development-start", development.ActionID, "codex", "setup-development", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(spawn)
+	if err := lifecycle.ObserveNativeCompletion(root, "native-execution", development.ActionID, "codex", "setup-development"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(original.Validation.Workspace.Path, "app.go"), []byte("package main\nfunc main() { println(\"delivered\") }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	completion := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Handoff: "The original command is ready for its approved checks"}
+	for _, criterion := range original.Validation.Development.Batch.DoD {
+		completion.DoD[criterion.ID] = "Delivered the original command artifact"
+	}
+	submit(protocol.Event{ID: "development-result", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: development.ActionID, Provider: "codex", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:development-result", Validation: &protocol.ValidationResult{Binding: original.Validation.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Delivered the command", Completion: completion}}}})
+	var run facade.Run
+	var gate string
+	for gate == "" {
+		run, err = f.Drive()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, input := range run.ValidationInputs {
+			if input.Handler == "engine.gate" {
+				gate = id
+			}
+		}
+		if gate == "" {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	spawn, err = protocol.NewSpawnReceiptEvent("gate-start", gate, "codex", "setup-gate", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(spawn)
+	if err := lifecycle.ObserveNativeCompletion(root, "native-execution", gate, "codex", "setup-gate"); err != nil {
+		t.Fatal(err)
+	}
+	submit(protocol.Event{ID: "gate-failure", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: "codex", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:gate-failure", Validation: &protocol.ValidationResult{Binding: run.ValidationInputs[gate].Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "Reported command ordering differs from the confirmed ordering"}}}}})
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref facade.WorkerMaterial
+	var observation *protocol.ObservationInput
+	for id, input := range run.ValidationInputs {
+		if input.Handler == "engine.validation.observation" {
+			ref, observation = run.WorkerMaterials[id], input.Observation
+		}
+	}
+	if observation == nil || len(observation.Findings) != 1 {
+		t.Fatal("original gate did not issue its actual observation duty", run.ValidationInputs)
+	}
+	request, supervised, directory, err := f.WorkerExecutionRequest(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.request, s.directory = request, directory
+	s.workspace = request["workspace"].(string)
+	binding, err := NativeBinding("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["binding"] = binding
+	s.peer.Mode = "workflow-held"
+	s.peer.Answer = nil
+	s.save(t)
+	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), supervised); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "harness", "supervise", directory)
+	DetachSupervisor(cmd)
+	log, err := os.Create(filepath.Join(directory, "supervisor.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = log
+	if err := cmd.Start(); err != nil {
+		log.Close()
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { err := cmd.Wait(); log.Close(); finished <- err }()
+	t.Cleanup(func() { _ = StopNativeJob(directory) })
+	for {
+		if _, err := os.Stat(filepath.Join(s.config, "held-turn")); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-finished:
+			t.Fatalf("original native worker exited before its acknowledgement: %v", err)
+		default:
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	identity, err := NativeStartEvidence("codex", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := facade.NativeStartVerifier
+	facade.NativeStartVerifier = NativeStartEvidence
+	t.Cleanup(func() { facade.NativeStartVerifier = previous })
+	f, err = facade.Open(root, "native-execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := protocol.FindingResolution{FindingID: observation.Findings[0].Finding.ID, Decision: "DISMISSED", Requirement: original.RequirementDocument.Requirements[0].AcceptanceConditions[0].ID, NormalPath: "go run app.go", Module: "command", RootCause: "The report applies an ordering condition absent from the confirmed command contract", Consequence: "The permitted command output was classified as a defect", Severity: "P3", SeverityRationale: "The additional ordering preference is outside the confirmed scope", Verification: review.FindingVerification{Scope: "confirmed command contract", Severity: "no blocked command behavior", Causality: "the report uses an additional ordering condition", Reproduction: "compare the actual command output with the confirmed acceptance", Classification: "the confirmed contract permits this output"}, Reason: "The confirmed requirement permits the reported ordering"}
+	submit(protocol.Event{ID: "typed-ordering-fact", Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: observation.WaveID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
+	run, err = f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "native-execution", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Content protocol.State `json:"content"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatal(err)
+	}
+	if run.PendingActions[ref.ActionID].AttemptID != ref.AttemptID || state.Content.SpawnReceipts[ref.ActionID].Correlation != identity || nativePeerTurns(t, s) != 1 {
+		t.Fatal("cold acknowledgement lost the actual native worker", state.Content.SpawnReceipts)
+	}
+	if err := f.ObserveWorkerStart(ref, directory, NativeStartEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.config, "release-turn"), []byte("continue"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finished; err != nil {
+		t.Fatal("original acknowledged worker did not finish", err)
+	}
+	source, err := NativeJobSource("codex", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, _, err := f.SubmitWorkerResult("late-native-observation", ref, directory, source, NativeWorkerResultEvidence)
+	if err != nil || accepted.Status != "OBSOLETE_RESULT" {
+		t.Fatal("actual late native source bypassed obsolete admission", accepted, err)
+	}
+	if err := f.ObserveWorkerTerminal(ref, identity); err != nil {
+		t.Fatal(err)
+	}
+	for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+		event, err := protocol.NewLifecycleEventEvent(protocol.EventID("observed:"+edge), "codex", identity, edge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(event)
+	}
+	run, err = f.Show()
+	if err != nil || run.PendingActions[ref.ActionID].ActionID != "" {
+		t.Fatal("verified native completion did not retire its old task", err)
+	}
 }
 
 func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
@@ -948,7 +1123,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if nativePeerTurns(t, s) != 2 {
 		t.Fatalf("original developer plus independent gate turns=%d", nativePeerTurns(t, s))
 	}
-	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution").CombinedOutput(); err != nil {
+	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine").CombinedOutput(); err != nil {
 		t.Fatal(err)
 	}
 	if nativePeerTurns(t, s) != 2 {
@@ -975,6 +1150,9 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			}
 			call := func(input []byte, args ...string) []byte {
 				t.Helper()
+				if args[0] == "workflow" {
+					args = append(args, "--machine")
+				}
 				cmd := exec.Command(binary, args...)
 				cmd.Stdin = bytes.NewReader(input)
 				out, err := cmd.CombinedOutput()
@@ -1079,7 +1257,7 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 	f, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "wait"
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

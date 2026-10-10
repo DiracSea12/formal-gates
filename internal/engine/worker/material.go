@@ -105,8 +105,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "product-review"
 	case "engine.readiness.plan":
 		actionID = "start-readiness"
-	case "engine.development.batch", "engine.repair", "engine.repair.verify", "engine.merge.resolve":
+	case "engine.development.batch", "engine.repair":
 		actionID = "development-worker"
+	case "engine.repair.verify":
+		actionID = "qa-execution"
 	case "engine.qa.design":
 		actionID = "qa-design"
 	case "engine.qa.review.rationale":
@@ -129,7 +131,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			return Material{}, fmt.Errorf("gate %s has no bound prompt", input.Validation.Gate.Gate)
 		}
 		blocks = append(blocks, "[Gate]\n"+gate.Content)
-	} else {
+	} else if actionID != "" {
 		action, ok := catalog.Action(actionID)
 		if !ok {
 			return Material{}, fmt.Errorf("worker action %s has no bound prompt", actionID)
@@ -188,7 +190,18 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		if input.Validation.Development != nil && validation["development"] != nil {
 			development := input.Validation.Development
-			validation["development"], err = json.Marshal(map[string]any{"batch": development.Batch, "dependencies": development.Dependencies, "result": development.Result, "checks": promptChecks(development.Checks)})
+			dependencies := make(map[string]any, len(development.Dependencies))
+			for key, result := range development.Dependencies {
+				dependencies[key], err = promptWorkerResult(&result)
+				if err != nil {
+					return Material{}, err
+				}
+			}
+			result, err := promptWorkerResult(development.Result)
+			if err != nil {
+				return Material{}, err
+			}
+			validation["development"], err = json.Marshal(map[string]any{"batch": development.Batch, "dependencies": dependencies, "result": result, "checks": promptChecks(development.Checks)})
 			if err != nil {
 				return Material{}, err
 			}
@@ -224,6 +237,30 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			var repair map[string]json.RawMessage
 			if err := json.Unmarshal(validation["repair"], &repair); err != nil {
 				return Material{}, err
+			}
+			if repair["result"] != nil {
+				result, err := promptWorkerResult(input.Validation.Repair.Result)
+				if err != nil {
+					return Material{}, err
+				}
+				repair["result"], err = json.Marshal(result)
+				if err != nil {
+					return Material{}, err
+				}
+			}
+			if repair["memberResults"] != nil {
+				members := make([]any, 0, len(input.Validation.Repair.MemberResults))
+				for _, member := range input.Validation.Repair.MemberResults {
+					result, err := promptWorkerResult(&member)
+					if err != nil {
+						return Material{}, err
+					}
+					members = append(members, result)
+				}
+				repair["memberResults"], err = json.Marshal(members)
+				if err != nil {
+					return Material{}, err
+				}
 			}
 			failures := make([]any, 0, len(input.Validation.Repair.ExecutionFailures))
 			for _, failure := range input.Validation.Repair.ExecutionFailures {
@@ -268,6 +305,35 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	blocks = append(blocks, "[Result contract]\n"+instructions+"\nReturn exactly one JSON object matching the supplied semantic schema, using only its direct body or allowed inability/continuation alternative. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted.\n")
 	value.Prompt = strings.Join(blocks, "\n\n") + "\n"
 	return value, nil
+}
+
+func promptWorkerResult(result *protocol.WorkerResult) (any, error) {
+	if result == nil {
+		return nil, nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	for _, field := range []string{"sourceResult", "actionId", "provider", "payloadDigest", "digest"} {
+		delete(fields, field)
+	}
+	if result.Validation != nil {
+		var validation map[string]json.RawMessage
+		if err := json.Unmarshal(fields["validation"], &validation); err != nil {
+			return nil, err
+		}
+		delete(validation, "binding")
+		fields["validation"], err = json.Marshal(validation)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fields, nil
 }
 
 // promptCheck keeps actual execution observations; request and receipt bindings

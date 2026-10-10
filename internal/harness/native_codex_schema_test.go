@@ -206,7 +206,10 @@ func TestCodexDictionaryProjectionRejectsAmbiguousEntries(t *testing.T) {
 	if err != nil || !valuesEqual(result, map[string]any{"new-plan-id": "actual completion"}) {
 		t.Fatalf("dynamic dictionary = %v %v", result, err)
 	}
-	request := map[string]any{"prompt": "original prompt", "schema": WorkerSchema()}
+	request := map[string]any{"prompt": "original prompt", "schema": map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"summary"},
+		"properties": map[string]any{"summary": map[string]any{"type": "string"}},
+	}}
 	params, err := codexTurnParameters(request, "thread")
 	if err != nil || !strings.Contains(textOf(params), "original prompt") || getOf(listOf(params["input"])[0], "text") != "original prompt" {
 		t.Fatalf("all-required request changed: %v %v", params, err)
