@@ -340,16 +340,15 @@ func runAutomaticNativeFlow(t *testing.T, packageRoot, provider, topology string
 	if err := c.captureBinding(); err != nil {
 		t.Fatal(err)
 	}
+	intakePath := filepath.Join(c.jobs, "intake.json")
 	var preview facade.IntakePreview
-	f.decode(f.command(nil, "workflow", "start", "--precheck", "--root", c.project, "--requirement", "requirements.md"), &preview)
+	f.decode(f.command(nil, "workflow", "start", "--precheck", "--root", c.project, "--requirement", "requirements.md", "--save-candidate", intakePath), &preview)
 	if preview.Content != string(c.doc) || preview.Revision == "" || preview.RequirementDocument == nil {
 		t.Fatal("public precheck lost the complete test document")
 	}
 	f.intake, c.revision = preview.IntakeCandidate, preview.Revision
-	f.save("test-participant-confirmation.json", map[string]any{"authority": "authorized isolated test participant", "materials": preview.Materials, "decision": "confirm complete displayed materials and exact revisions"})
+	f.save("test-participant-confirmation.json", map[string]any{"authority": "authorized isolated test participant", "displayed": preview, "decision": "confirm complete displayed materials and exact revisions"})
 	t.Logf("authorized_test_participant_confirmation revision=%s complete_document=%s", preview.Revision, preview.Content)
-	intakePath := filepath.Join(c.jobs, "intake.json")
-	f.save("intake.json", preview.IntakeCandidate)
 	if provider == "git" && !split {
 		c.promotion = installCanaryPromotionRecovery(c)
 	}
@@ -432,8 +431,13 @@ func (f *automaticNativeFlow) command(input []byte, args ...string) []byte {
 	if err != nil {
 		if f.promotion != nil && f.promotion.recover(f.engineCanary, args, err) {
 			if args[1] == "submit" {
-				var event protocol.Event
-				f.decode(input, &event)
+				confirmation := slices.Index(args, "--confirmation")
+				if confirmation < 0 || confirmation+1 >= len(args) {
+					f.t.Fatal("interrupted decision requires its original program confirmation")
+				}
+				var candidate facade.ControlCandidate
+				f.decode(readTestFileBytes(f.t, args[confirmation+1]), &candidate)
+				event := candidate.Event
 				var original struct{ Content protocol.State }
 				f.decode(readTestFileBytes(f.t, filepath.Join(f.project, facade.EngineNamespace, "engine-canary", "state.json")), &original)
 				record, accepted := original.Content.Events[string(event.ID)]
@@ -480,17 +484,16 @@ func (f *automaticNativeFlow) requireUnblocked(boundary automaticNativeBoundary)
 func (f *automaticNativeFlow) decide(run facade.Run) {
 	f.t.Helper()
 	ask := run.PendingAsks[0]
-	var choice protocol.AskOptionID
-	var payload protocol.ReviewDecisionPayload
+	input := facade.ControlInput{Ask: 1}
 	switch ask.Control {
 	case protocol.ControlConfirmTopology:
-		topology := &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command and its two existing functions"}
+		input.Choice, input.Reason = "no-split", "one cohesive command and its two existing functions"
 		if f.split {
-			topology = f.splitTopology(run.Review.ReadinessProposal)
+			input.Choice, input.Parallel = "split", "independent functions and concurrent merge case preparation"
+			input.Owners = f.splitOwners(run)
 		}
-		payload.Topology, choice = topology, protocol.AskOptionID(topology.Decision)
 	case protocol.ControlSelectRoute:
-		route := &protocol.RouteDecision{Mode: "full", Gates: slices.Clone(ask.RouteGates)}
+		input.Choice = "full"
 		if run.MasterRunID != "" {
 			master := f.run
 			f.decode(f.command(nil, "workflow", "show", "--root", f.project, "--run-id", run.MasterRunID), &master)
@@ -501,56 +504,52 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 				}
 			}
 			if master.Review.Topology != nil && slice == master.Review.Topology.ACOwners["AC-002"] {
-				route.Mode = "custom"
-				if !slices.Contains(route.Gates, "implementation-quality-gate") {
+				input.Choice = "custom"
+				gate := slices.Index(ask.RouteGates, "implementation-quality-gate")
+				if gate < 0 {
 					f.t.Fatal("declared custom gate is absent from original route candidates")
 				}
-				route.Selected = []string{"implementation-quality-gate"}
+				input.Gates = []int{gate + 1}
 			}
 		}
-		payload.Route, choice = route, protocol.AskOptionID(route.Mode)
 	default:
 		f.t.Fatalf("actual typed Ask needs Root's semantic disposition beyond declared test choices: %s", textOf(ask))
 	}
-	draft, err := json.Marshal(payload)
+	draft, err := json.Marshal(input)
 	if err != nil {
 		f.t.Fatal(err)
-	}
-	if payload.Topology == nil || payload.Topology.Decision == "split" {
-		var preview struct {
-			ReviewDecision protocol.ReviewDecisionPayload `json:"reviewDecision"`
-		}
-		f.decode(f.command(draft, "workflow", "next", "--root", f.project, "--run-id", run.RunID, "--review-decision", "-"), &preview)
-		payload = preview.ReviewDecision
-	} else {
-		f.command(nil, "workflow", "next", "--root", f.project, "--run-id", run.RunID)
 	}
 	f.sequence++
-	event, err := protocol.NewReviewDecideEvent(protocol.EventID(fmt.Sprintf("test-participant-decision-%d", f.sequence)), protocol.RequestID(ask.RequestID), ask.Token, choice, payload)
-	if err != nil {
-		f.t.Fatal(err)
+	name := fmt.Sprintf("control-confirmation-%d.json", f.sequence)
+	path := filepath.Join(f.jobs, name)
+	var candidate facade.ControlCandidate
+	f.decode(f.command(draft, "workflow", "next", "--root", f.project, "--run-id", run.RunID, "--decision", "-", "--save-candidate", path), &candidate)
+	if candidate.Run.RunID != run.RunID || !canaryValuesEqual(candidate.Input, input) {
+		f.t.Fatal("program candidate differs from declared participant choices")
 	}
-	body, err := json.Marshal(event)
-	if err != nil {
-		f.t.Fatal(err)
-	}
+	f.save(fmt.Sprintf("control-participant-%d.json", f.sequence), map[string]any{"authority": "authorized isolated test participant", "displayed": candidate, "decision": "confirm complete original candidate for these predeclared choices"})
 	var response automaticNativeBoundary
-	f.decode(f.command(body, "workflow", "submit", "--root", f.project, "--run-id", run.RunID), &response)
+	f.decode(f.command(nil, "workflow", "submit", "--root", f.project, "--run-id", run.RunID, "--confirmation", path), &response)
 	if response.Acceptance == nil || strings.Contains(response.Acceptance.Status, "REJECTED") {
 		f.t.Fatalf("original test-participant decision not accepted: %s", textOf(response))
 	}
 	f.requireUnblocked(response)
 }
 
-func (f *automaticNativeFlow) splitTopology(plan *protocol.GranularityReview) *protocol.TopologyDecision {
+func (f *automaticNativeFlow) splitOwners(run facade.Run) []int {
 	f.t.Helper()
+	plan := run.Review.ReadinessProposal
 	if plan == nil {
 		f.t.Fatal("original readiness proposal is required for topology confirmation")
 	}
 	owners := map[string]string{}
+	var proposed []string
 	for _, batch := range plan.Batches {
 		if batch.Owner == "master-merge" {
 			continue
+		}
+		if batch.Owner != "" && !slices.Contains(proposed, batch.Owner) {
+			proposed = append(proposed, batch.Owner)
 		}
 		for _, path := range batch.Artifacts {
 			if path == "app.py" || path == "size.py" {
@@ -564,7 +563,20 @@ func (f *automaticNativeFlow) splitTopology(plan *protocol.GranularityReview) *p
 	if owners["app.py"] == "" || owners["size.py"] == "" || owners["app.py"] == owners["size.py"] {
 		f.t.Fatal("original plan does not propose the confirmed two independent function owners")
 	}
-	return &protocol.TopologyDecision{Decision: "split", SplitCount: 2, Slices: []string{owners["app.py"], owners["size.py"]}, Parallel: "independent functions and concurrent merge case preparation", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: owners["app.py"]}, {AC: "AC-002", Owner: owners["size.py"]}, {AC: "AC-003", Owner: "master-merge"}, {AC: "AC-004", Owner: "master-merge"}}}
+	if run.Validation == nil {
+		f.t.Fatal("original confirmed acceptance conditions are required")
+	}
+	var selected []int
+	for _, requirement := range run.Validation.Document.Requirements {
+		for _, condition := range requirement.AcceptanceConditions {
+			owner := 0
+			if artifact := map[string]string{"AC-001": "app.py", "AC-002": "size.py"}[condition.ID]; artifact != "" {
+				owner = slices.Index(proposed, owners[artifact]) + 1
+			}
+			selected = append(selected, owner)
+		}
+	}
+	return selected
 }
 
 func (f *automaticNativeFlow) assertTerminal(base string) {
