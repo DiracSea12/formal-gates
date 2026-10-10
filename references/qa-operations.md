@@ -55,8 +55,9 @@ Go 源文件解析由原生 adapter 在实际启动前完成，核心计划只�
 `ValidationInput.executionFacts` 是原 receipts 的只读投影，并随原 worker material
 冻结。只有全部动作完整执行的 case 可以签发语义比较；Go 的无匹配/skip、进程中断或
 未完成动作保留具体原始事实与未完成责任，不能产生 EXECUTED_PASS/FAIL 行。模型只
-返回每 case 的 result 和 comparison，程序填充 procedure、observation、tool、environment
-并展开批准 edges；core 逐值核原事实、当前候选和批准配方，沿原入口合并 Completed。
+按原签发比较顺序返回 result 和 comparison 数组，不填写 case ID 或 ID 键。程序填充
+原 case 身份、procedure、observation、tool、environment 并展开批准 edges；core 逐值
+核原事实、当前候选和批准配方，沿原入口合并 Completed。
 缺少配方的设计允许暂存，冻结前须指出具体 case 并回到原设计/审查补齐。
 
 Case 与 shared-step 的可选 `files` 精确列出该测试材料的仓库相对文件路径；它与正文、
@@ -76,23 +77,32 @@ identity 和完整 raw diff 供这次审查，不提前声称 test-only 或生�
 这份证据是绑定的独立判断加机械身份核验，不是完整原生依赖图证明；未审/FAIL 材料不能
 提升、排除质量门或获得这些旗标。删除与 rename 每个实际存在端点仍逐值核验。
 
-设计结果用 `retainCases` / `retainSharedSteps` 明确选择保留的原签发条目。程序保留其原正文、
-操作和文件关联；`cases` / `sharedSteps` 只承载新增或改写。保留 ID 必须存在、唯一且不与
-改写条目重复。未选中保留且未改写的条目删除，原覆盖关系也不保留该 case。未变关系从原 manifest
-搬运；`coverage` 的已提交点键替换该点的整个 case 列表，`[]` 清除该点关系。模型不回抄未变实际载荷。
-改写条目省略 `files` 时，程序从原签发材料保留该关联；明确提交 `[]` 清除它。
+无指定修订集合的设计续作，`retainCases` / `retainSharedSteps` 选择原列表的一基序号，
+不填写原 ID。程序搬运所选条目的原正文、操作和文件关联；`cases` / `sharedSteps`
+只承载新创作条目，身份由程序分配。两类列表均不含的条目删除，其 case 的覆盖关系
+不再保留。用例的 `sharedSteps` 选择原共享说明列表加新创作说明列表的序号。
+
+`coverage` 按原签发验收点顺序返回数组，每项选择用例序号（保留用例在前、新用例在后）。
+`[]` 清除该点关系；`null` 由程序保留仍在当前集合中的原关系，不重写点键或原 case ID。
+
+输入含 `affectedCases` 时，按该原顺序仅返回指定用例的语义改动字段。程序保留原身份、
+未改字段、未受影响用例及原覆盖；不填写 `caseId`、保留列表或覆盖映射。共同说明有变化时，
+按原 manifest 中这些用例引用的说明顺序返回改动字段，未改时省略。改动省略 `files`
+保留原文件关联，明确提交 `[]` 清除它。受影响部分仍由原独立审查验收。
 
 ## 冻结验证职责的语义判断
 
 `engine.validation.observation` 将当前波次尚未完成的 ADJUDICATE、EXECUTION_SCOPE 与
 GATE_IMPACT 投影为一个签发包，使用原生只读 worker 材料和原 WORKER_RESULT 接纳路径。
-模型按输入顺序返回 findings/scopes/gateImpacts 判断数组；程序填充 kind、波次、发现与
-目标身份、历史位置、新问题 ID、状态和绑定。发现关联与 affected cases 是语义选择。
+模型按输入顺序返回 findings/scopes/gateImpacts 判断数组。发现关联与受影响用例使用
+签发列表的一基序号表达语义选择；程序回填原身份、kind、波次、历史位置、新问题 ID、
+状态和绑定，不要求模型填写 ID 或重复原对象。
 程序先核完整包的当前输入身份，再在同一事务逐项调用原 observation validator；任何
 一项非法不会留下包内部分判断。原 typed Operator observation API 同样保留。
 
-EXECUTION_SCOPE 只能选择已批准且非空的用例子集，必须包含程序依据原继承规则标出的
-全部 mustExecute 项；未选项须有真实、未受影响的原始 PASS。GATE_IMPACT 只根据该门
+EXECUTION_SCOPE 按 `approvedCases` 的一基序号选择受影响用例并说明实际理由。程序将
+所选项与原 `mustExecute` 合并，再核验最终非空集合；不要求模型重列必跑项。未纳入
+最终集合的用例须有真实、未受影响的原始 PASS。GATE_IMPACT 只根据该门
 原始 PASS 和当前原生范围安排 INHERIT/RERUN，不提供门审结论；实际门审输入保持其
 原有 QA 隔离。判断包的有限职责、TaskKey 和重试策略由原波次、输入摘要、步骤声明与
 Attempt 拥有；拓扑、路线、额外额度、豁免和处置仍通过原 typed Ask 请求用户确认。
