@@ -601,6 +601,13 @@ func dshValidateBinding(binding any) error {
 	return validateNativeBinding(binding, "dsh")
 }
 
+func dshVerifyStart(_ any, acknowledgement any, identity string) error {
+	if getOf(acknowledgement, "sessionId") != identity {
+		return fmt.Errorf("native session acknowledgement differs")
+	}
+	return nil
+}
+
 // dshVerifySource is the registry's verify_source: provider/identity must
 // match, the proof set must be exactly the four evidence files, and each proof
 // must still hold against the directory.

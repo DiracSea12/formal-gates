@@ -35,11 +35,11 @@ func jsonNumber(literal string) any { return json.Number(literal) }
 // TestDSHDispatch pins the registered providers and the unsupported-host text.
 func TestDSHDispatch(t *testing.T) {
 	for _, provider := range []string{"dsh", "zcode", "claude", "codex", "cursor"} {
-		if err := dshDispatch(provider); err != nil {
+		if _, err := nativeImplementationFor(provider); err != nil {
 			t.Fatalf("%s must dispatch: %v", provider, err)
 		}
 	}
-	err := dshDispatch("ghost")
+	_, err := nativeImplementationFor("ghost")
 	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, cursor" {
 		t.Fatalf("unsupported text = %v", err)
 	}

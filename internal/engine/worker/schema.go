@@ -39,36 +39,11 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 }
 
 func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
-	var typ reflect.Type
-	if input.Review != nil {
-		typ = reflect.TypeOf(Review{})
-	} else if input.Validation != nil {
-		switch input.Handler {
-		case "engine.development.batch":
-			typ = reflect.TypeOf(Development{})
-		case "engine.repair":
-			typ = reflect.TypeOf(Repair{})
-		case "engine.merge.resolve":
-			typ = reflect.TypeOf(ConflictResolution{})
-		case "engine.qa.design":
-			typ = reflect.TypeOf(Design{})
-		case "engine.qa.review.rationale":
-			typ = reflect.TypeOf(CaseReview{})
-		case "engine.qa.execution":
-			typ = reflect.TypeOf(ExecutionJudgments{})
-		case "engine.validation.observation":
-			typ = reflect.TypeOf(ObservationJudgments{})
-		case "engine.repair.verify":
-			typ = reflect.TypeOf(Execution{})
-		case "engine.gate":
-			typ = reflect.TypeOf(Gate{})
-		default:
-			return nil, fmt.Errorf("worker result schema has no role %s", input.Handler)
-		}
-	} else {
-		return nil, fmt.Errorf("worker result schema lacks typed role")
+	target, err := semanticRole(input)
+	if err != nil {
+		return nil, err
 	}
-	body, err := resultTypeSchema(typ)
+	body, err := resultTypeSchema(reflect.TypeOf(target))
 	if err != nil {
 		return nil, err
 	}

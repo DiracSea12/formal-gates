@@ -477,6 +477,38 @@ func DecodeResult(input protocol.WorkerInput, eventID protocol.EventID, raw []by
 	return event, event.Validate()
 }
 
+// semanticRole selects the original typed semantic body for schema and decoding.
+func semanticRole(input protocol.WorkerInput) (any, error) {
+	if input.Review != nil {
+		return &Review{}, nil
+	}
+	if input.Validation == nil {
+		return nil, fmt.Errorf("worker result schema lacks typed role")
+	}
+	switch input.Handler {
+	case "engine.development.batch":
+		return &Development{}, nil
+	case "engine.repair":
+		return &Repair{}, nil
+	case "engine.merge.resolve":
+		return &ConflictResolution{}, nil
+	case "engine.qa.design":
+		return &Design{}, nil
+	case "engine.qa.review.rationale":
+		return &CaseReview{}, nil
+	case "engine.qa.execution":
+		return &ExecutionJudgments{}, nil
+	case "engine.validation.observation":
+		return &ObservationJudgments{}, nil
+	case "engine.repair.verify":
+		return &Execution{}, nil
+	case "engine.gate":
+		return &Gate{}, nil
+	default:
+		return nil, fmt.Errorf("worker result schema has no role %s", input.Handler)
+	}
+}
+
 func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, string, error) {
 	schema, err := completedSchema(input)
 	if err != nil {
@@ -520,9 +552,13 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		}
 		return decodedResult{}, text, nil
 	}
+	target, err := semanticRole(input)
+	if err != nil {
+		return decodedResult{}, "", err
+	}
 	var result decodedResult
 	if input.Review != nil {
-		result.Review = &Review{}
+		result.Review = target.(*Review)
 		if err := decodeObject(raw, result.Review); err != nil {
 			return result, "", err
 		}
@@ -532,29 +568,6 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	} else if input.Validation != nil {
 		v := &decodedValidation{Status: protocol.OutcomePass}
 		result.Validation = v
-		var target any
-		switch input.Handler {
-		case "engine.development.batch":
-			target = &Development{}
-		case "engine.repair":
-			target = &Repair{}
-		case "engine.merge.resolve":
-			target = &ConflictResolution{}
-		case "engine.qa.design":
-			target = &Design{}
-		case "engine.qa.review.rationale":
-			target = &CaseReview{}
-		case "engine.qa.execution":
-			target = &ExecutionJudgments{}
-		case "engine.validation.observation":
-			target = &ObservationJudgments{}
-		case "engine.repair.verify":
-			target = &Execution{}
-		case "engine.gate":
-			target = &Gate{}
-		default:
-			return result, "", fmt.Errorf("worker result has no semantic role %s", input.Handler)
-		}
 		if err := decodeObject(raw, target); err != nil {
 			return result, "", err
 		}

@@ -94,27 +94,8 @@ func NativeStartEvidence(provider, directory string) (string, error) {
 	if previous, _ := getOf(request, "identity").(string); previous != "" && previous != identity {
 		return "", fmt.Errorf("native start resumed another identity")
 	}
-	ack := getOf(start, "acknowledgement")
-	switch provider {
-	case "codex":
-		if err := codexCheckConfiguration(request, ack, identity); err != nil {
-			return "", err
-		}
-	case "zcode":
-		if getOf(getOf(ack, "session"), "sessionId") != identity {
-			return "", fmt.Errorf("native session acknowledgement differs")
-		}
-		if _, err := zcodeHandshake(ack); err != nil {
-			return "", err
-		}
-	case "dsh":
-		if getOf(ack, "sessionId") != identity {
-			return "", fmt.Errorf("native session acknowledgement differs")
-		}
-	case "claude", "cursor":
-		if getOf(ack, "type") != "system" || getOf(ack, "subtype") != "init" || getOf(ack, "session_id") != identity {
-			return "", fmt.Errorf("native init acknowledgement differs")
-		}
+	if err := impl.verifyStart(request, getOf(start, "acknowledgement"), identity); err != nil {
+		return "", err
 	}
 	return identity, nil
 }

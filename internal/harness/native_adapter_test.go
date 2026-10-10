@@ -16,7 +16,7 @@ func TestNativeAdapterEntriesImplementWholeBoundary(t *testing.T) {
 		}
 		seen[entry.provider] = true
 		adapter := entry.nativeImplementation
-		if adapter.capture == nil || adapter.validateBinding == nil || adapter.verifySource == nil || adapter.reconcile == nil || adapter.execute == nil {
+		if adapter.capture == nil || adapter.validateBinding == nil || adapter.verifySource == nil || adapter.verifyStart == nil || adapter.reconcile == nil || adapter.execute == nil {
 			t.Fatalf("incomplete provider %s", entry.provider)
 		}
 	}
@@ -48,6 +48,13 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 			calls = append(calls, "verify")
 			return nil
 		},
+		verifyStart: func(request, acknowledgement any, identity string) error {
+			if getOf(request, "prompt") != "exact prompt" || acknowledgement != "native-ack" || identity != "session-identity" {
+				t.Fatalf("start = %#v %#v %s", request, acknowledgement, identity)
+			}
+			calls = append(calls, "start")
+			return nil
+		},
 		reconcile: func(dir string, got any) (map[string]any, error) {
 			if dir != directory || !reflect.DeepEqual(got, process) {
 				t.Fatalf("process = %s %#v", dir, got)
@@ -64,7 +71,8 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 		},
 	}
 	nativeImplementations = append(append(original[:0:0], original...), entry)
-	if err := dshDispatch("native-peer"); err != nil {
+	adapter, err := nativeImplementationFor("native-peer")
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := nativeCapture("native-peer")
@@ -85,6 +93,9 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := map[string]any{"provider": "native-peer", "binding": binding, "prompt": "exact prompt", "probe": true}
+	if err := adapter.verifyStart(request, "native-ack", "session-identity"); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(directory, "native-request.json"), raw(request), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +107,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, source) {
 		t.Fatalf("reconcile = %#v %v", got, err)
 	}
-	if !reflect.DeepEqual(calls, []string{"capture", "validate", "verify", "validate", "execute", "reconcile"}) {
+	if !reflect.DeepEqual(calls, []string{"capture", "validate", "verify", "start", "validate", "execute", "reconcile"}) {
 		t.Fatalf("boundary calls = %v", calls)
 	}
 }

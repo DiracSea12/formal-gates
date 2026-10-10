@@ -798,31 +798,70 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 }
 
 func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
-	s := newCodexScenario(t)
-	s.save(t)
-	source, err := s.execute(t)
-	if err != nil {
-		t.Fatal(err)
+	scenarios := map[string]func(*testing.T) string{
+		"codex": func(t *testing.T) string {
+			s := newCodexScenario(t)
+			s.save(t)
+			if _, err := s.execute(t); err != nil {
+				t.Fatal(err)
+			}
+			return s.directory
+		},
+		"dsh": func(t *testing.T) string {
+			s := newDSHScenario(t, successSteps(), func(request map[string]any) { request["model"] = "test-model"; request["reasoning_effort"] = "high" })
+			if _, err := runNativeJob(s.directory); err != nil {
+				t.Fatal(err)
+			}
+			return s.directory
+		},
+		"zcode": func(t *testing.T) string {
+			s := newZcodeScenario(t, zcodeSuccessSteps, func(request map[string]any) { request["read_only"] = false })
+			if _, err := runNativeJob(s.directory); err != nil {
+				t.Fatal(err)
+			}
+			return s.directory
+		},
+		"claude": func(t *testing.T) string {
+			s := newClaudeScenario(t, "session-a", true)
+			if _, err := runNativeJob(s.directory); err != nil {
+				t.Fatal(err)
+			}
+			return s.directory
+		},
+		"cursor": func(t *testing.T) string {
+			s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
+			if _, err := runNativeJob(s.directory); err != nil {
+				t.Fatal(err)
+			}
+			return s.directory
+		},
 	}
-	identity, err := NativeStartEvidence("codex", s.directory)
-	if err != nil {
-		body, _ := os.ReadFile(filepath.Join(s.directory, "identity.json"))
-		t.Fatalf("actual acknowledgement rejected: %v %s", err, body)
-	}
-	if identity != source["identity"] {
-		t.Fatal("native start and completed source identities differ")
-	}
-	start, err := readJSONFile(filepath.Join(s.directory, "identity.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	object := objectOrEmpty(start)
-	delete(object, "acknowledgement")
-	if err := writeAtomicJSON(filepath.Join(s.directory, "identity.json"), object); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NativeStartEvidence("codex", s.directory); err == nil {
-		t.Fatal("identity file alone replaced the actual native acknowledgement")
+	for provider, scenario := range scenarios {
+		t.Run(provider, func(t *testing.T) {
+			directory := scenario(t)
+			source, err := NativeJobSource(provider, directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := NativeStartEvidence(provider, directory)
+			if err != nil {
+				t.Fatalf("actual acknowledgement rejected: %v", err)
+			}
+			if identity != source["identity"] {
+				t.Fatal("native start and completed source identities differ")
+			}
+			start, err := readJSONFile(filepath.Join(directory, "identity.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			delete(objectOrEmpty(start), "acknowledgement")
+			if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), start); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NativeStartEvidence(provider, directory); err == nil {
+				t.Fatal("identity file alone replaced the actual native acknowledgement")
+			}
+		})
 	}
 }
 

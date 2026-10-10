@@ -1865,44 +1865,14 @@ func zcodeValidateBinding(binding any) error {
 }
 
 // zcodeVerifySource is the registry's verify_source for zcode.
-func zcodeVerifySource(directory string, source any) error {
-	return verifyNativeSource(directory, source, "zcode")
-}
-
-// nativeImplementation is the execution boundary for one native provider.
-type nativeImplementation struct {
-	capture         func() (map[string]any, error)
-	validateBinding func(binding any) error
-	verifySource    func(directory string, source any) error
-	reconcile       func(directory string, process any) (map[string]any, error)
-	execute         func(request any, directory string, probe bool) (map[string]any, error)
-}
-
-// Ordered entries own both routing and unsupported-host diagnostics.
-var nativeImplementations = []struct {
-	provider string
-	nativeImplementation
-}{
-	{"dsh", nativeImplementation{capture: dshCaptureBinding, validateBinding: dshValidateBinding, verifySource: dshVerifySource, reconcile: dshReconcile, execute: dshExecute}},
-	{"zcode", nativeImplementation{capture: zcodeCaptureBinding, validateBinding: zcodeValidateBinding, verifySource: zcodeVerifySource, reconcile: zcodeReconcile, execute: zcodeExecute}},
-	{"claude", nativeImplementation{capture: claudeCaptureBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, reconcile: claudeReconcile, execute: claudeExecute}},
-	{"codex", nativeImplementation{capture: codexCaptureBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, reconcile: codexReconcile, execute: codexExecute}},
-	{"cursor", nativeImplementation{capture: cursorCaptureBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, reconcile: cursorReconcile, execute: cursorExecute}},
-}
-
-func dshDispatch(provider string) error {
-	_, err := nativeImplementationFor(provider)
+func zcodeVerifyStart(_ any, acknowledgement any, identity string) error {
+	if getOf(getOf(acknowledgement, "session"), "sessionId") != identity {
+		return fmt.Errorf("native session acknowledgement differs")
+	}
+	_, err := zcodeHandshake(acknowledgement)
 	return err
 }
 
-func nativeImplementationFor(provider string) (nativeImplementation, error) {
-	names := make([]string, 0, len(nativeImplementations))
-	for _, entry := range nativeImplementations {
-		if entry.provider == provider {
-			return entry.nativeImplementation, nil
-		}
-		names = append(names, entry.provider)
-	}
-	return nativeImplementation{}, &blockedError{message: fmt.Sprintf(
-		"UNSUPPORTED_NATIVE_HOST: %s; execution adapters: %s", provider, strings.Join(names, ", "))}
+func zcodeVerifySource(directory string, source any) error {
+	return verifyNativeSource(directory, source, "zcode")
 }
