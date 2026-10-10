@@ -210,6 +210,9 @@ func (s *State) errWriteBarrier(entry string) error {
 // 变化 Ask：需求决定事务内以它判定屏障解除边界——只有最后一个未决 Ask
 // 的解决才触发隔离账重分类，此前隔离继续持有。
 func (s *State) requirementChangePendingExcept(requestID string) bool {
+	if s.abortRequested() {
+		return false
+	}
 	if s.SliceChild != nil && s.SliceChild.ParentChange != nil && s.SliceChild.ParentChange.Pending {
 		return true
 	}

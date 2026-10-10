@@ -725,7 +725,7 @@ func (s *State) cleanupQuiescent() bool {
 			return false
 		}
 	}
-	if s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
+	if !s.abortRequested() && s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
 	}
 	if s.RebuildingChildren() {

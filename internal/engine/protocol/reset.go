@@ -120,7 +120,10 @@ func (s *State) resetDecision() (RecordedDecision, bool) {
 	}
 	return found, found.Reset != nil
 }
-func (s *State) resetPending() bool { d, ok := s.resetDecision(); return ok && !d.Reset.Confirmed }
+func (s *State) resetPending() bool {
+	d, ok := s.resetDecision()
+	return ok && !d.Reset.Confirmed && !s.abortRequested()
+}
 func (s *State) resetRequestID() string {
 	d, ok := s.resetDecision()
 	if ok {

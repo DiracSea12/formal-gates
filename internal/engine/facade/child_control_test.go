@@ -872,3 +872,104 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 		t.Fatal("receipt replacement replay changed accepted evidence or cost", err)
 	}
 }
+
+func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
+	master, _ := controlChildren(t)
+	parent := driverState(t, master)
+	if len(parent.ChildCreation.Children) != 2 {
+		t.Fatal("fixture must have two original children")
+	}
+	var children []*validationDriver
+	for _, plan := range parent.ChildCreation.Children {
+		f, err := Open(master.f.root, plan.RunID, master.f.runtimeFiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := f.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
+		development := sliceLanePlan()
+		development.Batches[0].Artifacts = []string{plan.SliceID + ".go"}
+		child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, development)
+		child.drive()
+		id, input := planBatchAction(child, "command")
+		if err := os.WriteFile(filepath.Join(input.Workspace.Path, development.Batches[0].Artifacts[0]), []byte("package main\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+		child.drive()
+		for id := range child.run.PendingActions {
+			child.receipt(id)
+		}
+		children = append(children, child)
+	}
+	for id := range master.run.PendingActions {
+		master.receipt(id)
+	}
+	reset := resetControl(t, master)
+	settleResetWorkerStops(t, master)
+	master.drive()
+	for _, child := range children {
+		child.drive()
+		settleResetWorkerStops(t, child)
+		child.drive()
+	}
+	master.drive()
+	before := driverState(t, master)
+	if !before.ResetPending() || !before.Decisions[string(reset.Decide.Request)].Reset.Applied {
+		t.Fatal("reset was not applied with confirmation still pending")
+	}
+	for _, child := range children {
+		state := driverState(t, child)
+		if state.SliceChild.ParentReset == nil || !state.ResetPending() || state.SliceChild.ParentChange == nil || !state.SliceChild.ParentChange.Pending {
+			t.Fatal("original child did not retain its unconfirmed parent reset")
+		}
+		retainedDevelopment := false
+		for _, resource := range state.NativeResources {
+			retainedDevelopment = retainedDevelopment || resource.Role == "development" && resource.Status == "READY"
+		}
+		if !retainedDevelopment {
+			t.Fatal("reset fixture has no retained original development resource")
+		}
+	}
+	abortRun(t, master)
+	master.reopen()
+	master.drive()
+	if master.run.Status != "ABORTED" || master.run.Termination == nil || !master.run.Termination.ResourcesCleaned() {
+		t.Fatal("unconfirmed reset prevented parent abort cleanup", master.run.Status)
+	}
+	terminal := master.run.Termination
+	if terminal.Decisions[string(reset.Decide.Request)].Reset == nil || terminal.Decisions[string(reset.Decide.Request)].Reset.Confirmed {
+		t.Fatal("abort invented a reset confirmation or discarded original audit")
+	}
+	for _, child := range children {
+		run, err := child.f.Show()
+		if err != nil || run.Status != "ABORTED" || run.Termination == nil || !run.Termination.ResourcesCleaned() {
+			t.Fatal("parent abort did not finish original child cleanup", run.Status, err)
+		}
+		state := run.Termination
+		if state.SliceChild.ParentAbort == nil || !reflect.DeepEqual(state.SliceChild.ParentAbort.Decision, terminal.Decisions[state.SliceChild.ParentAbort.Decision.RequestID]) {
+			t.Fatal("child abort lost original parent authority")
+		}
+		for _, decision := range state.Decisions {
+			if decision.Control == protocol.ControlAbort {
+				t.Fatal("cascade invented a child user abort")
+			}
+		}
+		for _, resource := range state.NativeResources {
+			if _, err := os.Stat(resource.Path); !os.IsNotExist(err) {
+				t.Fatal("abort retained child resource", resource.ID, err)
+			}
+		}
+	}
+	if _, _, err := master.f.Submit(reset); err != nil {
+		t.Fatal("original reset confirmation could not replay after abort", err)
+	}
+	master.reopen()
+	master.drive()
+	if master.run.Status != "ABORTED" || !reflect.DeepEqual(master.run.Termination.ReconciledEffects, terminal.ReconciledEffects) || !reflect.DeepEqual(master.run.Termination.Cost, terminal.Cost) {
+		t.Fatal("repeat recovery changed abort cleanup or cumulative costs")
+	}
+}

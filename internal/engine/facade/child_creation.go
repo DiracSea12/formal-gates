@@ -388,9 +388,6 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 	if !settled {
 		return nil
 	}
-	if err := f.engine.FinishChildCancellation(states, emptyFingerprint()); err != nil {
-		return err
-	}
 	current, err := f.engine.Load()
 	if err != nil {
 		return err

@@ -330,39 +330,6 @@ func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
 	return err
 }
 
-func (e *Engine) FinishChildCancellation(children []*State, expectedFingerprint string) error {
-	revision, s, err := e.load()
-	if err != nil {
-		return err
-	}
-	if s.ChildCreation == nil || !s.abortRequested() || len(children) != len(s.ChildCreation.Children) {
-		return validationError("child cancellation does not match the creation")
-	}
-	for i, child := range s.ChildCreation.Children {
-		if actual := children[i]; actual != nil && (!s.preparedChild(child, actual) || actual.Phase != runtime.PhaseTerminal || !actual.ResourcesCleaned()) {
-			return validationError("child cancellation has unfinished children")
-		}
-	}
-	for _, intent := range s.PendingHostActions {
-		if intent.Step == "children.workspace" {
-			return nil
-		}
-	}
-	if slices.Contains(s.Completed, authoring.StepID("children.publish")) {
-		return nil
-	}
-	for _, step := range []authoring.StepID{"children.prepare", "children.workspace", "children.publish"} {
-		if slices.Contains(s.Completed, step) {
-			continue
-		}
-		if err := s.CompleteStep(step, e.cfg.Definition); err != nil {
-			return err
-		}
-	}
-	_, err = e.commit(s, revision, expectedFingerprint)
-	return err
-}
-
 // Creation targets outlive their children until abort or delivered-master
 // release has cleaned every child's own native resources.
 func (s *State) childTargetsCleanable(children []*State) bool {
