@@ -15,7 +15,7 @@ type CaseRevisions struct {
 	Checkpoint  bool               `json:"checkpoint,omitempty"`
 }
 type CaseChange struct {
-	Files         *[]string             `json:"files,omitempty"`
+	Files         *[]Location           `json:"files,omitempty"`
 	Operations    *[]coverage.Operation `json:"operations,omitempty"`
 	Scenario      *string               `json:"scenario,omitempty"`
 	SharedSteps   *[]int                `json:"sharedSteps,omitempty"`
@@ -24,11 +24,12 @@ type CaseChange struct {
 	Steps         *string               `json:"steps,omitempty"`
 	Oracle        *string               `json:"oracle,omitempty"`
 	TestRef       *string               `json:"testRef,omitempty"`
+	TestFile      *int                  `json:"testFile,omitempty"`
 }
 type SharedStepChange struct {
 	Procedure  *string               `json:"procedure,omitempty"`
 	Operations *[]coverage.Operation `json:"operations,omitempty"`
-	Files      *[]string             `json:"files,omitempty"`
+	Files      *[]Location           `json:"files,omitempty"`
 }
 
 func revisionSharedSteps(input *protocol.ValidationInput) []coverage.SharedStep {
@@ -51,19 +52,12 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 	manifest := &Manifest{Cases: []Case{}, Coverage: map[string][]string{}}
 	for _, original := range input.Manifest.Cases {
 		index := slices.Index(input.AffectedCases, original.CaseID)
-		var item Case
-		raw, err := json.Marshal(original)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, err
-		}
+		item := Case{CaseID: original.CaseID, Scenario: original.Scenario, Operations: slices.Clone(original.Operations), SharedSteps: slices.Clone(original.SharedSteps), PublicEntry: original.PublicEntry, Preconditions: original.Preconditions, Steps: original.Steps, Oracle: original.Oracle}
 		if index >= 0 {
 			change := changes.Cases[index]
 			sharedChoices := change.SharedSteps
 			change.SharedSteps = nil
-			raw, err = json.Marshal(change)
+			raw, err := json.Marshal(change)
 			if err != nil {
 				return nil, err
 			}
@@ -85,16 +79,9 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 	}
 	for _, original := range input.Manifest.SharedSteps {
 		index := slices.IndexFunc(shared, func(step coverage.SharedStep) bool { return step.ID == original.ID })
-		var item SharedStep
-		raw, err := json.Marshal(original)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, err
-		}
+		item := SharedStep{ID: original.ID, Procedure: original.Procedure, Operations: slices.Clone(original.Operations)}
 		if index >= 0 && changes.SharedSteps != nil {
-			raw, err = json.Marshal(changes.SharedSteps[index])
+			raw, err := json.Marshal(changes.SharedSteps[index])
 			if err != nil {
 				return nil, err
 			}

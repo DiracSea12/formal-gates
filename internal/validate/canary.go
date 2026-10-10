@@ -404,7 +404,8 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			if err = json.Unmarshal(raw, &material); err != nil {
 				return err
 			}
-			payload, err := portableWorkerResult(material.Input, checked)
+			var locationFacts []worker.LocationFact
+			payload, err := portableWorkerResult(material.Input, checked, &locationFacts)
 			if err != nil {
 				return err
 			}
@@ -443,7 +444,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 					paths = []string{}
 				}
 			}
-			event, err := worker.DecodeResultWithPaths(material.Input, eventID(), raw, fmt.Sprintf("sha256:%x", sha256.Sum256(raw)), paths)
+			event, err := worker.DecodeResultWithFacts(material.Input, eventID(), raw, fmt.Sprintf("sha256:%x", sha256.Sum256(raw)), paths, locationFacts)
 			if err != nil {
 				return err
 			}
@@ -470,7 +471,7 @@ func portableDevelopmentPlan() *worker.Granularity {
 	return &worker.Granularity{Reason: "One data-artifact fixture with exact byte build/test checks and no inferred language.", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, NewArtifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Native candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []worker.Criterion{{Description: "Exact delivery marker content"}}, Checks: []worker.Check{{Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes", ContextCost: "One file and one acceptance condition"}}}
 }
 
-func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (any, error) {
+func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, facts *[]worker.LocationFact) (any, error) {
 	var payload any
 	if input.Review != nil {
 		evidence := map[string]string{
@@ -509,18 +510,27 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool) (
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
 		if mode == coverage.ReviewWhitebox {
-			c.TestRef = "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"
+			c.TestRef, c.TestFile = "TestWhiteboxDirectBehavior", 1
 			c.PublicEntry, c.Preconditions, c.Steps = "", "", ""
 			c.Operations = nil
 			c.Oracle = canaryWhiteboxOracle
-			missing.TestRef = "whitebox_delivered_test.go::TestWhiteboxMissingArtifact"
+			missing.TestRef, missing.TestFile = "TestWhiteboxMissingArtifact", 1
 			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
 			missing.Operations = nil
 			missing.Oracle = canaryWhiteboxOracle
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			files := []string{"whitebox_delivered_test.go"}
+			entries, err := os.ReadDir(workspace)
+			if err != nil {
+				return payload, err
+			}
+			listing := worker.LocationFact{Kind: "listing"}
+			for _, entry := range entries {
+				listing.Paths = append(listing.Paths, entry.Name())
+			}
+			*facts = append(*facts, listing)
+			files := []worker.Location{{Listing: len(*facts), Entry: slices.Index(listing.Paths, "whitebox_delivered_test.go") + 1}}
 			c.Files, missing.Files = &files, &files
 		}
 		manifest := worker.DesignManifest{Cases: []worker.DesignedCase{c, missing}, Coverage: [][]int{}}

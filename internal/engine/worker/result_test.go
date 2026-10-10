@@ -160,7 +160,7 @@ func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
 	if !reflect.DeepEqual(inherited.Cases[0].Files, []string{"original.case"}) || !reflect.DeepEqual(inherited.SharedSteps[0].Files, []string{"original.shared"}) {
 		t.Fatal("omission lost original issued files")
 	}
-	empty := []string{}
+	empty := []Location{}
 	omitted.Cases[0].Files = &empty
 	omitted.SharedSteps = []SharedStepChange{{Files: &empty}}
 
@@ -177,23 +177,29 @@ func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestWhiteboxDesignDerivesDeliveryFromMaterialRelations(t *testing.T) {
+func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
-	files := []string{"analytics_test.go", "frob_test.go"}
-	sharedFiles := []string{"fixture.data"}
-	unused := []string{"unrelated.go"}
-	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestRef: "analytics_test.go::TestUsage", Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{1}, nil}}}
-	result := decodeSemantic(t, input, value).Validation
-	if result.Development == nil || !reflect.DeepEqual(result.Development.Paths, []string{"analytics_test.go", "fixture.data", "frob_test.go"}) || result.Development.Summary != "" {
-		t.Fatalf("manifest-only delivery paths lost: %+v", result.Development)
-	}
-	if !reflect.DeepEqual(result.Manifest.Cases[0].Files, files) || result.Binding != input.Validation.Binding {
-		t.Fatal("file semantics or original binding changed")
-	}
+	files := []Location{{Listing: 1, Entry: 1}, {Listing: 1, Entry: 2}}
+	sharedFiles := []Location{{Listing: 1, Entry: 3}}
+	unused := []Location{{Listing: 1, Entry: 4}}
+	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestRef: "TestUsage", Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{1}, nil}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
+	}
+	paths := []string{"analytics_test.go", "frob_test.go", "fixture.data", "unrelated.go", "helper.data"}
+	facts := []LocationFact{{Kind: "listing", Paths: paths}}
+	event, err := DecodeResultWithFacts(input, "result", raw, "original-raw-digest", paths, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := event.Result.Validation
+	if result.Development == nil || !reflect.DeepEqual(result.Development.Paths, paths) || result.Development.Summary != "" {
+		t.Fatalf("captured native delivery paths lost: %+v", result.Development)
+	}
+	if !reflect.DeepEqual(result.Manifest.Cases[0].Files, paths[:2]) || result.Manifest.Cases[0].TestRef != "analytics_test.go::TestUsage" || !reflect.DeepEqual(result.Manifest.TestFiles(), []string{"analytics_test.go", "fixture.data", "frob_test.go"}) || result.Binding != input.Validation.Binding {
+		t.Fatal("file semantics or original binding changed")
 	}
 	raw = append(raw[:len(raw)-1], []byte(`,"development":{"paths":["analytics_test.go"],"summary":"duplicate path declaration"}}`)...)
 	if _, err = DecodeResultWithPaths(input, "result", raw, "original-raw-digest", []string{}); err == nil {

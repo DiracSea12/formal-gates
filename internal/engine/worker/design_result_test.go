@@ -142,3 +142,98 @@ func TestDesignCoverageKeepsOriginalRelationValuesAndOrder(t *testing.T) {
 		t.Fatal("unchanged selected coverage relations or case were rewritten by model choice order")
 	}
 }
+
+func TestWhiteboxDesignKeepsCompleteNativeDeliveryPaths(t *testing.T) {
+	input := retainedDesignInput()
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
+	paths := []string{"keep.fixture", "support.data", "removed.fixture"}
+	raw := []byte(`{"retainCases":[1],"retainSharedSteps":[1],"cases":[],"coverage":[null,[]]}`)
+	event, err := DecodeResultWithPaths(input, "result", raw, "original-source", paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Result.Validation.Development == nil || !reflect.DeepEqual(event.Result.Validation.Development.Paths, paths) {
+		t.Fatalf("captured delivery dropped helper/removal: %+v", event.Result.Validation.Development)
+	}
+	if !reflect.DeepEqual(event.Result.Validation.Manifest.TestFiles(), []string{"keep.fixture", "setup.fixture"}) {
+		t.Fatal("captured delivery invented semantic case relations")
+	}
+	input.Validation.Interruption = &protocol.RecoveryRecord{}
+	recovered, err := DecodeResultWithPaths(input, "result", raw, "original-source", paths)
+	if err != nil || !reflect.DeepEqual(event, recovered) {
+		t.Fatal("recovery changed native delivery or semantic relations", err)
+	}
+}
+
+func TestCaseFileSelectionsPreserveReferencesAndRejectCopiedPaths(t *testing.T) {
+	input := semanticInput()
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
+	input.Validation.Manifest.Cases[0].Files = []string{"case.data", "support.data"}
+	input.Validation.Manifest.Cases[0].TestRef = "case.data::Class::method"
+	input.Validation.AffectedCases = []string{"new"}
+	facts := []LocationFact{{Kind: "listing", Paths: []string{"case.data", "support.data", "replacement.data"}}}
+	for _, sample := range []struct{ raw, ref string }{
+		{`{"cases":[{}]}`, "case.data::Class::method"},
+		{`{"cases":[{"testFile":2}]}`, "support.data::Class::method"},
+		{`{"cases":[{"testFile":1,"testRef":"Class::other"}]}`, "case.data::Class::other"},
+		{`{"cases":[{"testRef":"Class::method"}]}`, "Class::method"},
+		{`{"cases":[{"testRef":""}]}`, ""},
+		{`{"cases":[{"files":[{"listing":1,"entry":3}],"testFile":1}]}`, "replacement.data::Class::method"},
+	} {
+		event, err := DecodeResultWithFacts(input, "result", []byte(sample.raw), "original-source", []string{}, facts)
+		if err != nil {
+			t.Fatal(sample.raw, err)
+		}
+		if got := event.Result.Validation.Manifest.Cases[0].TestRef; got != sample.ref {
+			t.Fatalf("reference %q != %q", got, sample.ref)
+		}
+		input.Validation.Interruption = &protocol.RecoveryRecord{}
+		recovered, err := DecodeResultWithFacts(input, "result", []byte(sample.raw), "original-source", []string{}, facts)
+		if err != nil || !reflect.DeepEqual(event, recovered) {
+			t.Fatal("recovery changed selected file/reference", err)
+		}
+		input.Validation.Interruption = nil
+	}
+	for _, raw := range []string{
+		`{"cases":[{"files":["case.data"]}]}`,
+		`{"cases":[{"files":[{"read":1,"line":1}]}]}`,
+		`{"cases":[{"files":[{"requirementLine":1}]}]}`,
+		`{"cases":[{"testRef":"case.data::Class::method"}]}`,
+		`{"cases":[{"testRef":"replacement.data::Class::method"}]}`,
+		`{"cases":[{"testFile":3,"testRef":"Class::method"}]}`,
+		`{"cases":[{"files":[],"testFile":1,"testRef":"Class::method"}]}`,
+	} {
+		if _, err := DecodeResultWithFacts(input, "invalid", []byte(raw), "original-source", []string{}, facts); err == nil {
+			t.Fatal("copied/invalid file identity accepted", raw)
+		}
+	}
+	if input.Validation.Manifest.Cases[0].TestRef != "case.data::Class::method" || !reflect.DeepEqual(input.Validation.Manifest.Cases[0].Files, []string{"case.data", "support.data"}) {
+		t.Fatal("assembly mutated original file/reference facts")
+	}
+}
+
+func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
+	input := semanticInput()
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := schema["anyOf"].([]any)[0].(map[string]any)
+	item := body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
+	properties := item["properties"].(map[string]any)
+	location := properties["files"].(map[string]any)["items"].(map[string]any)
+	if location["type"] != "object" || properties["testFile"] == nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
+		t.Fatal("schema publishes raw/non-file identity", location)
+	}
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewBlackbox
+	schema, err = ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = schema["anyOf"].([]any)[0].(map[string]any)
+	item = body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
+	if item["properties"].(map[string]any)["testFile"] != nil {
+		t.Fatal("blackbox receives file-bound whitebox reference choice")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -164,10 +165,10 @@ type DesignManifest struct {
 type DesignedSharedStep struct {
 	Procedure  string               `json:"procedure"`
 	Operations []coverage.Operation `json:"operations,omitempty"`
-	Files      *[]string            `json:"files,omitempty"`
+	Files      *[]Location          `json:"files,omitempty"`
 }
 type DesignedCase struct {
-	Files         *[]string            `json:"files,omitempty"`
+	Files         *[]Location          `json:"files,omitempty"`
 	Operations    []coverage.Operation `json:"operations,omitempty"`
 	Scenario      string               `json:"scenario"`
 	SharedSteps   []int                `json:"sharedSteps,omitempty"`
@@ -176,6 +177,7 @@ type DesignedCase struct {
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
 	TestRef       string               `json:"testRef,omitempty"`
+	TestFile      int                  `json:"testFile,omitempty"`
 }
 type Manifest struct {
 	RetainCases       []string            `json:"retainCases,omitempty"`
@@ -188,10 +190,10 @@ type SharedStep struct {
 	ID         string               `json:"id"`
 	Procedure  string               `json:"procedure"`
 	Operations []coverage.Operation `json:"operations,omitempty"`
-	Files      *[]string            `json:"files,omitempty"`
+	Files      *[]Location          `json:"files,omitempty"`
 }
 type Case struct {
-	Files         *[]string            `json:"files,omitempty"`
+	Files         *[]Location          `json:"files,omitempty"`
 	Operations    []coverage.Operation `json:"operations,omitempty"`
 	Scenario      string               `json:"scenario"`
 	SharedSteps   []string             `json:"sharedSteps,omitempty"`
@@ -200,7 +202,8 @@ type Case struct {
 	Preconditions string               `json:"preconditions,omitempty"`
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
-	TestRef       string               `json:"testRef,omitempty"`
+	TestRef       *string              `json:"testRef,omitempty"`
+	TestFile      int                  `json:"testFile,omitempty"`
 }
 type Decision struct {
 	Status coverage.DecisionStatus `json:"status"`
@@ -361,7 +364,10 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			for _, item := range v.Manifest.SharedSteps {
 				step := coverage.SharedStep{ID: item.ID, Procedure: item.Procedure, Operations: slices.Clone(item.Operations)}
 				if item.Files != nil {
-					step.Files = slices.Clone(*item.Files)
+					step.Files, err = selectedTestFiles(*item.Files, locationFacts)
+					if err != nil {
+						return protocol.Event{}, err
+					}
 				} else {
 					for _, original := range issued.Manifest.SharedSteps {
 						if original.ID == item.ID {
@@ -379,15 +385,28 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				manifest.Cases = append(manifest.Cases, issued.Manifest.Cases[index])
 			}
 			for _, item := range v.Manifest.Cases {
-				c := coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestRef: item.TestRef}
+				c := coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle}
 				if item.Files != nil {
-					c.Files = slices.Clone(*item.Files)
+					c.Files, err = selectedTestFiles(*item.Files, locationFacts)
+					if err != nil {
+						return protocol.Event{}, err
+					}
 				} else {
 					for _, original := range issued.Manifest.Cases {
 						if original.CaseID == item.CaseID {
 							c.Files = slices.Clone(original.Files)
 						}
 					}
+				}
+				originalRef := ""
+				for _, original := range issued.Manifest.Cases {
+					if original.CaseID == item.CaseID {
+						originalRef = original.TestRef
+					}
+				}
+				c.TestRef, err = selectedTestRef(item, c.Files, originalRef, paths, locationFacts)
+				if err != nil {
+					return protocol.Event{}, err
 				}
 				manifest.Cases = append(manifest.Cases, c)
 			}
@@ -424,9 +443,10 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			}
 			body.Manifest = &manifest
 			if input.Handler == "engine.qa.design" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
-				if paths := manifest.TestFiles(); len(paths) > 0 {
-					body.Development = &protocol.DevelopmentEvidence{Paths: paths}
+				if paths == nil {
+					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
 				}
+				body.Development = &protocol.DevelopmentEvidence{Paths: slices.Clone(paths)}
 			}
 		}
 		if value.Validation.Review != nil {
@@ -852,4 +872,45 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 		return input.Validation.Repair.Result
 	}
 	return nil
+}
+
+func selectedTestFiles(locations []Location, facts []LocationFact) ([]string, error) {
+	for _, location := range locations {
+		if location.Line != 0 || location.RequirementLine != 0 {
+			return nil, fmt.Errorf("test material selects an original file, not a source line")
+		}
+	}
+	return LocationPaths(locations, facts, requirement.FrozenRequirementProjection{})
+}
+
+func selectedTestRef(item Case, files []string, original string, paths []string, facts []LocationFact) (string, error) {
+	if item.TestRef == nil && item.TestFile == 0 {
+		return original, nil
+	}
+	ref := original
+	if item.TestRef != nil {
+		ref = *item.TestRef
+		prefix, _, _ := strings.Cut(ref, "::")
+		matches := func(file string) bool { return filepath.Clean(prefix) == filepath.Clean(filepath.FromSlash(file)) }
+		copied := slices.ContainsFunc(files, matches) || slices.ContainsFunc(paths, matches)
+		for _, fact := range facts {
+			copied = copied || slices.ContainsFunc(fact.Paths, matches)
+		}
+		if copied {
+			return "", fmt.Errorf("test reference selects its known file by testFile, not a copied path")
+		}
+	} else {
+		_, symbol, qualified := strings.Cut(original, "::")
+		if !qualified {
+			return "", fmt.Errorf("original test reference has no file-bound symbol")
+		}
+		ref = symbol
+	}
+	if item.TestFile == 0 {
+		return ref, nil
+	}
+	if item.TestFile < 1 || item.TestFile > len(files) || strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("testFile selects a related case file and requires its test symbol")
+	}
+	return files[item.TestFile-1] + "::" + ref, nil
 }

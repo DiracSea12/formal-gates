@@ -234,6 +234,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["records"] = comparisonSchema(input.Validation.Repair.VerificationCases, item, false)
 	}
 	if input.Handler == "engine.qa.design" {
+		whitebox := input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
 		if len(input.Validation.AffectedCases) > 0 {
 			cases := []any{}
 			for _, id := range input.Validation.AffectedCases {
@@ -242,6 +243,9 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 					return nil, err
 				}
 				item["description"] = "Change only this issued case: " + id
+				if !whitebox {
+					delete(item["properties"].(map[string]any), "testFile")
+				}
 				cases = append(cases, item)
 			}
 			fields["cases"] = map[string]any{"type": "array", "prefixItems": cases, "items": false, "minItems": len(cases), "maxItems": len(cases)}
@@ -256,6 +260,10 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			fields["sharedSteps"] = map[string]any{"type": "array", "prefixItems": shared, "items": false, "minItems": len(shared), "maxItems": len(shared)}
 			return body, nil
+		}
+		if !whitebox {
+			item := fields["cases"].(map[string]any)["items"].(map[string]any)
+			delete(item["properties"].(map[string]any), "testFile")
 		}
 		items := []any{}
 		for _, point := range input.Validation.Manifest.Points {
@@ -369,6 +377,19 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			}
 			if value == reflect.TypeOf(Suggestion{}) && field.Name == "Severity" {
 				child["enum"] = []string{"P2", "P3"}
+			}
+			if field.Name == "Files" {
+				location := LocationSchema(false)
+				delete(location["properties"].(map[string]any), "line")
+				location["description"] = "Select original read or listing/entry numbers for related test files. Omit files to retain an issued relation; an empty array clears it. The program supplies paths."
+				child["items"] = location
+			}
+			if field.Name == "TestFile" {
+				child["minimum"] = 1
+				child["description"] = "Select a 1-based position in this case's related files; testRef supplies only the test symbol. Omit testFile for a non-file native reference."
+			}
+			if field.Name == "TestRef" {
+				child["description"] = "Author a test symbol with testFile, or a non-file native test reference. Omit an issued reference to preserve it."
 			}
 			properties[name] = child
 			if !strings.Contains(options, "omitempty") {
