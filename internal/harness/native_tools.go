@@ -264,6 +264,18 @@ func (t *nativeWorkspaceTools) fact(number int, kind string) (nativeToolFact, er
 	return t.facts[number-1], nil
 }
 
+func (t *nativeWorkspaceTools) testOwned(relative string) bool {
+	if t.material == nil || t.material.Input.Handler != "engine.gate" || t.material.Input.Validation == nil || t.material.Input.Validation.Gate == nil {
+		return false
+	}
+	for _, owned := range t.material.Input.Validation.Gate.TestOwnedPaths {
+		if filepath.Clean(relative) == filepath.Clean(filepath.FromSlash(owned)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, error) {
 	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(filepath.Clean(relative), ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("target must belong to the issued workspace")
@@ -283,6 +295,9 @@ func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, e
 	rel, err := filepath.Rel(t.workspace, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("target resolves outside the issued workspace")
+	}
+	if t.testOwned(relative) || t.testOwned(rel) {
+		return "", fmt.Errorf("test-owned content is outside the issued gate duty")
 	}
 	if t.materials != "" {
 		parent := filepath.Dir(t.materials)
@@ -376,6 +391,10 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		}
 		readable := make([]any, 0, len(rows))
 		for _, row := range rows {
+			if t.testOwned(row.Path) {
+				readable = append(readable, map[string]any{"path": row.Path, "kind": row.Kind, "testOwned": true})
+				continue
+			}
 			value := map[string]any{"path": row.Path, "kind": row.Kind, "baseMode": row.BaseMode, "mode": row.Mode, "before": row.BaseContent, "after": row.Content}
 			if utf8.Valid(row.BaseContent) {
 				value["before"] = string(row.BaseContent)
@@ -414,8 +433,13 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 			if t.materials != "" && path == filepath.Dir(t.materials) && entry.Name() != filepath.Base(t.materials) {
 				continue
 			}
-			paths = append(paths, filepath.Join(relative, entry.Name()))
-			choices = append(choices, map[string]any{"entry": len(paths), "name": entry.Name(), "directory": entry.IsDir()})
+			name := filepath.Join(relative, entry.Name())
+			paths = append(paths, name)
+			choice := map[string]any{"entry": len(paths), "name": entry.Name(), "directory": entry.IsDir()}
+			if t.testOwned(name) {
+				choice["testOwned"] = true
+			}
+			choices = append(choices, choice)
 		}
 		number, err := t.publish(nativeToolFact{Kind: "listing", Paths: paths})
 		return map[string]any{"listing": number, "entries": choices}, err
