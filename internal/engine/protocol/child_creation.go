@@ -378,7 +378,7 @@ func (s *State) creationWorkspaceCurrent(p WorkspaceParameters) bool {
 }
 
 func (s *State) RebuildingChildren() bool {
-	return s.ChildCreation != nil && s.ChildCreation.Previous != nil && !slices.Contains(s.Completed, authoring.StepID("children.publish"))
+	return !s.abortRequested() && s.ChildCreation != nil && s.ChildCreation.Previous != nil && !slices.Contains(s.Completed, authoring.StepID("children.publish"))
 }
 func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) error {
 	revision, s, err := e.load()
