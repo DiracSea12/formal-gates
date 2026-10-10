@@ -10,19 +10,36 @@ import (
 	"testing"
 )
 
+func installedScriptRuntimeFixture(t *testing.T) string {
+	t.Helper()
+	source := copyPackageFixture(t)
+	entries, err := installPackageFiles(source, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := copyInstallPackageFiles(source, target, entries); err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
 func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
-	root := t.TempDir()
-	for _, rel := range []string{
-		"runtime/langgraph/formal_gates_harness/native_dsh.mjs",
-		"runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
-		"references/host.md",
-	} {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
+	root := installedScriptRuntimeFixture(t)
+	entries, err := installPackageFiles(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{"runtime/langgraph/formal_gates_harness/native_dsh.mjs", "runtime/langgraph/formal_gates_harness/zcode_credential.mjs"} {
+		declared := false
+		for _, entry := range entries {
+			if entry.Path == relative {
+				declared = true
+				break
+			}
 		}
-		if err := os.WriteFile(path, []byte(rel+"\n"), 0o600); err != nil {
-			t.Fatal(err)
+		if !declared {
+			t.Fatalf("host asset %s is not selected by the manifest owner", relative)
 		}
 	}
 	hook := filepath.Join(t.TempDir(), "hooks.json")
@@ -47,8 +64,13 @@ func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
 	}
 	for _, rel := range paths {
 		t.Run(rel, func(t *testing.T) {
-			root := t.TempDir()
+			root := installedScriptRuntimeFixture(t)
 			path := filepath.Join(root, filepath.FromSlash(rel))
+			if rel == "runtime/langgraph/formal_gates_harness/Native_dsh.mjs" {
+				if err := os.Remove(filepath.Join(root, "runtime/langgraph/formal_gates_harness/native_dsh.mjs")); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +88,7 @@ func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
 func TestInstalledScriptRuntimeRejectsScriptHookCommands(t *testing.T) {
 	for _, marker := range []string{".ps1", "powershell", "pwsh", "python", "node", "bash"} {
 		t.Run(marker, func(t *testing.T) {
-			root := t.TempDir()
+			root := installedScriptRuntimeFixture(t)
 			hook := filepath.Join(t.TempDir(), "hooks.json")
 			if err := os.WriteFile(hook, []byte(`{"command":"`+strings.ToUpper(marker)+` helper"}`), 0o600); err != nil {
 				t.Fatal(err)
@@ -105,7 +127,7 @@ func TestPortableComparisonUsesIssuedNativeCaseEvidence(t *testing.T) {
 		comparison string
 	}{
 		{coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: canaryDeliveryContents}, fmt.Sprintf("expected stdout=%q and exit=0; actual stdout=%q exit=0; equal=true", canaryDeliveryContents, canaryDeliveryContents)},
-		{coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{ExitCode: 128, StderrText: "fatal: path 'absent-marker.txt' does not exist in 'HEAD'"}, "expected Git to reject absent-marker.txt with no stdout; actual exit=128 stdout=\"\" stderr=\"fatal: path 'absent-marker.txt' does not exist in 'HEAD'\""},
+		{coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox, Steps: "Read absent-marker.txt from the delivered HEAD"}, protocol.CheckEvidence{ExitCode: 128, StderrText: "fatal: path 'absent-marker.txt' does not exist in 'HEAD'"}, "expected Git to reject absent-marker.txt with no stdout; actual exit=128 stdout=\"\" stderr=\"fatal: path 'absent-marker.txt' does not exist in 'HEAD'\""},
 		{coverage.AcceptanceCase{CaseID: "delivery-whitebox", Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoTestName: "TestWhiteboxDirectBehavior", GoResult: "pass"}, "expected exact Go test TestWhiteboxDirectBehavior to pass; actual test=TestWhiteboxDirectBehavior result=pass exit=0"},
 	}
 	for _, item := range cases {
@@ -125,7 +147,7 @@ func TestPortableComparisonRetainsActualExecutionFailures(t *testing.T) {
 	}{
 		{"missing-delivery", coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{ExitCode: 128}, "exit=128"},
 		{"mismatched-delivery", coverage.AcceptanceCase{CaseID: "delivery-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: "unexpected delivery\n"}, "unexpected delivery"},
-		{"present-absent-artifact", coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox}, protocol.CheckEvidence{StdoutText: "artifact exists"}, "artifact exists"},
+		{"present-absent-artifact", coverage.AcceptanceCase{CaseID: "missing-blackbox", Mode: coverage.CaseBlackbox, Steps: "Read absent-marker.txt from the delivered HEAD"}, protocol.CheckEvidence{StdoutText: "artifact exists"}, "artifact exists"},
 		{"wrong-whitebox-test", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoResult: "pass", GoTestName: "AnotherTest"}, "actual test=AnotherTest"},
 		{"whitebox-fail", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{ExitCode: 1, GoResult: "fail", GoTestName: "TestWhiteboxDirectBehavior"}, "result=fail exit=1"},
 		{"whitebox-unmatched", coverage.AcceptanceCase{Mode: coverage.CaseWhitebox, TestRef: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, protocol.CheckEvidence{GoResult: "not-executed"}, "result=not-executed"},

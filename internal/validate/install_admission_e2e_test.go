@@ -488,7 +488,19 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 func TestAdmissionRejectsIncompleteDisabledAndMissingRecords(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "registry.json")
-	complete := e2eRegistryRecord("complete", filepath.Join(root, "install"), filepath.Join(root, "bin", nativeBinaryName()), "global", "codex", filepath.Join(root, "home"), "active")
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	source := e2eInstallSource(t)
+	report, err := Install(InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: path, BinaryTarget: filepath.Join(root, "bin", nativeBinaryName()), Force: true, SkipHooks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := installRecordByID(t, document, report.Targets[0].RegistryRecordID)
 	disabled := e2eRegistryRecord("disabled", filepath.Join(root, "install-disabled"), filepath.Join(root, "bin", nativeBinaryName()), "project", "claude", filepath.Join(root, "project"), "disabled")
 	e2eCommitRegistry(t, path, complete, disabled)
 	// The unique transaction owner rejects incomplete records before they can
@@ -501,7 +513,7 @@ func TestAdmissionRejectsIncompleteDisabledAndMissingRecords(t *testing.T) {
 	if _, err := commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{{ID: "incomplete", Status: "active"}}); err == nil {
 		t.Fatal("semantic registry owner accepted an incomplete record")
 	}
-	accepted, err := AdmitRegistry(path, "complete")
+	accepted, err := AdmitRegistry(path, complete.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

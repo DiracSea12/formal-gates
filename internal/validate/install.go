@@ -1387,12 +1387,8 @@ func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryReco
 	return false
 }
 
-// bootstrapReleasePreservesIdentity recognizes the documented bootstrap of a
-// release tree already registered by the preceding install transaction. The
-// installer adds executable permission bits while copying the release, so the
-// release receipt digest is not the original source package digest; the
-// installed target digest and exact registered release root are the binding
-// proof for this read-only maintenance operation.
+// bootstrapReleasePreservesIdentity binds release-root bootstrap to the
+// registered source identity and exact installed target digest.
 func bootstrapReleasePreservesIdentity(record RegistryRecord, sourceRoot, installedDigest string) bool {
 	return record.ReleaseRoot != "" &&
 		canonicalRegistryPath(sourceRoot) == canonicalRegistryPath(record.ReleaseRoot) &&

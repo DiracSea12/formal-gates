@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -102,20 +101,11 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	}
 }
 
-// The documented release installer first installs from the unpacked source
-// while staging a release root, then invokes bootstrap with that release root
-// as its source.  Archive/extraction tools may normalize the native
-// executable's mode in the copied release tree; that normalization must not
-// rotate the already-registered source identity.  The target digest remains
-// the tamper fence and the resulting bootstrap receipt must still admit the
-// first workflow start.
-func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
+// Release-root bootstrap preserves the registered installed identity and the
+// source executable mode under the same installation transaction.
+func TestReleaseRootBootstrapPreservesExecutableModeAndIdentity(t *testing.T) {
 	source := copyPackageFixture(t)
 	binary := filepath.Join(source, "bin", nativeBinaryName())
-	// The source receipt may carry owner-only execute permission.  The
-	// installer normalizes the copied release executable by adding execute
-	// bits for all users, so the release-tree package digest is intentionally
-	// different from the source package digest.
 	if err := os.Chmod(binary, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -137,32 +127,23 @@ func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
 	}
 	before := document.Records[0]
 
-	// The release executable is 0711 after copyFile's native-binary
-	// normalization, while the source receipt above recorded 0700.
+	sourceInfo, err := os.Stat(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
 	releaseInfo, err := os.Stat(filepath.Join(releaseRoot, "bin", nativeBinaryName()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && releaseInfo.Mode().Perm() != 0o711 {
-		t.Fatalf("unexpected normalized release executable mode: %v", releaseInfo.Mode().Perm())
-	}
-	beforeDigest, err := PackageDigest(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	releaseDigest, err := PackageDigest(releaseRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && releaseDigest == beforeDigest {
-		t.Fatalf("release normalization did not change package digest: %s", releaseDigest)
+	if releaseInfo.Mode().Perm() != sourceInfo.Mode().Perm() {
+		t.Fatalf("release changed source executable mode: source=%v release=%v", sourceInfo.Mode().Perm(), releaseInfo.Mode().Perm())
 	}
 	if _, err := Install(InstallOptions{
 		Source: releaseRoot, Host: "claude", Scope: "project", Project: project,
 		ReleaseRoot: releaseRoot, RegistryPath: registry, BinaryTarget: launcher,
 		Bootstrap: true, Force: true,
 	}); err != nil {
-		t.Fatalf("release-root bootstrap rejected normalized executable mode: %v", err)
+		t.Fatalf("release-root bootstrap rejected the registered release: %v", err)
 	}
 
 	document, err = LoadRegistry(registry)

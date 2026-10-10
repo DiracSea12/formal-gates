@@ -600,7 +600,7 @@ func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
 	parentRecord := installRecordByID(t, document, parentInstall.Targets[0].RegistryRecordID)
 	nestedRecord := installRecordByID(t, document, nestedInstall.Targets[0].RegistryRecordID)
 	packageRoot := nestedRecord.Target
-	if _, err := admissionStartCurrent(nested, packageRoot, registry, parentRecord.ID, "install-parent", "lightweight"); err == nil || !strings.Contains(err.Error(), "workflow root") {
+	if _, err := admissionStartCurrent(nested, parentRecord.Target, registry, parentRecord.ID, "install-parent", "lightweight"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("less-specific project binding accepted: %v", err)
 	}
 	run, err := admissionStartCurrent(nested, packageRoot, registry, nestedRecord.ID, "install-nested", "lightweight")
